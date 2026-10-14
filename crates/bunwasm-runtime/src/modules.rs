@@ -196,17 +196,37 @@ pub fn module_format(ctx: &Ctx<'_>, state: &State, path: &str) -> Result<&'stati
 /// Compile a CommonJS file into `function (exports, require, module, __filename, __dirname)`.
 pub fn compile_cjs<'js>(ctx: &Ctx<'js>, state: &State, path: &str) -> Result<Function<'js>> {
     let (code, _) = state.load_source(ctx, path)?;
-    // Same line as the first source line, so line numbers are preserved.
-    let wrapped = if code.starts_with(CJS_WRAPPER_PREFIX) {
-        code.to_string()
-    } else {
-        format!("(function (exports, require, module, __filename, __dirname) {{{code}\n}})")
+    // Already wrapped by Bun's transpiler (its lines follow the printed code).
+    if code.starts_with(CJS_WRAPPER_PREFIX) {
+        return eval_script_at(ctx, &code, path, 1)?.get();
+    }
+    // Our wrapper takes lines -1 and 0 (QuickJS treats a start line of 0 as
+    // "default"), so the file's own lines and columns are unchanged in stack
+    // traces.
+    let wrapped = format!("(function (exports, require, module, __filename, __dirname) {{\n\n{code}\n}})");
+    eval_script_at(ctx, &wrapped, path, -1)?.get()
+}
+
+/// Evaluate a classic script whose first line is numbered `first_line`.
+fn eval_script_at<'js>(ctx: &Ctx<'js>, source: &str, filename: &str, first_line: i32) -> Result<Value<'js>> {
+    use rquickjs::qjs;
+    let c_source = std::ffi::CString::new(source)?;
+    let c_filename = std::ffi::CString::new(filename)?;
+    let mut options = qjs::JSEvalOptions {
+        version: qjs::JS_EVAL_OPTIONS_VERSION as i32,
+        eval_flags: qjs::JS_EVAL_TYPE_GLOBAL as i32,
+        filename: c_filename.as_ptr(),
+        line_num: first_line,
     };
-    let mut opts = rquickjs::context::EvalOptions::default();
-    opts.global = true;
-    opts.strict = false;
-    opts.filename = Some(path.to_owned());
-    ctx.eval_with_options(wrapped, opts)
+    // SAFETY: the source is NUL-terminated as JS_Eval2 requires; the result is
+    // a new reference (or JS_EXCEPTION with the exception left on the context).
+    unsafe {
+        let raw = qjs::JS_Eval2(ctx.as_raw().as_ptr(), c_source.as_ptr(), source.len() as _, &mut options);
+        if qjs::JS_IsException(raw) {
+            return Err(rquickjs::Error::Exception);
+        }
+        Ok(Value::from_raw(ctx.clone(), raw))
+    }
 }
 
 /// `require()` of an ES module: import it and run the job queue until it
