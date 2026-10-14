@@ -54,14 +54,28 @@
     if (site.getFunction() === undefined && !name && file) {
       return `${file}:${site.getLineNumber()}:${site.getColumnNumber()}`;
     }
-    const label = name || "<anonymous>";
-    if (site.isNative() || file === null || file === undefined) return `${label} (native)`;
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
+    if (line !== null && file) {
+      const mapped = native.mapPosition(file, line, col);
+      if (mapped) [line, col] = mapped;
+    }
+    // Module and script top-level code prints bare, like JSC.
+    if (!name && file && line !== null && isTopLevel(site.getFunction())) return `${file}:${line}:${col}`;
+    const label = name || "<anonymous>";
+    if (site.isNative() || file === null || file === undefined) return `${label} (native)`;
     if (line === null) return `${label} (${file})`;
-    const mapped = native.mapPosition(file, line, col);
-    if (mapped) [line, col] = mapped;
     return `${label} (${file}:${line}:${col})`;
+  }
+
+  // CommonJS wrappers (registered by evaluateModule) and ES module bodies,
+  // which QuickJS represents as nameless functions printing as native code.
+  const topLevelFunctions = new WeakSet();
+  internal.topLevelFunctions = topLevelFunctions;
+  function isTopLevel(fn) {
+    if (typeof fn !== "function") return false;
+    if (topLevelFunctions.has(fn)) return true;
+    return Function.prototype.toString.call(fn).startsWith("function () {\n    [native code]");
   }
 
   Error.prepareStackTrace = function prepareStackTrace(error, callsites) {
@@ -469,6 +483,7 @@
       return;
     }
     const wrapper = native.compileCjs(path);
+    topLevelFunctions.add(wrapper);
     wrapper.call(mod.exports, mod.exports, makeRequire(path, mod), mod, path, dirname(path));
   }
 

@@ -1380,7 +1380,7 @@
 
   // Parses QuickJS-ng (and V8/JSC-style) `err.stack` text into frames:
   //   "    at inner (/index.js:2:10)"   -> { name: "inner", file, line, column }
-  //   "    at <anonymous> (/index.js:4:11)" -> { name: "", ... }
+  //   "    at <anonymous> (/index.js:4:11)" -> { name: "<anonymous>", ... }
   //   "    at /index.js:4:11"           -> { name: "", ... }
   //   "    at map (native)"             -> skipped
   function parseStack(stack) {
@@ -1401,7 +1401,9 @@
     const location = withName ? withName[2] : body;
     const pos = /^(.*):(\d+):(\d+)$/.exec(location);
     if (!pos || pos[1].startsWith("bun-wasm:")) return null;
-    const cleanName = name === "<anonymous>" || name === "<eval>" ? "" : name;
+    // The runtime prints module/script top-level frames bare (no name), like
+    // JSC; a remaining "<anonymous>" is an anonymous function and stays.
+    const cleanName = name === "<eval>" ? "" : name;
     return { name: cleanName, file: pos[1], line: Number(pos[2]), column: Number(pos[3]) };
   }
 
