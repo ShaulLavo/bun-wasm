@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rquickjs::function::{IntoJsFunc, Opt};
+use rquickjs::object::Property;
 use rquickjs::{
     qjs, Array, BigInt, Ctx, Exception, Function, IntoJs, Object, Promise, Result, TypedArray, Value,
 };
@@ -72,6 +73,25 @@ pub fn bytes_of(value: &Value<'_>) -> Result<Vec<u8>> {
     Err(Exception::throw_type(value.ctx(), "expected a string, Uint8Array or ArrayBuffer"))
 }
 
+/// A plain `Error` with a non-enumerable `message`, as `new Error(message)`
+/// makes it (`Exception::from_message` defines an enumerable one, which then
+/// shows in `Object.keys(err)` and in inspected output).
+pub fn new_error<'js>(ctx: &Ctx<'js>, message: &str) -> Result<Exception<'js>> {
+    let err = Exception::from_message(ctx.clone(), message)?;
+    // Redefining keeps the old enumerability, so delete first.
+    err.as_object().remove("message")?;
+    err.as_object().prop("message", Property::from(message).writable().configurable())?;
+    Ok(err)
+}
+
+/// Throw [`new_error`].
+pub fn throw_error(ctx: &Ctx<'_>, message: &str) -> rquickjs::Error {
+    match new_error(ctx, message) {
+        Ok(err) => err.throw(),
+        Err(e) => e,
+    }
+}
+
 fn uint8<'js>(ctx: &Ctx<'js>, bytes: Vec<u8>) -> Result<Value<'js>> {
     TypedArray::<u8>::new(ctx.clone(), bytes).map(|a| a.into_value())
 }
@@ -102,7 +122,7 @@ pub fn throw_io(ctx: &Ctx<'_>, err: io::Error, syscall: &str, path: Option<&str>
         Some(p) => format!("{code}: {desc}, {syscall} '{p}'"),
         None => format!("{code}: {desc}, {syscall}"),
     };
-    let exception = match Exception::from_message(ctx.clone(), &message) {
+    let exception = match new_error(ctx, &message) {
         Ok(e) => e,
         Err(e) => return e,
     };
@@ -510,7 +530,7 @@ fn install_fds<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
 }
 
 fn bad_fd(ctx: &Ctx<'_>, syscall: &str) -> rquickjs::Error {
-    let err = Exception::from_message(ctx.clone(), &format!("EBADF: bad file descriptor, {syscall}"));
+    let err = new_error(ctx, &format!("EBADF: bad file descriptor, {syscall}"));
     match err {
         Ok(e) => {
             let _ = e.as_object().set("syscall", syscall);
@@ -637,7 +657,7 @@ fn install_crypto<'js>(native: &Object<'js>) -> Result<()> {
         match crate::encoding::decompress(&bytes_of(&data)?, wrapper) {
             Ok(out) => uint8(&ctx, out),
             Err(msg) => {
-                let err = Exception::from_message(ctx.clone(), &msg)?;
+                let err = new_error(&ctx, &msg)?;
                 err.as_object().set("code", "Z_DATA_ERROR")?;
                 err.as_object().set("errno", -3)?;
                 Err(err.throw())
