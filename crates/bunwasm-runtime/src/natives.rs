@@ -226,6 +226,8 @@ fn install_process<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
     let st = state.clone();
     set_fn(native, "mainPath", move || -> String { st.main.borrow().clone() })?;
     let st = state.clone();
+    set_fn(native, "setMainPath", move |path: String| *st.main.borrow_mut() = path)?;
+    let st = state.clone();
     set_fn(native, "mainArg", move || -> String { st.main_arg.borrow().clone() })?;
     set_fn(native, "env", |ctx: Ctx<'js>| -> Result<Object<'js>> {
         let obj = Object::new(ctx)?;
