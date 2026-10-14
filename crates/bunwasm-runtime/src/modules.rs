@@ -58,8 +58,43 @@ fn throw_error(ctx: &Ctx<'_>, msg: &str) -> rquickjs::Error {
     Exception::throw_message(ctx, msg)
 }
 
-fn throw_syntax(ctx: &Ctx<'_>, msg: &str) -> rquickjs::Error {
-    Exception::throw_syntax(ctx, msg)
+/// A transpiler failure, reported like Bun's build errors: the offending
+/// source line, a caret, `error: message` and the location. The transpiler
+/// formats each error as `file:line:col: message`.
+fn throw_build_error(ctx: &Ctx<'_>, report: &str, source: &str) -> rquickjs::Error {
+    let mut text = String::new();
+    let mut first_message = None;
+    for entry in report.lines().filter(|l| !l.trim().is_empty()) {
+        let Some((file, line, col, message)) = parse_location(entry) else {
+            text.push_str(&format!("error: {entry}\n"));
+            first_message.get_or_insert_with(|| entry.to_owned());
+            continue;
+        };
+        first_message.get_or_insert_with(|| message.to_owned());
+        if let Some(code) = source.lines().nth(line.saturating_sub(1)) {
+            let gutter = format!("{line} | ");
+            text.push_str(&format!("{gutter}{code}\n{}^\n", " ".repeat(gutter.len() + col.saturating_sub(1))));
+        }
+        text.push_str(&format!("error: {message}\n    at {file}:{line}:{col}\n\n"));
+    }
+    let message = first_message.unwrap_or_else(|| report.trim().to_owned());
+    let exception = match Exception::from_message(ctx.clone(), &message) {
+        Ok(e) => e,
+        Err(e) => return e,
+    };
+    let _ = exception.as_object().set("name", "BuildError");
+    let _ = exception.as_object().set("__bunwasmFormatted", text);
+    exception.throw()
+}
+
+/// Split `file:line:col: message`.
+fn parse_location(entry: &str) -> Option<(&str, usize, usize, &str)> {
+    let (location, message) = entry.split_once(": ")?;
+    let mut parts = location.rsplitn(3, ':');
+    let col = parts.next()?.parse().ok()?;
+    let line = parts.next()?.parse().ok()?;
+    let file = parts.next()?;
+    Some((file, line, col, message))
 }
 
 /// Lines that start an ES module statement. Crude, but the real transpiler
@@ -147,7 +182,10 @@ impl State {
             SourceLoader::Json => (raw, Format::Json),
             SourceLoader::Text => (raw, Format::Text),
             _ => {
-                let code = self.transpiler.transpile(&raw, path, loader).map_err(|msg| throw_syntax(ctx, &msg))?;
+                let code = self
+                    .transpiler
+                    .transpile(&raw, path, loader)
+                    .map_err(|msg| throw_build_error(ctx, &msg, &raw))?;
                 let format = self.detect_format(path, &code);
                 (code, format)
             }
