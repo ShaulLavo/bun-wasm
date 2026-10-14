@@ -49,7 +49,7 @@ fn call_engine_helper<'js>(ctx: &Ctx<'js>, value: &Value<'js>, helper: EngineHel
     }
 }
 
-fn set_fn<'js, F, P>(obj: &Object<'js>, name: &str, f: F) -> Result<()>
+pub(crate) fn set_fn<'js, F, P>(obj: &Object<'js>, name: &str, f: F) -> Result<()>
 where
     F: IntoJsFunc<'js, P> + 'js,
 {
@@ -242,6 +242,7 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> Result<Object<'js>> {
     install_crypto(&native)?;
     install_url(&native)?;
     install_engine(&native, state)?;
+    crate::sqlite::install(&native)?;
     Ok(native)
 }
 
