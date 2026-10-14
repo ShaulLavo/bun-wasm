@@ -17,7 +17,8 @@
 #                               --update leaves it alone
 #
 # Outputs are normalized before comparing: durations like `[1.23ms]` become
-# `[TIME]`, `bun test v1.4.2 (744846f84)` becomes `bun test vVERSION`, and the
+# `[TIME]` (dropped entirely on per-test `(pass) name` lines, which native Bun
+# only times above 10µs), `bun test v1.4.2 (744846f84)` becomes `bun test vVERSION`, and the
 # crash footer `Bun v1.4.2 (Linux x64)` becomes `Bun vVERSION (PLATFORM)`, and
 # `bun build`'s "Bundled N modules in 12ms" loses its timing.
 #
@@ -58,7 +59,8 @@ if [[ ${#names[@]} == 0 ]]; then
 fi
 
 normalize() {
-  sed -E -e 's/\[[0-9]+(\.[0-9]+)?m?s\]/[TIME]/g' -e 's/^bun test v[^ ]+ \([0-9a-f]+\)/bun test vVERSION/' \
+  sed -E -e 's/\[[0-9]+(\.[0-9]+)?m?s\]/[TIME]/g' \
+    -e 's/^(\((pass|fail|skip|todo)\) .*) \[TIME\]$/\1/' -e 's/^bun test v[^ ]+ \([0-9a-f]+\)/bun test vVERSION/' \
     -e 's/^Bun v[0-9.]+ \([^)]*\)$/Bun vVERSION (PLATFORM)/' \
     -e 's/^Bundled ([0-9]+) modules? in [0-9]+ms/Bundled \1 modules in Nms/'
 }
@@ -108,7 +110,7 @@ for name in "${names[@]}"; do
   if [[ $update == 1 ]]; then
     native_cmd=("${cmd[@]}")
     [[ ! -f "$work/cmd" ]] && native_cmd=(run "./$entry")
-    (cd "$work" && HOME=/ bun "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+    (cd "$work" && AGENT=0 CLAUDECODE= HOME=/ bun "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
     show_files "$work" "$scratch/out"
     # Native runs live in the scratch dir; inside wasm the fixture is `/`.
     sed -e "s#$work/#/#g" -e "s#$work#/#g" "$scratch/out" | normalize >"$src/expected.txt"
