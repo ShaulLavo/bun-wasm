@@ -1,0 +1,31 @@
+[package]
+name = "bunwasm-build"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bun's bundler (`bun build`, BundleV2) behind a CLI-agnostic build() API"
+
+[dependencies]
+bstr = "1"
+bun_alloc = { path = "../../vendor/bun/src/bun_alloc" }
+bun_ast = { path = "../../vendor/bun/src/ast" }
+bun_bundler = { path = "../../vendor/bun/src/bundler" }
+bun_collections = { path = "../../vendor/bun/src/collections" }
+bun_core = { path = "../../vendor/bun/src/bun_core" }
+bun_dotenv = { path = "../../vendor/bun/src/dotenv" }
+bun_errno = { path = "../../vendor/bun/src/errno" }
+bun_event_loop = { path = "../../vendor/bun/src/event_loop" }
+bun_install_types = { path = "../../vendor/bun/src/install_types" }
+bun_js_parser = { path = "../../vendor/bun/src/js_parser" }
+bun_options_types = { path = "../../vendor/bun/src/options_types" }
+bun_paths = { path = "../../vendor/bun/src/paths" }
+bun_resolver = { path = "../../vendor/bun/src/resolver" }
+bun_sys = { path = "../../vendor/bun/src/sys" }
+
+[target.'cfg(target_os = "wasi")'.dependencies]
+bunwasm-posix = { path = "../bunwasm-posix" }
+bunwasm-glue = { path = "../bunwasm-glue" }
+
+[[bin]]
+name = "bun-build"
+path = "src/bin/bun-build.rs"
