@@ -1,0 +1,327 @@
+diff --git i/Source/JavaScriptCore/CMakeLists.txt w/Source/JavaScriptCore/CMakeLists.txt
+index 50920859..a9ebd94f 100644
+--- i/Source/JavaScriptCore/CMakeLists.txt
++++ w/Source/JavaScriptCore/CMakeLists.txt
+@@ -442,6 +442,11 @@ set_property(TARGET LLIntSettingsExtractor PROPERTY SKIP_CODESIGN YES)
+ set_property(TARGET LLIntSettingsExtractor PROPERTY SKIP_DSYM YES)
+ WEBKIT_EXECUTABLE(LLIntSettingsExtractor)
+ set_target_properties(LLIntSettingsExtractor PROPERTIES POSITION_INDEPENDENT_CODE ON)
++if (WTF_OS_WASI)
++    # offlineasm scans the binary for its tables; wasm-ld trims trailing zeros from data segments
++    # unless memory is imported. The extractors are only read, never run.
++    target_link_options(LLIntSettingsExtractor PRIVATE -Wl,--import-memory)
++endif ()
+ 
+ # LLIntSettingsExtractor target needs to have a direct or indirect
+ # dependency to Bytecodes target for CMake Visual Studio generator to
+@@ -473,6 +478,9 @@ set_property(TARGET LLIntOffsetsExtractor PROPERTY SKIP_CODESIGN YES)
+ set_property(TARGET LLIntOffsetsExtractor PROPERTY SKIP_DSYM YES)
+ WEBKIT_EXECUTABLE(LLIntOffsetsExtractor)
+ set_target_properties(LLIntOffsetsExtractor PROPERTIES POSITION_INDEPENDENT_CODE ON)
++if (WTF_OS_WASI)
++    target_link_options(LLIntOffsetsExtractor PRIVATE -Wl,--import-memory)
++endif ()
+ 
+ # The build system will execute asm.rb every time LLIntOffsetsExtractor's mtime is newer than
+ # LLIntAssembly.h's mtime. The problem we have here is: asm.rb has some built-in optimization
+diff --git i/Source/JavaScriptCore/dfg/DFGAbstractHeap.h w/Source/JavaScriptCore/dfg/DFGAbstractHeap.h
+index 7626bb93..6061652b 100644
+--- i/Source/JavaScriptCore/dfg/DFGAbstractHeap.h
++++ w/Source/JavaScriptCore/dfg/DFGAbstractHeap.h
+@@ -25,8 +25,7 @@
+ 
+ #pragma once
+ 
+-#if ENABLE(DFG_JIT)
+-
++// AbstractHeapKind is used by DOMJIT::Effect even when the DFG is disabled (C_LOOP builds).
+ #include "DOMJITHeapRange.h"
+ #include "OperandsInlines.h"
+ #include "VirtualRegister.h"
+@@ -100,6 +99,8 @@ enum AbstractHeapKind : uint8_t {
+ #undef ABSTRACT_HEAP_DECLARATION
+ };
+ 
++#if ENABLE(DFG_JIT)
++
+ class AbstractHeap {
+ public:
+     class Payload {
+@@ -392,8 +393,12 @@ private:
+     int64_t m_value;
+ };
+ 
++#endif // ENABLE(DFG_JIT)
++
+ } } // namespace JSC::DFG
+ 
++#if ENABLE(DFG_JIT)
++
+ namespace WTF {
+ 
+ void printInternal(PrintStream&, JSC::DFG::AbstractHeapKind);
+diff --git i/Source/JavaScriptCore/heap/RegisterState.h w/Source/JavaScriptCore/heap/RegisterState.h
+index 6c841ea4..60e46a29 100644
+--- i/Source/JavaScriptCore/heap/RegisterState.h
++++ w/Source/JavaScriptCore/heap/RegisterState.h
+@@ -26,8 +26,10 @@
+ #pragma once
+ 
+ #include <cstdint>
+-#include <setjmp.h>
+ #include <wtf/Platform.h>
++#if !OS(WASI)
++#include <setjmp.h>
++#endif
+ 
+ namespace JSC {
+ 
+@@ -164,6 +166,17 @@ struct RegisterState {
+ #endif
+ #endif // !OS(WINDOWS)
+ 
++#if OS(WASI) && !defined(ALLOCATE_AND_GET_REGISTER_STATE)
++// Wasm locals live outside linear memory, so there are no registers to spill. Values the GC must
++// see have to be in linear memory already (the C loop's JS stack, or address-taken C++ locals).
++struct RegisterState {
++    void* unused;
++};
++
++#define ALLOCATE_AND_GET_REGISTER_STATE(registers) \
++    RegisterState registers { nullptr }
++#endif
++
+ #ifndef ALLOCATE_AND_GET_REGISTER_STATE
+ 
+ using RegisterState = jmp_buf;
+diff --git i/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp w/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp
+index 73c7f54d..aa6dad8c 100644
+--- i/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp
++++ w/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp
+@@ -31,7 +31,7 @@
+ #include <wtf/NeverDestroyed.h>
+ #include <wtf/text/SuperFastHash.h>
+ 
+-#if OS(UNIX)
++#if OS(UNIX) && !OS(WASI)
+ #include <dlfcn.h>
+ #if OS(DARWIN)
+ #include <mach-o/dyld.h>
+diff --git i/Source/JavaScriptCore/runtime/JSModuleLoader.cpp w/Source/JavaScriptCore/runtime/JSModuleLoader.cpp
+index bda17b3b..5b39e656 100644
+--- i/Source/JavaScriptCore/runtime/JSModuleLoader.cpp
++++ w/Source/JavaScriptCore/runtime/JSModuleLoader.cpp
+@@ -26,6 +26,7 @@
+ 
+ #include "config.h"
+ #include "JSModuleLoader.h"
++#include <wtf/Scope.h>
+ #include "ProgramExecutable.h"
+ 
+ #include "BuiltinNames.h"
+diff --git i/Source/JavaScriptCore/runtime/Options.cpp w/Source/JavaScriptCore/runtime/Options.cpp
+index a5b84dde..ec0277b9 100644
+--- i/Source/JavaScriptCore/runtime/Options.cpp
++++ w/Source/JavaScriptCore/runtime/Options.cpp
+@@ -233,7 +233,7 @@ std::optional<OptionsStorage::Unsigned> parse(const char* string)
+     return std::nullopt;
+ }
+ 
+-#if CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU)
++#if CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU) || OS(WASI)
+ template<>
+ std::optional<OptionsStorage::Size> parse(const char* string)
+ {
+diff --git i/Source/JavaScriptCore/runtime/VM.cpp w/Source/JavaScriptCore/runtime/VM.cpp
+index 8713c8fc..0409be07 100644
+--- i/Source/JavaScriptCore/runtime/VM.cpp
++++ w/Source/JavaScriptCore/runtime/VM.cpp
+@@ -28,6 +28,7 @@
+ 
+ #include "config.h"
+ #include "VM.h"
++#include <wtf/Scope.h>
+ 
+ #include "AbortReason.h"
+ #include "AccessCase.h"
+diff --git i/Source/WTF/wtf/PlatformHave.h w/Source/WTF/wtf/PlatformHave.h
+index 8ea6ff0b..a770ad6a 100644
+--- i/Source/WTF/wtf/PlatformHave.h
++++ w/Source/WTF/wtf/PlatformHave.h
+@@ -188,7 +188,7 @@
+ #define HAVE_BROKEN_STATIC_ANALYZER_INT128_OVERFLOW 1
+ #endif
+ 
+-#if OS(UNIX) && !OS(FUCHSIA)
++#if OS(UNIX) && !OS(FUCHSIA) && !OS(WASI)
+ #define HAVE_RESOURCE_H 1
+ #endif
+ 
+diff --git i/Source/WTF/wtf/PlatformOS.h w/Source/WTF/wtf/PlatformOS.h
+index e3184e90..9ef88309 100644
+--- i/Source/WTF/wtf/PlatformOS.h
++++ w/Source/WTF/wtf/PlatformOS.h
+@@ -126,6 +126,11 @@
+ #define WTF_OS_QNX 1
+ #endif
+ 
++/* OS(WASI) - WebAssembly System Interface (wasi-libc) */
++#if defined(__wasi__)
++#define WTF_OS_WASI 1
++#endif
++
+ /* OS(WINDOWS) - Any version of Windows */
+ #if defined(WIN32) || defined(_WIN32)
+ #define WTF_OS_WINDOWS 1
+@@ -142,6 +147,7 @@
+     || OS(LINUX)            \
+     || OS(NETBSD)           \
+     || OS(OPENBSD)          \
++    || OS(WASI)             \
+     || defined(unix)        \
+     || defined(__unix)      \
+     || defined(__unix__)
+diff --git i/Source/WTF/wtf/PlatformRegisters.h w/Source/WTF/wtf/PlatformRegisters.h
+index 37efb86d..3b9b9c85 100644
+--- i/Source/WTF/wtf/PlatformRegisters.h
++++ w/Source/WTF/wtf/PlatformRegisters.h
+@@ -39,7 +39,7 @@
+ typedef ucontext_t mcontext_t;
+ #elif OS(QNX)
+ #include <ucontext.h>
+-#else
++#elif !OS(WASI)
+ #include <sys/ucontext.h>
+ #endif
+ 
+diff --git i/Source/WTF/wtf/RandomDevice.cpp w/Source/WTF/wtf/RandomDevice.cpp
+index 55ca3c18..d0876371 100644
+--- i/Source/WTF/wtf/RandomDevice.cpp
++++ w/Source/WTF/wtf/RandomDevice.cpp
+@@ -55,6 +55,11 @@
+ #include <zircon/syscalls.h>
+ #endif
+ 
++#if OS(WASI)
++#include <algorithm>
++#include <unistd.h>
++#endif
++
+ namespace WTF {
+ 
+ #if OS(WINDOWS)
+@@ -93,7 +98,7 @@ NEVER_INLINE NO_RETURN_DUE_TO_CRASH static void crashUnableToReadFromURandom()
+ #if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS)
+ RandomDevice::RandomDevice()
+ {
+-#if !OS(LINUX)
++#if !OS(LINUX) && !OS(WASI)
+     openURandom();
+ #endif
+ }
+@@ -126,6 +131,10 @@ void RandomDevice::cryptographicallyRandomValues(std::span<uint8_t> buffer)
+     RELEASE_ASSERT(!CCRandomGenerateBytes(buffer.data(), buffer.size()));
+ #elif OS(FUCHSIA)
+     zx_cprng_draw(buffer.data(), buffer.size());
++#elif OS(WASI)
++    // WASI's random_get, which getentropy() wraps 256 bytes at a time.
++    for (size_t offset = 0; offset < buffer.size(); offset += 256)
++        RELEASE_ASSERT(!getentropy(buffer.subspan(offset).data(), std::min<size_t>(256, buffer.size() - offset)));
+ #elif OS(UNIX)
+     ssize_t amountRead = 0;
+ #if OS(LINUX)
+diff --git i/Source/WTF/wtf/RawHex.h w/Source/WTF/wtf/RawHex.h
+index ad348c93..99418330 100644
+--- i/Source/WTF/wtf/RawHex.h
++++ w/Source/WTF/wtf/RawHex.h
+@@ -51,7 +51,7 @@ public:
+         : RawHex(static_cast<uintptr_t>(value))
+     { }
+ 
+-#if CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU)
++#if CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU) || OS(WASI)
+     // These causes build errors for CPU(ADDRESS32) on some ports because int32_t
+     // is already handled by intptr_t, and uint32_t is handled by uintptr_t.
+     explicit RawHex(int32_t value)
+diff --git i/Source/WTF/wtf/StackBounds.cpp w/Source/WTF/wtf/StackBounds.cpp
+index 8cea1e87..2c53b5b9 100644
+--- i/Source/WTF/wtf/StackBounds.cpp
++++ w/Source/WTF/wtf/StackBounds.cpp
+@@ -102,6 +102,24 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+     return StackBounds { origin, bound };
+ }
+ 
++#elif OS(WASI)
++
++// wasm-ld places the C (shadow) stack in linear memory between these symbols; it grows down.
++extern "C" {
++extern char __stack_low;
++extern char __stack_high;
++}
++
++StackBounds StackBounds::newThreadStackBounds(PlatformThreadHandle)
++{
++    return currentThreadStackBoundsInternal();
++}
++
++StackBounds StackBounds::currentThreadStackBoundsInternal()
++{
++    return StackBounds { static_cast<void*>(&__stack_high), static_cast<void*>(&__stack_low) };
++}
++
+ #elif OS(UNIX) || OS(HAIKU)
+ 
+ #if OS(OPENBSD)
+diff --git i/Source/WTF/wtf/dtoa/utils.h w/Source/WTF/wtf/dtoa/utils.h
+index 3d374cf7..a3da710e 100644
+--- i/Source/WTF/wtf/dtoa/utils.h
++++ w/Source/WTF/wtf/dtoa/utils.h
+@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
+     defined(__AARCH64EL__) || defined(__aarch64__) || defined(__AARCH64EB__) || \
+     defined(__riscv) || \
+     defined(__or1k__) || defined(__arc__) || \
+-    defined(__EMSCRIPTEN__)
++    defined(__EMSCRIPTEN__) || defined(__wasm__)
+ #define DOUBLE_CONVERSION_CORRECT_DOUBLE_OPERATIONS 1
+ #elif defined(__mc68000__) || \
+     defined(__pnacl__) || defined(__native_client__)
+diff --git i/Source/bmalloc/libpas/src/libpas/pas_lock.h w/Source/bmalloc/libpas/src/libpas/pas_lock.h
+index 58409f6b..ef2a5073 100644
+--- i/Source/bmalloc/libpas/src/libpas/pas_lock.h
++++ w/Source/bmalloc/libpas/src/libpas/pas_lock.h
+@@ -165,7 +165,7 @@ static inline void pas_lock_testing_assert_held(pas_lock* lock)
+ 
+ PAS_END_EXTERN_C;
+ 
+-#elif PAS_OS(LINUX) || PAS_OS(WINDOWS) || PAS_OS(FREEBSD)
++#elif PAS_OS(LINUX) || PAS_OS(WINDOWS) || PAS_OS(FREEBSD) || defined(__wasi__)
+ 
+ PAS_BEGIN_EXTERN_C;
+ 
+diff --git i/Source/cmake/OptionsJSCOnly.cmake w/Source/cmake/OptionsJSCOnly.cmake
+index 06c78e32..e139ceee 100644
+--- i/Source/cmake/OptionsJSCOnly.cmake
++++ w/Source/cmake/OptionsJSCOnly.cmake
+@@ -105,7 +105,7 @@ else ()
+     set(ENABLE_INSPECTOR_ALTERNATE_DISPATCHERS OFF)
+ endif ()
+ 
+-if (WIN32)
++if (WIN32 OR WTF_OS_WASI)
+     set(ENABLE_API_TESTS OFF)
+ else ()
+     set(ENABLE_API_TESTS ON)
+diff --git i/Source/cmake/WebKitCommon.cmake w/Source/cmake/WebKitCommon.cmake
+index dedf2254..3e454fbf 100644
+--- i/Source/cmake/WebKitCommon.cmake
++++ w/Source/cmake/WebKitCommon.cmake
+@@ -228,6 +228,9 @@ if (NOT HAS_RUN_WEBKIT_COMMON)
+         set(WTF_OS_WINDOWS 1)
+     elseif (CMAKE_SYSTEM_NAME MATCHES "Fuchsia")
+         set(WTF_OS_FUCHSIA 1)
++    elseif (CMAKE_SYSTEM_NAME MATCHES "WASI")
++        set(WTF_OS_UNIX 1)
++        set(WTF_OS_WASI 1)
+     else ()
+         message(FATAL_ERROR "Unknown OS '${CMAKE_SYSTEM_NAME}'")
+     endif ()
