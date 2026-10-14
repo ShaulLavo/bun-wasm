@@ -1,0 +1,5 @@
+src/index.ts
+src/index.ts --minify
+src/index.ts --no-bundle
+src/index.ts --outdir out --define process.env.NODE_ENV="production"
+src/index.ts --outdir out --production

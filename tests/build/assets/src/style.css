@@ -1,0 +1,6 @@
+body {
+  background-image: url("./img/dot.png");
+}
+.logo::before {
+  content: url(./img/logo.svg);
+}

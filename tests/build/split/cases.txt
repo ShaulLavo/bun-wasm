@@ -1,0 +1,5 @@
+src/main.ts src/admin.ts --outdir out --splitting
+src/main.ts src/admin.ts --outdir out --splitting --minify
+src/main.ts --outdir out --splitting --target bun --sourcemap=linked
+src/main.ts src/admin.ts --outdir out --splitting --entry-naming [dir]/[name]-[hash].[ext] --chunk-naming chunks/[name]-[hash].[ext]
+src/main.ts --outdir out

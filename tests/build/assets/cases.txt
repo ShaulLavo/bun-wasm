@@ -1,0 +1,3 @@
+src/index.js --outdir out
+src/index.js --outdir out --minify --asset-naming assets/[name]-[hash].[ext]
+src/index.js --outdir out --public-path https://cdn.example.com/
