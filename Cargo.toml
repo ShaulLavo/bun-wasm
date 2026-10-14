@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 4
+panic = "abort"
+debug = false
+
+[profile.dev]
+panic = "abort"
+opt-level = 1

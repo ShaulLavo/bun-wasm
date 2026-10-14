@@ -1,0 +1,4 @@
+/vendor/bun
+/target
+/dist
+node_modules

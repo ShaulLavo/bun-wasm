@@ -1,0 +1,8 @@
+[package]
+name = "bunwasm-transpiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
