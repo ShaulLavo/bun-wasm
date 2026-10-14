@@ -1,0 +1,2 @@
+lines: ALPHA BETA GAMMA
+count: 3

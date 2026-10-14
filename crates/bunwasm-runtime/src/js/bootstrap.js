@@ -601,6 +601,7 @@
   defineGlobal("console", internal.require("console"));
   defineGlobal("Bun", internal.require("bun"));
   defineLazyGlobal("Buffer", () => internal.require("buffer").Buffer);
+  if (typeof globalThis.Intl === "undefined") defineLazyGlobal("Intl", () => internal.require("intl"));
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
   internal.require("builtins");
 
