@@ -1,0 +1,17 @@
+[package]
+name = "bunwasm-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bun-compatible JS runtime on QuickJS-ng (rquickjs), targeting wasm32-wasip1"
+
+[dependencies]
+rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"] }
+bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
+url = "2"
+serde_json = { version = "1", features = ["preserve_order"] }
+sha1 = "0.10"
+sha2 = "0.10"
+md-5 = "0.10"
+hmac = "0.12"
+getrandom = "0.3"

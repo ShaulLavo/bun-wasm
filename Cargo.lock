@@ -885,7 +885,9 @@ dependencies = [
 name = "bunwasm-cli"
 version = "0.0.1"
 dependencies = [
+ "bunwasm-glue",
  "bunwasm-runtime",
+ "bunwasm-transpiler",
 ]
 
 [[package]]

@@ -1,0 +1,1019 @@
+// Registry of built-in modules (`node:*`, `bun`, `bun:*`) and the small Node
+// modules that don't deserve their own file. Modules for things WASI can't do
+// (processes, sockets) import fine but throw a clear error when used.
+(function (internal) {
+  "use strict";
+  const native = internal.native;
+  const reg = internal.builtinFactories;
+  const lazy = (name, pick) => () => (pick ? pick(internal.require(name)) : internal.require(name));
+
+  function unsupportedError(what, why) {
+    const err = new Error(`${what} is not supported in bun-wasm: ${why}`);
+    err.code = "ERR_NOT_SUPPORTED_IN_WASM";
+    return err;
+  }
+
+  function thrower(what, why) {
+    const fn = function () {
+      throw unsupportedError(what, why);
+    };
+    Object.defineProperty(fn, "name", { value: what.slice(what.lastIndexOf(".") + 1) });
+    return fn;
+  }
+
+  // A module whose listed functions/classes all throw on use.
+  function unsupportedModule(name, why, keys, extra = {}) {
+    const mod = {};
+    for (const key of keys) mod[key] = thrower(`${name}.${key}`, why);
+    return Object.assign(mod, extra);
+  }
+
+  const NO_PROCESSES = "WASI has no processes";
+  const NO_NETWORK = "WASI has no network access";
+  const NO_THREADS = "bun.wasm is single-threaded";
+
+  // --- os -------------------------------------------------------------------
+
+  function osModule() {
+    const env = globalThis.process.env;
+    const signals = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15 };
+    const cpu = { model: "wasm32", speed: 0, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } };
+    return {
+      EOL: "\n",
+      devNull: "/dev/null",
+      arch: () => globalThis.process.arch,
+      machine: () => globalThis.process.arch,
+      platform: () => "linux",
+      type: () => "Linux",
+      release: () => "wasi-preview1",
+      version: () => "WASI preview1",
+      hostname: () => env.HOSTNAME || "localhost",
+      homedir: () => env.HOME || "/",
+      tmpdir: () => (env.TMPDIR || env.TMP || env.TEMP || "/tmp").replace(/(.)\/$/, "$1"),
+      endianness: () => "LE",
+      uptime: () => native.now() / 1000,
+      loadavg: () => [0, 0, 0],
+      totalmem: () => 4294967296,
+      freemem: () => 4294967296 - native.memoryUsage().rss,
+      availableParallelism: () => 1,
+      cpus: () => [cpu],
+      networkInterfaces: () => ({}),
+      userInfo: () => ({ uid: 0, gid: 0, username: env.USER || "user", homedir: env.HOME || "/", shell: env.SHELL || null }),
+      getPriority: () => 0,
+      setPriority() {},
+      constants: { signals, errno: {}, priority: {}, dlopen: {}, UV_UDP_REUSEADDR: 4 },
+    };
+  }
+
+  // --- crypto ---------------------------------------------------------------
+
+  function cryptoModule() {
+    const { Buffer } = internal.require("buffer");
+    const webcrypto = globalThis.crypto;
+
+    function encodeOut(bytes, encoding) {
+      const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      return encoding === undefined || encoding === "buffer" ? buf : buf.toString(encoding);
+    }
+
+    function inputBytes(data, encoding) {
+      if (typeof data === "string") return Buffer.from(data, encoding);
+      if (ArrayBuffer.isView(data) || data instanceof ArrayBuffer) return internal.toUint8(data);
+      const err = new TypeError(`The "data" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received ${internal.describe(data)}`);
+      err.code = "ERR_INVALID_ARG_TYPE";
+      throw err;
+    }
+
+    class Hash {
+      #algorithm;
+      #key;
+      #chunks = [];
+      #done = false;
+      constructor(algorithm, key) {
+        this.#algorithm = String(algorithm);
+        this.#key = key;
+        // Validate eagerly, like Node.
+        if (key === undefined) native.hash(this.#algorithm, "");
+        else native.hmac(this.#algorithm, "", "");
+      }
+      update(data, encoding) {
+        if (this.#done) throw Object.assign(new Error("Digest already called"), { code: "ERR_CRYPTO_HASH_FINALIZED" });
+        this.#chunks.push(inputBytes(data, encoding).slice());
+        return this;
+      }
+      digest(encoding) {
+        if (this.#done) throw Object.assign(new Error("Digest already called"), { code: "ERR_CRYPTO_HASH_FINALIZED" });
+        this.#done = true;
+        const input = internal.concatBytes(this.#chunks);
+        const bytes = this.#key === undefined ? native.hash(this.#algorithm, input) : native.hmac(this.#algorithm, this.#key, input);
+        return encodeOut(bytes, encoding);
+      }
+      copy() {
+        const copy = new Hash(this.#algorithm, this.#key);
+        for (const c of this.#chunks) copy.update(c);
+        return copy;
+      }
+    }
+
+    function createHash(algorithm) {
+      try {
+        return new Hash(algorithm);
+      } catch {
+        throw Object.assign(new Error("Digest method not supported"), { code: "ERR_CRYPTO_INVALID_DIGEST" });
+      }
+    }
+
+    function createHmac(algorithm, key) {
+      const keyBytes = typeof key === "string" ? Buffer.from(key) : internal.toUint8(key && key.export ? key.export() : key).slice();
+      try {
+        return new Hash(algorithm, keyBytes);
+      } catch {
+        throw Object.assign(new TypeError(`Invalid digest: ${algorithm}`), { code: "ERR_CRYPTO_INVALID_DIGEST" });
+      }
+    }
+
+    function randomBytes(size, callback) {
+      const buf = Buffer.from(native.randomBytes(size).buffer);
+      if (typeof callback === "function") {
+        setImmediate(() => callback(null, buf));
+        return undefined;
+      }
+      return buf;
+    }
+
+    function randomInt(min, max, callback) {
+      if (typeof max === "function" || max === undefined) {
+        callback = max;
+        max = min;
+        min = 0;
+      }
+      const range = max - min;
+      const bytes = native.randomBytes(6);
+      let n = 0;
+      for (const b of bytes) n = n * 256 + b;
+      const value = min + (n % range);
+      if (typeof callback === "function") {
+        setImmediate(() => callback(null, value));
+        return undefined;
+      }
+      return value;
+    }
+
+    function timingSafeEqual(a, b) {
+      const x = internal.toUint8(a);
+      const y = internal.toUint8(b);
+      if (x.byteLength !== y.byteLength) {
+        throw Object.assign(new RangeError("Input buffers must have the same byte length"), { code: "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH" });
+      }
+      let diff = 0;
+      for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+      return diff === 0;
+    }
+
+    function randomFillSync(buffer, offset = 0, size) {
+      const view = internal.toUint8(buffer);
+      const end = size === undefined ? view.length : offset + size;
+      view.set(native.randomBytes(end - offset), offset);
+      return buffer;
+    }
+
+    const unsupportedCrypto = ["createCipheriv", "createDecipheriv", "createSign", "createVerify", "generateKeyPair", "generateKeyPairSync", "createECDH", "createDiffieHellman", "pbkdf2", "pbkdf2Sync", "scrypt", "scryptSync", "publicEncrypt", "privateDecrypt", "sign", "verify", "createPublicKey", "createPrivateKey", "createSecretKey", "hkdf", "hkdfSync"];
+    return unsupportedModule("crypto", "only hashes, HMAC and random numbers are implemented", unsupportedCrypto, {
+      createHash,
+      createHmac,
+      hash: (algorithm, data, encoding = "hex") => createHash(algorithm).update(data).digest(encoding),
+      randomBytes,
+      pseudoRandomBytes: randomBytes,
+      randomFillSync,
+      randomFill: (buffer, ...rest) => {
+        const callback = rest.pop();
+        randomFillSync(buffer, ...rest);
+        setImmediate(() => callback(null, buffer));
+      },
+      randomInt,
+      randomUUID: () => webcrypto.randomUUID(),
+      getRandomValues: (array) => webcrypto.getRandomValues(array),
+      timingSafeEqual,
+      getHashes: () => ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"],
+      getCiphers: () => [],
+      getCurves: () => [],
+      webcrypto,
+      subtle: webcrypto.subtle,
+      constants: {},
+      Hash,
+      Hmac: Hash,
+    });
+  }
+
+  // --- timers ---------------------------------------------------------------
+
+  function timersPromises() {
+    const t = internal.timers;
+    const abortError = (signal) => Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR", cause: signal.reason });
+    function delayed(schedule) {
+      return (value, options = {}) =>
+        new Promise((resolve, reject) => {
+          const { signal } = options;
+          if (signal && signal.aborted) {
+            reject(abortError(signal));
+            return;
+          }
+          const handle = schedule(() => resolve(value));
+          if (options.ref === false && handle.unref) handle.unref();
+          if (signal) signal.addEventListener("abort", () => {
+            t.clearTimeout(handle);
+            t.clearImmediate(handle);
+            reject(abortError(signal));
+          });
+        });
+    }
+    const setTimeoutP = (ms, value, options) => delayed((cb) => t.setTimeout(cb, ms))(value, options);
+    const setImmediateP = (value, options) => delayed((cb) => t.setImmediate(cb))(value, options);
+    async function* setIntervalP(ms, value) {
+      for (;;) {
+        await setTimeoutP(ms);
+        yield value;
+      }
+    }
+    return {
+      setTimeout: setTimeoutP,
+      setImmediate: setImmediateP,
+      setInterval: setIntervalP,
+      scheduler: { wait: (ms, options) => setTimeoutP(ms, undefined, options), yield: () => setImmediateP() },
+    };
+  }
+
+  function timersModule() {
+    const t = internal.timers;
+    return {
+      setTimeout: t.setTimeout,
+      clearTimeout: t.clearTimeout,
+      setInterval: t.setInterval,
+      clearInterval: t.clearInterval,
+      setImmediate: t.setImmediate,
+      clearImmediate: t.clearImmediate,
+      promises: internal.builtin("node:timers/promises"),
+      active: (timer) => timer && timer.refresh && timer.refresh(),
+      unenroll: (timer) => t.clearTimeout(timer),
+    };
+  }
+
+  // --- module / vm ----------------------------------------------------------
+
+  function moduleModule() {
+    const builtinModules = Object.keys(reg)
+      .filter((id) => id.startsWith("node:"))
+      .map((id) => id.slice(5));
+    function createRequire(filename) {
+      let path = filename instanceof URL || String(filename).startsWith("file:") ? internal.require("node_url").fileURLToPath(filename) : String(filename);
+      if (path.endsWith("/")) path += "noop.js";
+      return internal.makeRequire(path);
+    }
+    const Module = internal.Module;
+    Object.assign(Module, {
+      builtinModules,
+      createRequire,
+      isBuiltin: (name) => Object.prototype.hasOwnProperty.call(reg, name.startsWith("node:") ? name : "node:" + name) || name === "bun" || name.startsWith("bun:"),
+      _cache: internal.moduleCache,
+      _extensions: { ".js": () => {}, ".json": () => {}, ".node": () => {} },
+      _resolveFilename: (request, parent) => native.resolve(request, (parent && parent.filename) || native.cwd() + "/", true),
+      _nodeModulePaths: (dir) => new Module(dir + "/x", null).paths,
+      wrap: (code) => `(function (exports, require, module, __filename, __dirname) { ${code}\n});`,
+      register() {},
+      syncBuiltinESMExports() {},
+      findSourceMap: () => undefined,
+      SourceMap: class SourceMap {},
+      Module,
+    });
+    return Module;
+  }
+
+  function vmModule() {
+    class Script {
+      constructor(code, options = {}) {
+        this.code = String(code);
+        this.filename = typeof options === "string" ? options : options.filename || "evalmachine.<anonymous>";
+      }
+      runInThisContext() {
+        return native.evalScript(this.code, this.filename);
+      }
+      runInContext(context) {
+        return runWith(this.code, context, this.filename);
+      }
+      runInNewContext(context = {}) {
+        return runWith(this.code, context, this.filename);
+      }
+    }
+    // Not a real separate realm: globals resolve through the context object
+    // first (`with`), then fall back to this realm's globals.
+    function runWith(code, context, filename) {
+      const runner = native.evalScript(`(function (__ctx, __code) { with (__ctx) { return eval(__code); } })`, filename);
+      return runner(context, String(code));
+    }
+    return {
+      Script,
+      runInThisContext: (code, options) => new Script(code, options).runInThisContext(),
+      runInContext: (code, context, options) => new Script(code, options).runInContext(context),
+      runInNewContext: (code, context, options) => new Script(code, options).runInNewContext(context),
+      createContext: (context = {}) => context,
+      isContext: (value) => value !== null && typeof value === "object",
+      compileFunction: (code, params = []) => native.evalScript(`(function (${params.join(", ")}) {\n${code}\n})`),
+    };
+  }
+
+  // --- querystring ----------------------------------------------------------
+
+  function querystringModule() {
+    const escape = (str) => encodeURIComponent(str).replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+    function unescape(str) {
+      try {
+        return decodeURIComponent(str);
+      } catch {
+        return str;
+      }
+    }
+    function stringifyPrimitive(v) {
+      if (typeof v === "string") return v;
+      if ((typeof v === "number" && isFinite(v)) || typeof v === "bigint" || typeof v === "boolean") return String(v);
+      return "";
+    }
+    function stringify(obj, sep = "&", eq = "=", options = {}) {
+      if (obj === null || typeof obj !== "object") return "";
+      const enc = options.encodeURIComponent || escape;
+      const parts = [];
+      for (const key of Object.keys(obj)) {
+        const value = obj[key];
+        const ks = enc(stringifyPrimitive(key)) + eq;
+        if (Array.isArray(value)) {
+          for (const v of value) parts.push(ks + enc(stringifyPrimitive(v)));
+        } else {
+          parts.push(ks + enc(stringifyPrimitive(value)));
+        }
+      }
+      return parts.join(sep);
+    }
+    function parse(str, sep = "&", eq = "=", options = {}) {
+      const out = Object.create(null);
+      if (typeof str !== "string" || str.length === 0) return out;
+      const dec = options.decodeURIComponent || unescape;
+      let pieces = str.split(sep);
+      if (options.maxKeys !== 0) pieces = pieces.slice(0, options.maxKeys || 1000);
+      for (const piece of pieces) {
+        if (!piece) continue;
+        const i = piece.indexOf(eq);
+        const k = dec((i < 0 ? piece : piece.slice(0, i)).replace(/\+/g, " "));
+        const v = i < 0 ? "" : dec(piece.slice(i + eq.length).replace(/\+/g, " "));
+        if (!(k in out)) out[k] = v;
+        else if (Array.isArray(out[k])) out[k].push(v);
+        else out[k] = [out[k], v];
+      }
+      return out;
+    }
+    return { stringify, parse, encode: stringify, decode: parse, escape, unescape };
+  }
+
+  // --- async_hooks / diagnostics_channel ------------------------------------
+
+  function asyncHooksModule() {
+    // Synchronous-only context: the store is visible during run()'s callback
+    // but is not propagated across awaits (QuickJS has no async context hooks).
+    class AsyncLocalStorage {
+      #store = undefined;
+      #enabled = false;
+      getStore() {
+        return this.#enabled ? this.#store : undefined;
+      }
+      run(store, callback, ...args) {
+        const prev = [this.#store, this.#enabled];
+        this.#store = store;
+        this.#enabled = true;
+        try {
+          return callback(...args);
+        } finally {
+          [this.#store, this.#enabled] = prev;
+        }
+      }
+      exit(callback, ...args) {
+        const prev = [this.#store, this.#enabled];
+        this.#enabled = false;
+        try {
+          return callback(...args);
+        } finally {
+          [this.#store, this.#enabled] = prev;
+        }
+      }
+      enterWith(store) {
+        this.#store = store;
+        this.#enabled = true;
+      }
+      disable() {
+        this.#enabled = false;
+      }
+      static bind(fn) {
+        return fn;
+      }
+      static snapshot() {
+        return (fn, ...args) => fn(...args);
+      }
+    }
+    class AsyncResource {
+      constructor(type) {
+        this.type = type;
+      }
+      runInAsyncScope(fn, thisArg, ...args) {
+        return fn.apply(thisArg, args);
+      }
+      emitDestroy() {
+        return this;
+      }
+      bind(fn) {
+        return fn.bind(this);
+      }
+      asyncId() {
+        return 1;
+      }
+      triggerAsyncId() {
+        return 0;
+      }
+      static bind(fn) {
+        return fn;
+      }
+    }
+    return {
+      AsyncLocalStorage,
+      AsyncResource,
+      createHook: () => ({ enable() { return this; }, disable() { return this; } }),
+      executionAsyncId: () => 1,
+      triggerAsyncId: () => 0,
+      executionAsyncResource: () => ({}),
+    };
+  }
+
+  function diagnosticsChannelModule() {
+    const channels = new Map();
+    class Channel {
+      constructor(name) {
+        this.name = name;
+        this._subscribers = [];
+      }
+      get hasSubscribers() {
+        return this._subscribers.length > 0;
+      }
+      subscribe(fn) {
+        this._subscribers.push(fn);
+      }
+      unsubscribe(fn) {
+        const i = this._subscribers.indexOf(fn);
+        if (i >= 0) this._subscribers.splice(i, 1);
+        return i >= 0;
+      }
+      publish(message) {
+        for (const fn of this._subscribers.slice()) fn(message, this.name);
+      }
+      bindStore() {}
+      unbindStore() {}
+      runStores(data, fn, thisArg, ...args) {
+        return fn.apply(thisArg, args);
+      }
+    }
+    const channel = (name) => {
+      if (!channels.has(name)) channels.set(name, new Channel(name));
+      return channels.get(name);
+    };
+    const tracingChannel = (name) => {
+      const names = ["start", "end", "asyncStart", "asyncEnd", "error"];
+      const tc = {};
+      for (const n of names) tc[n] = channel(`tracing:${name}:${n}`);
+      tc.traceSync = (fn, ctx, thisArg, ...args) => fn.apply(thisArg, args);
+      tc.tracePromise = (fn, ctx, thisArg, ...args) => fn.apply(thisArg, args);
+      tc.traceCallback = (fn, pos, ctx, thisArg, ...args) => fn.apply(thisArg, args);
+      tc.subscribe = () => {};
+      tc.unsubscribe = () => {};
+      return tc;
+    };
+    return {
+      channel,
+      hasSubscribers: (name) => channels.has(name) && channels.get(name).hasSubscribers,
+      subscribe: (name, fn) => channel(name).subscribe(fn),
+      unsubscribe: (name, fn) => channel(name).unsubscribe(fn),
+      tracingChannel,
+      Channel,
+    };
+  }
+
+  // --- readline -------------------------------------------------------------
+
+  // Lines come from reading all of stdin (or the given input's data events).
+  function readlineModule() {
+    const EventEmitter = internal.require("events");
+    let stdinLines = null;
+    function takeStdinLine() {
+      if (stdinLines === null) {
+        const text = native.utf8Decode(native.readStdin());
+        stdinLines = text.split(/\r?\n/);
+        if (stdinLines[stdinLines.length - 1] === "") stdinLines.pop();
+      }
+      return stdinLines.length ? stdinLines.shift() : null;
+    }
+    class Interface extends EventEmitter {
+      constructor(input, output) {
+        super();
+        const opts = input && input.input ? input : { input, output };
+        this.input = opts.input;
+        this.output = opts.output;
+        this.terminal = false;
+        this.line = "";
+        this.closed = false;
+        this._prompt = opts.prompt === undefined ? "> " : opts.prompt;
+        this._pendingQuestion = null;
+        this._started = false;
+        this.on("newListener", (event) => {
+          if (event === "line") this._start();
+        });
+      }
+      _start() {
+        if (this._started) return;
+        this._started = true;
+        setImmediate(() => this._pump());
+      }
+      _pump() {
+        if (this.input && this.input !== globalThis.process.stdin && typeof this.input.on === "function") {
+          let buffered = "";
+          this.input.on("data", (chunk) => {
+            buffered += String(chunk);
+            const parts = buffered.split(/\r?\n/);
+            buffered = parts.pop();
+            for (const line of parts) this._deliver(line);
+          });
+          this.input.on("end", () => {
+            if (buffered) this._deliver(buffered);
+            this.close();
+          });
+          return;
+        }
+        for (let line = takeStdinLine(); line !== null && !this.closed; line = takeStdinLine()) this._deliver(line);
+        this.close();
+      }
+      _deliver(line) {
+        if (this._pendingQuestion) {
+          const cb = this._pendingQuestion;
+          this._pendingQuestion = null;
+          cb(line);
+          return;
+        }
+        this.emit("line", line);
+      }
+      question(query, options, callback) {
+        if (typeof options === "function") callback = options;
+        if (this.output && this.output.write) this.output.write(query);
+        const line = takeStdinLine();
+        setImmediate(() => callback(line === null ? "" : line));
+      }
+      prompt() {
+        if (this.output && this.output.write) this.output.write(this._prompt);
+        this._start();
+      }
+      setPrompt(prompt) {
+        this._prompt = prompt;
+      }
+      getPrompt() {
+        return this._prompt;
+      }
+      write(data) {
+        if (this.output && this.output.write) this.output.write(data);
+      }
+      pause() {
+        return this;
+      }
+      resume() {
+        return this;
+      }
+      close() {
+        if (this.closed) return;
+        this.closed = true;
+        this.emit("close");
+      }
+      async *[Symbol.asyncIterator]() {
+        this._started = true;
+        if (this.input && this.input !== globalThis.process.stdin && typeof this.input.on === "function") {
+          const lines = [];
+          let done = false;
+          let wake = null;
+          this._started = false;
+          this.on("line", (l) => {
+            lines.push(l);
+            if (wake) wake();
+          });
+          this.on("close", () => {
+            done = true;
+            if (wake) wake();
+          });
+          while (!done || lines.length) {
+            if (lines.length) yield lines.shift();
+            else await new Promise((r) => (wake = r));
+          }
+          return;
+        }
+        for (let line = takeStdinLine(); line !== null && !this.closed; line = takeStdinLine()) yield line;
+        this.close();
+      }
+    }
+    const createInterface = (input, output) => new Interface(input, output);
+    const promises = {
+      Interface,
+      createInterface(input, output) {
+        const rl = new Interface(input, output);
+        const ask = rl.question.bind(rl);
+        rl.question = (query) => new Promise((resolve) => ask(query, resolve));
+        return rl;
+      },
+    };
+    return {
+      Interface,
+      createInterface,
+      promises,
+      clearLine: (stream, dir, cb) => (cb && cb(), true),
+      clearScreenDown: (stream, cb) => (cb && cb(), true),
+      cursorTo: (stream, x, y, cb) => (typeof y === "function" ? y() : cb && cb(), true),
+      moveCursor: (stream, dx, dy, cb) => (cb && cb(), true),
+      emitKeypressEvents() {},
+    };
+  }
+
+  // --- stream (minimal) -----------------------------------------------------
+
+  function streamModule() {
+    const EventEmitter = internal.require("events");
+    // A small subset of Node streams: push/pipe/data/end, write/end/finish
+    // and Transform. Backpressure is not modelled.
+    class Stream extends EventEmitter {
+      pipe(dest) {
+        this.on("data", (chunk) => dest.write(chunk));
+        this.on("end", () => {
+          if (dest !== globalThis.process.stdout && dest !== globalThis.process.stderr && dest.end) dest.end();
+        });
+        return dest;
+      }
+    }
+    class Readable extends Stream {
+      constructor(options = {}) {
+        super();
+        this.readable = true;
+        this._buffer = [];
+        this._ended = false;
+        this._flowing = false;
+        this._encoding = options.encoding || null;
+        this._objectMode = Boolean(options.objectMode || options.readableObjectMode);
+        if (typeof options.read === "function") this._read = options.read;
+        this.on("newListener", (event) => {
+          if (event === "data") setImmediate(() => this.resume());
+        });
+      }
+      static from(iterable, options) {
+        const stream = new Readable(Object.assign({ objectMode: true }, options));
+        (async () => {
+          try {
+            for await (const chunk of iterable) stream.push(chunk);
+            stream.push(null);
+          } catch (err) {
+            stream.destroy(err);
+          }
+        })();
+        return stream;
+      }
+      _read() {}
+      push(chunk) {
+        if (chunk === null) {
+          this._ended = true;
+          setImmediate(() => this._flush());
+          return false;
+        }
+        this._buffer.push(this._encoding && typeof chunk !== "string" ? String(chunk) : chunk);
+        if (this._flowing) setImmediate(() => this._flush());
+        return true;
+      }
+      _flush() {
+        if (!this._flowing) return;
+        while (this._buffer.length) this.emit("data", this._buffer.shift());
+        if (this._ended && !this._endEmitted) {
+          this._endEmitted = true;
+          this.emit("end");
+          this.emit("close");
+        }
+      }
+      resume() {
+        if (!this._flowing) {
+          this._flowing = true;
+          this._read();
+        }
+        this._flush();
+        return this;
+      }
+      pause() {
+        this._flowing = false;
+        return this;
+      }
+      setEncoding(enc) {
+        this._encoding = enc;
+        return this;
+      }
+      read() {
+        return this._buffer.length ? this._buffer.shift() : null;
+      }
+      destroy(err) {
+        if (err) setImmediate(() => this.emit("error", err));
+        setImmediate(() => this.emit("close"));
+        return this;
+      }
+      async *[Symbol.asyncIterator]() {
+        const queue = [];
+        let done = false;
+        let failure = null;
+        let wake = null;
+        const notify = () => wake && wake();
+        this.on("data", (c) => {
+          queue.push(c);
+          notify();
+        });
+        this.on("end", () => {
+          done = true;
+          notify();
+        });
+        this.on("error", (e) => {
+          failure = e;
+          notify();
+        });
+        while (true) {
+          if (failure) throw failure;
+          if (queue.length) {
+            yield queue.shift();
+            continue;
+          }
+          if (done) return;
+          await new Promise((r) => (wake = r));
+        }
+      }
+    }
+    class Writable extends Stream {
+      constructor(options = {}) {
+        super();
+        this.writable = true;
+        if (typeof options.write === "function") this._write = options.write;
+        if (typeof options.final === "function") this._final = options.final;
+      }
+      _write(chunk, encoding, callback) {
+        callback();
+      }
+      write(chunk, encoding, callback) {
+        if (typeof encoding === "function") callback = encoding;
+        this._write(chunk, typeof encoding === "string" ? encoding : "utf8", (err) => {
+          if (err) this.emit("error", err);
+          if (typeof callback === "function") callback(err);
+        });
+        return true;
+      }
+      end(chunk, encoding, callback) {
+        if (typeof chunk === "function") callback = chunk;
+        else if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
+        const finish = () => {
+          this.writable = false;
+          this.emit("finish");
+          this.emit("close");
+          if (typeof callback === "function") callback();
+        };
+        if (this._final) this._final(() => setImmediate(finish));
+        else setImmediate(finish);
+        return this;
+      }
+      destroy() {
+        return this;
+      }
+    }
+    class Duplex extends Readable {
+      constructor(options = {}) {
+        super(options);
+        this.writable = true;
+        if (typeof options.write === "function") this._write = options.write;
+        if (typeof options.final === "function") this._final = options.final;
+      }
+    }
+    for (const key of ["write", "end", "_write"]) Duplex.prototype[key] = Writable.prototype[key];
+    class Transform extends Duplex {
+      constructor(options = {}) {
+        super(options);
+        if (typeof options.transform === "function") this._transform = options.transform;
+        if (typeof options.flush === "function") this._flushTransform = options.flush;
+      }
+      _transform(chunk, encoding, callback) {
+        callback(null, chunk);
+      }
+      _write(chunk, encoding, callback) {
+        this._transform(chunk, encoding, (err, out) => {
+          if (out !== undefined && out !== null) this.push(out);
+          callback(err);
+        });
+      }
+      end(chunk, encoding, callback) {
+        if (typeof chunk === "function") callback = chunk;
+        else if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
+        const done = () => {
+          this.push(null);
+          this.emit("finish");
+          if (typeof callback === "function") callback();
+        };
+        if (this._flushTransform) {
+          this._flushTransform((err, out) => {
+            if (out !== undefined && out !== null) this.push(out);
+            done();
+          });
+        } else done();
+        return this;
+      }
+    }
+    class PassThrough extends Transform {}
+    function finished(stream, callback) {
+      let called = false;
+      const done = (err) => {
+        if (called) return;
+        called = true;
+        callback(err);
+      };
+      stream.on("end", () => done());
+      stream.on("finish", () => done());
+      stream.on("error", done);
+      return () => {};
+    }
+    function pipeline(...streams) {
+      const callback = typeof streams[streams.length - 1] === "function" ? streams.pop() : null;
+      for (let i = 0; i < streams.length - 1; i++) streams[i].pipe(streams[i + 1]);
+      const last = streams[streams.length - 1];
+      if (callback) finished(last, callback);
+      return last;
+    }
+    const promises = {
+      pipeline: (...streams) => new Promise((resolve, reject) => pipeline(...streams, (err) => (err ? reject(err) : resolve()))),
+      finished: (stream) => new Promise((resolve, reject) => finished(stream, (err) => (err ? reject(err) : resolve()))),
+    };
+    Stream.Readable = Readable;
+    Stream.Writable = Writable;
+    Stream.Duplex = Duplex;
+    Stream.Transform = Transform;
+    Stream.PassThrough = PassThrough;
+    Stream.Stream = Stream;
+    Stream.finished = finished;
+    Stream.pipeline = pipeline;
+    Stream.promises = promises;
+    Stream.isReadable = (s) => Boolean(s && s.readable);
+    Stream.isErrored = () => false;
+    return Stream;
+  }
+
+  // --- net / http helpers that work without sockets -------------------------
+
+  function isIPv4(s) {
+    return /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(String(s));
+  }
+  function isIPv6(s) {
+    const str = String(s);
+    if (!str.includes(":")) return false;
+    try {
+      return new URL(`http://[${str}]/`).hostname.length > 2;
+    } catch {
+      return false;
+    }
+  }
+  const isIP = (s) => (isIPv4(s) ? 4 : isIPv6(s) ? 6 : 0);
+
+  const STATUS_CODES = {
+    100: "Continue", 101: "Switching Protocols", 102: "Processing", 103: "Early Hints", 200: "OK", 201: "Created",
+    202: "Accepted", 203: "Non-Authoritative Information", 204: "No Content", 205: "Reset Content", 206: "Partial Content",
+    207: "Multi-Status", 208: "Already Reported", 226: "IM Used", 300: "Multiple Choices", 301: "Moved Permanently",
+    302: "Found", 303: "See Other", 304: "Not Modified", 305: "Use Proxy", 307: "Temporary Redirect",
+    308: "Permanent Redirect", 400: "Bad Request", 401: "Unauthorized", 402: "Payment Required", 403: "Forbidden",
+    404: "Not Found", 405: "Method Not Allowed", 406: "Not Acceptable", 407: "Proxy Authentication Required",
+    408: "Request Timeout", 409: "Conflict", 410: "Gone", 411: "Length Required", 412: "Precondition Failed",
+    413: "Payload Too Large", 414: "URI Too Long", 415: "Unsupported Media Type", 416: "Range Not Satisfiable",
+    417: "Expectation Failed", 418: "I'm a Teapot", 421: "Misdirected Request", 422: "Unprocessable Entity",
+    423: "Locked", 424: "Failed Dependency", 425: "Too Early", 426: "Upgrade Required", 428: "Precondition Required",
+    429: "Too Many Requests", 431: "Request Header Fields Too Large", 451: "Unavailable For Legal Reasons",
+    500: "Internal Server Error", 501: "Not Implemented", 502: "Bad Gateway", 503: "Service Unavailable",
+    504: "Gateway Timeout", 505: "HTTP Version Not Supported", 506: "Variant Also Negotiates",
+    507: "Insufficient Storage", 508: "Loop Detected", 509: "Bandwidth Limit Exceeded", 510: "Not Extended",
+    511: "Network Authentication Required",
+  };
+  const METHODS = ["ACL", "BIND", "CHECKOUT", "CONNECT", "COPY", "DELETE", "GET", "HEAD", "LINK", "LOCK", "M-SEARCH", "MERGE", "MKACTIVITY", "MKCALENDAR", "MKCOL", "MOVE", "NOTIFY", "OPTIONS", "PATCH", "POST", "PROPFIND", "PROPPATCH", "PURGE", "PUT", "QUERY", "REBIND", "REPORT", "SEARCH", "SOURCE", "SUBSCRIBE", "TRACE", "UNBIND", "UNLINK", "UNLOCK", "UNSUBSCRIBE"];
+
+  function httpModule(name) {
+    return unsupportedModule(name, NO_NETWORK, ["createServer", "request", "get", "Agent", "Server", "ClientRequest", "IncomingMessage", "ServerResponse", "OutgoingMessage"], {
+      STATUS_CODES,
+      METHODS,
+      maxHeaderSize: 16384,
+      validateHeaderName() {},
+      validateHeaderValue() {},
+      setMaxIdleHTTPParsers() {},
+    });
+  }
+
+  // --- registry -------------------------------------------------------------
+
+  const entries = {
+    "node:assert": lazy("assert"),
+    "node:assert/strict": lazy("assert", (a) => a.strict),
+    "node:buffer": lazy("buffer"),
+    "node:events": lazy("events"),
+    "node:fs": lazy("node_fs", (m) => m.fs),
+    "node:fs/promises": lazy("node_fs", (m) => m.promises),
+    "node:path": lazy("path"),
+    "node:path/posix": lazy("path", (p) => p.posix),
+    "node:path/win32": lazy("path", (p) => p.win32),
+    "node:string_decoder": lazy("string_decoder"),
+    "node:util": lazy("util"),
+    "node:sys": lazy("util"),
+    "node:util/types": lazy("util", (u) => u.types),
+    "node:url": lazy("node_url"),
+    "node:process": () => globalThis.process,
+    "node:console": () => globalThis.console,
+    "node:os": osModule,
+    "node:crypto": cryptoModule,
+    "node:timers": timersModule,
+    "node:timers/promises": timersPromises,
+    "node:module": moduleModule,
+    "node:vm": vmModule,
+    "node:querystring": querystringModule,
+    "node:async_hooks": asyncHooksModule,
+    "node:diagnostics_channel": diagnosticsChannelModule,
+    "node:readline": readlineModule,
+    "node:readline/promises": () => internal.builtin("node:readline").promises,
+    "node:stream": streamModule,
+    "node:stream/promises": () => internal.builtin("node:stream").promises,
+    "node:stream/web": () => ({ ReadableStream: globalThis.ReadableStream }),
+    "node:perf_hooks": () => ({
+      performance: globalThis.performance,
+      PerformanceObserver: class PerformanceObserver {
+        observe() {}
+        disconnect() {}
+      },
+      monitorEventLoopDelay: () => ({ enable() {}, disable() {}, percentile: () => 0, min: 0, max: 0, mean: 0, stddev: 0 }),
+      createHistogram: () => ({ record() {}, percentile: () => 0, min: 0, max: 0, mean: 0 }),
+      constants: {},
+    }),
+    "node:tty": () => ({
+      isatty: (fd) => native.isatty(fd),
+      ReadStream: thrower("tty.ReadStream", "no terminal streams"),
+      WriteStream: thrower("tty.WriteStream", "no terminal streams"),
+    }),
+    "node:constants": () => Object.assign({}, internal.builtin("node:os").constants.signals, internal.builtin("node:fs").constants),
+    "node:worker_threads": () =>
+      unsupportedModule("worker_threads", NO_THREADS, ["Worker", "MessageChannel", "BroadcastChannel", "receiveMessageOnPort"], {
+        isMainThread: true,
+        parentPort: null,
+        workerData: null,
+        threadId: 0,
+        resourceLimits: {},
+        SHARE_ENV: Symbol("SHARE_ENV"),
+        markAsUntransferable() {},
+        getEnvironmentData: () => undefined,
+        setEnvironmentData() {},
+      }),
+    "node:child_process": () => unsupportedModule("child_process", NO_PROCESSES, ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork", "ChildProcess"]),
+    "node:cluster": () => unsupportedModule("cluster", NO_PROCESSES, ["fork", "setupPrimary", "setupMaster", "disconnect"], { isPrimary: true, isMaster: true, isWorker: false, workers: {} }),
+    "node:net": () => unsupportedModule("net", NO_NETWORK, ["createServer", "createConnection", "connect", "Socket", "Server", "Stream", "BlockList", "SocketAddress"], { isIP, isIPv4, isIPv6, getDefaultAutoSelectFamily: () => true, setDefaultAutoSelectFamily() {} }),
+    "node:tls": () => unsupportedModule("tls", NO_NETWORK, ["connect", "createServer", "createSecureContext", "TLSSocket", "Server", "checkServerIdentity"], { rootCertificates: [], DEFAULT_MIN_VERSION: "TLSv1.2", DEFAULT_MAX_VERSION: "TLSv1.3", DEFAULT_ECDH_CURVE: "auto" }),
+    "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
+    "node:dns": () => unsupportedModule("dns", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "resolveMx", "resolveTxt", "resolveSrv", "resolveNs", "resolveCname", "reverse", "lookupService", "Resolver"], { promises: internal.builtin("node:dns/promises"), getServers: () => [], setServers() {}, setDefaultResultOrder() {} }),
+    "node:dns/promises": () => unsupportedModule("dns.promises", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "reverse", "Resolver"]),
+    "node:http": () => httpModule("http"),
+    "node:https": () => httpModule("https"),
+    "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {} }),
+    "node:zlib": () => unsupportedModule("zlib", "compression is not implemented yet", ["gzip", "gzipSync", "gunzip", "gunzipSync", "deflate", "deflateSync", "inflate", "inflateSync", "deflateRaw", "deflateRawSync", "inflateRaw", "inflateRawSync", "brotliCompress", "brotliCompressSync", "brotliDecompress", "brotliDecompressSync", "createGzip", "createGunzip", "createDeflate", "createInflate", "unzip", "unzipSync", "crc32"], { constants: {} }),
+    "node:inspector": () => unsupportedModule("inspector", "no debugger", ["open", "close", "url", "waitForDebugger", "Session"], { console: globalThis.console }),
+    "node:repl": () => unsupportedModule("repl", "no interactive terminal", ["start", "REPLServer"]),
+    "node:v8": () => ({
+      getHeapStatistics: () => ({ total_heap_size: native.memoryUsage().heapTotal, used_heap_size: native.memoryUsage().heapUsed, heap_size_limit: 4294967296 }),
+      serialize: thrower("v8.serialize", "no V8 serializer"),
+      deserialize: thrower("v8.deserialize", "no V8 serializer"),
+      setFlagsFromString() {},
+      cachedDataVersionTag: () => 0,
+    }),
+    "node:wasi": () => unsupportedModule("wasi", "nested WASI instances are not supported", ["WASI"]),
+    "node:domain": () => unsupportedModule("domain", "domains are deprecated and not implemented", ["create", "createDomain", "Domain"]),
+    "node:punycode": () => ({ toASCII: (s) => native.domainToASCII(s), toUnicode: (s) => s, encode: thrower("punycode.encode", "not implemented"), decode: thrower("punycode.decode", "not implemented") }),
+    bun: () => globalThis.Bun,
+    "bun:jsc": () => ({
+      gcAndSweep: () => native.gc(),
+      fullGC: () => native.gc(),
+      edenGC: () => native.gc(),
+      heapSize: () => native.memoryUsage().heapUsed,
+      memoryUsage: () => native.memoryUsage(),
+      describe: (v) => String(v),
+      serialize: thrower("bun:jsc.serialize", "JavaScriptCore is not available"),
+      deserialize: thrower("bun:jsc.deserialize", "JavaScriptCore is not available"),
+    }),
+    "bun:test": () => unsupportedModule("bun:test", "the test runner is not part of bun.wasm yet", ["test", "it", "describe", "expect", "beforeAll", "beforeEach", "afterAll", "afterEach", "mock", "spyOn", "jest"]),
+    "bun:sqlite": () => unsupportedModule("bun:sqlite", "SQLite is not compiled into bun.wasm", ["Database", "Statement"]),
+    "bun:ffi": () => unsupportedModule("bun:ffi", "no native libraries in wasm", ["dlopen", "CString", "ptr", "toArrayBuffer", "toBuffer", "linkSymbols", "cc"], { FFIType: {}, suffix: "so" }),
+    "bun:wrap": () => ({}),
+  };
+  Object.assign(reg, entries);
+  return reg;
+})

@@ -1,0 +1,23 @@
+[package]
+name = "bunwasm-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The `bun` binary for wasm32-wasip1"
+
+[[bin]]
+name = "bun"
+path = "src/main.rs"
+
+[features]
+default = ["bun-transpiler"]
+# Bun's real transpiler (crates/bunwasm-transpiler) for .ts/.tsx/.jsx/.toml.
+# Without it only plain JavaScript runs.
+bun-transpiler = ["dep:bunwasm-transpiler", "dep:bunwasm-glue"]
+
+[dependencies]
+bunwasm-runtime = { path = "../bunwasm-runtime" }
+bunwasm-transpiler = { path = "../bunwasm-transpiler", optional = true }
+
+[target.'cfg(target_os = "wasi")'.dependencies]
+bunwasm-glue = { path = "../bunwasm-glue", optional = true }

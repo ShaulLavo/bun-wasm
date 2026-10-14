@@ -1,0 +1,590 @@
+// bun-wasm bootstrap. Evaluated once at startup with the `native` object
+// (src/natives.rs). Installs the globals and returns `internal`: the hooks the
+// Rust side calls (module loading, the event loop, error reporting).
+(function (native) {
+  "use strict";
+
+  const internal = { native };
+  const polyfills = new Map();
+
+  // Lazily evaluate src/js/<name>.js; every file is a factory taking `internal`.
+  internal.require = function requirePolyfill(name) {
+    if (polyfills.has(name)) return polyfills.get(name);
+    const factory = native.loadPolyfill(name);
+    const exports = factory(internal);
+    polyfills.set(name, exports);
+    return exports;
+  };
+
+  // --- small path helpers (the full node:path lives in path.js) ------------
+
+  function dirname(path) {
+    const i = path.lastIndexOf("/");
+    if (i < 0) return ".";
+    if (i === 0) return "/";
+    return path.slice(0, i);
+  }
+
+  function basename(path) {
+    return path.slice(path.lastIndexOf("/") + 1);
+  }
+
+  function pathToFileHref(path) {
+    // encodeURI leaves a few characters that URL paths must escape.
+    return "file://" + encodeURI(path).replace(/[?#]/g, encodeURIComponent);
+  }
+  internal.dirname = dirname;
+  internal.basename = basename;
+  internal.pathToFileHref = pathToFileHref;
+
+  function defineHidden(target, values) {
+    for (const key of Object.keys(values)) {
+      Object.defineProperty(target, key, {
+        value: values[key],
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+    }
+  }
+  internal.defineHidden = defineHidden;
+
+  function defineGlobal(name, value) {
+    Object.defineProperty(globalThis, name, {
+      value,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
+  }
+  internal.defineGlobal = defineGlobal;
+
+  // Lazily computed global (evaluated on first access, then replaced by a
+  // plain data property).
+  function defineLazyGlobal(name, compute) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      enumerable: false,
+      get() {
+        const value = compute();
+        defineGlobal(name, value);
+        return value;
+      },
+      set(value) {
+        defineGlobal(name, value);
+      },
+    });
+  }
+
+  // --- timers ---------------------------------------------------------------
+
+  let timerSeq = 1;
+  // Pending timers sorted by (when, seq).
+  let timerQueue = [];
+  const immediates = [];
+  let refedTimers = 0;
+
+  function insertTimer(timer) {
+    let lo = 0;
+    let hi = timerQueue.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      const other = timerQueue[mid];
+      const before = other._when < timer._when || (other._when === timer._when && other._seq < timer._seq);
+      if (before) lo = mid + 1;
+      else hi = mid;
+    }
+    timerQueue.splice(lo, 0, timer);
+  }
+
+  function removeTimer(timer) {
+    const i = timerQueue.indexOf(timer);
+    if (i >= 0) timerQueue.splice(i, 1);
+  }
+
+  class Timeout {
+    constructor(callback, delay, args, repeat) {
+      this._id = timerSeq++;
+      this._seq = this._id;
+      this._callback = callback;
+      this._args = args;
+      this._delay = delay;
+      this._repeat = repeat;
+      this._ref = true;
+      this._active = true;
+      this._when = native.now() + delay;
+      refedTimers++;
+      insertTimer(this);
+    }
+    ref() {
+      if (!this._ref && this._active) refedTimers++;
+      this._ref = true;
+      return this;
+    }
+    unref() {
+      if (this._ref && this._active) refedTimers--;
+      this._ref = false;
+      return this;
+    }
+    hasRef() {
+      return this._ref;
+    }
+    refresh() {
+      if (!this._active) return this;
+      removeTimer(this);
+      this._when = native.now() + this._delay;
+      this._seq = timerSeq++;
+      insertTimer(this);
+      return this;
+    }
+    close() {
+      cancelTimer(this);
+      return this;
+    }
+    [Symbol.toPrimitive]() {
+      return this._id;
+    }
+  }
+
+  function cancelTimer(timer) {
+    if (!timer || !timer._active) return;
+    timer._active = false;
+    if (timer._ref) refedTimers--;
+    removeTimer(timer);
+  }
+
+  const timersById = new Map();
+
+  function normalizeDelay(delay) {
+    const ms = Number(delay);
+    if (!(ms >= 1) || ms > 2147483647) return 1;
+    return ms;
+  }
+
+  function checkCallback(callback) {
+    if (typeof callback === "function") return;
+    const err = new TypeError(`The "callback" argument must be of type function. Received ${internal.describe(callback)}`);
+    err.code = "ERR_INVALID_ARG_TYPE";
+    throw err;
+  }
+
+  function setTimeout(callback, delay, ...args) {
+    checkCallback(callback);
+    const timer = new Timeout(callback, normalizeDelay(delay), args, false);
+    timersById.set(timer._id, timer);
+    return timer;
+  }
+
+  function setInterval(callback, delay, ...args) {
+    checkCallback(callback);
+    const timer = new Timeout(callback, normalizeDelay(delay), args, true);
+    timersById.set(timer._id, timer);
+    return timer;
+  }
+
+  function lookupTimer(handle) {
+    if (handle instanceof Timeout) return handle;
+    if (typeof handle === "number" || typeof handle === "string") return timersById.get(Number(handle));
+    return undefined;
+  }
+
+  function clearTimeout(handle) {
+    const timer = lookupTimer(handle);
+    if (!timer) return;
+    cancelTimer(timer);
+    timersById.delete(timer._id);
+  }
+
+  class Immediate {
+    constructor(callback, args) {
+      this._callback = callback;
+      this._args = args;
+      this._ref = true;
+      this._active = true;
+    }
+    ref() {
+      this._ref = true;
+      return this;
+    }
+    unref() {
+      this._ref = false;
+      return this;
+    }
+    hasRef() {
+      return this._ref;
+    }
+  }
+
+  function setImmediate(callback, ...args) {
+    checkCallback(callback);
+    const immediate = new Immediate(callback, args);
+    immediates.push(immediate);
+    return immediate;
+  }
+
+  function clearImmediate(immediate) {
+    if (immediate instanceof Immediate) immediate._active = false;
+  }
+
+  function runOneTimer(now) {
+    const timer = timerQueue.shift();
+    if (timer._repeat) {
+      timer._when = now + timer._delay;
+      timer._seq = timerSeq++;
+      insertTimer(timer);
+    } else {
+      timer._active = false;
+      if (timer._ref) refedTimers--;
+      timersById.delete(timer._id);
+    }
+    timer._callback.apply(timer, timer._args);
+  }
+
+  // Called by the Rust event loop. Runs at most one callback so microtasks
+  // drain between callbacks. Returns 0 when something ran, the delay in ms
+  // until the next timer, or -1 when nothing keeps the process alive.
+  internal.runTimers = function runTimers() {
+    const now = native.now();
+    if (timerQueue.length > 0 && timerQueue[0]._when <= now) {
+      runOneTimer(now);
+      return 0;
+    }
+    while (immediates.length > 0) {
+      const immediate = immediates.shift();
+      if (!immediate._active) continue;
+      immediate._active = false;
+      immediate._callback.apply(immediate, immediate._args);
+      return 0;
+    }
+    if (internal.pendingIo > 0) return 0;
+    if (refedTimers <= 0) return -1;
+    // Unref'd timers at the front don't keep us alive but still fire if a
+    // ref'd one is pending later.
+    return Math.max(0.01, timerQueue[0]._when - now);
+  };
+  internal.pendingIo = 0;
+
+  // --- process.nextTick -------------------------------------------------------
+
+  const tickQueue = [];
+
+  internal.nextTick = function nextTick(callback, ...args) {
+    checkCallback(callback);
+    if (tickQueue.length === 0) native.scheduleTick();
+    tickQueue.push([callback, args]);
+  };
+
+  internal.runTicks = function runTicks() {
+    try {
+      while (tickQueue.length > 0) {
+        const [callback, args] = tickQueue.shift();
+        callback.apply(undefined, args);
+      }
+    } finally {
+      if (tickQueue.length > 0) native.scheduleTick();
+    }
+  };
+
+  function queueMicrotask(callback) {
+    checkCallback(callback);
+    Promise.resolve().then(() => callback());
+  }
+
+  defineGlobal("setTimeout", setTimeout);
+  defineGlobal("setInterval", setInterval);
+  defineGlobal("clearTimeout", clearTimeout);
+  defineGlobal("clearInterval", clearTimeout);
+  defineGlobal("setImmediate", setImmediate);
+  defineGlobal("clearImmediate", clearImmediate);
+  defineGlobal("queueMicrotask", queueMicrotask);
+  internal.timers = { setTimeout, setInterval, clearTimeout, clearInterval: clearTimeout, setImmediate, clearImmediate, Timeout, Immediate };
+
+  // Short description of a value for ERR_INVALID_ARG_TYPE messages.
+  internal.describe = function describe(value) {
+    if (value === null) return "null";
+    if (value === undefined) return "undefined";
+    if (typeof value === "function") return `function ${value.name}`;
+    if (typeof value === "object") {
+      const name = value.constructor && value.constructor.name;
+      return name ? `an instance of ${name}` : "an instance of Object";
+    }
+    let shown = String(value);
+    if (shown.length > 28) shown = shown.slice(0, 25) + "...";
+    if (typeof value === "string") shown = `'${shown}'`;
+    return `type ${typeof value} (${shown})`;
+  };
+
+  // --- CommonJS ---------------------------------------------------------------
+
+  const moduleCache = Object.create(null);
+  let mainModule;
+
+  class Module {
+    constructor(id, parent) {
+      this.id = id;
+      this.filename = id;
+      this.path = dirname(id);
+      this.exports = {};
+      this.loaded = false;
+      this.children = [];
+      this.paths = nodeModulePaths(this.path);
+      defineHidden(this, { parent });
+    }
+    require(spec) {
+      return requireFrom(spec, this.filename);
+    }
+  }
+
+  function nodeModulePaths(dir) {
+    const paths = [];
+    let current = dir;
+    for (;;) {
+      if (basename(current) !== "node_modules") paths.push((current === "/" ? "" : current) + "/node_modules");
+      if (current === "/") break;
+      current = dirname(current);
+    }
+    return paths;
+  }
+
+  function isBuiltinId(id) {
+    return id.startsWith("node:") || id === "bun" || id.startsWith("bun:");
+  }
+
+  function loadModule(path, format) {
+    const cached = moduleCache[path];
+    if (cached) return cached;
+    const kind = format || native.moduleFormat(path);
+    const mod = new Module(path, undefined);
+    moduleCache[path] = mod;
+    try {
+      evaluateModule(mod, path, kind);
+    } catch (err) {
+      delete moduleCache[path];
+      throw err;
+    }
+    mod.loaded = true;
+    return mod;
+  }
+
+  function evaluateModule(mod, path, kind) {
+    if (kind === "json") {
+      mod.exports = JSON.parse(native.readFileUtf8(path));
+      return;
+    }
+    if (kind === "text") {
+      mod.exports = native.readFileUtf8(path);
+      return;
+    }
+    if (kind === "esm") {
+      mod.exports = native.requireEsm(path);
+      return;
+    }
+    const wrapper = native.compileCjs(path);
+    wrapper.call(mod.exports, mod.exports, makeRequire(path, mod), mod, path, dirname(path));
+  }
+
+  function resolveFrom(spec, fromPath) {
+    if (typeof spec !== "string") {
+      const err = new TypeError(`The "id" argument must be of type string. Received ${internal.describe(spec)}`);
+      err.code = "ERR_INVALID_ARG_TYPE";
+      throw err;
+    }
+    return native.resolve(spec, fromPath, true);
+  }
+
+  function requireFrom(spec, fromPath) {
+    const resolved = resolveFrom(spec, fromPath);
+    if (isBuiltinId(resolved)) return internal.builtin(resolved);
+    return loadModule(resolved, null).exports;
+  }
+
+  function makeRequire(fromPath, mod) {
+    function require(spec) {
+      return requireFrom(spec, fromPath);
+    }
+    require.resolve = function resolve(spec) {
+      return resolveFrom(spec, fromPath);
+    };
+    require.resolve.paths = function paths(spec) {
+      return isBuiltinId(spec) ? null : nodeModulePaths(dirname(fromPath));
+    };
+    require.cache = moduleCache;
+    require.main = mainModule;
+    require.extensions = { ".js": null, ".json": null, ".node": null };
+    if (mod) mod.require = require;
+    return require;
+  }
+  internal.makeRequire = makeRequire;
+  internal.moduleCache = moduleCache;
+  internal.Module = Module;
+  internal.isBuiltinId = isBuiltinId;
+
+  // ESM importing a non-ES module. Returns [namespace source, default export].
+  internal.importNonEsm = function importNonEsm(path, format) {
+    const exports = loadModule(path, format).exports;
+    if (format === "cjs" && exports !== null && typeof exports === "object" && exports.__esModule) {
+      return [exports, exports.default];
+    }
+    return [exports, exports];
+  };
+
+  internal.initImportMeta = function initImportMeta(meta, path, isMain) {
+    defineHidden(meta, {
+      url: pathToFileHref(path),
+      dir: dirname(path),
+      dirname: dirname(path),
+      path,
+      filename: path,
+      file: basename(path),
+      main: isMain,
+      require: makeRequire(path, undefined),
+      resolve(spec) {
+        const resolved = native.resolve(String(spec), path, false);
+        return isBuiltinId(resolved) ? resolved : pathToFileHref(resolved);
+      },
+      resolveSync(spec) {
+        return native.resolve(String(spec), path, false);
+      },
+    });
+    Object.defineProperty(meta, "env", {
+      get: () => globalThis.process.env,
+      configurable: true,
+      enumerable: false,
+    });
+  };
+
+  internal.runMain = function runMain(path) {
+    if (!native.exists(path)) {
+      const err = new Error(`Module not found "${internal.mainArg || path}"`);
+      err.code = "ERR_MODULE_NOT_FOUND";
+      err.__bunwasmPlain = true;
+      throw err;
+    }
+    const format = native.moduleFormat(path);
+    if (format === "esm") return native.importModule(path);
+    mainModule = new Module(path, null);
+    mainModule.id = ".";
+    moduleCache[path] = mainModule;
+    try {
+      evaluateModule(mainModule, path, format);
+    } catch (err) {
+      delete moduleCache[path];
+      throw err;
+    }
+    mainModule.loaded = true;
+    return undefined;
+  };
+  internal.getMainModule = () => mainModule;
+
+  // --- built-in modules -------------------------------------------------------
+
+  const builtinCache = new Map();
+  const builtinFactories = Object.create(null);
+  internal.builtinFactories = builtinFactories;
+
+  internal.builtin = function builtin(id) {
+    if (builtinCache.has(id)) return builtinCache.get(id);
+    const factory = builtinFactories[id];
+    if (!factory) throw new Error(`Cannot find module '${id}'`);
+    const exports = factory();
+    builtinCache.set(id, exports);
+    return exports;
+  };
+
+  // --- uncaught errors --------------------------------------------------------
+
+  function printError(err) {
+    let text;
+    try {
+      text = internal.require("inspect").formatError(err);
+    } catch (formatErr) {
+      text = fallbackErrorText(err);
+    }
+    native.writeStderr(text.endsWith("\n") ? text : text + "\n");
+    native.writeStderr(`Bun v${native.platformInfo.version} (WASI ${native.platformInfo.arch})\n`);
+  }
+  internal.printError = printError;
+
+  function fallbackErrorText(err) {
+    if (err instanceof Error) return `${err.name === "Error" ? "error" : err.name}: ${err.message}\n${err.stack || ""}\n`;
+    return `error: ${String(err)}\n`;
+  }
+
+  function emitExit(code) {
+    const process = globalThis.process;
+    if (!process || process._exiting) return;
+    process._exiting = true;
+    try {
+      process.emit("exit", code);
+    } catch (err) {
+      // An exception inside an exit handler is itself fatal.
+      printError(err);
+    }
+  }
+  internal.emitExit = emitExit;
+
+  function listenerCount(event) {
+    const process = globalThis.process;
+    return process && typeof process.listenerCount === "function" ? process.listenerCount(event) : 0;
+  }
+
+  // Plain messages like `Module not found "x"` print without a stack.
+  function printFatal(err) {
+    if (err && err.__bunwasmPlain) {
+      native.writeStderr(`error: ${err.message}\n\nBun v${native.platformInfo.version} (WASI ${native.platformInfo.arch})\n`);
+      return;
+    }
+    printError(err);
+  }
+
+  internal.handleUncaught = function handleUncaught(err) {
+    if (listenerCount("uncaughtException") > 0) {
+      globalThis.process.emit("uncaughtException", err, "uncaughtException");
+      return true;
+    }
+    printFatal(err);
+    globalThis.process.exitCode = 1;
+    emitExit(1);
+    return false;
+  };
+
+  internal.handleRejection = function handleRejection(reason) {
+    if (listenerCount("unhandledRejection") > 0) {
+      globalThis.process.emit("unhandledRejection", reason, undefined);
+      return true;
+    }
+    printFatal(reason);
+    globalThis.process.exitCode = 1;
+    emitExit(1);
+    return false;
+  };
+
+  internal.emitBeforeExit = function emitBeforeExit() {
+    if (listenerCount("beforeExit") === 0) return false;
+    const process = globalThis.process;
+    process.emit("beforeExit", process.exitCode || 0);
+    return refedTimers > 0 || immediates.length > 0 || tickQueue.length > 0;
+  };
+
+  internal.beforeExit = function beforeExit() {
+    const process = globalThis.process;
+    const code = (process.exitCode | 0) || 0;
+    emitExit(code);
+    return (process.exitCode | 0) || 0;
+  };
+
+  // --- globals ----------------------------------------------------------------
+
+  defineGlobal("global", globalThis);
+  defineGlobal("self", globalThis);
+
+  internal.require("web")(defineGlobal, defineLazyGlobal);
+  defineGlobal("process", internal.require("process"));
+  defineGlobal("console", internal.require("console"));
+  defineGlobal("Bun", internal.require("bun"));
+  defineLazyGlobal("Buffer", () => internal.require("buffer").Buffer);
+  defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
+  internal.require("builtins");
+
+  return internal;
+})
