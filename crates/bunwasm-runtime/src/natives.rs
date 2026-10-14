@@ -531,6 +531,16 @@ fn install_modules<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
         modules::load_polyfill(&ctx, &name)
     })?;
     let st = state.clone();
+    set_fn(native, "mapPosition", move |ctx: Ctx<'js>, file: String, line: u32, col: u32| -> Result<Value<'js>> {
+        let Some((line, col)) = st.map_position(&file, line, col) else {
+            return Ok(Value::new_undefined(ctx));
+        };
+        let pair = Array::new(ctx.clone())?;
+        pair.set(0, line)?;
+        pair.set(1, col)?;
+        Ok(pair.into_value())
+    })?;
+    let st = state.clone();
     set_fn(native, "getSourceLine", move |file: String, line: f64| -> Option<String> {
         st.source_line(&file, line as usize)
     })?;

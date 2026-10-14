@@ -21,9 +21,10 @@ mod encoding;
 mod modules;
 mod natives;
 mod resolve;
+mod sourcemap;
 pub mod transpiler;
 
-pub use transpiler::{Loader, PassthroughTranspiler, Transpiler};
+pub use transpiler::{Loader, PassthroughTranspiler, Transpiled, Transpiler};
 
 /// Bun version this runtime reports (from vendor/bun/package.json).
 pub const BUN_VERSION: &str = env!("BUNWASM_BUN_VERSION");
@@ -59,6 +60,9 @@ pub(crate) struct State {
     main_arg: RefCell<String>,
     /// Transpiled sources by path, with their module format.
     sources: RefCell<HashMap<String, (Rc<str>, modules::Format)>>,
+    /// Stack-position fixups for files whose evaluated code differs from the
+    /// file on disk (transpiled code, injected ESM prologue).
+    positions: RefCell<HashMap<String, modules::PositionMap>>,
     stdout: RefCell<BufWriter<io::Stdout>>,
     /// Set when `process.nextTick` queued work.
     tick_pending: Cell<bool>,
@@ -78,6 +82,7 @@ impl State {
             main: RefCell::new(String::new()),
             main_arg: RefCell::new(String::new()),
             sources: RefCell::new(HashMap::new()),
+            positions: RefCell::new(HashMap::new()),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
             tick_pending: Cell::new(false),
             rejections: RefCell::new(Vec::new()),

@@ -21,6 +21,28 @@ include!(concat!(env!("OUT_DIR"), "/polyfills.rs"));
 /// expression (that is how it reports a file is CommonJS).
 const CJS_WRAPPER_PREFIX: &str = "(function(exports, require, module, __filename, __dirname) {";
 
+/// How positions in the code QuickJS evaluated map to the file on disk.
+#[derive(Default)]
+pub struct PositionMap {
+    /// Source map from transpiled to original code.
+    pub map: Option<crate::sourcemap::SourceMap>,
+    /// Original source, for error excerpts (only kept when mapped).
+    pub original: Option<Rc<str>>,
+    /// Characters injected at the start of line 1 (the ESM prologue).
+    pub line1_shift: u32,
+}
+
+impl PositionMap {
+    /// Original 1-based (line, column) for a position in evaluated code.
+    pub fn original_position(&self, line: u32, col: u32) -> (u32, u32) {
+        let col = if line == 1 { col.saturating_sub(self.line1_shift).max(1) } else { col };
+        match &self.map {
+            Some(map) => map.lookup(line, col).unwrap_or((line, col)),
+            None => (line, col),
+        }
+    }
+}
+
 /// What kind of module a file is, once transpiled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -182,12 +204,18 @@ impl State {
             SourceLoader::Json => (raw, Format::Json),
             SourceLoader::Text => (raw, Format::Text),
             _ => {
-                let code = self
+                let out = self
                     .transpiler
-                    .transpile(&raw, path, loader)
+                    .transpile_with_map(&raw, path, loader)
                     .map_err(|msg| throw_build_error(ctx, &msg, &raw))?;
-                let format = self.detect_format(path, &code);
-                (code, format)
+                let format = self.detect_format(path, &out.code);
+                if let Some(mappings) = out.mappings.filter(|m| !m.is_empty()) {
+                    let mut positions = self.positions.borrow_mut();
+                    let entry = positions.entry(path.to_owned()).or_default();
+                    entry.map = Some(crate::sourcemap::SourceMap::parse(&mappings));
+                    entry.original = Some(Rc::from(raw.as_str()));
+                }
+                (out.code, format)
             }
         };
         let entry: (Rc<str>, Format) = (Rc::from(strip_shebang(&code)), format);
@@ -216,9 +244,26 @@ impl State {
     }
 
     pub fn source_line(&self, file: &str, line: usize) -> Option<String> {
+        if let Some(original) = self.positions.borrow().get(file).and_then(|p| p.original.clone()) {
+            return original.lines().nth(line.checked_sub(1)?).map(str::to_owned);
+        }
         let sources = self.sources.borrow();
         let (code, _) = sources.get(file)?;
         code.lines().nth(line.checked_sub(1)?).map(str::to_owned)
+    }
+
+    /// Original position for a stack frame, if the file needs any fixup.
+    pub fn map_position(&self, file: &str, line: u32, col: u32) -> Option<(u32, u32)> {
+        let positions = self.positions.borrow();
+        Some(positions.get(file)?.original_position(line, col))
+    }
+
+    /// Remember that `len` characters were injected before line 1 of `path`.
+    fn record_prologue(&self, path: &str, len: usize) {
+        if len == 0 {
+            return;
+        }
+        self.positions.borrow_mut().entry(path.to_owned()).or_default().line1_shift = len as u32;
     }
 
     fn internal<'js>(&self, ctx: &Ctx<'js>) -> Result<Object<'js>> {
@@ -380,7 +425,9 @@ impl Loader for ModuleLoader {
         let (code, format) = self.state.load_source(ctx, name)?;
         match format {
             Format::Esm => {
-                let source = format!("{}{}", esm_prologue(&code), code);
+                let prologue = esm_prologue(&code);
+                self.state.record_prologue(name, prologue.chars().count());
+                let source = format!("{prologue}{code}");
                 let module = Module::declare(ctx.clone(), name, source)?;
                 let init: Function = internal.get("initImportMeta")?;
                 let is_main = *self.state.main.borrow() == name;
@@ -401,7 +448,9 @@ impl Loader for ModuleLoader {
 /// Declare and evaluate `-e` code as an ES module named `<cwd>/[eval]`.
 pub fn eval_main<'js>(ctx: &Ctx<'js>, state: &State, code: &str) -> Result<rquickjs::Promise<'js>> {
     let name = format!("{}/[eval]", state.cwd().trim_end_matches('/'));
-    let source = format!("{}{}", esm_prologue(code), code);
+    let prologue = esm_prologue(code);
+    state.record_prologue(&name, prologue.chars().count());
+    let source = format!("{prologue}{code}");
     state
         .sources
         .borrow_mut()

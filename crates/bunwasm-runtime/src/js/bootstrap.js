@@ -33,6 +33,47 @@
     return exports;
   };
 
+  // --- stack traces ---------------------------------------------------------
+  //
+  // QuickJS-ng supports V8's Error.prepareStackTrace. We use it to print
+  // frames in QuickJS's own format, but with positions mapped back to the
+  // file on disk (source maps for transpiled code, the injected ESM
+  // prologue), and without the Error subclass constructor frames that JSC
+  // doesn't show either.
+
+  function isErrorConstructor(fn) {
+    return typeof fn === "function" && (fn === Error || fn.prototype instanceof Error);
+  }
+
+  function formatCallSite(site) {
+    const file = site.getFileName();
+    const name = site.getFunctionName();
+    // A syntax error's location: no function, just file:line:col.
+    if (site.getFunction() === undefined && !name && file) {
+      return `${file}:${site.getLineNumber()}:${site.getColumnNumber()}`;
+    }
+    const label = name || "<anonymous>";
+    if (site.isNative() || file === null || file === undefined) return `${label} (native)`;
+    let line = site.getLineNumber();
+    let col = site.getColumnNumber();
+    if (line === null) return `${label} (${file})`;
+    const mapped = native.mapPosition(file, line, col);
+    if (mapped) [line, col] = mapped;
+    return `${label} (${file}:${line}:${col})`;
+  }
+
+  Error.prepareStackTrace = function prepareStackTrace(error, callsites) {
+    let start = 0;
+    while (start < callsites.length - 1 && isErrorConstructorFrame(callsites[start])) start++;
+    let out = "";
+    for (let i = start; i < callsites.length; i++) out += `    at ${formatCallSite(callsites[i])}\n`;
+    return out;
+  };
+
+  function isErrorConstructorFrame(site) {
+    return site.isConstructor() && isErrorConstructor(site.getFunction());
+  }
+
   // --- small path helpers (the full node:path lives in path.js) ------------
 
   function dirname(path) {

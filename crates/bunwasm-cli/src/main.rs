@@ -36,7 +36,7 @@ fn transpiler() -> Box<dyn Transpiler> {
 
 #[cfg(feature = "bun-transpiler")]
 mod bun_transpiler {
-    use bunwasm_runtime::{Loader, Transpiler};
+    use bunwasm_runtime::{Loader, Transpiled, Transpiler};
     use bunwasm_transpiler::Loader as BunLoader;
 
     /// Bun's real parser and printer (crates/bunwasm-transpiler).
@@ -48,8 +48,12 @@ mod bun_transpiler {
 
     impl Transpiler for BunTranspiler {
         fn transpile(&self, source: &str, path: &str, loader: Loader) -> Result<String, String> {
+            self.transpile_with_map(source, path, loader).map(|out| out.code)
+        }
+
+        fn transpile_with_map(&self, source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
             let loader = match loader {
-                Loader::Js => return Ok(source.to_owned()),
+                Loader::Js => return Ok(Transpiled { code: source.to_owned(), mappings: None }),
                 Loader::Jsx => BunLoader::Jsx,
                 Loader::Ts => BunLoader::Ts,
                 Loader::Tsx => BunLoader::Tsx,
@@ -57,7 +61,8 @@ mod bun_transpiler {
                 Loader::Toml => BunLoader::Toml,
                 Loader::Text => BunLoader::Text,
             };
-            bunwasm_transpiler::transpile(source, path, loader)
+            let out = bunwasm_transpiler::transpile_with_source_map(source, path, loader)?;
+            Ok(Transpiled { code: out.code, mappings: Some(out.mappings) })
         }
     }
 }

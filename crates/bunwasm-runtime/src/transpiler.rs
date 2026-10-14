@@ -61,6 +61,20 @@ impl fmt::Display for Loader {
 /// the runtime throws as a `SyntaxError`-like error in JS.
 pub trait Transpiler {
     fn transpile(&self, source: &str, path: &str, loader: Loader) -> Result<String, String>;
+
+    /// Like [`Transpiler::transpile`], plus the source map v3 `mappings`
+    /// string (one source: the input) when the transpiler records one. The
+    /// runtime uses it to report original positions in stack traces.
+    fn transpile_with_map(&self, source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
+        self.transpile(source, path, loader).map(|code| Transpiled { code, mappings: None })
+    }
+}
+
+/// Transpiler output with an optional source map.
+#[derive(Clone, Debug, Default)]
+pub struct Transpiled {
+    pub code: String,
+    pub mappings: Option<String>,
 }
 
 /// Stand-in until Bun's real transpiler is wired in: plain JavaScript passes
