@@ -1,0 +1,6 @@
+ms: 172800000 2m 10 hours
+semver: true 1.3.0 1.2.0 1.9.9 1.10.0
+picocolors: false "\u001b[31mx\u001b[39m"
+nanoid: 21 true
+commander: true input.txt
+Usage: tool [options] <file>

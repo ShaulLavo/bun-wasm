@@ -520,7 +520,7 @@
       text = fallbackErrorText(err);
     }
     native.writeStderr(text.endsWith("\n") ? text : text + "\n");
-    native.writeStderr(`Bun v${native.platformInfo.version} (WASI ${native.platformInfo.arch})\n`);
+    native.writeStderr(`\nBun v${native.platformInfo.version} (WASI ${native.platformInfo.arch})\n`);
   }
   internal.printError = printError;
 
