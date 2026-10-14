@@ -22,3 +22,6 @@ opt-level = 1
 [patch.crates-io]
 # wasip1 gets the POSIX types and stubs the vendored Bun crates expect.
 libc = { path = "third_party/libc" }
+# QuickJS-ng with call-site columns that match JavaScriptCore (see the
+# `bun-wasm:` comments in third_party/rquickjs-sys/quickjs/quickjs.c).
+rquickjs-sys = { path = "third_party/rquickjs-sys" }
