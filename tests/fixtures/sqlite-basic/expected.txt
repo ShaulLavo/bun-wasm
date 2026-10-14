@@ -1,0 +1,119 @@
+module: true true true function
+constants: 1 4 1
+filename: ":memory:" inTransaction: false
+version: string
+paramsCount: 4
+{
+  changes: 1,
+  lastInsertRowid: 1,
+}
+{
+  changes: 1,
+  lastInsertRowid: 2,
+}
+{
+  changes: 2,
+  lastInsertRowid: 4,
+}
+columnNames: [ "id", "name", "age", "score", "photo" ]
+[
+  {
+    id: 1,
+    name: "Ada",
+    age: 36,
+    score: 9.5,
+    photo: Uint8Array(3) [ 1, 2, 3 ],
+  }, {
+    id: 2,
+    name: "Grace",
+    age: 45,
+    score: 8.25,
+    photo: null,
+  }, {
+    id: 3,
+    name: "Linus",
+    age: 21,
+    score: null,
+    photo: null,
+  }, {
+    id: 4,
+    name: "Ken",
+    age: 70,
+    score: null,
+    photo: null,
+  }
+]
+get: {
+  name: "Grace",
+  age: 45,
+}
+get none: null
+values: [
+  [ 1, "Ada" ], [ 2, "Grace" ], [ 3, "Linus" ], [ 4, "Ken" ]
+]
+raw: [
+  [
+    Uint8Array(8) [ 4, 0, 0, 0, 0, 0, 0, 0 ], Uint8Array(8) [ 0, 0, 0, 0, 0, 0, 248, 63 ], Uint8Array(2) [ 104, 105 ], Uint8Array(0) [], null, Uint8Array(1) [ 255 ]
+  ]
+]
+all none: []
+insert all/values/get: [] null null
+returning: {
+  id: 5,
+  name: "Z",
+}
+iterate: Ada,Grace,Linus,Ken,Z
+iterator + break: Ada,Grace then all: 5
+query cache: true false
+toString: select NULL as a, NULL as b select 1 as one
+expanded: select 'it''s' as x [object "select 'it''s' as x"]
+toJSON: {"sql":"select name from people","isFinalized":false,"paramsCount":0,"columnNames":["name"]}
+as: true Z (1); Linus (21); Ada (36); Grace (45); Ken (70) [ "name", "age" ]
+duplicate columns: {
+  a: 2,
+  b: 3,
+}
+types: {
+  i: 1,
+  f: 1.5,
+  t: "x",
+  b: Uint8Array(2) [ 0, 255 ],
+  n: null,
+  whole: 2,
+}
+columnTypes: [ "INTEGER", "TEXT", "FLOAT", "BLOB" ]
+declaredTypes: [ "INTEGER", "TEXT", null ]
+transaction: true false
+rolled back: boom false
+nested: 16 after: 16
+variants: function function function true
+immediate: true true true
+total: {
+  n: 7,
+  total: 31,
+}
+json: {
+  v: "c",
+  arr: "[1,\"x\"]",
+}
+math: {
+  s: 4,
+  p: 1024,
+  f: 2,
+}
+fts5: [
+  [ "quick thinking" ], [ "the quick brown fox" ]
+]
+rtree: [
+  [ 1 ]
+]
+window: [
+  [ 1, 1 ], [ 2, 3 ], [ 3, 6 ], [ 4, 10 ]
+]
+sorted: [
+  [ 4999 ], [ 4998 ], [ 4997 ]
+] {
+  c: 5000,
+}
+finalized: true false
+closed

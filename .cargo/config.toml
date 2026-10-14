@@ -1,0 +1,15 @@
+[env]
+# Extra compile flags for the SQLite amalgamation that libsqlite3-sys bundles
+# (bun:sqlite, crates/bunwasm-runtime/src/sqlite.rs). Applied after the crate's
+# own flags, so -U drops one of its defaults. The aim is native Bun's feature
+# set and defaults, minus what WASI cannot do:
+#   -USQLITE_DEFAULT_FOREIGN_KEYS   Bun leaves foreign keys off by default
+#   -USQLITE_USE_URI                Bun treats "file:..." as a plain file name
+#   -USQLITE_ENABLE_STAT4 -USQLITE_SOUNDEX -USQLITE_ENABLE_MEMORY_MANAGEMENT
+#                                   not in Bun's build; smaller binary
+#   SQLITE_ENABLE_MATH_FUNCTIONS    sqrt(), pow(), ... as in Bun
+#   SQLITE_MAX_VARIABLE_NUMBER      Bun's limit on bound parameters
+#   SQLITE_TEMP_STORE=3             temp tables/indices always in memory (no temp dir in WASI)
+#   SQLITE_OMIT_LOAD_EXTENSION      no dlopen in WASI (SQLite's __wasi__ check also sets it)
+#   SQLITE_OMIT_WAL                 WAL needs shared memory (mmap) that WASI lacks
+LIBSQLITE3_FLAGS = "-USQLITE_DEFAULT_FOREIGN_KEYS -USQLITE_USE_URI -USQLITE_ENABLE_STAT4 -USQLITE_SOUNDEX -USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_MATH_FUNCTIONS -DSQLITE_MAX_VARIABLE_NUMBER=250000 -DSQLITE_TEMP_STORE=3 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_WAL"

@@ -22,6 +22,7 @@ mod modules;
 mod natives;
 mod resolve;
 mod sourcemap;
+mod sqlite;
 pub mod transpiler;
 
 pub use transpiler::{Loader, PassthroughTranspiler, Transpiled, Transpiler};

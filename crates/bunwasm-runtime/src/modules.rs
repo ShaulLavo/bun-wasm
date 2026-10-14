@@ -9,8 +9,9 @@ use std::rc::Rc;
 
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 use rquickjs::module::Declared;
-use rquickjs::{Ctx, Exception, Function, Module, Object, Result, Value};
+use rquickjs::{Ctx, Function, Module, Object, Result, Value};
 
+use crate::natives;
 use crate::resolve::{self, Kind, Resolved};
 use crate::transpiler::Loader as SourceLoader;
 use crate::State;
@@ -64,7 +65,7 @@ impl Format {
 }
 
 pub fn throw_resolve_error(ctx: &Ctx<'_>, msg: &str, spec: &str, kind: Kind) -> rquickjs::Error {
-    let exception = match Exception::from_message(ctx.clone(), msg) {
+    let exception = match natives::new_error(ctx, msg) {
         Ok(e) => e,
         Err(e) => return e,
     };
@@ -77,7 +78,7 @@ pub fn throw_resolve_error(ctx: &Ctx<'_>, msg: &str, spec: &str, kind: Kind) -> 
 }
 
 fn throw_error(ctx: &Ctx<'_>, msg: &str) -> rquickjs::Error {
-    Exception::throw_message(ctx, msg)
+    natives::throw_error(ctx, msg)
 }
 
 /// A transpiler failure, reported like Bun's build errors: the offending
@@ -100,7 +101,7 @@ fn throw_build_error(ctx: &Ctx<'_>, report: &str, source: &str) -> rquickjs::Err
         text.push_str(&format!("error: {message}\n    at {file}:{line}:{col}\n\n"));
     }
     let message = first_message.unwrap_or_else(|| report.trim().to_owned());
-    let exception = match Exception::from_message(ctx.clone(), &message) {
+    let exception = match natives::new_error(ctx, &message) {
         Ok(e) => e,
         Err(e) => return e,
     };
@@ -420,7 +421,13 @@ impl Loader for ModuleLoader {
         if resolve::builtin_name(name).is_some() {
             let builtin: Function = internal.get("builtin")?;
             let exports: Value = builtin.call((name,))?;
-            return declare_wrapper(ctx, name, exports.clone(), exports);
+            // A builtin marked `__esModule` (bun:sqlite) names its own default
+            // export; for the rest the default is the exports object.
+            let default = match exports.as_object() {
+                Some(obj) if obj.get::<_, bool>("__esModule").unwrap_or(false) => obj.get("default")?,
+                _ => exports.clone(),
+            };
+            return declare_wrapper(ctx, name, exports, default);
         }
         let (code, format) = self.state.load_source(ctx, name)?;
         match format {
