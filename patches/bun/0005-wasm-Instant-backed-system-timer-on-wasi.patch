@@ -1,0 +1,44 @@
+From bcb79d93c337457c20a18671d777eafe38e67609 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 15 Oct 2026 02:10:37 +0300
+Subject: [PATCH 5/7] wasm: Instant-backed system timer on wasi
+
+The resolver resets its timer on every resolve; wasi has a monotonic clock.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/perf/system_timer.rs | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/perf/system_timer.rs b/src/perf/system_timer.rs
+index aa0e9e2a..622a4541 100644
+--- a/src/perf/system_timer.rs
++++ b/src/perf/system_timer.rs
+@@ -1,10 +1,10 @@
+ // Selects between a WASM stub and an `Instant`-backed timer via cfg-gated
+ // definitions of `Timer`.
+ 
+-#[cfg(target_family = "wasm")]
++#[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
+ pub struct Timer;
+ 
+-#[cfg(target_family = "wasm")]
++#[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
+ impl Timer {
+     pub fn start() -> Result<Self, bun_core::Error> {
+         Ok(Self)
+@@ -27,12 +27,12 @@ impl Timer {
+ 
+ // Non-WASM: wrap `std::time::Instant` behind a small monotonic-timer surface
+ // (`start`/`read`/`lap`/`reset`, ns as u64).
+-#[cfg(not(target_family = "wasm"))]
++#[cfg(any(not(target_family = "wasm"), target_os = "wasi"))]
+ pub struct Timer {
+     started: std::time::Instant,
+ }
+ 
+-#[cfg(not(target_family = "wasm"))]
++#[cfg(any(not(target_family = "wasm"), target_os = "wasi"))]
+ impl Timer {
+     pub fn start() -> Result<Self, bun_core::Error> {
+         // Infallible here, but kept fallible to match the `Result` signature

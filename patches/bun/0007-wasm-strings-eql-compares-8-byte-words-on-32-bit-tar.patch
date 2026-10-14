@@ -1,0 +1,49 @@
+From 48658c2c16014add068e39a2178ff300e5ddc9d1 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 15 Oct 2026 02:18:08 +0300
+Subject: [PATCH 7/7] wasm: strings::eql compares 8-byte words on 32-bit
+ targets
+
+eql_long counted len >> 3 words but read usize, which is 4 bytes on
+wasm32, and skipped the 4-byte tail step there. Strings of length 4..7
+compared only their last 0..3 bytes and longer ones half their words, so
+"loopB" equalled "loopA" and the minifier sent `continue loopB` to the
+inner label. Read u64 words on every target.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/bun_core/string/immutable.rs | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/src/bun_core/string/immutable.rs b/src/bun_core/string/immutable.rs
+index 07e39da4..0a1dd574 100644
+--- a/src/bun_core/string/immutable.rs
++++ b/src/bun_core/string/immutable.rs
+@@ -1273,21 +1273,23 @@ pub fn eql_long(a_str: &[u8], b_str: &[u8], check_len: bool) -> bool {
+         }
+ 
+         {
++            // `u64`, not `usize`: the word count is `len >> 3` and the tail
++            // below assumes 8-byte words, which `usize` is not on wasm32.
+             let mut dword_length = len >> 3;
+             while dword_length > 0 {
+-                if a.cast::<usize>().read_unaligned() != b.cast::<usize>().read_unaligned() {
++                if a.cast::<u64>().read_unaligned() != b.cast::<u64>().read_unaligned() {
+                     return false;
+                 }
+-                b = b.add(core::mem::size_of::<usize>());
++                b = b.add(core::mem::size_of::<u64>());
+                 if b == end {
+                     return true;
+                 }
+-                a = a.add(core::mem::size_of::<usize>());
++                a = a.add(core::mem::size_of::<u64>());
+                 dword_length -= 1;
+             }
+         }
+ 
+-        if core::mem::size_of::<usize>() == 8 {
++        {
+             if (len & 4) != 0 {
+                 if a.cast::<u32>().read_unaligned() != b.cast::<u32>().read_unaligned() {
+                     return false;

@@ -1,0 +1,69 @@
+From fc230fdb46292055340e4f4edf581efd3703defe Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 15 Oct 2026 02:10:37 +0300
+Subject: [PATCH 4/7] wasm: thread pool runs scheduled tasks inline on
+ single-threaded wasm
+
+wasm32-wasip1 has no threads, so ThreadPool::schedule drains the queue on
+the calling thread before returning, and warm() spawns nothing. Tasks that
+schedule onto the same pool are picked up by the outer drain loop.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/threading/ThreadPool.rs | 35 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/src/threading/ThreadPool.rs b/src/threading/ThreadPool.rs
+index 08c785d4..3727be64 100644
+--- a/src/threading/ThreadPool.rs
++++ b/src/threading/ThreadPool.rs
+@@ -697,7 +697,37 @@ impl ThreadPool {
+         } else {
+             self.run_queue.push(&list);
+         }
++        #[cfg(not(all(target_arch = "wasm32", not(target_feature = "atomics"))))]
+         self.force_spawn();
++        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
++        self.run_inline();
++    }
++
++    /// Single-threaded wasm has no workers: the scheduling thread runs what it
++    /// queued before `schedule` returns. Tasks that schedule more on the same
++    /// pool land in its queue and run in the outer loop instead of recursing.
++    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
++    fn run_inline(&self) {
++        std::thread_local! {
++            static DRAINING: core::cell::RefCell<Vec<usize>> = const { core::cell::RefCell::new(Vec::new()) };
++        }
++        let me = std::ptr::from_ref::<ThreadPool>(self) as usize;
++        if DRAINING.with_borrow(|d| d.contains(&me)) {
++            return;
++        }
++        DRAINING.with_borrow_mut(|d| d.push(me));
++        loop {
++            let node = match self.run_queue.try_acquire_consumer() {
++                Ok(mut consumer) => consumer.pop(),
++                Err(_) => None,
++            };
++            let Some(node) = node else { break };
++            // SAFETY: node points to the `node` field of a scheduled Task.
++            let task = unsafe { Task::from_node(node) };
++            // SAFETY: task is a live scheduled Task; callback contract is `unsafe fn(*mut Task)`.
++            unsafe { ((*task).callback)(task) };
++        }
++        DRAINING.with_borrow_mut(|d| d.retain(|&p| p != me));
+     }
+ 
+     /// Schedule a batch of tasks to be executed by some thread on the thread pool.
+@@ -790,6 +820,11 @@ impl ThreadPool {
+     /// Warm the thread pool up to the given number of threads.
+     /// https://www.youtube.com/watch?v=ys3qcbO5KWw
+     pub fn warm(&self, count: u16) {
++        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
++        if true {
++            let _ = count;
++            return;
++        }
+         // Thread counts are 14-bit fields in `Sync`; truncate to 14 bits.
+         let target = count.min((self.max_threads & Sync::IDLE_MASK) as u16);
+         let mut sync = self.sync.load(Ordering::Relaxed);

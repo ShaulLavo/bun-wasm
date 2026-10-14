@@ -1,0 +1,94 @@
+From b3aeae0ea1334015293715e77e08538a149eaa4f Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 15 Oct 2026 02:10:37 +0300
+Subject: [PATCH 6/7] wasm: openat access mode and fd paths on wasi
+
+wasi-libc's O_RDONLY is a real bit, so an O_DIRECTORY-only open gets
+EINVAL; add O_RDONLY when no access mode is given. get_fd_path asks
+bunwasm-posix, which remembers the path of every fd bun_sys opens.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/sys/lib.rs | 39 ++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 38 insertions(+), 1 deletion(-)
+
+diff --git a/src/sys/lib.rs b/src/sys/lib.rs
+index 550cf3a8..3874ec68 100644
+--- a/src/sys/lib.rs
++++ b/src/sys/lib.rs
+@@ -1809,11 +1809,22 @@ mod posix_impl {
+             // NUL-terminated path and `d` is a live dir fd (or AT_FDCWD).
+             unsafe { super::nocancel::openat(d, p, f, m) }
+         }
++        // POSIX `O_RDONLY` is 0, so callers write `O::DIRECTORY` alone for a
++        // read-only open; wasi-libc's is a real bit and rejects no access mode.
++        #[cfg(target_os = "wasi")]
++        let f = if f & libc::O_ACCMODE == 0 { f | libc::O_RDONLY } else { f };
+         #[cfg(not(target_os = "macos"))]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `p` is a valid
+             // NUL-terminated path and `d` is a live dir fd (or AT_FDCWD).
+-            unsafe { libc::openat(d, p, f, m) }
++            let fd = unsafe { libc::openat(d, p, f, m) };
++            // WASI cannot map an fd back to its path; remember it for `get_fd_path`.
++            #[cfg(target_os = "wasi")]
++            // SAFETY: as above; the callee only reads `p`.
++            unsafe {
++                super::wasi_fd_path::bunwasm_fd_opened(d, p, fd)
++            };
++            fd
+         }
+     }
+     #[cfg(not(any(target_os = "linux", target_os = "android")))]
+@@ -2076,6 +2087,11 @@ mod posix_impl {
+             let rc = super::nocancel::close(fd.native());
+             #[cfg(not(target_os = "macos"))]
+             let rc = safe_libc::close(fd.native());
++            #[cfg(target_os = "wasi")]
++            // SAFETY: plain fd bookkeeping.
++            unsafe {
++                wasi_fd_path::bunwasm_fd_closed(fd.native())
++            };
+             if rc < 0 && last_errno() == libc::EBADF {
+                 return Err(Error::from_code_int(libc::EBADF, Tag::close).with_fd(fd));
+             }
+@@ -7792,11 +7808,21 @@ pub fn get_fd_path<'a>(fd: Fd, out: &'a mut bun_paths::PathBuffer) -> Maybe<&'a
+         out.0[..len].copy_from_slice(unsafe { core::slice::from_raw_parts(path_ptr, len) });
+         return Ok(&mut out.0[..len]);
+     }
++    #[cfg(target_os = "wasi")]
++    {
++        // SAFETY: `out` is writable for its length.
++        let n = unsafe { wasi_fd_path::bunwasm_fd_path(fd.native(), out.0.as_mut_ptr(), out.0.len()) };
++        if n < 0 {
++            return Err(Error::from_code_int(-n as core::ffi::c_int, Tag::readlink).with_fd(fd));
++        }
++        return Ok(&mut out.0[..n as usize]);
++    }
+     #[cfg(not(any(
+         target_os = "linux",
+         target_os = "android",
+         target_os = "macos",
+         target_os = "freebsd",
++        target_os = "wasi",
+         windows
+     )))]
+     {
+@@ -7805,6 +7831,17 @@ pub fn get_fd_path<'a>(fd: Fd, out: &'a mut bun_paths::PathBuffer) -> Maybe<&'a
+     }
+ }
+ 
++/// Defined by bun-wasm's `bunwasm-posix`: the paths `openat` opened, by fd.
++#[cfg(target_os = "wasi")]
++pub(crate) mod wasi_fd_path {
++    use core::ffi::{c_char, c_int};
++    unsafe extern "C" {
++        pub(crate) fn bunwasm_fd_opened(dirfd: c_int, path: *const c_char, fd: c_int);
++        pub(crate) fn bunwasm_fd_closed(fd: c_int);
++        pub(crate) fn bunwasm_fd_path(fd: c_int, buf: *mut u8, cap: usize) -> isize;
++    }
++}
++
+ /// fd → absolute wide path (Windows `GetFinalPathNameByHandleW`).
+ /// `\\?\` prefix and `\\?\UNC\` are stripped. Higher-tier callers
+ /// (`bun.getFdPathW`) re-export this. A libc/kernel32-only sibling lives at
