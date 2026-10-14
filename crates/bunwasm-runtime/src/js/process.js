@@ -24,7 +24,17 @@
     return err;
   }
 
-  const env = native.env();
+  // Like Node, assigned values become strings (`process.env.N = 1` -> "1").
+  const env = new Proxy(native.env(), {
+    set(target, key, value) {
+      target[key] = typeof key === "symbol" ? value : String(value);
+      return true;
+    },
+    defineProperty(target, key, descriptor) {
+      if ("value" in descriptor && typeof key !== "symbol") descriptor = Object.assign({}, descriptor, { value: String(descriptor.value) });
+      return Reflect.defineProperty(target, key, descriptor);
+    },
+  });
 
   function hrtime(previous) {
     const ns = native.nanoseconds();
