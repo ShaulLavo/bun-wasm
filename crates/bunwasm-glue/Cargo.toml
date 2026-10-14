@@ -1,0 +1,17 @@
+[package]
+name = "bunwasm-glue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust definitions of the C/C++ symbols vendored Bun crates expect (JSC/WTF, simdutf, highway, mimalloc)"
+
+[dependencies]
+bstr = "1"
+bun_ast = { path = "../../vendor/bun/src/ast" }
+bun_core = { path = "../../vendor/bun/src/bun_core" }
+bun_install_types = { path = "../../vendor/bun/src/install_types" }
+bun_js_parser = { path = "../../vendor/bun/src/js_parser" }
+bun_semver = { path = "../../vendor/bun/src/semver" }
+bun_threading = { path = "../../vendor/bun/src/threading" }
+libc = "0.2"
+miniz_oxide = "0.8"

@@ -1,0 +1,204 @@
+From da641311cbb96dd2e43444f4de85976f6a0007b0 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 15 Oct 2026 01:39:19 +0300
+Subject: [PATCH 3/3] wasm: io waker, crash handler, resolver: bun_transpiler
+ closure type-checks on wasm32-wasip1
+
+---
+ src/crash_handler/CPUFeatures.rs | 22 ++++++++++++++++++++-
+ src/crash_handler/lib.rs         | 14 ++++++++++++--
+ src/io/lib.rs                    | 33 ++++++++++++++++++++++++++++++++
+ src/resolver/fs/stat_hash.rs     |  9 ++++++++-
+ src/resolver/lib.rs              |  4 +++-
+ 5 files changed, 77 insertions(+), 5 deletions(-)
+
+diff --git a/src/crash_handler/CPUFeatures.rs b/src/crash_handler/CPUFeatures.rs
+index 5736ea90..7baae5d0 100644
+--- a/src/crash_handler/CPUFeatures.rs
++++ b/src/crash_handler/CPUFeatures.rs
+@@ -1,10 +1,27 @@
+ // (no c types needed; kept for FFI clarity)
+ use core::fmt;
+ 
++#[cfg(not(target_arch = "wasm32"))]
+ unsafe extern "C" {
+     safe fn bun_cpu_features() -> u8;
+ }
+ 
++/// wasm has no CPUID; the only feature worth reporting is fixed at compile time.
++#[cfg(target_arch = "wasm32")]
++fn bun_cpu_features() -> u8 {
++    if cfg!(target_feature = "simd128") { Flags::SIMD128.bits() } else { 0 }
++}
++
++#[cfg(target_arch = "wasm32")]
++bitflags::bitflags! {
++    #[repr(transparent)]
++    #[derive(Copy, Clone)]
++    pub struct Flags: u8 {
++        const NONE    = 1 << 0;
++        const SIMD128 = 1 << 1;
++    }
++}
++
+ #[derive(Copy, Clone)]
+ pub(crate) struct CPUFeatures {
+     pub flags: Flags,
+@@ -44,7 +61,7 @@ bitflags::bitflags! {
+     }
+ }
+ 
+-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
++#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "wasm32")))]
+ compile_error!("CPUFeatures: unsupported target architecture");
+ 
+ // Per-arch const table of flag names, skipping "none" and padding bits.
+@@ -57,6 +74,9 @@ const NAMED_FLAGS: &[(&str, Flags)] = &[
+     ("avx512", Flags::AVX512),
+ ];
+ 
++#[cfg(target_arch = "wasm32")]
++const NAMED_FLAGS: &[(&str, Flags)] = &[("simd128", Flags::SIMD128)];
++
+ #[cfg(target_arch = "aarch64")]
+ const NAMED_FLAGS: &[(&str, Flags)] = &[
+     ("neon", Flags::NEON),
+diff --git a/src/crash_handler/lib.rs b/src/crash_handler/lib.rs
+index affe2f6f..53a97a12 100644
+--- a/src/crash_handler/lib.rs
++++ b/src/crash_handler/lib.rs
+@@ -1494,7 +1494,7 @@ mod draft {
+     /// handler. Seeds the frame-pointer walk from the faulting frame. Returns
+     /// `None` on arch/OS combos we don't have register offsets for (the caller
+     /// then falls back to a current-stack capture).
+-    #[cfg(any(unix, target_os = "wasi"))]
++    #[cfg(unix)]
+     fn fault_context_from_ucontext(ctx: *mut c_void) -> Option<(usize, usize)> {
+         debug_assert!(!ctx.is_null());
+         let uc = ctx.cast::<libc::ucontext_t>().cast_const();
+@@ -1542,7 +1542,7 @@ mod draft {
+         }
+     }
+ 
+-    #[cfg(any(unix, target_os = "wasi"))]
++    #[cfg(unix)]
+     extern "C" fn handle_segfault_posix(sig: c_int, info: *mut libc::siginfo_t, ctx: *mut c_void) {
+         // SAFETY: kernel provides a valid siginfo_t; `si_addr` reads the per-platform
+         // sigfault address field.
+@@ -1623,6 +1623,7 @@ mod draft {
+     // in `reset_segfault_handler` on a double-remove).
+ 
+     #[cfg(any(unix, target_os = "wasi"))]
++    #[cfg(not(target_os = "wasi"))]
+     pub fn reset_on_posix() {
+         if Environment::ENABLE_ASAN {
+             return;
+@@ -1637,6 +1638,10 @@ mod draft {
+         }
+         let _ = update_posix_segfault_handler(Some(&mut act));
+     }
++    #[cfg(target_os = "wasi")]
++    pub fn reset_on_posix() {
++        // WASI: a crash is a wasm trap; there is no handler to install.
++    }
+ 
+     pub fn init() {
+         if !ENABLE {
+@@ -2379,6 +2384,11 @@ mod draft {
+             {
+                 b'F'
+             }
++            // Not a bun.report platform; traces from wasm are never uploaded.
++            #[cfg(target_os = "wasi")]
++            {
++                b'z'
++            }
+         };
+     }
+ 
+diff --git a/src/io/lib.rs b/src/io/lib.rs
+index 545f2918..68ed490b 100644
+--- a/src/io/lib.rs
++++ b/src/io/lib.rs
+@@ -1963,6 +1963,39 @@ pub mod waker {
+     pub type Waker = LinuxWaker;
+     #[cfg(windows)]
+     pub type Waker = WindowsWaker;
++    #[cfg(target_os = "wasi")]
++    pub type Waker = WasiWaker;
++
++    /// WASI: no eventfd and (on wasip1) no second thread to wake us. A wake is
++    /// a flag the next `wait` consumes; `wait` never blocks.
++    #[cfg(target_os = "wasi")]
++    pub struct WasiWaker {
++        pending: core::sync::atomic::AtomicBool,
++    }
++
++    #[cfg(target_os = "wasi")]
++    impl WasiWaker {
++        pub const fn placeholder() -> Self {
++            Self { pending: core::sync::atomic::AtomicBool::new(false) }
++        }
++
++        pub fn init() -> crate::error::Result<Self> {
++            Ok(Self::placeholder())
++        }
++
++        #[inline]
++        pub(crate) fn get_fd(&self) -> Fd {
++            Fd::INVALID
++        }
++
++        pub fn wait(&self) {
++            self.pending.store(false, core::sync::atomic::Ordering::Release);
++        }
++
++        pub fn wake(&self) {
++            self.pending.store(true, core::sync::atomic::Ordering::Release);
++        }
++    }
+ 
+     // ── Linux / FreeBSD ───────────────────────────────────────────────────────
+ 
+diff --git a/src/resolver/fs/stat_hash.rs b/src/resolver/fs/stat_hash.rs
+index 5e675e8c..a9ad5b72 100644
+--- a/src/resolver/fs/stat_hash.rs
++++ b/src/resolver/fs/stat_hash.rs
+@@ -18,13 +18,20 @@ pub struct StatHash {
+ fn stat_mtime(s: &Stat) -> Timespec {
+     // The `libc` crate flattens BSD/Darwin `st_mtimespec` into
+     // `st_mtime`/`st_mtime_nsec` so the access is uniform on all `unix`.
+-    #[cfg(any(unix, target_os = "wasi"))]
++    #[cfg(unix)]
+     {
+         Timespec {
+             sec: s.st_mtime,
+             nsec: s.st_mtime_nsec,
+         }
+     }
++    #[cfg(target_os = "wasi")]
++    {
++        Timespec {
++            sec: s.st_mtim.tv_sec,
++            nsec: s.st_mtim.tv_nsec as i64,
++        }
++    }
+     #[cfg(windows)]
+     {
+         Timespec {
+diff --git a/src/resolver/lib.rs b/src/resolver/lib.rs
+index 26fa8e13..706501ce 100644
+--- a/src/resolver/lib.rs
++++ b/src/resolver/lib.rs
+@@ -1640,8 +1640,10 @@ pub mod fs {
+             // `st_mtime_nsec` (ns). The `libc` crate flattens BSD/Darwin
+             // `st_mtimespec` into `st_mtime`/`st_mtime_nsec`, so the access is
+             // uniform on all `unix`.
+-            #[cfg(any(unix, target_os = "wasi"))]
++            #[cfg(unix)]
+             let mtime: i128 = (stat.st_mtime as i128) * NS_PER_S + stat.st_mtime_nsec as i128;
++            #[cfg(target_os = "wasi")]
++            let mtime: i128 = (stat.st_mtim.tv_sec as i128) * NS_PER_S + stat.st_mtim.tv_nsec as i128;
+             #[cfg(windows)]
+             let mtime: i128 = (stat.mtim.sec as i128) * NS_PER_S + stat.mtim.nsec as i128;
+             let seconds = mtime / NS_PER_S;

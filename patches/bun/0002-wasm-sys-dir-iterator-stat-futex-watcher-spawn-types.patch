@@ -1,0 +1,1282 @@
+From 2212f714a930ebbc545ffddeb16772a8feed9442 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 15 Oct 2026 01:37:39 +0300
+Subject: [PATCH 2/3] wasm: sys dir iterator, stat, futex, watcher, spawn
+ types, 64-bit layout asserts
+
+---
+ src/analytics/lib.rs               |   8 ++
+ src/ast/b.rs                       |   4 +
+ src/ast/e.rs                       |  13 +++
+ src/ast/expr.rs                    |  19 +++++
+ src/ast/lib.rs                     |   2 +
+ src/ast/nodes.rs                   |   8 ++
+ src/ast/stmt.rs                    |   6 ++
+ src/ast/symbol.rs                  |   2 +
+ src/bun_alloc/lib.rs               |   5 --
+ src/bun_core/lib.rs                |   2 +-
+ src/bun_core/string/SmolStr.rs     |   1 +
+ src/bun_core/string/immutable.rs   |   1 +
+ src/bun_core/util.rs               |   2 +-
+ src/cares_sys/c_ares.rs            |   1 +
+ src/collections/array_hash_map.rs  |   1 +
+ src/errno/wasi_errno.rs            | 123 +++++++++++++++--------------
+ src/event_loop/ConcurrentTask.rs   |   2 +
+ src/http_types/h2.rs               |   1 +
+ src/md/parser.rs                   |   1 +
+ src/paths/lib.rs                   |   1 +
+ src/semver/lib.rs                  |   1 +
+ src/sourcemap/InternalSourceMap.rs |   1 +
+ src/sourcemap/Mapping.rs           |   2 +
+ src/spawn_sys/lib.rs               |   3 +
+ src/sys/PosixStat.rs               |  27 ++++++-
+ src/sys/fd.rs                      |   2 +-
+ src/sys/lib.rs                     | 113 +++++++++++++++++++++++++-
+ src/sys/linux_syscall.rs           |   1 +
+ src/sys/sys_uv.rs                  |   2 +
+ src/threading/Futex.rs             |  33 +++++++-
+ src/threading/ThreadPool.rs        |   2 +
+ src/uws_sys/Loop.rs                |   3 +
+ src/uws_sys/SocketContext.rs       |  10 +--
+ src/uws_sys/SocketGroup.rs         |   2 +
+ src/watcher/INotifyWatcher.rs      |   1 +
+ src/watcher/WasiWatcher.rs         |  38 +++++++++
+ src/watcher/Watcher.rs             |  26 +++---
+ src/watcher/WindowsWatcher.rs      |   1 +
+ src/watcher/lib.rs                 |   4 +
+ src/windows_sys/externs.rs         |   2 +
+ 40 files changed, 385 insertions(+), 92 deletions(-)
+ create mode 100644 src/watcher/WasiWatcher.rs
+
+diff --git a/src/analytics/lib.rs b/src/analytics/lib.rs
+index 444c4faa..5cc85506 100644
+--- a/src/analytics/lib.rs
++++ b/src/analytics/lib.rs
+@@ -433,6 +433,14 @@ pub mod generate_header {
+                         version: &[],
+                     };
+                 }
++                // Reported as Linux: analytics has no WASI bucket.
++                #[cfg(target_os = "wasi")]
++                {
++                    return Platform {
++                        os: OperatingSystem::Linux,
++                        version: b"wasi",
++                    };
++                }
+             })
+         }
+ 
+diff --git a/src/ast/b.rs b/src/ast/b.rs
+index 7ce9c8fb..e31c6657 100644
+--- a/src/ast/b.rs
++++ b/src/ast/b.rs
+@@ -51,9 +51,13 @@ impl Default for B {
+ // Three `StoreRef<T>` variants (8 B align 4) + one ZST → 1-byte discriminant
+ // + 8-byte payload = 9, align(4) rounds to 12. `Binding` = `B` (12, align 4)
+ // + `Loc` (i32) → 16. `Option<B>` niche-packs via spare discriminant values.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<B>() == 12);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<B>() == 4);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<super::binding::Binding>() == 16);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<Option<B>>() == core::mem::size_of::<B>(),
+     "B lost its niche — check for #[repr] or oversized inline payload"
+diff --git a/src/ast/e.rs b/src/ast/e.rs
+index 04845440..0a39f5f2 100644
+--- a/src/ast/e.rs
++++ b/src/ast/e.rs
+@@ -353,6 +353,7 @@ pub struct Arrow {
+     pub has_react_hooks_suppression: bool,
+ }
+ // The fourth bool fits in existing trailing padding.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Arrow>() == 32);
+ impl Arrow {
+     pub const NOOP_RETURN_UNDEFINED: Arrow = Arrow {
+@@ -682,7 +683,9 @@ pub struct Number {
+     value: f64,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Number>() == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<Number>() == 4);
+ 
+ impl Number {
+@@ -851,7 +854,9 @@ pub enum JsonValue {
+     Array(StoreRef<ArrayJSON>) = 5,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<JsonValue>() == 16);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<JsonValue>() == 4);
+ 
+ impl JsonValue {
+@@ -921,10 +926,14 @@ pub struct PropertyJSON {
+     pub value: JsonValue,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<PropertyJSON>() == 32);
+ // Read from C++ (JSONRowsToJS.cpp), which asserts the same offsets.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(PropertyJSON, key) == 0);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(PropertyJSON, key_loc) == 12);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(PropertyJSON, value) == 16);
+ 
+ /// Where a [`JsonTape`]'s buffers (and, in arena mode, the tape itself) live.
+@@ -1124,9 +1133,13 @@ pub struct ObjectJSON {
+     pub is_single_line: bool,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(ObjectJSON, first) == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(ObjectJSON, count) == 12);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(ArrayJSON, first) == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(ArrayJSON, count) == 12);
+ 
+ // SAFETY: the tape outlives the AST (`StoreRef`'s contract) and is read-only once parsing returns.
+diff --git a/src/ast/expr.rs b/src/ast/expr.rs
+index 056ca920..2b5bb82a 100644
+--- a/src/ast/expr.rs
++++ b/src/ast/expr.rs
+@@ -1369,33 +1369,52 @@ pub enum Data {
+ // payload → 12 at align 4. `Expr` = `Data` (12, align 4) + `Loc` (i32) → 16.
+ // `Option<Data>`/`Option<Expr>` niche-pack via spare discriminant values
+ // (47 variants < 256); a `#[repr(C)]`/`#[repr(u32)]` on `Data` would break it.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Data>() == 12); // Do not increase the size of Expr
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<Data>() == 4);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Expr>() == 16);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<Option<Data>>() == core::mem::size_of::<Data>(),
+     "expr::Data lost its niche — check for #[repr] or nullable-ptr payload"
+ );
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<Option<Expr>>() == core::mem::size_of::<Expr>(),
+     "Expr lost its niche — Option<Expr> is used in G::Property/B::Property/etc."
+ );
+ // Inline-payload ceilings (regress any of these and `Data` grows past 12).
+ // `align_of <= 4` is what keeps `Data` (and therefore `Expr`) at align 4.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::Identifier>() == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<E::Identifier>() == 4);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::ImportIdentifier>() == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::CommonJSExportIdentifier>() == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::PrivateIdentifier>() == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::Number>() <= 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<E::Number>() == 4);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::Special>() <= 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::RequireString>() <= 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::NewTarget>() <= 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StoreRef<E::Binary>>() == core::mem::size_of::<usize>());
+ // Heap-payload shrinks unlocked by the 12-byte StoreSlice<T>:
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<crate::G::FnBody>() == 16);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::Arrow>() <= 32);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<crate::S::Block>() == 16);
+ 
+ // Field-style accessors (`data.e_string()`, `data.e_object()`). The match arms
+diff --git a/src/ast/lib.rs b/src/ast/lib.rs
+index fccb1f24..5396cd7c 100644
+--- a/src/ast/lib.rs
++++ b/src/ast/lib.rs
+@@ -195,7 +195,9 @@ pub enum RefTag {
+ #[derive(Clone, Copy)]
+ pub struct Ref(u64);
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Ref>() == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<Ref>() == 4);
+ 
+ /// We mask to 31 bits for `source_index`, 28 for `inner_index`.
+diff --git a/src/ast/nodes.rs b/src/ast/nodes.rs
+index 8fa78903..98adda93 100644
+--- a/src/ast/nodes.rs
++++ b/src/ast/nodes.rs
+@@ -28,8 +28,11 @@ pub use crate::flags as Flags;
+ #[repr(C, packed(4))]
+ pub struct StoreRef<T>(NonNull<T>);
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StoreRef<u8>>() == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<StoreRef<u8>>() == 4);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Option<StoreRef<u8>>>() == 8);
+ 
+ // SAFETY: `StoreRef` is a thin pointer into a single-threaded bump arena.
+@@ -161,7 +164,9 @@ pub struct StoreStr {
+     len: u32,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StoreStr>() == 12);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<StoreStr>() == 4);
+ 
+ // SAFETY: same rationale as `StoreRef` — points into a single-threaded bump
+@@ -327,7 +332,9 @@ pub struct StoreSlice<T> {
+     len: u32,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StoreSlice<u8>>() == 12);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<StoreSlice<u8>>() == 4);
+ 
+ // Manual Copy/Clone: derive would add a spurious `T: Copy` bound.
+@@ -558,6 +565,7 @@ pub struct LocRef {
+     pub ref_: Ref,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<LocRef>() == 12);
+ 
+ impl Default for LocRef {
+diff --git a/src/ast/stmt.rs b/src/ast/stmt.rs
+index 7ee2e2e0..06111e88 100644
+--- a/src/ast/stmt.rs
++++ b/src/ast/stmt.rs
+@@ -328,20 +328,26 @@ pub enum Data {
+ // `Data` (12, align 4) + `Loc` (i32) → 16. `Option<Data>`/`Option<Stmt>`
+ // niche-pack via spare discriminant values (33 variants < 256); a
+ // `#[repr(C)]`/`#[repr(u32)]` on `Data` would break it.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Data>() == 12);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<Data>() == 4);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<Stmt>() == 16,
+     "Expected Stmt to be 16 bytes"
+ );
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<Option<Data>>() == core::mem::size_of::<Data>(),
+     "stmt::Data lost its niche — check for #[repr] or nullable-ptr payload"
+ );
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<Option<Stmt>>() == core::mem::size_of::<Stmt>(),
+     "Stmt lost its niche"
+ );
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StoreRef<S::SExpr>>() == core::mem::size_of::<usize>());
+ 
+ // Field-style union accessors (`data.s_function()`, `data.s_local()`, …).
+diff --git a/src/ast/symbol.rs b/src/ast/symbol.rs
+index 0baff6d2..f1e87d1f 100644
+--- a/src/ast/symbol.rs
++++ b/src/ast/symbol.rs
+@@ -161,7 +161,9 @@ symbol_flag_accessors! {
+     call_ignores_this, set_call_ignores_this => CALL_IGNORES_THIS;
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Option<bun_alloc::AstBox<G::NamespaceAlias>>>() == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Symbol>() <= 48);
+ 
+ const INVALID_CHUNK_INDEX: u32 = u32::MAX;
+diff --git a/src/bun_alloc/lib.rs b/src/bun_alloc/lib.rs
+index afc792f1..fe6d8e29 100644
+--- a/src/bun_alloc/lib.rs
++++ b/src/bun_alloc/lib.rs
+@@ -672,11 +672,6 @@ pub fn page_size() -> usize {
+             GetSystemInfo(&mut info);
+             info.dw_page_size as usize
+         }
+-        // WebAssembly linear memory grows in 64 KiB pages.
+-        #[cfg(target_os = "wasi")]
+-        {
+-            65536
+-        }
+     })
+ }
+ 
+diff --git a/src/bun_core/lib.rs b/src/bun_core/lib.rs
+index 6b402160..00bb39fb 100644
+--- a/src/bun_core/lib.rs
++++ b/src/bun_core/lib.rs
+@@ -2631,7 +2631,7 @@ pub mod ffi {
+     // (`__val: [c_ulong; 16]`) and FreeBSD (`__bits: [u32; 4]`). Gate the
+     // explicit impl to everywhere it's NOT already a primitive.
+     // SAFETY: integer-array struct on the gated targets; all-zero is valid.
+-    #[cfg(all(any(unix, target_os = "wasi"), not(target_vendor = "apple")))]
++    #[cfg(all(unix, not(target_vendor = "apple")))]
+     unsafe impl Zeroable for libc::sigset_t {}
+     // SAFETY: C POD (integer/array/raw-pointer fields only); all-zero is valid.
+     #[cfg(any(unix, target_os = "wasi"))]
+diff --git a/src/bun_core/string/SmolStr.rs b/src/bun_core/string/SmolStr.rs
+index 23b8484d..87c24e9c 100644
+--- a/src/bun_core/string/SmolStr.rs
++++ b/src/bun_core/string/SmolStr.rs
+@@ -270,6 +270,7 @@ impl Inlined {
+     }
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(mem::size_of::<SmolStr>() == mem::size_of::<Inlined>());
+ 
+ // ---------------------------------------------------------------------------
+diff --git a/src/bun_core/string/immutable.rs b/src/bun_core/string/immutable.rs
+index e38040c9..07e39da4 100644
+--- a/src/bun_core/string/immutable.rs
++++ b/src/bun_core/string/immutable.rs
+@@ -809,6 +809,7 @@ impl StringOrTinyStringMeta {
+     }
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StringOrTinyString>() == 32);
+ 
+ impl StringOrTinyString {
+diff --git a/src/bun_core/util.rs b/src/bun_core/util.rs
+index 1de09775..6d8a9057 100644
+--- a/src/bun_core/util.rs
++++ b/src/bun_core/util.rs
+@@ -2738,7 +2738,7 @@ pub fn self_exe_path() -> crate::CrateResult<&'static ZStr> {
+         //  test/js/node/test/parallel/test-process-execpath.js).
+         #[cfg(any(target_vendor = "apple", windows))]
+         let path = path.canonicalize().unwrap_or(path);
+-        #[cfg(any(unix, target_os = "wasi"))]
++        #[cfg(unix)]
+         {
+             use std::os::unix::ffi::OsStringExt;
+             Ok(ZBox::from_vec_with_nul(path.into_os_string().into_vec()))
+diff --git a/src/cares_sys/c_ares.rs b/src/cares_sys/c_ares.rs
+index 09b41da7..45f2a94a 100644
+--- a/src/cares_sys/c_ares.rs
++++ b/src/cares_sys/c_ares.rs
+@@ -675,6 +675,7 @@ bun_opaque::opaque_ffi! {
+ // on the basis that re-entrant callbacks re-deriving `&mut Channel` from a raw
+ // pointer cannot conflict because `Channel` claims zero bytes. If this type ever
+ // gains a non-ZST field, those signatures must revert to `unsafe fn(*mut Channel)`.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Channel>() == 0);
+ 
+ /// Implemented by the type that owns a `*mut Channel` and receives socket-
+diff --git a/src/collections/array_hash_map.rs b/src/collections/array_hash_map.rs
+index dc6fe76d..949a6ebd 100644
+--- a/src/collections/array_hash_map.rs
++++ b/src/collections/array_hash_map.rs
+@@ -1484,6 +1484,7 @@ pub struct StringHashMapKey<A: Allocator + Default = DefaultAlloc> {
+ const SHMK_OWNED_BIT: usize = 1 << (usize::BITS - 1);
+ 
+ // Compile-time check: with a ZST allocator the key is exactly two words.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<StringHashMapKey<DefaultAlloc>>() == 2 * core::mem::size_of::<usize>()
+ );
+diff --git a/src/errno/wasi_errno.rs b/src/errno/wasi_errno.rs
+index 188c5fbb..5c144e36 100644
+--- a/src/errno/wasi_errno.rs
++++ b/src/errno/wasi_errno.rs
+@@ -4,7 +4,7 @@ pub use crate::posix::S;
+ 
+ // WASI preview1 errno values (wasi-libc `__errno_values.h`). Variant names
+ // follow linux_errno.rs so shared code compiles unchanged; Linux-only codes
+-// that WASI never returns get unused values from 100 up.
++// that WASI never returns follow densely from 77 (tables index by value).
+ #[repr(u16)]
+ #[derive(
+     Copy,
+@@ -96,69 +96,70 @@ pub enum SystemErrno {
+     ETXTBSY = 74,
+     EXDEV = 75,
+     ENOTCAPABLE = 76,
+-    ENOTBLK = 100,
+-    EWOULDBLOCK = 101,
+-    ECHRNG = 102,
+-    EL2NSYNC = 103,
+-    EL3HLT = 104,
+-    EL3RST = 105,
+-    ELNRNG = 106,
+-    EUNATCH = 107,
+-    ENOCSI = 108,
+-    EL2HLT = 109,
+-    EBADE = 110,
+-    EBADR = 111,
+-    EXFULL = 112,
+-    ENOANO = 113,
+-    EBADRQC = 114,
+-    EBADSLT = 115,
+-    EDEADLOCK = 116,
+-    EBFONT = 117,
+-    ENOSTR = 118,
+-    ENODATA = 119,
+-    ETIME = 120,
+-    ENOSR = 121,
+-    ENONET = 122,
+-    ENOPKG = 123,
+-    EREMOTE = 124,
+-    EADV = 125,
+-    ESRMNT = 126,
+-    ECOMM = 127,
+-    EDOTDOT = 128,
+-    ENOTUNIQ = 129,
+-    EBADFD = 130,
+-    EREMCHG = 131,
+-    ELIBACC = 132,
+-    ELIBBAD = 133,
+-    ELIBSCN = 134,
+-    ELIBMAX = 135,
+-    ELIBEXEC = 136,
+-    ERESTART = 137,
+-    ESTRPIPE = 138,
+-    EUSERS = 139,
+-    ESOCKTNOSUPPORT = 140,
+-    EPFNOSUPPORT = 141,
+-    ESHUTDOWN = 142,
+-    ETOOMANYREFS = 143,
+-    EHOSTDOWN = 144,
+-    EUCLEAN = 145,
+-    ENOTNAM = 146,
+-    ENAVAIL = 147,
+-    EISNAM = 148,
+-    EREMOTEIO = 149,
+-    ENOMEDIUM = 150,
+-    EMEDIUMTYPE = 151,
+-    ENOKEY = 152,
+-    EKEYEXPIRED = 153,
+-    EKEYREVOKED = 154,
+-    EKEYREJECTED = 155,
+-    ERFKILL = 156,
+-    EHWPOISON = 157,
+-    EUNKNOWN = 158,
++    ENOTBLK = 77,
++    EWOULDBLOCK = 78,
++    ECHRNG = 79,
++    EL2NSYNC = 80,
++    EL3HLT = 81,
++    EL3RST = 82,
++    ELNRNG = 83,
++    EUNATCH = 84,
++    ENOCSI = 85,
++    EL2HLT = 86,
++    EBADE = 87,
++    EBADR = 88,
++    EXFULL = 89,
++    ENOANO = 90,
++    EBADRQC = 91,
++    EBADSLT = 92,
++    EDEADLOCK = 93,
++    EBFONT = 94,
++    ENOSTR = 95,
++    ENODATA = 96,
++    ETIME = 97,
++    ENOSR = 98,
++    ENONET = 99,
++    ENOPKG = 100,
++    EREMOTE = 101,
++    EADV = 102,
++    ESRMNT = 103,
++    ECOMM = 104,
++    EDOTDOT = 105,
++    ENOTUNIQ = 106,
++    EBADFD = 107,
++    EREMCHG = 108,
++    ELIBACC = 109,
++    ELIBBAD = 110,
++    ELIBSCN = 111,
++    ELIBMAX = 112,
++    ELIBEXEC = 113,
++    ERESTART = 114,
++    ESTRPIPE = 115,
++    EUSERS = 116,
++    ESOCKTNOSUPPORT = 117,
++    EPFNOSUPPORT = 118,
++    ESHUTDOWN = 119,
++    ETOOMANYREFS = 120,
++    EHOSTDOWN = 121,
++    EUCLEAN = 122,
++    ENOTNAM = 123,
++    ENAVAIL = 124,
++    EISNAM = 125,
++    EREMOTEIO = 126,
++    ENOMEDIUM = 127,
++    EMEDIUMTYPE = 128,
++    ENOKEY = 129,
++    EKEYEXPIRED = 130,
++    EKEYREVOKED = 131,
++    EKEYREJECTED = 132,
++    ERFKILL = 133,
++    EHWPOISON = 134,
++    EFTYPE = 135,
++    EUNKNOWN = 136,
+ }
+ 
+ impl SystemErrno {
+-    pub const MAX: u16 = 159;
++    pub const MAX: u16 = 137;
+     pub const EOPNOTSUPP: SystemErrno = SystemErrno::ENOTSUP;
+ }
+ 
+diff --git a/src/event_loop/ConcurrentTask.rs b/src/event_loop/ConcurrentTask.rs
+index b08674e5..c0a8c138 100644
+--- a/src/event_loop/ConcurrentTask.rs
++++ b/src/event_loop/ConcurrentTask.rs
+@@ -154,6 +154,7 @@ pub struct Task {
+     // [`Task::context`], in the padding `tag` leaves.
+     context: ContextId,
+ }
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Task>() == 2 * core::mem::size_of::<usize>());
+ 
+ /// Identifies a script execution context within its VM (`bun_jsc` hands them out, counting up).
+@@ -306,6 +307,7 @@ impl Default for ConcurrentTask {
+ // turning the MPSC enqueue's single release-store into a load-then-store on a
+ // cache line that is bouncing between producer threads and the JS-thread
+ // consumer. The extra word of padding is cheap; the contended RMW is not.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<ConcurrentTask>()
+         == core::mem::size_of::<Task>() + 2 * core::mem::size_of::<usize>(),
+diff --git a/src/http_types/h2.rs b/src/http_types/h2.rs
+index 00469eb1..25f45754 100644
+--- a/src/http_types/h2.rs
++++ b/src/http_types/h2.rs
+@@ -145,6 +145,7 @@ pub struct StreamPriority {
+     pub(crate) stream_identifier: u32,
+     pub(crate) weight: u8,
+ }
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StreamPriority>() == StreamPriority::BYTE_SIZE);
+ 
+ impl StreamPriority {
+diff --git a/src/md/parser.rs b/src/md/parser.rs
+index 15097705..0621315c 100644
+--- a/src/md/parser.rs
++++ b/src/md/parser.rs
+@@ -212,6 +212,7 @@ const MAX_BLOCK_BYTES: usize =
+ 
+ // The headroom proof: a buffer filled to the cap can still be aligned up and
+ // take one more header without leaving `OFF` range.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     ((MAX_BLOCK_BYTES + (align_of::<BlockHeader>() - 1)) & !(align_of::<BlockHeader>() - 1))
+         + size_of::<BlockHeader>()
+diff --git a/src/paths/lib.rs b/src/paths/lib.rs
+index 9db4ede0..fa62b383 100644
+--- a/src/paths/lib.rs
++++ b/src/paths/lib.rs
+@@ -792,6 +792,7 @@ pub mod fs {
+         pub is_symlink: bool,
+     }
+ 
++    #[cfg(target_pointer_width = "64")]
+     const _: () = assert!(core::mem::size_of::<Path<'static>>() <= 56);
+ 
+     impl<'a> Default for Path<'a> {
+diff --git a/src/semver/lib.rs b/src/semver/lib.rs
+index 1af94f54..d1cd2a3c 100644
+--- a/src/semver/lib.rs
++++ b/src/semver/lib.rs
+@@ -938,6 +938,7 @@ pub mod semver_string {
+         }
+     }
+ 
++    #[cfg(target_pointer_width = "64")]
+     const _: () = assert!(
+         core::mem::size_of::<String>() == core::mem::size_of::<Pointer>(),
+         "String types must be the same size",
+diff --git a/src/sourcemap/InternalSourceMap.rs b/src/sourcemap/InternalSourceMap.rs
+index fbf1e5b1..e8c399a7 100644
+--- a/src/sourcemap/InternalSourceMap.rs
++++ b/src/sourcemap/InternalSourceMap.rs
+@@ -133,6 +133,7 @@ pub struct SyncEntry {
+     pub(crate) source_index: i32,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(size_of::<SyncEntry>() == 24);
+ 
+ impl SyncEntry {
+diff --git a/src/sourcemap/Mapping.rs b/src/sourcemap/Mapping.rs
+index 0b57c2d8..077f7007 100644
+--- a/src/sourcemap/Mapping.rs
++++ b/src/sourcemap/Mapping.rs
+@@ -757,7 +757,9 @@ fn parse_simd(
+     // i32s, so its column storage is byte-identical to `[[i32; 2]]`. That
+     // lets the kernel write `{line, col}` pairs straight into the SoA
+     // column with no per-row Rust copy.
++    #[cfg(target_pointer_width = "64")]
+     const _: () = assert!(size_of::<LineColumnOffset>() == size_of::<[i32; 2]>());
++    #[cfg(target_pointer_width = "64")]
+     const _: () = assert!(align_of::<LineColumnOffset>() == align_of::<[i32; 2]>());
+ 
+     // Segments on a line are comma-separated and lines are semicolon-
+diff --git a/src/spawn_sys/lib.rs b/src/spawn_sys/lib.rs
+index 69f8e49f..03156d29 100644
+--- a/src/spawn_sys/lib.rs
++++ b/src/spawn_sys/lib.rs
+@@ -63,13 +63,16 @@ pub type CStrPtr = *const c_char;
+ // Layout guard: a C-string pointer is exactly one machine word. If this ever
+ // fails, every `as_ptr().cast()` from a `Vec<*const c_char>` to `Argv` is
+ // suspect.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<*const c_char>() == core::mem::size_of::<usize>());
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::align_of::<*const c_char>() == core::mem::align_of::<usize>());
+ // Negative guard: `Option<*const c_char>` is **not** word-sized — it carries a
+ // discriminant. Any `[Option<*const c_char>; N]` cast to `Argv` is a layout bug.
+ // Use `Option<NonNull<c_char>>` for niche-optimized nullable storage instead.
+ const _: () =
+     assert!(core::mem::size_of::<Option<*const c_char>>() != core::mem::size_of::<usize>());
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<Option<core::ptr::NonNull<c_char>>>() == core::mem::size_of::<usize>()
+ );
+diff --git a/src/sys/PosixStat.rs b/src/sys/PosixStat.rs
+index 5d24f464..c47baa3b 100644
+--- a/src/sys/PosixStat.rs
++++ b/src/sys/PosixStat.rs
+@@ -75,13 +75,20 @@ fn to_u64<T: to_u64_impl::ToU64>(value: T) -> u64 {
+ // `unix` targets.
+ #[inline]
+ pub fn stat_atime(s: &Stat) -> Timespec {
+-    #[cfg(any(unix, target_os = "wasi"))]
++    #[cfg(unix)]
+     {
+         Timespec {
+             sec: s.st_atime,
+             nsec: s.st_atime_nsec,
+         }
+     }
++    #[cfg(target_os = "wasi")]
++    {
++        Timespec {
++            sec: s.st_atim.tv_sec,
++            nsec: s.st_atim.tv_nsec as i64,
++        }
++    }
+     #[cfg(windows)]
+     {
+         Timespec {
+@@ -92,13 +99,20 @@ pub fn stat_atime(s: &Stat) -> Timespec {
+ }
+ #[inline]
+ pub fn stat_mtime(s: &Stat) -> Timespec {
+-    #[cfg(any(unix, target_os = "wasi"))]
++    #[cfg(unix)]
+     {
+         Timespec {
+             sec: s.st_mtime,
+             nsec: s.st_mtime_nsec,
+         }
+     }
++    #[cfg(target_os = "wasi")]
++    {
++        Timespec {
++            sec: s.st_mtim.tv_sec,
++            nsec: s.st_mtim.tv_nsec as i64,
++        }
++    }
+     #[cfg(windows)]
+     {
+         Timespec {
+@@ -109,13 +123,20 @@ pub fn stat_mtime(s: &Stat) -> Timespec {
+ }
+ #[inline]
+ pub fn stat_ctime(s: &Stat) -> Timespec {
+-    #[cfg(any(unix, target_os = "wasi"))]
++    #[cfg(unix)]
+     {
+         Timespec {
+             sec: s.st_ctime,
+             nsec: s.st_ctime_nsec,
+         }
+     }
++    #[cfg(target_os = "wasi")]
++    {
++        Timespec {
++            sec: s.st_ctim.tv_sec,
++            nsec: s.st_ctim.tv_nsec as i64,
++        }
++    }
+     #[cfg(windows)]
+     {
+         Timespec {
+diff --git a/src/sys/fd.rs b/src/sys/fd.rs
+index add0523b..590fc1e5 100644
+--- a/src/sys/fd.rs
++++ b/src/sys/fd.rs
+@@ -117,7 +117,7 @@ impl FdExt for Fd {
+                     _ => None,
+                 }
+             }
+-            #[cfg(target_os = "freebsd")]
++            #[cfg(any(target_os = "freebsd", target_os = "wasi"))]
+             {
+                 debug_assert!(self.native() >= 0);
+                 match sys::get_errno(sys::safe_libc::close(self.native())) {
+diff --git a/src/sys/lib.rs b/src/sys/lib.rs
+index 59dc9b45..550cf3a8 100644
+--- a/src/sys/lib.rs
++++ b/src/sys/lib.rs
+@@ -565,6 +565,104 @@ pub mod dir_iterator {
+         }
+     }
+ 
++    // ── WASI ─────────────────────────────────────────────────────────────
++    // `fd_readdir` fills `buf` with `{d_next: u64, d_ino: u64, d_namlen: u32,
++    // d_type: u8}` headers (24 bytes) each followed by an un-terminated name.
++    // A record cut off at the end of `buf` is re-read from its cookie.
++    #[cfg(target_os = "wasi")]
++    struct State {
++        buf: AlignedBuf,
++        index: usize,
++        end_index: usize,
++        cookie: u64,
++        exhausted: bool,
++        name: Vec<u8>,
++    }
++    #[cfg(target_os = "wasi")]
++    impl State {
++        #[inline]
++        fn new() -> State {
++            State {
++                buf: AlignedBuf::uninit(),
++                index: 0,
++                end_index: 0,
++                cookie: 0,
++                exhausted: false,
++                name: Vec::new(),
++            }
++        }
++        fn next(&mut self, dir: Fd) -> Result<Option<IteratorResult>> {
++            #[link(wasm_import_module = "wasi_snapshot_preview1")]
++            unsafe extern "C" {
++                #[link_name = "fd_readdir"]
++                fn wasi_fd_readdir(fd: i32, buf: *mut u8, len: usize, cookie: u64, used: *mut usize) -> u16;
++            }
++            const HEADER: usize = 24;
++            loop {
++                if self.index + HEADER > self.end_index {
++                    if self.exhausted {
++                        return Ok(None);
++                    }
++                    let mut used = 0usize;
++                    // SAFETY: buf is valid for BUF_SIZE bytes.
++                    let errno = unsafe {
++                        wasi_fd_readdir(dir.native(), self.buf.as_mut_ptr(), BUF_SIZE, self.cookie, &mut used)
++                    };
++                    if errno != 0 {
++                        return Err(Error::from_code_int(errno as _, Tag::getdents64));
++                    }
++                    if used == 0 {
++                        return Ok(None);
++                    }
++                    self.exhausted = used < BUF_SIZE;
++                    self.index = 0;
++                    self.end_index = used;
++                    continue;
++                }
++                let base = self.index;
++                // SAFETY: `fd_readdir` initialized `[0..end_index]`.
++                let buf = unsafe { self.buf.filled(self.end_index) };
++                let le64 = |at: usize| u64::from_le_bytes(buf[at..at + 8].try_into().expect("8 bytes"));
++                let d_next = le64(base);
++                let d_ino = le64(base + 8);
++                let namlen = u32::from_le_bytes(buf[base + 16..base + 20].try_into().expect("4 bytes")) as usize;
++                let d_type = buf[base + 20];
++                if base + HEADER + namlen > self.end_index {
++                    // Truncated record: refill starting at this entry.
++                    if self.end_index < BUF_SIZE || base == 0 {
++                        return Ok(None);
++                    }
++                    self.index = self.end_index;
++                    self.exhausted = false;
++                    continue;
++                }
++                self.cookie = d_next;
++                self.index = base + HEADER + namlen;
++                let name = &buf[base + HEADER..base + HEADER + namlen];
++                if name == b"." || name == b".." {
++                    continue;
++                }
++                self.name.clear();
++                self.name.extend_from_slice(name);
++                self.name.push(0);
++                let kind = match d_type {
++                    1 => EntryKind::BlockDevice,
++                    2 => EntryKind::CharacterDevice,
++                    3 => EntryKind::Directory,
++                    4 => EntryKind::File,
++                    5 | 6 => EntryKind::UnixDomainSocket,
++                    7 => EntryKind::SymLink,
++                    _ => EntryKind::Unknown,
++                };
++                return Ok(Some(IteratorResult {
++                    name: Name::borrow(&self.name[..namlen]),
++                    kind,
++                    ino: d_ino,
++                }));
++            }
++        }
++    }
++
+     // ── Windows ──────────────────────────────────────────────────────────
+     // `NtQueryDirectoryFile` + `FILE_DIRECTORY_INFORMATION` walk.
+     #[cfg(windows)]
+@@ -2207,6 +2305,7 @@ mod posix_impl {
+                 pub stx_dev_minor: u32,
+                 __pad1: [u64; 14],
+             }
++            #[cfg(target_pointer_width = "64")]
+             const _: () = assert!(core::mem::size_of::<statx>() == 256);
+ 
+             /// Raw `statx(2)` via syscall — returns `0` on success or `-1` with
+@@ -2645,6 +2744,7 @@ mod posix_impl {
+     }
+     /// The extended attributes of an open file, by name, each with its value. On Linux its ACL and its SELinux label are
+     /// among them. On FreeBSD: those of the namespace `user`. None on a file system that has none.
++    #[cfg(not(target_os = "wasi"))]
+     pub fn extended_attributes(fd: Fd) -> Maybe<Vec<(Vec<u8>, Vec<u8>)>> {
+         let fd = fd.native();
+         let listed = filled(Tag::flistxattr, |list, size| {
+@@ -2715,6 +2815,12 @@ mod posix_impl {
+         attributes.sort_unstable();
+         Ok(attributes)
+     }
++    #[cfg(target_os = "wasi")]
++    pub fn extended_attributes(fd: Fd) -> Maybe<Vec<(Vec<u8>, Vec<u8>)>> {
++        // WASI file systems expose no extended attributes.
++        let _ = fd;
++        Ok(Vec::new())
++    }
+     pub fn ftruncate(fd: Fd, len: i64) -> Maybe<()> {
+         check!(safe_libc::ftruncate(fd.native(), len), Tag::ftruncate);
+         Ok(())
+@@ -3629,7 +3735,7 @@ impl TimeLike {
+     }
+ }
+ #[cfg(any(unix, target_os = "wasi"))]
+-pub const UTIME_NOW: i64 = libc::UTIME_NOW;
++pub const UTIME_NOW: i64 = libc::UTIME_NOW as i64;
+ #[cfg(windows)]
+ pub const UTIME_NOW: i64 = -1;
+ 
+@@ -5351,6 +5457,7 @@ pub mod linux {
+         pub sec: time_t,
+         pub nsec: libc::c_long,
+     }
++    #[cfg(target_pointer_width = "64")]
+     const _: () = assert!(
+         core::mem::size_of::<timespec>() == core::mem::size_of::<libc::timespec>()
+             && core::mem::align_of::<timespec>() == core::mem::align_of::<libc::timespec>()
+@@ -8314,15 +8421,19 @@ pub mod net {
+             scope_id: 0,
+         };
+     }
++    #[cfg(not(target_os = "wasi"))] // wasi-libc over-aligns sockaddr_in*
+     const _: () = assert!(
+         core::mem::size_of::<sockaddr_in>() == core::mem::size_of::<crate::posix::sockaddr_in>()
+     );
++    #[cfg(not(target_os = "wasi"))] // wasi-libc over-aligns sockaddr_in*
+     const _: () = assert!(
+         core::mem::align_of::<sockaddr_in>() == core::mem::align_of::<crate::posix::sockaddr_in>()
+     );
++    #[cfg(not(target_os = "wasi"))] // wasi-libc over-aligns sockaddr_in*
+     const _: () = assert!(
+         core::mem::size_of::<sockaddr_in6>() == core::mem::size_of::<crate::posix::sockaddr_in6>()
+     );
++    #[cfg(not(target_os = "wasi"))] // wasi-libc over-aligns sockaddr_in*
+     const _: () = assert!(
+         core::mem::align_of::<sockaddr_in6>()
+             == core::mem::align_of::<crate::posix::sockaddr_in6>()
+diff --git a/src/sys/linux_syscall.rs b/src/sys/linux_syscall.rs
+index 675dfdd6..f5e161a9 100644
+--- a/src/sys/linux_syscall.rs
++++ b/src/sys/linux_syscall.rs
+@@ -253,6 +253,7 @@ pub(crate) fn faccessat(dir: Fd, path: &ZStr, mode: i32) -> Result<(), i32> {
+ #[inline(always)]
+ #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+ fn stat_to_libc(s: rustix::fs::Stat) -> libc::stat {
++    #[cfg(target_pointer_width = "64")]
+     const _: () = assert!(
+         core::mem::size_of::<rustix::fs::Stat>() == core::mem::size_of::<libc::stat>()
+             && core::mem::align_of::<rustix::fs::Stat>() == core::mem::align_of::<libc::stat>(),
+diff --git a/src/sys/sys_uv.rs b/src/sys/sys_uv.rs
+index 9cf9c4ef..cd126dcb 100644
+--- a/src/sys/sys_uv.rs
++++ b/src/sys/sys_uv.rs
+@@ -554,6 +554,7 @@ fn sum_bufs_len(bufs: &[PlatformIOVec]) -> usize {
+ 
+ pub fn preadv(fd: Fd, bufs: &[PlatformIOVec], position: i64) -> Result<usize> {
+     let uv_fd = fd.uv();
++    #[cfg(target_pointer_width = "64")]
+     const _: () = assert!(
+         core::mem::size_of::<PlatformIOVec>() == core::mem::size_of::<uv::uv_buf_t>()
+             && core::mem::align_of::<PlatformIOVec>() == core::mem::align_of::<uv::uv_buf_t>()
+@@ -627,6 +628,7 @@ pub fn preadv(fd: Fd, bufs: &[PlatformIOVec], position: i64) -> Result<usize> {
+ 
+ pub fn pwritev(fd: Fd, bufs: &[PlatformIOVecConst], position: i64) -> Result<usize> {
+     let uv_fd = fd.uv();
++    #[cfg(target_pointer_width = "64")]
+     const _: () = assert!(
+         core::mem::size_of::<PlatformIOVec>() == core::mem::size_of::<uv::uv_buf_t>()
+             && core::mem::align_of::<PlatformIOVec>() == core::mem::align_of::<uv::uv_buf_t>()
+diff --git a/src/threading/Futex.rs b/src/threading/Futex.rs
+index a62d55c8..5f08a93b 100644
+--- a/src/threading/Futex.rs
++++ b/src/threading/Futex.rs
+@@ -87,8 +87,10 @@ use linux_impl as imp;
+     target_arch = "wasm32",
+ )))]
+ use unsupported_impl as imp;
+-#[cfg(target_arch = "wasm32")]
++#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+ use wasm_impl as imp;
++#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
++use wasm_single_thread_impl as imp;
+ #[cfg(windows)]
+ use windows_impl as imp;
+ 
+@@ -460,7 +462,34 @@ mod freebsd_impl {
+     }
+ }
+ 
+-#[cfg(target_arch = "wasm32")]
++/// Single-threaded wasm (wasm32-wasip1 without `atomics`): there is no other
++/// thread to change `*ptr`, so a wait either returns at once or sleeps out its
++/// timeout. Waiting forever on the expected value would be a deadlock.
++#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
++mod wasm_single_thread_impl {
++    use super::*;
++
++    pub(crate) fn wait(
++        ptr: &AtomicU32,
++        expect: u32,
++        timeout: Option<u64>,
++    ) -> Result<(), TimeoutError> {
++        if ptr.load(core::sync::atomic::Ordering::SeqCst) != expect {
++            return Ok(());
++        }
++        match timeout {
++            Some(ns) => {
++                std::thread::sleep(std::time::Duration::from_nanos(ns));
++                Err(TimeoutError::Timeout)
++            }
++            None => panic!("Futex.wait would deadlock: single-threaded wasm has no waker"),
++        }
++    }
++
++    pub fn wake(_ptr: *const AtomicU32, _max_waiters: u32) {}
++}
++
++#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+ mod wasm_impl {
+     use super::*;
+ 
+diff --git a/src/threading/ThreadPool.rs b/src/threading/ThreadPool.rs
+index 850877f6..08c785d4 100644
+--- a/src/threading/ThreadPool.rs
++++ b/src/threading/ThreadPool.rs
+@@ -366,6 +366,7 @@ impl CountedTask {
+ 
+     unsafe fn run_and_finish(task: *mut Task) {
+         // The cast below and every embedder's container-of over its `CountedTask` field rely on it.
++        #[cfg(target_pointer_width = "64")]
+         const _: () = assert!(core::mem::offset_of!(CountedTask, task) == 0);
+         let this = task.cast::<CountedTask>();
+         // SAFETY: `task` is the `task` field (offset 0) of a live `CountedTask`; read both
+@@ -418,6 +419,7 @@ impl Task {
+     /// the recurring `addr_of_mut!((*task.as_ptr()).node)` pattern.
+     #[inline]
+     fn node_of(task: NonNull<Task>) -> NonNull<Node> {
++        #[cfg(target_pointer_width = "64")]
+         const _: () = assert!(core::mem::offset_of!(Task, node) == 0);
+         task.cast::<Node>()
+     }
+diff --git a/src/uws_sys/Loop.rs b/src/uws_sys/Loop.rs
+index 42ebb296..27a47ee7 100644
+--- a/src/uws_sys/Loop.rs
++++ b/src/uws_sys/Loop.rs
+@@ -100,6 +100,9 @@ pub type EventType = libc::kevent;
+ // TODO:
+ #[cfg(windows)]
+ pub type EventType = *mut c_void;
++/// WASI: no epoll/kqueue; the loop polls with `poll_oneoff`-backed `poll(2)`.
++#[cfg(target_os = "wasi")]
++pub type EventType = libc::pollfd;
+ 
+ /// Loop handler trait with optional `pre`/`post` hooks. Implementors override
+ /// `PRE`/`POST` if they have them.
+diff --git a/src/uws_sys/SocketContext.rs b/src/uws_sys/SocketContext.rs
+index e4b4c58e..6c5e44b3 100644
+--- a/src/uws_sys/SocketContext.rs
++++ b/src/uws_sys/SocketContext.rs
+@@ -26,11 +26,11 @@ fn stat_for_digest(path: &bun_core::ZStr) -> Option<[i64; 3]> {
+     }
+     // libc exposes mtime as `st_mtime` (sec) + `st_mtime_nsec` (nsec) on
+     // Linux/BSD/macOS. Widen to i64 (already i64 on LP64; cast is a no-op).
+-    Some([
+-        st.st_mtime as i64,
+-        st.st_mtime_nsec as i64,
+-        st.st_size as i64,
+-    ])
++    #[cfg(not(target_os = "wasi"))]
++    let (sec, nsec) = (st.st_mtime as i64, st.st_mtime_nsec as i64);
++    #[cfg(target_os = "wasi")]
++    let (sec, nsec) = (st.st_mtim.tv_sec, st.st_mtim.tv_nsec as i64);
++    Some([sec, nsec, st.st_size as i64])
+ }
+ 
+ #[cfg(windows)]
+diff --git a/src/uws_sys/SocketGroup.rs b/src/uws_sys/SocketGroup.rs
+index b7f09b52..e0b54135 100644
+--- a/src/uws_sys/SocketGroup.rs
++++ b/src/uws_sys/SocketGroup.rs
+@@ -60,10 +60,12 @@ pub struct VTable {
+ 
+ // Must match `struct us_socket_group_t` in libusockets.h.
+ // 9 ptrs + u32 + u16 + 3×u8, padded to 8-byte alignment.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<SocketGroup>() == 9 * core::mem::size_of::<*mut c_void>() + 16,
+     "SocketGroup layout drifted from us_socket_group_t"
+ );
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<VTable>() == 11 * core::mem::size_of::<*mut c_void>(),
+     "VTable layout drifted from us_socket_vtable_t"
+diff --git a/src/watcher/INotifyWatcher.rs b/src/watcher/INotifyWatcher.rs
+index 23637c21..2c82cc4c 100644
+--- a/src/watcher/INotifyWatcher.rs
++++ b/src/watcher/INotifyWatcher.rs
+@@ -27,6 +27,7 @@ const EVENTLIST_BYTES_SIZE: usize = (Event::LARGEST_SIZE / 2) * max_count;
+ /// Aligned to `align_of::<Event>()` so casts from the buffer base are sound.
+ #[repr(C, align(4))]
+ pub struct EventListBytes(pub(crate) [u8; EVENTLIST_BYTES_SIZE]);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(align_of::<Event>() == 4);
+ // SAFETY: EventListBytes is a `[u8; N]` newtype; the all-zero bit pattern is valid.
+ unsafe impl bun_core::Zeroable for EventListBytes {}
+diff --git a/src/watcher/WasiWatcher.rs b/src/watcher/WasiWatcher.rs
+new file mode 100644
+index 00000000..7c8a0b66
+--- /dev/null
++++ b/src/watcher/WasiWatcher.rs
+@@ -0,0 +1,38 @@
++//! WASI has no file-change notifications. Watches are accepted (so `--watch`
++//! style callers keep working) but never fire; the watch thread idles.
++use core::ffi::c_int;
++
++use bun_core::ZStr;
++
++use crate::watcher_impl::Watcher;
++
++pub(crate) type Platform = WasiWatcher;
++pub(crate) type EventListIndex = c_int;
++
++#[derive(Default)]
++pub struct WasiWatcher {
++    next_index: EventListIndex,
++}
++
++impl WasiWatcher {
++    pub(crate) fn new(_root: &[u8]) -> crate::Result<Self> {
++        Ok(Self::default())
++    }
++
++    pub(crate) fn watch_path(&mut self, _pathname: &ZStr) -> bun_sys::Result<EventListIndex> {
++        self.next_index += 1;
++        Ok(self.next_index)
++    }
++
++    pub(crate) fn watch_dir(&mut self, pathname: &ZStr) -> bun_sys::Result<EventListIndex> {
++        self.watch_path(pathname)
++    }
++
++    pub(crate) fn stop(&mut self) {}
++}
++
++/// Called repeatedly by the watch thread; there is never anything to report.
++pub(crate) fn watch_loop_cycle(_this: &mut Watcher) -> bun_sys::Result<()> {
++    std::thread::sleep(std::time::Duration::from_secs(3600));
++    Ok(())
++}
+diff --git a/src/watcher/Watcher.rs b/src/watcher/Watcher.rs
+index 59cdd402..89bce27b 100644
+--- a/src/watcher/Watcher.rs
++++ b/src/watcher/Watcher.rs
+@@ -18,7 +18,9 @@ use crate::kevent_watcher as platform;
+ #[cfg(windows)]
+ use crate::windows_watcher as platform;
+ use bun_collections::index_sort;
+-#[cfg(target_arch = "wasm32")]
++#[cfg(target_os = "wasi")]
++use crate::wasi_watcher as platform;
++#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+ compile_error!("Unsupported platform");
+ 
+ bun_core::define_scoped_log!(log, watcher, visible);
+@@ -127,7 +129,7 @@ pub struct Watcher {
+ 
+     /// Scratch snapshot of `watchlist.eventlist_index` used by
+     /// `watch_loop_cycle`; owned by the watcher thread.
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
++    #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
+     pub(crate) eventlist_index_scratch: Vec<platform::EventListIndex>,
+ 
+     pub(crate) ctx: *mut (),
+@@ -204,7 +206,7 @@ impl Watcher {
+             close_descriptors: bun_core::AtomicCell::new(false),
+             evict_list: [0; MAX_EVICTION_COUNT],
+             evict_list_i: 0,
+-            #[cfg(any(target_os = "linux", target_os = "android"))]
++            #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
+             eventlist_index_scratch: Vec::new(),
+             thread_lock: ThreadLock::init_unlocked(),
+         });
+@@ -550,7 +552,7 @@ impl Watcher {
+ 
+         #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+         self.add_file_descriptor_to_kqueue_without_checks(fd, watchlist_id);
+-        #[cfg(any(target_os = "linux", target_os = "android"))]
++        #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
+         let eventlist_index = {
+             // inotify needs a trailing NUL. When
+             // CLONE_FILE_PATH is true the caller's `file_path` is NOT NUL-terminated,
+@@ -578,7 +580,7 @@ impl Watcher {
+             parent_hash,
+             package_json,
+             kind: WatchItemKind::File,
+-            #[cfg(any(target_os = "linux", target_os = "android"))]
++            #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
+             eventlist_index,
+         });
+         Ok(FdOwnership::Watcher)
+@@ -628,7 +630,7 @@ impl Watcher {
+ 
+         #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+         self.add_file_descriptor_to_kqueue_without_checks(fd, watchlist_id);
+-        #[cfg(any(target_os = "linux", target_os = "android"))]
++        #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
+         let eventlist_index = {
+             let mut buf = bun_paths::path_buffer_pool::get();
+             let path: &ZStr = if CLONE_FILE_PATH
+@@ -662,7 +664,7 @@ impl Watcher {
+             parent_hash,
+             kind: WatchItemKind::Directory,
+             package_json: None,
+-            #[cfg(any(target_os = "linux", target_os = "android"))]
++            #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
+             eventlist_index,
+         });
+         Ok((self.watchlist.len() - 1) as WatchItemIndex)
+@@ -983,7 +985,7 @@ impl WatchEvent {
+         &buf[self.name_off as usize..][..self.name_len as usize]
+     }
+ 
+-    #[cfg(any(target_os = "linux", target_os = "android", windows))]
++    #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi", windows))]
+     pub(crate) fn sort_by_index(event: WatchEvent, rhs: WatchEvent) -> core::cmp::Ordering {
+         event.index.cmp(&rhs.index)
+     }
+@@ -1052,7 +1054,7 @@ pub struct WatchItem {
+     pub parent_hash: u32,
+     pub kind: WatchItemKind,
+     pub package_json: Option<&'static PackageJSON>,
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
++    #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
+     pub eventlist_index: platform::EventListIndex,
+ }
+ 
+@@ -1086,7 +1088,7 @@ pub trait WatchItemColumns {
+     fn items_fd_mut(&mut self) -> &mut [Fd];
+     fn items_parent_hash(&self) -> &[u32];
+     fn items_kind(&self) -> &[WatchItemKind];
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
++    #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
+     fn items_eventlist_index(&self) -> &[platform::EventListIndex];
+ }
+ 
+@@ -1109,7 +1111,7 @@ impl WatchItemColumns for WatchList {
+     fn items_kind(&self) -> &[WatchItemKind] {
+         self.items::<"kind", WatchItemKind>()
+     }
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
++    #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
+     fn items_eventlist_index(&self) -> &[platform::EventListIndex] {
+         self.items::<"eventlist_index", platform::EventListIndex>()
+     }
+@@ -1134,7 +1136,7 @@ impl WatchItemColumns for bun_collections::multi_array_list::Slice<WatchItem> {
+     fn items_kind(&self) -> &[WatchItemKind] {
+         self.items::<"kind", WatchItemKind>()
+     }
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
++    #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
+     fn items_eventlist_index(&self) -> &[platform::EventListIndex] {
+         self.items::<"eventlist_index", platform::EventListIndex>()
+     }
+diff --git a/src/watcher/WindowsWatcher.rs b/src/watcher/WindowsWatcher.rs
+index e39adde6..2f284bd8 100644
+--- a/src/watcher/WindowsWatcher.rs
++++ b/src/watcher/WindowsWatcher.rs
+@@ -88,6 +88,7 @@ bun_core::assert_ffi_layout!(
+     ::core::mem::align_of::<w::OVERLAPPED>();
+     overlapped @ 0, buf @ 32, dir_handle @ 32 + 64 * 1024,
+ );
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     ::core::mem::offset_of!(DirWatcher, buf)
+         % ::core::mem::align_of::<w::FILE_NOTIFY_INFORMATION>()
+diff --git a/src/watcher/lib.rs b/src/watcher/lib.rs
+index 07ffe348..703c854f 100644
+--- a/src/watcher/lib.rs
++++ b/src/watcher/lib.rs
+@@ -19,6 +19,10 @@ pub mod kevent_watcher;
+ #[path = "WindowsWatcher.rs"]
+ pub mod windows_watcher;
+ 
++#[cfg(target_os = "wasi")]
++#[path = "WasiWatcher.rs"]
++pub mod wasi_watcher;
++
+ #[path = "WatcherTrace.rs"]
+ pub(crate) mod watcher_trace;
+ 
+diff --git a/src/windows_sys/externs.rs b/src/windows_sys/externs.rs
+index c85b4c2c..e09dc336 100644
+--- a/src/windows_sys/externs.rs
++++ b/src/windows_sys/externs.rs
+@@ -1100,7 +1100,9 @@ pub mod ws2_32 {
+         __ss_align: i64,
+         __ss_pad2: [u8; 112],
+     }
++    #[cfg(target_pointer_width = "64")]
+     const _: () = assert!(core::mem::size_of::<sockaddr_storage>() == 128);
++    #[cfg(target_pointer_width = "64")]
+     const _: () = assert!(core::mem::align_of::<sockaddr_storage>() == 8);
+ 
+     #[repr(C)]

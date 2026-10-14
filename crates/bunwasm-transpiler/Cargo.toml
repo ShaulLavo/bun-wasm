@@ -3,6 +3,17 @@ name = "bunwasm-transpiler"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Bun's own Rust transpiler (vendor/bun) behind a small transpile() API"
 
 [dependencies]
+bun_alloc = { path = "../../vendor/bun/src/bun_alloc" }
+bun_ast = { path = "../../vendor/bun/src/ast" }
+bun_bundler = { path = "../../vendor/bun/src/bundler" }
+bun_js_printer = { path = "../../vendor/bun/src/js_printer" }
+bun_options_types = { path = "../../vendor/bun/src/options_types" }
+bun_sys = { path = "../../vendor/bun/src/sys" }
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
+
+[target.'cfg(target_os = "wasi")'.dependencies]
+bunwasm-posix = { path = "../bunwasm-posix" }
+bunwasm-glue = { path = "../bunwasm-glue" }

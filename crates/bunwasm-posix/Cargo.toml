@@ -1,0 +1,9 @@
+[package]
+name = "bunwasm-posix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "POSIX functions wasi-libc lacks, implemented in Rust for wasm32-wasi (see third_party/libc posix_compat.rs)"
+
+[dependencies]
+libc = "0.2"
