@@ -1,0 +1,13 @@
+15 |   return validate(shape.size) * shape.size;
+16 | }
+17 | 
+18 | function validate(n: number): number {
+19 |   if (n < 0) {
+20 |     throw new RangeError(`negative size: ${n}${Unit.Px}`);
+                   ^
+RangeError: negative size: -2px
+      at validate (/index.ts:20:15)
+      at area (/index.ts:15:10)
+      at /index.ts:30:15
+
+Bun vVERSION (PLATFORM)

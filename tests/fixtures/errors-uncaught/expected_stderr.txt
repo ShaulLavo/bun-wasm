@@ -1,0 +1,9 @@
+1 | console.log("before");
+2 | function explode() {
+3 |   throw new TypeError("kaboom");
+                ^
+TypeError: kaboom
+      at explode (/index.js:3:13)
+      at /index.js:6:1
+
+Bun vVERSION (PLATFORM)

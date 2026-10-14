@@ -1,0 +1,10 @@
+1 | console.log("start");
+2 | process.on("exit", (code) => console.log("exit code", code));
+3 | async function fail() {
+4 |   await null;
+5 |   throw new Error("async failure");
+                ^
+error: async failure
+      at fail (/index.js:5:13)
+
+Bun vVERSION (PLATFORM)

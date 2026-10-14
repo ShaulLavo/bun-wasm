@@ -15,7 +15,8 @@
 #                               --update leaves it alone
 #
 # Outputs are normalized before comparing: durations like `[1.23ms]` become
-# `[TIME]` and `bun test v1.4.2 (744846f84)` becomes `bun test vVERSION`.
+# `[TIME]`, `bun test v1.4.2 (744846f84)` becomes `bun test vVERSION`, and the
+# crash footer `Bun v1.4.2 (Linux x64)` becomes `Bun vVERSION (PLATFORM)`.
 #
 # The fixture is copied to a scratch directory that is preopened as `/`, so
 # tests may write files freely. Use relative paths for files a test creates:
@@ -54,7 +55,8 @@ if [[ ${#names[@]} == 0 ]]; then
 fi
 
 normalize() {
-  sed -E -e 's/\[[0-9]+(\.[0-9]+)?m?s\]/[TIME]/g' -e 's/^bun test v[^ ]+ \([0-9a-f]+\)/bun test vVERSION/'
+  sed -E -e 's/\[[0-9]+(\.[0-9]+)?m?s\]/[TIME]/g' -e 's/^bun test v[^ ]+ \([0-9a-f]+\)/bun test vVERSION/' \
+    -e 's/^Bun v[0-9.]+ \([^)]*\)$/Bun vVERSION (PLATFORM)/'
 }
 
 entry_of() {

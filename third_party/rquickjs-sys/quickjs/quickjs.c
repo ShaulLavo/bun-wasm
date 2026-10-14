@@ -27047,6 +27047,12 @@ static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
     FuncCallType call_type;
     int optional_chaining_label;
     bool accept_lparen = (parse_flags & PF_POSTFIX_CALL) != 0;
+    /* bun-wasm: position reported for calls in stack traces. JSC (and so
+       Bun) points at the callee: the identifier, or the property name of a
+       method call, or the constructor after `new`. Upstream QuickJS reports
+       the first argument. */
+    int callee_line_num = s->token.line_num;
+    int callee_col_num = (int)(s->token.ptr - s->line_start) + 1;
 
     call_type = FUNC_CALL_NORMAL;
     switch(s->token.val) {
@@ -27251,6 +27257,9 @@ static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
             emit_u16(s, 0);
         } else {
             emit_source_loc(s);
+            /* bun-wasm: `new X()` is reported at X. */
+            callee_line_num = s->token.line_num;
+            callee_col_num = (int)(s->token.ptr - s->line_start) + 1;
             if (js_parse_postfix_expr(s, 0))
                 return -1;
             accept_lparen = true;
@@ -27535,6 +27544,8 @@ static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
                     return -1;
                 /* drop the index */
                 emit_op(s, OP_drop);
+                /* bun-wasm: see emit_func_call */
+                emit_source_loc_at(s, callee_line_num, callee_col_num);
 
                 /* apply function call */
                 switch(opcode) {
@@ -27581,6 +27592,8 @@ static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
                 if (next_token(s))
                     return -1;
             emit_func_call:
+                /* bun-wasm: the call's own position, after the arguments'. */
+                emit_source_loc_at(s, callee_line_num, callee_col_num);
                 switch(opcode) {
                 case OP_get_field:
                 case OP_scope_get_private_field:
@@ -27637,6 +27650,9 @@ static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
                 if (!token_is_ident(s->token.val)) {
                     return js_parse_error(s, "expecting field name");
                 }
+                /* bun-wasm: `a.b.c()` is reported at c. */
+                callee_line_num = s->token.line_num;
+                callee_col_num = (int)(s->token.ptr - s->line_start) + 1;
                 if (get_prev_opcode(fd) == OP_get_super) {
                     JSValue val;
                     int ret;
