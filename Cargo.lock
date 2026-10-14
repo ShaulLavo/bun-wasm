@@ -930,6 +930,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-jsc"
+version = "0.0.1"
+dependencies = [
+ "bunwasm-build",
+ "bunwasm-glue",
+ "bunwasm-posix",
+]
+
+[[package]]
 name = "bunwasm-posix"
 version = "0.0.1"
 dependencies = [
