@@ -1,0 +1,18 @@
+join("/a/b", "../c", "./d") = "/a/c/d"
+join("a", "", "b/") = "a/b/"
+resolve("/foo/bar", "./baz") = "/foo/bar/baz"
+resolve("/foo/bar", "/tmp/file/") = "/tmp/file"
+normalize("/foo/bar//baz/asdf/quux/..") = "/foo/bar/baz/asdf"
+normalize("./a/../../b") = "../b"
+relative("/data/orandea/test/aaa", "/data/orandea/impl/bbb") = "../../impl/bbb"
+dirname("/a/b/c.txt") = "/a/b"
+basename("/a/b/c.txt") = "c.txt"
+basename("/a/b/c.txt", ".txt") = "c"
+extname("index.coffee.md") = ".md"
+extname(".hidden") = ""
+isAbsolute("/x") = true
+isAbsolute("x/y") = false
+parse: {"root":"/","dir":"/home/user/dir","base":"file.txt","ext":".txt","name":"file"}
+format: /home/user/dir/file.txt
+sep/delimiter: / : true
+node:path esm default: function function

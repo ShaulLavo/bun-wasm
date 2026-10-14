@@ -20,9 +20,17 @@ fn main() {
         })
         .unwrap_or_default();
     names.sort();
+    // Development aid: files in $BUNWASM_JS_OVERRIDE_DIR replace same-named
+    // polyfills (handy to test a module without touching the tree).
+    println!("cargo:rerun-if-env-changed=BUNWASM_JS_OVERRIDE_DIR");
+    let override_dir = std::env::var_os("BUNWASM_JS_OVERRIDE_DIR").map(std::path::PathBuf::from);
     let mut table = String::from("pub static POLYFILLS: &[(&str, &str)] = &[\n");
     for name in &names {
-        let path = js_dir.join(name);
+        let path = override_dir
+            .as_ref()
+            .map(|dir| dir.join(name))
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| js_dir.join(name));
         println!("cargo:rerun-if-changed={}", path.display());
         let stem = name.trim_end_matches(".js");
         table.push_str(&format!("    ({stem:?}, include_str!({:?})),\n", path.display().to_string()));

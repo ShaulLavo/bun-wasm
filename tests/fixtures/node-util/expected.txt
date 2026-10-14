@@ -1,0 +1,15 @@
+a=42 {"x":1} [ 1, [length]: 1 ]
+no args 1 two { three: 3 }
+{ a: 1, b: 'str', c: [ 1, 2, { d: 3 } ], e: Map(1) { 'k' => 1 } }
+'string' Set(1) { 1 } null
+{ deep: { deeper: { deepest: [Object] } } }
+{ deep: [Object] }
+types: true true true true true
+isDeepStrictEqual: true false
+inherits: hi true
+TextEncoder: true
+parseArgs: {"f":true,"name":"x"} pos
+stripVTControlCharacters: bold
+callbackify: null 2
+promisify: 42
+promisify reject: negative

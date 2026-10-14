@@ -200,8 +200,13 @@ pub fn run(options: Options) -> i32 {
         Entry::File(path) => resolve::join(&cwd, path),
         Entry::Eval(_) => format!("{}/[eval]", cwd.trim_end_matches('/')),
     };
-    let argv = [String::from("bun"), main_path.clone()]
-        .into_iter()
+    // Like Bun, `-e` code gets no script path in argv.
+    let script = match &options.entry {
+        Entry::File(_) => Some(main_path.clone()),
+        Entry::Eval(_) => None,
+    };
+    let argv = std::iter::once(String::from("bun"))
+        .chain(script)
         .chain(options.args.iter().cloned())
         .collect::<Vec<_>>();
     let state = Rc::new(State::new(argv, options.transpiler));
@@ -221,11 +226,16 @@ pub fn run(options: Options) -> i32 {
         modules::ModuleLoader { state: state.clone() },
     );
 
-    ctx.with(|ctx| {
+    let code = ctx.with(|ctx| {
         let code = run_in_context(&ctx, &state, &options.entry, &main_path);
         state.flush();
         code
-    })
+    });
+    // Skip teardown: persistent handles (timers, the internal object) are
+    // still alive and QuickJS asserts on leaked objects; the process exits next.
+    std::mem::forget(ctx);
+    std::mem::forget(rt);
+    code
 }
 
 fn run_in_context(ctx: &Ctx<'_>, state: &Rc<State>, entry: &Entry, main_path: &str) -> i32 {

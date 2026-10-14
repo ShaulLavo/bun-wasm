@@ -1,0 +1,25 @@
+file: true 20 text/plain;charset=utf-8 out/hello.txt
+text: hello from Bun.write
+json: {"a":[1,2]}
+bytes: 20 20
+missing exists: false
+write returns bytes: 20
+u8 size: 3
+slice: hello
+version: string string
+sleepSync + nanoseconds: true
+inspect: {
+  a: 1,
+  b: "x",
+}
+inspect array: [ 1, "two", [ 3 ] ]
+deepEquals: true false
+deepEquals strict: true false
+escapeHTML: &lt;a href=&quot;x&quot;&gt;Tom &amp; &#x27;Jerry&#x27;&lt;/a&gt;
+stringWidth: 5 6 3
+hash: 1019145960556548909n 15802777309726279454n 190542993387777138n
+crc32: 907060870 adler32: 103547413
+CryptoHasher: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+main: true
+peek: 5 pending
+bun module: function true

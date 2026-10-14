@@ -1,0 +1,34 @@
+TextEncoder: 10 104,195,169
+TextDecoder: héllo €
+encodeInto: {"read":2,"written":3}
+stream decode: héllo €
+URL: https://user:pw@example.com:8080/a/c?x=1&y=two#frag
+URL parts: https: user pw example.com:8080 example.com 8080 /a/c ?x=1&y=two #frag https://example.com:8080
+URL mutated: https://user:pw@example.com:8080/new%20path?x=1&y=two&z=a+b%26c
+URL relative: http://h.com/a/up?q
+URL.canParse: false true
+URL invalid: TypeError ERR_INVALID_URL
+URLSearchParams: a=1&a=3&b=x+y 1|3 true 3
+from object: q=1%2B1%3D2&e=%C3%A9
+btoa: aGVsbG8gd29ybGQ= atob: hello world
+btoa throws: InvalidCharacterError
+structuredClone: true true true true x
+structuredClone fn: DataCloneError
+performance.now: number true number
+getRandomValues: 16 true
+randomUUID: true
+event: ping true 42
+once listener
+event: ping true 43
+onabort fired, aborted: true
+abort reason: AbortError
+AbortSignal.abort: why
+Blob: 4 text/plain;charset=utf-8
+Headers: [["content-type","text/html"],["x-a","1, again"],["x-b","2"]] text/html true
+Response: 201 true true application/json
+Request: POST https://example.com/api
+blob text: abcd
+response json: {"ok":true} true
+request text: payload
+Response.json: {"a":1}
+arrayBuffer: 3

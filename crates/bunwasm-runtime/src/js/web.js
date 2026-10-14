@@ -281,6 +281,12 @@
     return Object.keys(init).map((k) => [k, String(init[k])]);
   }
 
+  // Component array, or undefined when the input doesn't parse.
+  function parseUrl(input, base) {
+    if (base === undefined) return native.urlParse(String(input));
+    return native.urlParse(String(input), String(base));
+  }
+
   const URL_FIELDS = ["href", "protocol", "username", "password", "hostname", "port", "pathname", "search", "hash", "origin"];
 
   class URL {
@@ -288,7 +294,7 @@
     #searchParams = null;
     constructor(input, base) {
       if (arguments.length === 0) throw new TypeError("URL constructor requires at least 1 argument");
-      const parts = native.urlParse(String(input), base === undefined ? undefined : String(base));
+      const parts = parseUrl(input, base);
       if (!parts) {
         const err = new TypeError(`"${input}" cannot be parsed as a URL.`);
         err.code = "ERR_INVALID_URL";
@@ -298,7 +304,7 @@
       this.#parts = parts;
     }
     static canParse(input, base) {
-      return native.urlParse(String(input), base === undefined ? undefined : String(base)) !== null;
+      return parseUrl(input, base) != null;
     }
     static parse(input, base) {
       try {
@@ -657,6 +663,14 @@
     return native.utf8Encode(String(part));
   }
 
+  // Bun adds the charset to text types: "text/plain" -> "text/plain;charset=utf-8".
+  function normalizeBlobType(type) {
+    if (!type) return "";
+    const lower = String(type).toLowerCase();
+    if (lower.startsWith("text/") && !lower.includes("charset")) return lower + ";charset=utf-8";
+    return lower;
+  }
+
   class Blob {
     #bytes;
     #type;
@@ -665,7 +679,7 @@
         throw new TypeError("new Blob() expects an Array");
       }
       this.#bytes = concatBytes(Array.from(parts || [], partBytes));
-      this.#type = options.type ? String(options.type).toLowerCase() : "";
+      this.#type = normalizeBlobType(options.type);
     }
     // Subclasses (BunFile) read lazily.
     _bytes() {

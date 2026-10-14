@@ -1,0 +1,13 @@
+require: hello cjs (loads=1) true
+exports shorthand: via exports
+module.exports function: function called
+__filename: /index.js
+__dirname: /
+require.resolve: lib/cjs-lib.js
+json require: 42
+cache has lib: true
+module.id: . main: true
+circular: true true
+require(esm): esm default esm named
+missing require: MODULE_NOT_FOUND
+esm importing cjs: called | 42 | function | true | 2 | flagged default | flagged other

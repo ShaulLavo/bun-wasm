@@ -1,0 +1,16 @@
+os: true true number LE string linux
+string_decoder: €
+timers/promises: slept
+querystring: a=1&a=2&b=x%20y {"a":["1","2"],"b":"x y"}
+net.isIP: 4 6 0
+process module: true
+util default: function
+child_process.spawn throws: true
+http.createServer throws: true
+net.connect throws: true
+Bun.which: null
+Bun.spawn throws: true
+Bun.spawnSync throws: true
+Bun.serve throws: true
+fetch rejects: true
+fetch file: URL: true

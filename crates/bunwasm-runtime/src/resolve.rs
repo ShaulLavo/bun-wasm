@@ -200,10 +200,11 @@ impl Resolver {
         EXTENSIONS.iter().map(|ext| format!("{dir}/index{ext}")).find(|p| is_file(p))
     }
 
-    /// `module` (for imports) and `main` fields of a package without `exports`.
+    /// `main` field of a package without `exports`. Like Bun's runtime,
+    /// `module` is only a fallback for packages with no `main`.
     fn resolve_main_fields(&self, dir: &str, pkg: &Json, kind: Kind) -> Option<String> {
         let fields: &[&str] = match kind {
-            Kind::Import => &["module", "main"],
+            Kind::Import => &["main", "module"],
             Kind::Require => &["main"],
         };
         for field in fields {

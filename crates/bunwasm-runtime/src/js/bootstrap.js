@@ -5,6 +5,23 @@
   "use strict";
 
   const internal = { native };
+
+  // Engine hooks for the formatter (inspect.js) and util.types.
+  function isModuleNamespace(value) {
+    return value !== null && typeof value === "object" && Object.getPrototypeOf(value) === null &&
+      Object.prototype.toString.call(value) === "[object Module]";
+  }
+  Object.assign(internal, {
+    promiseState: native.promiseState,
+    promiseResult: native.promiseResult,
+    isProxy: native.isProxy,
+    getProxyTarget: native.getProxyTarget,
+    isPromise: native.isPromise,
+    isError: native.isError,
+    getSourceLine: native.getSourceLine,
+    isESMNamespace: isModuleNamespace,
+    isModuleNamespaceObject: isModuleNamespace,
+  });
   const polyfills = new Map();
 
   // Lazily evaluate src/js/<name>.js; every file is a factory taking `internal`.
@@ -554,8 +571,8 @@
       return true;
     }
     printFatal(reason);
-    globalThis.process.exitCode = 1;
-    emitExit(1);
+    // Bun reports exit code 0 to "exit" listeners here (and still exits 1).
+    emitExit(0);
     return false;
   };
 
@@ -578,6 +595,7 @@
   defineGlobal("global", globalThis);
   defineGlobal("self", globalThis);
 
+  internal.mainPath = native.mainPath();
   internal.require("web")(defineGlobal, defineLazyGlobal);
   defineGlobal("process", internal.require("process"));
   defineGlobal("console", internal.require("console"));

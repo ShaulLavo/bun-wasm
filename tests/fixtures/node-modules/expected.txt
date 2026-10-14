@@ -1,0 +1,9 @@
+exports import condition: cond-pkg esm
+exports subpath: cond-pkg/feature
+main field: legacy-pkg main
+scoped package: @scope/sub
+module field (import): mod-field main
+exports require condition: cond-pkg cjs
+main field (require): mod-field main
+unexported subpath rejected: true
+missing package: true

@@ -1,0 +1,16 @@
+argv: ["first","second arg","--flag"]
+argv0/1: string true
+Bun.argv same: true
+env HOME: /
+env set: set set
+cwd: /
+platform: linux
+version prefix: true string
+types: number object bigint number
+memoryUsage keys: arrayBuffers,external,heapTotal,heapUsed,rss
+hrtime: true true
+stdout.write works
+bytes
+isBun: true release: node
+nextTick arg: tick
+exit event, code: 7

@@ -1,0 +1,20 @@
+read utf8: alpha-beta
+read buffer: true 10 616c70
+exists: true false
+stat: true false 10 true
+readdir: a.txt,deep
+readdir types: a.txt:f,deep:d
+readdir recursive: er,er/dir,er/file.bin
+rename+copy: b.txt,c.txt,deep alpha-beta
+after rm: b.txt
+ENOENT: ENOENT open -2 ENOENT: no such file or directory, open 'work/missing.txt'
+EEXIST: EEXIST
+fd io: fd write
+callback readFile: null alpha-beta
+callback writeFile: null via callback
+promises readFile: promised
+callback error: ENOENT
+promises readdir: x
+promises stat: 8
+promises reject: ENOENT
+filehandle: 8

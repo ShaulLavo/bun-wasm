@@ -1,0 +1,16 @@
+timer object: function function function true
+sync
+nextTick
+promise
+microtask
+immediate
+timeout 0
+args x y
+interval 1
+interval 2
+interval 3
+timeout 30
+abort: stop
+timers/promises: promised
+timeout 50
+Bun.sleep resolved after >=55ms: true

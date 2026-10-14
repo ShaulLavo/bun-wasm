@@ -17,6 +17,10 @@ use crate::State;
 
 include!(concat!(env!("OUT_DIR"), "/polyfills.rs"));
 
+/// Bun's transpiler emits CommonJS modules already wrapped in this function
+/// expression (that is how it reports a file is CommonJS).
+const CJS_WRAPPER_PREFIX: &str = "(function(exports, require, module, __filename, __dirname) {";
+
 /// What kind of module a file is, once transpiled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -37,13 +41,15 @@ impl Format {
     }
 }
 
-pub fn throw_resolve_error(ctx: &Ctx<'_>, msg: &str, spec: &str) -> rquickjs::Error {
+pub fn throw_resolve_error(ctx: &Ctx<'_>, msg: &str, spec: &str, kind: Kind) -> rquickjs::Error {
     let exception = match Exception::from_message(ctx.clone(), msg) {
         Ok(e) => e,
         Err(e) => return e,
     };
     let obj = exception.as_object();
-    let _ = obj.set("code", "ERR_MODULE_NOT_FOUND");
+    // require() and import report different codes, like Node and Bun.
+    let code = if kind == Kind::Require { "MODULE_NOT_FOUND" } else { "ERR_MODULE_NOT_FOUND" };
+    let _ = obj.set("code", code);
     let _ = obj.set("specifier", spec);
     exception.throw()
 }
@@ -152,6 +158,9 @@ impl State {
     }
 
     fn detect_format(&self, path: &str, code: &str) -> Format {
+        if code.starts_with(CJS_WRAPPER_PREFIX) {
+            return Format::Cjs;
+        }
         if path.ends_with(".mjs") || path.ends_with(".mts") {
             return Format::Esm;
         }
@@ -188,7 +197,11 @@ pub fn module_format(ctx: &Ctx<'_>, state: &State, path: &str) -> Result<&'stati
 pub fn compile_cjs<'js>(ctx: &Ctx<'js>, state: &State, path: &str) -> Result<Function<'js>> {
     let (code, _) = state.load_source(ctx, path)?;
     // Same line as the first source line, so line numbers are preserved.
-    let wrapped = format!("(function (exports, require, module, __filename, __dirname) {{{code}\n}})");
+    let wrapped = if code.starts_with(CJS_WRAPPER_PREFIX) {
+        code.to_string()
+    } else {
+        format!("(function (exports, require, module, __filename, __dirname) {{{code}\n}})")
+    };
     let mut opts = rquickjs::context::EvalOptions::default();
     opts.global = true;
     opts.strict = false;
@@ -289,7 +302,7 @@ impl Resolver for ModuleResolver {
         match self.state.resolver.resolve(name, &from, Kind::Import) {
             Ok(Resolved::Builtin(b)) => Ok(b),
             Ok(Resolved::File(f)) => Ok(f),
-            Err(msg) => Err(throw_resolve_error(ctx, &msg, name)),
+            Err(msg) => Err(throw_resolve_error(ctx, &msg, name, Kind::Import)),
         }
     }
 }

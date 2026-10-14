@@ -39,12 +39,16 @@ mod bun_transpiler {
     use bunwasm_transpiler::Loader as BunLoader;
 
     /// Bun's real parser and printer (crates/bunwasm-transpiler).
+    ///
+    /// Plain JavaScript skips it: QuickJS runs it as is, and the original
+    /// line numbers then show up in stack traces (the printer reformats code
+    /// and there are no source maps yet).
     pub struct BunTranspiler;
 
     impl Transpiler for BunTranspiler {
         fn transpile(&self, source: &str, path: &str, loader: Loader) -> Result<String, String> {
             let loader = match loader {
-                Loader::Js => BunLoader::Js,
+                Loader::Js => return Ok(source.to_owned()),
                 Loader::Jsx => BunLoader::Jsx,
                 Loader::Ts => BunLoader::Ts,
                 Loader::Tsx => BunLoader::Tsx,

@@ -1,0 +1,7 @@
+strictEqual -> AssertionError ERR_ASSERTION true 
+deepStrictEqual -> AssertionError ERR_ASSERTION true 
+ok -> AssertionError ERR_ASSERTION true custom message
+throws -> AssertionError ERR_ASSERTION true 
+fail -> AssertionError ERR_ASSERTION true explicit
+strict: function function
+rejects ok

@@ -223,6 +223,8 @@ fn install_process<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
         }
         Ok(arr)
     })?;
+    let st = state.clone();
+    set_fn(native, "mainPath", move || -> String { st.main.borrow().clone() })?;
     set_fn(native, "env", |ctx: Ctx<'js>| -> Result<Object<'js>> {
         let obj = Object::new(ctx)?;
         for (k, v) in std::env::vars_os() {
@@ -323,7 +325,7 @@ fn install_fs<'js>(native: &Object<'js>) -> Result<()> {
             };
             list.push((entry.file_name().to_string_lossy().into_owned(), kind));
         }
-        list.sort();
+        // Host directory order, like Node (no sorting).
         let arr = Array::new(ctx.clone())?;
         for (i, (name, kind)) in list.into_iter().enumerate() {
             let pair = Array::new(ctx.clone())?;
@@ -496,7 +498,7 @@ fn install_modules<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
         match st.resolver.resolve(&spec, &from, kind) {
             Ok(Resolved::Builtin(name)) => Ok(name),
             Ok(Resolved::File(path)) => Ok(path),
-            Err(msg) => Err(modules::throw_resolve_error(&ctx, &msg, &spec)),
+            Err(msg) => Err(modules::throw_resolve_error(&ctx, &msg, &spec, kind)),
         }
     })?;
     let st = state.clone();
@@ -663,6 +665,19 @@ fn install_engine<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
     })?;
     set_fn(native, "promiseResult", |ctx: Ctx<'js>, p: Promise<'js>| modules::promise_result(&ctx, &p))?;
     set_fn(native, "isProxy", |v: Value<'js>| v.is_proxy())?;
+    set_fn(native, "isPromise", |v: Value<'js>| v.is_promise())?;
+    // SAFETY: JS_IsError only inspects the value's class.
+    set_fn(native, "isError", |v: Value<'js>| unsafe { qjs::JS_IsError(v.as_raw()) })?;
+    set_fn(native, "getProxyTarget", |ctx: Ctx<'js>, v: Value<'js>| -> Result<Value<'js>> {
+        if !v.is_proxy() {
+            return Ok(Value::new_undefined(ctx));
+        }
+        // SAFETY: returns a new reference to the proxy's target.
+        unsafe {
+            let raw = qjs::JS_GetProxyTarget(ctx.as_raw().as_ptr(), v.as_raw());
+            Ok(Value::from_raw(ctx.clone(), raw))
+        }
+    })?;
     let st = state.clone();
     set_fn(native, "scheduleTick", move || st.tick_pending.set(true))?;
     let st = state.clone();

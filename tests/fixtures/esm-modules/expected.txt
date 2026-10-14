@@ -1,0 +1,20 @@
+default: 5
+named: named export
+live binding before: 0
+live binding after: 1
+namespace keys: bump,counter,default,named
+index resolution: lib/dir/index.js
+extension resolution: lib/noext.js
+json default: config 3
+json named: config
+meta.url: file:///index.mjs
+meta.dir: /
+meta.path: /index.mjs
+meta.file: index.mjs
+meta.main: true
+meta.resolve: file:///lib/math.mjs
+top-level await: tla done
+dynamic module evaluated once, main = false
+dynamic import: dynamic module dynamic.mjs
+same instance: true
+missing import rejects: true

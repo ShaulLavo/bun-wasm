@@ -1,0 +1,6 @@
+Ada (36) Bob (?)
+enum: 10 Low
+generic: boxed 2
+satisfies: 1
+tsx: {"type":"div","props":{"className":"greeting","children":["Hello ","TSX"]}}
+toml: TOML Example Tom 8000,8001

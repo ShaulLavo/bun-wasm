@@ -1,0 +1,15 @@
+toString: hello world 68656c6c6f20776f726c64 aGVsbG8gd29ybGQ=
+from hex/base64: hello hello
+base64url: c3ViamVjdHM_X2Q
+latin1/utf16le: 5 68006900
+byteLength: 6 2
+concat: abc
+alloc fill: abab 000000
+read/write ints: deadbeef -2 1.5 222
+subarray shares: Hello true
+compare/equals: -1 true
+indexOf/includes: 6 true 4
+JSON: {"type":"Buffer","data":[1,2,3]}
+instanceof Uint8Array: true number
+global Buffer: true
+bigint: 256n
