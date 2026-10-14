@@ -421,7 +421,13 @@ impl Loader for ModuleLoader {
         if resolve::builtin_name(name).is_some() {
             let builtin: Function = internal.get("builtin")?;
             let exports: Value = builtin.call((name,))?;
-            return declare_wrapper(ctx, name, exports.clone(), exports);
+            // A builtin marked `__esModule` (bun:sqlite) names its own default
+            // export; for the rest the default is the exports object.
+            let default = match exports.as_object() {
+                Some(obj) if obj.get::<_, bool>("__esModule").unwrap_or(false) => obj.get("default")?,
+                _ => exports.clone(),
+            };
+            return declare_wrapper(ctx, name, exports, default);
         }
         let (code, format) = self.state.load_source(ctx, name)?;
         match format {
