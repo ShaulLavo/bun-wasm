@@ -1,0 +1,71 @@
+unique: SQLiteError: UNIQUE constraint failed: users.email code=SQLITE_CONSTRAINT_UNIQUE errno=2067 byteOffset=-1 true true [
+  "code", "errno", "byteOffset"
+]
+not null: SQLiteError: NOT NULL constraint failed: users.email code=SQLITE_CONSTRAINT_NOTNULL errno=1299 byteOffset=-1 true true [
+  "code", "errno", "byteOffset"
+]
+check: SQLiteError: CHECK constraint failed: age >= 0 code=SQLITE_CONSTRAINT_CHECK errno=275 byteOffset=-1 true true [
+  "code", "errno", "byteOffset"
+]
+primary key: SQLiteError: UNIQUE constraint failed: users.id code=SQLITE_CONSTRAINT_PRIMARYKEY errno=1555 byteOffset=-1 true true [
+  "code", "errno", "byteOffset"
+]
+syntax: SQLiteError: near "selec": syntax error code=SQLITE_ERROR errno=1 byteOffset=0 true true [
+  "code", "errno", "byteOffset"
+]
+syntax offset: SQLiteError: near "id": syntax error code=SQLITE_ERROR errno=1 byteOffset=25 true true [
+  "code", "errno", "byteOffset"
+]
+no table: SQLiteError: no such table: nope code=SQLITE_ERROR errno=1 byteOffset=-1 true true [
+  "code", "errno", "byteOffset"
+]
+no column: SQLiteError: no such column: nope code=SQLITE_ERROR errno=1 byteOffset=-1 true true [
+  "code", "errno", "byteOffset"
+]
+run syntax: SQLiteError: near "tabl": syntax error code=SQLITE_ERROR errno=1 byteOffset=7 true true [
+  "code", "errno", "byteOffset"
+]
+partial run kept: {
+  name: "ok",
+}
+blank run: Error: SQL string mustn't be blank true false []
+empty run: Error: Query contained no valid SQL statement; likely empty query. true false []
+comment run: Error: Query contained no valid SQL statement; likely empty query. true false []
+empty query: Error: SQL query cannot be empty. true false []
+blank prepare: RangeError: Invalid SQL statement true false []
+query type: TypeError: Expected 'query' to be a string, got 'number' true false []
+bad binding: TypeError: Binding expected string, TypedArray, boolean, number, bigint or null true false []
+construct SQLiteError: Error: SQLiteError can only be constructed by bun:sqlite true false []
+anonymous readonly: Error: Cannot open an anonymous database in read-only mode. true false []
+missing readonly: SQLiteError: unable to open database file code=SQLITE_CANTOPEN errno=14 byteOffset=-1 true true [
+  "code", "errno", "byteOffset"
+]
+missing no create: SQLiteError: unable to open database file code=SQLITE_CANTOPEN errno=14 byteOffset=-1 true true [
+  "code", "errno", "byteOffset"
+]
+readOnly typo: TypeError: Misspelled option "readOnly" should be "readonly" true false []
+filename type: TypeError: Expected 'filename' to be a string, got 'number' true false []
+transaction arg: TypeError: Expected first argument to be a function true false []
+load extension: function
+first: {
+  changes: 1,
+  lastInsertRowid: 2,
+}
+again: SQLiteError: UNIQUE constraint failed: users.email code=SQLITE_CONSTRAINT_UNIQUE errno=2067 byteOffset=-1 true true [
+  "code", "errno", "byteOffset"
+]
+reused: {
+  changes: 1,
+  lastInsertRowid: 3,
+}
+foreign_keys: {
+  foreign_keys: 0,
+}
+finalized: Error: Statement has finalized true false []
+closed query: RangeError: Cannot use a closed database true false []
+closed run: Error: Database has closed true false []
+closed cached: Error: Database has closed true false []
+prepared survives close: {
+  n: 3,
+}
+close twice: undefined

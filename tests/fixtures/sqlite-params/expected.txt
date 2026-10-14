@@ -1,0 +1,189 @@
+int: {
+  v: 42,
+  t: "integer",
+}
+whole double: {
+  v: 3,
+  t: "integer",
+}
+real: {
+  v: 2.5,
+  t: "real",
+}
+negative zero: {
+  v: -0,
+  t: "real",
+}
+big number: {
+  v: 1152921504606847000,
+  t: "real",
+}
+bigint: {
+  v: 123,
+  t: "integer",
+}
+bigint wraps: {
+  v: 5,
+  t: "integer",
+}
+true: {
+  v: 1,
+  t: "integer",
+}
+false: {
+  v: 0,
+  t: "integer",
+}
+string: {
+  v: "héllo ✓",
+  t: "text",
+}
+empty string: {
+  v: "",
+  t: "text",
+}
+null: {
+  v: null,
+  t: "null",
+}
+undefined: {
+  v: null,
+  t: "null",
+}
+Uint8Array: {
+  v: Uint8Array(2) [ 9, 8 ],
+  t: "blob",
+}
+Buffer: {
+  v: Uint8Array(2) [ 104, 105 ],
+  t: "blob",
+}
+Uint16Array: {
+  v: Uint8Array(4) [ 1, 0, 0, 1 ],
+  t: "blob",
+}
+empty blob: {
+  v: Uint8Array(0) [],
+  t: "blob",
+}
+Date: {
+  v: null,
+  t: "null",
+}
+symbol: TypeError: Binding expected string, TypedArray, boolean, number, bigint or null
+array arg: {
+  v: 7,
+  t: "integer",
+}
+kept bindings: {
+  v: 7,
+  t: "integer",
+}
+spread: {
+  a: 1,
+  b: 2,
+}
+array: {
+  a: 3,
+  b: 4,
+}
+too many: Error: SQLite query expected 2 values, received 3
+too few: Error: SQLite query expected 2 values, received 1
+empty array: {
+  a: null,
+  b: null,
+}
+numbered: {
+  second: "two",
+  first: "one",
+}
+named: {
+  a: 1,
+  b: 2,
+  c: 3,
+}
+named no prefix: {
+  a: null,
+  b: null,
+  c: null,
+}
+named partial: {
+  a: "only a",
+  b: null,
+  c: null,
+}
+strict named: {
+  a: 1,
+  b: 2,
+}
+strict with prefix: Error: Missing parameter "a"
+strict missing: Error: Missing parameter "b"
+strict positional: {
+  x: "p",
+  y: "q",
+}
+strict positional missing: Error: Missing parameter "2"
+strict numbered: Error: Missing parameter "?1"
+strict numbered array: {
+  x: "second",
+  y: "first",
+}
+strict run: {
+  changes: 1,
+  lastInsertRowid: 1,
+}
+strict run missing: Error: Missing parameter "v"
+strict rows: [
+  {
+    k: "a",
+    v: 1,
+  }
+]
+run positional: {
+  changes: 1,
+  lastInsertRowid: 1,
+}
+run array: {
+  changes: 1,
+  lastInsertRowid: 2,
+}
+run named: {
+  changes: 1,
+  lastInsertRowid: 3,
+}
+run multi: {
+  changes: 2,
+  lastInsertRowid: 5,
+}
+exec: {
+  changes: 2,
+  lastInsertRowid: 5,
+}
+rows: [
+  [ 1, "x" ], [ 2, "y" ], [ 3, "z" ], [ 4, "W" ], [ 5, "V" ]
+]
+prepare params: {
+  bound: "at prepare",
+}
+prepare named params: {
+  x: 9,
+}
+safe read: {
+  big: 9007199254740993n,
+  f: 1.5,
+  small: 7n,
+}
+safe bind: {
+  v: 9007199254740993n,
+}
+safe out of range: RangeError: BigInt value '9223372036854775808' is out of range
+safe run: {
+  changes: 0,
+  lastInsertRowid: 0n,
+}
+unsafe big: {
+  big: 9007199254740992,
+}
+toggle safeIntegers: [ false, {
+    n: 5n,
+  }, true ]

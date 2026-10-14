@@ -1,0 +1,35 @@
+filename: data/app.sqlite true
+journal_mode: {
+  journal_mode: "delete",
+}
+rows: {
+  n: 3,
+}
+size > 0: true journal gone: true
+reopened: [
+  [ "first" ], [ "second" ], [ "third" ]
+]
+readonly read: {
+  n: 2,
+}
+readonly write: SQLITE_READONLY attempt to write a readonly database
+second file: {
+  n: 1,
+}
+serialize: true true true
+deserialized: :memory: [
+  [ "hello" ], [ "world" ]
+]
+writable copy: {
+  n: 3,
+} original: {
+  n: 2,
+}
+readonly copy: SQLITE_READONLY
+from Uint8Array: {
+  n: 2,
+}
+attached: {
+  name: "attached",
+}
+files: true,true,true,true
