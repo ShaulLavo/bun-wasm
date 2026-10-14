@@ -10,6 +10,7 @@
 
 use core::ffi::{c_int, c_void};
 
+mod fdpath;
 mod mman;
 mod process;
 

@@ -9,6 +9,7 @@
 #![feature(linkage)]
 
 mod bun_native;
+mod bundler;
 mod extra;
 
 pub use bun_native::set_stack_size;
