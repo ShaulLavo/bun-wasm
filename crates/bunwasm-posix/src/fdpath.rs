@@ -2,9 +2,10 @@
 //!
 //! `bun_sys` reports every `openat` it makes and every `close`
 //! (`bunwasm_fd_opened` / `bunwasm_fd_closed`); `bun_sys::get_fd_path` asks
-//! `bunwasm_fd_path`. Paths are absolute and normalized, but symlinks are not
-//! resolved (WASI hosts rarely expose them). Preopened directories answer with
-//! their preopen name.
+//! `bunwasm_fd_path`. Answers are absolute, normalized and, like the kernel's,
+//! free of symlinks: they are resolved with `readlink` when asked for, since
+//! the resolver relies on this for packages linked into `node_modules`.
+//! Preopened directories answer with their preopen name.
 use core::ffi::{c_char, c_int};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -30,6 +31,61 @@ fn join(base: &[u8], rel: &[u8]) -> Vec<u8> {
     for p in &parts {
         out.push(b'/');
         out.extend_from_slice(p);
+    }
+    if out.is_empty() {
+        out.push(b'/');
+    }
+    out
+}
+
+/// The target of `path` if it is a symlink.
+fn readlink(path: &[u8]) -> Option<Vec<u8>> {
+    let mut z = path.to_vec();
+    z.push(0);
+    let mut buf = vec![0u8; 4096];
+    // SAFETY: `z` is NUL-terminated and `buf` writable for its length.
+    let n = unsafe { libc::readlink(z.as_ptr().cast(), buf.as_mut_ptr().cast(), buf.len()) };
+    if n < 0 {
+        return None;
+    }
+    buf.truncate(n as usize);
+    Some(buf)
+}
+
+/// `realpath` of an absolute, normalized path: each symlink component is
+/// replaced by its target. A path that does not exist is returned as is.
+fn canonicalize(path: &[u8]) -> Vec<u8> {
+    let mut pending: Vec<Vec<u8>> = path
+        .split(|&c| c == b'/')
+        .filter(|p| !p.is_empty())
+        .rev()
+        .map(<[u8]>::to_vec)
+        .collect();
+    let mut out: Vec<u8> = Vec::new();
+    let mut hops = 0;
+    while let Some(part) = pending.pop() {
+        match part.as_slice() {
+            b"." => continue,
+            b".." => {
+                let cut = out.iter().rposition(|&c| c == b'/').unwrap_or(0);
+                out.truncate(cut);
+                continue;
+            }
+            _ => {}
+        }
+        let parent_len = out.len();
+        out.push(b'/');
+        out.extend_from_slice(&part);
+        let Some(target) = readlink(&out) else { continue };
+        hops += 1;
+        if hops > 40 {
+            break;
+        }
+        out.truncate(parent_len);
+        if target.first() == Some(&b'/') {
+            out.clear();
+        }
+        pending.extend(target.split(|&c| c == b'/').filter(|p| !p.is_empty()).rev().map(<[u8]>::to_vec));
     }
     if out.is_empty() {
         out.push(b'/');
@@ -120,6 +176,7 @@ pub unsafe extern "C" fn bunwasm_fd_path(fd: c_int, buf: *mut u8, cap: usize) ->
     let Some(path) = path_of(fd) else {
         return -(libc::EBADF as isize);
     };
+    let path = canonicalize(&path);
     if path.len() > cap {
         return -(libc::ENAMETOOLONG as isize);
     }
