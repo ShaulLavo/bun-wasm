@@ -10,13 +10,16 @@
 #   cmd                         optional: bun arguments replacing `run /index.*`, one per line
 #   stdin                       optional file piped to stdin
 #   expected_stderr.txt         optional expected stderr (e.g. `bun test` reports)
+#   show                        optional list of files (one per line) the run creates; their
+#                               contents are appended to stdout as `--- <path>` sections
 #   manual                      optional marker: expected.txt is hand-written because native
 #                               Bun legitimately differs (version numbers, real sockets), and
 #                               --update leaves it alone
 #
 # Outputs are normalized before comparing: durations like `[1.23ms]` become
 # `[TIME]`, `bun test v1.4.2 (744846f84)` becomes `bun test vVERSION`, and the
-# crash footer `Bun v1.4.2 (Linux x64)` becomes `Bun vVERSION (PLATFORM)`.
+# crash footer `Bun v1.4.2 (Linux x64)` becomes `Bun vVERSION (PLATFORM)`, and
+# `bun build`'s "Bundled N modules in 12ms" loses its timing.
 #
 # The fixture is copied to a scratch directory that is preopened as `/`, so
 # tests may write files freely. Use relative paths for files a test creates:
@@ -56,7 +59,19 @@ fi
 
 normalize() {
   sed -E -e 's/\[[0-9]+(\.[0-9]+)?m?s\]/[TIME]/g' -e 's/^bun test v[^ ]+ \([0-9a-f]+\)/bun test vVERSION/' \
-    -e 's/^Bun v[0-9.]+ \([^)]*\)$/Bun vVERSION (PLATFORM)/'
+    -e 's/^Bun v[0-9.]+ \([^)]*\)$/Bun vVERSION (PLATFORM)/' \
+    -e 's/^Bundled ([0-9]+) modules? in [0-9]+ms/Bundled \1 modules in Nms/'
+}
+
+# Append the files listed in the fixture's `show` file to an output file.
+show_files() {
+  local dir="$1" out="$2" f
+  [[ -f "$dir/show" ]] || return 0
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    printf -- '--- %s\n' "$f" >>"$out"
+    cat "$dir/$f" >>"$out" 2>/dev/null || echo "(missing)" >>"$out"
+  done <"$dir/show"
 }
 
 entry_of() {
@@ -94,6 +109,7 @@ for name in "${names[@]}"; do
     native_cmd=("${cmd[@]}")
     [[ ! -f "$work/cmd" ]] && native_cmd=(run "./$entry")
     (cd "$work" && HOME=/ bun "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+    show_files "$work" "$scratch/out"
     # Native runs live in the scratch dir; inside wasm the fixture is `/`.
     sed -e "s#$work/#/#g" -e "s#$work#/#g" "$scratch/out" | normalize >"$src/expected.txt"
     if [[ -f "$src/expected_stderr.txt" ]]; then
@@ -106,6 +122,7 @@ for name in "${names[@]}"; do
   (cd "$work" && timeout 60 wasmtime run --dir "$work::/" --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 \
     "$wasm" "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   code=$?
+  show_files "$work" "$scratch/out"
   normalize <"$scratch/out" >"$scratch/out.n"
   normalize <"$scratch/err" >"$scratch/err.n"
   ok=1

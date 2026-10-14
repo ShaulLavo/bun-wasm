@@ -1,0 +1,13 @@
+// @bun
+// src/greet.ts
+function greet(name) {
+  return `Hello, ${name}!`;
+}
+// src/data.json
+var data_default = {
+  name: "bundler"
+};
+
+// src/index.ts
+var mood = "happy" /* Happy */;
+console.log(greet(data_default.name), mood);

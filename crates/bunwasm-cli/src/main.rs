@@ -11,6 +11,7 @@ Usage: bun <command> [...flags] [...args]
 Commands:
   run       ./my-script.ts       Execute a file with Bun
   test      [filters]            Run unit tests with Bun's test runner
+  build     ./a.ts --outdir out  Bundle TypeScript & JavaScript into a single file
   <file>                         Same as `bun run <file>`
   -e, --eval <code>              Evaluate JavaScript source code
   -p, --print <code>             Evaluate and print the result
@@ -20,7 +21,7 @@ Flags:
       --revision                 Print version with revision and exit
   -h, --help                     Display this menu and exit
 
-Not available in bun.wasm: install, add, build, x, create, upgrade.
+Not available in bun.wasm: install, add, x, create, upgrade.
 ";
 
 fn transpiler() -> Box<dyn Transpiler> {
@@ -67,8 +68,23 @@ mod bun_transpiler {
     }
 }
 
+#[cfg(feature = "bun-build")]
+mod build_command;
+
+#[cfg(feature = "bun-build")]
+fn build(args: Vec<String>) -> i32 {
+    build_command::run(args)
+}
+
+#[cfg(not(feature = "bun-build"))]
+fn build(_: Vec<String>) -> i32 {
+    eprintln!("error: this bun.wasm was built without the bundler (feature bun-build)");
+    1
+}
+
 enum Command {
     Run(Entry, Vec<String>),
+    Build(Vec<String>),
     Print(String),
     Exit(i32),
 }
@@ -105,6 +121,7 @@ fn parse(args: Vec<String>) -> Command {
                 return Command::Print(code);
             }
             "test" => return Command::Run(Entry::Test(rest.collect()), Vec::new()),
+            "build" => return Command::Build(rest.collect()),
             "run" => {
                 let Some(file) = rest.next() else { return usage_error("bun run needs a file to run") };
                 return Command::Run(Entry::File(file), rest.collect());
@@ -121,7 +138,7 @@ fn parse(args: Vec<String>) -> Command {
 
 fn main() {
     // Sets the parser's stack limit and keeps Bun's C/POSIX shims linked.
-    #[cfg(all(feature = "bun-transpiler", target_os = "wasi"))]
+    #[cfg(all(any(feature = "bun-transpiler", feature = "bun-build"), target_os = "wasi"))]
     bunwasm_glue::init();
 
     // WASI has no working directory of its own; hosts pass the intended one
@@ -133,6 +150,7 @@ fn main() {
     let command = parse(std::env::args().skip(1).collect());
     let (entry, args) = match command {
         Command::Exit(code) => std::process::exit(code),
+        Command::Build(args) => std::process::exit(build(args)),
         Command::Run(entry, args) => (entry, args),
         // `-p`: evaluate an expression and print it like Bun.
         Command::Print(code) => {

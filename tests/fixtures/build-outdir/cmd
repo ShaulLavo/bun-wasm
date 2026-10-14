@@ -1,0 +1,5 @@
+build
+./src/index.ts
+--outdir
+out
+--minify

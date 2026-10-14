@@ -1,0 +1,6 @@
+Bundled 3 modules in Nms
+
+  index.js  98 bytes  (entry point)
+
+--- out/index.js
+function e(n){return`Hello, ${n}!`}var o={name:"bundler"};var t="happy";console.log(e(o.name),t);

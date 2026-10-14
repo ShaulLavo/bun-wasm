@@ -10,14 +10,17 @@ name = "bun"
 path = "src/main.rs"
 
 [features]
-default = ["bun-transpiler"]
+default = ["bun-transpiler", "bun-build"]
 # Bun's real transpiler (crates/bunwasm-transpiler) for .ts/.tsx/.jsx/.toml.
 # Without it only plain JavaScript runs.
 bun-transpiler = ["dep:bunwasm-transpiler", "dep:bunwasm-glue"]
+# `bun build`: Bun's bundler (crates/bunwasm-build).
+bun-build = ["dep:bunwasm-build", "dep:bunwasm-glue"]
 
 [dependencies]
 bunwasm-runtime = { path = "../bunwasm-runtime" }
 bunwasm-transpiler = { path = "../bunwasm-transpiler", optional = true }
+bunwasm-build = { path = "../bunwasm-build", optional = true }
 
 [target.'cfg(target_os = "wasi")'.dependencies]
 bunwasm-glue = { path = "../bunwasm-glue", optional = true }
