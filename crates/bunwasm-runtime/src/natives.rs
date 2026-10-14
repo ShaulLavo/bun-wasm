@@ -225,6 +225,8 @@ fn install_process<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
     })?;
     let st = state.clone();
     set_fn(native, "mainPath", move || -> String { st.main.borrow().clone() })?;
+    let st = state.clone();
+    set_fn(native, "mainArg", move || -> String { st.main_arg.borrow().clone() })?;
     set_fn(native, "env", |ctx: Ctx<'js>| -> Result<Object<'js>> {
         let obj = Object::new(ctx)?;
         for (k, v) in std::env::vars_os() {

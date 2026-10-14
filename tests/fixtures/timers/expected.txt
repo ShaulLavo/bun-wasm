@@ -9,8 +9,8 @@ args x y
 interval 1
 interval 2
 interval 3
-timeout 30
+timeout 60
 abort: stop
 timers/promises: promised
-timeout 50
-Bun.sleep resolved after >=55ms: true
+timeout 150
+Bun.sleep resolved after >=180ms: true

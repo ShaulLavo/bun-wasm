@@ -261,16 +261,18 @@
   // drain between callbacks. Returns 0 when something ran, the delay in ms
   // until the next timer, or -1 when nothing keeps the process alive.
   internal.runTimers = function runTimers() {
-    const now = native.now();
-    if (timerQueue.length > 0 && timerQueue[0]._when <= now) {
-      runOneTimer(now);
-      return 0;
-    }
+    // Immediates first: like Bun, setImmediate callbacks queued by the
+    // main script run before even a due setTimeout(0).
     while (immediates.length > 0) {
       const immediate = immediates.shift();
       if (!immediate._active) continue;
       immediate._active = false;
       immediate._callback.apply(immediate, immediate._args);
+      return 0;
+    }
+    const now = native.now();
+    if (timerQueue.length > 0 && timerQueue[0]._when <= now) {
+      runOneTimer(now);
       return 0;
     }
     if (internal.pendingIo > 0) return 0;
@@ -472,7 +474,7 @@
 
   internal.runMain = function runMain(path) {
     if (!native.exists(path)) {
-      const err = new Error(`Module not found "${internal.mainArg || path}"`);
+      const err = new Error(`Module not found "${native.mainArg() || path}"`);
       err.code = "ERR_MODULE_NOT_FOUND";
       err.__bunwasmPlain = true;
       throw err;

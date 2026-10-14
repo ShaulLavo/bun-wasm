@@ -152,10 +152,9 @@
     return lines.join("\n");
   }
 
+  // Bun left-aligns cells after one space of padding.
   function center(text, w, width) {
-    const pad = w - width(text);
-    const left = Math.floor(pad / 2);
-    return " ".repeat(left) + text + " ".repeat(pad - left);
+    return " " + text + " ".repeat(w - width(text) - 1);
   }
 
   for (const key of Object.keys(console)) {

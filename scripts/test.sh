@@ -36,13 +36,14 @@ for arg in "$@"; do
   esac
 done
 
-if [[ $build == 1 && $update == 0 ]]; then
-  "$root/scripts/build.sh" >/dev/null || { echo "build failed"; exit 1; }
-fi
 wasm="$root/dist/bun.wasm"
 
 scratch="$(mktemp -d /work/tmp/bun-wasm-runtime-test-XXXXXX)"
 trap 'rm -rf "$scratch"' EXIT INT TERM
+
+if [[ $build == 1 && $update == 0 ]]; then
+  "$root/scripts/build.sh" >"$scratch/build.log" 2>&1 || { tail -30 "$scratch/build.log"; echo "build failed"; exit 1; }
+fi
 
 if [[ ${#names[@]} == 0 ]]; then
   for dir in "$root"/tests/fixtures/*/; do names+=("$(basename "$dir")"); done

@@ -53,6 +53,8 @@ pub(crate) struct State {
     transpiler: Box<dyn Transpiler>,
     /// Absolute path of the entry module (for `import.meta.main`).
     main: RefCell<String>,
+    /// The entry point as given on the command line (for error messages).
+    main_arg: RefCell<String>,
     /// Transpiled sources by path, with their module format.
     sources: RefCell<HashMap<String, (Rc<str>, modules::Format)>>,
     stdout: RefCell<BufWriter<io::Stdout>>,
@@ -72,6 +74,7 @@ impl State {
             resolver: resolve::Resolver::new(),
             transpiler,
             main: RefCell::new(String::new()),
+            main_arg: RefCell::new(String::new()),
             sources: RefCell::new(HashMap::new()),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
             tick_pending: Cell::new(false),
@@ -211,6 +214,9 @@ pub fn run(options: Options) -> i32 {
         .collect::<Vec<_>>();
     let state = Rc::new(State::new(argv, options.transpiler));
     *state.main.borrow_mut() = main_path.clone();
+    if let Entry::File(arg) = &options.entry {
+        *state.main_arg.borrow_mut() = arg.clone();
+    }
 
     let tracker_state = state.clone();
     rt.set_host_promise_rejection_tracker(Some(Box::new(move |ctx, promise, reason, is_handled| {
