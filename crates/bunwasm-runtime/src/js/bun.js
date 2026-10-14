@@ -407,7 +407,7 @@
     spawn: unsupported("Bun.spawn", noProcesses),
     spawnSync: unsupported("Bun.spawnSync", noProcesses),
     $: unsupported("Bun.$", noProcesses),
-    serve: unsupported("Bun.serve", noNetwork),
+    serve: native.hostCaps.listen ? (options) => internal.require("net").serve(options) : unsupported("Bun.serve", noNetwork),
     listen: unsupported("Bun.listen", noNetwork),
     connect: unsupported("Bun.connect", noNetwork),
     udpSocket: unsupported("Bun.udpSocket", noNetwork),

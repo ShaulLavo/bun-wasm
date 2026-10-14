@@ -359,6 +359,9 @@
     return Math.max(0.01, timerQueue[0]._when - now);
   };
   internal.pendingIo = 0;
+  // Replaced by net.js when a networking host is present.
+  internal.ioPending = () => 0;
+  internal.pumpIo = () => false;
 
   // --- process.nextTick -------------------------------------------------------
 

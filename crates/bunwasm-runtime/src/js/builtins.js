@@ -992,6 +992,18 @@
   const METHODS = ["ACL", "BIND", "CHECKOUT", "CONNECT", "COPY", "DELETE", "GET", "HEAD", "LINK", "LOCK", "M-SEARCH", "MERGE", "MKACTIVITY", "MKCALENDAR", "MKCOL", "MOVE", "NOTIFY", "OPTIONS", "PATCH", "POST", "PROPFIND", "PROPPATCH", "PURGE", "PUT", "QUERY", "REBIND", "REPORT", "SEARCH", "SOURCE", "SUBSCRIBE", "TRACE", "UNBIND", "UNLINK", "UNLOCK", "UNSUBSCRIBE"];
 
   function httpModule(name) {
+    // With a networking host (docs/host-abi.md) servers and requests work.
+    if (native.hostCaps.listen || native.hostCaps.fetch) {
+      const http = internal.require("net").nodeHttp(name === "https" ? "https:" : "http:");
+      return Object.assign(http, {
+        STATUS_CODES,
+        METHODS,
+        maxHeaderSize: 16384,
+        validateHeaderName() {},
+        validateHeaderValue() {},
+        setMaxIdleHTTPParsers() {},
+      });
+    }
     return unsupportedModule(name, NO_NETWORK, ["createServer", "request", "get", "Agent", "Server", "ClientRequest", "IncomingMessage", "ServerResponse", "OutgoingMessage"], {
       STATUS_CODES,
       METHODS,
@@ -1065,7 +1077,7 @@
       }),
     "node:child_process": () => unsupportedModule("child_process", NO_PROCESSES, ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork", "ChildProcess"]),
     "node:cluster": () => unsupportedModule("cluster", NO_PROCESSES, ["fork", "setupPrimary", "setupMaster", "disconnect"], { isPrimary: true, isMaster: true, isWorker: false, workers: {} }),
-    "node:net": () => unsupportedModule("net", NO_NETWORK, ["createServer", "createConnection", "connect", "Socket", "Server", "Stream", "BlockList", "SocketAddress"], { isIP, isIPv4, isIPv6, getDefaultAutoSelectFamily: () => true, setDefaultAutoSelectFamily() {} }),
+    "node:net": () => native.hostCaps.listen ? Object.assign(internal.require("net").nodeNet(), { isIP, isIPv4, isIPv6, getDefaultAutoSelectFamily: () => true, setDefaultAutoSelectFamily() {} }) : unsupportedModule("net", NO_NETWORK, ["createServer", "createConnection", "connect", "Socket", "Server", "Stream", "BlockList", "SocketAddress"], { isIP, isIPv4, isIPv6, getDefaultAutoSelectFamily: () => true, setDefaultAutoSelectFamily() {} }),
     "node:tls": () => unsupportedModule("tls", NO_NETWORK, ["connect", "createServer", "createSecureContext", "TLSSocket", "Server", "checkServerIdentity"], { rootCertificates: [], DEFAULT_MIN_VERSION: "TLSv1.2", DEFAULT_MAX_VERSION: "TLSv1.3", DEFAULT_ECDH_CURVE: "auto" }),
     "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
     "node:dns": () => unsupportedModule("dns", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "resolveMx", "resolveTxt", "resolveSrv", "resolveNs", "resolveCname", "reverse", "lookupService", "Resolver"], { promises: internal.builtin("node:dns/promises"), getServers: () => [], setServers() {}, setDefaultResultOrder() {} }),

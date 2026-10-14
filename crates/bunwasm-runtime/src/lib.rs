@@ -320,6 +320,28 @@ fn run_event_loop<'js>(ctx: &Ctx<'js>, state: &Rc<State>, main: Option<Promise<'
         if next == 0.0 {
             continue;
         }
+        // Network handles (docs/host-abi.md): pump them, then sleep in the
+        // host's poll until news or the next timer instead of a plain sleep.
+        if state.call_internal::<i32>(ctx, "ioPending", ()).unwrap_or(0) > 0 {
+            match state.call_internal::<bool>(ctx, "pumpIo", ()) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(err) => {
+                    state.uncaught(ctx, err);
+                    continue;
+                }
+            }
+            if state.drain_jobs(ctx) {
+                continue;
+            }
+            state.flush();
+            let wait = if next < 0.0 { -1 } else { next.ceil() as i32 };
+            if host::poll(wait) == host::UNSUPPORTED {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            let _ = state.call_internal::<bool>(ctx, "pumpIo", ()).map_err(|err| state.uncaught(ctx, err));
+            continue;
+        }
         if next < 0.0 {
             if state.drain_jobs(ctx) {
                 continue;

@@ -987,6 +987,7 @@
     #headers;
     #type = "default";
     #url = "";
+    #redirected = false;
     constructor(body = null, init = {}) {
       const status = init.status === undefined ? 200 : Number(init.status);
       if (!(status >= 200 && status <= 599)) {
@@ -1016,6 +1017,12 @@
     static _setUrl(res, url) {
       res.#url = url;
     }
+    // A response that came over the network (see net.js).
+    static _setNetwork(res, url, redirected) {
+      res.#url = url;
+      res.#redirected = redirected;
+      res.#type = "basic";
+    }
     get status() {
       return this.#status;
     }
@@ -1035,7 +1042,7 @@
       return this.#url;
     }
     get redirected() {
-      return false;
+      return this.#redirected;
     }
     get bodyUsed() {
       return this._bodyUsed;
@@ -1126,7 +1133,8 @@
       return res;
     }
     if (url.startsWith("data:")) return fetchDataUrl(url);
-    void init;
+    // Hosts implementing the bun_wasm ABI (docs/host-abi.md) do real HTTP.
+    if (native.hostCaps.fetch) return internal.require("net").fetch(input, init);
     const err = new TypeError(`fetch() is not available in bun-wasm: WASI has no network access (${url})`);
     err.code = "ERR_NO_NETWORK";
     throw err;
