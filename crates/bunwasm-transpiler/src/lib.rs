@@ -92,16 +92,83 @@ fn init_state() -> Result<State, String> {
 /// Transpile one module to ESM JavaScript. `path` is used for error messages
 /// and the JSX/TS pragma lookups; it is not read from disk.
 pub fn transpile(source: &str, path: &str, loader: Loader) -> Result<String, String> {
+    with_state(|state| run(state, source, path, loader, None))
+}
+
+/// Output plus its source map.
+pub struct Transpiled {
+    pub code: String,
+    /// Source map v3 `mappings` (base64 VLQ, one source: the input file).
+    pub mappings: String,
+}
+
+/// Like [`transpile`], also returning the source map the printer recorded,
+/// so stack traces can point at the original TypeScript lines.
+pub fn transpile_with_source_map(source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
+    let mut collector = ChunkCollector(None);
+    let code = with_state(|state| run(state, source, path, loader, Some(&mut collector)))?;
+    let mappings = collector
+        .0
+        .map(|chunk| String::from_utf8_lossy(chunk.buffer.list.as_slice()).into_owned())
+        .unwrap_or_default();
+    Ok(Transpiled { code, mappings })
+}
+
+/// Renders a v3 source map JSON for a [`Transpiled`] result.
+pub fn source_map_json(path: &str, source: &str, mappings: &str) -> String {
+    let quote = |s: &str| {
+        let mut out = String::from('"');
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    };
+    format!(
+        r#"{{"version":3,"sources":[{}],"sourcesContent":[{}],"names":[],"mappings":{}}}"#,
+        quote(path),
+        quote(source),
+        quote(mappings)
+    )
+}
+
+struct ChunkCollector(Option<bun_sourcemap::Chunk>);
+
+impl bun_js_printer::OnSourceMapChunk for ChunkCollector {
+    fn on_source_map_chunk(
+        &mut self,
+        chunk: bun_sourcemap::Chunk,
+        _source: &bun_ast::Source,
+    ) -> bun_js_printer::Result<()> {
+        self.0 = Some(chunk);
+        Ok(())
+    }
+}
+
+fn with_state<T>(f: impl FnOnce(&mut State) -> Result<T, String>) -> Result<T, String> {
     STATE.with_borrow_mut(|slot| {
         if slot.is_none() {
             *slot = Some(init_state()?);
         }
-        let state = slot.as_mut().expect("initialized above");
-        run(state, source, path, loader)
+        f(slot.as_mut().expect("initialized above"))
     })
 }
 
-fn run(state: &mut State, source: &str, path: &str, loader: Loader) -> Result<String, String> {
+fn run(
+    state: &mut State,
+    source: &str,
+    path: &str,
+    loader: Loader,
+    source_map: Option<&mut ChunkCollector>,
+) -> Result<String, String> {
     let arena = Arena::new();
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&arena);
     let _ast_scope = ast_alloc.enter();
@@ -152,12 +219,19 @@ fn run(state: &mut State, source: &str, path: &str, loader: Loader) -> Result<St
         return Err(if msg.is_empty() { format!("failed to parse {path}") } else { msg });
     }
     let mut printer = bun_js_printer::BufferPrinter::init(bun_js_printer::BufferWriter::init());
-    let printed = state.transpiler.print(
-        &arena,
-        parsed.expect("checked above"),
-        &mut printer,
-        bun_bundler::transpiler::PrintFormat::Esm,
-    );
+    let parsed = parsed.expect("checked above");
+    let format = bun_bundler::transpiler::PrintFormat::Esm;
+    let printed = match source_map {
+        Some(collector) => state.transpiler.print_with_source_map(
+            &arena,
+            parsed,
+            &mut printer,
+            format,
+            bun_js_printer::SourceMapHandler::for_(collector),
+            None,
+        ),
+        None => state.transpiler.print(&arena, parsed, &mut printer, format),
+    };
     restore(&mut state.transpiler, &mut state.log);
     printed.map_err(|e| format!("failed to print {path}: {e:?}"))?;
     String::from_utf8(printer.ctx.written().to_vec()).map_err(|e| e.to_string())

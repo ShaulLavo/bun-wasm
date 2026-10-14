@@ -960,6 +960,7 @@ dependencies = [
  "bun_bundler",
  "bun_js_printer",
  "bun_options_types",
+ "bun_sourcemap",
  "bun_sys",
  "bun_wyhash",
  "bunwasm-glue",
