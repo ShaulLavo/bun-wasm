@@ -1,0 +1,17 @@
+outside undefined undefined
+start 1 {"id":1} undefined
+start 2 {"id":2} undefined
+in tick "tick" undefined
+in then "then" undefined
+in immediate "immediate" undefined
+in timer "timer" undefined
+after sleep 1 {"id":1} undefined
+nested 1 {"id":1} {"inner":1}
+end 1 {"id":1} undefined
+after sleep 2 {"id":2} undefined
+nested 2 {"id":2} {"inner":2}
+end 2 {"id":2} undefined
+after all undefined undefined
+resource scope "resource" undefined
+bound fn "bound" undefined
+inside exit undefined undefined

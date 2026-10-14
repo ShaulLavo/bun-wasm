@@ -136,6 +136,24 @@
     });
   }
 
+  // --- async context ----------------------------------------------------------
+  //
+  // QuickJS (patched in third_party/rquickjs-sys) keeps an async-context value
+  // that promise reactions capture at then/await time and restore when they
+  // run. Timers, ticks and immediates do the same here, so AsyncLocalStorage
+  // follows the logical flow of a program.
+
+  function runInContext(context, fn, thisArg, args) {
+    const previous = native.getAsyncContext();
+    native.setAsyncContext(context);
+    try {
+      return fn.apply(thisArg, args);
+    } finally {
+      native.setAsyncContext(previous);
+    }
+  }
+  internal.runInContext = runInContext;
+
   // --- timers ---------------------------------------------------------------
 
   let timerSeq = 1;
@@ -172,6 +190,7 @@
       this._repeat = repeat;
       this._ref = true;
       this._active = true;
+      this._context = native.getAsyncContext();
       this._when = native.now() + delay;
       refedTimers++;
       insertTimer(this);
@@ -261,6 +280,7 @@
       this._args = args;
       this._ref = true;
       this._active = true;
+      this._context = native.getAsyncContext();
     }
     ref() {
       this._ref = true;
@@ -297,7 +317,7 @@
       if (timer._ref) refedTimers--;
       timersById.delete(timer._id);
     }
-    timer._callback.apply(timer, timer._args);
+    runInContext(timer._context, timer._callback, timer, timer._args);
   }
 
   // Called by the Rust event loop. Runs at most one callback so microtasks
@@ -310,7 +330,7 @@
       const immediate = immediates.shift();
       if (!immediate._active) continue;
       immediate._active = false;
-      immediate._callback.apply(immediate, immediate._args);
+      runInContext(immediate._context, immediate._callback, immediate, immediate._args);
       return 0;
     }
     const now = native.now();
@@ -333,14 +353,14 @@
   internal.nextTick = function nextTick(callback, ...args) {
     checkCallback(callback);
     if (tickQueue.length === 0) native.scheduleTick();
-    tickQueue.push([callback, args]);
+    tickQueue.push([callback, args, native.getAsyncContext()]);
   };
 
   internal.runTicks = function runTicks() {
     try {
       while (tickQueue.length > 0) {
-        const [callback, args] = tickQueue.shift();
-        callback.apply(undefined, args);
+        const [callback, args, context] = tickQueue.shift();
+        runInContext(context, callback, undefined, args);
       }
     } finally {
       if (tickQueue.length > 0) native.scheduleTick();

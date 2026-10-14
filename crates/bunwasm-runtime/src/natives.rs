@@ -28,6 +28,9 @@ unsafe extern "C" {
     /// Own keys in JSC's console order (index keys, then insertion order with
     /// symbols interleaved); undefined for exotic objects.
     fn JS_bunwasm_OwnKeysInOrder(ctx: *mut qjs::JSContext, value: qjs::JSValue) -> qjs::JSValue;
+    /// The async context promise reactions capture and restore (new reference).
+    fn JS_bunwasm_GetAsyncContext(ctx: *mut qjs::JSContext) -> qjs::JSValue;
+    fn JS_bunwasm_SetAsyncContext(ctx: *mut qjs::JSContext, value: qjs::JSValue);
 }
 
 type EngineHelper = unsafe extern "C" fn(*mut qjs::JSContext, qjs::JSValue) -> qjs::JSValue;
@@ -724,6 +727,13 @@ fn install_engine<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
     set_fn(native, "isProxy", |v: Value<'js>| v.is_proxy())?;
     set_fn(native, "iteratorEntries", |ctx: Ctx<'js>, v: Value<'js>| call_engine_helper(&ctx, &v, JS_bunwasm_IteratorEntries))?;
     set_fn(native, "ownKeysInOrder", |ctx: Ctx<'js>, v: Value<'js>| call_engine_helper(&ctx, &v, JS_bunwasm_OwnKeysInOrder))?;
+    // SAFETY: plain accessors on the context's async-context slot.
+    set_fn(native, "getAsyncContext", |ctx: Ctx<'js>| unsafe {
+        Value::from_raw(ctx.clone(), JS_bunwasm_GetAsyncContext(ctx.as_raw().as_ptr()))
+    })?;
+    set_fn(native, "setAsyncContext", |ctx: Ctx<'js>, v: Value<'js>| unsafe {
+        JS_bunwasm_SetAsyncContext(ctx.as_raw().as_ptr(), v.as_raw())
+    })?;
     set_fn(native, "isPromise", |v: Value<'js>| v.is_promise())?;
     // SAFETY: JS_IsError only inspects the value's class.
     set_fn(native, "isError", |v: Value<'js>| unsafe { qjs::JS_IsError(v.as_raw()) })?;

@@ -587,6 +587,10 @@ struct JSContext {
     JSValue error_ctor;
     JSValue error_back_trace;
     JSValue error_prepare_stack;
+    /* bun-wasm: the async context (AsyncLocalStorage frame). Promise
+       reactions capture it when they are created (then/await) and restore
+       it while their job runs. */
+    JSValue async_context;
     JSValue error_stack_trace_limit;
     JSValue iterator_ctor;
     JSValue iterator_ctor_getset;
@@ -2878,6 +2882,7 @@ JSContext *JS_NewContextRaw(JSRuntime *rt)
     ctx->error_ctor = JS_NULL;
     ctx->error_back_trace = JS_UNDEFINED;
     ctx->error_prepare_stack = JS_UNDEFINED;
+    ctx->async_context = JS_UNDEFINED;
     ctx->error_stack_trace_limit = js_int32(10);
     init_list_head(&ctx->loaded_modules);
     // TODO(bnoordhuis) use getrandom() etc.
@@ -3008,6 +3013,7 @@ static void JS_MarkContext(JSRuntime *rt, JSContext *ctx,
     JS_MarkValue(rt, ctx->error_ctor, mark_func);
     JS_MarkValue(rt, ctx->error_back_trace, mark_func);
     JS_MarkValue(rt, ctx->error_prepare_stack, mark_func);
+    JS_MarkValue(rt, ctx->async_context, mark_func);
     JS_MarkValue(rt, ctx->error_stack_trace_limit, mark_func);
     for(i = 0; i < rt->class_count; i++) {
         JS_MarkValue(rt, ctx->class_proto[i], mark_func);
@@ -3090,6 +3096,7 @@ void JS_FreeContext(JSContext *ctx)
     JS_FreeValue(ctx, ctx->error_ctor);
     JS_FreeValue(ctx, ctx->error_back_trace);
     JS_FreeValue(ctx, ctx->error_prepare_stack);
+    JS_FreeValue(ctx, ctx->async_context);
     JS_FreeValue(ctx, ctx->error_stack_trace_limit);
     for(i = 0; i < rt->class_count; i++) {
         JS_FreeValue(ctx, ctx->class_proto[i]);
@@ -55588,6 +55595,7 @@ typedef struct JSPromiseReactionData {
     struct list_head link; /* not used in promise_reaction_job */
     JSValue resolving_funcs[2];
     JSValue handler;
+    JSValue async_context; /* bun-wasm: ctx->async_context at then() time */
 } JSPromiseReactionData;
 
 JSPromiseStateEnum JS_PromiseState(JSContext *ctx, JSValueConst promise)
@@ -55655,6 +55663,7 @@ static void promise_reaction_data_free(JSRuntime *rt,
     JS_FreeValueRT(rt, rd->resolving_funcs[0]);
     JS_FreeValueRT(rt, rd->resolving_funcs[1]);
     JS_FreeValueRT(rt, rd->handler);
+    JS_FreeValueRT(rt, rd->async_context);
     js_free_rt(rt, rd);
 }
 
@@ -55672,11 +55681,14 @@ static JSValue promise_reaction_job(JSContext *ctx, int argc,
                                     JSValueConst *argv)
 {
     JSValueConst handler, func;
-    JSValue res, res2;
+    JSValue res, res2, saved_context;
     JSValueConst arg;
     bool is_reject;
 
-    assert(argc == 5);
+    assert(argc == 6);
+    /* bun-wasm: run the reaction in the async context it was created in */
+    saved_context = ctx->async_context;
+    ctx->async_context = js_dup(argv[5]);
     handler = argv[2];
     is_reject = JS_ToBool(ctx, argv[3]);
     arg = argv[4];
@@ -55694,8 +55706,11 @@ static JSValue promise_reaction_job(JSContext *ctx, int argc,
     }
     is_reject = JS_IsException(res);
     if (is_reject) {
-        if (unlikely(JS_IsUncatchableError(ctx->rt->current_exception)))
+        if (unlikely(JS_IsUncatchableError(ctx->rt->current_exception))) {
+            JS_FreeValue(ctx, ctx->async_context);
+            ctx->async_context = saved_context;
             return JS_EXCEPTION;
+        }
         res = JS_GetException(ctx);
     }
     func = argv[is_reject];
@@ -55708,8 +55723,24 @@ static JSValue promise_reaction_job(JSContext *ctx, int argc,
         res2 = JS_UNDEFINED;
     }
     JS_FreeValue(ctx, res);
+    JS_FreeValue(ctx, ctx->async_context);
+    ctx->async_context = saved_context;
 
     return res2;
+}
+
+/* bun-wasm: read (new reference) and replace (takes a new reference of
+   `value`) the current async context. */
+JSValue JS_bunwasm_GetAsyncContext(JSContext *ctx)
+{
+    return js_dup(ctx->async_context);
+}
+
+void JS_bunwasm_SetAsyncContext(JSContext *ctx, JSValueConst value)
+{
+    JSValue old = ctx->async_context;
+    ctx->async_context = js_dup(value);
+    JS_FreeValue(ctx, old);
 }
 
 void JS_SetPromiseHook(JSRuntime *rt, JSPromiseHook promise_hook, void *opaque)
@@ -55732,7 +55763,7 @@ static void fulfill_or_reject_promise(JSContext *ctx, JSValueConst promise,
     JSPromiseData *s = JS_GetOpaque(promise, JS_CLASS_PROMISE);
     struct list_head *el, *el1;
     JSPromiseReactionData *rd;
-    JSValueConst args[5];
+    JSValueConst args[6];
 
     if (!s || s->promise_state != JS_PROMISE_PENDING)
         return; /* should never happen */
@@ -55758,7 +55789,8 @@ static void fulfill_or_reject_promise(JSContext *ctx, JSValueConst promise,
         args[2] = rd->handler;
         args[3] = js_bool(is_reject);
         args[4] = value;
-        JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
+        args[5] = rd->async_context;
+        JS_EnqueueJob(ctx, promise_reaction_job, 6, args);
         list_del(&rd->link);
         promise_reaction_data_free(ctx->rt, rd);
     }
@@ -55967,6 +55999,7 @@ static void js_promise_mark(JSRuntime *rt, JSValueConst val,
             JS_MarkValue(rt, rd->resolving_funcs[0], mark_func);
             JS_MarkValue(rt, rd->resolving_funcs[1], mark_func);
             JS_MarkValue(rt, rd->handler, mark_func);
+            JS_MarkValue(rt, rd->async_context, mark_func);
         }
     }
     JS_MarkValue(rt, s->promise_result, mark_func);
@@ -56568,6 +56601,7 @@ static __exception int perform_promise_then(JSContext *ctx,
         if (!JS_IsFunction(ctx, handler))
             handler = JS_UNDEFINED;
         rd->handler = js_dup(handler);
+        rd->async_context = js_dup(ctx->async_context);
         rd_array[i] = rd;
     }
 
@@ -56575,7 +56609,7 @@ static __exception int perform_promise_then(JSContext *ctx,
         for(i = 0; i < 2; i++)
             list_add_tail(&rd_array[i]->link, &s->promise_reactions[i]);
     } else {
-        JSValueConst args[5];
+        JSValueConst args[6];
         call_promise_rejection_tracker(ctx, promise, true);
         i = s->promise_state - JS_PROMISE_FULFILLED;
         rd = rd_array[i];
@@ -56584,7 +56618,8 @@ static __exception int perform_promise_then(JSContext *ctx,
         args[2] = rd->handler;
         args[3] = js_bool(i);
         args[4] = s->promise_result;
-        JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
+        args[5] = rd->async_context;
+        JS_EnqueueJob(ctx, promise_reaction_job, 6, args);
         for(i = 0; i < 2; i++)
             promise_reaction_data_free(ctx->rt, rd_array[i]);
     }

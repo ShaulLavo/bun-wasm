@@ -375,53 +375,56 @@
   // --- async_hooks / diagnostics_channel ------------------------------------
 
   function asyncHooksModule() {
-    // Synchronous-only context: the store is visible during run()'s callback
-    // but is not propagated across awaits (QuickJS has no async context hooks).
+    // The current async context is a frozen Map from storage to store,
+    // carried across await/then, timers and ticks by the engine (see
+    // runInContext in bootstrap.js).
+    const currentFrame = () => native.getAsyncContext();
+    function frameWith(storage, store) {
+      const next = new Map(currentFrame() || []);
+      next.set(storage, store);
+      return Object.freeze(next);
+    }
+    function frameWithout(storage) {
+      const next = new Map(currentFrame() || []);
+      next.delete(storage);
+      return Object.freeze(next);
+    }
+
     class AsyncLocalStorage {
-      #store = undefined;
-      #enabled = false;
       getStore() {
-        return this.#enabled ? this.#store : undefined;
+        const frame = currentFrame();
+        return frame ? frame.get(this) : undefined;
       }
       run(store, callback, ...args) {
-        const prev = [this.#store, this.#enabled];
-        this.#store = store;
-        this.#enabled = true;
-        try {
-          return callback(...args);
-        } finally {
-          [this.#store, this.#enabled] = prev;
-        }
+        return internal.runInContext(frameWith(this, store), callback, undefined, args);
       }
       exit(callback, ...args) {
-        const prev = [this.#store, this.#enabled];
-        this.#enabled = false;
-        try {
-          return callback(...args);
-        } finally {
-          [this.#store, this.#enabled] = prev;
-        }
+        return internal.runInContext(frameWithout(this), callback, undefined, args);
       }
       enterWith(store) {
-        this.#store = store;
-        this.#enabled = true;
+        native.setAsyncContext(frameWith(this, store));
       }
       disable() {
-        this.#enabled = false;
+        native.setAsyncContext(frameWithout(this));
       }
       static bind(fn) {
-        return fn;
+        const frame = currentFrame();
+        return function bound(...args) {
+          return internal.runInContext(frame, fn, this, args);
+        };
       }
       static snapshot() {
-        return (fn, ...args) => fn(...args);
+        const frame = currentFrame();
+        return (fn, ...args) => internal.runInContext(frame, fn, undefined, args);
       }
     }
     class AsyncResource {
       constructor(type) {
         this.type = type;
+        this._frame = currentFrame();
       }
       runInAsyncScope(fn, thisArg, ...args) {
-        return fn.apply(thisArg, args);
+        return internal.runInContext(this._frame, fn, thisArg, args);
       }
       emitDestroy() {
         return this;
