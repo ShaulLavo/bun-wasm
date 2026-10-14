@@ -868,6 +868,91 @@
     return Stream;
   }
 
+  // --- zlib (deflate/gzip via miniz_oxide; no brotli) -------------------------
+
+  function zlibModule() {
+    const { Buffer } = internal.require("buffer");
+    const toBytes = (data) => (typeof data === "string" ? Buffer.from(data) : internal.toUint8(data));
+    const asBuffer = (bytes) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const level = (options) => (options && options.level !== undefined ? options.level : -1);
+
+    function unzipSync(data) {
+      const bytes = toBytes(data);
+      const format = bytes[0] === 0x1f && bytes[1] === 0x8b ? "gzip" : "zlib";
+      return asBuffer(native.decompress(bytes, format));
+    }
+    const sync = {
+      deflateSync: (data, options) => asBuffer(native.compress(toBytes(data), level(options), "zlib")),
+      inflateSync: (data) => asBuffer(native.decompress(toBytes(data), "zlib")),
+      deflateRawSync: (data, options) => asBuffer(native.compress(toBytes(data), level(options), "raw")),
+      inflateRawSync: (data) => asBuffer(native.decompress(toBytes(data), "raw")),
+      gzipSync: (data, options) => asBuffer(native.compress(toBytes(data), level(options), "gzip")),
+      gunzipSync: (data) => asBuffer(native.decompress(toBytes(data), "gzip")),
+      unzipSync,
+    };
+
+    const mod = {};
+    for (const name of Object.keys(sync)) {
+      mod[name] = sync[name];
+      // Callback flavour: zlib.gzip(data[, options], callback).
+      mod[name.slice(0, -4)] = function (data, options, callback) {
+        const cb = typeof options === "function" ? options : callback;
+        let result;
+        let error = null;
+        try {
+          result = sync[name](data, typeof options === "function" ? undefined : options);
+        } catch (err) {
+          error = err;
+        }
+        setImmediate(() => cb(error, result));
+      };
+    }
+
+    // Streams buffer everything and emit the result at end().
+    function streamFor(fn) {
+      return (options) => {
+        const { Transform } = internal.builtin("node:stream");
+        const chunks = [];
+        return new Transform({
+          transform(chunk, encoding, callback) {
+            chunks.push(toBytes(chunk));
+            callback();
+          },
+          flush(callback) {
+            try {
+              callback(null, fn(internal.concatBytes(chunks), options));
+            } catch (err) {
+              callback(err);
+            }
+          },
+        });
+      };
+    }
+    const streams = {
+      createDeflate: streamFor(sync.deflateSync),
+      createInflate: streamFor(sync.inflateSync),
+      createDeflateRaw: streamFor(sync.deflateRawSync),
+      createInflateRaw: streamFor(sync.inflateRawSync),
+      createGzip: streamFor(sync.gzipSync),
+      createGunzip: streamFor(sync.gunzipSync),
+      createUnzip: streamFor(sync.unzipSync),
+    };
+    const brotli = unsupportedModule("zlib", "brotli is not compiled into bun.wasm", ["brotliCompress", "brotliCompressSync", "brotliDecompress", "brotliDecompressSync", "createBrotliCompress", "createBrotliDecompress", "zstdCompress", "zstdCompressSync", "zstdDecompress", "zstdDecompressSync"]);
+    const constants = {
+      Z_NO_FLUSH: 0, Z_PARTIAL_FLUSH: 1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3, Z_FINISH: 4, Z_BLOCK: 5,
+      Z_OK: 0, Z_STREAM_END: 1, Z_NEED_DICT: 2, Z_ERRNO: -1, Z_STREAM_ERROR: -2, Z_DATA_ERROR: -3,
+      Z_NO_COMPRESSION: 0, Z_BEST_SPEED: 1, Z_BEST_COMPRESSION: 9, Z_DEFAULT_COMPRESSION: -1,
+      Z_FILTERED: 1, Z_HUFFMAN_ONLY: 2, Z_RLE: 3, Z_FIXED: 4, Z_DEFAULT_STRATEGY: 0,
+    };
+    return Object.assign(mod, streams, brotli, {
+      constants,
+      crc32: (data, value = 0) => {
+        if (value !== 0) throw unsupportedError("zlib.crc32 with an initial value", "not implemented");
+        return native.crc32(toBytes(data));
+      },
+    }, constants);
+  }
+
   // --- net / http helpers that work without sockets -------------------------
 
   function isIPv4(s) {
@@ -985,7 +1070,7 @@
     "node:http": () => httpModule("http"),
     "node:https": () => httpModule("https"),
     "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {} }),
-    "node:zlib": () => unsupportedModule("zlib", "compression is not implemented yet", ["gzip", "gzipSync", "gunzip", "gunzipSync", "deflate", "deflateSync", "inflate", "inflateSync", "deflateRaw", "deflateRawSync", "inflateRaw", "inflateRawSync", "brotliCompress", "brotliCompressSync", "brotliDecompress", "brotliDecompressSync", "createGzip", "createGunzip", "createDeflate", "createInflate", "unzip", "unzipSync", "crc32"], { constants: {} }),
+    "node:zlib": zlibModule,
     "node:inspector": () => unsupportedModule("inspector", "no debugger", ["open", "close", "url", "waitForDebugger", "Session"], { console: globalThis.console }),
     "node:repl": () => unsupportedModule("repl", "no interactive terminal", ["start", "REPLServer"]),
     "node:v8": () => ({

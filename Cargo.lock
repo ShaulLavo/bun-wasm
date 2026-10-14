@@ -882,6 +882,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-build"
+version = "0.0.1"
+dependencies = [
+ "bstr",
+ "bun_alloc",
+ "bun_ast",
+ "bun_bundler",
+ "bun_collections",
+ "bun_core",
+ "bun_dotenv",
+ "bun_errno",
+ "bun_event_loop",
+ "bun_install_types",
+ "bun_js_parser",
+ "bun_options_types",
+ "bun_paths",
+ "bun_resolver",
+ "bun_sys",
+ "bunwasm-glue",
+ "bunwasm-posix",
+]
+
+[[package]]
 name = "bunwasm-cli"
 version = "0.0.1"
 dependencies = [
@@ -920,6 +943,7 @@ dependencies = [
  "getrandom",
  "hmac",
  "md-5",
+ "miniz_oxide",
  "rquickjs",
  "serde_json",
  "sha1",

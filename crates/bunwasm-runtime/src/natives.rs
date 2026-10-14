@@ -586,6 +586,25 @@ fn install_crypto<'js>(native: &Object<'js>) -> Result<()> {
         let seed = seed.0.unwrap_or(0.0) as u64;
         BigInt::from_u64(ctx, bun_wyhash::hash_with_seed(seed, &bytes))
     })?;
+    set_fn(native, "compress", |ctx: Ctx<'js>, data: Value<'js>, level: f64, format: String| -> Result<Value<'js>> {
+        let wrapper = crate::encoding::Wrapper::parse(&format)
+            .ok_or_else(|| Exception::throw_type(&ctx, &format!("unknown compression format {format}")))?;
+        let level = if level < 0.0 { 6 } else { level.min(10.0) as u8 };
+        uint8(&ctx, crate::encoding::compress(&bytes_of(&data)?, level, wrapper))
+    })?;
+    set_fn(native, "decompress", |ctx: Ctx<'js>, data: Value<'js>, format: String| -> Result<Value<'js>> {
+        let wrapper = crate::encoding::Wrapper::parse(&format)
+            .ok_or_else(|| Exception::throw_type(&ctx, &format!("unknown compression format {format}")))?;
+        match crate::encoding::decompress(&bytes_of(&data)?, wrapper) {
+            Ok(out) => uint8(&ctx, out),
+            Err(msg) => {
+                let err = Exception::from_message(ctx.clone(), &msg)?;
+                err.as_object().set("code", "Z_DATA_ERROR")?;
+                err.as_object().set("errno", -3)?;
+                Err(err.throw())
+            }
+        }
+    })?;
     set_fn(native, "crc32", |data: Value<'js>| -> Result<f64> {
         Ok(crate::encoding::crc32(&bytes_of(&data)?) as f64)
     })?;

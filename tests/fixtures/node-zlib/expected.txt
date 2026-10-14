@@ -1,0 +1,10 @@
+gzipSync true true
+deflateSync true true
+deflateRawSync true true
+gzip magic: 1f8b08
+unzip detects gzip: auto
+gunzip external: "hello\n"
+Bun.gunzipSync: bun gzip
+Bun.inflateSync: raw deflate
+bad data throws: true
+callback: null async
