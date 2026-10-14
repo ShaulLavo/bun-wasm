@@ -36,6 +36,8 @@ pub enum Entry {
     File(String),
     /// Source code from `bun -e`.
     Eval(String),
+    /// `bun test`: the arguments after `test` (filters and flags).
+    Test(Vec<String>),
 }
 
 pub struct Options {
@@ -202,11 +204,13 @@ pub fn run(options: Options) -> i32 {
     let main_path = match &options.entry {
         Entry::File(path) => resolve::join(&cwd, path),
         Entry::Eval(_) => format!("{}/[eval]", cwd.trim_end_matches('/')),
+        Entry::Test(_) => format!("{}/", cwd.trim_end_matches('/')),
     };
     // Like Bun, `-e` code gets no script path in argv.
     let script = match &options.entry {
         Entry::File(_) => Some(main_path.clone()),
         Entry::Eval(_) => None,
+        Entry::Test(_) => Some("test".to_owned()),
     };
     let argv = std::iter::once(String::from("bun"))
         .chain(script)
@@ -262,6 +266,16 @@ fn run_in_context(ctx: &Ctx<'_>, state: &Rc<State>, entry: &Entry, main_path: &s
     let started = match entry {
         Entry::Eval(code) => modules::eval_main(ctx, state, code).map(|p| p.into_value()),
         Entry::File(_) => state.call_internal::<Value>(ctx, "runMain", (main_path,)),
+        Entry::Test(args) => {
+            let list = rquickjs::Array::new(ctx.clone());
+            let list = list.and_then(|list| {
+                for (i, arg) in args.iter().enumerate() {
+                    list.set(i, arg.as_str())?;
+                }
+                Ok(list)
+            });
+            list.and_then(|list| state.call_internal::<Value>(ctx, "runTests", (list,)))
+        }
     };
     let main_promise = match started {
         Ok(v) => v.into_promise(),

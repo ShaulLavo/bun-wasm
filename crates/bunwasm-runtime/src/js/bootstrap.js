@@ -516,6 +516,13 @@
   };
   internal.getMainModule = () => mainModule;
 
+  // `bun test [args]`: the runner lives in bun_test.js. It sets
+  // process.exitCode when tests fail.
+  internal.runTests = function runTests(args) {
+    return internal.require("bun_test").run(args);
+  };
+  internal.importModule = (path) => native.importModule(path);
+
   // --- built-in modules -------------------------------------------------------
 
   const builtinCache = new Map();

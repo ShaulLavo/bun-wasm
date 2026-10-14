@@ -9,9 +9,13 @@
 #   args                        optional extra program arguments, one per line
 #   cmd                         optional: bun arguments replacing `run /index.*`, one per line
 #   stdin                       optional file piped to stdin
+#   expected_stderr.txt         optional expected stderr (e.g. `bun test` reports)
 #   manual                      optional marker: expected.txt is hand-written because native
 #                               Bun legitimately differs (version numbers, real sockets), and
 #                               --update leaves it alone
+#
+# Outputs are normalized before comparing: durations like `[1.23ms]` become
+# `[TIME]` and `bun test v1.4.2 (744846f84)` becomes `bun test vVERSION`.
 #
 # The fixture is copied to a scratch directory that is preopened as `/`, so
 # tests may write files freely. Use relative paths for files a test creates:
@@ -49,6 +53,10 @@ if [[ ${#names[@]} == 0 ]]; then
   for dir in "$root"/tests/fixtures/*/; do names+=("$(basename "$dir")"); done
 fi
 
+normalize() {
+  sed -E -e 's/\[[0-9]+(\.[0-9]+)?m?s\]/[TIME]/g' -e 's/^bun test v[^ ]+ \([0-9a-f]+\)/bun test vVERSION/'
+}
+
 entry_of() {
   local dir="$1" f
   for f in index.js index.mjs index.cjs index.ts index.tsx index.jsx; do
@@ -83,9 +91,12 @@ for name in "${names[@]}"; do
   if [[ $update == 1 ]]; then
     native_cmd=("${cmd[@]}")
     [[ ! -f "$work/cmd" ]] && native_cmd=(run "./$entry")
-    (cd "$work" && HOME=/ bun "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>/dev/null)
+    (cd "$work" && HOME=/ bun "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
     # Native runs live in the scratch dir; inside wasm the fixture is `/`.
-    sed -e "s#$work/#/#g" -e "s#$work#/#g" "$scratch/out" >"$src/expected.txt"
+    sed -e "s#$work/#/#g" -e "s#$work#/#g" "$scratch/out" | normalize >"$src/expected.txt"
+    if [[ -f "$src/expected_stderr.txt" ]]; then
+      sed -e "s#$work/#/#g" -e "s#$work#/#g" "$scratch/err" | normalize >"$src/expected_stderr.txt"
+    fi
     echo "updated $name"
     continue
   fi
@@ -93,7 +104,14 @@ for name in "${names[@]}"; do
   (cd "$work" && timeout 60 wasmtime run --dir "$work::/" --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 \
     "$wasm" "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   code=$?
-  if diff -u "$src/expected.txt" "$scratch/out" >"$scratch/diff" && [[ "$code" == "$expected_exit" ]]; then
+  normalize <"$scratch/out" >"$scratch/out.n"
+  normalize <"$scratch/err" >"$scratch/err.n"
+  ok=1
+  diff -u "$src/expected.txt" "$scratch/out.n" >"$scratch/diff" || ok=0
+  if [[ -f "$src/expected_stderr.txt" ]]; then
+    diff -u "$src/expected_stderr.txt" "$scratch/err.n" >>"$scratch/diff" || ok=0
+  fi
+  if [[ $ok == 1 && "$code" == "$expected_exit" ]]; then
     pass=$((pass + 1))
     printf 'PASS %s\n' "$name"
     continue

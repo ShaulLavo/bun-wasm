@@ -1094,7 +1094,7 @@
       serialize: thrower("bun:jsc.serialize", "JavaScriptCore is not available"),
       deserialize: thrower("bun:jsc.deserialize", "JavaScriptCore is not available"),
     }),
-    "bun:test": () => unsupportedModule("bun:test", "the test runner is not part of bun.wasm yet", ["test", "it", "describe", "expect", "beforeAll", "beforeEach", "afterAll", "afterEach", "mock", "spyOn", "jest"]),
+    "bun:test": () => internal.require("bun_test").exports,
     "bun:sqlite": () => unsupportedModule("bun:sqlite", "SQLite is not compiled into bun.wasm", ["Database", "Statement"]),
     "bun:ffi": () => unsupportedModule("bun:ffi", "no native libraries in wasm", ["dlopen", "CString", "ptr", "toArrayBuffer", "toBuffer", "linkSymbols", "cc"], { FFIType: {}, suffix: "so" }),
     "bun:wrap": () => ({}),

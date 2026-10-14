@@ -10,6 +10,7 @@ Usage: bun <command> [...flags] [...args]
 
 Commands:
   run       ./my-script.ts       Execute a file with Bun
+  test      [filters]            Run unit tests with Bun's test runner
   <file>                         Same as `bun run <file>`
   -e, --eval <code>              Evaluate JavaScript source code
   -p, --print <code>             Evaluate and print the result
@@ -19,7 +20,7 @@ Flags:
       --revision                 Print version with revision and exit
   -h, --help                     Display this menu and exit
 
-Not available in bun.wasm: install, add, build, test, x, create, upgrade.
+Not available in bun.wasm: install, add, build, x, create, upgrade.
 ";
 
 fn transpiler() -> Box<dyn Transpiler> {
@@ -98,6 +99,7 @@ fn parse(args: Vec<String>) -> Command {
                 let Some(code) = rest.next() else { return usage_error("--print requires code") };
                 return Command::Print(code);
             }
+            "test" => return Command::Run(Entry::Test(rest.collect()), Vec::new()),
             "run" => {
                 let Some(file) = rest.next() else { return usage_error("bun run needs a file to run") };
                 return Command::Run(Entry::File(file), rest.collect());
