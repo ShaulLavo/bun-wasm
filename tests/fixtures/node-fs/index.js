@@ -2,6 +2,7 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
 const dir = "work";
+fs.mkdirSync(dir, { recursive: true });
 
 fs.writeFileSync(path.join(dir, "a.txt"), "alpha");
 fs.appendFileSync(path.join(dir, "a.txt"), "-beta");

@@ -1,0 +1,10 @@
+# one bun build invocation per line, relative to the fixture
+src/index.tsx --outdir out
+src/index.tsx --outdir out --minify
+src/index.tsx --outdir out --target bun
+src/index.tsx --outdir out --target node --format cjs
+src/index.tsx --outdir out --format iife --minify-syntax
+src/index.tsx --outdir out --sourcemap
+src/index.tsx --outdir out --sourcemap=external --minify
+src/index.tsx --outdir out --external react --packages external
+src/index.tsx --outfile out/bundle.js

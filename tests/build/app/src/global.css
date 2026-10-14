@@ -1,0 +1,17 @@
+@import "./reset.css";
+
+:root {
+  --accent: #ff6600;
+}
+
+.app {
+  font-family: system-ui, sans-serif;
+  display: flex;
+  & h1 {
+    color: var(--accent);
+  }
+}
+
+.app.dark {
+  background: black;
+}
