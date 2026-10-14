@@ -292,6 +292,17 @@
 
   // ───────────────────────────── property enumeration ─────────────────────────────
 
+  // Own keys in the order Bun prints them: JSC enumerates symbols
+  // interleaved with strings in insertion order, while Reflect.ownKeys puts
+  // all symbols last. The engine hook recovers insertion order.
+  function orderedOwnKeys(obj) {
+    if (typeof internal.ownKeysInOrder === "function") {
+      const keys = internal.ownKeysInOrder(obj);
+      if (keys) return keys;
+    }
+    return Reflect.ownKeys(obj);
+  }
+
   function isIndexKey(key) {
     return typeof key === "string" && /^(0|[1-9][0-9]*)$/.test(key) && Number(key) < 4294967295;
   }
@@ -303,7 +314,7 @@
     if (isStringObject(obj) || isNamespace(obj)) return false;
     let keys;
     try {
-      keys = Reflect.ownKeys(obj);
+      keys = orderedOwnKeys(obj);
     } catch {
       return false;
     }
@@ -339,7 +350,7 @@
     let protoCount = 0;
     let target = object;
     let fast = !nonIndexedOnly && isFastEnumerable(object);
-    if (fast && Reflect.ownKeys(object).length === 0) {
+    if (fast && orderedOwnKeys(object).length === 0) {
       fast = false;
       const proto = safeGetPrototype(object);
       if (proto) {
@@ -363,7 +374,7 @@
   function fastPass(object, target, visited, cb) {
     let anyHits = false;
     const entries = [];
-    for (const key of Reflect.ownKeys(target)) {
+    for (const key of orderedOwnKeys(target)) {
       if (key === "constructor" || key === "__proto__" || key === Symbol.toStringTag) continue;
       if (target !== object && key === "__esModule") continue;
       if (visited.has(key)) continue;
@@ -393,6 +404,7 @@
   function ownKeysFor(obj, nonIndexedOnly) {
     let keys;
     try {
+      // JSC's slow path enumerates like Reflect.ownKeys (symbols last).
       keys = Reflect.ownKeys(obj);
     } catch {
       return [];
@@ -1524,7 +1536,7 @@
   function errorPropertyKeys(err) {
     let keys;
     try {
-      keys = Reflect.ownKeys(err);
+      keys = orderedOwnKeys(err);
     } catch {
       return [];
     }

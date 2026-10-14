@@ -53927,6 +53927,120 @@ static JSValue js_create_map_iterator(JSContext *ctx, JSValueConst this_val,
     return JS_EXCEPTION;
 }
 
+/* bun-wasm: own keys of an ordinary object in the order JSC enumerates them
+   for console.log: array-index keys ascending, then string and symbol keys
+   interleaved in insertion order (Reflect.ownKeys puts every symbol last).
+   Returns undefined for exotic objects and fast arrays. */
+JSValue JS_bunwasm_OwnKeysInOrder(JSContext *ctx, JSValueConst val)
+{
+    typedef struct { uint32_t idx; JSAtom atom; } IndexKey;
+    JSObject *p;
+    JSShape *sh;
+    JSShapeProperty *prs;
+    JSValue result, key;
+    uint32_t i, j, n = 0, idx, count = 0;
+    IndexKey *indices;
+
+    if (JS_VALUE_GET_TAG(val) != JS_TAG_OBJECT)
+        return JS_UNDEFINED;
+    p = JS_VALUE_GET_OBJ(val);
+    if (p->is_exotic || p->fast_array)
+        return JS_UNDEFINED;
+    sh = p->shape;
+    indices = js_malloc(ctx, sizeof(IndexKey) * (sh->prop_count + 1));
+    if (!indices)
+        return JS_EXCEPTION;
+    for (i = 0, prs = get_shape_prop(sh); i < sh->prop_count; i++, prs++) {
+        if (prs->atom != JS_ATOM_NULL && JS_AtomIsArrayIndex(ctx, &idx, prs->atom)) {
+            indices[count].idx = idx;
+            indices[count].atom = prs->atom;
+            count++;
+        }
+    }
+    /* insertion sort: index keys are rare in ordinary objects */
+    for (i = 1; i < count; i++) {
+        IndexKey v = indices[i];
+        for (j = i; j > 0 && indices[j - 1].idx > v.idx; j--)
+            indices[j] = indices[j - 1];
+        indices[j] = v;
+    }
+    result = JS_NewArray(ctx);
+    if (JS_IsException(result))
+        goto fail;
+    for (i = 0; i < count; i++) {
+        key = JS_AtomToString(ctx, indices[i].atom);
+        if (JS_IsException(key) || JS_SetPropertyUint32(ctx, result, n++, key) < 0)
+            goto fail;
+    }
+    for (i = 0, prs = get_shape_prop(sh); i < sh->prop_count; i++, prs++) {
+        if (prs->atom == JS_ATOM_NULL || JS_AtomIsArrayIndex(ctx, &idx, prs->atom))
+            continue;
+        if (JS_AtomGetKind(ctx, prs->atom) == JS_ATOM_KIND_PRIVATE)
+            continue; /* #private fields live in the shape too */
+        key = JS_AtomToValue(ctx, prs->atom);
+        if (JS_IsException(key) || JS_SetPropertyUint32(ctx, result, n++, key) < 0)
+            goto fail;
+    }
+    js_free(ctx, indices);
+    return result;
+ fail:
+    js_free(ctx, indices);
+    JS_FreeValue(ctx, result);
+    return JS_EXCEPTION;
+}
+
+/* bun-wasm: the entries a Map or Set iterator has left, without advancing
+   it, so console.log can show them like JSC does. Returns an array of what
+   next() would yield, or undefined for other values. */
+JSValue JS_bunwasm_IteratorEntries(JSContext *ctx, JSValueConst val)
+{
+    JSObject *p;
+    JSMapIteratorData *it;
+    JSMapState *s;
+    JSMapRecord *mr;
+    struct list_head *el;
+    JSValue result, item;
+    uint32_t i = 0;
+    int magic;
+
+    if (JS_VALUE_GET_TAG(val) != JS_TAG_OBJECT)
+        return JS_UNDEFINED;
+    p = JS_VALUE_GET_OBJ(val);
+    if (p->class_id == JS_CLASS_MAP_ITERATOR)
+        magic = 0;
+    else if (p->class_id == JS_CLASS_SET_ITERATOR)
+        magic = 1;
+    else
+        return JS_UNDEFINED;
+    result = JS_NewArray(ctx);
+    if (JS_IsException(result))
+        return result;
+    it = JS_GetOpaque(val, JS_CLASS_MAP_ITERATOR + magic);
+    if (!it || JS_IsUndefined(it->obj))
+        return result;
+    s = JS_GetOpaque(it->obj, JS_CLASS_MAP + magic);
+    el = it->cur_record ? it->cur_record->link.next : s->records.next;
+    for (; el != &s->records; el = el->next) {
+        JSValueConst args[2];
+        mr = list_entry(el, JSMapRecord, link);
+        if (mr->empty)
+            continue;
+        args[0] = mr->key;
+        args[1] = magic ? mr->key : mr->value;
+        if (it->kind == JS_ITERATOR_KIND_KEY)
+            item = js_dup(mr->key);
+        else if (it->kind == JS_ITERATOR_KIND_VALUE)
+            item = js_dup(args[1]);
+        else
+            item = js_create_array(ctx, 2, args);
+        if (JS_IsException(item) || JS_SetPropertyUint32(ctx, result, i++, item) < 0) {
+            JS_FreeValue(ctx, result);
+            return JS_EXCEPTION;
+        }
+    }
+    return result;
+}
+
 static JSValue js_map_iterator_next(JSContext *ctx, JSValueConst this_val,
                                     int argc, JSValueConst *argv,
                                     int *pdone, int magic)

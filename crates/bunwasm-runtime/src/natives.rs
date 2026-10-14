@@ -21,6 +21,30 @@ use crate::modules;
 use crate::resolve::{self, Kind, Resolved};
 use crate::State;
 
+unsafe extern "C" {
+    /// Added to QuickJS by bun-wasm (third_party/rquickjs-sys): remaining
+    /// entries of a Map/Set iterator, without advancing it.
+    fn JS_bunwasm_IteratorEntries(ctx: *mut qjs::JSContext, value: qjs::JSValue) -> qjs::JSValue;
+    /// Own keys in JSC's console order (index keys, then insertion order with
+    /// symbols interleaved); undefined for exotic objects.
+    fn JS_bunwasm_OwnKeysInOrder(ctx: *mut qjs::JSContext, value: qjs::JSValue) -> qjs::JSValue;
+}
+
+type EngineHelper = unsafe extern "C" fn(*mut qjs::JSContext, qjs::JSValue) -> qjs::JSValue;
+
+/// Call one of the bun-wasm helpers added to QuickJS.
+fn call_engine_helper<'js>(ctx: &Ctx<'js>, value: &Value<'js>, helper: EngineHelper) -> Result<Value<'js>> {
+    // SAFETY: the helpers borrow `value` and return a new reference, or
+    // JS_EXCEPTION with the exception left on the context.
+    unsafe {
+        let raw = helper(ctx.as_raw().as_ptr(), value.as_raw());
+        if qjs::JS_IsException(raw) {
+            return Err(rquickjs::Error::Exception);
+        }
+        Ok(Value::from_raw(ctx.clone(), raw))
+    }
+}
+
 fn set_fn<'js, F, P>(obj: &Object<'js>, name: &str, f: F) -> Result<()>
 where
     F: IntoJsFunc<'js, P> + 'js,
@@ -698,6 +722,8 @@ fn install_engine<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
     })?;
     set_fn(native, "promiseResult", |ctx: Ctx<'js>, p: Promise<'js>| modules::promise_result(&ctx, &p))?;
     set_fn(native, "isProxy", |v: Value<'js>| v.is_proxy())?;
+    set_fn(native, "iteratorEntries", |ctx: Ctx<'js>, v: Value<'js>| call_engine_helper(&ctx, &v, JS_bunwasm_IteratorEntries))?;
+    set_fn(native, "ownKeysInOrder", |ctx: Ctx<'js>, v: Value<'js>| call_engine_helper(&ctx, &v, JS_bunwasm_OwnKeysInOrder))?;
     set_fn(native, "isPromise", |v: Value<'js>| v.is_promise())?;
     // SAFETY: JS_IsError only inspects the value's class.
     set_fn(native, "isError", |v: Value<'js>| unsafe { qjs::JS_IsError(v.as_raw()) })?;

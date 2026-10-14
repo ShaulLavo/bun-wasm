@@ -16,6 +16,8 @@
     promiseResult: native.promiseResult,
     isProxy: native.isProxy,
     getProxyTarget: native.getProxyTarget,
+    iteratorEntries: native.iteratorEntries,
+    ownKeysInOrder: native.ownKeysInOrder,
     isPromise: native.isPromise,
     isError: native.isError,
     getSourceLine: native.getSourceLine,
