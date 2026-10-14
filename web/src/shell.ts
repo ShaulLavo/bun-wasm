@@ -418,6 +418,8 @@ export class Shell {
             "",
             `  ${GREEN}bun run <file>${RESET}      run a TypeScript/JavaScript file`,
             `  ${GREEN}bun -e '<code>'${RESET}     evaluate code`,
+            `  ${GREEN}bun test${RESET}            run *.test.ts files with bun:test`,
+            `  ${GREEN}bun build <entry> --outdir out [--minify]${RESET}   bundle with Bun's bundler`,
             `  ${GREEN}bun --version${RESET}       print the version`,
             `  ls [-a] [dir]  cat <file>  echo <text> [> file]  cd  pwd  mkdir [-p]  rm [-r]  mv  touch`,
             `  edit <file>    open a file in the editor`,

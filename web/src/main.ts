@@ -297,7 +297,10 @@ async function runCurrent(): Promise<void> {
   if (shell.running) return;
   editor.save();
   const rel = editor.path.startsWith(`${shell.cwd}/`) ? editor.path.slice(shell.cwd.length + 1) : editor.path;
-  await shell.submit(`bun run ${/\s/.test(rel) ? `'${rel}'` : rel}`);
+  const quoted = /\s/.test(rel) ? `'${rel}'` : rel;
+  // Test files run under Bun's test runner, like `bun test <file>` would.
+  const command = /\.(test|spec)\.[cm]?[jt]sx?$/.test(rel) ? "test" : "run";
+  await shell.submit(`bun ${command} ${quoted}`);
 }
 
 runButton.addEventListener("click", () => void runCurrent());

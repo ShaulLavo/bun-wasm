@@ -132,4 +132,59 @@ const html = (
 
 console.log(html);
 `,
+
+  "math.ts": `// A tiny module for math.test.ts and for bun build (try: bun build math.ts --outdir out --minify).
+export function fib(n: number): number {
+  return n < 2 ? n : fib(n - 1) + fib(n - 2);
+}
+
+export const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+
+if (import.meta.main) console.log("fib(20) =", fib(20), "mean =", mean([1, 2, 3, 4]));
+`,
+
+  "math.test.ts": `// Bun's test runner, in wasm. Press Run, or type: bun test
+import { describe, expect, test, mock } from "bun:test";
+import { fib, mean } from "./math";
+
+describe("fib", () => {
+  test("small numbers", () => {
+    expect([0, 1, 2, 3, 4, 5].map(fib)).toEqual([0, 1, 1, 2, 3, 5]);
+  });
+  test.each([[10, 55], [20, 6765]])("fib(%i) = %i", (n, want) => {
+    expect(fib(n)).toBe(want);
+  });
+});
+
+test("mean", () => {
+  expect(mean([1, 2, 3, 4])).toBeCloseTo(2.5);
+});
+
+test("mocks and async", async () => {
+  const fetchUser = mock(async (id: number) => ({ id, name: "user" + id }));
+  await expect(fetchUser(7)).resolves.toMatchObject({ name: "user7" });
+  expect(fetchUser).toHaveBeenCalledWith(7);
+});
+`,
+
+  "db.ts": `// bun:sqlite: real SQLite compiled to WebAssembly.
+import { Database } from "bun:sqlite";
+
+const db = new Database("todos.sqlite");
+db.run("CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY, title TEXT, done INTEGER)");
+
+const insert = db.prepare("INSERT INTO todos (title, done) VALUES ($title, $done)");
+const addMany = db.transaction((rows: { title: string; done: boolean }[]) => {
+  for (const row of rows) insert.run({ $title: row.title, $done: row.done ? 1 : 0 });
+});
+addMany([
+  { title: "compile Bun to wasm", done: true },
+  { title: "run bun:sqlite in a browser", done: true },
+  { title: "ship it", done: false },
+]);
+
+console.table(db.query("SELECT id, title, done FROM todos ORDER BY id").all());
+const { open } = db.query("SELECT count(*) AS open FROM todos WHERE done = 0").get() as { open: number };
+console.log(open, "open todo(s); run again and the database file keeps growing");
+`,
 };
