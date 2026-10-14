@@ -86,7 +86,8 @@ await Bun.sleep(300);
 console.log("slept with Bun.sleep, total", elapsed());
 `,
 
-  "jsx.tsx": `/** @jsx h */
+  "jsx.tsx": `/** @jsxRuntime classic */
+/** @jsx h */
 /** @jsxFrag Fragment */
 // JSX compiled by Bun's transpiler into calls to our own tiny h() that renders to a string.
 type Child = string | number | boolean | null | undefined | Child[];
