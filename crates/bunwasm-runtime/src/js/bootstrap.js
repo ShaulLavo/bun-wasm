@@ -306,7 +306,14 @@
 
   function queueMicrotask(callback) {
     checkCallback(callback);
-    Promise.resolve().then(() => callback());
+    // Errors thrown by a microtask are uncaught exceptions, not rejections.
+    Promise.resolve().then(() => {
+      try {
+        callback();
+      } catch (err) {
+        if (!internal.handleUncaught(err)) native.exit(1);
+      }
+    });
   }
 
   defineGlobal("setTimeout", setTimeout);

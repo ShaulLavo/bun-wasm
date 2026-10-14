@@ -1263,6 +1263,95 @@
 
   const crypto = { getRandomValues, randomUUID, subtle };
 
+  // --- FormData / MessageChannel / navigator ----------------------------------
+
+  class FormData {
+    #entries = [];
+    append(name, value, filename) {
+      this.#entries.push([String(name), toFormValue(value, filename)]);
+    }
+    set(name, value, filename) {
+      const n = String(name);
+      this.#entries = this.#entries.filter(([k]) => k !== n);
+      this.#entries.push([n, toFormValue(value, filename)]);
+    }
+    get(name) {
+      const hit = this.#entries.find(([k]) => k === String(name));
+      return hit ? hit[1] : null;
+    }
+    getAll(name) {
+      return this.#entries.filter(([k]) => k === String(name)).map(([, v]) => v);
+    }
+    has(name) {
+      return this.#entries.some(([k]) => k === String(name));
+    }
+    delete(name) {
+      this.#entries = this.#entries.filter(([k]) => k !== String(name));
+    }
+    forEach(callback, thisArg) {
+      for (const [k, v] of this.#entries) callback.call(thisArg, v, k, this);
+    }
+    *entries() {
+      yield* this.#entries.map(([k, v]) => [k, v]);
+    }
+    *keys() {
+      for (const [k] of this.#entries) yield k;
+    }
+    *values() {
+      for (const [, v] of this.#entries) yield v;
+    }
+    [Symbol.iterator]() {
+      return this.entries();
+    }
+    get [Symbol.toStringTag]() {
+      return "FormData";
+    }
+  }
+
+  function toFormValue(value, filename) {
+    if (value instanceof Blob) {
+      if (value instanceof File && filename === undefined) return value;
+      return new File([value._bytes()], filename === undefined ? "blob" : String(filename), { type: value.type });
+    }
+    return String(value);
+  }
+
+  // Ports deliver messages asynchronously on the same thread.
+  class MessagePort extends EventTarget {
+    _other = null;
+    onmessage = null;
+    postMessage(data) {
+      const target = this._other;
+      if (!target) return;
+      const copy = internal.require("structured_clone").structuredClone(data);
+      setImmediate(() => target.dispatchEvent(new MessageEvent("message", { data: copy })));
+    }
+    start() {}
+    close() {
+      this._other = null;
+    }
+    ref() {}
+    unref() {}
+  }
+
+  class MessageChannel {
+    constructor() {
+      this.port1 = new MessagePort();
+      this.port2 = new MessagePort();
+      this.port1._other = this.port2;
+      this.port2._other = this.port1;
+    }
+  }
+
+  const navigator = {
+    userAgent: `Bun/${native.platformInfo.version}`,
+    hardwareConcurrency: 1,
+    platform: `Linux ${native.platformInfo.arch}`,
+    language: "en-US",
+    languages: ["en-US"],
+    onLine: false,
+  };
+
   // --- install ----------------------------------------------------------------
 
   internal.web = { Blob, File, Headers, Request, Response, URL, URLSearchParams, Event, EventTarget, DOMException, AbortController, AbortSignal, TextEncoder, TextDecoder, ReadableStream, performance, crypto, fetch };
@@ -1271,7 +1360,8 @@
     const globals = {
       DOMException, TextEncoder, TextDecoder, btoa, atob, URL, URLSearchParams, Event, CustomEvent,
       ErrorEvent, MessageEvent, EventTarget, AbortController, AbortSignal, Blob, File, Headers,
-      Request, Response, fetch, ReadableStream, performance, crypto,
+      Request, Response, fetch, ReadableStream, performance, crypto, FormData, MessageChannel,
+      MessagePort, navigator,
     };
     for (const name of Object.keys(globals)) defineGlobal(name, globals[name]);
     void defineLazyGlobal;
