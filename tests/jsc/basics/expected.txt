@@ -1,0 +1,31 @@
+12.566 12
+[ 0, 1, 1, 2, 3, 5, 8, 13, 21, 34 ]
+clicks 2 1
+1 {
+  b: 2,
+  c: [ 3, 4 ],
+}
+Map(2) {
+  "x": 1,
+  "y": 2,
+} Set(3) {
+  1,
+  "two",
+  3n,
+}
+[ 2, 4, 6 ] {
+  nested: {
+    deep: {
+      deeper: [Object ...],
+    },
+  },
+}
+bun is 3 years and {
+  ok: true,
+}
+symbol 0.30000000000000004 9007199254740992 -0 [ undefined, null ]
+a|b|c1,2
+olléh ---abc xxx
+1 1
+1 2
+2 1

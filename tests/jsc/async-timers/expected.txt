@@ -1,0 +1,13 @@
+sync
+nextTick
+microtask
+promise
+timeout 0
+interval 1
+worker a
+interval 2
+timeout 20
+interval 3
+worker b
+all B,A
+race fast

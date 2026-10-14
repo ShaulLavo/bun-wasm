@@ -1,0 +1,3 @@
+start
+microtask
+exit event 3

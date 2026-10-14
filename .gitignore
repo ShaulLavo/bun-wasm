@@ -4,4 +4,5 @@
 node_modules
 # bun build fixtures ship fake packages
 !/tests/build/*/node_modules/
+!/tests/jsc/*/node_modules/
 __pycache__/

@@ -1,0 +1,5 @@
+1.0.0 2 1
+42 hello, modules
+fixture 4
+tiny:9 cjs 5
+/a/c z

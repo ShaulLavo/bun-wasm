@@ -1,0 +1,11 @@
+wrote 21 bytes
+"hello from Bun.write\n"
+6 true
+3 true false
+12 line1 6c696e6531
+ENOENT open
+10 [ 104, 195, 169 ] héllo ✓
+YnVu bun
+string [ "alpha", "beta" ] object true
+--- out.txt
+hello from Bun.write
