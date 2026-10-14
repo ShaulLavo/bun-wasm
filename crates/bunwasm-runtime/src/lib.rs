@@ -18,6 +18,7 @@ use std::time::Instant;
 use rquickjs::{Context, Ctx, Function, Object, Persistent, Promise, Runtime, Value};
 
 mod encoding;
+pub mod host;
 mod modules;
 mod natives;
 mod resolve;

@@ -136,6 +136,10 @@ fn parse(args: Vec<String>) -> Command {
     Command::Exit(0)
 }
 
+// Referenced so the linker keeps the exported slot table (docs/host-abi.md).
+#[used]
+static KEEP_HOST_SLOTS: extern "C" fn() -> *mut bunwasm_runtime::host::HostSlots = bunwasm_runtime::host::bun_wasm_host_slots;
+
 fn main() {
     // Sets the parser's stack limit and keeps Bun's C/POSIX shims linked.
     #[cfg(all(any(feature = "bun-transpiler", feature = "bun-build"), target_os = "wasi"))]

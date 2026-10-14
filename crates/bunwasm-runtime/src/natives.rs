@@ -242,6 +242,7 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> Result<Object<'js>> {
     install_crypto(&native)?;
     install_url(&native)?;
     install_engine(&native, state)?;
+    install_host(&native)?;
     crate::sqlite::install(&native)?;
     Ok(native)
 }
@@ -793,6 +794,49 @@ fn install_engine<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
         Ok(obj)
     })?;
     native.set("platformInfo", platform_info(native.ctx())?)?;
+    Ok(())
+}
+
+/// The `bun_wasm` host ABI (docs/host-abi.md) for the JS networking layer
+/// (src/js/net.js). Functions return the ABI's raw codes (negative = error);
+/// byte results come back as Uint8Array / strings.
+fn install_host<'js>(native: &Object<'js>) -> Result<()> {
+    use crate::host;
+    let ctx = native.ctx().clone();
+    let caps = Object::new(ctx)?;
+    for (i, name) in host::SLOT_NAMES.iter().enumerate() {
+        caps.set(*name, host::provided(i))?;
+    }
+    native.set("hostCaps", caps)?;
+    set_fn(native, "hostPoll", |timeout: i32| host::poll(timeout))?;
+    set_fn(native, "hostFetch", |meta: String, body: Value<'js>| -> Result<i32> {
+        let body = if body.is_undefined() || body.is_null() { Vec::new() } else { bytes_of(&body)? };
+        Ok(host::fetch(meta.as_bytes(), &body))
+    })?;
+    // String on success, the negative code otherwise.
+    fn text_or_code<'js>(ctx: &Ctx<'js>, result: std::result::Result<Vec<u8>, i32>) -> Result<Value<'js>> {
+        match result {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned().into_js(ctx),
+            Err(code) => Ok(Value::new_int(ctx.clone(), code)),
+        }
+    }
+    set_fn(native, "hostFetchHead", |ctx: Ctx<'js>, h: i32| text_or_code(&ctx, host::fetch_head(h)))?;
+    set_fn(native, "hostError", |ctx: Ctx<'js>, h: i32| text_or_code(&ctx, host::error(h)))?;
+    set_fn(native, "hostPeerAddr", |ctx: Ctx<'js>, h: i32| text_or_code(&ctx, host::peer_addr(h)))?;
+    set_fn(native, "hostRead", |ctx: Ctx<'js>, h: i32, cap: Opt<i32>| -> Result<Value<'js>> {
+        let cap = cap.0.unwrap_or(65536).max(1) as usize;
+        match host::read(h, cap) {
+            Ok(bytes) if bytes.is_empty() => Ok(Value::new_int(ctx, 0)),
+            Ok(bytes) => uint8(&ctx, bytes),
+            Err(code) => Ok(Value::new_int(ctx, code)),
+        }
+    })?;
+    set_fn(native, "hostWrite", |h: i32, data: Value<'js>| -> Result<i32> { Ok(host::write(h, &bytes_of(&data)?)) })?;
+    set_fn(native, "hostClose", |h: i32| host::close(h))?;
+    set_fn(native, "hostListen", |hostname: String, port: i32| host::listen(&hostname, port))?;
+    set_fn(native, "hostLocalPort", |h: i32| host::local_port(h))?;
+    set_fn(native, "hostAccept", |h: i32| host::accept(h))?;
+    set_fn(native, "hostConnect", |hostname: String, port: i32| host::connect(&hostname, port))?;
     Ok(())
 }
 
