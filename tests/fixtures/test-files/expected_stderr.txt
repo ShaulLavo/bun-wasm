@@ -1,0 +1,20 @@
+
+a.test.js:
+(pass) root js
+
+z.test.ts:
+(pass) z ts
+
+sub/b.spec.ts:
+(pass) ts pass
+
+sub/deep/c_test.mjs:
+(pass) deep
+
+sub/deep/d_spec.cjs:
+(pass) cjs
+
+ 5 pass
+ 0 fail
+ 5 expect() calls
+Ran 5 tests across 5 files. [TIME]

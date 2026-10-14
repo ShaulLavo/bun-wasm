@@ -1,0 +1,34 @@
+import { it, test, expect, describe, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
+const log = [];
+beforeAll(() => log.push("beforeAll"));
+afterAll(() => { log.push("afterAll"); console.log(log.join("\n")); });
+beforeEach(() => log.push("beforeEach"));
+afterEach(() => log.push("afterEach"));
+test("top", () => log.push("top"));
+describe("outer", () => {
+  beforeAll(() => log.push("outer beforeAll"));
+  afterAll(() => log.push("outer afterAll"));
+  beforeEach(() => log.push("outer beforeEach"));
+  afterEach(() => log.push("outer afterEach"));
+  test("a", () => log.push("outer a"));
+  describe("inner", () => {
+    beforeEach(() => log.push("inner beforeEach"));
+    afterEach(() => log.push("inner afterEach 1"));
+    afterEach(() => log.push("inner afterEach 2"));
+    test("b", () => log.push("inner b"));
+  });
+  describe.skip("skipped group", () => { test("c", () => {}); });
+  describe.todo("todo group", () => { test("d", () => {}); });
+});
+test.each([[1, 2, 3], [2, 3, 5]])("add %d + %d = %d", (a, b, c) => { expect(a + b).toBe(c); });
+test.each([{ a: 1, b: "x" }, { a: 2, b: "y" }])("obj $a $b %#", ({ a }) => {});
+test.each(["s", 1, { k: [1] }, null, undefined, 1.5, true])("fmt %s %p %j %i %o %%", () => {});
+test.each([[1, "x"], [2, "y"]])("p %p %p %s", () => {});
+describe.each([1, 2])("each describe %d", (n) => { test("t" + n, () => {}); });
+test.if(true)("if true", () => {});
+test.if(false)("if false", () => {});
+test.skipIf(true)("skipIf true", () => {});
+test.todoIf(true)("todoIf true", () => {});
+it("it works", () => {});
+test("done ok", (done) => { setTimeout(() => done(), 1); });
+test.each([[1]])("each done %d", (n, done) => { done(); });

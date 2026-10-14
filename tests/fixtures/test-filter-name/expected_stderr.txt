@@ -1,0 +1,22 @@
+
+h.test.js:
+1 | import { test, describe, beforeEach, beforeAll, afterEach, expect } from "bun:test";
+2 | describe("be", () => {
+3 |   beforeEach(() => { expect(1).toBe(2); });
+                                   ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 1
+
+      at <anonymous> (/h.test.js:3:32)
+(fail) be > t1
+(pass) match me
+
+o.test.js:
+
+ 1 pass
+ 6 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 2 tests across 2 files. [TIME]

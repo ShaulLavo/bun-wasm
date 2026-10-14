@@ -1,0 +1,14 @@
+
+bail.test.js:
+1 | import { test, expect } from "bun:test";
+2 | test("one", () => { expect(1).toBe(2); });
+                                  ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 1
+
+      at <anonymous> (/bail.test.js:2:31)
+(fail) one
+Ran 1 test across 1 file. [TIME]
+Bailed out after 1 failure

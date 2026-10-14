@@ -1,0 +1,20 @@
+
+pass.test.ts:
+(pass) equality > toBe
+(pass) equality > toEqual
+(pass) equality > toStrictEqual
+(pass) equality > asymmetric
+(pass) equality > toMatchObject
+(pass) values > truthiness
+(pass) values > numbers
+(pass) values > containers
+(pass) values > strings and types
+(pass) values > toThrow
+(pass) values > expect.assertions
+(pass) values > expect.hasAssertions
+(pass) extend > custom matcher
+
+ 13 pass
+ 0 fail
+ 72 expect() calls
+Ran 13 tests across 1 file. [TIME]

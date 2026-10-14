@@ -1,0 +1,828 @@
+
+matchers.test.js:
+1 | import { test, expect, mock } from "bun:test";
+2 | test("toBe obj", () => { expect({ a: 1 }).toBe({ a: 1 }); });
+                                              ^
+error: expect(received).toBe(expected)
+
+Expected: {
+  a: 1,
+}
+Received: serializes to the same string
+
+      at <anonymous> (/matchers.test.js:2:43)
+(fail) toBe obj
+1 | import { test, expect, mock } from "bun:test";
+2 | test("toBe obj", () => { expect({ a: 1 }).toBe({ a: 1 }); });
+3 | test("toBe str", () => { expect("abc").toBe("abd"); });
+                                           ^
+error: expect(received).toBe(expected)
+
+Expected: "abd"
+Received: "abc"
+
+      at <anonymous> (/matchers.test.js:3:40)
+(fail) toBe str
+1 | import { test, expect, mock } from "bun:test";
+2 | test("toBe obj", () => { expect({ a: 1 }).toBe({ a: 1 }); });
+3 | test("toBe str", () => { expect("abc").toBe("abd"); });
+4 | test("not.toBe", () => { expect(1).not.toBe(1); });
+                                           ^
+error: expect(received).not.toBe(expected)
+
+Expected: not 1
+
+      at <anonymous> (/matchers.test.js:4:40)
+(fail) not.toBe
+1 | import { test, expect, mock } from "bun:test";
+2 | test("toBe obj", () => { expect({ a: 1 }).toBe({ a: 1 }); });
+3 | test("toBe str", () => { expect("abc").toBe("abd"); });
+4 | test("not.toBe", () => { expect(1).not.toBe(1); });
+5 | test("toEqual arr", () => { expect([1, 2, 3]).toEqual([1, 2, 4]); });
+                                                  ^
+error: expect(received).toEqual(expected)
+
+  [
+    1,
+    2,
+-   4,
++   3,
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/matchers.test.js:5:47)
+(fail) toEqual arr
+1 | import { test, expect, mock } from "bun:test";
+2 | test("toBe obj", () => { expect({ a: 1 }).toBe({ a: 1 }); });
+3 | test("toBe str", () => { expect("abc").toBe("abd"); });
+4 | test("not.toBe", () => { expect(1).not.toBe(1); });
+5 | test("toEqual arr", () => { expect([1, 2, 3]).toEqual([1, 2, 4]); });
+6 | test("toEqual str", () => { expect("a\nb").toEqual("a\nc"); });
+                                               ^
+error: expect(received).toEqual(expected)
+
+  "a
+- c"
++ b"
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/matchers.test.js:6:44)
+(fail) toEqual str
+2 | test("toBe obj", () => { expect({ a: 1 }).toBe({ a: 1 }); });
+3 | test("toBe str", () => { expect("abc").toBe("abd"); });
+4 | test("not.toBe", () => { expect(1).not.toBe(1); });
+5 | test("toEqual arr", () => { expect([1, 2, 3]).toEqual([1, 2, 4]); });
+6 | test("toEqual str", () => { expect("a\nb").toEqual("a\nc"); });
+7 | test("not.toEqual", () => { expect({ a: 1 }).not.toEqual({ a: 1 }); });
+                                                     ^
+error: expect(received).not.toEqual(expected)
+
+Expected: not {
+  "a": 1,
+}
+
+      at <anonymous> (/matchers.test.js:7:50)
+(fail) not.toEqual
+3 | test("toBe str", () => { expect("abc").toBe("abd"); });
+4 | test("not.toBe", () => { expect(1).not.toBe(1); });
+5 | test("toEqual arr", () => { expect([1, 2, 3]).toEqual([1, 2, 4]); });
+6 | test("toEqual str", () => { expect("a\nb").toEqual("a\nc"); });
+7 | test("not.toEqual", () => { expect({ a: 1 }).not.toEqual({ a: 1 }); });
+8 | test("toStrictEqual", () => { expect({ a: undefined }).toStrictEqual({}); });
+                                                           ^
+error: expect(received).toStrictEqual(expected)
+
+- {}
++ {
++   "a": undefined,
++ }
+
+- Expected  - 1
++ Received  + 3
+
+      at <anonymous> (/matchers.test.js:8:56)
+(fail) toStrictEqual
+4 | test("not.toBe", () => { expect(1).not.toBe(1); });
+5 | test("toEqual arr", () => { expect([1, 2, 3]).toEqual([1, 2, 4]); });
+6 | test("toEqual str", () => { expect("a\nb").toEqual("a\nc"); });
+7 | test("not.toEqual", () => { expect({ a: 1 }).not.toEqual({ a: 1 }); });
+8 | test("toStrictEqual", () => { expect({ a: undefined }).toStrictEqual({}); });
+9 | test("truthy", () => { expect(0).toBeTruthy(); });
+                                     ^
+error: expect(received).toBeTruthy()
+
+Received: 0
+
+      at <anonymous> (/matchers.test.js:9:34)
+(fail) truthy
+ 5 | test("toEqual arr", () => { expect([1, 2, 3]).toEqual([1, 2, 4]); });
+ 6 | test("toEqual str", () => { expect("a\nb").toEqual("a\nc"); });
+ 7 | test("not.toEqual", () => { expect({ a: 1 }).not.toEqual({ a: 1 }); });
+ 8 | test("toStrictEqual", () => { expect({ a: undefined }).toStrictEqual({}); });
+ 9 | test("truthy", () => { expect(0).toBeTruthy(); });
+10 | test("falsy", () => { expect(1).toBeFalsy(); });
+                                     ^
+error: expect(received).toBeFalsy()
+
+Received: 1
+
+      at <anonymous> (/matchers.test.js:10:33)
+(fail) falsy
+ 6 | test("toEqual str", () => { expect("a\nb").toEqual("a\nc"); });
+ 7 | test("not.toEqual", () => { expect({ a: 1 }).not.toEqual({ a: 1 }); });
+ 8 | test("toStrictEqual", () => { expect({ a: undefined }).toStrictEqual({}); });
+ 9 | test("truthy", () => { expect(0).toBeTruthy(); });
+10 | test("falsy", () => { expect(1).toBeFalsy(); });
+11 | test("null", () => { expect(1).toBeNull(); });
+                                    ^
+error: expect(received).toBeNull()
+
+Received: 1
+
+      at <anonymous> (/matchers.test.js:11:32)
+(fail) null
+ 7 | test("not.toEqual", () => { expect({ a: 1 }).not.toEqual({ a: 1 }); });
+ 8 | test("toStrictEqual", () => { expect({ a: undefined }).toStrictEqual({}); });
+ 9 | test("truthy", () => { expect(0).toBeTruthy(); });
+10 | test("falsy", () => { expect(1).toBeFalsy(); });
+11 | test("null", () => { expect(1).toBeNull(); });
+12 | test("undef", () => { expect(1).toBeUndefined(); });
+                                     ^
+error: expect(received).toBeUndefined()
+
+Received: 1
+
+      at <anonymous> (/matchers.test.js:12:33)
+(fail) undef
+ 8 | test("toStrictEqual", () => { expect({ a: undefined }).toStrictEqual({}); });
+ 9 | test("truthy", () => { expect(0).toBeTruthy(); });
+10 | test("falsy", () => { expect(1).toBeFalsy(); });
+11 | test("null", () => { expect(1).toBeNull(); });
+12 | test("undef", () => { expect(1).toBeUndefined(); });
+13 | test("defined", () => { expect(undefined).toBeDefined(); });
+                                               ^
+error: expect(received).toBeDefined()
+
+Received: undefined
+
+      at <anonymous> (/matchers.test.js:13:43)
+(fail) defined
+ 9 | test("truthy", () => { expect(0).toBeTruthy(); });
+10 | test("falsy", () => { expect(1).toBeFalsy(); });
+11 | test("null", () => { expect(1).toBeNull(); });
+12 | test("undef", () => { expect(1).toBeUndefined(); });
+13 | test("defined", () => { expect(undefined).toBeDefined(); });
+14 | test("nan", () => { expect(1).toBeNaN(); });
+                                   ^
+error: expect(received).toBeNaN()
+
+Received: 1
+
+      at <anonymous> (/matchers.test.js:14:31)
+(fail) nan
+10 | test("falsy", () => { expect(1).toBeFalsy(); });
+11 | test("null", () => { expect(1).toBeNull(); });
+12 | test("undef", () => { expect(1).toBeUndefined(); });
+13 | test("defined", () => { expect(undefined).toBeDefined(); });
+14 | test("nan", () => { expect(1).toBeNaN(); });
+15 | test("gt", () => { expect(1).toBeGreaterThan(2); });
+                                  ^
+error: expect(received).toBeGreaterThan(expected)
+
+Expected: > 2
+Received: 1
+
+      at <anonymous> (/matchers.test.js:15:30)
+(fail) gt
+11 | test("null", () => { expect(1).toBeNull(); });
+12 | test("undef", () => { expect(1).toBeUndefined(); });
+13 | test("defined", () => { expect(undefined).toBeDefined(); });
+14 | test("nan", () => { expect(1).toBeNaN(); });
+15 | test("gt", () => { expect(1).toBeGreaterThan(2); });
+16 | test("gte", () => { expect(1).toBeGreaterThanOrEqual(2); });
+                                   ^
+error: expect(received).toBeGreaterThanOrEqual(expected)
+
+Expected: >= 2
+Received: 1
+
+      at <anonymous> (/matchers.test.js:16:31)
+(fail) gte
+12 | test("undef", () => { expect(1).toBeUndefined(); });
+13 | test("defined", () => { expect(undefined).toBeDefined(); });
+14 | test("nan", () => { expect(1).toBeNaN(); });
+15 | test("gt", () => { expect(1).toBeGreaterThan(2); });
+16 | test("gte", () => { expect(1).toBeGreaterThanOrEqual(2); });
+17 | test("lt", () => { expect(3).toBeLessThan(2); });
+                                  ^
+error: expect(received).toBeLessThan(expected)
+
+Expected: < 2
+Received: 3
+
+      at <anonymous> (/matchers.test.js:17:30)
+(fail) lt
+13 | test("defined", () => { expect(undefined).toBeDefined(); });
+14 | test("nan", () => { expect(1).toBeNaN(); });
+15 | test("gt", () => { expect(1).toBeGreaterThan(2); });
+16 | test("gte", () => { expect(1).toBeGreaterThanOrEqual(2); });
+17 | test("lt", () => { expect(3).toBeLessThan(2); });
+18 | test("lte", () => { expect(3).toBeLessThanOrEqual(2); });
+                                   ^
+error: expect(received).toBeLessThanOrEqual(expected)
+
+Expected: <= 2
+Received: 3
+
+      at <anonymous> (/matchers.test.js:18:31)
+(fail) lte
+14 | test("nan", () => { expect(1).toBeNaN(); });
+15 | test("gt", () => { expect(1).toBeGreaterThan(2); });
+16 | test("gte", () => { expect(1).toBeGreaterThanOrEqual(2); });
+17 | test("lt", () => { expect(3).toBeLessThan(2); });
+18 | test("lte", () => { expect(3).toBeLessThanOrEqual(2); });
+19 | test("close", () => { expect(0.1 + 0.2).toBeCloseTo(0.4); });
+                                             ^
+error: expect(received).toBeCloseTo(expected, precision)
+
+Expected: 0.4
+Received: 0.30000000000000004
+
+Expected precision: 2
+Expected difference: < 0.005
+Received difference: 0.09999999999999998
+
+      at <anonymous> (/matchers.test.js:19:41)
+(fail) close
+15 | test("gt", () => { expect(1).toBeGreaterThan(2); });
+16 | test("gte", () => { expect(1).toBeGreaterThanOrEqual(2); });
+17 | test("lt", () => { expect(3).toBeLessThan(2); });
+18 | test("lte", () => { expect(3).toBeLessThanOrEqual(2); });
+19 | test("close", () => { expect(0.1 + 0.2).toBeCloseTo(0.4); });
+20 | test("contain", () => { expect([1, 2]).toContain(3); });
+                                            ^
+error: expect(received).toContain(expected)
+
+Expected to contain: 3
+Received: [ 1, 2 ]
+
+      at <anonymous> (/matchers.test.js:20:40)
+(fail) contain
+16 | test("gte", () => { expect(1).toBeGreaterThanOrEqual(2); });
+17 | test("lt", () => { expect(3).toBeLessThan(2); });
+18 | test("lte", () => { expect(3).toBeLessThanOrEqual(2); });
+19 | test("close", () => { expect(0.1 + 0.2).toBeCloseTo(0.4); });
+20 | test("contain", () => { expect([1, 2]).toContain(3); });
+21 | test("contain str", () => { expect("hello").toContain("z"); });
+                                                 ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "z"
+Received: "hello"
+
+      at <anonymous> (/matchers.test.js:21:45)
+(fail) contain str
+17 | test("lt", () => { expect(3).toBeLessThan(2); });
+18 | test("lte", () => { expect(3).toBeLessThanOrEqual(2); });
+19 | test("close", () => { expect(0.1 + 0.2).toBeCloseTo(0.4); });
+20 | test("contain", () => { expect([1, 2]).toContain(3); });
+21 | test("contain str", () => { expect("hello").toContain("z"); });
+22 | test("containEqual", () => { expect([{ a: 1 }]).toContainEqual({ a: 2 }); });
+                                                     ^
+error: expect(received).toContainEqual(expected)
+
+Expected to contain: {
+  a: 2,
+}
+Received: [
+  {
+    a: 1,
+  }
+]
+
+      at <anonymous> (/matchers.test.js:22:49)
+(fail) containEqual
+18 | test("lte", () => { expect(3).toBeLessThanOrEqual(2); });
+19 | test("close", () => { expect(0.1 + 0.2).toBeCloseTo(0.4); });
+20 | test("contain", () => { expect([1, 2]).toContain(3); });
+21 | test("contain str", () => { expect("hello").toContain("z"); });
+22 | test("containEqual", () => { expect([{ a: 1 }]).toContainEqual({ a: 2 }); });
+23 | test("length", () => { expect([1, 2]).toHaveLength(3); });
+                                           ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 3
+Received length: 2
+
+      at <anonymous> (/matchers.test.js:23:39)
+(fail) length
+19 | test("close", () => { expect(0.1 + 0.2).toBeCloseTo(0.4); });
+20 | test("contain", () => { expect([1, 2]).toContain(3); });
+21 | test("contain str", () => { expect("hello").toContain("z"); });
+22 | test("containEqual", () => { expect([{ a: 1 }]).toContainEqual({ a: 2 }); });
+23 | test("length", () => { expect([1, 2]).toHaveLength(3); });
+24 | test("property", () => { expect({ a: { b: 1 } }).toHaveProperty("a.c"); });
+                                                      ^
+error: expect(received).toHaveProperty(path)
+
+Expected path: "a.c"
+
+Unable to find property
+
+      at <anonymous> (/matchers.test.js:24:50)
+(fail) property
+20 | test("contain", () => { expect([1, 2]).toContain(3); });
+21 | test("contain str", () => { expect("hello").toContain("z"); });
+22 | test("containEqual", () => { expect([{ a: 1 }]).toContainEqual({ a: 2 }); });
+23 | test("length", () => { expect([1, 2]).toHaveLength(3); });
+24 | test("property", () => { expect({ a: { b: 1 } }).toHaveProperty("a.c"); });
+25 | test("property val", () => { expect({ a: { b: 1 } }).toHaveProperty("a.b", 2); });
+                                                          ^
+error: expect(received).toHaveProperty(path, value)
+
+Expected: 2
+Received: 1
+
+      at <anonymous> (/matchers.test.js:25:54)
+(fail) property val
+21 | test("contain str", () => { expect("hello").toContain("z"); });
+22 | test("containEqual", () => { expect([{ a: 1 }]).toContainEqual({ a: 2 }); });
+23 | test("length", () => { expect([1, 2]).toHaveLength(3); });
+24 | test("property", () => { expect({ a: { b: 1 } }).toHaveProperty("a.c"); });
+25 | test("property val", () => { expect({ a: { b: 1 } }).toHaveProperty("a.b", 2); });
+26 | test("match", () => { expect("hello").toMatch(/z/); });
+                                           ^
+error: expect(received).toMatch(expected)
+
+Expected substring or pattern: /z/
+Received: "hello"
+
+      at <anonymous> (/matchers.test.js:26:39)
+(fail) match
+22 | test("containEqual", () => { expect([{ a: 1 }]).toContainEqual({ a: 2 }); });
+23 | test("length", () => { expect([1, 2]).toHaveLength(3); });
+24 | test("property", () => { expect({ a: { b: 1 } }).toHaveProperty("a.c"); });
+25 | test("property val", () => { expect({ a: { b: 1 } }).toHaveProperty("a.b", 2); });
+26 | test("match", () => { expect("hello").toMatch(/z/); });
+27 | test("matchObject", () => { expect({ a: 1, b: 2 }).toMatchObject({ a: 2 }); });
+                                                        ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "a": 2,
++   "a": 1,
++   "b": 2,
+  }
+
+- Expected  - 1
++ Received  + 2
+
+      at <anonymous> (/matchers.test.js:27:52)
+(fail) matchObject
+23 | test("length", () => { expect([1, 2]).toHaveLength(3); });
+24 | test("property", () => { expect({ a: { b: 1 } }).toHaveProperty("a.c"); });
+25 | test("property val", () => { expect({ a: { b: 1 } }).toHaveProperty("a.b", 2); });
+26 | test("match", () => { expect("hello").toMatch(/z/); });
+27 | test("matchObject", () => { expect({ a: 1, b: 2 }).toMatchObject({ a: 2 }); });
+28 | test("instanceOf", () => { expect([]).toBeInstanceOf(Map); });
+                                           ^
+error: expect(received).toBeInstanceOf(expected)
+
+Expected constructor: [class Map]
+Received value: []
+
+      at <anonymous> (/matchers.test.js:28:39)
+(fail) instanceOf
+24 | test("property", () => { expect({ a: { b: 1 } }).toHaveProperty("a.c"); });
+25 | test("property val", () => { expect({ a: { b: 1 } }).toHaveProperty("a.b", 2); });
+26 | test("match", () => { expect("hello").toMatch(/z/); });
+27 | test("matchObject", () => { expect({ a: 1, b: 2 }).toMatchObject({ a: 2 }); });
+28 | test("instanceOf", () => { expect([]).toBeInstanceOf(Map); });
+29 | test("typeOf", () => { expect(1).toBeTypeOf("string"); });
+                                      ^
+error: expect(received).toBeTypeOf()
+
+Expected type: "string"
+Received type: "number"
+Received value: 1
+
+      at <anonymous> (/matchers.test.js:29:34)
+(fail) typeOf
+25 | test("property val", () => { expect({ a: { b: 1 } }).toHaveProperty("a.b", 2); });
+26 | test("match", () => { expect("hello").toMatch(/z/); });
+27 | test("matchObject", () => { expect({ a: 1, b: 2 }).toMatchObject({ a: 2 }); });
+28 | test("instanceOf", () => { expect([]).toBeInstanceOf(Map); });
+29 | test("typeOf", () => { expect(1).toBeTypeOf("string"); });
+30 | test("not.toBeNull", () => { expect(null).not.toBeNull(); });
+                                                   ^
+error: expect(received).not.toBeNull()
+
+Received: null
+
+      at <anonymous> (/matchers.test.js:30:47)
+(fail) not.toBeNull
+26 | test("match", () => { expect("hello").toMatch(/z/); });
+27 | test("matchObject", () => { expect({ a: 1, b: 2 }).toMatchObject({ a: 2 }); });
+28 | test("instanceOf", () => { expect([]).toBeInstanceOf(Map); });
+29 | test("typeOf", () => { expect(1).toBeTypeOf("string"); });
+30 | test("not.toBeNull", () => { expect(null).not.toBeNull(); });
+31 | test("order", () => { expect({ b: 1, a: { d: 1, c: 2 } }).toEqual({ b: 1, a: { d: 1, c: 3 } }); });
+                                                               ^
+error: expect(received).toEqual(expected)
+
+  {
+    "a": {
+-     "c": 3,
++     "c": 2,
+      "d": 1,
+    },
+    "b": 1,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/matchers.test.js:31:59)
+(fail) order
+27 | test("matchObject", () => { expect({ a: 1, b: 2 }).toMatchObject({ a: 2 }); });
+28 | test("instanceOf", () => { expect([]).toBeInstanceOf(Map); });
+29 | test("typeOf", () => { expect(1).toBeTypeOf("string"); });
+30 | test("not.toBeNull", () => { expect(null).not.toBeNull(); });
+31 | test("order", () => { expect({ b: 1, a: { d: 1, c: 2 } }).toEqual({ b: 1, a: { d: 1, c: 3 } }); });
+32 | test("asym", () => { expect({ a: 1, b: "hello", c: [1], d: 2 }).toEqual({ a: expect.any(Number), b: expect.stringContaining("ell"), c: expect.arrayContaining([1]), d: expect.anything(), e: expect.objectContaining({ x: 1 }), f: expect.stringMatching(/a/), g: expect.any(String) }); });
+                                                                     ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "a": Any<Number>,
+-   "b": StringContaining "ell",
+-   "c": ExpectArrayContaining {},
+-   "d": Anything,
+-   "e": ObjectContaining {
+-     "x": 1,
+-   },
+-   "f": StringMatching /a/,
+-   "g": Any<String>,
++   "a": 1,
++   "b": "hello",
++   "c": [
++     1,
++   ],
++   "d": 2,
+  }
+
+- Expected  - 9
++ Received  + 6
+
+      at <anonymous> (/matchers.test.js:32:65)
+(fail) asym
+28 | test("instanceOf", () => { expect([]).toBeInstanceOf(Map); });
+29 | test("typeOf", () => { expect(1).toBeTypeOf("string"); });
+30 | test("not.toBeNull", () => { expect(null).not.toBeNull(); });
+31 | test("order", () => { expect({ b: 1, a: { d: 1, c: 2 } }).toEqual({ b: 1, a: { d: 1, c: 3 } }); });
+32 | test("asym", () => { expect({ a: 1, b: "hello", c: [1], d: 2 }).toEqual({ a: expect.any(Number), b: expect.stringContaining("ell"), c: expect.arrayContaining([1]), d: expect.anything(), e: expect.objectContaining({ x: 1 }), f: expect.stringMatching(/a/), g: expect.any(String) }); });
+33 | test("asym top", () => { expect(1).toEqual(expect.any(String)); });
+                                        ^
+error: expect(received).toEqual(expected)
+
+Expected: Any<String>
+Received: 1
+
+      at <anonymous> (/matchers.test.js:33:36)
+(fail) asym top
+29 | test("typeOf", () => { expect(1).toBeTypeOf("string"); });
+30 | test("not.toBeNull", () => { expect(null).not.toBeNull(); });
+31 | test("order", () => { expect({ b: 1, a: { d: 1, c: 2 } }).toEqual({ b: 1, a: { d: 1, c: 3 } }); });
+32 | test("asym", () => { expect({ a: 1, b: "hello", c: [1], d: 2 }).toEqual({ a: expect.any(Number), b: expect.stringContaining("ell"), c: expect.arrayContaining([1]), d: expect.anything(), e: expect.objectContaining({ x: 1 }), f: expect.stringMatching(/a/), g: expect.any(String) }); });
+33 | test("asym top", () => { expect(1).toEqual(expect.any(String)); });
+34 | test("not asym", () => { expect("a").not.toEqual(expect.anything()); });
+                                              ^
+error: expect(received).not.toEqual(expected)
+
+Expected: not Anything
+
+      at <anonymous> (/matchers.test.js:34:42)
+(fail) not asym
+30 | test("not.toBeNull", () => { expect(null).not.toBeNull(); });
+31 | test("order", () => { expect({ b: 1, a: { d: 1, c: 2 } }).toEqual({ b: 1, a: { d: 1, c: 3 } }); });
+32 | test("asym", () => { expect({ a: 1, b: "hello", c: [1], d: 2 }).toEqual({ a: expect.any(Number), b: expect.stringContaining("ell"), c: expect.arrayContaining([1]), d: expect.anything(), e: expect.objectContaining({ x: 1 }), f: expect.stringMatching(/a/), g: expect.any(String) }); });
+33 | test("asym top", () => { expect(1).toEqual(expect.any(String)); });
+34 | test("not asym", () => { expect("a").not.toEqual(expect.anything()); });
+35 | test("asym str", () => { expect("abc").toEqual(expect.stringContaining("z")); });
+                                            ^
+error: expect(received).toEqual(expected)
+
+Expected: StringContaining "z"
+Received: "abc"
+
+      at <anonymous> (/matchers.test.js:35:40)
+(fail) asym str
+
+throw.test.js:
+1 | import { test, expect } from "bun:test";
+2 | test("toThrow none", () => { expect(() => {}).toThrow(); });
+                                                  ^
+error: expect(received).toThrow()
+
+Received function did not throw
+Received value: undefined
+
+      at <anonymous> (/throw.test.js:2:47)
+(fail) toThrow none
+1 | import { test, expect } from "bun:test";
+2 | test("toThrow none", () => { expect(() => {}).toThrow(); });
+3 | test("toThrow msg", () => { expect(() => { throw new Error("boom"); }).toThrow("bang"); });
+                                                                           ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "bang"
+Received message: "boom"
+
+      at <anonymous> (/throw.test.js:3:72)
+(fail) toThrow msg
+1 | import { test, expect } from "bun:test";
+2 | test("toThrow none", () => { expect(() => {}).toThrow(); });
+3 | test("toThrow msg", () => { expect(() => { throw new Error("boom"); }).toThrow("bang"); });
+4 | test("toThrow re", () => { expect(() => { throw new Error("boom"); }).toThrow(/bang/); });
+                                                                          ^
+error: expect(received).toThrow(expected)
+
+Expected pattern: /bang/
+Received message: "boom"
+
+      at <anonymous> (/throw.test.js:4:71)
+(fail) toThrow re
+1 | import { test, expect } from "bun:test";
+2 | test("toThrow none", () => { expect(() => {}).toThrow(); });
+3 | test("toThrow msg", () => { expect(() => { throw new Error("boom"); }).toThrow("bang"); });
+4 | test("toThrow re", () => { expect(() => { throw new Error("boom"); }).toThrow(/bang/); });
+5 | test("toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).toThrow(RangeError); });
+                                                                               ^
+error: expect(received).toThrow(expected)
+
+Expected constructor: RangeError
+Received constructor: TypeError
+
+Received message: "boom"
+
+      at <anonymous> (/throw.test.js:5:76)
+(fail) toThrow cls
+1 | import { test, expect } from "bun:test";
+2 | test("toThrow none", () => { expect(() => {}).toThrow(); });
+3 | test("toThrow msg", () => { expect(() => { throw new Error("boom"); }).toThrow("bang"); });
+4 | test("toThrow re", () => { expect(() => { throw new Error("boom"); }).toThrow(/bang/); });
+5 | test("toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).toThrow(RangeError); });
+6 | test("toThrow err", () => { expect(() => { throw new Error("boom"); }).toThrow(new Error("bang")); });
+                                                                           ^
+error: expect(received).toThrow(expected)
+
+Expected message: "bang"
+Received message: "boom"
+
+      at <anonymous> (/throw.test.js:6:72)
+(fail) toThrow err
+2 | test("toThrow none", () => { expect(() => {}).toThrow(); });
+3 | test("toThrow msg", () => { expect(() => { throw new Error("boom"); }).toThrow("bang"); });
+4 | test("toThrow re", () => { expect(() => { throw new Error("boom"); }).toThrow(/bang/); });
+5 | test("toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).toThrow(RangeError); });
+6 | test("toThrow err", () => { expect(() => { throw new Error("boom"); }).toThrow(new Error("bang")); });
+7 | test("not.toThrow", () => { expect(() => { throw new Error("boom"); }).not.toThrow(); });
+                                                                               ^
+error: expect(received).not.toThrow()
+
+Error name: "Error"
+Error message: "boom"
+
+      at <anonymous> (/throw.test.js:7:76)
+(fail) not.toThrow
+3 | test("toThrow msg", () => { expect(() => { throw new Error("boom"); }).toThrow("bang"); });
+4 | test("toThrow re", () => { expect(() => { throw new Error("boom"); }).toThrow(/bang/); });
+5 | test("toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).toThrow(RangeError); });
+6 | test("toThrow err", () => { expect(() => { throw new Error("boom"); }).toThrow(new Error("bang")); });
+7 | test("not.toThrow", () => { expect(() => { throw new Error("boom"); }).not.toThrow(); });
+8 | test("not.toThrow msg", () => { expect(() => { throw new Error("boom"); }).not.toThrow("bo"); });
+                                                                                   ^
+error: expect(received).not.toThrow(expected)
+
+Expected substring: not "bo"
+Received message: "boom"
+
+      at <anonymous> (/throw.test.js:8:80)
+(fail) not.toThrow msg
+4 | test("toThrow re", () => { expect(() => { throw new Error("boom"); }).toThrow(/bang/); });
+5 | test("toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).toThrow(RangeError); });
+6 | test("toThrow err", () => { expect(() => { throw new Error("boom"); }).toThrow(new Error("bang")); });
+7 | test("not.toThrow", () => { expect(() => { throw new Error("boom"); }).not.toThrow(); });
+8 | test("not.toThrow msg", () => { expect(() => { throw new Error("boom"); }).not.toThrow("bo"); });
+9 | test("toThrow did not throw msg", () => { expect(() => 1).toThrow("x"); });
+                                                              ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "x"
+
+Received function did not throw
+Received value: 1
+
+      at <anonymous> (/throw.test.js:9:59)
+(fail) toThrow did not throw msg
+ 5 | test("toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).toThrow(RangeError); });
+ 6 | test("toThrow err", () => { expect(() => { throw new Error("boom"); }).toThrow(new Error("bang")); });
+ 7 | test("not.toThrow", () => { expect(() => { throw new Error("boom"); }).not.toThrow(); });
+ 8 | test("not.toThrow msg", () => { expect(() => { throw new Error("boom"); }).not.toThrow("bo"); });
+ 9 | test("toThrow did not throw msg", () => { expect(() => 1).toThrow("x"); });
+10 | test("toThrow non-error", () => { expect(() => { throw 42; }).toThrow("x"); });
+                                                                   ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "x"
+Received message: "42"
+
+      at <anonymous> (/throw.test.js:10:63)
+(fail) toThrow non-error
+ 6 | test("toThrow err", () => { expect(() => { throw new Error("boom"); }).toThrow(new Error("bang")); });
+ 7 | test("not.toThrow", () => { expect(() => { throw new Error("boom"); }).not.toThrow(); });
+ 8 | test("not.toThrow msg", () => { expect(() => { throw new Error("boom"); }).not.toThrow("bo"); });
+ 9 | test("toThrow did not throw msg", () => { expect(() => 1).toThrow("x"); });
+10 | test("toThrow non-error", () => { expect(() => { throw 42; }).toThrow("x"); });
+11 | test("toThrow asym", () => { expect(() => { throw new Error("boom"); }).toThrow(expect.objectContaining({ message: "x" })); });
+                                                                             ^
+error: expect(received).toThrow(expected)
+
+Expected value: ObjectContaining {
+  message: "x",
+}
+Received value:  6 | test("toThrow err", () => { expect(() => { throw new Error("boom"); }).toThrow(new Error("bang")); });
+ 7 | test("not.toThrow", () => { expect(() => { throw new Error("boom"); }).not.toThrow(); });
+ 8 | test("not.toThrow msg", () => { expect(() => { throw new Error("boom"); }).not.toThrow("bo"); });
+ 9 | test("toThrow did not throw msg", () => { expect(() => 1).toThrow("x"); });
+10 | test("toThrow non-error", () => { expect(() => { throw 42; }).toThrow("x"); });
+11 | test("toThrow asym", () => { expect(() => { throw new Error("boom"); }).toThrow(expect.objectContaining({ message: "x" })); });
+                                                           ^
+error: boom
+      at <anonymous> (/throw.test.js:11:55)
+      at <anonymous> (/throw.test.js:11:73)
+
+
+      at <anonymous> (/throw.test.js:11:73)
+(fail) toThrow asym
+ 7 | test("not.toThrow", () => { expect(() => { throw new Error("boom"); }).not.toThrow(); });
+ 8 | test("not.toThrow msg", () => { expect(() => { throw new Error("boom"); }).not.toThrow("bo"); });
+ 9 | test("toThrow did not throw msg", () => { expect(() => 1).toThrow("x"); });
+10 | test("toThrow non-error", () => { expect(() => { throw 42; }).toThrow("x"); });
+11 | test("toThrow asym", () => { expect(() => { throw new Error("boom"); }).toThrow(expect.objectContaining({ message: "x" })); });
+12 | test("not.toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).not.toThrow(TypeError); });
+                                                                                        ^
+error: expect(received).not.toThrow(expected)
+
+Expected constructor: not TypeError
+
+Received message: "boom"
+
+      at <anonymous> (/throw.test.js:12:84)
+(fail) not.toThrow cls
+ 8 | test("not.toThrow msg", () => { expect(() => { throw new Error("boom"); }).not.toThrow("bo"); });
+ 9 | test("toThrow did not throw msg", () => { expect(() => 1).toThrow("x"); });
+10 | test("toThrow non-error", () => { expect(() => { throw 42; }).toThrow("x"); });
+11 | test("toThrow asym", () => { expect(() => { throw new Error("boom"); }).toThrow(expect.objectContaining({ message: "x" })); });
+12 | test("not.toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).not.toThrow(TypeError); });
+13 | test("not.toMatch", () => { expect("hello").not.toMatch("ell"); });
+                                                     ^
+error: expect(received).not.toMatch(expected)
+
+Expected substring or pattern: not "ell"
+Received: "hello"
+
+      at <anonymous> (/throw.test.js:13:49)
+(fail) not.toMatch
+ 9 | test("toThrow did not throw msg", () => { expect(() => 1).toThrow("x"); });
+10 | test("toThrow non-error", () => { expect(() => { throw 42; }).toThrow("x"); });
+11 | test("toThrow asym", () => { expect(() => { throw new Error("boom"); }).toThrow(expect.objectContaining({ message: "x" })); });
+12 | test("not.toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).not.toThrow(TypeError); });
+13 | test("not.toMatch", () => { expect("hello").not.toMatch("ell"); });
+14 | test("not.toContain", () => { expect([1, 2]).not.toContain(2); });
+                                                      ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: 2
+Received: [ 1, 2 ]
+
+      at <anonymous> (/throw.test.js:14:50)
+(fail) not.toContain
+10 | test("toThrow non-error", () => { expect(() => { throw 42; }).toThrow("x"); });
+11 | test("toThrow asym", () => { expect(() => { throw new Error("boom"); }).toThrow(expect.objectContaining({ message: "x" })); });
+12 | test("not.toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).not.toThrow(TypeError); });
+13 | test("not.toMatch", () => { expect("hello").not.toMatch("ell"); });
+14 | test("not.toContain", () => { expect([1, 2]).not.toContain(2); });
+15 | test("not.toHaveLength", () => { expect("ab").not.toHaveLength(2); });
+                                                       ^
+error: expect(received).not.toHaveLength(expected)
+
+Expected length: not 2
+
+      at <anonymous> (/throw.test.js:15:51)
+(fail) not.toHaveLength
+11 | test("toThrow asym", () => { expect(() => { throw new Error("boom"); }).toThrow(expect.objectContaining({ message: "x" })); });
+12 | test("not.toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).not.toThrow(TypeError); });
+13 | test("not.toMatch", () => { expect("hello").not.toMatch("ell"); });
+14 | test("not.toContain", () => { expect([1, 2]).not.toContain(2); });
+15 | test("not.toHaveLength", () => { expect("ab").not.toHaveLength(2); });
+16 | test("not.gt", () => { expect(3).not.toBeGreaterThan(2); });
+                                          ^
+error: expect(received).not.toBeGreaterThan(expected)
+
+Expected: not > 2
+Received: 3
+
+      at <anonymous> (/throw.test.js:16:38)
+(fail) not.gt
+12 | test("not.toThrow cls", () => { expect(() => { throw new TypeError("boom"); }).not.toThrow(TypeError); });
+13 | test("not.toMatch", () => { expect("hello").not.toMatch("ell"); });
+14 | test("not.toContain", () => { expect([1, 2]).not.toContain(2); });
+15 | test("not.toHaveLength", () => { expect("ab").not.toHaveLength(2); });
+16 | test("not.gt", () => { expect(3).not.toBeGreaterThan(2); });
+17 | test("not.toHaveProperty", () => { expect({ a: 1 }).not.toHaveProperty("a"); });
+                                                             ^
+error: expect(received).not.toHaveProperty(path)
+
+Expected path: not "a"
+
+Received value: 1
+
+      at <anonymous> (/throw.test.js:17:57)
+(fail) not.toHaveProperty
+13 | test("not.toMatch", () => { expect("hello").not.toMatch("ell"); });
+14 | test("not.toContain", () => { expect([1, 2]).not.toContain(2); });
+15 | test("not.toHaveLength", () => { expect("ab").not.toHaveLength(2); });
+16 | test("not.gt", () => { expect(3).not.toBeGreaterThan(2); });
+17 | test("not.toHaveProperty", () => { expect({ a: 1 }).not.toHaveProperty("a"); });
+18 | test("toEqual map", () => { expect(new Map([["a", 1]])).toEqual(new Map([["a", 2]])); });
+                                                             ^
+error: expect(received).toEqual(expected)
+
+  Map {
+-   "a" => 2,
++   "a" => 1,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/throw.test.js:18:57)
+(fail) toEqual map
+14 | test("not.toContain", () => { expect([1, 2]).not.toContain(2); });
+15 | test("not.toHaveLength", () => { expect("ab").not.toHaveLength(2); });
+16 | test("not.gt", () => { expect(3).not.toBeGreaterThan(2); });
+17 | test("not.toHaveProperty", () => { expect({ a: 1 }).not.toHaveProperty("a"); });
+18 | test("toEqual map", () => { expect(new Map([["a", 1]])).toEqual(new Map([["a", 2]])); });
+19 | test("toEqual class", () => { class Foo { constructor() { this.x = 1; } } expect(new Foo()).toEqual({ x: 2 }); });
+                                                                                                 ^
+error: expect(received).toEqual(expected)
+
+- {
+-   "x": 2,
++ Foo {
++   "x": 1,
+  }
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/throw.test.js:19:93)
+(fail) toEqual class
+15 | test("not.toHaveLength", () => { expect("ab").not.toHaveLength(2); });
+16 | test("not.gt", () => { expect(3).not.toBeGreaterThan(2); });
+17 | test("not.toHaveProperty", () => { expect({ a: 1 }).not.toHaveProperty("a"); });
+18 | test("toEqual map", () => { expect(new Map([["a", 1]])).toEqual(new Map([["a", 2]])); });
+19 | test("toEqual class", () => { class Foo { constructor() { this.x = 1; } } expect(new Foo()).toEqual({ x: 2 }); });
+20 | test("toEqual long", () => { expect(Array.from({ length: 400 }, (_, i) => i)).toEqual(Array.from({ length: 400 }, (_, i) => (i === 200 ? -1 : i))); });
+                                                                                   ^
+error: expect(received).toEqual(expected)
+
+@@ -197,11 +197,11 @@
+    195,
+    196,
+    197,
+    198,
+    199,
+-   -1,
++   200,
+    201,
+    202,
+    203,
+    204,
+    205,
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/throw.test.js:20:79)
+(fail) toEqual long
+
+ 0 pass
+ 53 fail
+ 53 expect() calls
+Ran 53 tests across 2 files. [TIME]

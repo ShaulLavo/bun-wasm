@@ -1,0 +1,153 @@
+
+mocks.test.ts:
+1 | import { test, expect, mock, spyOn, jest } from "bun:test";
+2 | test("called", () => { const f = mock(() => 1); expect(f).toHaveBeenCalled(); });
+                                                              ^
+error: expect(received).toHaveBeenCalled()
+
+Expected number of calls: >= 1
+Received number of calls: 0
+
+      at <anonymous> (/mocks.test.ts:2:59)
+(fail) called
+1 | import { test, expect, mock, spyOn, jest } from "bun:test";
+2 | test("called", () => { const f = mock(() => 1); expect(f).toHaveBeenCalled(); });
+3 | test("not called", () => { const f = mock(() => 1); f(1); expect(f).not.toHaveBeenCalled(); });
+                                                                            ^
+error: expect(received).not.toHaveBeenCalled()
+
+Expected number of calls: 0
+Received number of calls: 1
+
+      at <anonymous> (/mocks.test.ts:3:73)
+(fail) not called
+1 | import { test, expect, mock, spyOn, jest } from "bun:test";
+2 | test("called", () => { const f = mock(() => 1); expect(f).toHaveBeenCalled(); });
+3 | test("not called", () => { const f = mock(() => 1); f(1); expect(f).not.toHaveBeenCalled(); });
+4 | test("times", () => { const f = mock(() => 1); f(); expect(f).toHaveBeenCalledTimes(2); });
+                                                                  ^
+error: expect(received).toHaveBeenCalledTimes(expected)
+
+Expected number of calls: 2
+Received number of calls: 1
+
+      at <anonymous> (/mocks.test.ts:4:63)
+(fail) times
+1 | import { test, expect, mock, spyOn, jest } from "bun:test";
+2 | test("called", () => { const f = mock(() => 1); expect(f).toHaveBeenCalled(); });
+3 | test("not called", () => { const f = mock(() => 1); f(1); expect(f).not.toHaveBeenCalled(); });
+4 | test("times", () => { const f = mock(() => 1); f(); expect(f).toHaveBeenCalledTimes(2); });
+5 | test("with", () => { const f = mock(() => 1); f(1, "a"); f(2); expect(f).toHaveBeenCalledWith(3); });
+                                                                             ^
+error: expect(received).toHaveBeenCalledWith(...expected)
+
+    Expected: [ 3 ]
+    Received:
+              1: [ 1, "a" ]
+              2: [ 2 ]
+
+    Number of calls: 2
+
+      at <anonymous> (/mocks.test.ts:5:74)
+(fail) with
+1 | import { test, expect, mock, spyOn, jest } from "bun:test";
+2 | test("called", () => { const f = mock(() => 1); expect(f).toHaveBeenCalled(); });
+3 | test("not called", () => { const f = mock(() => 1); f(1); expect(f).not.toHaveBeenCalled(); });
+4 | test("times", () => { const f = mock(() => 1); f(); expect(f).toHaveBeenCalledTimes(2); });
+5 | test("with", () => { const f = mock(() => 1); f(1, "a"); f(2); expect(f).toHaveBeenCalledWith(3); });
+6 | test("with none", () => { const f = jest.fn(); expect(f).toHaveBeenCalledWith(3); });
+                                                             ^
+error: expect(received).toHaveBeenCalledWith(...expected)
+
+Expected: [ 3 ]
+But it was not called.
+      at <anonymous> (/mocks.test.ts:6:58)
+(fail) with none
+2 | test("called", () => { const f = mock(() => 1); expect(f).toHaveBeenCalled(); });
+3 | test("not called", () => { const f = mock(() => 1); f(1); expect(f).not.toHaveBeenCalled(); });
+4 | test("times", () => { const f = mock(() => 1); f(); expect(f).toHaveBeenCalledTimes(2); });
+5 | test("with", () => { const f = mock(() => 1); f(1, "a"); f(2); expect(f).toHaveBeenCalledWith(3); });
+6 | test("with none", () => { const f = jest.fn(); expect(f).toHaveBeenCalledWith(3); });
+7 | test("last", () => { const f = mock(() => 1); f(1); f(2, { a: 1 }); expect(f).toHaveBeenLastCalledWith(3); });
+                                                                                  ^
+error: expect(received).toHaveBeenLastCalledWith(...expected)
+
+  [
+-   3,
++   2,
++   {
++     "a": 1,
++   },
+  ]
+
+- Expected  - 1
++ Received  + 4
+
+      at <anonymous> (/mocks.test.ts:7:79)
+(fail) last
+3 | test("not called", () => { const f = mock(() => 1); f(1); expect(f).not.toHaveBeenCalled(); });
+4 | test("times", () => { const f = mock(() => 1); f(); expect(f).toHaveBeenCalledTimes(2); });
+5 | test("with", () => { const f = mock(() => 1); f(1, "a"); f(2); expect(f).toHaveBeenCalledWith(3); });
+6 | test("with none", () => { const f = jest.fn(); expect(f).toHaveBeenCalledWith(3); });
+7 | test("last", () => { const f = mock(() => 1); f(1); f(2, { a: 1 }); expect(f).toHaveBeenLastCalledWith(3); });
+8 | test("nth", () => { const f = mock(() => 1); f(1); f(2); expect(f).toHaveBeenNthCalledWith(1, 3); });
+                                                                       ^
+error: expect(received).toHaveBeenNthCalledWith(n, ...expected)
+
+Call #1:
+  [
+-   3,
++   1,
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/mocks.test.ts:8:68)
+(fail) nth
+4 | test("times", () => { const f = mock(() => 1); f(); expect(f).toHaveBeenCalledTimes(2); });
+5 | test("with", () => { const f = mock(() => 1); f(1, "a"); f(2); expect(f).toHaveBeenCalledWith(3); });
+6 | test("with none", () => { const f = jest.fn(); expect(f).toHaveBeenCalledWith(3); });
+7 | test("last", () => { const f = mock(() => 1); f(1); f(2, { a: 1 }); expect(f).toHaveBeenLastCalledWith(3); });
+8 | test("nth", () => { const f = mock(() => 1); f(1); f(2); expect(f).toHaveBeenNthCalledWith(1, 3); });
+9 | test("returned", () => { const f = mock(() => 1); f(); expect(f).toHaveReturnedWith(2); });
+                                                                     ^
+error: expect(received).toHaveReturnedWith(expected)
+
+Expected: 2
+Received: 1
+      at <anonymous> (/mocks.test.ts:9:66)
+(fail) returned
+ 5 | test("with", () => { const f = mock(() => 1); f(1, "a"); f(2); expect(f).toHaveBeenCalledWith(3); });
+ 6 | test("with none", () => { const f = jest.fn(); expect(f).toHaveBeenCalledWith(3); });
+ 7 | test("last", () => { const f = mock(() => 1); f(1); f(2, { a: 1 }); expect(f).toHaveBeenLastCalledWith(3); });
+ 8 | test("nth", () => { const f = mock(() => 1); f(1); f(2); expect(f).toHaveBeenNthCalledWith(1, 3); });
+ 9 | test("returned", () => { const f = mock(() => 1); f(); expect(f).toHaveReturnedWith(2); });
+10 | test("spy", () => { const o = { m() { return 1; } }; const s = spyOn(o, "m"); expect(o.m).toHaveBeenCalled(); });
+                                                                                               ^
+error: expect(received).toHaveBeenCalled()
+
+Expected number of calls: >= 1
+Received number of calls: 0
+
+      at <anonymous> (/mocks.test.ts:10:91)
+(fail) spy
+ 6 | test("with none", () => { const f = jest.fn(); expect(f).toHaveBeenCalledWith(3); });
+ 7 | test("last", () => { const f = mock(() => 1); f(1); f(2, { a: 1 }); expect(f).toHaveBeenLastCalledWith(3); });
+ 8 | test("nth", () => { const f = mock(() => 1); f(1); f(2); expect(f).toHaveBeenNthCalledWith(1, 3); });
+ 9 | test("returned", () => { const f = mock(() => 1); f(); expect(f).toHaveReturnedWith(2); });
+10 | test("spy", () => { const o = { m() { return 1; } }; const s = spyOn(o, "m"); expect(o.m).toHaveBeenCalled(); });
+11 | test("not a mock", () => { expect(() => {}).toHaveBeenCalled(); });
+                                                 ^
+error: Expected value must be a mock function: [Function]
+      at <anonymous> (/mocks.test.ts:11:45)
+(fail) not a mock
+(pass) mock basics
+(pass) mock return values
+(pass) mock that throws
+(pass) spyOn
+
+ 4 pass
+ 10 fail
+ 34 expect() calls
+Ran 14 tests across 1 file. [TIME]

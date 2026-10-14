@@ -1,0 +1,8 @@
+The following filters did not match any test files:
+ nomatch foo.ts
+6 files were searched [TIME]
+
+note: Tests need ".test", "_test_", ".spec" or "_spec_" in the filename (ex: "MyApp.test.ts")
+note: To treat the "foo.ts" filter as a path, run "bun test ./foo.ts"
+
+Learn more about bun test: https://bun.com/docs/cli/test

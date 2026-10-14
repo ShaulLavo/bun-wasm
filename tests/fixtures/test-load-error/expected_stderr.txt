@@ -1,0 +1,59 @@
+
+a.test.js:
+
+# Unhandled error between tests
+-------------------------------
+1 | import { test, expect } from "bun:test";
+2 | test("before", () => {});
+3 | expect(1).toBe(2);
+              ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 1
+
+      at /a.test.js:3:11
+-------------------------------
+
+
+b.test.js:
+1 | import { test, expect } from "bun:test";
+2 | test("rejection", async () => {
+3 |   Promise.reject(new Error("stray"));
+                         ^
+error: stray
+      at <anonymous> (/b.test.js:3:22)
+(fail) rejection
+(pass) next
+4 |   await Bun.sleep(5);
+5 | });
+6 | test("next", () => {});
+7 | test("timer error", async () => {
+8 |   setTimeout(() => {
+9 |     expect("timer").toBe("callback");
+                        ^
+error: expect(received).toBe(expected)
+
+Expected: "callback"
+Received: "timer"
+
+      at <anonymous> (/b.test.js:9:21)
+(fail) timer error
+
+c.test.js:
+
+# Unhandled error between tests
+-------------------------------
+1 | import { test } from "bun:test";
+2 | test("no body");
+    ^
+error: test expects a function as the second argument
+      at /c.test.js:2:1
+-------------------------------
+
+
+ 1 pass
+ 4 fail
+ 2 errors
+ 2 expect() calls
+Ran 5 tests across 3 files. [TIME]

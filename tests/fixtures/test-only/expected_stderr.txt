@@ -1,0 +1,9 @@
+
+o.test.js:
+(pass) b only
+(pass) d > d only
+(pass) e > f
+
+ 3 pass
+ 0 fail
+Ran 3 tests across 1 file. [TIME]

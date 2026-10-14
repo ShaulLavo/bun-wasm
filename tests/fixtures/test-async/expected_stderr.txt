@@ -1,0 +1,90 @@
+
+async.test.js:
+(pass) async pass
+(pass) resolves and rejects pass
+ 8 |   await expect(Promise.resolve({ a: 1 })).resolves.toEqual({ a: 1 });
+ 9 |   await expect(Promise.reject(new Error("bad"))).rejects.toThrow("bad");
+10 |   await expect(Promise.resolve(2)).resolves.not.toBe(3);
+11 | });
+12 | test("resolves", async () => {
+13 |   await expect(Promise.resolve(1)).resolves.toBe(2);
+                                                 ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 1
+
+      at <anonymous> (/async.test.js:13:45)
+(fail) resolves
+11 | });
+12 | test("resolves", async () => {
+13 |   await expect(Promise.resolve(1)).resolves.toBe(2);
+14 | });
+15 | test("rejects", async () => {
+16 |   await expect(Promise.reject(new Error("x"))).rejects.toThrow("y");
+                                                            ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "y"
+Received message: "x"
+
+      at <anonymous> (/async.test.js:16:56)
+(fail) rejects
+14 | });
+15 | test("rejects", async () => {
+16 |   await expect(Promise.reject(new Error("x"))).rejects.toThrow("y");
+17 | });
+18 | test("rejects on resolve", async () => {
+19 |   await expect(Promise.resolve(1)).rejects.toBe(1);
+                                                ^
+error: expect(received).rejects.toBe(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/async.test.js:19:44)
+(fail) rejects on resolve
+17 | });
+18 | test("rejects on resolve", async () => {
+19 |   await expect(Promise.resolve(1)).rejects.toBe(1);
+20 | });
+21 | test("resolves on reject", async () => {
+22 |   await expect(Promise.reject(1)).resolves.toBe(1);
+                                                ^
+error: expect(received).resolves.toBe(expected)
+
+Expected promise that resolves
+Received promise that rejected: Promise { <rejected> }
+
+      at <anonymous> (/async.test.js:22:44)
+(fail) resolves on reject
+AssertionError: expected 2 assertions, but test ended with 1 assertion
+(fail) assertions
+AssertionError: received 0 assertions, but expected at least one assertion to be called
+(fail) hasAssertions
+28 | test("hasAssertions", () => {
+29 |   expect.hasAssertions();
+30 | });
+31 | test("async rejection fails", async () => {
+32 |   await Bun.sleep(1);
+33 |   expect("late").toBe("early");
+                      ^
+error: expect(received).toBe(expected)
+
+Expected: "early"
+Received: "late"
+
+      at <anonymous> (/async.test.js:33:18)
+(fail) async rejection fails
+(fail) timeout
+  ^ this test timed out after 20ms.
+(fail) done timeout
+  ^ this test timed out after 20ms, before its done callback was called. If a done callback was not intended, remove the last parameter from the test callback function
+(pass) done pass
+(pass) timeout option object
+(pass) after timeouts
+
+ 5 pass
+ 9 fail
+ 9 expect() calls
+Ran 14 tests across 1 file. [TIME]

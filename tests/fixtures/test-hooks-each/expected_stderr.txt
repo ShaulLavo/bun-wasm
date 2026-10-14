@@ -1,0 +1,46 @@
+
+hooks.test.js:
+(pass) top
+(pass) outer > a
+(pass) outer > inner > b
+(skip) outer > skipped group > c
+(todo) outer > todo group > d
+(pass) add 1 + 2 = 3
+(pass) add 2 + 3 = 5
+(pass) obj 1 x 0
+(pass) obj 2 y 1
+(pass) fmt s %p %j %i %o %%
+(pass) fmt %s %p %j %i %o %%
+(pass) fmt %s %p %j %i %o %%
+(pass) fmt %s %p %j %i %o %%
+(pass) fmt %s %p %j %i %o %%
+(pass) fmt %s %p %j %i %o %%
+(pass) fmt %s %p %j %i %o %%
+(pass) p 1 "x" %s
+(pass) p 2 "y" %s
+(pass) each describe 1 > t1
+(pass) each describe 2 > t2
+(pass) if true
+(skip) if false
+(skip) skipIf true
+(todo) todoIf true
+(pass) it works
+(pass) done ok
+(pass) each done 1
+
+3 tests skipped:
+(skip) outer > skipped group > c
+(skip) if false
+(skip) skipIf true
+
+
+2 tests todo:
+(todo) outer > todo group > d
+(todo) todoIf true
+
+ 22 pass
+ 3 skip
+ 2 todo
+ 0 fail
+ 2 expect() calls
+Ran 27 tests across 1 file. [TIME]

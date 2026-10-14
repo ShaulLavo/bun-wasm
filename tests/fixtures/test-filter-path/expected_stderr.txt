@@ -1,0 +1,11 @@
+
+sub/deep/c_test.mjs:
+(pass) deep
+
+sub/deep/d_spec.cjs:
+(pass) cjs
+
+ 2 pass
+ 0 fail
+ 2 expect() calls
+Ran 2 tests across 2 files. [TIME]
