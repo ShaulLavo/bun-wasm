@@ -1,5 +1,5 @@
 //! `bun-build <entry>... [flags]`: Bun's `bun build`, in wasm.
-use std::io::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::process::ExitCode;
 
 use bunwasm_build::{BuildArgs, Format, Packages, SourceMap, Target};
@@ -111,13 +111,18 @@ fn main() -> ExitCode {
         }
     }
 
+    // Bun colors terminal output unless NO_COLOR is set.
+    let colors = |tty: bool| tty && std::env::var_os("NO_COLOR").is_none();
+    let stdout_colors = colors(std::io::stdout().is_terminal());
+    bunwasm_build::set_log_colors(colors(std::io::stderr().is_terminal()));
+
     match bunwasm_build::build(&args) {
         Ok(out) => {
             let mut stdout = std::io::stdout().lock();
             if let Some(bytes) = &out.stdout {
                 let _ = stdout.write_all(bytes);
             } else {
-                let _ = stdout.write_all(out.summary(start.elapsed().as_millis(), false).as_bytes());
+                let _ = stdout.write_all(out.summary(start.elapsed().as_millis(), stdout_colors).as_bytes());
             }
             let _ = stdout.flush();
             for e in &out.write_errors {

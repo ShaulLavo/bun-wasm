@@ -7,7 +7,12 @@
 #   scripts/test-build.sh app split       # some fixtures
 #
 # Each fixture has a cases.txt: one set of `bun build` arguments per line,
-# relative to the fixture directory. Env: BUN (native bun, default `bun`),
+# relative to the fixture directory. vendor/bun is newer than a release, so
+# the exact reference is a canary build of the pinned commit (`bun --revision`
+# ends in the BUN_COMMIT of scripts/sync-bun.sh), e.g. bun-linux-x64.zip from
+# github.com/oven-sh/bun/releases/tag/canary while it still matches. Against
+# bun 1.4.2, two cases differ through upstream changes made after 1.4.2.
+# Env: BUN (native bun, default `bun`),
 # NO_BUILD=1 (skip cargo build), KEEP=1 (keep the scratch dir),
 # VERBOSE=1 (print diffs).
 set -uo pipefail

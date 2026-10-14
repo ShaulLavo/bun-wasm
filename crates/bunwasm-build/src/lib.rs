@@ -261,6 +261,12 @@ fn push_spaces(out: &mut String, n: usize) {
     out.extend(std::iter::repeat_n(' ', n));
 }
 
+/// Whether `BuildOutput::log` and errors use ANSI colors, like Bun on a
+/// terminal. Off by default on wasm.
+pub fn set_log_colors(on: bool) {
+    bun_core::Output::ENABLE_ANSI_COLORS_STDERR.store(on, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// Bun's byte-size formatter (`59 bytes`, `1.21 KB`).
 pub fn format_size(size: usize) -> String {
     format!("{}", bun_core::fmt::size(size, Default::default()))
