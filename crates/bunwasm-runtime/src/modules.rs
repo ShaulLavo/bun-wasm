@@ -19,6 +19,12 @@ include!(concat!(env!("OUT_DIR"), "/polyfills.rs"));
 /// Bun's transpiler emits CommonJS modules already wrapped in this function
 /// expression (that is how it reports a file is CommonJS).
 pub const CJS_WRAPPER_PREFIX: &str = "(function(exports, require, module, __filename, __dirname) {";
+const CJS_META_WRAPPER_PREFIX: &str = "(function(exports, require, module, __filename, __dirname, $Bun_import_meta) {";
+
+fn is_cjs_wrapper(code: &str) -> bool {
+    code.starts_with(CJS_WRAPPER_PREFIX) || code.starts_with(CJS_META_WRAPPER_PREFIX)
+}
+
 
 /// How positions in the code the engine evaluated map to the file on disk.
 #[derive(Default)]
@@ -256,7 +262,7 @@ impl State {
     }
 
     fn detect_format(&self, path: &str, code: &str, parsed_kind: Option<crate::transpiler::ModuleKind>) -> Format {
-        if code.starts_with(CJS_WRAPPER_PREFIX) {
+        if is_cjs_wrapper(code) {
             return Format::Cjs;
         }
         if path.ends_with(".mjs") || path.ends_with(".mts") {
@@ -331,7 +337,7 @@ impl State {
 /// "default"), so the file's own lines and columns are unchanged; code Bun's
 /// transpiler already wrapped keeps the printed code's lines.
 pub fn cjs_wrapper(code: &str) -> (String, i32) {
-    if code.starts_with(CJS_WRAPPER_PREFIX) {
+    if is_cjs_wrapper(code) {
         return (code.to_owned(), 1);
     }
     // Named so engines whose stack frames carry only a name (JSC) can tell

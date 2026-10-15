@@ -434,13 +434,10 @@ fn writev(state: &State, args: Args<'_>) -> NativeResult {
         _ => return Err(NativeError::type_error("fd must be a number").prop("code", "ERR_INVALID_ARG_TYPE")),
     };
     let buffers = args.array(1).ok_or_else(|| NativeError::type_error("expected an array of byte buffers"))?;
-    let limit = unsafe { libc::sysconf(libc::_SC_IOV_MAX) };
-    let limit = usize::try_from(limit).ok().filter(|&n| n > 0).unwrap_or(16).min(i32::MAX as usize);
-    let vectors = buffers.iter().take(limit).map(|value| match value {
-        Val::Bytes(bytes) => Ok(libc::iovec { iov_base: bytes.as_ptr().cast_mut().cast(), iov_len: bytes.len() }),
+    let buffers = buffers.iter().map(|value| match value {
+        Val::Bytes(bytes) => Ok(bytes.as_slice()),
         _ => Err(NativeError::type_error("expected a byte buffer")),
     }).collect::<Result<Vec<_>, _>>()?;
-    let count = libc::c_int::try_from(vectors.len()).map_err(|_| NativeError::range_error("too many buffers"))?;
     let files = state.fds.borrow();
     let descriptor = match fd {
         1 | 2 => { state.flush(); fd }
@@ -448,15 +445,30 @@ fn writev(state: &State, args: Args<'_>) -> NativeResult {
             .map_err(|_| bad_fd("writev"))?,
     };
     let position = args.opt_num(2).filter(|&n| n >= 0.0).map(|n| n as libc::off_t);
-    // The argument frame owns the byte buffers and the file table owns the descriptor until this synchronous call returns.
-    let written = unsafe { match position {
-        Some(position) => libc::pwritev(descriptor, vectors.as_ptr(), count, position),
-        None => libc::writev(descriptor, vectors.as_ptr(), count),
-    } };
-    if written < 0 {
-        return Err(io_error(io::Error::last_os_error(), "writev", None));
+    let mut written = 0usize;
+    for bytes in buffers {
+        if bytes.is_empty() { continue; }
+        let offset = position.map(|base| base.checked_add(written as libc::off_t).ok_or(io::ErrorKind::InvalidInput))
+            .transpose().map_err(io::Error::from);
+        let count = match offset.and_then(|offset| write_chunk(descriptor, bytes, offset)) {
+            Ok(count) => count,
+            Err(_) if written > 0 => break,
+            Err(error) => return Err(io_error(error, "writev", None)),
+        };
+        written += count;
+        if count < bytes.len() { break; }
     }
     Ok(Val::Num(written as f64))
+}
+
+fn write_chunk(fd: libc::c_int, bytes: &[u8], position: Option<libc::off_t>) -> io::Result<usize> {
+    // The argument frame owns these bytes until the synchronous call returns.
+    let written = unsafe { match position {
+        Some(position) => libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position),
+        None => libc::write(fd, bytes.as_ptr().cast(), bytes.len()),
+    } };
+    if written < 0 { return Err(io::Error::last_os_error()); }
+    Ok(written as usize)
 }
 
 fn install_fds(t: &mut Table, state: &Rc<State>) {
