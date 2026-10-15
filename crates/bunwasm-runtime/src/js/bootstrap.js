@@ -62,7 +62,7 @@
       if (mapped) [line, col] = mapped;
     }
     // Module and script top-level code prints bare, like JSC.
-    if (!name && file && line !== null && isTopLevel(site.getFunction())) return `${file}:${line}:${col}`;
+    if ((!name || name === "__bunwasm_cjs__") && file && line !== null && isTopLevel(site.getFunction())) return `${file}:${line}:${col}`;
     const label = name || "<anonymous>";
     if (site.isNative() || file === null || file === undefined) return `${label} (native)`;
     if (line === null) return `${label} (${file})`;

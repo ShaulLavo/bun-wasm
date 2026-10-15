@@ -25,8 +25,6 @@ thread_local! {
     /// Module sources registered by `eval_module` (bun -e), served by fetch.
     static VIRTUAL: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
     static REJECTIONS: RefCell<Vec<(JsVal, JsVal)>> = const { RefCell::new(Vec::new()) };
-    /// AsyncLocalStorage frame: kept per call, not carried across await.
-    static ASYNC_CONTEXT: RefCell<Option<JsVal>> = const { RefCell::new(None) };
 }
 
 fn ctx() -> JSContextRef {
@@ -176,6 +174,36 @@ fn to_val(v: JSValueRef) -> Val {
     }
 }
 
+/// A Uint8Array filled with `bytes`, made by `new Uint8Array(len)`: arrays
+/// made by the C API (JSObjectMakeTypedArray*) read `arr.buffer` as
+/// undefined in this C-loop build (the getter itself works), which breaks
+/// `bytes.buffer.slice(...)`.
+fn uint8_array(bytes: &[u8]) -> JSValueRef {
+    thread_local! {
+        static CTOR: Cell<JSObjectRef> = const { Cell::new(ptr::null_mut()) };
+    }
+    let c = ctx();
+    let ctor = CTOR.with(|k| {
+        if k.get().is_null() {
+            let f = global_function("Uint8Array");
+            // SAFETY: kept for the life of the process.
+            unsafe { JSValueProtect(c, f) };
+            k.set(f);
+        }
+        k.get()
+    });
+    // SAFETY: a fresh array of `len` bytes; its storage is written before any JS runs.
+    unsafe {
+        let len = JSValueMakeNumber(c, bytes.len() as f64);
+        let arr = JSObjectCallAsConstructor(c, ctor, 1, &len, ptr::null_mut());
+        if !bytes.is_empty() {
+            let data = JSObjectGetTypedArrayBytesPtr(c, arr, ptr::null_mut()).cast::<u8>();
+            ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
+        }
+        arr
+    }
+}
+
 fn from_val(v: Val) -> JSValueRef {
     let c = ctx();
     // SAFETY: valid context throughout.
@@ -188,7 +216,7 @@ fn from_val(v: Val) -> JSValueRef {
             Val::BigInt(n) => JSBigIntCreateWithInt64(c, n, ptr::null_mut()),
             Val::BigUint(n) => JSBigIntCreateWithUInt64(c, n, ptr::null_mut()),
             Val::Str(s) => js_string(&s),
-            Val::Bytes(b) => bunwasm_jsc::Js { ctx: c }.uint8_array(b),
+            Val::Bytes(b) => uint8_array(&b),
             Val::Array(items) => {
                 // Keep the items reachable while the array is built.
                 let items: Vec<JsVal> = items.into_iter().map(|i| JsVal::new(from_val(i))).collect();
@@ -205,6 +233,28 @@ fn from_val(v: Val) -> JSValueRef {
             }
         }
     }
+}
+
+/// A non-enumerable own property (like `name` on built-in errors). The C
+/// API's attribute flags don't apply here, so use Object.defineProperty.
+fn define_hidden(obj: &JsVal, key: &str, value: JSValueRef) {
+    thread_local! {
+        static DEFINE: Cell<JSObjectRef> = const { Cell::new(ptr::null_mut()) };
+    }
+    let f = DEFINE.with(|d| {
+        if d.get().is_null() {
+            let src = "(function (o, k, v) { Object.defineProperty(o, k, { value: v, writable: true, configurable: true }); })";
+            if let Ok(v) = Jsc.eval_script(src, "bun-wasm:define", 1) {
+                // SAFETY: kept for the life of the process.
+                unsafe { JSValueProtect(ctx(), v.raw()) };
+                d.set(v.object());
+            }
+        }
+        d.get()
+    });
+    let args = [obj.raw(), js_string(key), value];
+    // SAFETY: valid function; the arguments are live on the stack.
+    unsafe { JSObjectCallAsFunction(ctx(), f, ptr::null_mut(), 3, args.as_ptr(), ptr::null_mut()) };
 }
 
 /// The one C callback behind every native: finds the closure by function.
@@ -377,13 +427,15 @@ impl Engine for Jsc {
         // SAFETY: valid constructor; one argument.
         let e = JsVal::new(unsafe { JSObjectCallAsConstructor(ctx(), global_function(ctor), 1, &message, ptr::null_mut()) });
         for (k, v) in &err.props {
+            if k == "name" {
+                define_hidden(&e, k, from_val(v.clone()));
+                continue;
+            }
             let name = JsString::new(k);
-            let attrs = if k == "name" { kJSPropertyAttributeDontEnum } else { kJSPropertyAttributeNone };
-            unsafe { JSObjectSetProperty(ctx(), e.object(), name.raw(), from_val(v.clone()), attrs, ptr::null_mut()) };
+            unsafe { JSObjectSetProperty(ctx(), e.object(), name.raw(), from_val(v.clone()), kJSPropertyAttributeNone, ptr::null_mut()) };
         }
         if let Some(n) = &err.name {
-            let name = JsString::new("name");
-            unsafe { JSObjectSetProperty(ctx(), e.object(), name.raw(), js_string(n), kJSPropertyAttributeDontEnum, ptr::null_mut()) };
+            define_hidden(&e, "name", js_string(n));
         }
         e
     }
@@ -490,11 +542,13 @@ impl Engine for Jsc {
     }
 
     fn async_context(&self) -> JsVal {
-        ASYNC_CONTEXT.with(|c| c.borrow().clone()).unwrap_or_else(|| self.undefined())
+        // SAFETY: valid context.
+        JsVal::new(unsafe { bunjsc_get_async_context(ctx()) })
     }
 
     fn set_async_context(&self, v: &JsVal) {
-        ASYNC_CONTEXT.with(|c| *c.borrow_mut() = Some(v.clone()));
+        // SAFETY: valid context and value (JSC keeps its own reference).
+        unsafe { bunjsc_set_async_context(ctx(), v.raw()) }
     }
 
     fn gc(&self) {

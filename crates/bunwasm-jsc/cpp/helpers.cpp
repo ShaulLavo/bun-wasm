@@ -16,6 +16,7 @@
 #include "Completion.h"
 #include "ErrorInstance.h"
 #include "Identifier.h"
+#include "InternalFieldTuple.h"
 #include "JSCInlines.h"
 #include "GlobalObjectMethodTable.h"
 #include "InitializeThreading.h"
@@ -289,6 +290,31 @@ bool bunjsc_is_error(JSContextRef ctx, JSValueRef value)
     JSGlobalObject* global = toJS(ctx);
     JSLockHolder lock(global->vm());
     return dynamicDowncast<ErrorInstance>(toJS(global, value));
+}
+
+// The async context (AsyncLocalStorage frame): JSGlobalObject's
+// m_asyncContextData field 0, which Bun's JSC captures in promise reactions
+// and restores when they run, the same mechanism Bun's own ALS uses.
+JSValueRef bunjsc_get_async_context(JSContextRef ctx)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+#if USE(BUN_JSC_ADDITIONS)
+    return toRef(global, global->m_asyncContextData->getInternalField(0));
+#else
+    return toRef(global, jsUndefined());
+#endif
+}
+
+void bunjsc_set_async_context(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    VM& vm = global->vm();
+    JSLockHolder lock(vm);
+#if USE(BUN_JSC_ADDITIONS)
+    vm.setAsyncContextTrackingEnabled();
+    global->m_asyncContextData->putInternalField(vm, 0, toJS(global, value));
+#endif
 }
 
 }

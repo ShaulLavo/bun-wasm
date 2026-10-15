@@ -258,7 +258,9 @@ pub fn cjs_wrapper(code: &str) -> (String, i32) {
     if code.starts_with(CJS_WRAPPER_PREFIX) {
         return (code.to_owned(), 1);
     }
-    (format!("(function (exports, require, module, __filename, __dirname) {{\n\n{code}\n}})"), -1)
+    // Named so engines whose stack frames carry only a name (JSC) can tell
+    // the module's top level from an anonymous function.
+    (format!("(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {{\n\n{code}\n}})"), -1)
 }
 
 /// Source of an embedded polyfill (src/js/<name>.js).

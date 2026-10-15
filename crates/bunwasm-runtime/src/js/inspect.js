@@ -1393,6 +1393,17 @@
     return frames;
   }
 
+  // JSC (without Bun's position remapping) reports a call at its open paren;
+  // Bun prints the callee, i.e. the last identifier before it.
+  function calleeColumn(file, lineNo, column) {
+    if (typeof internal.getSourceLine !== "function") return column;
+    const text = internal.getSourceLine(file, lineNo);
+    if (typeof text !== "string" || text[column - 1] !== "(") return column;
+    let start = column - 1;
+    while (start > 0 && /[\w$]/.test(text[start - 1])) start--;
+    return start < column - 1 ? start + 1 : column;
+  }
+
   // JavaScriptCore frames: `name@file:line:col`, `module code@…`,
   // `forEach@[native code]`. Positions are in evaluated code; map them back.
   function parseJscFrameLine(line) {
@@ -1401,7 +1412,8 @@
     let [file, lineNo, column] = [m[2], Number(m[3]), Number(m[4])];
     const mapped = typeof internal.mapPosition === "function" ? internal.mapPosition(file, lineNo, column) : undefined;
     if (mapped) [lineNo, column] = mapped;
-    const topLevel = m[1] === "global code" || m[1] === "module code" || m[1] === "eval code";
+    column = calleeColumn(file, lineNo, column);
+    const topLevel = m[1] === "global code" || m[1] === "module code" || m[1] === "eval code" || m[1] === "__bunwasm_cjs__";
     return { name: topLevel ? "" : m[1] || "<anonymous>", file, line: lineNo, column };
   }
 

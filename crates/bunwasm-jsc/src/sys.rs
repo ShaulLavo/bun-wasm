@@ -158,6 +158,8 @@ unsafe extern "C" {
     pub fn bunjsc_enter(ctx: JSContextRef);
     pub fn bunjsc_drain_microtasks(ctx: JSContextRef) -> bool;
     pub fn bunjsc_is_error(ctx: JSContextRef, value: JSValueRef) -> bool;
+    pub fn bunjsc_get_async_context(ctx: JSContextRef) -> JSValueRef;
+    pub fn bunjsc_set_async_context(ctx: JSContextRef, value: JSValueRef);
     pub fn bunjsc_promise_state(ctx: JSContextRef, value: JSValueRef) -> c_int;
     pub fn bunjsc_promise_result(ctx: JSContextRef, value: JSValueRef) -> JSValueRef;
     pub fn bunjsc_proxy_target(ctx: JSContextRef, value: JSValueRef) -> JSValueRef;
