@@ -4,3 +4,4 @@ xyzD!
 3 true
 123D!
 invalid vectors rejected
+stdio vectors

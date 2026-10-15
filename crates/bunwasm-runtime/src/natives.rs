@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::os::fd::AsRawFd;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -426,6 +427,38 @@ fn write_file_at(file: &mut File, bytes: &[u8], position: Option<u64>) -> io::Re
     result.and(restored)
 }
 
+fn writev(state: &State, args: Args<'_>) -> NativeResult {
+    let fd = match args.get(0) {
+        Val::Num(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(i32::MAX) => *n as i32,
+        Val::Num(_) => return Err(NativeError::range_error("fd must be an integer between 0 and 2147483647").prop("code", "ERR_OUT_OF_RANGE")),
+        _ => return Err(NativeError::type_error("fd must be a number").prop("code", "ERR_INVALID_ARG_TYPE")),
+    };
+    let buffers = args.array(1).ok_or_else(|| NativeError::type_error("expected an array of byte buffers"))?;
+    let limit = unsafe { libc::sysconf(libc::_SC_IOV_MAX) };
+    let limit = usize::try_from(limit).ok().filter(|&n| n > 0).unwrap_or(16).min(i32::MAX as usize);
+    let vectors = buffers.iter().take(limit).map(|value| match value {
+        Val::Bytes(bytes) => Ok(libc::iovec { iov_base: bytes.as_ptr().cast_mut().cast(), iov_len: bytes.len() }),
+        _ => Err(NativeError::type_error("expected a byte buffer")),
+    }).collect::<Result<Vec<_>, _>>()?;
+    let count = libc::c_int::try_from(vectors.len()).map_err(|_| NativeError::range_error("too many buffers"))?;
+    let files = state.fds.borrow();
+    let descriptor = match fd {
+        1 | 2 => { state.flush(); fd }
+        _ => libc::c_int::try_from(files.files.get(&fd).ok_or_else(|| bad_fd("writev"))?.as_raw_fd())
+            .map_err(|_| bad_fd("writev"))?,
+    };
+    let position = args.opt_num(2).filter(|&n| n >= 0.0).map(|n| n as libc::off_t);
+    // The argument frame owns the byte buffers and the file table owns the descriptor until this synchronous call returns.
+    let written = unsafe { match position {
+        Some(position) => libc::pwritev(descriptor, vectors.as_ptr(), count, position),
+        None => libc::writev(descriptor, vectors.as_ptr(), count),
+    } };
+    if written < 0 {
+        return Err(io_error(io::Error::last_os_error(), "writev", None));
+    }
+    Ok(Val::Num(written as f64))
+}
+
 fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("open", move |a| {
@@ -486,6 +519,8 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         }
         Ok(Val::Num(bytes.len() as f64))
     });
+    let st = state.clone();
+    t.add("writev", move |a| writev(&st, a));
     let st = state.clone();
     t.add("fstat", move |a| {
         let fds = st.fds.borrow();

@@ -28,3 +28,5 @@ for (const invalid of [null, ['text'], [{}]]) {
   assert.throws(() => fs.writev(1, invalid, () => {}), { code: 'ERR_INVALID_ARG_TYPE' });
 }
 console.log('invalid vectors rejected');
+assert.equal(fs.writevSync(1, [Buffer.from('stdio '), Buffer.from('vectors\n')]), 14);
+assert.equal(fs.writevSync(2, [Buffer.from('stderr '), Buffer.from('vectors\n')]), 15);

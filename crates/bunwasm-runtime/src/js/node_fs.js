@@ -336,33 +336,43 @@
     return native.write(fd, view.slice(offset, offset + length), typeof position === "number" ? position : -1);
   }
 
-  function validateWritev(fd, buffers) {
+  function validateFd(fd) {
     if (typeof fd !== "number") throw invalidArg("fd", "of type number", fd);
+    if (Number.isInteger(fd) && fd >= 0 && fd <= 2147483647) return;
+    const expected = Number.isInteger(fd) ? ">= 0 && <= 2147483647" : "an integer";
+    const error = new RangeError(`The value of "fd" is out of range. It must be ${expected}. Received ${internal.describe(fd)}`);
+    error.code = "ERR_OUT_OF_RANGE";
+    throw error;
+  }
+
+  function validateWritev(buffers) {
     if (!Array.isArray(buffers)) throw invalidArg("buffers", "an array", buffers);
     for (const buffer of buffers) {
       if (!ArrayBuffer.isView(buffer)) throw invalidArg("buffers", "an array of ArrayBufferView instances", buffers);
     }
   }
 
+  function writeBuffers(fd, buffers, position) {
+    if (buffers.length === 0) return 0;
+    const at = typeof position === "number" && position >= 0 ? position : -1;
+    return native.writev(fd, buffers.map(internal.toUint8), at);
+  }
+
   function writevSync(fd, buffers, position) {
-    validateWritev(fd, buffers);
-    let written = 0;
-    for (const buffer of buffers) {
-      const at = typeof position === "number" && position >= 0 ? position + written : -1;
-      const count = native.write(fd, internal.toUint8(buffer), at);
-      written += count;
-      if (count < buffer.byteLength) break;
-    }
-    return written;
+    validateWritev(buffers);
+    if (buffers.length === 0) return 0;
+    validateFd(fd);
+    return writeBuffers(fd, buffers, position);
   }
 
   function writev(fd, buffers, position, callback) {
     if (typeof position === "function") { callback = position; position = null; }
+    validateFd(fd);
+    validateWritev(buffers);
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
-    validateWritev(fd, buffers);
     let written = 0;
     let error = null;
-    try { written = writevSync(fd, buffers, position); } catch (err) { error = err; }
+    try { written = writeBuffers(fd, buffers, position); } catch (err) { error = err; }
     later(() => callback(error, written, buffers));
   }
 

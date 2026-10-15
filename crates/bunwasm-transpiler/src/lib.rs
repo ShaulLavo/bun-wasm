@@ -272,7 +272,7 @@ fn run(
 }
 
 fn module_kind(ast: &bun_ast::Ast<'_>, loader: Loader) -> ModuleKind {
-    if matches!(loader, Loader::Json | Loader::Toml | Loader::Yaml | Loader::Json5 | Loader::Jsonc | Loader::Text) {
+    if ast.has_import_meta || matches!(loader, Loader::Json | Loader::Toml | Loader::Yaml | Loader::Json5 | Loader::Jsonc | Loader::Text) {
         return ModuleKind::Esm;
     }
     if matches!(ast.exports_kind, bun_ast::ExportsKind::Cjs | bun_ast::ExportsKind::EsmWithDynamicFallbackFromCjs) {
@@ -282,7 +282,7 @@ fn module_kind(ast: &bun_ast::Ast<'_>, loader: Loader) -> ModuleKind {
         record.kind == bun_ast::ImportKind::Stmt
             && !record.flags.intersects(bun_ast::import_record::Flags::IS_INTERNAL | bun_ast::import_record::Flags::IS_UNUSED)
     });
-    if ast.export_keyword.len > 0 || ast.top_level_await_keyword.len > 0 || ast.has_import_meta || imports {
+    if ast.export_keyword.len > 0 || ast.top_level_await_keyword.len > 0 || imports {
         return ModuleKind::Esm;
     }
     ModuleKind::Script
