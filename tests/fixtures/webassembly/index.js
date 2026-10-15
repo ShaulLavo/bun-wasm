@@ -28,3 +28,10 @@ try { throwing.exports.invoke(1); } catch (error) { console.log(error === reject
 console.log(throwing.exports.add(4, 5));
 console.log(await WebAssembly.instantiate(module, { env: { callback: n => n } }) instanceof WebAssembly.Instance);
 try { await WebAssembly.compile(new Uint8Array([1])); } catch (error) { console.log(error instanceof WebAssembly.CompileError); }
+
+for (const compile of [input => new WebAssembly.Module(input), input => WebAssembly.validate(input)]) {
+  const transferInput = new Uint8Array(bytes).buffer;
+  compile(transferInput);
+  transferInput.transfer(0);
+  console.log(transferInput.byteLength);
+}
