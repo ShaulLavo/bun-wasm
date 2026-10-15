@@ -26,6 +26,8 @@ const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
 const NativeMessageChannel = globalThis.MessageChannel;
 const NativeAbortController = globalThis.AbortController;
+const NativePromise = globalThis.Promise;
+const PENDING = Object.freeze({ state: "pending", value: undefined });
 const nativeProcess = typeof process === "object" && process && process.versions && process.versions.node ? process : null;
 const nativeAddEventListener = typeof globalThis.addEventListener === "function" ? globalThis.addEventListener.bind(globalThis) : null;
 
@@ -279,6 +281,8 @@ class EngineHost {
     // Module graph: key (path or builtin) -> URL; URL -> path for stack traces.
     this.urls = new Map();
     this.building = new Set();
+    // promise -> {state, value}, for console.log and Bun.peek.
+    this.promiseStates = new WeakMap();
     // Pending writes to o.modules, awaited before the next import().
     this.storing = [];
     this.paths = new Map();
@@ -396,8 +400,10 @@ class EngineHost {
         return host.evalPolyfill(name);
       },
       // The engine doesn't expose these to JS; console.log shows less.
-      promiseState: () => "pending",
-      promiseResult: () => undefined,
+      // Known only for promises whose settling the host saw (wrapPromiseJobs);
+      // others print as pending.
+      promiseState: (p) => (host.promiseStates.get(p) || PENDING).state,
+      promiseResult: (p) => (host.promiseStates.get(p) || PENDING).value,
       isProxy: () => false,
       getProxyTarget: () => undefined,
       isPromise: (v) => v instanceof Promise,
@@ -611,28 +617,94 @@ class EngineHost {
   // `then` on native promises, so it is not covered.
   wrapPromiseJobs() {
     const host = this;
-    const wrap = (fn) => {
-      if (typeof fn !== "function") return fn;
+    const states = this.promiseStates;
+    // What a promise resolved with `value` becomes, if that can be told
+    // without observable effects: a non-thenable fulfills it; a native
+    // promise passes on its known state. `in` instead of reading `then`,
+    // which may be a getter.
+    const settleWith = (promise, value) => {
+      if (value instanceof NativePromise) {
+        const known = states.get(value);
+        if (known && known.state !== "pending") states.set(promise, known);
+        return;
+      }
+      if ((typeof value !== "object" && typeof value !== "function") || value === null || !("then" in value)) {
+        states.set(promise, { state: "fulfilled", value });
+      }
+    };
+    const wrap = (fn, box, rejects) => {
       const context = host.asyncContext;
       return (value) => {
         if (host.tickQueued) host.drainTicks();
         const previous = host.asyncContext;
         host.asyncContext = context;
         try {
-          return fn(value);
+          // A missing handler does what the default one would.
+          if (typeof fn !== "function") {
+            if (rejects) throw value;
+            settleWith(box.promise, value);
+            return value;
+          }
+          const result = fn(value);
+          settleWith(box.promise, result);
+          return result;
+        } catch (err) {
+          states.set(box.promise, { state: "rejected", value: err });
+          throw err;
         } finally {
           host.asyncContext = previous;
         }
       };
     };
-    const nativeThen = Promise.prototype.then;
+    const nativeThen = NativePromise.prototype.then;
     const { then } = {
       then(onFulfilled, onRejected) {
-        return nativeThen.call(this, wrap(onFulfilled), wrap(onRejected));
+        const box = { promise: null };
+        box.promise = nativeThen.call(this, wrap(onFulfilled, box, false), wrap(onRejected, box, true));
+        return box.promise;
       },
     };
-    Object.defineProperty(Promise.prototype, "then", { value: then, configurable: true, writable: true, enumerable: false });
+    Object.defineProperty(NativePromise.prototype, "then", { value: then, configurable: true, writable: true, enumerable: false });
+
+    // Statics whose result state is known at once. `this` stays the caller's
+    // (subclasses); the constructor itself is not replaced, so promise
+    // identity, `constructor` and await's fast path are untouched.
+    const nativeResolve = NativePromise.resolve;
+    const nativeReject = NativePromise.reject;
+    const nativeWithResolvers = NativePromise.withResolvers;
+    const statics = {
+      resolve(value) {
+        const promise = nativeResolve.call(this, value);
+        if (promise !== value) settleWith(promise, value);
+        return promise;
+      },
+      reject(reason) {
+        const promise = nativeReject.call(this, reason);
+        states.set(promise, { state: "rejected", value: reason });
+        return promise;
+      },
+      withResolvers() {
+        const r = nativeWithResolvers.call(this);
+        let settled = false;
+        const { resolve, reject } = r;
+        r.resolve = (value) => {
+          if (!settled) settleWith(r.promise, value);
+          settled = true;
+          resolve(value);
+        };
+        r.reject = (reason) => {
+          if (!settled) states.set(r.promise, { state: "rejected", value: reason });
+          settled = true;
+          reject(reason);
+        };
+        return r;
+      },
+    };
+    for (const name of ["resolve", "reject"].concat(nativeWithResolvers ? ["withResolvers"] : [])) {
+      Object.defineProperty(NativePromise, name, { value: statics[name], configurable: true, writable: true, enumerable: false });
+    }
   }
+
 
   watchRejections() {
     const onRejection = (reason) => {
