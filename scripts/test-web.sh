@@ -30,16 +30,20 @@ for _ in $(seq 50); do [[ -s "$scratch/port" ]] && break; sleep 0.1; done
 export TEST_SERVER="http://127.0.0.1:$(head -1 "$scratch/port")"
 
 failed=0
-for fixture in net-fetch net-serve net-node-http; do
-  dir="$root/tests/fixtures/$fixture"
-  if timeout 60 bun scripts/run.ts "$root/dist/bun.wasm" -e "$(cat "$dir/index.js")" >"$scratch/$fixture.out" 2>&1 &&
-    diff -u "$dir/expected.txt" "$scratch/$fixture.out" >"$scratch/$fixture.diff"; then
-    echo "ok   cli $fixture"
-  else
-    echo "FAIL cli $fixture"
-    cat "$scratch/$fixture.diff" 2>/dev/null || tail -20 "$scratch/$fixture.out"
-    failed=1
-  fi
+# Both ways of installing the host functions: table slots (default) and calls through the WASI
+# import (SLOTS=imports, the playground's ?slots=imports).
+for slots in table imports; do
+  for fixture in net-fetch net-serve net-node-http; do
+    dir="$root/tests/fixtures/$fixture"
+    if SLOTS=$slots timeout 60 bun scripts/run.ts "$root/dist/bun.wasm" -e "$(cat "$dir/index.js")" >"$scratch/$fixture.out" 2>&1 &&
+      diff -u "$dir/expected.txt" "$scratch/$fixture.out" >"$scratch/$fixture.diff"; then
+      echo "ok   cli $fixture ($slots)"
+    else
+      echo "FAIL cli $fixture ($slots)"
+      cat "$scratch/$fixture.diff" 2>/dev/null || tail -20 "$scratch/$fixture.out"
+      failed=1
+    fi
+  done
 done
 
 if [[ $browser == 1 ]]; then

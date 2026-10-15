@@ -53,14 +53,6 @@ pub extern "C" fn bun_wasm_host_slots() -> *mut HostSlots {
     addr_of_mut!(HOST_SLOTS)
 }
 
-/// Table index installed in a slot, if any. Read volatile: the host writes
-/// the slots from outside the program, which the optimizer can't see.
-fn slot(slot: Slot) -> Option<usize> {
-    // SAFETY: plain read of a static only the host writes, before `_start`.
-    let index = unsafe { read_volatile(addr_of!(HOST_SLOTS.slots[slot as usize])) };
-    (index != 0).then_some(index as usize)
-}
-
 pub fn provided(slot_number: usize) -> bool {
     slot_number < SLOT_COUNT
         && unsafe { read_volatile(addr_of!(HOST_SLOTS.slots[slot_number])) } != 0
@@ -70,17 +62,50 @@ type F1 = extern "C" fn(i32) -> i32;
 type F3 = extern "C" fn(i32, i32, i32) -> i32;
 type F4 = extern "C" fn(i32, i32, i32, i32) -> i32;
 
-// On wasm32 a function pointer is a table index, so a slot's index can be
-// called as a function of the documented signature.
-macro_rules! host_fn {
-    ($slot:expr, $ty:ty) => {{
-        match slot($slot) {
-            // SAFETY: the host installed a function with this signature
-            // (docs/host-abi.md); a mismatch traps in call_indirect.
-            Some(index) => Some(unsafe { std::mem::transmute::<usize, $ty>(index) }),
-            None => None,
+/// A slot value meaning "provided, but call it through an import": the host
+/// answers `sock_send` on [`HOST_CALL_FD`] instead of putting a function into
+/// the table. For hosts where a cross-module function in the table traps
+/// (docs/host-abi.md, "Calling through an import").
+const VIA_IMPORT: u32 = u32::MAX;
+/// The fd a host-call `sock_send` names. No real descriptor gets this number.
+const HOST_CALL_FD: i32 = 0x7fff_b0b0;
+
+#[link(wasm_import_module = "wasi_snapshot_preview1")]
+unsafe extern "C" {
+    /// WASI's `sock_send(fd, si_data, si_data_len, si_flags, so_datalen)`,
+    /// borrowed as a host call: `si_data` points at `[slot, a, b, c, d]`,
+    /// `si_data_len` is 5, and the result goes to `so_datalen`.
+    #[link_name = "sock_send"]
+    fn wasi_sock_send(fd: i32, si_data: i32, si_data_len: i32, si_flags: i32, so_datalen: i32) -> i32;
+}
+
+/// Calls slot `id` with `args` (unused ones 0), or None when not provided.
+/// Slots are read volatile: the host writes them from outside the program,
+/// which the optimizer can't see.
+fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
+    // SAFETY: plain read of a static only the host writes, before `_start`.
+    let index = unsafe { read_volatile(addr_of!(HOST_SLOTS.slots[id as usize])) };
+    if index == 0 {
+        return None;
+    }
+    if index == VIA_IMPORT {
+        let packet = [id as i32, args[0], args[1], args[2], args[3]];
+        let mut result: i32 = UNSUPPORTED;
+        // SAFETY: both pointers are valid for the call; the host reads 5 i32s and writes one.
+        let errno = unsafe { wasi_sock_send(HOST_CALL_FD, packet.as_ptr() as i32, 5, 0, addr_of_mut!(result) as i32) };
+        return Some(if errno == 0 { result } else { UNSUPPORTED });
+    }
+    // On wasm32 a function pointer is a table index, so a slot's index can be
+    // called as a function of the documented signature.
+    // SAFETY: the host installed a function with this signature
+    // (docs/host-abi.md); a mismatch traps in call_indirect.
+    Some(unsafe {
+        match id {
+            Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept => std::mem::transmute::<usize, F1>(index as usize)(args[0]),
+            Slot::Fetch => std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3]),
+            _ => std::mem::transmute::<usize, F3>(index as usize)(args[0], args[1], args[2]),
         }
-    }};
+    })
 }
 
 fn ptr(bytes: &[u8]) -> i32 {
@@ -88,20 +113,19 @@ fn ptr(bytes: &[u8]) -> i32 {
 }
 
 pub fn poll(timeout_ms: i32) -> i32 {
-    host_fn!(Slot::Poll, F1).map_or(UNSUPPORTED, |f| f(timeout_ms))
+    call(Slot::Poll, [timeout_ms, 0, 0, 0]).unwrap_or(UNSUPPORTED)
 }
 
 pub fn fetch(meta: &[u8], body: &[u8]) -> i32 {
-    host_fn!(Slot::Fetch, F4).map_or(UNSUPPORTED, |f| f(ptr(meta), meta.len() as i32, ptr(body), body.len() as i32))
+    call(Slot::Fetch, [ptr(meta), meta.len() as i32, ptr(body), body.len() as i32]).unwrap_or(UNSUPPORTED)
 }
 
 /// Calls a `(handle, buf, cap) -> len` function, growing the buffer when the
 /// host reports a longer result. Returns the bytes or the negative code.
 fn read_sized(slot_id: Slot, handle: i32) -> Result<Vec<u8>, i32> {
-    let f = host_fn!(slot_id, F3).ok_or(UNSUPPORTED)?;
     let mut buf = vec![0u8; 1024];
     loop {
-        let n = f(handle, ptr(&buf), buf.len() as i32);
+        let n = call(slot_id, [handle, ptr(&buf), buf.len() as i32, 0]).ok_or(UNSUPPORTED)?;
         if n < 0 {
             return Err(n);
         }
@@ -127,9 +151,8 @@ pub fn peer_addr(handle: i32) -> Result<Vec<u8>, i32> {
 }
 
 pub fn read(handle: i32, cap: usize) -> Result<Vec<u8>, i32> {
-    let f = host_fn!(Slot::Read, F3).ok_or(UNSUPPORTED)?;
     let mut buf = vec![0u8; cap];
-    let n = f(handle, ptr(&buf), cap as i32);
+    let n = call(Slot::Read, [handle, ptr(&buf), cap as i32, 0]).ok_or(UNSUPPORTED)?;
     if n < 0 {
         return Err(n);
     }
@@ -138,25 +161,25 @@ pub fn read(handle: i32, cap: usize) -> Result<Vec<u8>, i32> {
 }
 
 pub fn write(handle: i32, data: &[u8]) -> i32 {
-    host_fn!(Slot::Write, F3).map_or(UNSUPPORTED, |f| f(handle, ptr(data), data.len() as i32))
+    call(Slot::Write, [handle, ptr(data), data.len() as i32, 0]).unwrap_or(UNSUPPORTED)
 }
 
 pub fn close(handle: i32) -> i32 {
-    host_fn!(Slot::Close, F1).map_or(UNSUPPORTED, |f| f(handle))
+    call(Slot::Close, [handle, 0, 0, 0]).unwrap_or(UNSUPPORTED)
 }
 
 pub fn listen(host: &str, port: i32) -> i32 {
-    host_fn!(Slot::Listen, F3).map_or(UNSUPPORTED, |f| f(ptr(host.as_bytes()), host.len() as i32, port))
+    call(Slot::Listen, [ptr(host.as_bytes()), host.len() as i32, port, 0]).unwrap_or(UNSUPPORTED)
 }
 
 pub fn local_port(handle: i32) -> i32 {
-    host_fn!(Slot::LocalPort, F1).map_or(UNSUPPORTED, |f| f(handle))
+    call(Slot::LocalPort, [handle, 0, 0, 0]).unwrap_or(UNSUPPORTED)
 }
 
 pub fn accept(listener: i32) -> i32 {
-    host_fn!(Slot::Accept, F1).map_or(UNSUPPORTED, |f| f(listener))
+    call(Slot::Accept, [listener, 0, 0, 0]).unwrap_or(UNSUPPORTED)
 }
 
 pub fn connect(host: &str, port: i32) -> i32 {
-    host_fn!(Slot::Connect, F3).map_or(UNSUPPORTED, |f| f(ptr(host.as_bytes()), host.len() as i32, port))
+    call(Slot::Connect, [ptr(host.as_bytes()), host.len() as i32, port, 0]).unwrap_or(UNSUPPORTED)
 }

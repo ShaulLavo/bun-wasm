@@ -1,14 +1,15 @@
 // Runs a wasm32-wasip1 binary under the browser shim, from the command line, to compare against wasmtime.
 //   bun scripts/run.ts <file.wasm> [args…]
 // The guest sees the same seeded in-memory filesystem as the playground (cwd /home/user).
-// WASI_TRACE=1 logs every syscall to stderr. NET=0 leaves out the networking slots (fetch, Bun.serve).
+// WASI_TRACE=1 logs every syscall to stderr. NET=0 leaves out the networking slots (fetch, Bun.serve);
+// SLOTS=imports installs them as calls through the WASI import (the playground's ?slots=imports).
 // Guest servers are served on real 127.0.0.1 ports by the helper worker (scripts/net-helper.ts).
 import { readFileSync } from "node:fs";
 import { HOME, examples } from "../src/examples";
 import { MemFS } from "../src/fs";
 import { NetHost } from "../src/net/host";
 import { createRing } from "../src/net/ring";
-import { installHostSlots } from "../src/net/trampoline";
+import { installHostSlots, installHostSlotsViaImport } from "../src/net/trampoline";
 import { Wasi } from "../src/wasi";
 
 const [wasmPath, ...args] = process.argv.slice(2);
@@ -45,7 +46,8 @@ if (process.env.NET !== "0") {
   helper.postMessage({ type: "init", ring });
   const host = new NetHost(ring, (req, transfer = []) => helper.postMessage(req, transfer));
   host.attach(instance.exports.memory as WebAssembly.Memory);
-  installHostSlots(instance, host.slots());
+  if (process.env.SLOTS === "imports") wasi.hostCall = installHostSlotsViaImport(instance, host.slots());
+  else installHostSlots(instance, host.slots());
 }
 const code = wasi.start(instance);
 process.exit(code);

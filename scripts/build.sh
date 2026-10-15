@@ -19,7 +19,9 @@ cargo build -j "${JOBS:-12}" --release --target wasm32-wasip1 -p bunwasm-cli "${
 raw="$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm"
 mkdir -p "$root/dist"
 if command -v wasm-opt >/dev/null; then
-  wasm-opt -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
+  # -g keeps the name section (function names in wasm stack traces; about +5% gzipped); there is
+  # no DWARF to strip in release builds, --strip-dwarf makes sure.
+  wasm-opt -O2 -g --strip-dwarf --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
     --enable-mutable-globals "$raw" -o "$root/dist/bun.wasm"
 else
   cp "$raw" "$root/dist/bun.wasm"

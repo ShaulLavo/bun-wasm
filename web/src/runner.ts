@@ -108,6 +108,12 @@ export interface Run {
   kill(): void;
 }
 
+/** `?slots=imports|off` on the page: how the wasm engines get networking (see RunRequest.slots). */
+function slotsMode(): RunRequest["slots"] {
+  const value = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("slots");
+  return value === "imports" || value === "off" ? value : "table";
+}
+
 /** Starts `bun <args>` in a fresh worker. Networking needs a cross-origin isolated page. */
 export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const ring = globalThis.crossOriginIsolated === true ? createRing() : null;
@@ -128,6 +134,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     trace: options.trace ?? false,
     net: ring,
     moduleCache,
+    slots: slotsMode(),
   };
   const worker = new Worker(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", { type: "module" });
   let settle: (result: RunResult) => void = () => {};
@@ -151,7 +158,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       (msg.type === "stdout" ? hooks.stdout : hooks.stderr)(msg.data);
       return;
     }
-    if (msg.type === "error") finish({ code: 134, root: msg.root, error: `bun.wasm crashed: ${msg.message}` });
+    // Terminals want CRLF between the error's stack lines.
+    if (msg.type === "error") finish({ code: 134, root: msg.root, error: `bun.wasm crashed: ${msg.message}`.replace(/\r?\n/g, "\r\n") });
     else finish({ code: msg.code, root: msg.root });
   };
   worker.onerror = (event) => {

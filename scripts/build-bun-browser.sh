@@ -16,7 +16,8 @@ cargo build -j "${JOBS:-12}" --release --target wasm32-wasip1 -p bunwasm-cli \
   --no-default-features --features engine-host,bun-transpiler,bun-build
 raw="$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm"
 mkdir -p "$root/dist"
-wasm-opt -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
+# -g keeps the name section (function names in wasm stack traces; about +5% gzipped).
+wasm-opt -O2 -g --strip-dwarf --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
   --enable-mutable-globals "$raw" -o "$root/dist/bun-browser.wasm"
 printf 'dist/bun-browser.wasm: %s bytes (cargo output: %s bytes)\n' \
   "$(stat -c %s "$root/dist/bun-browser.wasm")" "$(stat -c %s "$raw")"
