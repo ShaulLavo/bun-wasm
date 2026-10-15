@@ -1,7 +1,8 @@
 import { callerSourceOrigin } from "bun:jsc";
-import { makeEval, directEval, makeFunction } from "./helper.mjs";
+import { makeEval, directEval, makeFunction, hasEvalMetadata } from "./helper.mjs";
 
 globalThis.reviewCaller = callerSourceOrigin;
+globalThis.reviewEvalMetadata = hasEvalMetadata;
 const helper = new URL("./helper.mjs", import.meta.url).href;
 const cases = [
   ["cross-module eval", makeEval(), helper],
@@ -11,7 +12,7 @@ const cases = [
 let failed = false;
 for (const [name, fn, actualOrigin] of cases) {
   const result = fn();
-  const ok = result.origin === null || result.origin === actualOrigin;
+  const ok = result.origin === actualOrigin || (result.origin === null && !result.metadata);
   console.log(name, ok);
   if (!ok) { console.error(name, "wrong origin", JSON.stringify(result)); failed = true; }
 }

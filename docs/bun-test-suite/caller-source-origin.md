@@ -61,6 +61,8 @@ Chromium and WebKit check is part of `scripts/test-web.sh`.
 `caller-source-origin-eval` invokes an eval-created function from another module,
 direct eval and a Function constructor. Each must report its creation module or `null`.
 It must never report an unrelated invocation module or a pseudo filename such as `<input>`.
+When public call-site metadata exposes the eval origin, the test requires the actual creation
+module and rejects `null`. This prevents replacing every eval result with `null`.
 
 The stack formatter preserves V8 eval creation metadata and keeps opaque eval frames
 distinct from native callbacks. The builtin stops at an unidentified user frame instead
