@@ -525,6 +525,37 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
             .collect();
         Ok(Record::new().set("outputs", Val::Array(outputs)).set("logs", result.logs).into())
     });
+    let st = state.clone();
+    t.add("devServerOpen", move |a| {
+        st.transpiler.dev_server_open(a.str(0)?).map(dev_server_record).map_err(NativeError::error)
+    });
+    let st = state.clone();
+    t.add("devServerRebuild", move |a| {
+        let changed: Vec<String> = serde_json::from_str(a.str(1)?)
+            .map_err(|error| NativeError::type_error(error.to_string()))?;
+        st.transpiler.dev_server_rebuild(a.u32(0)?, &changed).map(dev_server_record).map_err(NativeError::error)
+    });
+    let st = state.clone();
+    t.add("devServerClose", move |a| {
+        st.transpiler.dev_server_close(a.u32(0)?);
+        ok()
+    });
+}
+
+fn dev_server_record(result: crate::DevServerResult) -> Val {
+    let files = result.files.into_iter().map(|file| {
+        Record::new().set("path", file.path).set("contents", Val::Bytes(file.contents)).set("type", file.mime).into()
+    }).collect();
+    Record::new()
+        .set("id", result.id)
+        .set("version", result.version)
+        .set("html", Val::Bytes(result.html))
+        .set("files", Val::Array(files))
+        .set("watch", Val::Array(result.watch.into_iter().map(Val::Str).collect()))
+        .set("update", Val::Bytes(result.update))
+        .set("errors", Val::Bytes(result.errors))
+        .set("logs", result.logs)
+        .into()
 }
 
 fn build_request(json: &str) -> Result<crate::BuildRequest, NativeError> {

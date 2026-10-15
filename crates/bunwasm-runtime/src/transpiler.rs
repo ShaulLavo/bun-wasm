@@ -96,6 +96,35 @@ pub trait Transpiler {
     fn build(&self, _request: &BuildRequest) -> Result<BuildResult, String> {
         Err("Bun.build needs Bun's bundler, which this bun.wasm was built without".to_owned())
     }
+
+    fn dev_server_open(&self, _path: &str) -> Result<DevServerResult, String> {
+        Err("HTML development needs Bun's bundler, which this bun.wasm was built without".to_owned())
+    }
+
+    fn dev_server_rebuild(&self, _id: u32, _changed: &[String]) -> Result<DevServerResult, String> {
+        Err("HTML development needs Bun's bundler, which this bun.wasm was built without".to_owned())
+    }
+
+    fn dev_server_close(&self, _id: u32) {}
+}
+
+#[derive(Clone, Debug)]
+pub struct DevServerFile {
+    pub path: String,
+    pub contents: Vec<u8>,
+    pub mime: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DevServerResult {
+    pub id: u32,
+    pub version: String,
+    pub html: Vec<u8>,
+    pub files: Vec<DevServerFile>,
+    pub watch: Vec<String>,
+    pub update: Vec<u8>,
+    pub errors: Vec<u8>,
+    pub logs: String,
 }
 
 /// The `Bun.build` options the runtime passes on (a subset of Bun's

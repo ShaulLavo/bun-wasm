@@ -9,6 +9,14 @@
 //!
 //! Not ported: `--compile`, `--bytecode`, `--app` (bake), `--server-components`,
 //! `--check`, `--watch`, macros and plugins.
+#![feature(adt_const_params)]
+#![allow(incomplete_features)]
+
+pub mod dev_server;
+pub(crate) use dev_server::graph as bake;
+pub(crate) type Error = bun_bundler::Error;
+pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
+
 use std::fmt::Write as _;
 
 use bun_alloc::Arena;

@@ -63,9 +63,9 @@ async function check(engine) {
   const css = await fetch(new URL(style, url));
   assert.match(css.headers.get("content-type"), /^text\/css/);
   const styles = await css.text();
-  const image = /["']([^"']+\.png)["']/.exec(source)[1];
+  const image = /["']([^"']*\/[^"']+\.png)["']/.exec(source)[1];
   const asset = await fetch(new URL(image, url));
-  assert.equal(asset.headers.get("content-type"), "image/png");
+  assert.equal(asset.headers.get("content-type"), "image/png", `Asset ${image} did not resolve`);
   assert.equal(new Uint8Array(await asset.arrayBuffer())[0], 137);
   const head = await fetch(url, { method: "HEAD" });
   assert(Number(head.headers.get("content-length")) > 0);

@@ -128,6 +128,37 @@ mod bun_transpiler {
         fn build(&self, request: &bunwasm_runtime::BuildRequest) -> Result<bunwasm_runtime::BuildResult, String> {
             build(request)
         }
+
+        #[cfg(feature = "bun-build")]
+        fn dev_server_open(&self, path: &str) -> Result<bunwasm_runtime::DevServerResult, String> {
+            bunwasm_build::dev_server::open(path).map(dev_server_result)
+        }
+
+        #[cfg(feature = "bun-build")]
+        fn dev_server_rebuild(&self, id: u32, changed: &[String]) -> Result<bunwasm_runtime::DevServerResult, String> {
+            bunwasm_build::dev_server::rebuild(id, changed).map(dev_server_result)
+        }
+
+        #[cfg(feature = "bun-build")]
+        fn dev_server_close(&self, id: u32) {
+            bunwasm_build::dev_server::close(id);
+        }
+    }
+
+    #[cfg(feature = "bun-build")]
+    fn dev_server_result(output: bunwasm_build::dev_server::Output) -> bunwasm_runtime::DevServerResult {
+        bunwasm_runtime::DevServerResult {
+            id: output.id,
+            version: output.version,
+            html: output.html,
+            files: output.files.into_iter().map(|file| bunwasm_runtime::DevServerFile {
+                path: file.path, contents: file.contents, mime: file.mime,
+            }).collect(),
+            watch: output.watch,
+            update: output.update,
+            errors: output.errors,
+            logs: output.logs,
+        }
     }
 
     /// `Bun.build`: the options map onto `bun build`'s flags. Without an

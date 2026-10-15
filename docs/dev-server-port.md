@@ -1,7 +1,7 @@
 # Bun dev server port
 
-Status: Approved. Slices 1 and 2 implement uncompressed WebSockets and bundled
-HTML serving. Incremental bundling and the sandbox migration are still pending.
+Status: Approved. Slices 1–3 implement WebSockets, HTML serving and Bun bake
+incremental HMR. React refresh and sandbox migration follow in slices 4–5.
 
 ## WebSockets
 
@@ -32,9 +32,8 @@ duplex connection for a future preview WebSocket tunnel. Writes retain their
 order across ring records and copy input bytes before queuing them. Ordinary
 HTTP preview requests use this connection underneath `ResponseParser`.
 
-This slice does not provide the preview-page WebSocket shim. A WebSocket opened
-by a separate preview tab still cannot reach a guest listener. That bridge
-belongs to slice 3.
+Slices 1–2 did not provide a preview-page WebSocket shim. Slice 3 adds the
+bridge described below, including independent preview tabs.
 
 TLS, proxies, Unix sockets and permessage-deflate are not implemented. The
 client does not offer compression and rejects unsolicited extensions. TLS
@@ -65,9 +64,9 @@ artifacts derive their MIME types from their output paths, and emitted assets
 report the file loader. No generated build
 directory is written into the project.
 
-This is a static serving slice. It uses Bun's ordinary HTML bundler, not bake's
-incremental graph. `development.hmr` does not enable updates yet. Syntax errors
-are reported by the existing server error path, without a browser overlay.
+Slices 1–2 used Bun's ordinary HTML bundler for static serving. Slice 3 adds
+bake's incremental graph and client for development HTML entries. Static routes
+continue to use the ordinary bundler when development is disabled.
 
 ## Verify
 
@@ -152,14 +151,52 @@ then removes them.
 
 ## Next slices
 
-3. Port the incremental graph and bundler callbacks from
-   `vendor/bun/src/runtime/bake/DevServer.rs` and `dev_server/`. Replace the
-   trapping bake hooks in `crates/bunwasm-build/src/stubs.rs`. Serve Bun's
-   `hmr-runtime-client.ts` and its protocol, then connect preview tabs through
-   `NetHelper.connect`. Choose and document the page-to-worker file-change
-   notification when adding the watcher.
+3. Complete. See the slice 3 implementation and verification below.
 4. Enable Bun's React refresh and error overlay, then remove the sandbox's
    `.dev/` plumbing. Preserve engine switching, dependency caching, preview
    links and phone behavior. Run the existing HMR acceptance test on all engines.
 5. Add a vanilla TypeScript template that exercises `import.meta.hot`, and an
    HTML CLI fixture with an HMR WebSocket client.
+
+## Slice 3: incremental bake on WASI
+
+The frontend now compiles Bun's unchanged `incremental_graph.rs`, `packed_map.rs`
+and `serialized_failure.rs` against a host-independent owner in
+`crates/bunwasm-build/src/dev_server`. `BundleV2::start_from_bake_dev_server`
+parses stale entries, its normal bake callbacks index emitted modules and their
+edges, and its cache hook skips clean modules. The WASI patch only exposes the
+existing parse/finish sequence to the synchronous mini event loop.
+
+The generated client is Bun's `hmr-runtime-client.ts`, `hmr-module.ts` and
+supporting overlay/CSS/runtime modules. Regenerate it with
+`scripts/generate-bake.sh`; `--check` compares the checked-in output. The runtime
+serves that client's native module registry and binary HMR protocol on
+`/_bun/hmr`. `scripts/test-hmr-server.mjs` edits a real CLI file and checks the
+version/subscription handshake, changed module payload, refreshed HTTP bundle,
+Bun's serialized syntax error and recovery on each engine.
+
+Filesystem delivery uses a shared filesystem on the CLI and byte snapshots of
+known project inputs every 100 ms. Browser editors call
+`NetHelper.changeFile(path, bytes)`; ordered records in the existing shared ring
+atomically replace the worker's MemFS file before the same watcher runs. This
+also works while QuickJS or JSC is blocked inside wasm. Dependency files are
+excluded from periodic polling. Missing-import directory watching is not yet
+implemented.
+
+The service worker adds a WebSocket shim to preview HTML. The shim reuses the
+runtime's existing WebSocket framing and handshake implementation. A transferred
+MessagePort finds the owning page through the service worker and connects to
+`NetHelper.connect`, so independent preview tabs use the same guest TCP listener.
+External WebSockets retain the browser's own implementation. HTML previews carry
+the host's isolation headers so they can render inside an isolated editor page.
+
+Only one HTML root per HMR listener is currently represented by route zero.
+Static `development: false` HTML routes retain their ordinary bundler path.
+Source maps are retained in the incremental graph, but their HTTP endpoints are
+not yet exposed. React refresh and sandbox migration follow in slice 4.
+
+Verification at this boundary: 76 local fixtures pass on each engine. CLI HMR
+and direct HTML checks pass on all three. Real Chromium and WebKit checks cover
+both iframe and independent-tab updates, same-size source edits, document
+identity across updates, linked CSS, binary sockets, protocol negotiation and
+shared-ring filesystem writes. The full `scripts/test-web.sh` also passes.

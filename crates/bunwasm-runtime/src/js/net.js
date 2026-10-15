@@ -543,8 +543,10 @@
       throw new TypeError("Bun.serve expects a `fetch` function or `routes`");
     }
     let websocket = options.websocket;
+    let websocketHandlers = websocket;
     if (websocket && !["message", "open", "ping", "pong"].some((name) => typeof websocket[name] === "function")) throw new TypeError("websocket requires a message, open, ping or pong handler");
     if (options.tls) throw new Error("Bun.serve TLS is not supported by this networking host");
+    const htmlServer = internal.require("html_server");
     const ws = internal.require("websocket");
     const hostname = options.hostname || "0.0.0.0";
     const requested = options.port !== undefined ? Number(options.port) : Number(globalThis.process.env.BUN_PORT || globalThis.process.env.PORT || 3000);
@@ -553,6 +555,7 @@
     let fetchHandler = options.fetch;
     let errorHandler = options.error;
     let routes = compileRoutes(options.routes);
+    websocket = htmlServer.websocket(routes, options.development, websocket);
     let pending = 0;
     let stopped = false;
     const connections = new Set();
@@ -573,7 +576,7 @@
     const server = {
       port,
       hostname: displayHost,
-      development: false,
+      development: htmlServer.developmentEnabled(options.development),
       id: "",
       get url() {
         return new URL(`http://${displayHost}:${port}/`);
@@ -593,8 +596,13 @@
       reload(next = {}) {
         if (next.fetch) fetchHandler = next.fetch;
         if (next.error) errorHandler = next.error;
-        if (next.routes) routes = compileRoutes(next.routes);
-        if (next.websocket) websocket = next.websocket;
+        if (next.routes) {
+          htmlServer.dispose(server);
+          routes = compileRoutes(next.routes);
+          htmlServer.attach(server, routes, options.development);
+        }
+        if (next.websocket) websocketHandlers = next.websocket;
+        websocket = htmlServer.websocket(routes, options.development, websocketHandlers);
         return server;
       },
       stop(closeActive = false) {
@@ -602,6 +610,7 @@
           stopped = true;
           waiters.delete(accepting);
           native.hostClose(listener);
+          htmlServer.dispose(server);
           // Idle keep-alive connections close now; busy ones after their
           // response (they no longer keep alive once stopped).
         }
@@ -658,14 +667,15 @@
       pending++;
       let res;
       try {
+        if (htmlServer.upgrade(req, server)) return UPGRADED;
         const route = matchRoute(routes, new URL(url).pathname, request.method);
-        if (route && internal.require("html_server").isBundle(route.handler)) res = await internal.require("html_server").respond(route.handler, new URL(url).pathname, request.method);
+        if (route && internal.require("html_server").isBundle(route.handler)) res = await internal.require("html_server").respond(route.handler, new URL(url).pathname, request.method, server);
         else if (route && route.handler instanceof Response) res = route.handler.clone();
         else if (route) {
           req.params = route.params;
           res = await route.handler.call(server, req, server);
         } else {
-          res = await internal.require("html_server").asset(routes, new URL(url).pathname, request.method);
+          res = await internal.require("html_server").asset(routes, new URL(url).pathname, request.method, server);
           if (!res) res = fetchHandler ? await fetchHandler.call(server, req, server) : new Response("Not Found", { status: 404 });
         }
       } catch (err) {
@@ -691,6 +701,7 @@
       };
       serveHttp(conn, handleRequest);
     });
+    htmlServer.attach(server, routes, options.development);
     return server;
   }
 

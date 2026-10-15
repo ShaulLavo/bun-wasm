@@ -357,4 +357,4 @@ shell.start([
   "",
 ]);
 
-Object.assign(globalThis, { playground: { fs, shell, term, editor } });
+Object.assign(globalThis, { playground: { fs, shell, term, editor, previews } });

@@ -1,7 +1,7 @@
 //! Link-time hooks `bun_bundler` imports from the JavaScriptCore runtime
-//! (`bun_runtime`, `bun_jsc`): the dev server (bake), JS plugins, the JS
-//! event loop, `--watch` and bytecode generation. None of them exist in
-//! bun-wasm and `build` never selects them, so each traps if reached.
+//! (`bun_runtime`, `bun_jsc`): JS plugins, the JS event loop, `--watch` and
+//! bytecode generation. These paths are not selected by ordinary builds.
+//! Bake hooks are implemented by `dev_server::hooks`.
 //!
 //! They are defined here rather than in `bunwasm-glue` because their
 //! signatures use bundler types, and under LTO a definition whose Rust types
@@ -11,8 +11,7 @@
 use core::ffi::c_void;
 use core::ptr::NonNull;
 
-use bun_bundler::bundle_v2::bake_types::{CacheEntry, Graph};
-use bun_bundler::bundle_v2::{BundleV2, DevServerOutput};
+use bun_bundler::bundle_v2::BundleV2;
 use bun_bundler::bytecode_order::{CodeNamesRef, LinkedPayload};
 use bun_bundler::options_impl::Format;
 
@@ -21,90 +20,6 @@ type Error = bun_bundler::Error;
 #[cold]
 fn missing(what: &str) -> ! {
     panic!("{what} is not available in bun-wasm (needs JavaScriptCore)")
-}
-
-// ── bake: the dev server ──────────────────────────────────────────────────
-
-const DEV: &str = "the dev server";
-
-#[unsafe(no_mangle)]
-fn __bun_dispatch__DevServerHandle__Bake__barrel_needed_exports(
-    _owner: *mut (),
-) -> *mut bun_collections::StringArrayHashMap<bun_collections::StringHashMap<()>> {
-    missing(DEV)
-}
-#[unsafe(no_mangle)]
-fn __bun_dispatch__DevServerHandle__Bake__log_for_resolution_failures(
-    _owner: *mut (),
-    _abs_path: &[u8],
-    _graph: Graph,
-) -> *mut bun_ast::Log {
-    missing(DEV)
-}
-#[unsafe(no_mangle)]
-fn __bun_dispatch__DevServerHandle__Bake__finalize_bundle(
-    _owner: *mut (),
-    _bv2: *mut BundleV2<'_>,
-    _result: *mut DevServerOutput<'_>,
-) -> Result<(), Error> {
-    missing(DEV)
-}
-#[unsafe(no_mangle)]
-fn __bun_dispatch__DevServerHandle__Bake__handle_parse_task_failure(
-    _owner: *mut (),
-    _err: Error,
-    _graph: Graph,
-    _abs_path: &[u8],
-    _log: *const bun_ast::Log,
-    _bv2: *mut BundleV2<'_>,
-) -> Result<(), Error> {
-    missing(DEV)
-}
-#[unsafe(no_mangle)]
-fn __bun_dispatch__DevServerHandle__Bake__put_or_overwrite_asset(
-    _owner: *mut (),
-    _path: *const (),
-    _contents: &[u8],
-    _content_hash: u64,
-) -> Result<(), Error> {
-    missing(DEV)
-}
-#[unsafe(no_mangle)]
-fn __bun_dispatch__DevServerHandle__Bake__track_resolution_failure(
-    _owner: *mut (),
-    _import_source: &[u8],
-    _specifier: &[u8],
-    _renderer: Graph,
-    _loader: bun_ast::Loader,
-) -> Result<(), Error> {
-    missing(DEV)
-}
-#[unsafe(no_mangle)]
-fn __bun_dispatch__DevServerHandle__Bake__is_file_cached(
-    _owner: *mut (),
-    _abs_path: &[u8],
-    _side: Graph,
-) -> Option<CacheEntry> {
-    missing(DEV)
-}
-#[unsafe(no_mangle)]
-fn __bun_dispatch__DevServerHandle__Bake__asset_hash(_owner: *mut (), _abs_path: &[u8]) -> Option<u64> {
-    missing(DEV)
-}
-#[unsafe(no_mangle)]
-fn __bun_dispatch__DevServerHandle__Bake__current_bundle_start_data(_owner: *mut ()) -> *mut () {
-    missing(DEV)
-}
-#[unsafe(no_mangle)]
-fn __bun_dispatch__DevServerHandle__Bake__register_barrel_with_deferrals(
-    _owner: *mut (),
-    _path: &[u8],
-) -> Result<(), Error> {
-    missing(DEV)
-}
-#[unsafe(no_mangle)]
-fn __bun_dispatch__DevServerHandle__Bake__register_barrel_export(_owner: *mut (), _barrel_path: &[u8], _alias: &[u8]) {
-    missing(DEV)
 }
 
 // ── JS plugins (`Bun.build({ plugins })`) ─────────────────────────────────

@@ -4,6 +4,7 @@
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { previewWebsocketScript } from "../web/preview-build";
 import { join, relative, resolve } from "node:path";
 
 const here = import.meta.dir;
@@ -31,7 +32,7 @@ const page = await bundle({
   naming: "[name].[ext]",
 });
 // The service worker is a classic script (module service workers are newer in Safari).
-const sw = await bundle({ entrypoints: [join(web, "src/sw.ts")], outdir: out, target: "browser", format: "iife", minify: true, naming: "[name].[ext]" });
+const sw = await bundle({ define: { __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(await previewWebsocketScript()) }, entrypoints: [join(web, "src/sw.ts")], outdir: out, target: "browser", format: "iife", minify: true, naming: "[name].[ext]" });
 
 // Safari may fetch a dedicated worker's initial script from the network on its first visit.
 // Keep the script in its controlling scope without relying on fetch interception to bootstrap it.

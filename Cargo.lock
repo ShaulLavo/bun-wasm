@@ -982,8 +982,9 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-build"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
+ "bitflags",
  "bstr",
  "bun_alloc",
  "bun_ast",
@@ -994,18 +995,23 @@ dependencies = [
  "bun_errno",
  "bun_event_loop",
  "bun_install_types",
+ "bun_io",
  "bun_js_parser",
+ "bun_js_printer",
  "bun_options_types",
  "bun_paths",
+ "bun_ptr",
  "bun_resolver",
+ "bun_sourcemap",
  "bun_sys",
+ "bun_wyhash",
  "bunwasm-glue",
  "bunwasm-posix",
 ]
 
 [[package]]
 name = "bunwasm-cli"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "bunwasm-build",
  "bunwasm-glue",
@@ -1015,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-glue"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "bstr",
  "bun_ast",
@@ -1030,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-host"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "brotli-decompressor",
@@ -1047,18 +1053,18 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-jsc"
-version = "0.0.7"
+version = "0.0.8"
 
 [[package]]
 name = "bunwasm-posix"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "bunwasm-runtime"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "bun_glob",
  "bun_semver",
@@ -1081,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-transpiler"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "bun_alloc",
  "bun_ast",

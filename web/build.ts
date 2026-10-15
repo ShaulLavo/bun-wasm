@@ -2,6 +2,7 @@
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
 // (Not BUN_JSC_WASM: Bun refuses to start when a BUN_JSC_* variable is not a JSC option.)
 import { existsSync, rmSync, statSync } from "node:fs";
+import { previewWebsocketScript } from "./preview-build";
 import { join, resolve } from "node:path";
 
 const here = import.meta.dir;
@@ -25,8 +26,11 @@ if (!result.success) {
 }
 
 // The service worker is a classic script (module service workers are newer in Safari).
+const previewSocketScript = await previewWebsocketScript();
+
 const sw = await Bun.build({
   entrypoints: [join(here, "src/sw.ts")],
+  define: { __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(previewSocketScript) },
   outdir: out,
   target: "browser",
   format: "iife",

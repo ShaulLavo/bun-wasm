@@ -1,0 +1,30 @@
+From f58c9656e25f5adabaf309f9f80e64fcb99adf59 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 15 Oct 2026 16:50:01 +0300
+Subject: [PATCH 9/9] Drive bake completion from the WASI mini event loop
+
+Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>
+---
+ src/bundler/bundle_v2.rs | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/bundler/bundle_v2.rs b/src/bundler/bundle_v2.rs
+index 6ed38562..84c3a76f 100644
+--- a/src/bundler/bundle_v2.rs
++++ b/src/bundler/bundle_v2.rs
+@@ -5833,6 +5833,15 @@ pub mod bv2_impl {
+             Ok(ctx)
+         }
+ 
++        /// WASI drives bake synchronously on its mini event loop. Native bake
++        /// calls the same finish path from its asynchronous completion task.
++        #[cfg(target_os = "wasi")]
++        pub fn finish_wasi_dev_server(&mut self) -> Result<(), Error> {
++            self.wait_for_parse();
++            let owner = self.dev_server.expect("dev server installed");
++            self.finish_from_bake_dev_server(&owner).map_err(Into::into)
++        }
++
+         // The body has deep DevServer field access (current_bundle.start_data,
+         // css_entry_points, etc.). After tier-6 collapse this fn should be hoisted into
+         // bun_runtime::bake (which can name DevServer concretely) and call back into BundleV2
