@@ -3,11 +3,10 @@ import { readFileSync } from "node:fs";
 
 const adapter = eval(readFileSync("runtime.js", "utf8"));
 const catalog = JSON.parse(readFileSync("catalog.json", "utf8"));
-const names = catalog.modules.map(module => module.name);
-const freelist = names.indexOf("internal:freelist");
 const testNames = ["retry", "cycle", "intrinsics", "unknown-intrinsic", "stub"];
-const base = names.length;
-names.push(...testNames.map(name => `internal:test-${name}`));
+const base = catalog.modules.length;
+const names = catalog.modules.map(module => module.name).concat(testNames.map(name => `internal:test-${name}`));
+const freelist = names.indexOf("internal:freelist");
 const counts = new Map();
 const factories = new Map([[freelist, eval(readFileSync(`${freelist}.js`, "utf8"))]]);
 const bridged = {};
