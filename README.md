@@ -22,7 +22,8 @@ bun-wasm run server.ts          # crates/bunwasm-host: same binary plus fetch an
 | `fetch`, `Bun.serve`, `node:http`, `node:net` | through host functions (`docs/host-abi.md`): the native launcher or the browser page; plain wasmtime reports "not supported" |
 | Not available | `spawn`/`child_process` (no processes in WASI), `bun install`, WebSockets, snapshots in `bun test` |
 
-`scripts/test.sh` runs 49 end-to-end fixtures against native Bun's output.
+`scripts/test.sh` runs 57 end-to-end fixtures against native Bun's output; all pass on both
+engines (`scripts/test.sh --engine jsc`).
 `scripts/test-build.sh`, `scripts/test-web.sh`, `scripts/test-jsc.sh` cover the bundler,
 the browser host and the JavaScriptCore build.
 
@@ -33,8 +34,8 @@ the browser host and the JavaScriptCore build.
 | Parser, printer, transpiler, bundler, resolver, CSS | **Bun's Rust crates** (`vendor/bun`), plus a `cfg` patch series (`patches/bun`) |
 | POSIX surface WASI lacks (signals, processes, mmap, termios, ...) | `third_party/libc` (libc crate fork: declarations) + `crates/bunwasm-posix` (Rust implementations) |
 | Bun's C/C++ helpers (simdutf, highway, mimalloc, WTF dtoa/parseDouble, zlib) | `crates/bunwasm-glue`, starting from Bun's own pure-Rust stand-ins (`src/sema/standalone/native.rs`) |
-| JS engine | QuickJS-ng (`third_party/rquickjs-sys`, patched for JSC-like stack positions and async context) |
-| Experimental engine | **Bun's JavaScriptCore**, compiled to wasm (`jsc/`, `crates/bunwasm-jsc`, `dist/bun-jsc.wasm`) |
+| JS engine (default) | QuickJS-ng (`third_party/rquickjs-sys`, patched for JSC-like stack positions and async context), `dist/bun.wasm`, 9 MB |
+| JS engine (`engine-jsc`) | **Bun's JavaScriptCore**, compiled to wasm (`jsc/`, `crates/bunwasm-jsc`), `dist/bun-jsc.wasm`, 43 MB; same runtime through the `Engine` trait |
 | `Bun.*`, `process`, `node:*`, `bun:test`, `bun:sqlite` | `crates/bunwasm-runtime`: Rust natives + JS polyfills |
 | Networking host | `crates/bunwasm-host` (`bun-wasm` launcher on wasmtime) and `web/` |
 | Browser host | `web/`: WASI shim, in-memory FS, xterm terminal, editor, service-worker previews for `Bun.serve` |
