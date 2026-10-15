@@ -8,6 +8,7 @@ import { createRing } from "./net/ring";
 import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
 import { measureStartup } from "./startup";
+import { SubprocessBroker } from "./subprocess-broker";
 import type { Engine, RunRequest, WorkerMessage } from "./worker";
 
 export type { Engine } from "./worker";
@@ -187,8 +188,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     net: ring,
     moduleCache,
     slots: slotsMode(),
+    spawnBroker: true,
   };
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
+  const subprocess = new SubprocessBroker(workerUrl);
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
   let settle: (result: RunResult) => void = () => {};
@@ -198,12 +201,18 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (finished) return;
     finished = true;
     worker.terminate();
+    subprocess.dispose();
     helper?.dispose();
     if (moduleCache) void caches.delete(moduleCache);
     settle(result);
   };
   worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
+    if (finished) return;
     const msg = event.data;
+    if (msg.type === "spawn") {
+      subprocess.spawn(msg.request);
+      return;
+    }
     if (msg.type === "phase") {
       const duration = msg.name === "worker-start" ? performance.now() - starting : msg.duration;
       performance.measure(`bunwasm:${msg.name}`, { start: performance.now() - duration, duration });

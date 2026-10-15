@@ -115,7 +115,8 @@ bun.wasm must `chdir($PWD)` at startup for relative paths to resolve from `/home
 ## Bun subprocess workers
 
 When the page is cross-origin isolated, the subprocess ABI starts a fresh worker
-with the same compiled wasm module and engine. Commands must name `bun` or `/bun`; the guest normalizes its executable identities.
+with the same compiled wasm module and engine. The page creates child workers through
+a broker so a synchronous wasm call cannot block child startup. Commands must name `bun` or `/bun`; the guest normalizes its executable identities.
 Other executables fail with `ENOENT`; the host never runs a native program.
 The browser engine uses the same host functions directly, and the headless Node
 host starts another Node worker running the same wasm module.

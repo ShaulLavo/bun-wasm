@@ -11,6 +11,7 @@ export interface SpawnMeta {
 export interface ChildTransport {
   budget: SharedArrayBuffer;
   slot: number;
+  token: number;
   inheritedStdin?: boolean;
   pipes: SharedArrayBuffer[];
   control: SharedArrayBuffer;

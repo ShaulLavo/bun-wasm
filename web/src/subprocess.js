@@ -13,7 +13,7 @@ const FIRST_HANDLE = 0x60000000;
 export const MAX_CHILDREN = 4;
 
 export function createProcessBudget() {
-  return new SharedArrayBuffer(8 + MAX_CHILDREN * 4);
+  return new SharedArrayBuffer(8 + MAX_CHILDREN * 8);
 }
 
 function wake(budget) {
@@ -166,7 +166,10 @@ export class SubprocessHost {
     const buffers = modes.map(() => new SharedArrayBuffer(16 + PIPE_SIZE));
     const inheritedStdin = modes[0] === "inherit" && Boolean(this.options.stdin);
     if (inheritedStdin) buffers[0] = this.options.stdin;
-    const transport = { budget: this.budget, slot, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16 + SNAPSHOT_SIZE) };
+    const cells = new Int32Array(this.budget);
+    const token = Atomics.add(cells, 0, 1) + 1;
+    Atomics.store(cells, 2 + MAX_CHILDREN + slot, token);
+    const transport = { budget: this.budget, slot, token, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16 + SNAPSHOT_SIZE) };
     const id = this.nextHandle++;
     const pipes = transport.pipes.map((buffer) => new SharedPipe(buffer, this.budget));
     const handles = pipes.map((pipe, fd) => {
