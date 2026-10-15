@@ -1075,7 +1075,7 @@
     }),
     "node:wasi": () => unsupportedModule("wasi", "nested WASI instances are not supported", ["WASI"]),
     "node:domain": () => unsupportedModule("domain", "domains are deprecated and not implemented", ["create", "createDomain", "Domain"]),
-    "node:punycode": () => ({ toASCII: (s) => native.domainToASCII(s), toUnicode: (s) => s, encode: thrower("punycode.encode", "not implemented"), decode: thrower("punycode.decode", "not implemented") }),
+    "node:punycode": () => internal.require("bun_builtins").require("node:punycode"),
     bun: () => globalThis.Bun,
     "bun:jsc": () => ({
       gcAndSweep: () => native.gc(),
