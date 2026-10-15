@@ -1150,7 +1150,10 @@
       serialize: thrower("bun:jsc.serialize", "JavaScriptCore is not available"),
       deserialize: thrower("bun:jsc.deserialize", "JavaScriptCore is not available"),
     }),
-    "bun:internal-for-testing": () => ({ isASANEnabled: () => false }),
+    "bun:internal-for-testing": () => ({
+      isASANEnabled: () => false,
+      semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
+    }),
     "bun:test": () => internal.require("bun_test").exports,
     "bun:sqlite": () => internal.require("bun_sqlite"),
     "bun:ffi": () => unsupportedModule("bun:ffi", "no native libraries in wasm", ["dlopen", "CString", "ptr", "toArrayBuffer", "toBuffer", "linkSymbols", "cc"], { FFIType: {}, suffix: "so" }),
