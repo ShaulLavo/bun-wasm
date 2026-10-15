@@ -49,7 +49,7 @@
       }
     }
     if (native.engine === "host" && result.length > 0) {
-      result[result.length - 1] += `\n//# sourceURL=${origin}`;
+      result[result.length - 1] += `\n//# sourceURL=${path}`;
     }
     return result;
   }
