@@ -236,7 +236,7 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
         st.flush();
         let ms = a.opt_num(0).unwrap_or(0.0);
         if ms > 0.0 {
-            std::thread::sleep(Duration::from_secs_f64(ms / 1000.0));
+            crate::host::sleep(Duration::from_secs_f64(ms / 1000.0));
         }
         ok()
     });
@@ -705,6 +705,10 @@ fn install_host(t: &mut Table) {
             Err(code) => code.into(),
         })
     }
+    t.add("hostSpawn", |a| Ok(host::spawn(a.str(0)?.as_bytes()).into()));
+    t.add("hostChildWait", |a| Ok(host::child_wait(a.i32(0)?).into()));
+    t.add("hostChildPipe", |a| Ok(host::child_pipe(a.i32(0)?, a.i32(1)?).into()));
+    t.add("hostChildKill", |a| Ok(host::child_kill(a.i32(0)?, a.i32(1)?).into()));
     t.add("hostPoll", |a| Ok(host::poll(a.i32(0)?).into()));
     t.add("hostFetch", |a| {
         let body = if a.is_missing(1) { &[][..] } else { a.bytes(1)? };

@@ -9,7 +9,7 @@
 use std::ptr::{addr_of, addr_of_mut, read_volatile};
 
 pub const ABI_VERSION: u32 = 1;
-pub const SLOT_COUNT: usize = 12;
+pub const SLOT_COUNT: usize = 16;
 
 pub const ERROR: i32 = -1;
 pub const AGAIN: i32 = -2;
@@ -31,11 +31,15 @@ pub enum Slot {
     Connect = 9,
     Error = 10,
     PeerAddr = 11,
+    Spawn = 12,
+    ChildWait = 13,
+    ChildPipe = 14,
+    ChildKill = 15,
 }
 
 pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
     "poll", "fetch", "fetch_head", "read", "write", "close", "listen", "local_port", "accept", "connect",
-    "error", "peer_addr",
+    "error", "peer_addr", "spawn", "child_wait", "child_pipe", "child_kill",
 ];
 
 #[repr(C)]
@@ -59,6 +63,7 @@ pub fn provided(slot_number: usize) -> bool {
 }
 
 type F1 = extern "C" fn(i32) -> i32;
+type F2 = extern "C" fn(i32, i32) -> i32;
 type F3 = extern "C" fn(i32, i32, i32) -> i32;
 type F4 = extern "C" fn(i32, i32, i32, i32) -> i32;
 
@@ -101,7 +106,8 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
     // (docs/host-abi.md); a mismatch traps in call_indirect.
     Some(unsafe {
         match id {
-            Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept => std::mem::transmute::<usize, F1>(index as usize)(args[0]),
+            Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept | Slot::ChildWait => std::mem::transmute::<usize, F1>(index as usize)(args[0]),
+            Slot::Spawn | Slot::ChildPipe | Slot::ChildKill => std::mem::transmute::<usize, F2>(index as usize)(args[0], args[1]),
             Slot::Fetch => std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3]),
             _ => std::mem::transmute::<usize, F3>(index as usize)(args[0], args[1], args[2]),
         }
@@ -182,4 +188,31 @@ pub fn accept(listener: i32) -> i32 {
 
 pub fn connect(host: &str, port: i32) -> i32 {
     call(Slot::Connect, [ptr(host.as_bytes()), host.len() as i32, port, 0]).unwrap_or(UNSUPPORTED)
+}
+
+pub fn spawn(meta: &[u8]) -> i32 {
+    call(Slot::Spawn, [ptr(meta), meta.len() as i32, 0, 0]).unwrap_or(UNSUPPORTED)
+}
+pub fn child_wait(handle: i32) -> i32 {
+    call(Slot::ChildWait, [handle, 0, 0, 0]).unwrap_or(UNSUPPORTED)
+}
+pub fn child_pipe(handle: i32, fd: i32) -> i32 {
+    call(Slot::ChildPipe, [handle, fd, 0, 0]).unwrap_or(UNSUPPORTED)
+}
+pub fn child_kill(handle: i32, signal: i32) -> i32 {
+    call(Slot::ChildKill, [handle, signal, 0, 0]).unwrap_or(UNSUPPORTED)
+}
+
+/// Sleep through the host when present so child cancellation can interrupt timers
+/// and Bun.sleepSync, including instances with no open network handles.
+pub fn sleep(duration: std::time::Duration) {
+    if !provided(Slot::Poll as usize) {
+        std::thread::sleep(duration);
+        return;
+    }
+    let started = std::time::Instant::now();
+    while started.elapsed() < duration {
+        let left = duration.saturating_sub(started.elapsed());
+        poll(left.as_millis().clamp(1, 25) as i32);
+    }
 }

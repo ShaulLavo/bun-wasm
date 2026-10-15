@@ -446,7 +446,7 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
             }
         }
         core.state.flush();
-        std::thread::sleep(std::time::Duration::from_secs_f64(next / 1000.0));
+        host::sleep(std::time::Duration::from_secs_f64(next / 1000.0));
     }
 }
 

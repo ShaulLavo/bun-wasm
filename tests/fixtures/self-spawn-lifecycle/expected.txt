@@ -1,0 +1,10 @@
+large output 0 1200000 1200000
+large input 0 1200000
+cpu timeout null SIGTERM ETIMEDOUT
+blocked input kill 137 SIGKILL
+missing cwd ENOENT
+nested 0 0 99
+clock timeout true SIGTERM
+child limit EAGAIN
+children stopped 143,143,143,143
+inherit 0 42
