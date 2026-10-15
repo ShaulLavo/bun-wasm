@@ -31,9 +31,11 @@ export class SharedPipe {
   }
   read(cap = 65536) {
     const read = Atomics.load(this.cells, 0) >>> 0;
+    // Observing EOF must also observe every write published before close().
+    const closed = Atomics.load(this.cells, 2);
     const written = Atomics.load(this.cells, 1) >>> 0;
     const size = Math.min((written - read) >>> 0, cap);
-    if (!size) return Atomics.load(this.cells, 2) ? 0 : AGAIN;
+    if (!size) return closed ? 0 : AGAIN;
     const start = read % PIPE_SIZE;
     const first = Math.min(size, PIPE_SIZE - start);
     const out = new Uint8Array(size);
