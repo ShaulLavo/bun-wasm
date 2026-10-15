@@ -33,6 +33,10 @@ const page = await bundle({
 // The service worker is a classic script (module service workers are newer in Safari).
 const sw = await bundle({ entrypoints: [join(web, "src/sw.ts")], outdir: out, target: "browser", format: "iife", minify: true, naming: "[name].[ext]" });
 
+// Safari may fetch a dedicated worker's initial script from the network on its first visit.
+// Keep the script in its controlling scope without relying on fetch interception to bootstrap it.
+await Bun.write(join(out, "__bunwasm/worker.js"), Bun.file(join(out, "worker.js")));
+
 await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 await Bun.write(join(out, "_headers"), Bun.file(join(web, "_headers")));
 

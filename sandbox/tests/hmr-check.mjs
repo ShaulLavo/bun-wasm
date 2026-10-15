@@ -9,6 +9,7 @@
 // PLAYWRIGHT=<path to playwright's index.mjs> when `playwright` isn't resolvable from here.
 
 import { checkPhoneUI } from "../../web/tests/phone-ui.mjs";
+import { firstVisit } from "../../web/tests/first-visit.mjs";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -32,6 +33,9 @@ const STEP_MS = 20_000;
 async function check(browserName, engine) {
   const browser = await (browserName === "webkit" ? webkit : chromium).launch();
   const context = await browser.newContext(browserName === "webkit" ? { ...devices["iPhone 15"] } : { viewport: { width: 1440, height: 900 } });
+  const url = new URL(base);
+  url.searchParams.set("engine", engine);
+  const visit = await firstVisit(context, url.href);
   const page = await context.newPage();
   const logs = [];
   page.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
@@ -62,12 +66,11 @@ async function check(browserName, engine) {
     }, [path, edit]);
   };
   try {
-    const url = new URL(base);
-    url.searchParams.set("engine", engine);
-    await page.goto(url.href);
+    await page.goto(visit.url);
     await step("1 renders", async () => {
       await app.locator("button.counter").waitFor({ timeout: STARTUP_MS });
       await app.locator("h1", { hasText: "Hello from bun.wasm" }).waitFor({ timeout: STEP_MS });
+      await visit.check(page, engine === "browser");
       await shot("1-rendered");
     });
     await step("2 counter", async () => {
@@ -136,6 +139,7 @@ async function check(browserName, engine) {
     console.log(logs.slice(-15).map((l) => `      ${l}`).join("\n"));
   } finally {
     await browser.close();
+    await visit.close();
   }
   return { browser: browserName, engine, results };
 }

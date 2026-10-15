@@ -38,6 +38,10 @@ if (!sw.success) {
   process.exit(1);
 }
 
+// Safari may fetch a dedicated worker's initial script from the network on its first visit.
+// Keep the script in its controlling scope without relying on fetch interception to bootstrap it.
+await Bun.write(join(out, "__bunwasm/worker.js"), Bun.file(join(out, "worker.js")));
+
 await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 // Cloudflare Static Assets headers: cross-origin isolation (SharedArrayBuffer for
 // Atomics.wait sleeps and the networking bridge). serve.ts sends the same locally.

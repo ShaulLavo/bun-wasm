@@ -136,7 +136,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     moduleCache,
     slots: slotsMode(),
   };
-  const worker = new Worker(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", { type: "module" });
+  const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
+  const worker = new Worker(workerUrl, { type: "module" });
   let settle: (result: RunResult) => void = () => {};
   const done = new Promise<RunResult>((resolve) => (settle = resolve));
   let finished = false;
@@ -164,7 +165,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   };
   worker.onerror = (event) => {
     event.preventDefault();
-    finish({ code: 1, root: null, error: `worker error: ${event.message}` });
+    finish({ code: 1, root: null, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
   worker.postMessage(request);
   return { done, kill: () => finish({ code: 130, root: null }) };
