@@ -36,13 +36,22 @@
 
   function argumentsWithImports(Native, args) {
     const strings = Array.from(args, value => `${value}`);
-    if (!strings.some(value => value.includes("import"))) return strings;
+    const hasImports = strings.some(value => value.includes("import"));
+    if (!hasImports && native.engine !== "host") return strings;
     const origin = callerSourceOrigin();
     if (origin === null) return strings;
     const path = origin.startsWith("file:") ? internal.require("node_url").fileURLToPath(origin) : origin;
-    const rewritten = strings.map(value => native.rewriteDynamicImports(value, path));
-    if (rewritten.every((value, index) => value === strings[index])) return strings;
-    return selectImports(Native, strings, rewritten, path);
+    let result = strings;
+    if (hasImports) {
+      const rewritten = strings.map(value => native.rewriteDynamicImports(value, path));
+      if (rewritten.some((value, index) => value !== strings[index])) {
+        result = selectImports(Native, strings, rewritten, path);
+      }
+    }
+    if (native.engine === "host" && result.length > 0) {
+      result[result.length - 1] += `\n//# sourceURL=${origin}`;
+    }
+    return result;
   }
 
   function constructor(Native) {
