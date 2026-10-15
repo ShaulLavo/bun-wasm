@@ -1010,6 +1010,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-bun-jsc"
+version = "0.0.10"
+dependencies = [
+ "bunwasm-bun-jsc-macros",
+]
+
+[[package]]
+name = "bunwasm-bun-jsc-macros"
+version = "0.0.10"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "bunwasm-cli"
 version = "0.0.10"
 dependencies = [
@@ -1071,6 +1086,7 @@ dependencies = [
  "bun_sys",
  "bun_wyhash",
  "bunwasm-jsc",
+ "bunwasm-semver",
  "flate2",
  "getrandom 0.3.4",
  "hmac",
@@ -1083,6 +1099,16 @@ dependencies = [
  "sha2",
  "tar",
  "url",
+]
+
+[[package]]
+name = "bunwasm-semver"
+version = "0.0.10"
+dependencies = [
+ "bstr",
+ "bun_core",
+ "bun_semver",
+ "bunwasm-bun-jsc",
 ]
 
 [[package]]

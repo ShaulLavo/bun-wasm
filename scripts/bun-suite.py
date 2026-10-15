@@ -130,7 +130,7 @@ def provenance(opts, wasm):
     return {"schema": 1, "engine": opts.engine, "suite_commit": git(opts.suite, "rev-parse", "HEAD"),
             "wasm_sha256": digest(wasm), "runner_sha256": digest(Path(__file__)),
             "launcher_sha256": digest(opts.launcher) if opts.engine != "browser" else digest(ROOT / "web/scripts/node-host.mjs"),
-            "host_sources": {path: digest(ROOT / path) for path in ["web/src/engine-host.js", "web/scripts/node-net.mjs", "web/src/subprocess.js", "web/src/subprocess-fs.ts", "web/src/fs.ts", "web/src/wasi.ts"]} if opts.engine == "browser" else {},
+            "host_sources": {path: digest(ROOT / path) for path in ["web/src/engine-host.js", "web/src/memory-views.js", "web/scripts/node-net.mjs", "web/src/subprocess.js", "web/src/subprocess-fs.ts", "web/src/fs.ts", "web/src/wasi.ts"]} if opts.engine == "browser" else {},
             "dependencies": dependency_digest(opts.suite / "node_modules"),
             "test_dependencies": dependency_digest(opts.dependencies or opts.suite / "test/node_modules"),
             "network": opts.network, "timeout_seconds": opts.timeout, "test_timeout_ms": opts.test_timeout}

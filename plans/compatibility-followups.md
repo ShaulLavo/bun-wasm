@@ -55,3 +55,51 @@ collection because Bun.semver was missing. It now reaches 26 passes, 55 failures
 unimplemented `ChildProcess.spawn` instance method at line 71. Existing
 subprocess/IPC support is a separate follow-up; do not restore the collection
 failure to hide it.
+
+## Package-manager cases reached by the portable semver bridge
+
+Status: Approved
+
+Adding `semverIntersects` lets `cli/install/semver.test.ts` register its tests.
+Five package-manager cases fail on all three engines. The JSC measurement has
+345 passes and five failures in that file, with no timeout. The separate
+`regression/issue/08040.test.ts` still passes. Evidence is in
+`/work/reports/bun-wasm-track2-2026-10-15/initial-after/`, especially
+`jsc-after.json`. These failures are outside the semver host-function bridge.
+
+Reproduce with a clean source reference and rebuilt artifacts:
+
+```sh
+source env.sh
+bash /work/tmp/wave-heavy/run.sh --class light "serial semver package-manager follow-up" -- \
+  env PATH="$PATH" scripts/bun-suite.sh --engine jsc --network loopback --jobs 1 \
+  --suite /work/projects/bun-wasm/vendor/bun \
+  --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" \
+  --output /work/tmp/bun-wasm-semver-package-manager.json cli/install/semver.test.ts
+```
+
+The runner snapshots the reference tree and executes tests in its disposable
+copies. It does not run them in the shared checkout. Use a clean reference
+because the runner rejects tracked source modifications.
+
+The observed gaps are:
+
+- `bun install --lockfile-only` fails with `error: Unknown install option: --lockfile-only`.
+  The cases at upstream lines 1432 and 1673 need normal dependency and override
+  resolution while writing only the lockfile. The argument parser currently
+  rejects the option at `crates/bunwasm-runtime/src/install/mod.rs:54`.
+- A dependency range above `u64::MAX` reports
+  `No version matching "^99999999999999999999" found for specifier "foo"`.
+  The test at upstream line 1646 expects the suffix ` (but package exists)`.
+  `crates/bunwasm-runtime/src/install/resolve.rs:293` drops that distinction even
+  though registry metadata was found. The invalid range is already rejected.
+- `bun pm version <version> --no-git-tag-version` is not implemented. The two
+  cases in the table at upstream lines 1715 and 1730 expect invalid current or requested
+  versions to fail without changing `package.json`. They instead reach the
+  install option parser and report
+  `error: Unknown install option: --no-git-tag-version`.
+
+Implement these in the package-manager track with its existing install fixtures.
+Keep the upstream tests unchanged. Rerun the exact file on all three engines.
+The portable bridge PR separately fixes the engine-specific Symbol error wording
+and browser host GC recursion observed during the initial measurement.

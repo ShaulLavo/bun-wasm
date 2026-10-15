@@ -1,0 +1,8 @@
+1 | (()=>{var e={718:e=>{"use strict";e.exports=require("node:child_process")},673:e=>{"use strict";e.exports=require("node:events")},561:e=>{"use strict";e.exports=require("node:fs")},411:e=>{"use strict";e.exports=require("node:path")},742:e=>{"use strict";e.exports=require("node:process")},253:(e,t,i)=>{const{InvalidArgumentError:n}=i(299);class Argument{constructor(e,t){this.description=t||"";this.variadic=false;this.parseArg=undefined;this.defaultValue=undefined;this.defaultValueDescription=undefined;this.argChoices=undefined;switch(e[0]){case"<":this.required=true;this._name=e.slice(1,-1);break;case"[":this.required=false;this._name=e.slice(1,-1);break;default:this.required=true;this._name=e;break}if(this._name.length>3&&this._name.slice(-3)==="..."){this.variadic=true;this._name=this._name.slice(0,-3)}}name(){return this._name}_concatValue(e,t){if(t===this.defaultValue||!Array.isArray(t)){return[e]}return t.concat(e)}default(e,t){this.defaultValue=e;this.defaultValueDescription=t;return this}argParser(e){t
+
+ReferenceError: module is not defined
+      at <anonymous> (/node_modules/next/dist/compiled/commander/index.js:1:37691)
+      at /node_modules/next/dist/compiled/commander/index.js:1:1
+      at /node_modules/next/dist/bin/next:7:20
+
+Bun v1.4.4 (WASI wasm32)

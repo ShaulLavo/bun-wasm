@@ -426,14 +426,18 @@
   const { TOML, YAML, JSON5, JSONC } = internal.require("formats");
   const { Glob } = internal.require("glob");
   const { Cookie, CookieMap } = internal.require("cookie");
+  function semverString(value) {
+    if (typeof value === "symbol") throw new TypeError("Cannot convert a symbol to a string");
+    return `${value}`;
+  }
   const semver = {
     satisfies(version, range) {
       if (arguments.length < 2) throw new Error("Expected two arguments");
-      return native.semverSatisfies(`${version}`, `${range}`);
+      return native.semverSatisfies(semverString(version), semverString(range));
     },
     order(left, right) {
       if (arguments.length < 2) throw new Error("Expected two arguments");
-      return native.semverOrder(`${left}`, `${right}`);
+      return native.semverOrder(semverString(left), semverString(right));
     },
   };
 

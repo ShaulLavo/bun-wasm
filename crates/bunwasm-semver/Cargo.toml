@@ -1,0 +1,12 @@
+[package]
+name = "bunwasm-semver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bun's unmodified semver host functions with the portable bun_jsc facade"
+
+[dependencies]
+bun_jsc = { package = "bunwasm-bun-jsc", path = "../bunwasm-bun-jsc" }
+bun_core = { path = "../../vendor/bun/src/bun_core" }
+bun_semver = { path = "../../vendor/bun/src/semver" }
+bstr = "1"

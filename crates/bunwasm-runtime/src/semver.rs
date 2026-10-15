@@ -1,53 +1,41 @@
-//! The same parser, range matching and ordering as Bun's SemverObject bridge.
-use core::cmp::Ordering;
+use bunwasm_semver::{CallFrame, JSGlobalObject, JSValue, JsError};
 
-use bun_semver::{SlicedString, Version, query};
-
-use crate::engine::NativeError;
+use crate::engine::{NativeError, Val};
 use crate::natives::Table;
 
 pub fn install(table: &mut Table) {
-    table.add("semverSatisfies", |args| {
-        let version = args.str(0)?.as_bytes();
-        let range = args.str(1)?.as_bytes();
-        if !version.is_ascii() || !range.is_ascii() {
-            return Ok(false.into());
-        }
-        let Some(version_value) = Version::parse_exact(SlicedString::init(version, version)) else {
-            return Ok(false.into());
+    for (name, function, _) in bunwasm_semver::functions() {
+        let native_name = match name {
+            "satisfies" => "semverSatisfies",
+            "order" => "semverOrder",
+            "intersects" => "semverIntersects",
+            _ => unreachable!("unexpected Bun.semver export"),
         };
-        let group = query::parse(range, SlicedString::init(range, range))
-            .map_err(|_| NativeError::error("Out of memory"))?;
-        let result = match group.get_exact_version() {
-            Some(exact) => version_value.eql(exact),
-            None => group.satisfies(version_value, range, version),
-        };
-        Ok(result.into())
-    });
-    table.add("semverOrder", |args| {
-        let left = args.str(0)?.as_bytes();
-        let right = args.str(1)?.as_bytes();
-        if !left.is_ascii() || !right.is_ascii() {
-            return Ok(0.into());
-        }
-        let left_version = parsed_version(left)?;
-        let right_version = parsed_version(right)?;
-        let result = match left_version.order_without_build(right_version, left, right) {
-            Ordering::Less => -1,
-            Ordering::Equal => 0,
-            Ordering::Greater => 1,
-        };
-        Ok(result.into())
-    });
+        table.add(native_name, move |arguments| {
+            let global = JSGlobalObject::default();
+            let values = (0..arguments.0.len())
+                .map(|index| arguments.str(index).map(|value| global.string(value)))
+                .collect::<Result<Vec<_>, _>>()?;
+            let result = function(&global, &CallFrame::new(values)).map_err(native_error)?;
+            Ok(result_value(result))
+        });
+    }
 }
 
-fn parsed_version(input: &[u8]) -> Result<Version, NativeError> {
-    let result = Version::parse(SlicedString::init(input, input));
-    if !result.valid {
-        return Err(NativeError::error(format!(
-            "Invalid SemVer: {}\n",
-            String::from_utf8_lossy(input)
-        )));
+fn native_error(error: JsError) -> NativeError {
+    match error {
+        JsError::Error(message) => NativeError::error(message),
+        JsError::TypeError(message) => NativeError::type_error(message),
+        JsError::OutOfMemory => NativeError::error("Out of memory"),
     }
-    Ok(result.version.max())
+}
+
+fn result_value(value: JSValue) -> Val {
+    if let Some(value) = value.as_bool() {
+        return Val::Bool(value);
+    }
+    if let Some(value) = value.as_int32() {
+        return Val::Num(f64::from(value));
+    }
+    unreachable!("Bun.semver returns a boolean or an int32")
 }
