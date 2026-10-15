@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const adapter = eval(readFileSync("runtime.js", "utf8"));
+const bunBuiltinGlobals = eval(readFileSync("globals.js", "utf8"))();
 const catalog = JSON.parse(readFileSync("catalog.json", "utf8"));
 const testNames = ["retry", "cycle", "intrinsics", "unknown-intrinsic", "stub"];
 const base = catalog.modules.length;
@@ -23,7 +24,7 @@ const native = {
   isProxy: () => false,
   isError: value => value instanceof Error,
 };
-const runtime = adapter({ native, builtin: () => bridged });
+const runtime = adapter({ native, bunBuiltinGlobals, builtin: () => bridged });
 assert.equal(counts.size, 0);
 const FreeList = runtime.require(freelist);
 const list = new FreeList("test", 1, class { constructor(value) { this.value = value; } });
@@ -81,7 +82,7 @@ assert.throws(() => runtime.require(base + 3), /intrinsic \$notImplemented/);
 factories.set(base + 4, i => i.lazy(123));
 const stub = runtime.require(base + 4);
 assert.throws(() => stub(), /native hook 123 \(js2native_wrap_test_hook_123\)/);
-const second = adapter({ native, builtin: () => bridged });
+const second = adapter({ native, bunBuiltinGlobals, builtin: () => bridged });
 assert.notEqual(second.require(freelist), FreeList);
 assert.equal(globalThis.__intrinsic__Array, undefined);
 assert.equal(Function.prototype.__intrinsic__call, undefined);

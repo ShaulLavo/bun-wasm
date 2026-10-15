@@ -1,5 +1,6 @@
 (function (internal) {
   "use strict";
+  const { Array, Error, Function, Map, Object, Proxy, RangeError, Reflect, Set, String, Symbol, TypeError, URIError } = internal.bunBuiltinGlobals;
   const native = internal.native;
   const names = native.bunBuiltinNames();
   const cache = new Map();
@@ -91,9 +92,7 @@
       throw unsupported(`error constructor ${code}`);
     },
   };
-  for (const name of ["Array", "ArrayBuffer", "Buffer", "Infinity", "Promise", "ReadableByteStreamController", "ReadableStream", "ReadableStreamBYOBReader", "ReadableStreamBYOBRequest", "ReadableStreamDefaultController", "ReadableStreamDefaultReader", "TransformStream", "TransformStreamDefaultController", "Uint8Array", "String", "RegExp", "WritableStream", "WritableStreamDefaultController", "WritableStreamDefaultWriter", "isFinite"]) {
-    Object.defineProperty(hooks, name, { get: () => globalThis[name] });
-  }
+  Object.assign(hooks, internal.bunBuiltinGlobals);
   const intrinsics = new Proxy(hooks, {
     get(target, name) {
       if (Object.hasOwn(target, name)) return target[name];

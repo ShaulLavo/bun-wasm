@@ -101,31 +101,39 @@ function include(name) {
 }
 for (const name of selection.modules) include(name);
 
+function isExportMarker(node) {
+  return ts.isExpressionStatement(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "$$EXPORT_END$$";
+}
+
+function lowerExport(node, factory, visit) {
+  const marker = node.expression.expression;
+  if (!ts.isCallExpression(marker) || marker.expression.text !== "$$EXPORT$$" || marker.arguments.length !== 1) throw new Error("Unexpected export marker");
+  return factory.createReturnStatement(ts.visitNode(marker.arguments[0], visit));
+}
+
+function builtinTransformer(context) {
+  const f = context.factory;
+  const intrinsic = name => f.createPropertyAccessExpression(f.createIdentifier("intrinsics"), name);
+  function visit(node) {
+    if (isExportMarker(node)) return lowerExport(node, f, visit);
+    if (ts.isPropertyAccessExpression(node) && intrinsicName(node.name)) return property(node);
+    const name = intrinsicName(node);
+    if (name) return intrinsic(name);
+    if (ts.isIdentifier(node) && node.text.startsWith("__no_intrinsic__")) return f.createIdentifier(node.text.slice(16));
+    return ts.visitEachChild(node, visit, context);
+  }
+  function property(node) {
+    const name = intrinsicName(node.name);
+    const target = ts.visitNode(node.expression, visit);
+    if (["call", "apply", "bind"].includes(name)) return f.createCallExpression(intrinsic("uncurry"), undefined, [target, f.createStringLiteral(name)]);
+    return f.createElementAccessExpression(target, f.createCallExpression(intrinsic("privateName"), undefined, [f.createStringLiteral(name)]));
+  }
+  return node => ts.visitNode(node, visit);
+}
+
 function lower(source) {
   const tree = ts.createSourceFile("builtin.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  const result = ts.transform(tree, [context => {
-    const f = context.factory;
-    const intrinsic = name => f.createPropertyAccessExpression(f.createIdentifier("intrinsics"), name);
-    function visit(node) {
-      if (ts.isExpressionStatement(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "$$EXPORT_END$$") {
-        const marker = node.expression.expression;
-        if (!ts.isCallExpression(marker) || marker.expression.text !== "$$EXPORT$$" || marker.arguments.length !== 1) throw new Error("Unexpected export marker");
-        return f.createReturnStatement(ts.visitNode(marker.arguments[0], visit));
-      }
-      if (ts.isPropertyAccessExpression(node) && intrinsicName(node.name)) return property(node);
-      const name = intrinsicName(node);
-      if (name) return intrinsic(name);
-      if (ts.isIdentifier(node) && node.text.startsWith("__no_intrinsic__")) return f.createIdentifier(node.text.slice(16));
-      return ts.visitEachChild(node, visit, context);
-    }
-    function property(node) {
-      const name = intrinsicName(node.name);
-      const target = ts.visitNode(node.expression, visit);
-      if (["call", "apply", "bind"].includes(name)) return f.createCallExpression(intrinsic("uncurry"), undefined, [target, f.createStringLiteral(name)]);
-      return f.createElementAccessExpression(target, f.createCallExpression(intrinsic("privateName"), undefined, [f.createStringLiteral(name)]));
-    }
-    return node => ts.visitNode(node, visit);
-  }]);
+  const result = ts.transform(tree, [builtinTransformer]);
   const printed = ts.createPrinter({ removeComments: true }).printFile(result.transformed[0]);
   result.dispose();
   const factory = `(function (intrinsics) {\n"use strict";\n${printed}})\n`;

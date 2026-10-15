@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const adapter = eval(readFileSync("runtime.js", "utf8"));
-const builtinGlobals = Object.freeze({ Array, Buffer, Error, Function, Map, Object, Proxy, RangeError, Reflect, Set, String, Symbol, TypeError, URIError });
+const builtinGlobals = eval(readFileSync("globals.js", "utf8"))();
 
 function check(name, phase) {
   const saved = globalThis[name];
