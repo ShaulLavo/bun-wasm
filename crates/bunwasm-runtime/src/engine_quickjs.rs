@@ -460,17 +460,17 @@ mod tests {
         context.with(|ctx| {
             let array = ctx.eval::<Value, _>("[1, 2]").unwrap();
             assert_eq!(to_val(&array), Val::Array(vec![Val::Num(1.0), Val::Num(2.0)]));
-            assert!(ctx.catch().is_null(), "array conversion left an exception pending");
+            assert!(!ctx.has_exception(), "array conversion left an exception pending");
             let object = ctx.eval::<Value, _>("({ answer: 3 })").unwrap();
             assert_eq!(to_val(&object), Val::Object(vec![("answer".into(), Val::Num(3.0))]));
-            assert!(ctx.catch().is_null(), "object conversion left an exception pending");
+            assert!(!ctx.has_exception(), "object conversion left an exception pending");
             let bytes = ctx.eval::<Value, _>("new Uint8Array([4, 5]).buffer").unwrap();
             assert_eq!(to_val(&bytes), Val::Bytes(vec![4, 5]));
-            assert!(ctx.catch().is_null(), "buffer conversion left an exception pending");
+            assert!(!ctx.has_exception(), "buffer conversion left an exception pending");
             if ctx.eval::<bool, _>("typeof SharedArrayBuffer === 'function'").unwrap() {
                 let shared = ctx.eval::<Value, _>("new SharedArrayBuffer(2)").unwrap();
                 assert_eq!(to_val(&shared), Val::Bytes(vec![0, 0]));
-                assert!(ctx.catch().is_null(), "shared buffer conversion left an exception pending");
+                assert!(!ctx.has_exception(), "shared buffer conversion left an exception pending");
             }
         });
     }
