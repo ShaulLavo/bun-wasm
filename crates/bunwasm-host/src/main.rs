@@ -2,13 +2,15 @@
 //! `bun_wasm` networking host ABI (docs/host-abi.md).
 
 mod net;
+mod process;
 mod slots;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
-use wasmtime::{Cache, CacheConfig, Config, Engine, Linker, Module, Store};
+use wasmtime::{Cache, CacheConfig, Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::{DirPerms, FilePerms, I32Exit, WasiCtxBuilder};
 
@@ -35,6 +37,10 @@ pub struct Host {
     pub net: net::Net,
     pub memory: Option<wasmtime::Memory>,
     pub trace: bool,
+    pub processes: process::Processes,
+    pub limits: StoreLimits,
+    pub functions: Vec<wasmtime::Func>,
+    pub cancel: Arc<process::Cancellation>,
 }
 
 #[derive(Default)]
@@ -102,6 +108,7 @@ fn wasm_path(options: &Options) -> PathBuf {
 
 fn engine() -> Result<Engine> {
     let mut config = Config::new();
+    config.epoch_interruption(true);
     match std::env::var("BUN_WASM_CACHE_DIR").ok().as_deref() {
         Some("off" | "0") => {}
         Some(dir) => {
@@ -140,38 +147,65 @@ fn run(options: Options) -> Result<i32> {
         options.dirs.clone()
     };
 
-    let mut wasi = WasiCtxBuilder::new();
-    wasi.inherit_stdio().args(&[String::from("bun")].into_iter().chain(options.args.iter().cloned()).collect::<Vec<_>>());
-    if options.inherit_env {
-        wasi.inherit_env();
-    }
+    let mut env = if options.inherit_env { std::env::vars().collect::<Vec<_>>() } else { Vec::new() };
     let explicit_pwd = options.env.iter().any(|(k, _)| k == "PWD");
-    if !explicit_pwd && let Some(pwd) = guest_pwd(&cwd, &dirs) {
-        wasi.env("PWD", pwd);
-    }
-    for (key, value) in &options.env {
-        wasi.env(key, value);
-    }
-    for (host, guest) in &dirs {
+    if !explicit_pwd && let Some(pwd) = guest_pwd(&cwd, &dirs) { env.push(("PWD".into(), pwd)); }
+    env.extend(options.env);
+    let runtime = process::Runtime::new(engine.clone(), module, dirs);
+    let running = Arc::new(AtomicBool::new(true));
+    let tick = running.clone();
+    let ticker = std::thread::spawn(move || {
+        while tick.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            engine.increment_epoch();
+        }
+    });
+    let args = std::iter::once("bun".into()).chain(options.args).collect();
+    let result = run_instance(runtime, args, env, process::Stdio::inherited(), Arc::default());
+    running.store(false, Ordering::Relaxed);
+    let _ = ticker.join();
+    result
+}
+
+fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, env: Vec<(String, String)>, stdio: process::Stdio, cancel: Arc<process::Cancellation>) -> Result<i32> {
+    let mut wasi = WasiCtxBuilder::new();
+    wasi.args(&argv).envs(&env);
+    stdio.install(&mut wasi, cancel.clone());
+    for (host, guest) in &runtime.dirs {
         wasi.preopened_dir(host, guest, DirPerms::all(), FilePerms::all())
             .with_context(|| format!("preopening {}", host.display()))?;
     }
-
+    let net = net::Net::new();
+    let processes = process::Processes::new(runtime.clone(), stdio, net.notify());
     let host = Host {
         wasi: wasi.build_p1(),
-        net: net::Net::new(),
+        net,
+        functions: Vec::new(),
+        cancel: cancel.clone(),
+        processes,
+        limits: StoreLimitsBuilder::new().memory_size(512 << 20).instances(1).build(),
         memory: None,
         trace: std::env::var("BUN_WASM_TRACE").is_ok_and(|v| !v.is_empty() && v != "0"),
     };
-    let mut store = Store::new(&engine, host);
-    let mut linker: Linker<Host> = Linker::new(&engine);
+    let mut store = Store::new(&runtime.engine, host);
+    store.limiter(|host| &mut host.limits);
+    store.set_epoch_deadline(1);
+    let interruption = cancel.clone();
+    store.epoch_deadline_callback(move |_| {
+        if interruption.signal.load(Ordering::SeqCst) != 0 { bail!("child killed"); }
+        Ok(UpdateDeadline::Continue(1))
+    });
+    let mut linker: Linker<Host> = Linker::new(&runtime.engine);
     p1::add_to_linker_sync(&mut linker, |host| &mut host.wasi)?;
-    let instance = linker.instantiate(&mut store, &module)?;
+    slots::add_import(&mut linker)?;
+    let instance = linker.instantiate(&mut store, &runtime.module)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");
     slots::install(&mut store, &instance)?;
 
     let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
     let result = start.call(&mut store, ());
+    let signal = cancel.signal.load(Ordering::SeqCst);
+    if signal != 0 { return Ok(128 + signal); }
     store.data_mut().net.flush_closed(std::time::Duration::from_secs(2));
     match result {
         Ok(()) => Ok(0),

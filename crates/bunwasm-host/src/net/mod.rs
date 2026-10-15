@@ -111,6 +111,10 @@ impl Net {
         }
     }
 
+    pub fn notify(&self) -> Arc<Notify> {
+        self.notify.clone()
+    }
+
     fn insert(&mut self, handle: Handle) -> i32 {
         let id = self.next_handle;
         // Handles are never reused; i32 overflow after 2^31 handles is not a concern.
@@ -119,7 +123,7 @@ impl Net {
         id
     }
 
-    fn fail(&mut self, error: ErrorInfo) -> i32 {
+    pub fn fail(&mut self, error: ErrorInfo) -> i32 {
         self.last_error = Some(error);
         ERROR
     }
@@ -248,6 +252,18 @@ impl Net {
         let deadline = Instant::now() + limit;
         for conn in self.flushing.drain(..) {
             conn.wait_flushed(deadline);
+        }
+    }
+}
+
+impl Drop for Net {
+    fn drop(&mut self) {
+        for (_, handle) in self.handles.drain() {
+            match handle {
+                Handle::Fetch(request) => request.abort(),
+                Handle::Listener(listener) => listener.close(),
+                Handle::Conn(conn) => conn.close(),
+            }
         }
     }
 }

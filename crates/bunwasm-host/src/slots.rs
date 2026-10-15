@@ -5,15 +5,15 @@
 use std::ops::Range;
 
 use anyhow::{Context, Result, bail};
-use wasmtime::{Caller, Func, Instance, Ref, Store};
+use wasmtime::{Caller, Func, Instance, Linker, Store, Val};
 
 use crate::Host;
 use crate::net::Output;
 
 const ABI_VERSION: u32 = 1;
-const SLOT_NAMES: [&str; 12] = [
+const SLOT_NAMES: [&str; 16] = [
     "poll", "fetch", "fetch_head", "read", "write", "close", "listen", "local_port", "accept", "connect", "error",
-    "peer_addr",
+    "peer_addr", "spawn", "child_wait", "child_pipe", "child_kill",
 ];
 
 /// Fills the guest's slot table. A bun.wasm without the export (older
@@ -23,9 +23,6 @@ pub fn install(store: &mut Store<Host>, instance: &Instance) -> Result<()> {
         trace(store.data(), format_args!("no bun_wasm_host_slots export; networking disabled"));
         return Ok(());
     };
-    let table = instance
-        .get_table(&mut *store, "__indirect_function_table")
-        .context("bun.wasm exports bun_wasm_host_slots but not __indirect_function_table")?;
     let memory = store.data().memory.context("bun.wasm exports no memory")?;
 
     let base = slots_fn.call(&mut *store, ())? as u32 as usize;
@@ -40,7 +37,8 @@ pub fn install(store: &mut Store<Host>, instance: &Instance) -> Result<()> {
     let funcs = functions(store);
     for (slot, func) in funcs.into_iter().enumerate().take(count) {
         // `grow` returns the old size, which is the new element's index.
-        let index = table.grow(&mut *store, 1, Ref::Func(Some(func)))? as u32;
+        let index = u32::MAX;
+        store.data_mut().functions.push(func);
         let at = base + 8 + 4 * slot;
         memory
             .data_mut(&mut *store)
@@ -98,13 +96,14 @@ fn text(bytes: &[u8]) -> String {
 /// The 12 host functions, in slot order, with the exact ABI signatures.
 fn functions(store: &mut Store<Host>) -> Vec<Func> {
     vec![
-        Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, timeout: i32| -> i32 {
+        Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, timeout: i32| -> Result<i32> {
             let host = caller.data_mut();
-            let woke = host.net.poll(timeout);
+            if host.cancel.signal.load(std::sync::atomic::Ordering::SeqCst) != 0 { bail!("child killed"); }
+            let woke = host.net.poll(if timeout < 0 { 25 } else { timeout.min(25) });
             if timeout != 0 || woke != 0 {
                 trace(host, format_args!("poll({timeout}) -> {woke}"));
             }
-            woke
+            Ok(woke)
         }),
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, meta: i32, meta_len: i32, body: i32, body_len: i32| {
             with_memory(&mut caller, |memory, host| {
@@ -131,7 +130,7 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, handle: i32, buf: i32, cap: i32| {
             with_memory(&mut caller, |memory, host| {
                 let buf = range(memory, buf, cap)?;
-                let n = host.net.read(handle, &mut memory[buf]);
+                let n = if handle >= crate::process::FIRST_HANDLE { host.processes.read(handle, &mut memory[buf]) } else { host.net.read(handle, &mut memory[buf]) };
                 if n != crate::net::AGAIN {
                     trace(host, format_args!("read({handle}, {cap}) -> {n}"));
                 }
@@ -141,14 +140,14 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, handle: i32, buf: i32, len: i32| {
             with_memory(&mut caller, |memory, host| {
                 let data = &memory[range(memory, buf, len)?];
-                let n = host.net.write(handle, data);
+                let n = if handle >= crate::process::FIRST_HANDLE { host.processes.write(handle, data) } else { host.net.write(handle, data) };
                 trace(host, format_args!("write({handle}, {len}) -> {n}"));
                 Ok(n)
             })
         }),
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, handle: i32| -> i32 {
             let host = caller.data_mut();
-            let result = host.net.close(handle);
+            let result = if handle >= crate::process::FIRST_HANDLE { host.processes.close(handle) } else { host.net.close(handle) };
             trace(host, format_args!("close({handle}) -> {result}"));
             result
         }),
@@ -184,7 +183,7 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
         }),
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, handle: i32, buf: i32, cap: i32| {
             with_memory(&mut caller, |memory, host| {
-                let output = host.net.error(handle);
+                let output = if handle >= crate::process::FIRST_HANDLE { host.processes.error(handle) } else { host.net.error(handle) };
                 if let Output::Bytes(bytes) = &output {
                     trace(host, format_args!("error({handle}) -> {}", text(bytes)));
                 }
@@ -200,5 +199,36 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
                 put(memory, buf, cap, output)
             })
         }),
+        Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, meta: i32, len: i32| {
+            with_memory(&mut caller, |memory, host| {
+                let meta = &memory[range(memory, meta, len)?];
+                Ok(match host.processes.spawn(meta) {
+                    Ok(id) => id,
+                    Err(error) => host.net.fail(error),
+                })
+            })
+        }),
+        Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, id: i32| caller.data_mut().processes.wait(id)),
+        Func::wrap(&mut *store, |caller: Caller<'_, Host>, id: i32, fd: i32| caller.data().processes.child_pipe(id, fd)),
+        Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, id: i32, signal: i32| caller.data_mut().processes.kill(id, signal)),
     ]
+}
+
+/// Dispatch the optional ABI through an existing WASI import, avoiding cross-module tables.
+pub fn add_import(linker: &mut Linker<Host>) -> Result<()> {
+    linker.allow_shadowing(true);
+    linker.func_wrap("wasi_snapshot_preview1", "sock_send", |mut caller: Caller<'_, Host>, fd: i32, packet: i32, count: i32, _flags: i32, out: i32| -> Result<i32> {
+        if fd != 0x7fff_b0b0 || count != 5 { return Ok(58); }
+        let memory = caller.data().memory.context("no memory")?;
+        let bytes = &memory.data(&caller)[range(memory.data(&caller), packet, 20)?];
+        let words: Vec<i32> = bytes.chunks_exact(4).map(|b| i32::from_le_bytes(b.try_into().unwrap())).collect();
+        let Some(func) = caller.data().functions.get(words[0] as usize).copied() else { return Ok(58); };
+        let count = func.ty(&caller).params().len();
+        let args: Vec<Val> = words[1..1 + count].iter().map(|&n| Val::I32(n)).collect();
+        let mut result = [Val::I32(-4)];
+        func.call(&mut caller, &args, &mut result)?;
+        memory.write(&mut caller, out as u32 as usize, &result[0].unwrap_i32().to_le_bytes())?;
+        Ok(0)
+    })?;
+    Ok(())
 }
