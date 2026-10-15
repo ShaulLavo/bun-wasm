@@ -44,7 +44,10 @@ pub fn install(table: &mut Table) {
 fn parsed_version(input: &[u8]) -> Result<Version, NativeError> {
     let result = Version::parse(SlicedString::init(input, input));
     if !result.valid {
-        return Err(NativeError::error(format!("Invalid SemVer: {}\n", String::from_utf8_lossy(input))));
+        return Err(NativeError::error(format!(
+            "Invalid SemVer: {}\n",
+            String::from_utf8_lossy(input)
+        )));
     }
     Ok(result.version.max())
 }
