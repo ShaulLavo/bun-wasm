@@ -1,7 +1,7 @@
 # Bun dev server port
 
-Status: Approved. Slice 1 implements uncompressed WebSockets. HTML serving,
-incremental bundling and the sandbox migration are still pending.
+Status: Approved. Slices 1 and 2 implement uncompressed WebSockets and bundled
+HTML serving. Incremental bundling and the sandbox migration are still pending.
 
 ## WebSockets
 
@@ -43,6 +43,31 @@ workers cannot open arbitrary external TCP connections. Idle timeout,
 backpressure limits, pause/resume and detailed Bun error-message compatibility
 remain outside this slice.
 
+## HTML entries and routes
+
+`bun ./index.html` starts an HTTP server, using `BUN_PORT` or `PORT` to select
+its port. Port `0` selects a free port. Imported HTML files produce HTMLBundle
+objects, so `Bun.serve({ routes: { "/": html } })` works on every engine.
+Method-specific HTML routes are supported too. HTML routes serve GET and HEAD
+and answer other methods with 405.
+
+`html_server.js` calls Bun's real HTML bundler and serves its in-memory outputs.
+Bun parses HTML, bundles JavaScript and CSS, resolves packages, rewrites asset
+URLs and emits assets. The runtime does not parse HTML or rewrite module
+imports. Responses retain their content types and lengths. Direct HTML CLI
+entries fall back to their HTML for client-side routes; exact imported routes
+still return 404 for unmatched paths.
+
+The module loader distinguishes HTML from text through `modules::Format::Html`.
+All engines share the HTMLBundle factory and route handling in the JS runtime.
+Single-entry HTML builds now allow multiple in-memory outputs, and build
+artifacts derive their MIME types from their output paths. No generated build
+directory is written into the project.
+
+This is a static serving slice. It uses Bun's ordinary HTML bundler, not bake's
+incremental graph. `development.hmr` does not enable updates yet. Syntax errors
+are reported by the existing server error path, without a browser overlay.
+
 ## Verify
 
 Build all three wasm artifacts first, using the project's memory cage and
@@ -54,6 +79,7 @@ scripts/test.sh --no-build
 scripts/test.sh --no-build --engine browser
 scripts/test.sh --no-build --engine jsc
 node scripts/test-websocket.mjs
+node scripts/test-html-server.mjs
 ENGINES=browser,quickjs,jsc scripts/test-web.sh
 ```
 
@@ -63,6 +89,12 @@ TCP peer. It covers binary data, 80 KB UTF-8 text, subprotocol negotiation,
 HTTP takeover with a frame arriving alongside the upgrade, fragmented UTF-8
 with interleaved ping, and six malformed-frame cases. It closes its own
 sockets and kills and reaps its child processes on completion or failure.
+
+`test-html-server.mjs` starts each engine with a direct HTML entry and checks
+HTML, bundled JavaScript, CSS, an emitted image, HEAD, method rejection and
+client routing. The `net-serve-html` fixture checks imported HTML routes,
+method-specific routes and in-memory HTML build output. Browser tests render
+a direct HTML entry and check its CSS through the service-worker preview.
 
 The `net-websocket` fixture checks guest-to-guest echo, subscriptions,
 large messages and close handling. It also connects to the native Bun fixture
@@ -83,12 +115,38 @@ Repeat for `browser` and `jsc`. This selects 65 files at upstream commit
 `4ceda2c2868d3a7703c7737ddd9de7244ec384df`. A completed census can still contain
 failing tests. The checked-in full-suite baseline is not regenerated here.
 
+## Measured results
+
+The controlled run compares base `cc5738b` with these two slices. Both runs use
+the same copied native launcher, dependency directory, upstream revision,
+loopback isolation, two workers and 15-second file deadlines.
+
+| Engine | Before passes | After passes | Fully passing files before/after | Timeouts before/after |
+|---|---:|---:|---:|---:|
+| QuickJS | 2 | 67 | 0 / 3 | 1 / 0 |
+| Browser | 15 | 61 | 1 / 3 | 2 / 0 |
+| JSC | 2 | 66 | 0 / 3 | 1 / 0 |
+
+Each run selects 65 files. The after-runs still report 217, 223 and 218 failed
+observed tests respectively, seven skips and 29 errors. Most bake tests still
+stop at unsupported runtime or subprocess APIs. These are compatibility
+measurements, not a passing upstream suite. The one-pass QuickJS/JSC difference
+is the upstream `instances should be finalized when GC'd` test; the portable
+heap statistics do not prove object finalization.
+
+All 69 local fixtures pass on each engine. The external WebSocket checks pass
+72 checks across the engines. Direct HTML CLI checks pass on all three, and
+the full web checks pass in Chromium and WebKit with every engine, including
+HTML rendering, linked CSS and phone layout.
+
+Raw results and logs are retained in
+`/work/tmp/bun-wasm-real-dev-server-results/` for coordinator review. The
+`baseline-*.json` and `html-*.json` files hold the controlled comparison.
+The coordinator owns those results and the review worktree until integration,
+then removes them.
+
 ## Next slices
 
-2. Route HTML entries through Bun's HTML bundler. The CLI currently treats
-   `index.html` as a normal entry, and the runtime classifies HTML as text.
-   Implement both direct HTML entries and imported HTML route objects before
-   changing the sandbox template.
 3. Port the incremental graph and bundler callbacks from
    `vendor/bun/src/runtime/bake/DevServer.rs` and `dev_server/`. Replace the
    trapping bake hooks in `crates/bunwasm-build/src/stubs.rs`. Serve Bun's

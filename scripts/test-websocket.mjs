@@ -18,7 +18,7 @@ const sockets = new Set();
 let assertions = 0;
 
 async function stop(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
   assert.equal(readlinkSync(`/proc/${child.pid}/cwd`), root.replace(/\/$/, ""));
   const exited = once(child, "exit");
   child.kill("SIGKILL");
@@ -55,7 +55,7 @@ async function start(engine) {
   child.stderr.on("data", (bytes) => { output += bytes; });
   const port = await new Promise((resolvePort, reject) => {
     const timer = setTimeout(() => reject(new Error(`server startup timed out: ${output}`)), 30000);
-    child.once("error", reject);
+    child.once("error", (error) => { clearTimeout(timer); reject(error); });
     child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`server exited ${code}: ${output}`)); });
     child.stdout.on("data", (bytes) => {
       output += bytes;
