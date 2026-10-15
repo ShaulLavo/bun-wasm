@@ -353,6 +353,14 @@ main {
   }
 
   header #status {
+    display: block;
+    grid-column: 1 / -1;
+    grid-row: 3;
+    width: 100%;
+  }
+
+  header #status:empty,
+  header #status[data-kind="ok"] {
     display: none;
   }
 
