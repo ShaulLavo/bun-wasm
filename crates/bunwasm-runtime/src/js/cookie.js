@@ -9,6 +9,10 @@
   const validPath = /^[\x20-\x3a\x3d-\x7e]*$/;
   const validDomain = /^[a-z0-9.-]*$/;
 
+  function isObject(value) {
+    return value !== null && (typeof value === "object" || typeof value === "function");
+  }
+
   function plainString(value) {
     if (typeof value === "symbol") throw new TypeError("Cannot convert a Symbol value to a string");
     return String(value);
@@ -57,7 +61,7 @@
   function optionsState(name, value, options, checkName) {
     const state = { name, value, domain: "", path: "/", expires: undefined, maxAge: undefined, secure: false, httpOnly: false, partitioned: false, sameSite: "lax" };
     if (options == null) return state;
-    if (typeof options !== "object" && typeof options !== "function") throw new TypeError("Options must be an object");
+    if (!isObject(options)) throw new TypeError("Options must be an object");
     if (checkName) {
       state.name = "name" in options ? string(options.name) : "";
       if (!state.name) throw new TypeError("name is required");
@@ -132,7 +136,7 @@
     constructor(name, value, options) {
       let state;
       if (arguments.length === 1 && typeof name === "string") state = parseState(name);
-      else if (arguments.length === 1 && name !== null && (typeof name === "object" || typeof name === "function")) state = validateState(optionsState("", "", name, true));
+      else if (arguments.length === 1 && isObject(name)) state = validateState(optionsState("", "", name, true));
       else if (arguments.length >= 2) {
         name = string(name);
         if (!name) throw new TypeError("name is required");
@@ -235,13 +239,13 @@
       if (pair.length !== 2) throw new TypeError("Expected arrays of exactly two strings");
       return [plainString(pair[0]), plainString(pair[1])];
     });
-    if (typeof init === "object" || typeof init === "function") return Object.getOwnPropertyNames(init).map((key) => [key, plainString(init[key])]);
+    if (isObject(init)) return Object.getOwnPropertyNames(init).map((key) => [key, plainString(init[key])]);
     throw new TypeError("Invalid initializer type");
   }
 
   function remove(state, name) {
     state.original = state.original.filter((pair) => pair[0] !== name);
-    state.modified = state.modified.filter((cookie) => cookie.name !== name);
+    state.modified = state.modified.filter((cookie) => cookies.get(cookie).name !== name);
   }
 
   function iterate(state, kind) {
@@ -250,7 +254,8 @@
       next() {
         while (index < state.modified.length + state.original.length) {
           const modified = index < state.modified.length;
-          const pair = modified ? [state.modified[index].name, state.modified[index].value] : state.original[index - state.modified.length];
+          const cookie = modified ? cookies.get(state.modified[index]) : null;
+          const pair = modified ? [cookie.name, cookie.value] : state.original[index - state.modified.length];
           index++;
           if (modified && !pair[1]) continue;
           return { value: kind === "key" ? pair[0] : kind === "value" ? pair[1] : pair, done: false };
@@ -265,32 +270,32 @@
     constructor(init) { maps.set(this, { original: originalPairs(init), modified: [] }); }
     get size() {
       const state = maps.get(this);
-      return state.original.length + state.modified.filter((cookie) => cookie.value !== "").length;
+      return state.original.length + state.modified.filter((cookie) => cookies.get(cookie).value !== "").length;
     }
     get(name) {
       if (arguments.length === 0) return null;
       const state = maps.get(this);
       name = string(name);
-      const modified = state.modified.find((cookie) => cookie.name === name);
-      if (modified) return modified.value || null;
+      const modified = state.modified.find((cookie) => cookies.get(cookie).name === name);
+      if (modified) return cookies.get(modified).value || null;
       const original = state.original.find((pair) => pair[0] === name);
       return original ? original[1] : null;
     }
     has(name) { return arguments.length !== 0 && CookieMap.prototype.get.call(this, name) !== null; }
     set(name, value, options) {
       if (arguments.length === 0) return;
-      if (typeof name !== "object" && typeof name !== "function" && arguments.length < 2) throw new TypeError("Not enough arguments");
-      const cookie = cookies.has(name) ? name : typeof name === "object" && name !== null ? new Cookie(name) : new Cookie(name, value, options);
+      if (!isObject(name) && arguments.length < 2) throw new TypeError("Not enough arguments");
+      const cookie = cookies.has(name) ? name : isObject(name) ? new Cookie(name) : new Cookie(name, value, options);
       const state = maps.get(this);
-      remove(state, cookie.name);
+      remove(state, cookies.get(cookie).name);
       state.modified.push(cookie);
     }
     delete(name, options) {
       if (arguments.length === 0) return;
-      if (name !== null && (typeof name === "object" || typeof name === "function")) {
+      if (isObject(name)) {
         options = name;
         name = options.name;
-      } else if (arguments.length > 1 && (options === null || typeof options !== "object" && typeof options !== "function")) throw new TypeError("Options must be an object");
+      } else if (arguments.length > 1 && !isObject(options)) throw new TypeError("Options must be an object");
       if (typeof name !== "string") throw new TypeError("Cookie name is required");
       const state = maps.get(this);
       remove(state, name);
