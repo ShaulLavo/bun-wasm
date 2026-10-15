@@ -1,0 +1,47 @@
+[
+  {
+    "date": "2026-10-15",
+    "commit": "42262f8",
+    "fully_passing": 137,
+    "tests_passing": 5802,
+    "timeouts": 90,
+    "categories": {
+      "a": 164,
+      "b": 694,
+      "c": 218,
+      "d": 876,
+      "e": 104,
+      "f": 6
+    }
+  },
+  {
+    "date": "2026-10-15",
+    "commit": "a8ef9ca",
+    "fully_passing": 282,
+    "tests_passing": 12651,
+    "timeouts": 61,
+    "categories": {
+      "a": 89,
+      "b": 50,
+      "c": 146,
+      "d": 1523,
+      "e": 108,
+      "f": 0
+    }
+  },
+  {
+    "date": "2026-10-15",
+    "commit": "5ed3e9e",
+    "fully_passing": 282,
+    "tests_passing": 12663,
+    "timeouts": 57,
+    "categories": {
+      "a": 87,
+      "b": 67,
+      "c": 147,
+      "d": 1505,
+      "e": 92,
+      "f": 18
+    }
+  }
+]
