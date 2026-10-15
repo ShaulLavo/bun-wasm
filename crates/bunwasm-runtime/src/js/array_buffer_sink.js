@@ -1,6 +1,17 @@
 (function (internal) {
   "use strict";
 
+  const typedArrayGetters = Object.getOwnPropertyDescriptors(Object.getPrototypeOf(Uint8Array.prototype));
+  const dataViewGetters = Object.getOwnPropertyDescriptors(DataView.prototype);
+
+  function viewBytes(data) {
+    let getters = typedArrayGetters;
+    let buffer;
+    try { buffer = getters.buffer.get.call(data); }
+    catch { getters = dataViewGetters; buffer = getters.buffer.get.call(data); }
+    return new Uint8Array(buffer, getters.byteOffset.get.call(data), getters.byteLength.get.call(data));
+  }
+
   function startModes(options) {
     const type = typeof options;
     if (options === null || (type !== "object" && type !== "function")) return null;
@@ -16,7 +27,7 @@
     if (!ArrayBuffer.isView(data) && !(data instanceof ArrayBuffer) && !shared) {
       throw new TypeError("write() expects a string, ArrayBufferView, or ArrayBuffer");
     }
-    return new Uint8Array(internal.toUint8(data));
+    return new Uint8Array(ArrayBuffer.isView(data) ? viewBytes(data) : new Uint8Array(data));
   }
 
   class Sink {

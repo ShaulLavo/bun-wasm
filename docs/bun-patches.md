@@ -50,6 +50,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/assert.js`](#node-assertions) | Port | Adapt assertion helpers and messages to the local inspector and equality implementation. |
 | [`crates/bunwasm-runtime/src/js/bun_sqlite.js`](#bun-sqlite) | Port | Move Bun's SQLite wrapper and inherited transaction code onto Rust SQLite natives. |
 | [`crates/bunwasm-runtime/src/js/array_buffer_sink.js`](#bun-array-buffer-sink) | Port | Adapt Bun's byte sink lifecycle and option parsing to engine-owned typed arrays. |
+| [`crates/bunwasm-runtime/src/engine_quickjs.rs`, string boundary](#quickjs-string-boundary) | Host feature | Decode lone UTF-16 surrogates as replacement characters at the native boundary. Original adapter. |
 | [`web/src/engine-host.js`, GC hook](#host-gc-hook) | Host feature | Capture host GC before guest code replaces globals. Original adapter. |
 | [`crates/bunwasm-runtime/src/js/cookie.js`](#bun-cookies) | Port | Translate Bun's cookie parsing, validation, and binding behavior. |
 | [`crates/bunwasm-runtime/src/js/string_decoder.js`](#node-string-decoder) | Port | Translate Node's chunk-decoder state machine to JavaScript. |
@@ -432,6 +433,15 @@ Adapt Database/Statement behavior, constants, named-parameter handling, strict m
 
 The transaction controller and wrapper retain code Bun explicitly attributes to Joshua Wise's better-sqlite3 `lib/methods/transaction.js`. The retained upstream revision is Bun's pin. A separate better-sqlite3 import revision is not recorded in that section. Keep BEGIN/COMMIT, nested savepoints, rollback, and the four transaction modes, replacing statement ownership/preparation with the local native-handle model. This is inherited copied implementation, not an original transaction adapter.
 
+### QuickJS string boundary
+
+Class **Host feature**. Original adapter using QuickJS-ng through rquickjs-sys 0.13.0.
+Retain the valid UTF-8 fast path. If QuickJS returns a string containing lone UTF-16
+surrogates, read its UTF-16 units through `JS_ToCStringLenUTF16`, replace unpaired units
+with Rust's `String::from_utf16_lossy` and release the QuickJS buffer. This prevents
+native UTF-8 consumers from receiving `undefined` for a valid JavaScript string.
+No upstream implementation is copied or modified.
+
 ### Bun ArrayBufferSink
 
 Class **Port**. Upstream `src/runtime/webcore/ArrayBufferSink.rs`,
@@ -448,6 +458,9 @@ crate. Engine-owned buffers let every engine reclaim abandoned sinks without a n
 handle table or finalizer interface. String writes use the existing Rust UTF-8 encoder.
 The watermark remains an allocation hint and causes no eager reservation in this adapter.
 The callable constructor and private JavaScript storage are original binding adapters.
+Capture TypedArray and DataView intrinsic getters to extract the real backing buffer and
+bounds before copying. Own properties and accessors cannot replace those internal slots.
+This byte-view extraction is also an original binding adapter.
 The unsupported GC-tuning member is absent from `Bun.unsafe`, so the upstream harness's
 capability check can run byte-content tests without requesting unavailable GC controls.
 
