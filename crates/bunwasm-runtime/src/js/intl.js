@@ -236,6 +236,12 @@
         if (o.year && (o.month || o.day)) lit(", ");
         if (o.year) push("year", o.year === "2-digit" ? String(year).slice(-2) : year);
       }
+      if (o.era) {
+        const part = parts.find((p) => p.type === "year");
+        if (part && year <= 0) part.value = String(1 - year);
+        lit(" ");
+        push("era", o.era === "long" ? (year <= 0 ? "Before Christ" : "Anno Domini") : year <= 0 ? "BC" : "AD");
+      }
       const wantsTime = o.timeStyle || o.hour !== undefined || o.minute !== undefined;
       if (wantsTime) {
         if (parts.length) lit(", ");

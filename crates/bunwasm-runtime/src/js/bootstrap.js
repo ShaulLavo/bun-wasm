@@ -752,6 +752,7 @@
   internal.mainPath = native.mainPath();
   internal.require("web")(defineGlobal, defineLazyGlobal);
   defineGlobal("process", internal.require("process"));
+  if (typeof globalThis.Temporal === "undefined") defineLazyGlobal("Temporal", () => internal.require("temporal").Temporal);
   defineGlobal("console", internal.require("console"));
   defineGlobal("Bun", internal.require("bun"));
   defineLazyGlobal("Buffer", () => internal.require("buffer").Buffer);
