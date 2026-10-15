@@ -77,13 +77,65 @@ The native run's main blockers were Rollup's native binary refusing the wasm32 p
 
 The raw records and logs are in `/work/reports/bun-wasm-app-matrix-2026-10-15/native/` and `/work/reports/bun-wasm-app-matrix-2026-10-15/playground-light/`. The committed reproducer is [the app matrix runner](../../scripts/app-matrix.sh); each row links to its fixture registry.
 
+## Server stack and socket rerun
+
+The 2026-10-16 rerun installs Express 5.1.0 and Koa 3.0.1 from the offline mirror,
+then runs the unchanged server fixtures and checks their HTTP response bodies.
+All 12 install and server stages pass on the three engines.
+
+| App command | Engine | Before | After |
+| --- | --- | --- | --- |
+| Express start | QuickJS | Fail, missing CallSite.isEval | Pass |
+| Express start | JSC | Fail, captured stack is text | Pass |
+| Express start | Browser | Pass | Pass |
+| Koa start | QuickJS | Fail, missing CallSite.isEval | Pass |
+| Koa start | JSC | Fail, captured stack is text | Pass |
+| Koa start | Browser | Fail, empty HTTP body in this rerun | Pass |
+
+QuickJS now supplies the missing CallSite queries, and JSC capture converts its
+text frames before invoking a custom stack formatter. Koa then exposed an HTTP
+socket gap shared by the engines. Its writable check saw an absent property and
+ended the response with no body. The HTTP socket now reports the connection's
+existing open and closing states. The earlier census reported a browser Koa pass;
+the current baseline rerun observed an empty body and records that failure above.
+
+Koa's cached keygrip metadata also contains an official npm tarball URL using
+HTTP. The mirror now routes that URL to its offline cache, as it already does for
+HTTPS npm URLs. Package sources and matrix fixtures are unchanged. The registry
+regression checks alternate origins and credentials as well as the historical URL.
+
+All 90 fixtures pass on each engine. The structured-stack and HTTP socket
+regressions fail on the preserved baseline for their intended causes and pass
+after the fix. The bounded upstream selection remains at 0 of 3 fully passing
+files, 0 observed passes and 0 timeouts on each engine, before and after. The capture test still lacks `nativeFrameForTesting`; the other files reach an
+unconnected Socket.write and existing formatter failures.
+
+```sh
+source env.sh
+bash /work/tmp/wave-heavy/run.sh --class light "Express and Koa" -- \
+  env PATH="$PATH" scripts/app-matrix.sh --apps=express,koa \
+  --engines=quickjs,jsc,browser --hosts=native \
+  --output=/work/reports/bun-wasm-app-matrix/server-rerun
+bash /work/tmp/wave-heavy/run.sh --class light "stack suite" -- \
+  env PATH="$PATH" scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 \
+  --output=/work/reports/bun-wasm-app-matrix/stack-suite.json \
+  js/node/v8/capture-stack-trace.test.js \
+  regression/issue/prepare-stack-trace-crash.test.ts \
+  regression/issue/23022-stack-trace-iterator.test.ts
+```
+
+Repeat the suite command with `--engine jsc` and `--engine browser`, using separate
+output paths. Raw before/after records, artifact hashes and fixture logs are in
+`/work/reports/bun-wasm-app-blockers-2026-10-16/`, including
+`before-native/`, `before-koa-native/` and `after-server-native/`.
+
 ## Next fixes
 
 These priorities count app projects, not individual command rows.
 
 1. Replace or port the Rollup native package path with `@rollup/wasm-node`. This unblocks Vite vanilla, React, and Vue, Astro, SvelteKit, and Vitest build stages across all three engines.
 2. Implement the missing module and Node API boundaries used by Next.js. This unblocks its dev, build, and start stages.
-3. Fix QuickJS and JSC stack call-site access for Express and Koa. This unblocks two server projects on two engines.
+3. Completed. Express and Koa pass on all three engines in the [server rerun](#server-stack-and-socket-rerun).
 4. Add the missing CLI module resolution used by Prettier in QuickJS and the browser engine.
 5. Make Prisma's native-engine limitation explicit in the app fixture and add a WASM engine policy if the upstream package provides one.
 

@@ -94,7 +94,7 @@ pure Bun semver parser used by package installation. See
 
 `crates/bunwasm-runtime/src/js/stack_trace.js` is an original adapter for the public
 `Error.captureStackTrace` and `Error.prepareStackTrace` contracts. It does not copy
-Bun, Node or WebKit source. QuickJS-ng at the vendored rquickjs-sys 0.11.0 revision
+Bun, Node or WebKit source. QuickJS-ng at the vendored rquickjs-sys 0.13.0 revision
 already supplies structured frames but omits queries used by stack-inspection
 packages. The adapter extends that frame prototype. Bun's WebKit fork at
 `3d3257150c40a1aabdc5f8b48d5b33d0413674cb` supplies captured stack text through
