@@ -1,0 +1,27 @@
+true 1 0
+./App.js entry-point tsx text/javascript;charset=utf-8
+// src/App.tsx
+import { useState } from "react";
+import { label } from "./label";
+import { jsxDEV } from "react/jsx-dev-runtime";
+function App() {
+  _s();
+  const [n] = useState(0);
+  return /* @__PURE__ */ jsxDEV("p", {
+    children: label(n)
+  }, undefined, false, undefined, this);
+}
+var _s = $RefreshSig$();
+_s(App, "SIGNATURE");
+$RefreshReg$(App, "src/App.tsx:App");
+var App_default = App;
+export {
+  App_default as default
+};
+
+chunk ./chunk-HASH.js
+entry-point ./a.js
+entry-point ./b.js
+true
+AggregateError Bundle failed true
+false 0 true error

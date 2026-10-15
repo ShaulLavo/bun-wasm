@@ -335,6 +335,78 @@
     return native.resolve(String(spec), fromPath, false);
   }
 
+  // Bun.build(): Bun's bundler (native.build). Outputs are BuildArtifacts, Blobs with a path.
+  class BuildArtifact extends Blob {
+    constructor(output, entrypoints) {
+      const kind = output.kind;
+      const type = /\.css$/.test(output.path) ? "text/css;charset=utf-8" : kind === "sourcemap" || kind === "metafile" ? "application/json;charset=utf-8" : "text/javascript;charset=utf-8";
+      super([output.contents], { type });
+      this.path = output.path;
+      this.kind = kind;
+      this.loader = /\.css$/.test(output.path) ? "css" : kind === "sourcemap" || kind === "metafile" ? "json" : entryLoader(output, entrypoints);
+      this.hash = null;
+      this.sourcemap = null;
+    }
+  }
+
+  // An entry point's loader is its source's (`tsx` for App.tsx -> App.js), like Bun's.
+  function entryLoader(output, entrypoints) {
+    if (output.kind !== "entry-point") return "js";
+    const stem = (p) => p.slice(p.lastIndexOf("/") + 1).replace(/\.[^.]*$/, "");
+    const source = entrypoints.find((e) => stem(e) === stem(output.path));
+    const ext = source ? source.slice(source.lastIndexOf(".") + 1) : "js";
+    return { mjs: "js", cjs: "js", mts: "ts", cts: "ts" }[ext] || ext;
+  }
+
+  const BUILD_STRINGS = ["outdir", "root", "target", "format", "packages", "publicPath", "banner", "footer"];
+  const BUILD_FLAGS = ["splitting", "reactFastRefresh"];
+
+  function buildLog(message, level) {
+    return { name: "BuildMessage", level, message, position: null, notes: [], toString: () => message };
+  }
+
+  async function build(config) {
+    if (!config || typeof config !== "object") throw new TypeError("Bun.build expects an options object");
+    const { resolve } = internal.require("path");
+    const entrypoints = Array.from(config.entrypoints || [], (e) => resolve(toPath(e)));
+    if (entrypoints.length === 0) throw new TypeError("Bun.build: expected a non-empty array of entrypoints");
+    const request = { entrypoints };
+    for (const key of BUILD_STRINGS) if (config[key] !== undefined) request[key] = String(config[key]);
+    for (const key of BUILD_FLAGS) if (config[key]) request[key] = true;
+    if (request.outdir) request.outdir = resolve(request.outdir);
+    if (request.root) request.root = resolve(request.root);
+    if (Array.isArray(config.external)) request.external = config.external.map(String);
+    if (config.conditions !== undefined) request.conditions = [].concat(config.conditions).map(String);
+    if (config.define) request.define = Object.fromEntries(Object.entries(config.define).map(([k, v]) => [k, String(v)]));
+    const minify = config.minify;
+    if (minify === true) Object.assign(request, { minifySyntax: true, minifyWhitespace: true, minifyIdentifiers: true });
+    else if (minify && typeof minify === "object") {
+      Object.assign(request, { minifySyntax: !!minify.syntax, minifyWhitespace: !!minify.whitespace, minifyIdentifiers: !!minify.identifiers });
+    }
+    const sourcemap = config.sourcemap;
+    if (sourcemap !== undefined && sourcemap !== false) request.sourcemap = sourcemap === true ? "linked" : String(sourcemap);
+    const naming = config.naming;
+    if (typeof naming === "string") request.entryNaming = naming;
+    else if (naming && typeof naming === "object") {
+      if (naming.entry) request.entryNaming = String(naming.entry);
+      if (naming.chunk) request.chunkNaming = String(naming.chunk);
+      if (naming.asset) request.assetNaming = String(naming.asset);
+    }
+    // Bun.build names shared chunks `chunk-<hash>` (the CLI uses the entry's name).
+    if (!request.chunkNaming) request.chunkNaming = "./chunk-[hash].[ext]";
+    let result;
+    try {
+      result = native.build(JSON.stringify(request));
+    } catch (err) {
+      const message = String((err && err.message) || err);
+      const logs = [buildLog(message, "error")];
+      if (config.throw === false) return { success: false, outputs: [], logs };
+      throw new AggregateError(logs, message ? `Bundle failed\n${message}` : "Bundle failed");
+    }
+    const logs = result.logs ? [buildLog(result.logs.trimEnd(), "warning")] : [];
+    return { success: true, outputs: result.outputs.map((o) => new BuildArtifact(o, entrypoints)), logs };
+  }
+
   function concatArrayBuffers(buffers, maxLength, asUint8Array) {
     let bytes = internal.concatBytes(buffers.map((b) => internal.toUint8(b)));
     if (maxLength !== undefined) bytes = bytes.subarray(0, maxLength);
@@ -407,6 +479,7 @@
     spawn: unsupported("Bun.spawn", noProcesses),
     spawnSync: unsupported("Bun.spawnSync", noProcesses),
     $: unsupported("Bun.$", noProcesses),
+    build,
     serve: native.hostCaps.listen ? (options) => internal.require("net").serve(options) : unsupported("Bun.serve", noNetwork),
     listen: unsupported("Bun.listen", noNetwork),
     connect: unsupported("Bun.connect", noNetwork),

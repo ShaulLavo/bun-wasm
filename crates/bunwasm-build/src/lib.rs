@@ -93,6 +93,8 @@ pub struct BuildArgs {
     /// `--no-bundle`: transpile each entry point on its own.
     pub no_bundle: bool,
     pub metafile: Option<String>,
+    /// `--react-fast-refresh`: `$RefreshReg$`/`$RefreshSig$` calls in JSX files.
+    pub react_fast_refresh: bool,
     /// Write the output files to disk. Without it, contents are only returned.
     pub write: bool,
 }
@@ -127,6 +129,7 @@ impl Default for BuildArgs {
             production: false,
             no_bundle: false,
             metafile: None,
+            react_fast_refresh: false,
             write: true,
         }
     }
@@ -407,6 +410,7 @@ fn parse(a: &BuildArgs) -> Result<Parsed, String> {
         return Err("error: Missing entrypoints. What would you like to bundle?".into());
     }
     b.production = a.production;
+    b.react_fast_refresh = a.react_fast_refresh;
     Ok(Parsed { args: opts, bundler: b })
 }
 
@@ -478,7 +482,12 @@ fn exec(
     let outfile: &[u8] = &outfile;
     let output_to_stdout = outfile.is_empty() && bo.outdir.is_empty();
 
-    this_transpiler.options.supports_multiple_outputs = !(output_to_stdout || !outfile.is_empty());
+    // In memory (no `write`), several outputs need no outdir, like `Bun.build` without one.
+    let in_memory = !write
+        && outfile.is_empty()
+        && bo.outdir.is_empty()
+        && (this_transpiler.options.entry_points.len() > 1 || bo.code_splitting);
+    this_transpiler.options.supports_multiple_outputs = !(output_to_stdout || !outfile.is_empty()) || in_memory;
     this_transpiler.options.public_path.clone_from(&bo.public_path);
     this_transpiler.options.entry_naming.clone_from(&bo.entry_naming);
     this_transpiler.options.chunk_naming.clone_from(&bo.chunk_naming);
@@ -519,7 +528,7 @@ fn exec(
         }
     }
 
-    if bo.outdir.is_empty() {
+    if bo.outdir.is_empty() && !in_memory {
         if this_transpiler.options.entry_points.len() > 1 {
             return Err("error: Must use --outdir when specifying more than one entry point.".into());
         }

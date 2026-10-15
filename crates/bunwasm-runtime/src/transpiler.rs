@@ -77,6 +77,58 @@ pub trait Transpiler {
     fn esm_to_cjs(&self, path: &str) -> Result<Transpiled, String> {
         Err(format!("require() of ES module {path} needs Bun's bundler, which this bun.wasm was built without"))
     }
+
+    /// `Bun.build`: Bun's bundler. Writes the outputs when `outdir` is set
+    /// and returns them either way. Errors are the bundler's log, formatted.
+    fn build(&self, _request: &BuildRequest) -> Result<BuildResult, String> {
+        Err("Bun.build needs Bun's bundler, which this bun.wasm was built without".to_owned())
+    }
+}
+
+/// The `Bun.build` options the runtime passes on (a subset of Bun's
+/// `BuildConfig`). Paths are absolute; enum-like fields keep Bun's spelling
+/// (`"browser"`, `"esm"`, `"inline"`) and `None` is Bun's default.
+#[derive(Clone, Debug, Default)]
+pub struct BuildRequest {
+    pub entrypoints: Vec<String>,
+    pub outdir: Option<String>,
+    pub root: Option<String>,
+    pub target: Option<String>,
+    pub format: Option<String>,
+    pub splitting: bool,
+    pub external: Vec<String>,
+    pub packages: Option<String>,
+    pub define: Vec<(String, String)>,
+    pub conditions: Vec<String>,
+    pub minify_syntax: bool,
+    pub minify_whitespace: bool,
+    pub minify_identifiers: bool,
+    pub sourcemap: Option<String>,
+    pub public_path: Option<String>,
+    pub entry_naming: Option<String>,
+    pub chunk_naming: Option<String>,
+    pub asset_naming: Option<String>,
+    pub banner: Option<String>,
+    pub footer: Option<String>,
+    /// Emit `$RefreshReg$`/`$RefreshSig$` calls for React Fast Refresh.
+    pub react_fast_refresh: bool,
+}
+
+/// One output file of [`Transpiler::build`].
+#[derive(Clone, Debug)]
+pub struct BuildArtifact {
+    /// Absolute when the build had an `outdir`, else `./name.js` like Bun.
+    pub path: String,
+    /// `"entry-point"`, `"chunk"`, `"asset"`, `"sourcemap"` or `"metafile"`.
+    pub kind: &'static str,
+    pub contents: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct BuildResult {
+    pub outputs: Vec<BuildArtifact>,
+    /// Warnings, formatted. Empty if none.
+    pub logs: String,
 }
 
 /// Transpiler output with an optional source map.

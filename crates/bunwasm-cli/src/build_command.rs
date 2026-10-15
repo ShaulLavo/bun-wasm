@@ -10,7 +10,7 @@ const USAGE: &str = "usage: bun build <entrypoint>... [--outdir dir | --outfile 
 [--target browser|bun|node] [--sourcemap[=linked|inline|external|none]] [--splitting] \
 [--external pkg] [--packages bundle|external] [--define K=V] [--root dir] [--public-path p] \
 [--entry-naming t] [--chunk-naming t] [--asset-naming t] [--banner s] [--footer s] \
-[--production] [--no-bundle] [--keep-names] [--metafile[=path]] [--conditions c]";
+[--production] [--react-fast-refresh] [--no-bundle] [--keep-names] [--metafile[=path]] [--conditions c]";
 
 fn fail(msg: &str) -> i32 {
     eprintln!("error: {msg}");
@@ -52,6 +52,7 @@ pub fn run(cli_args: Vec<String>) -> i32 {
                 "--keep-names" => args.keep_names = true,
                 "--splitting" => args.splitting = true,
                 "--production" => args.production = true,
+                "--react-fast-refresh" => args.react_fast_refresh = true,
                 "--no-bundle" => args.no_bundle = true,
                 "--format" => {
                     args.format = match value("--format")?.as_str() {

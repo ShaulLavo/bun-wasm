@@ -505,6 +505,57 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
     });
     let st = state.clone();
     t.add("getSourceLine", move |a| Ok(st.source_line(a.str(0)?, a.num(1)? as usize).into()));
+    // `Bun.build`: the options as JSON (src/js/bun.js normalizes them), the
+    // outputs as `{ outputs: [{ path, kind, contents }], logs }`.
+    let st = state.clone();
+    t.add("build", move |a| {
+        let request = build_request(a.str(0)?)?;
+        let result = st.transpiler.build(&request).map_err(|log| NativeError::error(log).prop("code", "BUILD_FAILED"))?;
+        let outputs = result
+            .outputs
+            .into_iter()
+            .map(|o| Record::new().set("path", o.path).set("kind", o.kind).set("contents", Val::Bytes(o.contents)).into())
+            .collect();
+        Ok(Record::new().set("outputs", Val::Array(outputs)).set("logs", result.logs).into())
+    });
+}
+
+fn build_request(json: &str) -> Result<crate::BuildRequest, NativeError> {
+    use serde_json::Value as Json;
+    let v: Json = serde_json::from_str(json).map_err(|e| NativeError::type_error(format!("Bun.build: {e}")))?;
+    let text = |k: &str| v.get(k).and_then(Json::as_str).map(str::to_owned);
+    let flag = |k: &str| v.get(k).and_then(Json::as_bool).unwrap_or(false);
+    let list = |k: &str| -> Vec<String> {
+        v.get(k).and_then(Json::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+    };
+    let define = v
+        .get("define")
+        .and_then(Json::as_object)
+        .map(|m| m.iter().filter_map(|(k, x)| x.as_str().map(|x| (k.clone(), x.to_owned()))).collect())
+        .unwrap_or_default();
+    Ok(crate::BuildRequest {
+        entrypoints: list("entrypoints"),
+        outdir: text("outdir"),
+        root: text("root"),
+        target: text("target"),
+        format: text("format"),
+        splitting: flag("splitting"),
+        external: list("external"),
+        packages: text("packages"),
+        define,
+        conditions: list("conditions"),
+        minify_syntax: flag("minifySyntax"),
+        minify_whitespace: flag("minifyWhitespace"),
+        minify_identifiers: flag("minifyIdentifiers"),
+        sourcemap: text("sourcemap"),
+        public_path: text("publicPath"),
+        entry_naming: text("entryNaming"),
+        chunk_naming: text("chunkNaming"),
+        asset_naming: text("assetNaming"),
+        banner: text("banner"),
+        footer: text("footer"),
+        react_fast_refresh: flag("reactFastRefresh"),
+    })
 }
 
 fn install_encoding(t: &mut Table) {

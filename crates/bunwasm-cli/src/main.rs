@@ -107,6 +107,107 @@ mod bun_transpiler {
             };
             Ok(Transpiled { code, mappings })
         }
+
+        #[cfg(feature = "bun-build")]
+        fn build(&self, request: &bunwasm_runtime::BuildRequest) -> Result<bunwasm_runtime::BuildResult, String> {
+            build(request)
+        }
+    }
+
+    /// `Bun.build`: the options map onto `bun build`'s flags. Without an
+    /// `outdir` nothing is written: the outputs only come back in memory,
+    /// named `./<name>.js` like native Bun's.
+    #[cfg(feature = "bun-build")]
+    pub(super) fn build(request: &bunwasm_runtime::BuildRequest) -> Result<bunwasm_runtime::BuildResult, String> {
+        use bunwasm_build::{BuildArgs, Format, OutputKind, Packages, SourceMap, Target};
+        use bunwasm_runtime::{BuildArtifact, BuildResult};
+        let bad = |what: &str, value: &str| format!("Bun.build: invalid {what} \"{value}\"");
+        let target = match request.target.as_deref() {
+            None => None,
+            Some("browser") => Some(Target::Browser),
+            Some("bun") => Some(Target::Bun),
+            Some("node") => Some(Target::Node),
+            Some(other) => return Err(bad("target", other)),
+        };
+        let format = match request.format.as_deref() {
+            None | Some("esm") => Format::Esm,
+            Some("cjs") => Format::Cjs,
+            Some("iife") => Format::Iife,
+            Some(other) => return Err(bad("format", other)),
+        };
+        let sourcemap = match request.sourcemap.as_deref() {
+            None | Some("none") => SourceMap::None,
+            Some("inline") => SourceMap::Inline,
+            Some("linked") => SourceMap::Linked,
+            Some("external") => SourceMap::External,
+            Some(other) => return Err(bad("sourcemap", other)),
+        };
+        let packages = match request.packages.as_deref() {
+            None => None,
+            Some("bundle") => Some(Packages::Bundle),
+            Some("external") => Some(Packages::External),
+            Some(other) => return Err(bad("packages", other)),
+        };
+        let args = BuildArgs {
+            entry_points: request.entrypoints.clone(),
+            outdir: request.outdir.clone(),
+            root: request.root.clone(),
+            target,
+            format,
+            minify_syntax: request.minify_syntax,
+            minify_whitespace: request.minify_whitespace,
+            minify_identifiers: request.minify_identifiers,
+            sourcemap,
+            splitting: request.splitting,
+            external: request.external.clone(),
+            packages,
+            define: request.define.clone(),
+            conditions: request.conditions.clone(),
+            public_path: request.public_path.clone(),
+            banner: request.banner.clone(),
+            footer: request.footer.clone(),
+            entry_naming: request.entry_naming.clone(),
+            chunk_naming: request.chunk_naming.clone(),
+            asset_naming: request.asset_naming.clone(),
+            react_fast_refresh: request.react_fast_refresh,
+            write: request.outdir.is_some(),
+            ..BuildArgs::default()
+        };
+        // The output is for whatever `target` says, never for the host engine.
+        let out = bunwasm_transpiler::with_await_hooks(false, || bunwasm_build::build(&args))
+            .map_err(|log| log.trim_end().to_owned())?;
+        let mut outputs = Vec::new();
+        if let Some(bytes) = out.stdout {
+            let entry = request.entrypoints.first().map(String::as_str).unwrap_or("out");
+            let base = entry.rsplit('/').next().unwrap_or(entry);
+            let stem = base.rsplit_once('.').map_or(base, |(stem, _)| stem);
+            outputs.push(BuildArtifact { path: format!("./{stem}.js"), kind: "entry-point", contents: bytes });
+        }
+        for file in out.files {
+            let kind = match file.kind {
+                OutputKind::EntryPoint => "entry-point",
+                OutputKind::Chunk => "chunk",
+                OutputKind::Asset => "asset",
+                OutputKind::SourceMap => "sourcemap",
+                OutputKind::Metafile => "metafile",
+                OutputKind::Other => "asset",
+            };
+            let relative = file.path.trim_start_matches("./");
+            let (path, contents) = match &request.outdir {
+                // The bundler wrote the file itself and kept no copy.
+                Some(dir) => {
+                    let path = format!("{}/{relative}", dir.trim_end_matches('/'));
+                    let contents = if file.contents.is_empty() { std::fs::read(&path).unwrap_or_default() } else { file.contents };
+                    (path, contents)
+                }
+                None => (format!("./{relative}"), file.contents),
+            };
+            outputs.push(BuildArtifact { path, kind, contents });
+        }
+        if let Some(err) = out.write_errors.first() {
+            return Err(err.clone());
+        }
+        Ok(BuildResult { outputs, logs: out.log })
     }
 
     #[cfg(feature = "bun-build")]

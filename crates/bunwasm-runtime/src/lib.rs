@@ -37,7 +37,7 @@ mod engine_jsc;
 compile_error!("bunwasm-runtime needs an engine: feature engine-quickjs, engine-jsc or engine-host");
 
 pub use engine::{Engine, ModuleHost, NativeError, PromiseState, Val};
-pub use transpiler::{Loader, PassthroughTranspiler, Transpiled, Transpiler};
+pub use transpiler::{BuildArtifact, BuildRequest, BuildResult, Loader, PassthroughTranspiler, Transpiled, Transpiler};
 
 /// The engine this build uses.
 #[cfg(feature = "engine-quickjs")]
