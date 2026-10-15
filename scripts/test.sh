@@ -10,6 +10,10 @@
 #   cmd                         optional: bun arguments replacing `run /index.*`, one per line
 #   stdin                       optional file piped to stdin
 #   expected_stderr.txt         optional expected stderr (e.g. `bun test` reports)
+#   host                        optional marker: run under the bun-wasm launcher
+#                               (crates/bunwasm-host, networking ABI) instead of wasmtime;
+#                               TEST_SERVER=http://127.0.0.1:<port> points at
+#                               tests/servers/http.ts, which this script starts
 #   show                        optional list of files (one per line) the run creates; their
 #                               contents are appended to stdout as `--- <path>` sections
 #   manual                      optional marker: expected.txt is hand-written because native
@@ -48,10 +52,29 @@ done
 wasm="$root/dist/bun.wasm"
 
 scratch="$(mktemp -d /work/tmp/bun-wasm-runtime-test-XXXXXX)"
-trap 'rm -rf "$scratch"' EXIT INT TERM
+server_pid=""
+trap 'if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null; fi; rm -rf "$scratch"' EXIT INT TERM
 
 if [[ $build == 1 && $update == 0 ]]; then
   "$root/scripts/build.sh" >"$scratch/build.log" 2>&1 || { tail -30 "$scratch/build.log"; echo "build failed"; exit 1; }
+fi
+
+# Networking fixtures need the native launcher and the local test server.
+launcher="$CARGO_TARGET_DIR/release/bun-wasm"
+start_test_server() {
+  [[ -n "$server_pid" ]] && return 0
+  bun "$root/tests/servers/http.ts" >"$scratch/server.port" 2>"$scratch/server.err" &
+  server_pid=$!
+  for _ in $(seq 50); do
+    [[ -s "$scratch/server.port" ]] && break
+    sleep 0.1
+  done
+  TEST_SERVER="http://127.0.0.1:$(head -1 "$scratch/server.port")"
+  export TEST_SERVER
+}
+if [[ $build == 1 && $update == 0 ]] && compgen -G "$root/tests/fixtures/*/host" >/dev/null; then
+  (cd "$root" && cargo build -j "${JOBS:-12}" --release -p bunwasm-host >"$scratch/host-build.log" 2>&1) ||
+    { tail -30 "$scratch/host-build.log"; echo "launcher build failed"; exit 1; }
 fi
 
 if [[ ${#names[@]} == 0 ]]; then
@@ -107,6 +130,11 @@ for name in "${names[@]}"; do
     echo "skipped $name (manual)"
     continue
   fi
+  is_host=0
+  if [[ -f "$work/host" ]]; then
+    is_host=1
+    start_test_server
+  fi
   if [[ $update == 1 ]]; then
     native_cmd=("${cmd[@]}")
     [[ ! -f "$work/cmd" ]] && native_cmd=(run "./$entry")
@@ -121,8 +149,14 @@ for name in "${names[@]}"; do
     continue
   fi
 
-  (cd "$work" && timeout 60 wasmtime run --dir "$work::/" --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 \
-    "$wasm" "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+  if [[ $is_host == 1 ]]; then
+    (cd "$work" && BUN_WASM="$wasm" timeout 60 "$launcher" --dir "$work::/" --env PWD=/ --env HOME=/ \
+      --env BUNWASM_TEST=1 --env "TEST_SERVER=$TEST_SERVER" \
+      "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+  else
+    (cd "$work" && timeout 60 wasmtime run --dir "$work::/" --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 \
+      "$wasm" "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+  fi
   code=$?
   show_files "$work" "$scratch/out"
   normalize <"$scratch/out" >"$scratch/out.n"

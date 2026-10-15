@@ -1,0 +1,6 @@
+http listening: true
+fetch: 200 POST POST /path?q=1 yes hi
+http.get: 404 text/plain GET /missing - 
+http closed
+net: echo:ping
+net closed

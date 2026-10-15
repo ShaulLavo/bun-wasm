@@ -152,12 +152,15 @@
       if (!closed) native.hostClose(handle);
       closed = true;
     };
+    // The signal may have fired while the request body was being read.
     const aborted = new Promise((resolve, reject) => {
       if (!signal) return;
-      signal.addEventListener("abort", () => {
+      const onAbort = () => {
         closeHandle();
         reject(signal.reason || new DOMException("The operation was aborted.", "AbortError"));
-      });
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort);
     });
     const head = await Promise.race([waitHead(handle), aborted]);
     const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 304;
@@ -426,6 +429,7 @@
       }
       buffer = buffer.slice(request.length);
       busy = true;
+      conn.busy = true;
       const keepAlive = wantsKeepAlive(request) && !ended;
       Promise.resolve()
         .then(() => handleRequest(request, conn, keepAlive))
@@ -436,6 +440,7 @@
         })
         .then((stillOpen) => {
           busy = false;
+          conn.busy = false;
           if (stillOpen === false || !keepAlive) {
             conn.end();
             return;
@@ -564,7 +569,9 @@
           stopped = true;
           waiters.delete(accepting);
           native.hostClose(listener);
-          if (closeActive) for (const c of connections) c.destroy();
+          // Idle keep-alive connections close now; busy ones after their
+          // response (they no longer keep alive once stopped).
+          for (const c of Array.from(connections)) if (closeActive || !c.busy) c.destroy();
         }
         return Promise.resolve();
       },
@@ -789,6 +796,11 @@
       }
       _onConnection(conn) {
         this._connections.add(conn);
+        const destroy = conn.destroy.bind(conn);
+        conn.destroy = () => {
+          this._connections.delete(conn);
+          destroy();
+        };
         const peer = conn.peer();
         const socket = { remoteAddress: peer.address, remotePort: peer.port, remoteFamily: peer.family, encrypted: protocol === "https:", destroy: () => conn.destroy(), setTimeout() {}, setNoDelay() {}, setKeepAlive() {}, on() {}, once() {} };
         this.emit("connection", socket);
@@ -817,6 +829,8 @@
           native.hostClose(this._listener);
           this.listening = false;
         }
+        // Like Node 19+, idle keep-alive connections close with the server.
+        this.closeIdleConnections();
         internal.nextTick(() => {
           this.emit("close");
           if (typeof callback === "function") callback();
@@ -824,9 +838,11 @@
         return this;
       }
       closeAllConnections() {
-        for (const c of this._connections) c.destroy();
+        for (const c of Array.from(this._connections)) c.destroy();
       }
-      closeIdleConnections() {}
+      closeIdleConnections() {
+        for (const c of Array.from(this._connections)) if (!c.busy) c.destroy();
+      }
       setTimeout() {
         return this;
       }

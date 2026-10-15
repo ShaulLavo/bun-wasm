@@ -1,0 +1,12 @@
+listening: number true 127.0.0.1 http:
+200 - GET /hello?x=1 
+200 - POST /echo payload
+200 - static route
+200 - {"id":"42"}
+200 - got
+200 - posted data
+201 guest async ok
+500 - error page: handler failed
+200 - 127.0.0.1
+200 - GET /n0  | 200 - GET /n1  | 200 - GET /n2  | 200 - GET /n3  | 200 - GET /n4 
+stopped

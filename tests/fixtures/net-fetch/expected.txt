@@ -1,0 +1,14 @@
+text: 200 true text/plain;charset=utf-8 hello from the test server
+json: {"ok":true,"list":[1,2,3]}
+echo: {"method":"POST","path":"/echo?q=1","headers":{"content-type":"text/plain","x-test":"abc"},"body":"posted body"}
+put json: {"a":1}
+bytes: 0,1,2,253,254,255
+gzip: 320
+redirect: 200 true <server>/text hello from the test server
+manual redirect: 302 /text
+status: 418 I'm a Teapot false yes
+head: 200 0
+parallel: slow done | hello from the test server
+body stream: hello from the test server
+refused: true string
+aborted: AbortError
