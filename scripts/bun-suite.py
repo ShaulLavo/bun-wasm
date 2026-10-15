@@ -31,6 +31,7 @@ def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("glob", nargs="*", default=["**"], help="paths relative to test/, shell-quoted globs")
     parser.add_argument("--engine", choices=["quickjs", "jsc", "browser"], default="quickjs")
+    parser.add_argument("--network", choices=["host", "loopback"], default="host", help="loopback gives each file a private network namespace without external routing")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--timeout", type=float, default=15, help="wall seconds per file, excluding copying")
     parser.add_argument("--test-timeout", type=int, default=2000, help="milliseconds per individual test")
@@ -46,6 +47,8 @@ def arguments():
         parser.error("jobs and timeouts must be positive")
     if opts.rerun and not opts.resume:
         parser.error("--rerun requires --resume")
+    if opts.network == "loopback":
+        subprocess.run(loopback_command(["true"]), check=True)
     opts.started = time.monotonic()
     opts.suite = opts.suite.resolve()
     opts.launcher = opts.launcher.resolve()
@@ -129,7 +132,7 @@ def provenance(opts, wasm):
             "launcher_sha256": digest(opts.launcher) if opts.engine != "browser" else digest(ROOT / "web/scripts/node-host.mjs"),
             "dependencies": dependency_digest(opts.suite / "node_modules"),
             "test_dependencies": dependency_digest(opts.dependencies or opts.suite / "test/node_modules"),
-            "timeout_seconds": opts.timeout, "test_timeout_ms": opts.test_timeout}
+            "network": opts.network, "timeout_seconds": opts.timeout, "test_timeout_ms": opts.test_timeout}
 
 
 def stop_process(proc):
@@ -145,6 +148,10 @@ def interrupt(signum, frame):
     with LOCK:
         for proc in tuple(PROCESSES):
             stop_process(proc)
+
+
+def loopback_command(command):
+    return ["unshare", "--user", "--map-root-user", "--net", "sh", "-c", 'ip link set lo up && exec "$@"', "bun-suite"] + command
 
 
 def command(opts, wasm, work, preloads, path):
@@ -202,7 +209,10 @@ def invoke(opts, wasm, work, preloads, path):
     started = time.monotonic()
     timed_out = False
     with (work / "output").open("w+b") as output:
-        proc = subprocess.Popen(command(opts, wasm, work, preloads, path), cwd=work / "bun/test", stdin=subprocess.DEVNULL, stdout=output, stderr=output, start_new_session=True)
+        argv = command(opts, wasm, work, preloads, path)
+        if opts.network == "loopback":
+            argv = loopback_command(argv)
+        proc = subprocess.Popen(argv, cwd=work / "bun/test", stdin=subprocess.DEVNULL, stdout=output, stderr=output, start_new_session=True)
         with LOCK:
             PROCESSES.add(proc)
         try:

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 import importlib.util
 import json
+import shutil
+import socket
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import types
@@ -15,6 +19,19 @@ report_spec.loader.exec_module(report)
 
 
 class ReportTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("unshare") and shutil.which("ip"), "Linux network namespaces required")
+    def test_loopback_namespace_preserves_host_listener(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            code = "import socket; s = socket.socket(); s.bind(('127.0.0.1', " + str(port) + ")); s.listen(); print('private listener')"
+            output = subprocess.check_output(suite.loopback_command([sys.executable, "-c", code]), text=True)
+            self.assertEqual(output.strip(), "private listener")
+            with socket.create_connection(("127.0.0.1", port)):
+                connection, _ = listener.accept()
+                connection.close()
+
     def test_footer_overrides_compressed_repeated_lines(self):
         result = suite.parse_output("(pass) repeated\n[repeated 99 times]\n(fail) broken [2ms]\n 100 pass\n 1 fail\nRan 101 tests across 1 file. [3ms]\n")
         self.assertEqual(result["counts"]["pass"], 100)
