@@ -34,3 +34,10 @@ The machine has ~9 GB free RAM: use `cargo build -j 12` or less for big builds.
   `scripts/export-patches.sh`. Keep them minimal: add `target_os = "wasi"` arms, don't rewrite.
 - No GitHub issues; this repo is local until the owner says otherwise.
 - Scratch in /work/tmp/bun-wasm-*; clean it up.
+
+## Direction (owner, 2026-10-15)
+
+- The public site is a demo. Its sandbox bundles React with bun.wasm and caches the result in the
+  browser; it doesn't ship a pre-built React bundle.
+- A future product (a StackBlitz-style IDE, to be discussed) will likely ship React pre-built,
+  because nearly every project wants it.
