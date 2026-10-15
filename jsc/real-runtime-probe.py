@@ -115,6 +115,12 @@ def cpp(args):
 
 
 def category(message, path):
+    if "mimalloc/atomic.h" in path:
+        return "threads/atomics"
+    if "StrongRef.cpp" in path and "kStrongRefSlotMask" in message:
+        return "32-bit ABI/layout"
+    if any(word in message for word in ("Host architecture", "Target architecture", "Unknown target architecture")):
+        return "platform/POSIX"
     if "file not found" in message:
         if any(word in message for word in ("sys/", "netdb.h", "netinet/", "pthread", "signal", "termios.h", "spawn.h", "mach/")):
             return "platform/POSIX"
@@ -125,7 +131,7 @@ def category(message, path):
         return "threads/atomics"
     if any(word in message for word in ("sigaction", "SIG", "signal", "sigset")):
         return "signals"
-    if any(word in message for word in ("StreamingCompiler", "JIT", "DOMJIT", "Assembler", "RegisterID", "Int52", "jsDoubleNumber")):
+    if any(word in message for word in ("StreamingCompiler", "WebAssemblyCompileOptions", "JIT", "DOMJIT", "Assembler", "RegisterID", "Int52", "jsDoubleNumber")):
         return "disabled JIT/JS WebAssembly"
     if any(word in message for word in ("inspector", "Inspector", "SamplingProfiler", "samplingProfiler")):
         return "disabled inspector/profiler"
