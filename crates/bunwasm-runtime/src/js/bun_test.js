@@ -48,6 +48,7 @@
   // ───────────────────────────── run state ─────────────────────────────
 
   const options = { timeout: 5000, namePattern: null, only: false, bail: 0, runTodo: false, agent: false };
+  const preloads = [];
 
   const summary = { pass: 0, fail: 0, skip: 0, todo: 0, filtered: 0, files: 0, expectations: 0, errors: 0 };
 
@@ -1884,6 +1885,7 @@
       const [flag, inline] = splitFlag(arg);
       const value = () => (inline !== undefined ? inline : args[++i]);
       if (flag === "--timeout") options.timeout = Number(value());
+      else if (flag === "--preload") preloads.push(value());
       else if (flag === "-t" || flag === "--test-name-pattern") setNamePattern(value());
       else if (flag === "--bail") options.bail = inline === undefined ? 1 : Number(inline);
       else if (flag === "--only") options.only = true;
@@ -1923,6 +1925,7 @@
     startFileHeader(relativePath(cwd, abs));
     collecting = file;
     try {
+      for (const preload of preloads) await internal.importModule(resolveArgument(cwd, preload));
       await internal.importModule(abs);
     } catch (error) {
       // A file that fails to load counts as one failed test.
@@ -1949,6 +1952,7 @@
       return;
     }
     installErrorHandlers();
+    Object.assign(globalThis, exports);
     for (const abs of state.files) await runFile(abs, cwd);
     const filteredAll = printSummary();
     if (filteredAll || summary.fail > 0 || summary.errors > 0) globalThis.process.exitCode = 1;

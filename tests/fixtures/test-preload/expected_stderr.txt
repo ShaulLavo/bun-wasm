@@ -1,0 +1,8 @@
+
+example.test.ts:
+(pass) preload runs before collection and hooks before tests
+
+ 1 pass
+ 0 fail
+ 4 expect() calls
+Ran 1 test across 1 file. [TIME]

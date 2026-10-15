@@ -229,7 +229,7 @@
     getActiveResourcesInfo: () => [],
     constrainedMemory: () => 0,
     availableMemory: () => 4294967296 - native.memoryUsage().rss,
-    report: { getReport: () => ({}) },
+    report: { getReport: () => ({ header: {} }) },
     stdin: undefined,
   };
   Object.assign(process, props);

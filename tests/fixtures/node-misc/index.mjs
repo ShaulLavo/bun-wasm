@@ -33,7 +33,9 @@ for (const [name, fn] of [
 
 // Things WASI can't do: they fail loudly instead of hanging or lying.
 console.log("Bun.which:", Bun.which("ls"));
-for (const name of ["spawn", "spawnSync", "serve"]) {
+const spawned = Bun.spawnSync({ cmd: ["ls"] });
+console.log("Bun.spawnSync unsupported:", !spawned.success && spawned.exitCode !== 0 && spawned.stderr.toString().includes("not supported in bun-wasm"));
+for (const name of ["spawn", "serve"]) {
   try {
     Bun[name]({ cmd: ["ls"], fetch() {} });
     console.log(`Bun.${name} ran`);

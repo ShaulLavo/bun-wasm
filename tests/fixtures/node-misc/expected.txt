@@ -9,8 +9,8 @@ child_process.spawn throws: true
 http.createServer throws: true
 net.connect throws: true
 Bun.which: null
+Bun.spawnSync unsupported: true
 Bun.spawn throws: true
-Bun.spawnSync throws: true
 Bun.serve throws: true
 fetch rejects: true
 fetch file: URL: true
