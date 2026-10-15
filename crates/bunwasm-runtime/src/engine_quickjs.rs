@@ -369,7 +369,9 @@ fn to_val(v: &Value<'_>) -> Val {
         // SAFETY: no JS runs while the slice is alive; it is copied at once.
         return Val::Bytes(unsafe { arr.as_bytes() }.unwrap_or(&[]).to_vec());
     }
-    if let Some(buf) = rquickjs::ArrayBuffer::from_object(obj.clone()) {
+    // SAFETY: v is live; the tag query does not call JavaScript or throw.
+    let is_buffer = unsafe { qjs::JS_IsArrayBuffer(v.as_raw()) };
+    if is_buffer && let Some(buf) = rquickjs::ArrayBuffer::from_object(obj.clone()) {
         // SAFETY: as above.
         return Val::Bytes(unsafe { buf.as_bytes() }.unwrap_or(&[]).to_vec());
     }

@@ -61,6 +61,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
+| [`crates/bunwasm-runtime/src/engine_quickjs.rs`, data conversion](#quickjs-data-conversion) | Host feature | Original adapter checks buffer tags before calling a throwing getter. |
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-imports) | Host feature | Original generated-function adapter with module-relative dynamic imports. |
 
 ## Portable semver host functions
@@ -95,6 +96,16 @@ pure Bun semver parser used by package installation. See
 ## App compatibility fixtures
 
 `scripts/app-matrix/apps.mjs` contains original minimal projects that use published framework APIs. The dependency versions in that file identify the npm upstream revisions. No template source or upstream implementation is copied or adapted. The runner, registry recorder, network namespace wrapper, shared assertions/classifier, and browser driver are original bun-wasm host adapters. The namespace wrapper uses Linux user/network namespaces without changing any upstream source. Retained diagnostic fixtures under `scripts/app-matrix/review-evidence/` are unmodified logs from the pinned packages in the 2026-10-15 census, including Next 15.5.6, Prisma 6.17.1, Vite 7.1.12 and Rollup 4.64.7; they are regression inputs, not adapted implementations. The browser driver calls the existing playground test helpers. Recorded dependency tarballs remain unmodified in the external cache, verified by SHA-256; registry metadata is rewritten only in loopback responses to point tarballs at that mirror.
+
+## QuickJS data conversion
+
+`engine_quickjs.rs::to_val` is an original adapter over rquickjs 0.13.0 and the
+vendored QuickJS-ng API. No upstream source is copied. The adapter now checks
+`JS_IsArrayBuffer` before `ArrayBuffer::from_object`. The latter calls the throwing
+`JS_GetArrayBuffer` getter even for non-buffer objects and leaves a TypeError
+pending while returning None. Ordinary arrays and objects must cross the native
+boundary without creating an exception. The import-selector regression exposed
+this on QuickJS; a native Rust regression also observes the pending exception.
 
 ## Generated function imports
 
