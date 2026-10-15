@@ -138,6 +138,8 @@ fn array_items(arr: JSValueRef) -> Vec<JSValueRef> {
     (0..len).map(|i| unsafe { JSObjectGetPropertyAtIndex(ctx(), obj, i, ptr::null_mut()) }).collect()
 }
 
+// The JSC C API's enum constants (kJSType*) are used as match patterns.
+#[allow(non_upper_case_globals)]
 fn to_val(v: JSValueRef) -> Val {
     let c = ctx();
     // SAFETY: valid context and value throughout.

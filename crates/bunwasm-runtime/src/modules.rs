@@ -245,6 +245,7 @@ impl State {
     }
 
     /// Remember that `lines` lines were injected above line 1 of `path`.
+    #[cfg(feature = "engine-host")]
     pub fn record_line_offset(&self, path: &str, lines: u32) {
         self.positions.borrow_mut().entry(path.to_owned()).or_default().line_offset = lines;
     }
@@ -277,10 +278,12 @@ pub fn polyfill_source(name: &str) -> Option<&'static str> {
     POLYFILLS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
 }
 
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 fn is_plain_identifier(key: &str) -> bool {
     !key.is_empty() && key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 /// Wrapper ESM source re-exporting `import.meta.m` (default) and its keys.
 pub fn wrapper_source(keys: &[String]) -> String {
     let mut src = String::from("const m = import.meta.m.value; export default import.meta.m.default;\n");

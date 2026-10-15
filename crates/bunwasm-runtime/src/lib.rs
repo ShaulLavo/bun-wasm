@@ -136,6 +136,7 @@ impl State {
     }
 }
 
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 /// The runtime's engine-facing half: the `internal` object the bootstrap
 /// returned, pending wrapper-module handoffs, and the module host.
 pub(crate) struct Core<E: Engine> {
@@ -145,6 +146,7 @@ pub(crate) struct Core<E: Engine> {
     handoffs: RefCell<HashMap<String, (E::Value, E::Value)>>,
 }
 
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 impl<E: Engine> Core<E> {
     pub(crate) fn internal(&self, e: &E) -> E::Value {
         self.internal.borrow().clone().unwrap_or_else(|| e.undefined())
@@ -215,6 +217,7 @@ impl<E: Engine> Core<E> {
     }
 }
 
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 impl<E: Engine> ModuleHost<E> for Core<E> {
     fn resolve(&self, e: &E, specifier: &str, referrer: &str) -> Result<String, E::Value> {
         let from = if referrer.is_empty() || resolve::builtin_name(referrer).is_some() {
@@ -376,6 +379,7 @@ fn run_in_engine<E: Engine>(e: &E, core: &Rc<Core<E>>, entry: &Entry, main_path:
     }
 }
 
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 /// The event loop: microtasks and ticks, then one due timer at a time;
 /// sleeps (WASI `poll_oneoff`, or the host's poll while sockets are open)
 /// until the next timer when idle.
@@ -442,6 +446,7 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>) {
     }
 }
 
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 /// Surface a rejected entry module; keep pending ones around.
 fn check_main_promise<E: Engine>(e: &E, core: &Core<E>, promise: E::Value) -> Option<E::Value> {
     match e.promise_state(&promise) {

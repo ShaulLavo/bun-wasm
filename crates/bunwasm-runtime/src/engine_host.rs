@@ -149,7 +149,6 @@ pub fn decode(bytes: &[u8]) -> Val {
 }
 
 struct Host {
-    state: Rc<State>,
     functions: Vec<(&'static str, DataFn)>,
     constants: Vec<(&'static str, Val)>,
     entry: Val,
@@ -161,7 +160,7 @@ thread_local! {
 }
 
 /// Set the program up for the host to run; `_start` then returns.
-pub fn init(entry: Entry, state: Rc<State>, main_path: String) -> i32 {
+pub(crate) fn init(entry: Entry, state: Rc<State>, main_path: String) -> i32 {
     let mut table = crate::natives::table(&state);
     install_host_natives(&mut table, &state);
     let entry = match &entry {
@@ -175,7 +174,7 @@ pub fn init(entry: Entry, state: Rc<State>, main_path: String) -> i32 {
             .set("main", main_path)
             .set("args", Val::Array(args.iter().map(|a| Val::from(a.as_str())).collect())),
     };
-    let host = Host { state, functions: table.functions, constants: table.constants, entry: entry.into() };
+    let host = Host { functions: table.functions, constants: table.constants, entry: entry.into() };
     HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
     0
 }
