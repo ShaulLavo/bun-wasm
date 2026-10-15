@@ -1,0 +1,13 @@
+bun sync 7 false child-env error
+bun async 0 one,two true
+stdin HELLO 0
+node sync 0 node-sync null
+node async node-async 0
+exec sync 42
+execFile sync 43
+exec 44
+execFile 45
+kill 143 15
+unsupported ENOENT
+fork fork-arg 0
+ipc ERR_NOT_SUPPORTED_IN_WASM

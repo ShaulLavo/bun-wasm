@@ -479,12 +479,8 @@
     get stdin() {
       return file(0);
     },
-    spawn: unsupported("Bun.spawn", noProcesses),
-    spawnSync() {
-      const error = new Error(`Bun.spawnSync is not supported in bun-wasm: ${noProcesses}`);
-      error.code = "ERR_NOT_SUPPORTED_IN_WASM";
-      return { success: false, exitCode: 1, signalCode: null, stdout: Buffer.alloc(0), stderr: Buffer.from(error.message + "\n"), error };
-    },
+    spawn: (cmd, options) => internal.require("spawn").spawn(cmd, options),
+    spawnSync: (cmd, options) => internal.require("spawn").spawnSync(cmd, options),
     unsafe: {
       gcAggressionLevel: unsupported("Bun.unsafe.gcAggressionLevel", "engine GC scheduling is not exposed"),
       arrayBufferToString: unsupported("Bun.unsafe.arrayBufferToString", "zero-copy strings are not exposed"),

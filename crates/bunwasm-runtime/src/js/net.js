@@ -27,6 +27,8 @@
     return waiter;
   }
 
+  internal.addIoWaiter = addWaiter;
+
   internal.ioPending = function ioPending() {
     let n = 0;
     for (const w of waiters) if (w.ref) n++;

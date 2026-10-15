@@ -1075,7 +1075,7 @@
         getEnvironmentData: () => undefined,
         setEnvironmentData() {},
       }),
-    "node:child_process": () => unsupportedModule("child_process", NO_PROCESSES, ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork", "ChildProcess"]),
+    "node:child_process": () => internal.require("spawn").nodeChildProcess(),
     "node:cluster": () => unsupportedModule("cluster", NO_PROCESSES, ["fork", "setupPrimary", "setupMaster", "disconnect"], { isPrimary: true, isMaster: true, isWorker: false, workers: {} }),
     "node:net": () => native.hostCaps.listen ? Object.assign(internal.require("net").nodeNet(), { isIP, isIPv4, isIPv6, getDefaultAutoSelectFamily: () => true, setDefaultAutoSelectFamily() {} }) : unsupportedModule("net", NO_NETWORK, ["createServer", "createConnection", "connect", "Socket", "Server", "Stream", "BlockList", "SocketAddress"], { isIP, isIPv4, isIPv6, getDefaultAutoSelectFamily: () => true, setDefaultAutoSelectFamily() {} }),
     "node:tls": () => unsupportedModule("tls", NO_NETWORK, ["connect", "createServer", "createSecureContext", "TLSSocket", "Server", "checkServerIdentity"], { rootCertificates: [], DEFAULT_MIN_VERSION: "TLSv1.2", DEFAULT_MAX_VERSION: "TLSv1.3", DEFAULT_ECDH_CURVE: "auto" }),
