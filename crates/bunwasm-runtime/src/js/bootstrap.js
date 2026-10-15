@@ -21,6 +21,7 @@
     isPromise: native.isPromise,
     isError: native.isError,
     getSourceLine: native.getSourceLine,
+    mapPosition: native.mapPosition,
     isESMNamespace: isModuleNamespace,
     isModuleNamespaceObject: isModuleNamespace,
   });

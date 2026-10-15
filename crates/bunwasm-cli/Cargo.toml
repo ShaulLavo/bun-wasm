@@ -10,7 +10,11 @@ name = "bun"
 path = "src/main.rs"
 
 [features]
-default = ["bun-transpiler", "bun-build"]
+default = ["engine-quickjs", "bun-transpiler", "bun-build"]
+# The JS engine: QuickJS-ng (bun.wasm) or Bun's JavaScriptCore (bun-jsc.wasm,
+# scripts/build-bun-jsc.sh). Pick exactly one.
+engine-quickjs = ["bunwasm-runtime/engine-quickjs"]
+engine-jsc = ["bunwasm-runtime/engine-jsc"]
 # Bun's real transpiler (crates/bunwasm-transpiler) for .ts/.tsx/.jsx/.toml.
 # Without it only plain JavaScript runs.
 bun-transpiler = ["dep:bunwasm-transpiler", "dep:bunwasm-glue"]
@@ -18,7 +22,7 @@ bun-transpiler = ["dep:bunwasm-transpiler", "dep:bunwasm-glue"]
 bun-build = ["dep:bunwasm-build", "dep:bunwasm-glue"]
 
 [dependencies]
-bunwasm-runtime = { path = "../bunwasm-runtime" }
+bunwasm-runtime = { path = "../bunwasm-runtime", default-features = false }
 bunwasm-transpiler = { path = "../bunwasm-transpiler", optional = true }
 bunwasm-build = { path = "../bunwasm-build", optional = true }
 

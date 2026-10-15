@@ -31,7 +31,8 @@
 # `--update` runs native Bun in the scratch copy, where absolute paths would
 # land on the real filesystem.
 #
-#   scripts/test.sh [--no-build] [--update] [name...]
+#   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc] [name...]
+#     --engine jsc  run dist/bun-jsc.wasm (JavaScriptCore; scripts/build-bun-jsc.sh)
 #     --update   regenerate expected.txt with native `bun` (review the diff!)
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,23 +41,31 @@ source "$root/env.sh"
 
 build=1
 update=0
+engine=quickjs
 names=()
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --no-build) build=0 ;;
     --update) update=1 ;;
-    *) names+=("$arg") ;;
+    --engine) engine="$2"; shift ;;
+    --engine=*) engine="${1#--engine=}" ;;
+    *) names+=("$1") ;;
   esac
+  shift
 done
 
-wasm="$root/dist/bun.wasm"
+case "$engine" in
+  quickjs) wasm="$root/dist/bun.wasm"; build_script="$root/scripts/build.sh" ;;
+  jsc) wasm="$root/dist/bun-jsc.wasm"; build_script="$root/scripts/build-bun-jsc.sh" ;;
+  *) echo "unknown engine $engine (quickjs or jsc)"; exit 2 ;;
+esac
 
 scratch="$(mktemp -d /work/tmp/bun-wasm-runtime-test-XXXXXX)"
 server_pid=""
 trap 'if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null; fi; rm -rf "$scratch"' EXIT INT TERM
 
 if [[ $build == 1 && $update == 0 ]]; then
-  "$root/scripts/build.sh" >"$scratch/build.log" 2>&1 || { tail -30 "$scratch/build.log"; echo "build failed"; exit 1; }
+  "$build_script" >"$scratch/build.log" 2>&1 || { tail -30 "$scratch/build.log"; echo "build failed"; exit 1; }
 fi
 
 # Networking fixtures need the native launcher and the local test server.

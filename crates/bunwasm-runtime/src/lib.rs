@@ -26,18 +26,20 @@ mod sourcemap;
 mod sqlite;
 pub mod transpiler;
 
-#[cfg(not(feature = "engine-jsc"))]
+#[cfg(feature = "engine-quickjs")]
 mod engine_quickjs;
-#[cfg(feature = "engine-jsc")]
+#[cfg(all(feature = "engine-jsc", not(feature = "engine-quickjs")))]
 mod engine_jsc;
+#[cfg(not(any(feature = "engine-quickjs", feature = "engine-jsc")))]
+compile_error!("bunwasm-runtime needs an engine: feature engine-quickjs or engine-jsc");
 
 pub use engine::{Engine, ModuleHost, NativeError, PromiseState, Val};
 pub use transpiler::{Loader, PassthroughTranspiler, Transpiled, Transpiler};
 
 /// The engine this build uses.
-#[cfg(not(feature = "engine-jsc"))]
+#[cfg(feature = "engine-quickjs")]
 pub type ActiveEngine = engine_quickjs::QuickJs;
-#[cfg(feature = "engine-jsc")]
+#[cfg(all(feature = "engine-jsc", not(feature = "engine-quickjs")))]
 pub type ActiveEngine = engine_jsc::Jsc;
 
 /// Bun version this runtime reports (from vendor/bun/package.json).

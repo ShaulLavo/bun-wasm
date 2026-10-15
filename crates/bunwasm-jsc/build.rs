@@ -53,10 +53,8 @@ fn main() {
     for lib in ["c++", "c++abi", "wasi-emulated-process-clocks"] {
         println!("cargo:rustc-link-lib=static={lib}");
     }
-    println!("cargo:rustc-link-arg-bin=bun-jsc={}", libdir.join("crt1-command.o").display());
-    println!("cargo:rustc-link-arg-bin=bun-jsc=-zstack-size=8388608");
-    // Bun's string pointer tags use the top three address bits on wasm32.
-    println!("cargo:rustc-link-arg-bin=bun-jsc=--max-memory=536870912");
+    // The binary links wasi-sdk's crt1-command.o itself (crates/bunwasm-cli/build.rs under
+    // engine-jsc): link args from a dependency's build script don't reach it.
 }
 
 /// helpers.cpp uses JSC internals, so it is compiled exactly like the jsc shell (jsc.cpp):

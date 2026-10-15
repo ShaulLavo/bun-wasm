@@ -1,7 +1,7 @@
 //! Bun's JavaScriptCore, compiled to wasm32-wasip1 (C loop interpreter), behind its C API.
 //!
 //! [`sys`] declares the C API; [`Js`] is a thin, copyable handle over a context with the
-//! conversions the `bun-jsc` binary needs. Values are raw `JSValueRef`s: JSC finds the ones on the
+//! conversions bunwasm-runtime's JSC engine (src/engine_jsc.rs) needs. Values are raw `JSValueRef`s: JSC finds the ones on the
 //! stack by scanning it conservatively, which on wasm only works after `wasm-opt --spill-pointers`
 //! (jsc/finalize.sh). Values kept anywhere else (statics, heap) must be `protect`ed.
 pub mod sys;
@@ -46,6 +46,13 @@ impl JsString {
     pub fn raw(&self) -> JSStringRef {
         self.0
     }
+    /// Take ownership of one reference to `s` (e.g. from JSValueToStringCopy).
+    ///
+    /// # Safety
+    /// `s` must be a live string whose reference the caller owns.
+    pub unsafe fn from_owned(s: JSStringRef) -> Self {
+        JsString(s)
+    }
     pub fn to_rust(&self) -> String {
         // SAFETY: self.0 is a live string; the pointer is valid for its length.
         unsafe {
@@ -73,35 +80,13 @@ pub struct Js {
 }
 
 impl Js {
-    /// Creates a new global context (a new VM) with an ES module loader whose sources come from
-    /// [`Js::set_module_fetch`]. It is never released: VM teardown is not supported on this build
+    /// Creates a new global context (a new VM) with an ES module loader that calls back into the
+    /// runtime (cpp/helpers.cpp `bunjsc_host_*`). It is never released: VM teardown is not supported on this build
     /// (see jsc/README.md), and Bun never tears its VM down either.
     pub fn new_context() -> Js {
         // SAFETY: plain constructor (cpp/helpers.cpp).
         let ctx = unsafe { bunjsc_create_context() };
         Js { ctx }
-    }
-
-    /// `fetch(key) -> source` for every module the loader needs (key: file:// URL or node:name),
-    /// and `import_meta(meta, key)`, called for each module's `import.meta` object.
-    pub fn set_module_hooks(self, fetch: JSObjectRef, import_meta: JSObjectRef) {
-        // SAFETY: valid context and functions; the helper protects them.
-        unsafe { bunjsc_set_module_hooks(self.ctx, fetch, import_meta) }
-    }
-
-    /// Fetches and parses the module graph of `key` (a file:// URL). Returns a promise that
-    /// settles as microtasks run.
-    pub fn load_module(self, key: &str) -> JSValueRef {
-        let key = std::ffi::CString::new(key).unwrap_or_default();
-        // SAFETY: valid context and NUL-terminated key.
-        unsafe { bunjsc_load_module(self.ctx, key.as_ptr()) }
-    }
-
-    /// Runs a loaded module's body; returns the promise of its (top-level-await) completion.
-    pub fn evaluate_module(self, key: &str) -> JSValueRef {
-        let key = std::ffi::CString::new(key).unwrap_or_default();
-        // SAFETY: valid context and NUL-terminated key.
-        unsafe { bunjsc_evaluate_module(self.ctx, key.as_ptr()) }
     }
 
     pub fn global(self) -> JSObjectRef {
@@ -277,7 +262,8 @@ impl Js {
         unsafe { bunjsc_enter(self.ctx) }
     }
 
-    pub fn drain_microtasks(self) {
+    /// Runs pending promise jobs; returns whether there were any.
+    pub fn drain_microtasks(self) -> bool {
         // SAFETY: valid context.
         unsafe { bunjsc_drain_microtasks(self.ctx) }
     }

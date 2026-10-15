@@ -139,13 +139,25 @@ unsafe extern "C" {
 
     pub fn JSGlobalContextSetUnhandledRejectionCallback(ctx: JSGlobalContextRef, function: JSObjectRef, exception: *mut JSValueRef);
 
+    pub fn JSValueIsBoolean(ctx: JSContextRef, value: JSValueRef) -> bool;
+    pub fn JSValueIsNumber(ctx: JSContextRef, value: JSValueRef) -> bool;
+    pub fn JSValueIsBigInt(ctx: JSContextRef, value: JSValueRef) -> bool;
+    pub fn JSValueIsArray(ctx: JSContextRef, value: JSValueRef) -> bool;
+    pub fn JSValueIsStrictEqual(ctx: JSContextRef, a: JSValueRef, b: JSValueRef) -> bool;
+    pub fn JSValueToInt64(ctx: JSContextRef, value: JSValueRef, exception: *mut JSValueRef) -> i64;
+    pub fn JSBigIntCreateWithInt64(ctx: JSContextRef, integer: i64, exception: *mut JSValueRef) -> JSValueRef;
+    pub fn JSBigIntCreateWithUInt64(ctx: JSContextRef, integer: u64, exception: *mut JSValueRef) -> JSValueRef;
+    pub fn JSObjectMakeArray(ctx: JSContextRef, argc: usize, argv: *const JSValueRef, exception: *mut JSValueRef) -> JSObjectRef;
+    pub fn JSObjectGetPropertyAtIndex(ctx: JSContextRef, object: JSObjectRef, index: c_uint, exception: *mut JSValueRef) -> JSValueRef;
+    pub fn JSObjectCallAsConstructor(ctx: JSContextRef, object: JSObjectRef, argc: usize, argv: *const JSValueRef, exception: *mut JSValueRef) -> JSObjectRef;
+
     // cpp/helpers.cpp
     pub fn bunjsc_create_context() -> JSGlobalContextRef;
-    pub fn bunjsc_set_module_hooks(ctx: JSContextRef, fetch: JSObjectRef, import_meta: JSObjectRef);
-    pub fn bunjsc_load_module(ctx: JSContextRef, key: *const c_char) -> JSValueRef;
-    pub fn bunjsc_evaluate_module(ctx: JSContextRef, key: *const c_char) -> JSValueRef;
+    pub fn bunjsc_import(ctx: JSContextRef, specifier: *const c_char, exception: *mut JSValueRef) -> JSValueRef;
+    pub fn bunjsc_evaluate_script(ctx: JSContextRef, source: *const c_char, filename: *const c_char, first_line: c_int, exception: *mut JSValueRef) -> JSValueRef;
     pub fn bunjsc_enter(ctx: JSContextRef);
-    pub fn bunjsc_drain_microtasks(ctx: JSContextRef);
+    pub fn bunjsc_drain_microtasks(ctx: JSContextRef) -> bool;
+    pub fn bunjsc_is_error(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_promise_state(ctx: JSContextRef, value: JSValueRef) -> c_int;
     pub fn bunjsc_promise_result(ctx: JSContextRef, value: JSValueRef) -> JSValueRef;
     pub fn bunjsc_proxy_target(ctx: JSContextRef, value: JSValueRef) -> JSValueRef;

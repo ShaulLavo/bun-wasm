@@ -3,15 +3,4 @@ name = "bunwasm-jsc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Experimental second engine: Bun's JavaScriptCore (C loop, wasm32-wasip1) behind its C API, and the `bun-jsc` binary"
-
-[dependencies]
-bunwasm-build = { path = "../bunwasm-build" }
-
-[target.'cfg(target_os = "wasi")'.dependencies]
-bunwasm-glue = { path = "../bunwasm-glue" }
-bunwasm-posix = { path = "../bunwasm-posix" }
-
-[[bin]]
-name = "bun-jsc"
-path = "src/main.rs"
+description = "Bun's JavaScriptCore (C loop, wasm32-wasip1): its C API, the C++ helpers the API lacks, and the link setup; bunwasm-runtime's engine-jsc builds on it"

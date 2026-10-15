@@ -1393,8 +1393,20 @@
     return frames;
   }
 
+  // JavaScriptCore frames: `name@file:line:col`, `module code@…`,
+  // `forEach@[native code]`. Positions are in evaluated code; map them back.
+  function parseJscFrameLine(line) {
+    const m = /^(.*?)@(.*):(\d+):(\d+)$/.exec(line);
+    if (!m || m[2].startsWith("bun-wasm:")) return null;
+    let [file, lineNo, column] = [m[2], Number(m[3]), Number(m[4])];
+    const mapped = typeof internal.mapPosition === "function" ? internal.mapPosition(file, lineNo, column) : undefined;
+    if (mapped) [lineNo, column] = mapped;
+    const topLevel = m[1] === "global code" || m[1] === "module code" || m[1] === "eval code";
+    return { name: topLevel ? "" : m[1] || "<anonymous>", file, line: lineNo, column };
+  }
+
   function parseFrameLine(line) {
-    if (!line.startsWith("at ")) return null;
+    if (!line.startsWith("at ")) return line.includes("@") ? parseJscFrameLine(line) : null;
     const body = line.slice(3);
     const withName = /^(.*?) \((.*)\)$/.exec(body);
     const name = withName ? withName[1] : "";

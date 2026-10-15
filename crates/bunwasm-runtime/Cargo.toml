@@ -9,9 +9,10 @@ description = "Bun-compatible JS runtime for wasm32-wasip1, on QuickJS-ng or Jav
 default = ["engine-quickjs"]
 # The JS engine (exactly one): QuickJS-ng, or Bun's JavaScriptCore.
 engine-quickjs = ["dep:rquickjs"]
-engine-jsc = []
+engine-jsc = ["dep:bunwasm-jsc"]
 
 [dependencies]
+bunwasm-jsc = { path = "../bunwasm-jsc", optional = true }
 rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"], optional = true }
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
 url = "2"
