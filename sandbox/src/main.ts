@@ -1,5 +1,5 @@
 // The sandbox page: a React project in the in-memory filesystem, edited in CodeMirror and served by
-// its own dev server (template/dev.ts), which runs in bun.wasm in a worker. The preview iframe loads
+// its own dev server (template/.dev/dev.ts), which runs in bun.wasm in a worker. The preview iframe loads
 // it through the service worker's /__preview/<port>/ route. Saved edits go to the page's filesystem
 // (the next run starts from it) and, as POST /@hmr/update, straight to the running dev server.
 
@@ -165,14 +165,14 @@ async function startDevServer(): Promise<void> {
   unsent.clear();
   performance.clearMarks("bunwasm:deps-cached");
   performance.clearMeasures("bunwasm:deps-cached");
-  const changedDeps = Object.keys(edits).some((path) => path === "dev.ts" || path === "package.json" || path.startsWith("node_modules/"));
+  const changedDeps = Object.keys(edits).some((path) => path.startsWith(".dev/") || path === "package.json" || path.startsWith("node_modules/"));
   if (changedDeps) {
     depsKey = null;
     fs.remove(abs("node_modules/.dev/deps.json"));
   }
   setStatus("starting worker…");
   setServerState("starting", "starting dev server…");
-  term.write(`\x1b[2m$\x1b[0m bun dev.ts \x1b[2m(${ENGINES[engine].name})\x1b[0m\r\n`);
+  term.write(`\x1b[2m$\x1b[0m bun dev \x1b[2m(${ENGINES[engine].name})\x1b[0m\r\n`);
   const env: Record<string, string> = {
     HOME,
     PWD: APP,
@@ -189,9 +189,9 @@ async function startDevServer(): Promise<void> {
   };
   const started = performance.now();
   const output = new StartupOutput((text) => term.write(text), (line) => startupLine(line, started));
-  const current = startRun({ engine, module: wasm.module, args: ["dev.ts"], env, root: fs.root, moduleScope: scoped }, {
+  const current = startRun({ engine, module: wasm.module, args: [".dev/dev.ts"], env, root: fs.root, moduleScope: scoped }, {
     phase: (name) => {
-      if (name === "worker-start") setStatus("starting dev.ts…");
+      if (name === "worker-start") setStatus("starting dev server…");
     },
     stdout: (data) => output.write(data),
     stderr: (data) => term.write(data),
@@ -226,7 +226,7 @@ function startupLine(line: string, started: number): boolean {
   if (!event || typeof event !== "object" || !("phase" in event) || !("duration" in event)) return false;
   if (typeof event.phase !== "string" || typeof event.duration !== "number") return false;
   const labels: Record<string, string> = {
-    "dev-start": "starting dev.ts…",
+    "dev-start": "starting dev server…",
     "bundling-react": "bundling React dependencies…",
     "bundled-react": "starting dev server…",
     "deps-cached": "using cached React dependencies…",
@@ -542,7 +542,7 @@ async function boot(): Promise<void> {
   tree.render();
   editor.open(fs.lookup(abs(START_FILE)) ? START_FILE : (fs.listFiles(APP).map(rel)[0] ?? START_FILE));
   if (wasm) {
-    const changedDeps = Object.keys(edits).some((path) => path === "dev.ts" || path === "package.json" || path.startsWith("node_modules/"));
+    const changedDeps = Object.keys(edits).some((path) => path.startsWith(".dev/") || path === "package.json" || path.startsWith("node_modules/"));
     depsKey = changedDeps ? null : await depsCacheKey(engine, wasm.build);
     const cached = depsKey ? await readDeps(depsKey) : null;
     if (cached) fs.writeFile(abs("node_modules/.dev/deps.json"), cached);

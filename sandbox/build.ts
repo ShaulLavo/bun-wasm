@@ -80,9 +80,9 @@ try {
   await Bun.write(join(scratch, "package.json"), Bun.file(join(template, "package.json")));
   const install = Bun.spawnSync(["bun", "install", "--linker", "hoisted", "--no-save"], { cwd: scratch, stdout: "inherit", stderr: "inherit" });
   if (install.exitCode !== 0) throw new Error("bun install failed");
-  const devTs = files["dev.ts"] ?? "";
+  const devTs = files[".dev/dev.ts"] ?? "";
   const depsMatch = /const DEPS = (\[[^\]]*\]);/.exec(devTs);
-  if (!depsMatch) throw new Error("template/dev.ts has no `const DEPS = [...]` list");
+  if (!depsMatch) throw new Error("template/.dev/dev.ts has no `const DEPS = [...]` list");
   const deps: string[] = JSON.parse(depsMatch[1]!);
   const entries = await Promise.all(
     deps.map(async (spec, i) => {

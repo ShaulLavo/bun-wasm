@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun dev.ts"
+    "dev": "bun .dev/dev.ts"
   },
   "dependencies": {
     "react": "19.3.1",

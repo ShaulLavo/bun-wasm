@@ -2,7 +2,8 @@
 
 A small StackBlitz-style page: a file tree, a CodeMirror editor, a live preview and the dev server's
 terminal. The project is a React 19 app in the in-memory filesystem, and its dev server is a
-`Bun.serve` script (`template/dev.ts`) running in bun.wasm in a worker. No backend: the static
+`Bun.serve` script (`template/.dev/dev.ts`; `.dev/` is hidden from the file tree, since it is the
+sandbox's plumbing, not the app) running in bun.wasm in a worker. No backend: the static
 files are the whole site.
 
 ## Build and run
@@ -25,7 +26,7 @@ sessionStorage. The page must be cross-origin isolated (COOP/COEP), like the pla
 
 ## How a change reaches the preview
 
-1. **Start.** The page seeds the filesystem from `template.json` and runs `bun dev.ts` in
+1. **Start.** The page seeds the filesystem from `template.json` and runs `bun .dev/dev.ts` in
    `/home/user/app` (`web/src/runner.ts`). dev.ts bundles the dependencies once with `Bun.build`
    (splitting on, one ES module per import: `react`, `react-dom/client`, `react-refresh/runtime`, …)
    and listens on port 5173. The preview iframe opens `./__preview/5173/`, which the service worker
@@ -49,5 +50,5 @@ sessionStorage. The page must be cross-origin isolated (COOP/COEP), like the pla
 5. **Errors.** A failed build is reported in the POST's answer and as an event; the client shows
    an overlay with Bun's message and the offending line, and removes it on the next good build.
 
-dev.ts uses only Bun's APIs, so `bun dev.ts` in a copy of `template/` (after `bun install`) runs
+dev.ts uses only Bun's APIs, so `bun run dev` in a copy of `template/` (after `bun install`) runs
 the same server on native Bun.

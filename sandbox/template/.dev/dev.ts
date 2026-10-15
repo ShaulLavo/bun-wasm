@@ -5,7 +5,8 @@
 //   every import left external) with React Fast Refresh, so components call $RefreshReg$.
 //   Their relative imports are rewritten to URLs with a ?t=<version> query.
 // - The dependencies in DEPS are bundled once, at startup, into browser ES modules under /@deps/,
-//   and index.html gets an import map pointing at them, plus the HMR client (hmr-client.js).
+//   and index.html gets an import map pointing at them, plus the HMR client (hmr-client.js). Both live in .dev/,
+//   which the sandbox file tree hides: they are the sandbox's plumbing, not the app.
 // - POST /@hmr/update {path, text} writes a file and works out what to update: the changed
 //   module, or the nearest importers that only export components (React refreshes those in
 //   place, keeping state). CSS swaps its <style>. Anything else reloads the page.
@@ -21,7 +22,8 @@ function startup(phase: string, duration = 0): void {
 }
 startup("dev-start");
 
-const root = import.meta.dir;
+// dev.ts lives in .dev/ (hidden from the sandbox file tree); the app is the folder above it.
+const root = join(import.meta.dir, "..");
 const port = Number(process.env.PORT || 5173);
 const requireDep = createRequire(import.meta.url);
 
@@ -384,7 +386,7 @@ const server = Bun.serve({
     const path = decodeURIComponent(url.pathname);
     if (path === "/" || path === "/index.html") return html();
     if (path === "/@hmr/deps") return Response.json({ deps: Object.fromEntries(deps), importMap });
-    if (path === "/@hmr/client.js") return js(readFileSync(join(root, "hmr-client.js"), "utf8"));
+    if (path === "/@hmr/client.js") return js(readFileSync(join(import.meta.dir, "hmr-client.js"), "utf8"));
     if (path === "/@hmr/events") return poll(Number(url.searchParams.get("since") ?? -1));
     if (path === "/@hmr/update" && req.method === "POST") {
       const body = (await req.json()) as { path: string; text: string };
