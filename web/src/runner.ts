@@ -6,6 +6,8 @@ import type { DirNode } from "./fs";
 import { NetHelper } from "./net/helper";
 import { createRing } from "./net/ring";
 import { activated } from "./preview";
+import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
+import { measureStartup } from "./startup";
 import type { Engine, RunRequest, WorkerMessage } from "./worker";
 
 export type { Engine } from "./worker";
@@ -31,8 +33,27 @@ export class WasmMissing extends Error {}
  * Fetches and compiles a wasm module. Sites ship it gzipped (static hosts cap file sizes, and it is
  * 3-4x smaller) and the page decompresses it; a plain .wasm URL works too. Throws WasmMissing on 404.
  */
-export async function loadWasm(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number }> {
+export async function loadWasm(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string | null }> {
   progress("loading bun.wasm…");
+  const build = assetBuild(url);
+  const key = new URL(url, location.href).href;
+  const cached = build ? await cachedEngine(key, build) : null;
+  let size = 0;
+  if (cached) {
+    progress("compiling cached bun.wasm…");
+    const started = performance.now();
+    try {
+      size = Number(cached.headers.get("content-length"));
+      const module = await WebAssembly.compileStreaming(cached);
+      performance.mark("bunwasm:engine-cache-hit");
+      measureStartup("compile", started, { cached: true });
+      return { module, size, build };
+    } catch {
+      await evictEngine(key);
+    }
+  }
+  progress("downloading bun.wasm…");
+  const started = performance.now();
   const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
   let res = await fetch(gzUrl);
   const gzipped = res.ok;
@@ -41,18 +62,48 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   const total = Number(res.headers.get("content-length")) || 0;
   let received = 0;
-  const counter = new TransformStream<Uint8Array, Uint8Array>({
+  let lastProgress = 0;
+  const counter = new TransformStream<Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>>({
     transform(chunk, controller) {
       received += chunk.length;
-      progress(`loading bun.wasm… ${mb(received)}${total ? ` / ${mb(total)}` : ""}`);
+      if (performance.now() - lastProgress >= 50 || received === total) {
+        progress(`downloading bun.wasm… ${mb(received)}${total ? ` / ${mb(total)}` : ""}`);
+        lastProgress = performance.now();
+      }
       controller.enqueue(chunk);
     },
+    flush() {
+      measureStartup("download", started, { bytes: received });
+      progress("decompressing and compiling bun.wasm…");
+    },
   });
-  let body = res.body!.pipeThrough(counter);
-  if (gzipped) body = body.pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>);
-  const bytes = new Uint8Array(await new Response(body).arrayBuffer());
-  progress(`compiling bun.wasm (${mb(bytes.length)})…`);
-  return { module: await WebAssembly.compile(bytes), size: bytes.length };
+  if (!res.body) throw new Error(`${url}: empty response body`);
+  let body = res.body.pipeThrough(counter);
+  const decompressing = performance.now();
+  if (gzipped) body = body.pipeThrough(new DecompressionStream("gzip"));
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  body = body.pipeThrough(new TransformStream<Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>>({
+    transform(chunk, controller) {
+      size += chunk.length;
+      if (build) chunks.push(chunk);
+      controller.enqueue(chunk);
+    },
+    flush() {
+      measureStartup("decompress", decompressing, { bytes: size, gzipped });
+      progress(`compiling bun.wasm (${mb(size)})…`);
+    },
+  }));
+  // Compilation consumes the decompressed stream while the remaining bytes are still arriving.
+  const compiling = performance.now();
+  const response = new Response(body, { headers: { "content-type": "application/wasm" } });
+  const module = await WebAssembly.compileStreaming(response);
+  measureStartup("compile", compiling, { streaming: true });
+  const engine = { module, size };
+  if (build) setTimeout(() => {
+    const headers = { "content-type": "application/wasm", "content-length": String(size) };
+    void cacheEngine(key, build, new Response(new Blob(chunks), { headers }));
+  }, 0);
+  return { ...engine, build };
 }
 
 // The browser engine imports program modules from named URLs served by the service worker at
@@ -87,6 +138,7 @@ export interface RunOptions {
 }
 
 export interface RunHooks {
+  phase?(name: string, duration: number): void;
   stdout(data: Uint8Array): void;
   stderr(data: Uint8Array): void;
   /** A guest server started listening; `helper` delivers requests to it. */
@@ -137,6 +189,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     slots: slotsMode(),
   };
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
+  const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
   let settle: (result: RunResult) => void = () => {};
   const done = new Promise<RunResult>((resolve) => (settle = resolve));
@@ -151,6 +204,12 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   };
   worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
+    if (msg.type === "phase") {
+      const duration = msg.name === "worker-start" ? performance.now() - starting : msg.duration;
+      performance.measure(`bunwasm:${msg.name}`, { start: performance.now() - duration, duration });
+      hooks.phase?.(msg.name, duration);
+      return;
+    }
     if (msg.type === "net") {
       helper?.handle(msg.req);
       return;

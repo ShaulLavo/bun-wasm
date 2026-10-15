@@ -21,6 +21,9 @@ import { Previews } from "../../web/src/preview";
 import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
 import { enableTerminalCopy } from "../../web/src/terminal-copy";
 import { linkLocalUrls } from "../../web/src/terminal-links";
+import { measureStartup } from "../../web/src/startup";
+import { depsCacheKey, readDeps, writeDeps } from "./deps-cache";
+import { StartupOutput } from "./startup-output";
 
 const HOME = "/home/user";
 /** The project's directory in the guest's filesystem. */
@@ -98,9 +101,11 @@ function rememberEdit(relPath: string, text: string): void {
 }
 
 async function loadTemplate(): Promise<void> {
+  const started = performance.now();
   const res = await fetch("./template.json");
   if (!res.ok) throw new Error(`template.json: HTTP ${res.status}`);
   const { files } = (await res.json()) as { files: Record<string, string> };
+  measureStartup("template", started);
   for (const [path, text] of Object.entries(files)) fs.writeFile(abs(path), text);
   for (const [path, text] of Object.entries(edits)) fs.writeFile(abs(path), text);
 }
@@ -129,7 +134,9 @@ new ResizeObserver(() => fit.fit()).observe(termEl);
 const previews = new Previews();
 linkLocalUrls(term, previews);
 const moduleScope: Promise<boolean> = engine === "browser" ? registerModuleScope() : Promise.resolve(false);
-let wasm: { module: WebAssembly.Module; size: number } | null = null;
+let wasm: Awaited<ReturnType<typeof loadWasm>> | null = null;
+let depsKey: string | null = null;
+let firstStart = true;
 
 interface Server {
   port: number;
@@ -151,8 +158,19 @@ function setServerState(state: "starting" | "up" | "down", text: string): void {
 async function startDevServer(): Promise<void> {
   stopDevServer();
   if (!wasm) return;
+  const visibleStart = firstStart ? 0 : performance.now();
+  firstStart = false;
+  setStatus("waiting for module service worker…");
   const scoped = await moduleScope;
   unsent.clear();
+  performance.clearMarks("bunwasm:deps-cached");
+  performance.clearMeasures("bunwasm:deps-cached");
+  const changedDeps = Object.keys(edits).some((path) => path === "dev.ts" || path === "package.json" || path.startsWith("node_modules/"));
+  if (changedDeps) {
+    depsKey = null;
+    fs.remove(abs("node_modules/.dev/deps.json"));
+  }
+  setStatus("starting worker…");
   setServerState("starting", "starting dev server…");
   term.write(`\x1b[2m$\x1b[0m bun dev.ts \x1b[2m(${ENGINES[engine].name})\x1b[0m\r\n`);
   const env: Record<string, string> = {
@@ -166,16 +184,23 @@ async function startDevServer(): Promise<void> {
     LINES: String(term.rows),
     TMPDIR: "/tmp",
     PORT: String(PORT),
+    BUN_WASM_STARTUP: "1",
+    BUN_WASM_DEPS_KEY: depsKey ?? "",
   };
   const started = performance.now();
+  const output = new StartupOutput((text) => term.write(text), (line) => startupLine(line, started));
   const current = startRun({ engine, module: wasm.module, args: ["dev.ts"], env, root: fs.root, moduleScope: scoped }, {
-    stdout: (data) => term.write(data),
+    phase: (name) => {
+      if (name === "worker-start") setStatus("starting dev.ts…");
+    },
+    stdout: (data) => output.write(data),
     stderr: (data) => term.write(data),
     listening: (port, helper) => {
       previews.register(port, helper);
       if (run !== current) return;
       server = { port, helper };
-      void showPreview(port, performance.now() - started);
+      measureStartup("dev-server", started);
+      void showPreview(port, visibleStart);
       for (const [path, text] of unsent) void sendUpdate(path, text);
       unsent.clear();
     },
@@ -186,12 +211,45 @@ async function startDevServer(): Promise<void> {
   });
   run = current;
   const result = await current.done;
+  output.flush();
   if (result.error) term.write(`\x1b[31m${result.error}\x1b[0m\r\n`);
   if (run !== current) return; // restarted
   run = null;
   server = null;
   term.write(`\x1b[2m[dev server exited with code ${result.code}]\x1b[0m\r\n`);
   setServerState("down", `dev server stopped (exit ${result.code}) · press Restart`);
+}
+
+function startupLine(line: string, started: number): boolean {
+  let event: unknown;
+  try { event = JSON.parse(line); } catch { return false; }
+  if (!event || typeof event !== "object" || !("phase" in event) || !("duration" in event)) return false;
+  if (typeof event.phase !== "string" || typeof event.duration !== "number") return false;
+  const labels: Record<string, string> = {
+    "dev-start": "starting dev.ts…",
+    "bundling-react": "bundling React dependencies…",
+    "bundled-react": "starting dev server…",
+    "deps-cached": "using cached React dependencies…",
+    "starting-server": "starting dev server…",
+  };
+  if (!server) setStatus(labels[event.phase] ?? event.phase);
+  const end = "at" in event && typeof event.at === "number" ? event.at - performance.timeOrigin : performance.now();
+  if (event.phase === "dev-start") performance.measure("bunwasm:dev-start", { start: started, end });
+  performance.mark(`bunwasm:${event.phase}`, { startTime: end });
+  if (event.phase !== "dev-start" && event.phase !== "starting-server") performance.measure(`bunwasm:${event.phase}`, { start: end - event.duration, duration: event.duration });
+  return true;
+}
+
+async function saveDeps(target: Server, key: string): Promise<void> {
+  if (performance.getEntriesByName("bunwasm:deps-cached", "measure").length) return;
+  try {
+    const result = await guestFetch(target, "GET", "/@hmr/deps", "");
+    if (result.status !== 200 || server !== target) return;
+    fs.writeFile(abs("node_modules/.dev/deps.json"), result.text);
+    await writeDeps(key, result.text);
+  } catch {
+    // The server can be restarted while its first bundle is being saved.
+  }
 }
 
 function stopDevServer(): void {
@@ -201,7 +259,7 @@ function stopDevServer(): void {
   current?.kill();
 }
 
-async function showPreview(port: number, startupMs: number): Promise<void> {
+async function showPreview(port: number, visibleStart: number): Promise<void> {
   const state = await previews.ready;
   if (state !== "ready") {
     setServerState("down", `previews need a service worker (${state} here)`);
@@ -212,8 +270,14 @@ async function showPreview(port: number, startupMs: number): Promise<void> {
   openPreview.href = url;
   // The label shows the server's own address; tapping it opens the preview, which works anywhere.
   previewUrl.href = url;
+  setStatus("loading preview and React modules…");
+  const previewStarted = performance.now();
+  previewFrame.addEventListener("load", () => {
+    measureStartup("preview", previewStarted);
+    if (server && depsKey) void saveDeps(server, depsKey);
+    setStatus(`dev server ready in ${((performance.now() - visibleStart) / 1000).toFixed(1)} s · ${ENGINES[engine].name} · ${mb(wasm?.size ?? 0)}`, "ok");
+  }, { once: true });
   previewFrame.src = url;
-  setStatus(`dev server ready in ${(startupMs / 1000).toFixed(1)} s · ${ENGINES[engine].name} · ${mb(wasm?.size ?? 0)}`, "ok");
 }
 
 /** One request to the guest's dev server, without the service worker (this page is outside its scope). */
@@ -478,6 +542,10 @@ async function boot(): Promise<void> {
   tree.render();
   editor.open(fs.lookup(abs(START_FILE)) ? START_FILE : (fs.listFiles(APP).map(rel)[0] ?? START_FILE));
   if (wasm) {
+    const changedDeps = Object.keys(edits).some((path) => path === "dev.ts" || path === "package.json" || path.startsWith("node_modules/"));
+    depsKey = changedDeps ? null : await depsCacheKey(engine, wasm.build);
+    const cached = depsKey ? await readDeps(depsKey) : null;
+    if (cached) fs.writeFile(abs("node_modules/.dev/deps.json"), cached);
     setStatus(`starting the dev server on ${ENGINES[engine].name}…`);
     await startDevServer();
   }

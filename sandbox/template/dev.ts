@@ -15,6 +15,12 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { createRequire } from "node:module";
 import { dirname, extname, join, relative, resolve } from "node:path";
 
+const startupAt = performance.now();
+function startup(phase: string, duration = 0): void {
+  if (process.env.BUN_WASM_STARTUP) console.log(`[bunwasm:startup] ${JSON.stringify({ phase, duration, at: Date.now() })}`);
+}
+startup("dev-start");
+
 const root = import.meta.dir;
 const port = Number(process.env.PORT || 5173);
 const requireDep = createRequire(import.meta.url);
@@ -46,6 +52,7 @@ const ISOLATION = { "cross-origin-embedder-policy": "require-corp", "cross-origi
 
 const deps = new Map<string, string>(); // /@deps/<file> -> code
 const importMap: Record<string, string> = {};
+const depsFile = join(root, "node_modules/.dev/deps.json");
 
 function depName(spec: string): string {
   return spec.replace(/[^\w.-]+/g, "__");
@@ -61,6 +68,13 @@ function wrapper(spec: string): string {
 
 async function bundleDeps(): Promise<void> {
   const started = performance.now();
+  if (restoreDeps()) {
+    startup("deps-cached", performance.now() - started);
+    return;
+  }
+  startup("bundling-react", performance.now() - startupAt);
+  // Give the runtime a turn to flush the progress line before the synchronous wasm build.
+  await new Promise((resolve) => setTimeout(resolve, 0));
   const dir = join(root, "node_modules/.dev");
   mkdirSync(dir, { recursive: true });
   const entries = DEPS.map((spec) => {
@@ -71,8 +85,32 @@ async function bundleDeps(): Promise<void> {
   const result = await Bun.build({ entrypoints: entries, splitting: true, target: "browser", format: "esm", define: DEFINE });
   for (const output of result.outputs) deps.set(output.path.replace(/^.*\//, ""), await output.text());
   for (const spec of DEPS) importMap[spec] = `/@deps/${depName(spec)}.js`;
+  writeFileSync(depsFile, JSON.stringify({ deps: Object.fromEntries(deps), importMap }));
+  startup("bundled-react", performance.now() - started);
   const size = Array.from(deps.values()).reduce((n, code) => n + code.length, 0);
   console.log(`\x1b[2m  deps: ${DEPS.length} modules bundled (${(size / 1024).toFixed(0)} KB) in ${Math.round(performance.now() - started)} ms\x1b[0m`);
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((entry) => typeof entry === "string");
+}
+
+function restoreDeps(): boolean {
+  if (!existsSync(depsFile)) return false;
+  try {
+    if (!process.env.BUN_WASM_DEPS_KEY) return false;
+    const cached: unknown = JSON.parse(readFileSync(depsFile, "utf8"));
+    if (!cached || typeof cached !== "object" || !("deps" in cached) || !("importMap" in cached)) return false;
+    if (!isStringRecord(cached.deps) || !isStringRecord(cached.importMap)) return false;
+    const cachedImports = cached.importMap;
+    const cachedDeps = cached.deps;
+    if (!DEPS.every((spec) => cachedImports[spec] === `/@deps/${depName(spec)}.js` && typeof cachedDeps[`${depName(spec)}.js`] === "string")) return false;
+    for (const [name, code] of Object.entries(cached.deps)) deps.set(name, code);
+    Object.assign(importMap, cached.importMap);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------- the module graph ----------
@@ -337,6 +375,7 @@ async function serveFile(file: string, asImport: boolean): Promise<Response> {
 
 await bundleDeps();
 
+startup("starting-server");
 const server = Bun.serve({
   port,
   hostname: process.env.HOST || "0.0.0.0",
@@ -344,6 +383,7 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
     if (path === "/" || path === "/index.html") return html();
+    if (path === "/@hmr/deps") return Response.json({ deps: Object.fromEntries(deps), importMap });
     if (path === "/@hmr/client.js") return js(readFileSync(join(root, "hmr-client.js"), "utf8"));
     if (path === "/@hmr/events") return poll(Number(url.searchParams.get("since") ?? -1));
     if (path === "/@hmr/update" && req.method === "POST") {

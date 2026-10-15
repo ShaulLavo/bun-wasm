@@ -42,6 +42,8 @@ await Bun.write(join(out, "_headers"), Bun.file(join(web, "_headers")));
 
 // ---------- engines ----------
 
+const engineBuilds: Record<string, string> = {};
+
 async function copyWasm(source: string, name: string): Promise<void> {
   if (!existsSync(source)) {
     console.warn(`${name}: ${source} not found; that engine will say it is missing.`);
@@ -49,6 +51,7 @@ async function copyWasm(source: string, name: string): Promise<void> {
   }
   // Only the .gz ships: the page decompresses it (hosts cap file sizes).
   const bytes = new Uint8Array(await Bun.file(source).arrayBuffer());
+  engineBuilds[name] = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
   await Bun.write(join(out, `${name}.gz`), Bun.gzipSync(bytes, { level: 9 }));
   console.log(`${name}: ${source} (${(statSync(source).size / 1024 / 1024).toFixed(1)} MB)`);
 }
@@ -104,6 +107,12 @@ try {
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
-await Bun.write(join(out, "template.json"), JSON.stringify({ files }));
+const templateBytes = new TextEncoder().encode(JSON.stringify({ files }));
+engineBuilds["template.json"] = new Bun.CryptoHasher("sha256").update(templateBytes).digest("hex");
+await Bun.write(join(out, "template.json"), templateBytes);
+
+await Bun.write(join(out, "engine-builds.json"), JSON.stringify(engineBuilds));
+const index = await Bun.file(join(here, "index.html")).text();
+await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>globalThis.__bunwasmBuilds=${JSON.stringify(engineBuilds)}</script>`));
 
 for (const output of page.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);

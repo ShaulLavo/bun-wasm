@@ -48,9 +48,12 @@ await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 await Bun.write(join(out, "_headers"), Bun.file(join(here, "_headers")));
 
 // Each wasm gets a .gz twin; serve.ts sends that when the browser accepts gzip.
+const engineBuilds: Record<string, string> = {};
+
 async function copyWasm(source: string, name: string): Promise<boolean> {
   if (!existsSync(source)) return false;
   const bytes = new Uint8Array(await Bun.file(source).arrayBuffer());
+  engineBuilds[name] = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
   // Only the .gz ships: the page decompresses it, and static hosts cap file sizes
   // (Cloudflare: 25 MiB; bun-jsc.wasm is 43 MB raw, 12 MB gzipped).
   await Bun.write(join(out, `${name}.gz`), Bun.gzipSync(bytes, { level: 9 }));
@@ -68,5 +71,9 @@ const browserSource = resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun
 if (!(await copyWasm(browserSource, "bun-browser.wasm"))) {
   console.warn(`bun-browser.wasm: ${browserSource} not found; the Browser (native) engine option will fail to load.`);
 }
+
+await Bun.write(join(out, "engine-builds.json"), JSON.stringify(engineBuilds));
+const index = await Bun.file(join(here, "index.html")).text();
+await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>globalThis.__bunwasmBuilds=${JSON.stringify(engineBuilds)}</script>`));
 
 for (const output of result.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);
