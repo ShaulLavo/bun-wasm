@@ -69,6 +69,13 @@ async function checkPage(name, page, visit, fixtureBase) {
     .map((line) => engine === "browser" && name === "webkit" && line === "cjs true" ? "cjs unavailable" : line);
   await expectRun(page, `${name}: caller source origin across modules and callbacks`, "bun run caller-origin/index.js", 0, callerOutput);
 
+  const evalFixture = new URL("../../tests/fixtures/caller-source-origin-eval/", import.meta.url);
+  for (const file of readdirSync(evalFixture).filter((file) => /\.[cm]?js$/.test(file))) {
+    await writeFile(page, `${HOME}/caller-eval/${file}`, readFileSync(new URL(file, evalFixture), "utf8"));
+  }
+  const evalOutput = readFileSync(new URL("expected.txt", evalFixture), "utf8").trim().split("\n");
+  await expectRun(page, `${name}: opaque eval caller origins`, "bun run caller-eval/index.js", 0, evalOutput);
+
   // An import cycle with a hoisted function called before its module evaluated (the browser engine
   // needs the service worker's named module URLs for this).
   await writeFile(page, `${HOME}/cycle/a.ts`, `import { b } from "./b";\nexport function a(): string { return "a"; }\nexport let count = 0;\nexport function bump() { count++; }\nconsole.log("a sees", b());\n`);
