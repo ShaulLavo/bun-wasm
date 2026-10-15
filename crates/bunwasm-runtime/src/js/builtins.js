@@ -84,6 +84,33 @@
       throw err;
     }
 
+    const secretKeys = new WeakMap();
+    class KeyObject {
+      constructor() {
+        throw new TypeError("Illegal constructor");
+      }
+      get type() { return "secret"; }
+      get symmetricKeySize() { return secretKeys.get(this).length; }
+      export(options) {
+        const bytes = secretKeys.get(this);
+        if (options?.format === "jwk") return { kty: "oct", k: bytes.toString("base64url") };
+        return Buffer.from(bytes);
+      }
+      equals(other) {
+        if (!(other instanceof KeyObject)) throw Object.assign(new TypeError('The "otherKeyObject" argument must be a KeyObject'), { code: "ERR_INVALID_ARG_TYPE" });
+        const left = secretKeys.get(this);
+        const right = secretKeys.get(other);
+        return left.length === right.length && timingSafeEqual(left, right);
+      }
+    }
+
+    function createSecretKey(key, encoding) {
+      const bytes = Buffer.from(inputBytes(key, encoding));
+      const result = Object.create(KeyObject.prototype);
+      secretKeys.set(result, bytes);
+      return result;
+    }
+
     class Hash {
       #algorithm;
       #key;
@@ -177,10 +204,12 @@
       return buffer;
     }
 
-    const unsupportedCrypto = ["createCipheriv", "createDecipheriv", "createSign", "createVerify", "generateKeyPair", "generateKeyPairSync", "createECDH", "createDiffieHellman", "pbkdf2", "pbkdf2Sync", "scrypt", "scryptSync", "publicEncrypt", "privateDecrypt", "sign", "verify", "createPublicKey", "createPrivateKey", "createSecretKey", "hkdf", "hkdfSync"];
+    const unsupportedCrypto = ["createCipheriv", "createDecipheriv", "createSign", "createVerify", "generateKeyPair", "generateKeyPairSync", "createECDH", "createDiffieHellman", "pbkdf2", "pbkdf2Sync", "scrypt", "scryptSync", "publicEncrypt", "privateDecrypt", "sign", "verify", "createPublicKey", "createPrivateKey", "hkdf", "hkdfSync"];
     return unsupportedModule("crypto", "only hashes, HMAC and random numbers are implemented", unsupportedCrypto, {
       createHash,
       createHmac,
+      KeyObject,
+      createSecretKey,
       hash: (algorithm, data, encoding = "hex") => createHash(algorithm).update(data).digest(encoding),
       randomBytes,
       pseudoRandomBytes: randomBytes,
