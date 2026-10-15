@@ -1,0 +1,103 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`snapshots errors reject bad snapshots: existing mismatch 1`] = `"right"`;
+
+exports[`snapshots properties and shared counters 2`] = `"after inline"`;
+
+exports[`snapshots properties and shared counters: with properties 1`] = `
+{
+  "id": Any<Number>,
+  "nested": {
+    "keep": true,
+    "name": Any<String>,
+  },
+}
+`;
+
+exports[`snapshots properties and shared counters: direct properties 1`] = `
+{
+  "id": Any<Number>,
+}
+`;
+
+exports[`snapshots file values 1`] = `"backslash \\ backtick \` template \${x}"`;
+
+exports[`snapshots file values 2`] = `
+Map {
+  "first" =>   
+Set {
+    1,
+    2,
+  }
+,
+  "empty" => Map {},
+}
+`;
+
+exports[`snapshots file values 3`] = `
+Uint8Array [
+  1,
+  2,
+  255,
+]
+`;
+
+exports[`snapshots file values 4`] = `
+DataView [
+  3,
+  4,
+]
+`;
+
+exports[`snapshots file values 5`] = `
+{
+  "data": [
+    5,
+    6,
+  ],
+  "type": "Buffer",
+}
+`;
+
+exports[`snapshots file values 6`] = `
+{
+  "data": [],
+  "type": "Buffer",
+}
+`;
+
+exports[`snapshots file values 7`] = `1970-01-01T00:00:00.000Z`;
+
+exports[`snapshots file values 8`] = `/hello/gi`;
+
+exports[`snapshots file values 9`] = `[Error: snapshot]`;
+
+exports[`snapshots file values 10`] = `
+[
+  undefined,
+  -0,
+  NaN,
+  1n,
+  Symbol(key),
+]
+`;
+
+exports[`snapshots file values 11`] = `
+{
+  "self": [Circular],
+  "value": "cycle",
+}
+`;
+
+exports[`snapshots file values 12`] = `
+{
+  [Symbol(key)]: true,
+  "z": 1,
+}
+`;
+
+exports[`snapshots duplicate label 1`] = `1`;
+
+exports[`snapshots duplicate label 2`] = `2`;
+
+exports[`snapshots file values 13`] = `"controls \x00\b\f\v	"`;

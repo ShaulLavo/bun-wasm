@@ -47,7 +47,7 @@
 
   // ───────────────────────────── run state ─────────────────────────────
 
-  const options = { timeout: 5000, namePattern: null, only: false, bail: 0, runTodo: false, agent: false };
+  const options = { timeout: 5000, namePattern: null, only: false, bail: 0, runTodo: false, agent: false, updateSnapshots: false };
   const preloads = [];
 
   const summary = { pass: 0, fail: 0, skip: 0, todo: 0, filtered: 0, files: 0, expectations: 0, errors: 0 };
@@ -262,13 +262,13 @@
     return prettyValue(value, "", new Set());
   }
 
-  function prettyValue(value, indent, seen) {
+  function prettyValue(value, indent, seen, snapshot) {
     if (value === null) return "null";
     switch (typeof value) {
       case "undefined":
         return "undefined";
       case "string":
-        return `"${value}"`;
+        return snapshot ? snapshotString(value) : `"${value}"`;
       case "number":
         return Object.is(value, -0) ? "-0" : String(value);
       case "bigint":
@@ -280,11 +280,11 @@
       case "function":
         return prettyFunction(value);
     }
-    if (isAsymmetric(value)) return prettyAsymmetric(value, indent, seen);
+    if (isAsymmetric(value)) return prettyAsymmetric(value, indent, seen, snapshot);
     if (seen.has(value)) return "[Circular]";
     seen.add(value);
     try {
-      return prettyObject(value, indent, seen);
+      return prettyObject(value, indent, seen, snapshot);
     } finally {
       seen.delete(value);
     }
@@ -296,39 +296,55 @@
     return fn.name ? `[Function: ${fn.name}]` : "[Function]";
   }
 
-  function prettyAsymmetric(matcher, indent, seen) {
+  function prettyAsymmetric(matcher, indent, seen, snapshot) {
     // Bun prints arrayContaining through its generic object path.
     if (matcher instanceof ArrayContainingMatcher) return "ExpectArrayContaining {}";
-    return matcher.describe((sample) => prettyValue(sample, indent, seen));
+    return matcher.describe((sample) => prettyValue(sample, indent, seen, snapshot));
   }
 
-  function prettyObject(value, indent, seen) {
+  function prettyObject(value, indent, seen, snapshot) {
     const inner = indent + "  ";
-    const block = (open, close, items) => (items.length === 0 ? `${open}${close}` : `${open}\n${items.map((item) => `${inner}${item},\n`).join("")}${indent}${close}`);
+    const block = (open, close, items, collection) => {
+      if (items.length === 0) return `${snapshot && collection === "set" ? indent : ""}${open}${close}`;
+      const text = `${open}\n${items.map((item) => `${inner}${item},\n`).join("")}${indent}${close}`;
+      if (snapshot && collection) return `${collection === "set" ? indent : ""}\n${text}\n`;
+      return snapshot && indent === "" ? `\n${text}\n` : text;
+    };
+    if (snapshot && typeof Buffer !== "undefined" && Buffer.isBuffer(value)) {
+      return prettyObject({ data: Array.from(value), type: "Buffer" }, indent, seen, true);
+    }
+    if (snapshot && value instanceof DataView) {
+      return block("DataView [", "]", Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength), String));
+    }
     if (Array.isArray(value)) {
-      return block("[", "]", Array.from(value, (item) => prettyValue(item, inner, seen)));
+      return block("[", "]", Array.from(value, (item) => prettyValue(item, inner, seen, snapshot)));
     }
     if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
-      return block(`${value.constructor.name} [`, "]", Array.from(value, (item) => prettyValue(item, inner, seen)));
+      return block(`${value.constructor.name} [`, "]", Array.from(value, (item) => prettyValue(item, inner, seen, snapshot)));
     }
     if (value instanceof ArrayBuffer) {
       return block("ArrayBuffer [", "]", Array.from(new Uint8Array(value), String));
     }
     if (value instanceof Date) return Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString();
     if (value instanceof RegExp) return String(value);
-    if (value instanceof Error) return `[${value.name}: ${value.message}]`;
+    if (value instanceof Error) return snapshot && value.message === "" ? `[${value.name}]` : `[${value.name}: ${value.message}]`;
     if (value instanceof Promise) return "Promise {}";
     if (value instanceof Map) {
-      const entries = Array.from(value, ([k, v]) => `${prettyValue(k, inner, seen)} => ${prettyValue(v, inner, seen)}`);
-      return block("Map {", "}", entries);
+      const entries = Array.from(value, ([k, v]) => `${prettyValue(k, inner, seen, snapshot)} => ${prettyValue(v, inner, seen, snapshot)}`);
+      return block("Map {", "}", entries, "map");
     }
     if (value instanceof Set) {
-      return block("Set {", "}", Array.from(value, (item) => prettyValue(item, inner, seen)));
+      return block("Set {", "}", Array.from(value, (item) => prettyValue(item, inner, seen, snapshot)), "set");
     }
     const name = constructorName(value);
     const prefix = name === "Object" || name === "" ? "{" : `${name} {`;
-    const keys = Object.keys(value).sort();
-    return block(prefix, "}", keys.map((key) => `"${key}": ${prettyValue(value[key], inner, seen)}`));
+    const keys = snapshot ? Object.keys(value).concat(Object.getOwnPropertySymbols(value).filter((key) => Object.prototype.propertyIsEnumerable.call(value, key))) : Object.keys(value);
+    keys.sort((a, b) => compareStrings(typeof a === "symbol" ? a.description || "" : a, typeof b === "symbol" ? b.description || "" : b));
+    const items = keys.map((key) => {
+      const label = typeof key === "symbol" ? `[${String(key)}]` : snapshot ? JSON.stringify(key) : `"${key}"`;
+      return `${label}: ${prettyValue(value[key], inner, seen, snapshot)}`;
+    });
+    return block(prefix, "}", items);
   }
 
   function constructorName(value) {
@@ -704,7 +720,7 @@
   }
 
   function applyMatcher(flags, received, name, impl, args, error) {
-    const failure = impl({ not: flags.not, promise: flags.promise }, received, ...args);
+    const failure = impl({ not: flags.not, promise: flags.promise, error }, received, ...args);
     if (!failure) return;
     const params = failure.params === undefined ? matcherParams[name] : failure.params;
     error.message = failure.raw ? failure.body : signature(name, params, flags.not) + failure.body;
@@ -1304,6 +1320,338 @@
     if (!(alias in expectProto)) expectProto[alias] = expectProto[target];
   }
 
+  // ───────────────────────────── snapshots ─────────────────────────────
+
+  const snapshots = { total: 0, passed: 0, failed: 0, added: 0 };
+  const SNAPSHOT_HEADER = "// Bun Snapshot v1, https://bun.sh/docs/test/snapshots\n";
+
+  function snapshotString(value) {
+    const text = `"${value.replace(/\r\n?/g, "\n")}"`;
+    return text.includes("\n") ? `\n${text}\n` : text;
+  }
+
+  function snapshotSummary() {
+    if (snapshots.added === 0 && snapshots.failed === 0) return ` ${snapshots.total} snapshots, ${summary.expectations} expect() calls\n`;
+    const counts = [];
+    if (snapshots.passed) counts.push(`${snapshots.passed} passed`);
+    if (snapshots.added) counts.push(`${counts.length ? "" : "+"}${snapshots.added} added`);
+    if (snapshots.failed) counts.push(`${snapshots.failed} failed`);
+    return `snapshots: ${counts.join(", ")}\n`;
+  }
+
+  let snapshotCI;
+  function isSnapshotCI() {
+    if (snapshotCI !== undefined) return snapshotCI;
+    const env = globalThis.process.env;
+    if (env.CI !== undefined && ["", "0", "false", "no", "off"].includes(env.CI.toLowerCase())) return (snapshotCI = false);
+    const names = "BUILD_ID BUILD_NUMBER CI CI_APP_ID CI_BUILD_ID CI_BUILD_NUMBER CI_NAME CONTINUOUS_INTEGRATION RUN_ID AGOLA_GIT_REF AC_APPCIRCLE APPVEYOR CODEBUILD_BUILD_ARN TF_BUILD bamboo_planKey BITBUCKET_COMMIT BITRISE_IO BUDDY_WORKSPACE_ID BUILDKITE CIRCLECI CIRRUS_CI CF_PAGES WORKERS_CI CF_BUILD_ID CM_BUILD_ID DRONE DSARI EARTHLY_CI EAS_BUILD GERRIT_PROJECT GITEA_ACTIONS GITHUB_ACTIONS GITLAB_CI GO_PIPELINE_LABEL BUILDER_OUTPUT HARNESS_BUILD_ID HUDSON_URL LAYERCI MAGNUM NETLIFY NEVERCODE PROW_JOB_ID RELEASE_BUILD_ID RENDER SAILCI SCREWDRIVER SEMAPHORE STRIDER TEAMCITY_VERSION TRAVIS VELA NOW_BUILDER VERCEL APPCENTER_BUILD_ID CI_XCODE_PROJECT XCS".split(" ");
+    snapshotCI = names.some((name) => env[name] !== undefined) || (env.NODE !== undefined && env.NODE.includes("/app/.heroku/node/bin/node"));
+    return snapshotCI;
+  }
+
+  function snapshotArguments(args, inline) {
+    if (args.length === 0) return { properties: undefined, expected: undefined };
+    if (args.length === 1 && typeof args[0] === "string") return { properties: undefined, expected: args[0] };
+    if (args[0] === null || typeof args[0] !== "object") {
+      throw new Error(args.length === 1 ? "\n\nMatcher error: Expected first argument to be a string or object\n" : "\n\nMatcher error: Expected properties must be an object\n");
+    }
+    if (args.length > 1 && typeof args[1] !== "string" && !inline) throw new Error("\n\nMatcher error: Expected second argument to be a string\n");
+    return { properties: args[0], expected: typeof args[1] === "string" ? args[1] : undefined };
+  }
+
+  function prepareSnapshot(ctx, received, args, inline) {
+    if (ctx.not) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used with not\n" } };
+    if (!currentTest) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used outside of a test\n" } };
+    const parsed = snapshotArguments(args, inline);
+    if (parsed.properties !== undefined && !isObjectLike(received)) {
+      return { failure: { params: "properties, hint", body: "\n\nMatcher error: received values must be an object when the matcher has properties\n" } };
+    }
+    if (parsed.properties !== undefined && !matchesObject(received, parsed.properties)) {
+      return { failure: { params: "propertyMatchers", body: `\n\nExpected propertyMatchers to match properties from received object\n\nReceived: ${inspect(received)}\n` } };
+    }
+    if (parsed.properties !== undefined) replaceSnapshotProperties(received, parsed.properties, new Set());
+    return Object.assign(parsed, { text: prettyValue(received, "", new Set(), true) });
+  }
+
+  function replaceSnapshotProperties(received, properties, seen) {
+    if (!isObjectLike(received) || !isObjectLike(properties) || seen.has(properties)) return;
+    seen.add(properties);
+    for (const key of Object.keys(properties)) {
+      if (isAsymmetric(properties[key])) received[key] = properties[key];
+      else replaceSnapshotProperties(received[key], properties[key], seen);
+    }
+  }
+
+  function nextSnapshotName(hint) {
+    const { test, file } = currentTest;
+    const name = displayNames(test).concat([test.name || "(unnamed)"]).join(" ") + (hint ? `: ${hint}` : "");
+    const count = (file.snapshotCounts.get(name) || 0) + 1;
+    file.snapshotCounts.set(name, count);
+    snapshots.total++;
+    return `${name} ${count}`;
+  }
+
+  function snapshotFS() {
+    return internal.require("node_fs").fs;
+  }
+
+  function fileSnapshots(file) {
+    if (file.snapshots) return file.snapshots;
+    const path = internal.require("path");
+    const name = path.join(path.dirname(file.path), "__snapshots__", path.basename(file.path) + ".snap");
+    const state = { path: name, values: new Map(), text: SNAPSHOT_HEADER, dirty: false };
+    file.snapshots = state;
+    if (options.updateSnapshots || !snapshotFS().existsSync(name)) return state;
+    state.text = snapshotFS().readFileSync(name, "utf8");
+    try {
+      parseSnapshotFile(state);
+    } catch {
+      throw new Error(`Failed to parse snapshot file for: ${file.path}`);
+    }
+    return state;
+  }
+
+  function parseSnapshotFile(state) {
+    const tokens = snapshotTokens(state.text);
+    for (let i = 0; i < tokens.length;) {
+      if (tokens[i].text === ";") { i++; continue; }
+      const entry = tokens.slice(i, i + 6);
+      if (entry.length !== 6 || entry[0].text !== "exports" || entry[1].text !== "[" || entry[3].text !== "]" || entry[4].text !== "=") throw new Error("Invalid snapshot entry");
+      state.values.set(snapshotLiteral(entry[2].text), snapshotLiteral(entry[5].text));
+      i += 6;
+    }
+  }
+
+  function escapeSnapshot(text) {
+    return text.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${")
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, (ch) => ({ "\b": "\\b", "\v": "\\v", "\f": "\\f" })[ch] || `\\x${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
+  }
+
+  function addFileSnapshot(state, name, text) {
+    state.values.set(name, text);
+    state.text += `\nexports[\`${escapeSnapshot(name)}\`] = \`${escapeSnapshot(text)}\`;\n`;
+    state.dirty = true;
+    snapshots.added++;
+  }
+
+  defineMatcher("toMatchSnapshot", "expected", (ctx, received, ...args) => {
+    const prepared = prepareSnapshot(ctx, received, args, false);
+    if (prepared.failure) return prepared.failure;
+    const state = fileSnapshots(currentTest.file);
+    const name = nextSnapshotName(prepared.expected);
+    if (state.values.has(name)) return compareSnapshot(prepared.text, state.values.get(name));
+    if (isSnapshotCI() && !options.updateSnapshots) {
+      throw new Error(`Snapshot creation is disabled in CI environments unless --update-snapshots is used\nTo override, set the environment variable CI=false.\n\nSnapshot name: "${name}"\nReceived: ${prepared.text}`);
+    }
+    addFileSnapshot(state, name, prepared.text);
+    return null;
+  });
+
+  function compareSnapshot(received, expected) {
+    if (received === expected) { snapshots.passed++; return null; }
+    snapshots.failed++;
+    return { body: `\n\n${diffStrings(received, expected)}\n` };
+  }
+
+  function trimInlineSnapshot(text) {
+    const lines = text.split("\n");
+    if (lines.length < 3 || !/^[\t ]*$/.test(lines[0]) || !/^[\t ]*$/.test(lines[lines.length - 1])) return text;
+    const indent = /^[\t ]*/.exec(lines[1])[0];
+    if (!indent.length) return text;
+    const middle = lines.slice(1, -1);
+    if (middle.some((line) => line.trim() !== "" && !line.startsWith(indent))) return text;
+    return "\n" + middle.map((line) => line.startsWith(indent) ? line.slice(indent.length) : "").join("\n") + "\n";
+  }
+
+  defineMatcher("toMatchInlineSnapshot", "expected", (ctx, received, ...args) => {
+    const prepared = prepareSnapshot(ctx, received, args, true);
+    if (prepared.failure) return prepared.failure;
+    nextSnapshotName("");
+    const expected = prepared.expected === undefined ? undefined : trimInlineSnapshot(prepared.expected);
+    if (expected === prepared.text) { snapshots.passed++; return null; }
+    if (expected !== undefined && !options.updateSnapshots) return compareSnapshot(prepared.text, expected);
+    if (isSnapshotCI() && !options.updateSnapshots) {
+      return { params: "", body: `\n\nMatcher error: Inline snapshot creation is disabled in CI environments unless --update-snapshots is used.\nTo override, set the environment variable CI=false.\n\nReceived: ${prepared.text}` };
+    }
+    queueInlineSnapshot(ctx.error, prepared);
+    if (expected === undefined) snapshots.added++;
+    else snapshots.passed++;
+    return null;
+  });
+
+  function inlineCaller(error) {
+    for (const raw of String(error.stack || "").split("\n")) {
+      const frame = inlineCallerFrame(raw.trim());
+      if (frame && !frame.file.startsWith("bun-wasm:")) return frame;
+    }
+    throw new Error("Failed to update inline snapshot: caller source location is unavailable");
+  }
+
+  function inlineCallerFrame(line) {
+    let match;
+    if (line.startsWith("at ")) {
+      const body = line.slice(3);
+      const named = /^.*? \((.*)\)$/.exec(body);
+      match = /^(.*):(\d+):(\d+)$/.exec(named ? named[1] : body);
+      return match ? { file: match[1], line: Number(match[2]), column: Number(match[3]) } : null;
+    }
+    match = /^.*?@(.*):(\d+):(\d+)$/.exec(line);
+    if (!match) return null;
+    const file = internal.displayName ? internal.displayName(match[1]) : match[1];
+    const mapped = internal.mapPosition && internal.mapPosition(file, Number(match[2]), Number(match[3]));
+    return { file, line: mapped ? mapped[0] : Number(match[2]), column: mapped ? mapped[1] : Number(match[3]) };
+  }
+
+  function queueInlineSnapshot(error, prepared) {
+    const file = currentTest.file;
+    const caller = inlineCaller(error);
+    if (caller.file !== file.path) throw new Error(`Inline snapshot matchers must be called from the test file: ${file.path}\nCalled from file: ${caller.file}`);
+    if (file.source === undefined) file.source = snapshotFS().readFileSync(file.path, "utf8");
+    if (!file.inlineSites) file.inlineSites = inlineSnapshotSites(file.source);
+    const start = file.source.split("\n").slice(0, caller.line - 1).reduce((sum, line) => sum + line.length + 1, 0);
+    const offset = start + caller.column - 1;
+    const lineEnd = file.source.indexOf("\n", start);
+    const sites = file.inlineSites.filter((site) => site.name >= start && site.name <= (lineEnd < 0 ? file.source.length : lineEnd));
+    sites.sort((a, b) => Math.abs(a.name - offset) - Math.abs(b.name - offset));
+    const site = sites[0];
+    if (!site) throw new Error(`Failed to update inline snapshot: no matcher at ${caller.file}:${caller.line}:${caller.column}`);
+    const previous = file.inlineWrites.get(site.name);
+    if (previous && previous.text !== prepared.text) throw new Error("Failed to update inline snapshot: Multiple inline snapshots at the same call must all have the same value");
+    file.inlineWrites.set(site.name, { site, text: prepared.text, properties: prepared.properties !== undefined });
+  }
+
+  function inlineSnapshotSites(source) {
+    const tokens = snapshotTokens(source);
+    const sites = [];
+    for (let i = 1; i < tokens.length - 1; i++) {
+      if (tokens[i].text !== "toMatchInlineSnapshot" || tokens[i - 1].text !== "." || tokens[i + 1].text !== "(") continue;
+      const site = inlineSiteArguments(tokens, i);
+      if (site) sites.push(site);
+    }
+    return sites;
+  }
+
+  function inlineSiteArguments(tokens, index) {
+    const site = { name: tokens[index].start, open: tokens[index + 1].end, close: 0, commas: [], arguments: [] };
+    let depth = 0;
+    let argument = index + 2;
+    for (let i = argument; i < tokens.length; i++) {
+      const text = tokens[i].text;
+      if (depth === 0 && (text === ")" || text === ",")) {
+        captureInlineArgument(site, tokens, argument, i);
+        if (text === ")") return site;
+        argument = i + 1;
+      }
+      if (text === "(" || text === "[" || text === "{") depth++;
+      if (text === ")" || text === "]" || text === "}") depth--;
+    }
+    return null;
+  }
+
+  function captureInlineArgument(site, tokens, start, end) {
+    if (end > start) site.arguments.push({ start: tokens[start].start, end: tokens[end - 1].end });
+    if (tokens[end].text === ")") site.close = tokens[end].start;
+    else site.commas.push(tokens[end].start);
+  }
+
+  function inlineReplacement(source, write) {
+    const { site, text, properties } = write;
+    const lineStart = source.lastIndexOf("\n", site.name) + 1;
+    const indent = /^[\t ]*/.exec(source.slice(lineStart))[0];
+    const escaped = escapeSnapshot(text);
+    const value = text.includes("\n") ? "`" + escaped.split("\n").map((line, i, lines) => i === 0 ? line : (i === lines.length - 1 ? indent : indent + "  ") + line).join("\n") + "`" : "`" + escaped + "`";
+    const target = site.arguments[properties ? 1 : 0];
+    if (target) return { start: target.start, end: target.end, value };
+    const trailingComma = site.commas.length > 0 && site.commas.length === site.arguments.length;
+    return { start: site.close, end: site.close, value: (properties ? (trailingComma ? " " : ", ") : "") + value };
+  }
+
+  function flushSnapshots(file) {
+    if (file.snapshots && file.snapshots.dirty) {
+      snapshotFS().mkdirSync(internal.require("path").dirname(file.snapshots.path), { recursive: true });
+      snapshotFS().writeFileSync(file.snapshots.path, file.snapshots.text);
+    }
+    if (!file.inlineWrites.size) return;
+    const edits = Array.from(file.inlineWrites.values(), (write) => inlineReplacement(file.source, write));
+    edits.sort((a, b) => b.start - a.start);
+    let source = file.source;
+    for (const edit of edits) source = source.slice(0, edit.start) + edit.value + source.slice(edit.end);
+    snapshotFS().writeFileSync(file.path, source);
+  }
+
+  function snapshotTokens(source) {
+    const tokens = [];
+    for (let i = 0; i < source.length;) {
+      const start = i;
+      const ch = source[i];
+      if (/\s/.test(ch)) { i++; continue; }
+      if (source.startsWith("//", i)) { const end = source.indexOf("\n", i + 2); i = end < 0 ? source.length : end; continue; }
+      if (source.startsWith("/*", i)) { const end = source.indexOf("*/", i + 2); if (end < 0) throw new Error("Unterminated comment"); i = end + 2; continue; }
+      if (ch === '"' || ch === "'" || ch === "`") i = snapshotQuotedEnd(source, i);
+      else if (ch === "/" && snapshotRegexAllowed(tokens)) i = snapshotRegexEnd(source, i);
+      else if (/[\w$]/.test(ch)) { i++; while (i < source.length && /[\w$]/.test(source[i])) i++; }
+      else i++;
+      tokens.push({ text: source.slice(start, i), start, end: i });
+    }
+    return tokens;
+  }
+
+  function snapshotQuotedEnd(source, start) {
+    const quote = source[start];
+    for (let i = start + 1; i < source.length; i++) {
+      if (source[i] === "\\") { i++; continue; }
+      if (source[i] === quote) return i + 1;
+    }
+    throw new Error("Unterminated string");
+  }
+
+  function snapshotRegexAllowed(tokens) {
+    const last = tokens[tokens.length - 1];
+    return !last || /^(?:[({[=:,;!?&|]|return|throw|case|yield|=>)$/.test(last.text);
+  }
+
+  function snapshotRegexEnd(source, start) {
+    let bracket = false;
+    for (let i = start + 1; i < source.length; i++) {
+      if (source[i] === "\\") { i++; continue; }
+      if (source[i] === "[") bracket = true;
+      if (source[i] === "]") bracket = false;
+      if (source[i] !== "/" || bracket) continue;
+      i++;
+      while (i < source.length && /[a-z]/i.test(source[i])) i++;
+      return i;
+    }
+    return start + 1;
+  }
+
+  function snapshotLiteral(text) {
+    const quote = text[0];
+    if (quote !== "`" && quote !== '"' && quote !== "'") throw new Error("Snapshot values must be string literals");
+    let result = "";
+    for (let i = 1; i < text.length - 1; i++) {
+      if (quote === "`" && text[i] === "$" && text[i + 1] === "{") throw new Error("Snapshot values must be string literals");
+      if (text[i] !== "\\") { result += text[i]; continue; }
+      const escape = snapshotEscape(text, i + 1);
+      result += escape.text;
+      i = escape.end;
+    }
+    return result.replace(/\r\n?/g, "\n");
+  }
+
+  function snapshotEscape(text, index) {
+    const escapes = { n: "\n", r: "\r", t: "\t", v: "\v", b: "\b", f: "\f", "0": "\0", "\n": "" };
+    const ch = text[index];
+    if (Object.prototype.hasOwnProperty.call(escapes, ch)) return { text: escapes[ch], end: index };
+    if (ch === "\r") return { text: "", end: text[index + 1] === "\n" ? index + 1 : index };
+    if (ch !== "x" && ch !== "u") return { text: ch, end: index };
+    const brace = ch === "u" && text[index + 1] === "{";
+    const start = index + (brace ? 2 : 1);
+    const end = brace ? text.indexOf("}", start) : start + (ch === "x" ? 2 : 4);
+    const hex = text.slice(start, end);
+    if (end < start || !/^[a-f\d]+$/i.test(hex)) throw new Error("Invalid string escape");
+    return { text: String.fromCodePoint(parseInt(hex, 16)), end: brace ? end : end - 1 };
+  }
+
   // ───────────────────────────── collection ─────────────────────────────
 
   function createScope(name, parent, mode, only) {
@@ -1597,13 +1945,13 @@
     }
     if (test.mode === "skip") return reportResult(test, { status: "skip" }, 0);
     if (test.mode === "todo" && !(options.runTodo && test.fn)) return reportResult(test, { status: "todo" }, 0);
-    const outcome = await executeTest(test);
+    const outcome = await executeTest(test, file);
     reportResult(test, outcome.result, outcome.elapsed, outcome.expectCount);
   }
 
-  async function executeTest(test) {
+  async function executeTest(test, file) {
     const chain = scopeChain(test.parent);
-    const record = { expectCount: 0, assertions: null };
+    const record = { expectCount: 0, assertions: null, test, file };
     currentTest = record;
     const start = now();
     let result = await runHooks(chain.flatMap((s) => s.beforeEach));
@@ -1774,7 +2122,8 @@
     if (summary.todo > 0) out += ` ${summary.todo} todo\n`;
     out += ` ${summary.fail} fail\n`;
     if (summary.errors > 0) out += ` ${summary.errors} error${summary.errors > 1 ? "s" : ""}\n`;
-    if (summary.expectations > 0) out += ` ${summary.expectations} expect() calls\n`;
+    if (snapshots.total > 0) out += snapshotSummary();
+    if (summary.expectations > 0 && !(snapshots.total > 0 && snapshots.added === 0 && snapshots.failed === 0)) out += ` ${summary.expectations} expect() calls\n`;
     writeErr(out + ranLine() + "\n");
     return false;
   }
@@ -1931,6 +2280,7 @@
       else if (flag === "--bail") options.bail = inline === undefined ? 1 : Number(inline);
       else if (flag === "--only") options.only = true;
       else if (flag === "--todo") options.runTodo = true;
+      else if (flag === "--update-snapshots" || flag === "-u") options.updateSnapshots = true;
       else if (arg.startsWith("-")) continue;
       else filters.push(arg);
     }
@@ -1961,7 +2311,7 @@
 
   async function runFile(abs, cwd) {
     summary.files++;
-    const file = { root: createScope("", null, "run", false), hasOnly: false };
+    const file = { root: createScope("", null, "run", false), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
     file.scope = file.root;
     startFileHeader(relativePath(cwd, abs));
     collecting = file;
@@ -1977,6 +2327,11 @@
       collecting = null;
     }
     await runScope(file.root, file);
+    try {
+      flushSnapshots(file);
+    } catch (error) {
+      reportUnhandledError(error);
+    }
   }
 
   async function run(args) {

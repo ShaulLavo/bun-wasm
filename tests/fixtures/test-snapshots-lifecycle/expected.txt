@@ -1,0 +1,9 @@
+missing CI 1 true true
+missing CI contents true
+create 0 true true true
+existing CI 0
+mismatch 1 true true
+update short 0 true true
+updated CI 0
+vendor CI 1 true
+update long 0 true
