@@ -1,4 +1,4 @@
-// Exercises output produced by bun.wasm, persisted across worker restarts and page visits.
+// Exercises Bun's compiled dependency graph, persisted across worker restarts and page visits.
 // node sandbox/tests/startup-cache.mjs <url> [--engines browser,quickjs,jsc] [--browsers chromium,webkit]
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -76,7 +76,7 @@ async function checkCorruption(page) {
     const cache = await caches.open(name);
     const keys = await cache.keys();
     if (keys.length !== 1) throw new Error(`expected one dependency cache entry, got ${keys.length}`);
-    await cache.put(keys[0], new Response(JSON.stringify({ deps: {}, importMap: {} }), { headers: { "content-type": "application/json" } }));
+    await cache.put(keys[0], new Response("invalid Bun dependency cache", { headers: { "content-type": "application/octet-stream" } }));
   }, CACHE);
   await page.reload();
   await rendered(page, "Cached dependencies with hot reload");
@@ -87,12 +87,8 @@ async function checkCorruption(page) {
   await page.waitForFunction(async (name) => {
     const cache = await caches.open(name);
     const keys = await cache.keys();
-    const text = await (await cache.match(keys[0])).text();
-    try {
-      return Object.keys(JSON.parse(text).deps).length > 0;
-    } catch {
-      return false;
-    }
+    const bytes = new Uint8Array(await (await cache.match(keys[0])).arrayBuffer());
+    return bytes.length > 100 && new TextDecoder().decode(bytes) !== "invalid Bun dependency cache";
   }, CACHE, { timeout: TIMEOUT });
   await checkReload(page);
 }
@@ -103,7 +99,7 @@ async function checkEditedDependencies(page) {
     editor.open("package.json");
     editor.setText(new TextDecoder().decode(fs.readFile("/home/user/app/package.json")) + "\n");
   });
-  await page.waitForFunction(() => Object.hasOwn(JSON.parse(sessionStorage.getItem("bun-wasm-sandbox:edits") ?? "{}"), "package.json"));
+  await page.waitForFunction(() => Object.hasOwn(JSON.parse(sessionStorage.getItem("bun-wasm-sandbox:edits:react") ?? "{}"), "package.json"));
   await clearPhases(page);
   await page.click("#restart");
   await page.waitForFunction(() => performance.getEntriesByName("bunwasm:bundled-react").length > 0, null, { timeout: TIMEOUT });

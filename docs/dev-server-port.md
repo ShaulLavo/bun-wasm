@@ -1,7 +1,8 @@
 # Bun dev server port
 
-Status: Approved. Slices 1–3 implement WebSockets, HTML serving and Bun bake
-incremental HMR. React refresh and sandbox migration follow in slices 4–5.
+Status: Approved. Slices 1–4 implement WebSockets, HTML serving, Bun bake
+incremental HMR, React refresh and the plain-app sandbox. Slice 5 adds a
+second template.
 
 ## WebSockets
 
@@ -152,9 +153,7 @@ then removes them.
 ## Next slices
 
 3. Complete. See the slice 3 implementation and verification below.
-4. Enable Bun's React refresh and error overlay, then remove the sandbox's
-   `.dev/` plumbing. Preserve engine switching, dependency caching, preview
-   links and phone behavior. Run the existing HMR acceptance test on all engines.
+4. Complete. See the slice 4 implementation and verification below.
 5. Add a vanilla TypeScript template that exercises `import.meta.hot`, and an
    HTML CLI fixture with an HMR WebSocket client.
 
@@ -193,10 +192,54 @@ the host's isolation headers so they can render inside an isolated editor page.
 Only one HTML root per HMR listener is currently represented by route zero.
 Static `development: false` HTML routes retain their ordinary bundler path.
 Source maps are retained in the incremental graph, but their HTTP endpoints are
-not yet exposed. React refresh and sandbox migration follow in slice 4.
+not yet exposed. React refresh and sandbox migration are described in slice 4 below.
 
 Verification at this boundary: 76 local fixtures pass on each engine. CLI HMR
 and direct HTML checks pass on all three. Real Chromium and WebKit checks cover
 both iframe and independent-tab updates, same-size source edits, document
 identity across updates, linked CSS, binary sockets, protocol negotiation and
 shared-ring filesystem writes. The full `scripts/test-web.sh` also passes.
+
+## Slice 4: React refresh and the plain sandbox
+
+The framework projection now enables Bun's built-in React refresh transform
+when `react-refresh/runtime.js` is installed. The initial graph includes that
+runtime and Bun's client loads it before the application's HTML entry. Bun's
+own module runtime handles refresh boundaries; the sandbox adds no refresh
+registry or custom module loader.
+
+The sandbox template contains `index.html`, `src/main.tsx`, `src/App.tsx`,
+`src/App.css` and `package.json`. It runs `bun ./index.html`. Editor saves use
+the shared filesystem channel from slice 3. The engine picker, preview link,
+independent tab and phone layout remain. The shared phone test writes its
+layout sample directly to xterm, removing its dependency on `.dev/dev.ts`.
+
+The HMR upgrade hook follows Bun's origin policy: matching hosts, localhost
+names and non-browser clients without Origin are accepted; unrelated and
+opaque origins are rejected. The HTML fixture checks these cases on each engine.
+
+Bun's generated error runtime handles a page first opened with invalid source;
+it receives the same serialized failures and configuration prelude as native
+Bun. The regular client displays errors from later edits and clears them on
+recovery. The acceptance test covers both cases.
+
+Compiled dependency caching persists emitted package modules, graph edges and
+complete packed source maps. The first visit compiles them with bun.wasm. The
+page saves `/_bun/deps-cache` in Cache Storage and restores it to
+`/.bunwasm/deps-cache` before a later run. The key includes the exact engine
+wasm and template builds. Manifest/dependency edits disable restoration. The
+cache reader validates its input before changing the graph, and corrupt caches
+are discarded and rebuilt. Packages depending on project source, CSS or assets
+are excluded from this cache.
+
+`scripts/test-dev-cache.mjs` compares cold/warm JavaScript and cache bytes,
+breaks the dependency sources to prove warm parser bypass, then edits the app
+and checks the native HMR message. It also tests malformed cache records and
+an empty cache. Run it with `BUN_WASM_LAUNCHER` as for the other CLI checks.
+
+At the slice 4 boundary, all six browser/engine combinations pass nine React
+acceptance steps, including state-preserving edits, CSS, both error-overlay
+paths, independent tabs, engine switching and phone/clipboard behavior. All
+six cache runs pass cold compilation, cached Restart/reload, HMR after restore,
+corruption recovery and manifest invalidation. The CLI cache checks pass on
+all three engines, including 36 malformed-cache cases and three empty caches.

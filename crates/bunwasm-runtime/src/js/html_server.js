@@ -169,9 +169,21 @@
     servers.delete(server);
   }
 
+  // DevServer.rs::is_allowed_dev_origin: browser handshakes must come from
+  // the requested host or a localhost name. CLI clients may omit Origin.
+  function allowedOrigin(request) {
+    const value = request.headers.get("origin");
+    if (value === null) return true;
+    try {
+      const hostname = new URL(value).hostname;
+      return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === new URL(request.url).hostname;
+    } catch { return false; }
+  }
+
   function upgrade(request, server) {
     const context = servers.get(server);
     if (!context?.enabled || !context.bundles.length || new URL(request.url).pathname !== "/_bun/hmr") return false;
+    if (!allowedOrigin(request)) return false;
     const state = devState(context.bundles[0], server);
     return server.upgrade(request, { data: { [hmr]: state, topics: "" } });
   }

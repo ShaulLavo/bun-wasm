@@ -101,11 +101,11 @@ async function check(browserName, engine) {
     });
     await step("5 syntax error overlay and recovery", async () => {
       await setFile("src/App.tsx", [["<h1>", "<h1 "]]);
-      await app.locator("#__bun_dev_overlay", { hasText: "Build error" }).waitFor({ timeout: STEP_MS });
+      await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
       await shot("5-overlay");
       await setFile("src/App.tsx", [["<h1 ", "<h1>"], ["Hello, hot reload", "Fixed it"]]);
       await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
-      await app.locator("#__bun_dev_overlay").waitFor({ state: "detached", timeout: STEP_MS });
+      await app.locator("bun-hmr").waitFor({ state: "hidden", timeout: STEP_MS });
       const count = await app.locator("button.counter").textContent();
       if (count !== "count is 3") throw new Error(`state lost after recovery: ${count}`);
       await shot("5-recovered");
@@ -134,6 +134,18 @@ async function check(browserName, engine) {
       await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STARTUP_MS });
       await shot("6-switched");
     });
+    await step("6b initial build error overlay and recovery", async () => {
+      await setFile("src/App.tsx", [["<h1>", "<h1 "]]);
+      await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
+      const navigated = page.waitForEvent("framenavigated", { predicate: (frame) => frame.parentFrame() !== null });
+      await page.locator("#restart").click();
+      await navigated;
+      await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
+      await setFile("src/App.tsx", [["<h1 ", "<h1>"]]);
+      await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
+      await app.locator("bun-hmr").waitFor({ state: "hidden", timeout: STEP_MS });
+      await app.locator("button.counter", { hasText: "count is 0" }).waitFor({ timeout: STEP_MS });
+    });
     await step("7 phone layout and terminal copy", () => checkPhoneUI(page, "sandbox", browserName === "chromium"));
   } catch {
     console.log(logs.slice(-15).map((l) => `      ${l}`).join("\n"));
@@ -151,6 +163,6 @@ for (const browserName of browsers) {
     summary.push(await check(browserName, engine));
   }
 }
-const failed = summary.filter((s) => s.results.length < 8 || s.results.some((r) => !r.ok));
+const failed = summary.filter((s) => s.results.length < 9 || s.results.some((r) => !r.ok));
 console.log(failed.length ? `\n${failed.length} of ${summary.length} runs failed` : `\nall ${summary.length} runs passed`);
 process.exit(failed.length ? 1 : 0);

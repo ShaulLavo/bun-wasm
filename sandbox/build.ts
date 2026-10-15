@@ -3,7 +3,6 @@
 // with its node_modules.
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { previewWebsocketScript } from "../web/preview-build";
 import { join, relative, resolve } from "node:path";
 
@@ -17,7 +16,7 @@ async function bundle(config: Parameters<typeof Bun.build>[0]): Promise<Awaited<
   const result = await Bun.build(config);
   if (!result.success) {
     for (const log of result.logs) console.error(log);
-    process.exit(1);
+    throw new Error("Sandbox bundle failed");
   }
   return result;
 }
@@ -76,15 +75,12 @@ for (const path of Object.keys(files)) files[path] = await Bun.file(join(templat
 
 // node_modules: a native `bun install` of the template's package.json, keeping only the files the
 // dev server's dependency bundle reads (development builds), plus each package's package.json and LICENSE.
-const scratch = mkdtempSync(join(process.env.SCRATCH ?? tmpdir(), "bun-wasm-sandbox-template-"));
+const scratch = mkdtempSync(join(process.env.SCRATCH ?? "/work/tmp", "bun-wasm-sandbox-template-"));
 try {
   await Bun.write(join(scratch, "package.json"), Bun.file(join(template, "package.json")));
   const install = Bun.spawnSync(["bun", "install", "--linker", "hoisted", "--no-save"], { cwd: scratch, stdout: "inherit", stderr: "inherit" });
   if (install.exitCode !== 0) throw new Error("bun install failed");
-  const devTs = files[".dev/dev.ts"] ?? "";
-  const depsMatch = /const DEPS = (\[[^\]]*\]);/.exec(devTs);
-  if (!depsMatch) throw new Error("template/.dev/dev.ts has no `const DEPS = [...]` list");
-  const deps: string[] = JSON.parse(depsMatch[1]!);
+  const deps = ["react", "react/jsx-runtime", "react/jsx-dev-runtime", "react-dom", "react-dom/client", "react-refresh/runtime"];
   const entries = await Promise.all(
     deps.map(async (spec, i) => {
       const entry = join(scratch, `entry-${i}.js`);

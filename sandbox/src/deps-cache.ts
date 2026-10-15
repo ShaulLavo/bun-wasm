@@ -2,27 +2,28 @@ import { assetBuild } from "../../web/src/startup-cache";
 
 const CACHE = "bunwasm-sandbox-deps";
 
-export async function depsCacheKey(engine: string, engineBuild: string | null): Promise<string | null> {
-  const templateBuild = assetBuild("template.json");
+export function depsCacheKey(engine: string, engineBuild: string | null, templateFile: string): string | null {
+  const templateBuild = assetBuild(templateFile);
   if (!templateBuild || !engineBuild) return null;
-  return new URL(`./__startup/deps/${engine}/${engineBuild}-${templateBuild}.json`, location.href).href;
+  return new URL(`./__startup/deps/${templateFile}/${engine}/${engineBuild}-${templateBuild}.bin`, location.href).href;
 }
 
-export async function readDeps(key: string): Promise<string | null> {
+export async function readDeps(key: string): Promise<Uint8Array | null> {
   try {
     if (localStorage.getItem(`${CACHE}:${key}`) !== "1") return null;
-    return await (await (await caches.open(CACHE)).match(key))?.text() ?? null;
+    const response = await (await caches.open(CACHE)).match(key);
+    return response ? new Uint8Array(await response.arrayBuffer()) : null;
   } catch {
     return null;
   }
 }
 
-export async function writeDeps(key: string, text: string): Promise<void> {
+export async function writeDeps(key: string, bytes: Uint8Array): Promise<void> {
   try {
     const cache = await caches.open(CACHE);
-    await cache.put(key, new Response(text, { headers: { "content-type": "application/json" } }));
+    await cache.put(key, new Response(bytes.slice(), { headers: { "content-type": "application/octet-stream" } }));
     localStorage.setItem(`${CACHE}:${key}`, "1");
-    // Keep one bundle per engine. Editing a template or changing an engine invalidates its output.
+    // Keep one compiled dependency graph per engine and template.
     const directory = new URL(".", key).href;
     const stale = (await cache.keys()).filter((request) => request.url.startsWith(directory) && request.url !== key);
     for (const request of stale) localStorage.removeItem(`${CACHE}:${request.url}`);

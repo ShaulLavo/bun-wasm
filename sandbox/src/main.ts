@@ -1,8 +1,3 @@
-// The sandbox page: a React project in the in-memory filesystem, edited in CodeMirror and served by
-// its own dev server (template/.dev/dev.ts), which runs in bun.wasm in a worker. The preview iframe loads
-// it through the service worker's /__preview/<port>/ route. Saved edits go to the page's filesystem
-// (the next run starts from it) and, as POST /@hmr/update, straight to the running dev server.
-
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 
@@ -15,7 +10,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
-import { MemFS, decode, encode } from "../../web/src/fs";
+import { MemFS, decode } from "../../web/src/fs";
 import type { NetHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
 import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
@@ -30,7 +25,8 @@ const HOME = "/home/user";
 const APP = `${HOME}/app`;
 const PORT = 5173;
 /** Files the user changed, kept across reloads and engine switches. */
-const EDITS_KEY = "bun-wasm-sandbox:edits";
+const templateFile = "template.json";
+const EDITS_KEY = "bun-wasm-sandbox:edits:react";
 const SAVE_DELAY_MS = 350;
 /** Opened first. */
 const START_FILE = "src/App.tsx";
@@ -100,11 +96,27 @@ function rememberEdit(relPath: string, text: string): void {
   }
 }
 
+function templateFiles(text: string): Record<string, string> | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (!value || typeof value !== "object" || !("files" in value)) return null;
+    const files = value.files;
+    if (!files || typeof files !== "object") return null;
+    const output: Record<string, string> = {};
+    for (const [path, source] of Object.entries(files)) {
+      if (typeof source !== "string") return null;
+      output[path] = source;
+    }
+    return typeof output["index.html"] === "string" ? output : null;
+  } catch { return null; }
+}
+
 async function loadTemplate(): Promise<void> {
   const started = performance.now();
-  const res = await fetch("./template.json");
-  if (!res.ok) throw new Error(`template.json: HTTP ${res.status}`);
-  const { files } = (await res.json()) as { files: Record<string, string> };
+  const response = await fetch(`./${templateFile}`);
+  if (!response.ok) throw new Error(`${templateFile}: HTTP ${response.status}`);
+  const files = templateFiles(await response.text());
+  if (!files) throw new Error(`${templateFile}: invalid project files`);
   measureStartup("template", started);
   for (const [path, text] of Object.entries(files)) fs.writeFile(abs(path), text);
   for (const [path, text] of Object.entries(edits)) fs.writeFile(abs(path), text);
@@ -135,8 +147,9 @@ const previews = new Previews();
 linkLocalUrls(term, previews);
 const moduleScope: Promise<boolean> = engine === "browser" ? registerModuleScope() : Promise.resolve(false);
 let wasm: Awaited<ReturnType<typeof loadWasm>> | null = null;
-let depsKey: string | null = null;
 let firstStart = true;
+let depsKey: string | null = null;
+const DEPS_PATH = "/.bunwasm/deps-cache";
 
 interface Server {
   port: number;
@@ -163,16 +176,18 @@ async function startDevServer(): Promise<void> {
   setStatus("waiting for module service worker…");
   const scoped = await moduleScope;
   unsent.clear();
-  performance.clearMarks("bunwasm:deps-cached");
-  performance.clearMeasures("bunwasm:deps-cached");
-  const changedDeps = Object.keys(edits).some((path) => path.startsWith(".dev/") || path === "package.json" || path.startsWith("node_modules/"));
-  if (changedDeps) {
-    depsKey = null;
-    fs.remove(abs("node_modules/.dev/deps.json"));
+  for (const phase of ["deps-cached", "bundling-react", "bundled-react"]) {
+    performance.clearMarks(`bunwasm:${phase}`);
+    performance.clearMeasures(`bunwasm:${phase}`);
   }
+  const changedDeps = Object.keys(edits).some((path) => path === "package.json" || path.startsWith("node_modules/"));
+  depsKey = changedDeps ? null : depsCacheKey(engine, wasm.build, templateFile);
+  const cached = depsKey ? await readDeps(depsKey) : null;
+  fs.remove(DEPS_PATH);
+  if (cached) fs.writeFile(DEPS_PATH, cached);
   setStatus("starting worker…");
   setServerState("starting", "starting dev server…");
-  term.write(`\x1b[2m$\x1b[0m bun dev \x1b[2m(${ENGINES[engine].name})\x1b[0m\r\n`);
+  term.write(`\x1b[2m$\x1b[0m bun ./index.html \x1b[2m(${ENGINES[engine].name})\x1b[0m\r\n`);
   const env: Record<string, string> = {
     HOME,
     PWD: APP,
@@ -185,16 +200,15 @@ async function startDevServer(): Promise<void> {
     TMPDIR: "/tmp",
     PORT: String(PORT),
     BUN_WASM_STARTUP: "1",
-    BUN_WASM_DEPS_KEY: depsKey ?? "",
   };
   const started = performance.now();
-  const output = new StartupOutput((text) => term.write(text), (line) => startupLine(line, started));
-  const current = startRun({ engine, module: wasm.module, args: [".dev/dev.ts"], env, root: fs.root, moduleScope: scoped }, {
+  const output = new StartupOutput((text) => term.write(text), startupRecord);
+  const current = startRun({ engine, module: wasm.module, args: ["./index.html"], env, root: fs.root, moduleScope: scoped }, {
     phase: (name) => {
       if (name === "worker-start") setStatus("starting dev server…");
     },
     stdout: (data) => output.write(data),
-    stderr: (data) => term.write(data),
+    stderr: (data) => output.write(data),
     listening: (port, helper) => {
       previews.register(port, helper);
       if (run !== current) return;
@@ -220,35 +234,44 @@ async function startDevServer(): Promise<void> {
   setServerState("down", `dev server stopped (exit ${result.code}) · press Restart`);
 }
 
-function startupLine(line: string, started: number): boolean {
+function startupRecord(line: string): boolean {
   let event: unknown;
   try { event = JSON.parse(line); } catch { return false; }
   if (!event || typeof event !== "object" || !("phase" in event) || !("duration" in event)) return false;
   if (typeof event.phase !== "string" || typeof event.duration !== "number") return false;
-  const labels: Record<string, string> = {
-    "dev-start": "starting dev server…",
-    "bundling-react": "bundling React dependencies…",
-    "bundled-react": "starting dev server…",
-    "deps-cached": "using cached React dependencies…",
-    "starting-server": "starting dev server…",
-  };
-  if (!server) setStatus(labels[event.phase] ?? event.phase);
-  const end = "at" in event && typeof event.at === "number" ? event.at - performance.timeOrigin : performance.now();
-  if (event.phase === "dev-start") performance.measure("bunwasm:dev-start", { start: started, end });
-  performance.mark(`bunwasm:${event.phase}`, { startTime: end });
-  if (event.phase !== "dev-start" && event.phase !== "starting-server") performance.measure(`bunwasm:${event.phase}`, { start: end - event.duration, duration: event.duration });
+  measureStartup(event.phase, performance.now() - event.duration);
   return true;
 }
 
+function guestBytes(target: Server, path: string): Promise<{ status: number; bytes: Uint8Array }> {
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    let status = 0;
+    const accepted = target.helper.request(target.port, {
+      method: "GET", target: path, headers: [], body: new Uint8Array(),
+    }, {
+      head: (head) => { status = head.status; },
+      data: (chunk) => { chunks.push(chunk.slice()); },
+      end: () => {
+        const bytes = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+        let at = 0;
+        for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.length; }
+        resolve({ status, bytes });
+      },
+      error: (message) => reject(new Error(message)),
+    });
+    if (!accepted) reject(new Error("the dev server is not listening"));
+  });
+}
+
 async function saveDeps(target: Server, key: string): Promise<void> {
-  if (performance.getEntriesByName("bunwasm:deps-cached", "measure").length) return;
   try {
-    const result = await guestFetch(target, "GET", "/@hmr/deps", "");
-    if (result.status !== 200 || server !== target) return;
-    fs.writeFile(abs("node_modules/.dev/deps.json"), result.text);
-    await writeDeps(key, result.text);
+    const result = await guestBytes(target, "/_bun/deps-cache");
+    if (result.status !== 200 || server !== target || decode(result.bytes.subarray(0, 8)) !== "BUNDEPS1") return;
+    fs.writeFile(DEPS_PATH, result.bytes);
+    await writeDeps(key, result.bytes);
   } catch {
-    // The server can be restarted while its first bundle is being saved.
+    // Restart can close the guest while the dependency cache is being saved.
   }
 }
 
@@ -270,7 +293,7 @@ async function showPreview(port: number, visibleStart: number): Promise<void> {
   openPreview.href = url;
   // The label shows the server's own address; tapping it opens the preview, which works anywhere.
   previewUrl.href = url;
-  setStatus("loading preview and React modules…");
+  setStatus("loading preview…");
   const previewStarted = performance.now();
   previewFrame.addEventListener("load", () => {
     measureStartup("preview", previewStarted);
@@ -280,50 +303,15 @@ async function showPreview(port: number, visibleStart: number): Promise<void> {
   previewFrame.src = url;
 }
 
-/** One request to the guest's dev server, without the service worker (this page is outside its scope). */
-function guestFetch(target: Server, method: string, path: string, body: string): Promise<{ status: number; text: string }> {
-  return new Promise((resolve, reject) => {
-    const chunks: Uint8Array[] = [];
-    let status = 0;
-    const accepted = target.helper.request(
-      target.port,
-      { method, target: path, headers: [["content-type", "application/json"]], body: encode(body) },
-      {
-        head: (head) => void (status = head.status),
-        data: (chunk) => void chunks.push(chunk.slice()),
-        end: () => {
-          const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
-          let at = 0;
-          for (const c of chunks) {
-            bytes.set(c, at);
-            at += c.length;
-          }
-          resolve({ status, text: decode(bytes) });
-        },
-        error: (message) => reject(new Error(message)),
-      },
-    );
-    if (!accepted) reject(new Error("the dev server is not listening"));
-  });
-}
-
-/** Saves go out in order: an older save must not land after a newer one. */
-let sendQueue: Promise<void> = Promise.resolve();
-
-function sendUpdate(path: string, text: string): Promise<void> {
-  sendQueue = sendQueue.then(async () => {
-    const target = server;
-    if (!target) return;
-    try {
-      const res = await guestFetch(target, "POST", "/@hmr/update", JSON.stringify({ path, text }));
-      const result = JSON.parse(res.text) as { ok: boolean; error?: string };
-      if (result.ok) setSaveState("saved · updated", "ok");
-      else setSaveState("build error (see preview)", "error");
-    } catch (err) {
-      setSaveState(`not sent: ${err instanceof Error ? err.message : String(err)}`, "error");
-    }
-  });
-  return sendQueue;
+async function sendUpdate(path: string, text: string): Promise<void> {
+  const target = server;
+  if (!target) return;
+  try {
+    await target.helper.changeFile(abs(path), text);
+    if (server === target) setSaveState("saved", "ok");
+  } catch (error) {
+    setSaveState(`not sent: ${error instanceof Error ? error.message : String(error)}`, "error");
+  }
 }
 
 function save(path: string, text: string): void {
@@ -542,10 +530,6 @@ async function boot(): Promise<void> {
   tree.render();
   editor.open(fs.lookup(abs(START_FILE)) ? START_FILE : (fs.listFiles(APP).map(rel)[0] ?? START_FILE));
   if (wasm) {
-    const changedDeps = Object.keys(edits).some((path) => path.startsWith(".dev/") || path === "package.json" || path.startsWith("node_modules/"));
-    depsKey = changedDeps ? null : await depsCacheKey(engine, wasm.build);
-    const cached = depsKey ? await readDeps(depsKey) : null;
-    if (cached) fs.writeFile(abs("node_modules/.dev/deps.json"), cached);
     setStatus(`starting the dev server on ${ENGINES[engine].name}…`);
     await startDevServer();
   }

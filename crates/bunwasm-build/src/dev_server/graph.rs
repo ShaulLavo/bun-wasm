@@ -184,6 +184,17 @@ impl DevServer {
         let mut trace = self.trace_state()?;
         self.client_graph
             .trace_imports(index, &mut trace, TraceImportGoal::FindClientModules)?;
+        if !refresh.is_empty() {
+            let index = self
+                .client_graph
+                .get_file_index(refresh)
+                .expect("refresh entry is indexed");
+            self.client_graph.trace_imports(
+                index,
+                &mut trace,
+                TraceImportGoal::FindClientModules,
+            )?;
+        }
         self.client_graph
             .take_js_bundle(&incremental_graph::TakeJSBundleOptionsClient {
                 initial_response_entry_point: entry,

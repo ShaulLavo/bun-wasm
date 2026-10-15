@@ -14,6 +14,7 @@ use graph::{EntryPointList, incremental_graph};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
+mod cache;
 mod finalize;
 pub(crate) mod graph;
 #[cfg(target_os = "wasi")]
@@ -50,6 +51,8 @@ pub(super) struct Driver {
     resolution_logs: BTreeMap<Vec<u8>, Box<Log>>,
     start: Option<DevServerInput>,
     generation: u64,
+    refresh_entry: Option<String>,
+    startup_logs: String,
 }
 
 thread_local! {
@@ -61,6 +64,13 @@ pub fn open(path: &str) -> Result<Output, String> {
     let path = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
     let entry = path.to_string_lossy().into_owned();
     let root = path.parent().unwrap().to_string_lossy();
+    let refresh_entry = path
+        .parent()
+        .unwrap()
+        .ancestors()
+        .map(|root| root.join("node_modules/react-refresh/runtime.js"))
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().into_owned());
     let mut state = Box::new(Driver {
         graph: graph::DevServer::new(root.as_bytes(), *b"b00b1e5b00b1e5aa"),
         entry,
@@ -73,10 +83,43 @@ pub fn open(path: &str) -> Result<Output, String> {
         resolution_logs: BTreeMap::new(),
         start: None,
         generation: 0,
+        refresh_entry,
+        startup_logs: String::new(),
     });
+    let cache_started = std::time::Instant::now();
+    let restored = match cache::restore(&mut state.graph) {
+        Ok(count) => count,
+        Err(error) => {
+            eprintln!("Discarded invalid dependency cache: {error}");
+            0
+        }
+    };
+    if restored > 0 {
+        state.startup_phase("deps-cached", cache_started.elapsed().as_millis());
+    } else {
+        state.startup_phase("bundling-react", 0);
+    }
     let mut entries = EntryPointList::empty();
+    if let Some(refresh) = &state.refresh_entry {
+        entries
+            .append_js(refresh.as_bytes(), graph::Graph::Client)
+            .map_err(error)?;
+    }
     entries.append_html(state.entry.as_bytes()).map_err(error)?;
+    let build_started = std::time::Instant::now();
     state.bundle(entries, &[])?;
+    if restored == 0 {
+        state.startup_phase("bundled-react", build_started.elapsed().as_millis());
+    }
+    let cache = cache::encode(&state.graph);
+    state.files.insert(
+        "/_bun/deps-cache".into(),
+        File {
+            path: "/_bun/deps-cache".into(),
+            contents: cache,
+            mime: "application/octet-stream".into(),
+        },
+    );
     let id = NEXT.with_borrow_mut(|next| {
         let id = *next;
         *next += 1;
@@ -106,6 +149,27 @@ fn error(e: bun_bundler::Error) -> String {
 }
 
 impl Driver {
+    fn startup_phase(&mut self, phase: &str, duration: u128) {
+        if std::env::var("BUN_WASM_STARTUP").as_deref() != Ok("1") {
+            return;
+        }
+        use std::fmt::Write as _;
+        let _ = writeln!(
+            self.startup_logs,
+            "[bunwasm:startup] {{\"phase\":\"{phase}\",\"duration\":{duration}}}"
+        );
+    }
+
+    fn framework(&self) -> bake_types::Framework {
+        let refresh = self
+            .refresh_entry
+            .as_ref()
+            .map(|_| bake_types::ReactFastRefresh {
+                import_source: b"react-refresh/runtime".as_slice().into(),
+            });
+        bake_types::Framework::new(Default::default(), None, refresh, false)
+    }
+
     fn bundle(&mut self, entries: EntryPointList, changed: &[Box<[u8]>]) -> Result<(), String> {
         self.graph.start_bundle();
         self.css_updates.clear();
@@ -135,8 +199,13 @@ impl Driver {
         entries: EntryPointList,
         changed: &[Box<[u8]>],
     ) -> crate::Result<()> {
-        let server = self.transpiler(arena, log, false)?;
-        let client = match self.transpiler(arena, log, true) {
+        let framework_owner = Box::new(self.framework());
+        let framework_ptr = core::ptr::from_ref(&*framework_owner);
+        // SAFETY: the Box remains live until both transpilers are destroyed.
+        // The erased lifetime is restricted to this synchronous bundle pass.
+        let framework: &'static bake_types::Framework = unsafe { &*framework_ptr };
+        let server = self.transpiler(arena, log, false, framework)?;
+        let client = match self.transpiler(arena, log, true, framework) {
             Ok(value) => value,
             Err(err) => {
                 unsafe {
@@ -170,7 +239,7 @@ impl Driver {
         let mut bundle = BundleV2::init(
             server,
             Some(BakeOptions {
-                framework: bake_types::Framework::new(Default::default(), None, None, false),
+                framework: self.framework(),
                 client_transpiler: NonNull::from(&mut *client),
                 ssr_transpiler: server_ptr,
                 plugins: None,
@@ -217,6 +286,7 @@ impl Driver {
         arena: &'static Arena,
         log: *mut Log,
         client: bool,
+        framework: &'static bake_types::Framework,
     ) -> crate::Result<&'static mut Transpiler<'static>> {
         let opts = bun_options_types::schema::api::TransformOptions {
             absolute_working_dir: Some(self.graph.root.clone()),
@@ -242,12 +312,8 @@ impl Driver {
         value.options.source_map = options::SourceMapOption::External;
         value.options.jsx.development = true;
         value.options.css_chunking = true;
-        value.options.framework = Some(arena.alloc(bake_types::Framework::new(
-            Default::default(),
-            None,
-            None,
-            false,
-        )));
+        value.options.react_fast_refresh = client && self.refresh_entry.is_some();
+        value.options.framework = Some(framework);
         value.options.conditions.append_slice(&[b"development"])?;
         value.configure_defines()?;
         value.configure_linker();
@@ -279,7 +345,11 @@ impl Driver {
         if self.graph.bundling_failures.is_empty() && !self.html.is_empty() {
             let contents = self
                 .graph
-                .initial_js(self.entry.as_bytes(), b"", self.generation)
+                .initial_js(
+                    self.entry.as_bytes(),
+                    self.refresh_entry.as_deref().unwrap_or("").as_bytes(),
+                    self.generation,
+                )
                 .map_err(error)?;
             let path = "/_bun/client/main.js".to_owned();
             self.files.insert(
@@ -287,6 +357,31 @@ impl Driver {
                 File {
                     path,
                     contents,
+                    mime: "text/javascript;charset=utf-8".into(),
+                },
+            );
+        }
+        if !self.graph.bundling_failures.is_empty() {
+            let mut source = b"(()=>{const error=new Uint8Array([".to_vec();
+            for failure in self.graph.bundling_failures.values() {
+                for byte in &failure.data {
+                    use std::io::Write as _;
+                    let _ = write!(source, "{byte},");
+                }
+            }
+            let prelude = format!(
+                "]);const config={{bun:{:?}}};\n",
+                bun_core::Global::package_json_version_with_canary
+            );
+            source.extend_from_slice(prelude.as_bytes());
+            source.extend_from_slice(include_bytes!("../../generated/bake.error.js"));
+            source.extend_from_slice(b"\n})();");
+            let path = "/_bun/client/main.js".to_owned();
+            self.files.insert(
+                path.clone(),
+                File {
+                    path,
+                    contents: source,
                     mime: "text/javascript;charset=utf-8".into(),
                 },
             );
@@ -308,7 +403,7 @@ impl Driver {
             watch,
             update,
             errors,
-            logs: String::new(),
+            logs: std::mem::take(&mut self.startup_logs),
         })
     }
 
