@@ -13,7 +13,7 @@ const FIRST_HANDLE = 0x60000000;
 export const MAX_CHILDREN = 4;
 
 export function createProcessBudget() {
-  return new SharedArrayBuffer(8 + MAX_CHILDREN * 8);
+  return new SharedArrayBuffer(8 + MAX_CHILDREN * 4);
 }
 
 function wake(budget) {
@@ -131,25 +131,37 @@ export class SubprocessHost {
     this.lastError = JSON.stringify({ name: "Error", message, code });
     return -1;
   }
+  parentActive(cells) {
+    const slot = this.options.slot;
+    if (slot === undefined) return true;
+    const state = Atomics.load(cells, slot + 2);
+    return state > 0 && Math.floor(state / 8) === this.options.token;
+  }
   reserve() {
     const cells = new Int32Array(this.budget);
+    if (!this.parentActive(cells)) return null;
+    const token = (Atomics.add(cells, 0, 1) >>> 0) % 0x0fffffff + 1;
     const parent = this.options.slot;
-    if (parent !== undefined && Atomics.load(cells, parent + 2) <= 0) return -1;
+    // One atomic word carries both generation and parent link; checking a separate token races reuse.
+    const state = token * 8 + (parent === undefined ? 1 : parent + 2);
     for (let slot = 0; slot < MAX_CHILDREN; slot++) {
-      if (Atomics.compareExchange(cells, slot + 2, 0, parent === undefined ? 1 : parent + 2) !== 0) continue;
-      if (parent === undefined || Atomics.load(cells, parent + 2) > 0) return slot;
-      Atomics.store(cells, slot + 2, 0);
-      return -1;
+      if (Atomics.compareExchange(cells, slot + 2, 0, state) !== 0) continue;
+      if (this.parentActive(cells)) return { slot, token };
+      this.releaseSlot(slot, token);
+      return null;
     }
-    return -1;
+    return null;
   }
-  releaseSlot(slot) {
+  releaseSlot(slot, token) {
     const cells = new Int32Array(this.budget);
-    Atomics.store(cells, slot + 2, -1);
+    const state = Atomics.load(cells, slot + 2);
+    if (state <= 0 || Math.floor(state / 8) !== token) return;
+    if (Atomics.compareExchange(cells, slot + 2, state, -token) !== state) return;
     for (let child = 0; child < MAX_CHILDREN; child++) {
-      if (Atomics.load(cells, child + 2) === slot + 2) this.releaseSlot(child);
+      const owned = Atomics.load(cells, child + 2);
+      if (owned > 0 && owned % 8 === slot + 2) this.releaseSlot(child, Math.floor(owned / 8));
     }
-    Atomics.store(cells, slot + 2, 0);
+    Atomics.compareExchange(cells, slot + 2, -token, 0);
   }
   spawn(text) {
     let meta;
@@ -161,14 +173,12 @@ export class SubprocessHost {
     if (meta.env !== undefined && (!meta.env || typeof meta.env !== "object" || Array.isArray(meta.env) || Object.values(meta.env).some((v) => typeof v !== "string"))) return this.fail("spawn: invalid env", "EINVAL");
     const modes = [meta.stdin || "pipe", meta.stdout || "pipe", meta.stderr || "pipe"];
     if (modes.some((mode) => !["pipe", "inherit", "ignore"].includes(mode))) return this.fail("spawn: invalid stdio", "EINVAL");
-    const slot = this.reserve();
-    if (slot < 0) return this.fail("spawn: at most four bun-wasm child instances may run", "EAGAIN");
+    const reservation = this.reserve();
+    if (!reservation) return this.fail("spawn: at most four bun-wasm child instances may run", "EAGAIN");
+    const { slot, token } = reservation;
     const buffers = modes.map(() => new SharedArrayBuffer(16 + PIPE_SIZE));
     const inheritedStdin = modes[0] === "inherit" && Boolean(this.options.stdin);
     if (inheritedStdin) buffers[0] = this.options.stdin;
-    const cells = new Int32Array(this.budget);
-    const token = Atomics.add(cells, 0, 1) + 1;
-    Atomics.store(cells, 2 + MAX_CHILDREN + slot, token);
     const transport = { budget: this.budget, slot, token, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16 + SNAPSHOT_SIZE) };
     const id = this.nextHandle++;
     const pipes = transport.pipes.map((buffer) => new SharedPipe(buffer, this.budget));
@@ -232,7 +242,7 @@ export class SubprocessHost {
   }
   reap(child, cells) {
     child.ended = true;
-    this.releaseSlot(child.transport.slot);
+    this.releaseSlot(child.transport.slot, child.transport.token);
     const size = Atomics.load(cells, 2);
     if (size && this.options.sync) this.options.sync(decode.decode(new Uint8Array(child.transport.control, 16, size).slice()));
     child.worker?.terminate();

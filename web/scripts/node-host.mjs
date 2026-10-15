@@ -111,6 +111,7 @@ async function run() {
   subprocess = new SubprocessHost({
     budget: workerData?.transport?.budget,
     slot: workerData?.transport?.slot,
+    token: workerData?.transport?.token,
     stdin: child && (workerData.meta.stdin !== "inherit" || workerData.transport.inheritedStdin) ? workerData.transport.pipes[0] : undefined,
     output: (fd, bytes) => {
       if (child) child[fd === 2 ? "stderr" : "stdout"].writeAll(bytes);

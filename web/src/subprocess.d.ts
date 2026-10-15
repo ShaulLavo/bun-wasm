@@ -37,6 +37,7 @@ export class SubprocessHost {
   constructor(options: {
     budget?: SharedArrayBuffer;
     slot?: number;
+    token?: number;
     stdin?: SharedArrayBuffer;
     launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): { terminate(): unknown };
     output(fd: number, bytes: Uint8Array): void;
