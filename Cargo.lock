@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-build"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "bitflags",
  "bstr",
@@ -1011,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-cli"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "bunwasm-build",
  "bunwasm-glue",
@@ -1021,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-glue"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "bstr",
  "bun_ast",
@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-host"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "brotli-decompressor",
@@ -1053,18 +1053,18 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-jsc"
-version = "0.0.9"
+version = "0.0.10"
 
 [[package]]
 name = "bunwasm-posix"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "bunwasm-runtime"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "bun_glob",
  "bun_semver",
@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-transpiler"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "bun_alloc",
  "bun_ast",
