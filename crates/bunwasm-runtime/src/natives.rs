@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::engine::{Args, DataFn, NativeError, NativeResult, Record, Val};
 use crate::resolve::{self, Kind, Resolved};
+use crate::modules;
 use crate::State;
 
 /// Natives by name, plus constant properties of the `native` object.
@@ -495,7 +496,24 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     });
 }
 
+fn builtin_index(args: Args<'_>) -> Result<usize, NativeError> {
+    match args.get(0) {
+        Val::Num(n) if *n >= 0.0 && n.fract() == 0.0 && *n <= u32::MAX as f64 => Ok(*n as usize),
+        _ => Err(NativeError::type_error("expected a builtin registry index")),
+    }
+}
+
 fn install_modules(t: &mut Table, state: &Rc<State>) {
+    t.add("bunBuiltinNames", |_| {
+        Ok(Val::Array(modules::BUN_BUILTIN_NAMES.iter().map(|name| Val::from(*name)).collect()))
+    });
+    t.add("bunBuiltinSource", |a| Ok(modules::bun_builtin_source(builtin_index(a)?).map(Val::from).into()));
+    t.add("bunBuiltinHookName", |a| {
+        Ok(modules::BUN_BUILTIN_HOOK_NAMES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
+    });
+    t.add("bunBuiltinErrorCode", |a| {
+        Ok(modules::BUN_BUILTIN_ERROR_CODES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
+    });
     let st = state.clone();
     t.add("resolve", move |a| {
         let spec = a.str(0)?;
