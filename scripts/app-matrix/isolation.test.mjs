@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
@@ -39,9 +39,50 @@ function fixture() {
   } catch (error) { cleanup(); throw error; }
 }
 
-async function matrix(directory, extra = []) {
-  return launch([join(directory, "scripts/app-matrix/isolate.mjs"), "--apps=typescript,eslint", "--engines=quickjs", "--hosts=native", "--launcher=/usr/bin/true", `--cache=${directory}/cache`, `--output=${directory}/results`].concat(extra), { MATRIX_SCRATCH_ROOT: join(directory, "owned-scratch") });
+async function matrix(directory, extra = [], prefix = []) {
+  return launch(prefix.concat([join(directory, "scripts/app-matrix/isolate.mjs"), "--apps=typescript,eslint", "--engines=quickjs", "--hosts=native", "--launcher=/usr/bin/true", `--cache=${directory}/cache`, `--output=${directory}/results`], extra), { MATRIX_SCRATCH_ROOT: join(directory, "owned-scratch") });
 }
+
+test("native server must stay alive until its DOM assertion completes", async () => {
+  const { directory, cleanup } = fixture();
+  try {
+    const html = '<html><body>loading<script>setTimeout(() => document.body.textContent = "matrix", 250)</script></body></html>';
+    const server = exit => `let requests = 0; Bun.serve({ hostname: '127.0.0.1', port: Number(process.env.PORT), fetch() { if (++requests >= 2 && ${exit}) setTimeout(() => process.exit(0), 10); return new Response(${JSON.stringify(html)}, { headers: { 'content-type': 'text/html' } }); } });`;
+    const app = {
+      id: "native-dom", dependencies: {}, files: { "live.js": server(false), "exit.js": server(true) },
+      commands: ["live", "exit"].map(name => ({ name, args: ["run", `${name}.js`], check: { kind: "page", selector: "body", text: "matrix" } })),
+    };
+    writeFileSync(join(directory, "scripts/app-matrix/apps.mjs"), `export { projectFiles } from ${JSON.stringify(join(root, "scripts/app-matrix/apps.mjs"))}; export const apps = ${JSON.stringify([app])}; export const browserSubset = [];`);
+    const result = await matrix(directory, ["--apps=native-dom", "--reference", "--timeout=10"]);
+    expect(result.code).toBe(0);
+    const { results } = JSON.parse(readFileSync(join(directory, "results/results.json")));
+    const reference = results.filter(row => row.engine === "reference");
+    expect(reference.find(row => row.stage === "install").status).toBe("pass");
+    expect(reference.find(row => row.stage === "live").status).toBe("pass");
+    expect(reference.find(row => row.stage === "exit")).toMatchObject({ status: "fail", exit: 0 });
+    expect(reference.find(row => row.stage === "exit").blocker).toContain("before HTTP/DOM assertion");
+    expect(readdirSync(join(directory, "owned-scratch"))).toEqual([]);
+  } finally { cleanup(); }
+}, 30000);
+
+test("broker transport failure exits nonzero, records infrastructure error, and caches nothing", async () => {
+  const { directory, cleanup } = fixture();
+  try {
+    const preload = join(directory, "outage-preload.mjs");
+    writeFileSync(preload, `const original = globalThis.fetch; globalThis.fetch = (input, options) => { if (String(input).startsWith('https://registry.npmjs.org/')) throw new Error('injected broker transport failure'); return original(input, options); };`);
+    const result = await matrix(directory, ["--apps=hono", "--record", "--timeout=2"], ["--preload", preload]);
+    expect(result.code).toBe(1);
+    const report = JSON.parse(readFileSync(join(directory, "results/results.json")));
+    expect(report.provenance.registry.errors.join("\n")).toContain("injected broker transport failure");
+    expect(report.provenance.registry.errors.join("\n")).toContain("/hono");
+    expect(report.provenance.registry.misses).toEqual([]);
+    const index = join(directory, "cache/index.json");
+    expect(existsSync(index) ? JSON.parse(readFileSync(index)) : {}).not.toHaveProperty("/hono");
+    expect(readdirSync(join(directory, "cache/objects"))).toEqual([]);
+    expect(existsSync(join(directory, "cache/record.lock"))).toBe(false);
+    expect(readdirSync(join(directory, "owned-scratch"))).toEqual([]);
+  } finally { cleanup(); }
+}, 30000);
 
 function corruptManifest(directory, fault) {
   if (fault === "malformed-manifest") writeFileSync(join(directory, "web/dist/engine-builds.json"), "{bad");
