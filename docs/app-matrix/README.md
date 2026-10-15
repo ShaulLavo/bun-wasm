@@ -89,3 +89,19 @@ These priorities count app projects, not individual command rows.
 
 
 Rank remaining causes by the number of distinct app projects they would unblock, rather than counting install, dev, and build rows as separate apps. An install or module-loading fix exposes the next blocker; it does not promise that the app will then pass.
+
+## Next.js runtime boundaries
+
+A 2026-10-16 offline replay of Next 15.5.6 uses the unchanged published-package fixture. QuickJS installs pass before and after the runtime changes. Its dev and build commands now get past the CommonJS and vectored-write failures and stop at the Web Streams APIs.
+
+| Engine / host | Stage | Before | After |
+| --- | --- | --- | --- |
+| QuickJS / native | dev | `ReferenceError: module is not defined` | `ReferenceError: TextEncoderStream is not defined` |
+| QuickJS / native | build | `ReferenceError: module is not defined` | `ReferenceError: TextEncoderStream is not defined` |
+| QuickJS / native | start | Blocked by build | Blocked by build |
+
+The original module error came from a minified CommonJS module with `await` inside an async method. The loader treated any unindented line containing `await` as top-level await. It now uses Bun's parser classification. Next's bundled tar library also probes `fs.writev`; its absence selected an unsupported private `process.binding("fs")` fallback. The public callback, synchronous, and FileHandle vectored-write APIs now use the existing descriptor writes. Positioned writes preserve the descriptor cursor.
+
+The next measured blocker is category d. Reproduce with `bun run node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3000` or `bun run node_modules/next/dist/bin/next build` after a normal install. Both report `ReferenceError: TextEncoderStream is not defined` at `node_modules/next/dist/compiled/@edge-runtime/primitives/load.js:18588`, while loading `@edge-runtime/ponyfill`. The loader reads both `TextEncoderStream` and `TextDecoderStream`. The runtime currently supplies only a minimal `ReadableStream` at `crates/bunwasm-runtime/src/js/web.js:764`, with no `WritableStream` or `TransformStream`. A complete generic Web Streams implementation, including text-stream state, cancellation and backpressure, is a separate concern. No stream implementation or fixture substitute was added. Production start remains blocked because the build has not produced `.next/BUILD_ID`.
+
+Evidence lives in `/work/reports/bun-wasm-next-2026-10-16/before/` and `after-quickjs/`. The replay command is `scripts/app-matrix.sh --apps=next --engines=quickjs --hosts=native --timeout=90 --output=<fresh-directory>`. The default registry cache is the same offline mirror as the initial census.
