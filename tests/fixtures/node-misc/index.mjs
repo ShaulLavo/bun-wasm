@@ -19,7 +19,6 @@ console.log("net.isIP:", net.isIP("127.0.0.1"), net.isIP("::1"), net.isIP("nope"
 console.log("process module:", process2 === process);
 console.log("util default:", typeof util.inspect);
 for (const [name, fn] of [
-  ["child_process.spawn", () => childProcess.spawn("ls")],
   ["http.createServer", () => createServer()],
   ["net.connect", () => net.connect(80)],
 ]) {
@@ -31,16 +30,22 @@ for (const [name, fn] of [
   }
 }
 
+const missingChild = childProcess.spawn("ls");
+await new Promise((resolve) => missingChild.on("error", (error) => {
+  console.log("child_process.spawn ENOENT:", error.code === "ENOENT");
+  resolve();
+}));
+
 // Things WASI can't do: they fail loudly instead of hanging or lying.
 console.log("Bun.which:", Bun.which("ls"));
 const spawned = Bun.spawnSync({ cmd: ["ls"] });
-console.log("Bun.spawnSync unsupported:", !spawned.success && spawned.exitCode !== 0 && spawned.stderr.toString().includes("not supported in bun-wasm"));
+console.log("Bun.spawnSync unsupported:", !spawned.success && spawned.exitCode !== 0 && spawned.error.code === "ENOENT");
 for (const name of ["spawn", "serve"]) {
   try {
     Bun[name]({ cmd: ["ls"], fetch() {} });
     console.log(`Bun.${name} ran`);
   } catch (err) {
-    console.log(`Bun.${name} throws:`, err.message.includes("not supported in bun-wasm"));
+    console.log(`Bun.${name} throws:`, err.code === "ENOENT" || err.message.includes("not supported in bun-wasm"));
   }
 }
 try {

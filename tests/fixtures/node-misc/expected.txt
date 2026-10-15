@@ -5,9 +5,9 @@ querystring: a=1&a=2&b=x%20y {"a":["1","2"],"b":"x y"}
 net.isIP: 4 6 0
 process module: true
 util default: function
-child_process.spawn throws: true
 http.createServer throws: true
 net.connect throws: true
+child_process.spawn ENOENT: true
 Bun.which: null
 Bun.spawnSync unsupported: true
 Bun.spawn throws: true

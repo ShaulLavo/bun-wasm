@@ -22,6 +22,10 @@
     return number;
   }
 
+  function signalName(number) {
+    return Object.keys(signals).find((name) => signals[name] === number) || number;
+  }
+
   function bytes(value) {
     if (typeof value === "string") return Buffer.from(value);
     if (value && typeof value._bytes === "function") return value._bytes();
@@ -58,7 +62,8 @@
     const input = Array.isArray(io) ? io[0] : options.stdin;
     const output = Array.isArray(io) ? io[1] : options.stdout;
     const error = Array.isArray(io) ? io[2] : options.stderr;
-    const cwd = options.cwd instanceof URL ? decodeURIComponent(options.cwd.pathname) : String(options.cwd || native.cwd());
+    const requestedCwd = options.cwd instanceof URL ? decodeURIComponent(options.cwd.pathname) : String(options.cwd || native.cwd());
+    const cwd = internal.require("path").resolve(native.cwd(), requestedCwd);
     const meta = { argv, cwd, env,
       stdin: stdioMode(input, 0, "ignore"),
       stdout: stdioMode(output, 1, "pipe"),
@@ -69,6 +74,7 @@
   function start(cmd, options, sync) {
     const spec = normalize(cmd, options, sync);
     if (spec.options.signal && spec.options.signal.aborted) throw spec.options.signal.reason;
+    if (spec.options.killSignal !== undefined) signalNumber(spec.options.killSignal);
     const handle = native.hostSpawn(JSON.stringify(spec.meta));
     if (handle < 0) throw hostError(0);
     const pipes = [0, 1, 2].map((fd) => spec.meta[["stdin", "stdout", "stderr"][fd]] === "pipe" ? native.hostChildPipe(handle, fd) : 0);
@@ -157,13 +163,21 @@
       const state = { handle, end() {} };
       let controller;
       let wake;
+      let cancelled = false;
       const notify = () => { if (wake) wake(); wake = null; };
       const stream = handle ? new internal.web.ReadableStream({
         start(c) { controller = c; },
         pull() { if (state.handle) return new Promise((resolve) => { wake = resolve; }); },
+        cancel() { cancelled = true; if (state.handle) native.hostClose(state.handle); state.handle = 0; notify(); },
       }) : null;
-      state.end = () => { if (controller) controller.close(); notify(); };
-      state.consume = (chunk) => { controller.enqueue(chunk); notify(); };
+      state.end = () => { if (controller && !cancelled) controller.close(); notify(); };
+      state.consume = (chunk) => { if (!cancelled) controller.enqueue(chunk); notify(); };
+      if (stream) Object.assign(stream, {
+        text: () => new internal.web.Response(stream).text(),
+        bytes: () => globalThis.Bun.readableStreamToBytes(stream),
+        arrayBuffer: () => new internal.web.Response(stream).arrayBuffer(),
+        json: () => new internal.web.Response(stream).json(),
+      });
       outputs.push(stream);
       return state;
     });
@@ -173,12 +187,13 @@
     let abort;
     let signalCode = null;
     let closed = false;
+    let settled = false;
     const exited = new Promise((resolve, reject) => { resolveExit = resolve; rejectExit = reject; });
     const child = {
       pid: spec.handle, stdin: spec.pipes[0] ? sink : null, stdout: outputs[0], stderr: outputs[1],
       exited, exitCode: null, signalCode: null, killed: false,
       kill(signal) {
-        if (child.exitCode !== null) return;
+        if (settled) return;
         const number = signalNumber(signal);
         if (native.hostChildKill(spec.handle, number) < 0) throw hostError(spec.handle);
         if (number) { child.killed = true; signalCode = number; }
@@ -186,14 +201,16 @@
       ref() { waiter.ref = true; return child; },
       unref() { waiter.ref = false; return child; },
       resourceUsage() { return undefined; },
+      async [Symbol.asyncDispose]() { if (!settled) child.kill(); await exited; },
     };
     function finish(code) {
-      child.exitCode = code;
-      child.signalCode = signalCode;
+      settled = true;
+      child.exitCode = signalCode === null ? code : null;
+      child.signalCode = signalCode === null ? null : signalName(signalCode);
       if (timer) clearTimeout(timer);
       if (abort) spec.options.signal.removeEventListener("abort", abort);
       resolveExit(code);
-      if (typeof spec.options.onExit === "function") spec.options.onExit(child, code, signalCode, null);
+      if (typeof spec.options.onExit === "function") spec.options.onExit(child, child.exitCode, child.signalCode, null);
     }
     function close() {
       if (closed) return;
@@ -202,13 +219,13 @@
       native.hostClose(spec.handle);
     }
     function step() {
-      sink.flush();
+      const code = settled ? 0 : native.hostChildWait(spec.handle);
+      if (code < 0 && code !== AGAIN) throw hostError(spec.handle);
+      if (code >= 0 && !settled) { sink.destroy(); finish(code); }
+      if (!settled) sink.flush();
       let progress = false;
       for (const state of states) if (readPipe(state, state.consume)) progress = true;
-      const code = child.exitCode === null ? native.hostChildWait(spec.handle) : child.exitCode;
-      if (code === -1) throw hostError(spec.handle);
-      if (code >= 0 && child.exitCode === null) { finish(code); progress = true; }
-      if (child.exitCode !== null && states.every((state) => !state.handle)) { close(); return true; }
+      if (settled && states.every((state) => !state.handle)) { close(); return true; }
       return progress ? "progress" : false;
     }
     const waiter = internal.addIoWaiter({ step, fail(err) { close(); rejectExit(err); }, ref: true });
@@ -224,7 +241,7 @@
   function spawnSync(cmd, options) {
     let spec;
     try { spec = start(cmd, options, true); } catch (error) {
-      return { pid: 0, success: false, exitCode: 1, signalCode: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error };
+      return { pid: 0, success: false, exitCode: 1, signalCode: null, stdout: Buffer.alloc(0), stderr: Buffer.from(error.message + "\n"), error };
     }
     const chunks = [[], []];
     const states = spec.pipes.slice(1).map((handle) => ({ handle, end() {} }));
@@ -253,8 +270,8 @@
         }
         if (exitCode === AGAIN || states.some((state) => state.handle)) native.hostPoll(1);
       }
-      return { pid: spec.handle, success: exitCode === 0, exitCode, signalCode,
-        stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])) };
+      return { pid: spec.handle, success: exitCode === 0, exitCode: signalCode === null ? exitCode : null, signalCode: signalCode === null ? null : signalName(signalCode),
+        exitedDueToTimeout: signalCode !== null, stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])) };
     } catch (error) {
       native.hostChildKill(spec.handle, 9);
       return { pid: spec.handle, success: false, exitCode: 1, signalCode: 9,
@@ -362,9 +379,8 @@
     }
 
     function reportExit(child, code) {
-      const number = child._child.signalCode;
-      child.signalCode = number === null ? null : Object.keys(signals).find((name) => signals[name] === number) || number;
-      child.exitCode = number === null ? code : null;
+      child.signalCode = child._child.signalCode;
+      child.exitCode = child.signalCode === null ? code : null;
       child.emit("exit", child.exitCode, child.signalCode);
       // Web stream completion schedules Node stream end callbacks as immediates.
       // Give those callbacks a turn before close, including unread output pipes.
@@ -400,7 +416,8 @@
       const config = Object.assign({}, options);
       if (options.input !== undefined) config.stdio = [options.input].concat(options.stdio.slice(1));
       const result = spawnSync(argv, config);
-      const signal = result.signalCode === null ? null : Object.keys(signals).find((name) => signals[name] === result.signalCode) || result.signalCode;
+      const signal = result.signalCode;
+      if (result.exitedDueToTimeout) result.error = Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT", errno: -110, syscall: "spawnSync", path: String(command) });
       const encoding = options.encoding;
       const stdout = options.stdio[1] === "inherit" || options.stdio[1] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stdout.toString(encoding) : result.stdout;
       const stderr = options.stdio[2] === "inherit" || options.stdio[2] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stderr.toString(encoding) : result.stderr;
