@@ -13,6 +13,7 @@ import { MemFS, adoptInodes, decode, normalize } from "./fs";
 import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
 import { type Output, Shell } from "./shell";
+import { enableTerminalCopy } from "./terminal-copy";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const statusEl = $<HTMLSpanElement>("#status");
@@ -153,6 +154,7 @@ const fit = new FitAddon();
 term.loadAddon(fit);
 const termEl = $<HTMLDivElement>("#terminal");
 term.open(termEl);
+enableTerminalCopy(term, $<HTMLButtonElement>("#copy-terminal"));
 fit.fit();
 new ResizeObserver(() => fit.fit()).observe(termEl);
 // iOS only raises the keyboard when focus happens inside the tap's own event handler.

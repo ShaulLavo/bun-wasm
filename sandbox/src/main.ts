@@ -19,6 +19,7 @@ import { MemFS, decode, encode } from "../../web/src/fs";
 import type { NetHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
 import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
+import { enableTerminalCopy } from "../../web/src/terminal-copy";
 
 const HOME = "/home/user";
 /** The project's directory in the guest's filesystem. */
@@ -118,6 +119,7 @@ const fit = new FitAddon();
 term.loadAddon(fit);
 const termEl = $<HTMLDivElement>("#terminal");
 term.open(termEl);
+enableTerminalCopy(term, $<HTMLButtonElement>("#copy-terminal"));
 fit.fit();
 new ResizeObserver(() => fit.fit()).observe(termEl);
 

@@ -20,6 +20,8 @@ html,
 body {
   margin: 0;
   height: 100%;
+  width: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -30,6 +32,9 @@ body {
   display: flex;
   flex-direction: column;
   height: var(--app-height);
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
@@ -128,6 +133,7 @@ main {
 }
 
 .pane {
+  overflow: hidden;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -310,6 +316,8 @@ main {
 }
 
 #terminal {
+  min-width: 0;
+  overflow: hidden;
   flex: 1;
   min-height: 0;
   padding: 4px 0 0 8px;
@@ -318,8 +326,57 @@ main {
 
 @media (max-width: 800px) {
   header {
-    gap: 8px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 10px;
     padding: 6px 10px;
+  }
+
+  header h1 {
+    grid-column: 1;
+    grid-row: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  header a.nav {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  header #status {
+    display: none;
+  }
+
+  header .engine {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+    max-width: 100%;
+    justify-self: start;
+  }
+
+  header #restart {
+    grid-column: 2;
+    grid-row: 2;
+    min-height: 34px;
+  }
+
+  #engine {
+    min-width: 0;
+    max-width: 100%;
+    min-height: 34px;
+  }
+
+  #file-select {
+    min-width: 0;
+  }
+
+  #save-state {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   h1 .dim,
@@ -371,4 +428,21 @@ a.nav {
 a.nav:hover {
   color: inherit;
   text-decoration: underline;
+}
+
+#copy-terminal {
+  flex: none;
+  margin-left: auto;
+  min-height: 30px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#copy-terminal:hover {
+  border-color: var(--dim);
 }
