@@ -118,6 +118,13 @@ rl.on("close", () => console.log("readline closed:", JSON.stringify(lines)));
   const sinkOutput = (await readFile(new URL("expected.txt", sinkFixture), "utf8")).trim().split("\n");
   await expectRun(page, `${name}: Bun.ArrayBufferSink ownership and lifecycle`, "bun run sink.js", 0, sinkOutput);
 
+  for (const fixture of ["array-buffer-sink-strings", "array-buffer-sink-view-slots"]) {
+    const folder = new URL(`../../tests/fixtures/${fixture}/`, import.meta.url);
+    await writeFile(page, `${HOME}/${fixture}.js`, await readFile(new URL("index.js", folder), "utf8"));
+    const output = (await readFile(new URL("expected.txt", folder), "utf8")).trim().split("\n");
+    await expectRun(page, `${name}: ${fixture}`, `bun run ${fixture}.js`, 0, output);
+  }
+
   await writeFile(page, `${HOME}/shutdown.test.ts`, `import { test, afterAll } from "bun:test";
 test("live interval", () => { setInterval(() => {}, 1000); });
 afterAll(async () => { await Bun.sleep(5); console.log("cleanup finished"); });
