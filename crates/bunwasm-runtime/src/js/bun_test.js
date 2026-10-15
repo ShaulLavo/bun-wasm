@@ -841,6 +841,8 @@
     });
   }
 
+  defineValueMatcher("toBeTrue", (v) => v === true);
+  defineValueMatcher("toBeFalse", (v) => v === false);
   defineValueMatcher("toBeTruthy", (v) => !!v);
   defineValueMatcher("toBeFalsy", (v) => !v);
   defineValueMatcher("toBeNull", (v) => v === null);

@@ -1,0 +1,2 @@
+bun test vVERSION
+exact boolean matchers ok
