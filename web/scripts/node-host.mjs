@@ -45,6 +45,9 @@ const instance = await WebAssembly.instantiate(module, wasi.getImportObject());
 const code = wasi.start(instance);
 if (!instance.exports.bunwasm_ready || instance.exports.bunwasm_ready() !== 1) process.exit(code);
 
+// Load Node's fetch (undici) now: it is loaded lazily and reads globals the
+// runtime's polyfills replace (Blob, TextEncoder, streams).
+await globalThis.fetch("data:,").catch(() => {});
 const { startEngineHost } = await import("../src/engine-host.js");
 await startEngineHost({
   instance,

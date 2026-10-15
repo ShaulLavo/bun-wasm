@@ -25,6 +25,7 @@ const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
 const NativeMessageChannel = globalThis.MessageChannel;
+const NativeAbortController = globalThis.AbortController;
 const nativeProcess = typeof process === "object" && process && process.versions && process.versions.node ? process : null;
 const nativeAddEventListener = typeof globalThis.addEventListener === "function" ? globalThis.addEventListener.bind(globalThis) : null;
 
@@ -297,8 +298,16 @@ class EngineHost {
       return this.exit(70);
     }
     this.internal = internal;
-    internal.displayName = (file) => this.paths.get(file) || file;
+    // Module URLs show as their paths; frames of this host itself (and the
+    // worker bundle it lives in) are internal, like the polyfills.
+    internal.displayName = (file) => {
+      if (typeof file !== "string") return file;
+      const path = this.paths.get(file);
+      if (path) return path;
+      return /^(blob:|data:|file:|https?:|node:internal\/)/.test(file) ? `bun-wasm:host` : file;
+    };
     this.installGlobals();
+    this.wrapPromiseJobs();
     this.watchRejections();
     this.runEntry();
     this.schedule(0);
@@ -346,10 +355,7 @@ class EngineHost {
       scheduleTick() {
         if (host.tickQueued) return;
         host.tickQueued = true;
-        nativeQueueMicrotask(() => {
-          host.tickQueued = false;
-          host.guard(() => host.internal.runTicks());
-        });
+        nativeQueueMicrotask(() => host.drainTicks());
       },
       runMicrotasks() {},
       compileCjs(path) {
@@ -517,19 +523,71 @@ class EngineHost {
       const url = input instanceof web.Request ? input.url : String(input instanceof web.URL ? input.href : input);
       if (url.startsWith("file:") || url.startsWith("data:")) return polyfillFetch(input, init);
       const req = input instanceof web.Request && Object.keys(init).length === 0 ? input : new web.Request(input, init);
-      const body = req.method === "GET" || req.method === "HEAD" ? undefined : new Uint8Array(await req.arrayBuffer());
-      const res = await host.track(hostFetch(req.url, { method: req.method, headers: Array.from(req.headers), body, redirect: init.redirect || "follow" }));
-      const bytes = new Uint8Array(await host.track(res.arrayBuffer()));
-      const nullBody = req.method === "HEAD" || res.status === 204 || res.status === 304;
-      const out = new web.Response(nullBody ? null : bytes, {
-        status: res.status >= 200 && res.status <= 599 ? res.status : 200,
-        statusText: res.statusText,
-        headers: Array.from(res.headers),
-      });
-      web.Response._setNetwork(out, res.url || req.url, Boolean(res.redirected));
-      return out;
+      // The runtime's AbortSignal drives a native one for the host request.
+      const signal = init.signal || (input instanceof web.Request ? input.signal : undefined);
+      if (signal) signal.throwIfAborted();
+      const controller = new NativeAbortController();
+      const onAbort = () => controller.abort();
+      if (signal) signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        // A native Blob: Node's fetch would wrap a byte array in the global
+        // (polyfill) ReadableStream, which it doesn't accept.
+        const body = req.method === "GET" || req.method === "HEAD" ? undefined : new NativeBlob([await req.arrayBuffer()]);
+        const options = { method: req.method, headers: Array.from(req.headers), body, redirect: init.redirect || "follow", signal: controller.signal };
+        const res = await host.track(hostFetch(req.url, options));
+        const bytes = new Uint8Array(await host.track(res.arrayBuffer()));
+        const nullBody = req.method === "HEAD" || res.status === 204 || res.status === 304;
+        const out = new web.Response(nullBody ? null : bytes, {
+          status: res.status >= 200 && res.status <= 599 ? res.status : 200,
+          statusText: res.statusText,
+          headers: Array.from(res.headers),
+        });
+        web.Response._setNetwork(out, res.url || req.url, Boolean(res.redirected));
+        return out;
+      } catch (err) {
+        if (signal && signal.aborted) throw signal.reason;
+        throw err;
+      } finally {
+        if (signal) signal.removeEventListener("abort", onAbort);
+      }
     }
     Object.defineProperty(globalThis, "fetch", { value: fetch, configurable: true, writable: true, enumerable: false });
+  }
+
+  drainTicks() {
+    this.tickQueued = false;
+    this.guard(() => this.internal.runTicks());
+  }
+
+  // Bun runs process.nextTick callbacks before promise jobs, and promise
+  // callbacks keep the AsyncLocalStorage context they were registered in.
+  // The host engine owns the job queue, so every callback given to
+  // Promise.prototype.then (queueMicrotask goes through it too) drains
+  // pending ticks first and restores its context. `await` doesn't call
+  // `then` on native promises, so it is not covered.
+  wrapPromiseJobs() {
+    const host = this;
+    const wrap = (fn) => {
+      if (typeof fn !== "function") return fn;
+      const context = host.asyncContext;
+      return (value) => {
+        if (host.tickQueued) host.drainTicks();
+        const previous = host.asyncContext;
+        host.asyncContext = context;
+        try {
+          return fn(value);
+        } finally {
+          host.asyncContext = previous;
+        }
+      };
+    };
+    const nativeThen = Promise.prototype.then;
+    const { then } = {
+      then(onFulfilled, onRejected) {
+        return nativeThen.call(this, wrap(onFulfilled), wrap(onRejected));
+      },
+    };
+    Object.defineProperty(Promise.prototype, "then", { value: then, configurable: true, writable: true, enumerable: false });
   }
 
   watchRejections() {

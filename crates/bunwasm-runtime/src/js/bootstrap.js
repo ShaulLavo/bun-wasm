@@ -48,13 +48,36 @@
     return typeof fn === "function" && (fn === Error || fn.prototype instanceof Error);
   }
 
+  // V8 (the host engine in browsers/Node): eval'd code (CommonJS) names its
+  // file through //# sourceURL, and strict-mode frames hide their function,
+  // so top-level code is recognised by its enclosing position (1:1).
+  // Only V8 calls Error.prepareStackTrace among host engines (JavaScriptCore
+  // and SpiderMonkey stacks are parsed in inspect.js).
+  const isV8 = native.engine === "host";
+  function v8TopLevel(site) {
+    return typeof site.getEnclosingLineNumber === "function" && site.getEnclosingLineNumber() === 1 && site.getEnclosingColumnNumber() === 1;
+  }
+
+  // V8 places `new Error()` at `new`; Bun (JSC) at the constructor name.
+  function pastNew(file, line, col) {
+    let text;
+    try {
+      text = internal.getSourceLine && internal.getSourceLine(file, line);
+    } catch {
+      return col;
+    }
+    if (typeof text !== "string") return col;
+    const m = /^new\s+/.exec(text.slice(col - 1));
+    return m ? col + m[0].length : col;
+  }
+
   function formatCallSite(site) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
-    const rawFile = site.getFileName();
+    const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName();
     const file = internal.displayName ? internal.displayName(rawFile) : rawFile;
     const name = site.getFunctionName();
     // A syntax error's location: no function, just file:line:col.
-    if (site.getFunction() === undefined && !name && file) {
+    if (!isV8 && site.getFunction() === undefined && !name && file) {
       return `${file}:${site.getLineNumber()}:${site.getColumnNumber()}`;
     }
     let line = site.getLineNumber();
@@ -62,9 +85,11 @@
     if (line !== null && file) {
       const mapped = native.mapPosition(file, line, col);
       if (mapped) [line, col] = mapped;
+      if (isV8) col = pastNew(file, line, col);
     }
     // Module and script top-level code prints bare, like JSC.
-    if ((!name || name === "__bunwasm_cjs__") && file && line !== null && isTopLevel(site.getFunction())) return `${file}:${line}:${col}`;
+    const topLevel = isV8 ? !name && v8TopLevel(site) : isTopLevel(site.getFunction());
+    if ((!name || name === "__bunwasm_cjs__") && file && line !== null && (topLevel || name === "__bunwasm_cjs__")) return `${file}:${line}:${col}`;
     const label = name || "<anonymous>";
     if (site.isNative() || file === null || file === undefined) return `${label} (native)`;
     if (line === null) return `${label} (${file})`;

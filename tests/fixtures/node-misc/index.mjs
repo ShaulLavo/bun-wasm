@@ -42,7 +42,7 @@ for (const name of ["spawn", "spawnSync", "serve"]) {
   }
 }
 try {
-  await fetch("https://example.com/");
+  await fetch("http://127.0.0.1:9/");
   console.log("fetch resolved");
 } catch (err) {
   console.log("fetch rejects:", err instanceof TypeError);
