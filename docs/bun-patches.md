@@ -27,6 +27,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`jsc/webkit-wasi.patch`, module slots](#webkit-module-import-slots) | Upstream bug | Give import slots a full JSValue stride and initialize the whole slot. |
 | [`jsc/webkit-wasi.patch`, non-JIT declarations](#webkit-non-jit-declarations) | Upstream bug | Expose a required enum without DFG and add two missing includes. |
 | [`third_party/libc/src/wasi/mod.rs` and `posix_compat.rs`](#libc) | Port | Declare missing WASI POSIX types and functions. |
+| [`third_party/rquickjs-sys/quickjs/quickjs.c`, buffer tags](#quickjs-data-conversion) | Host feature | Query ordinary and shared buffer classes without throwing. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, call locations](#quickjs) | Host feature | Match JSC's call-site stack columns. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, inspection helpers](#quickjs) | Host feature | Inspect keys and iterator entries without consuming them. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, async context](#quickjs) | Host feature | Capture and restore async context in promise reactions. |
@@ -101,11 +102,15 @@ pure Bun semver parser used by package installation. See
 
 `engine_quickjs.rs::to_val` is an original adapter over rquickjs 0.13.0 and the
 vendored QuickJS-ng API. No upstream source is copied. The adapter now checks
-`JS_IsArrayBuffer` before `ArrayBuffer::from_object`. The latter calls the throwing
+`JS_bunwasm_IsArrayBufferLike` before `ArrayBuffer::from_object`. The latter calls the throwing
 `JS_GetArrayBuffer` getter even for non-buffer objects and leaves a TypeError
 pending while returning None. Ordinary arrays and objects must cross the native
 boundary without creating an exception. The import-selector regression exposed
 this on QuickJS; a native Rust regression also observes the pending exception.
+The original helper added to `third_party/rquickjs-sys/quickjs/quickjs.c` checks
+both ArrayBuffer and SharedArrayBuffer class tags without invoking a getter.
+QuickJS's existing `JS_IsArrayBuffer` recognizes only the first class, so using it
+alone would lose the shared-buffer conversion that the getter already supports.
 
 ## Generated function imports
 
