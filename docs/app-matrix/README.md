@@ -82,7 +82,7 @@ The raw records and logs are in `/work/reports/bun-wasm-app-matrix-2026-10-15/na
 These priorities count app projects, not individual command rows.
 
 1. Replace or port the Rollup native package path with `@rollup/wasm-node`. This unblocks Vite vanilla, React, and Vue, Astro, SvelteKit, and Vitest build stages across all three engines.
-2. Implement the missing module and Node API boundaries used by Next.js. This unblocks its dev, build, and start stages.
+2. Complete Web Streams and replace ambiguous dynamic-import scanning for Next.js. Its earlier CommonJS, vectored-write, and legacy Stream-constructor boundaries are fixed; dev/build/start are still failing or blocked.
 3. Fix QuickJS and JSC stack call-site access for Express and Koa. This unblocks two server projects on two engines.
 4. Add the missing CLI module resolution used by Prettier in QuickJS and the browser engine.
 5. Make Prisma's native-engine limitation explicit in the app fixture and add a WASM engine policy if the upstream package provides one.
@@ -92,16 +92,30 @@ Rank remaining causes by the number of distinct app projects they would unblock,
 
 ## Next.js runtime boundaries
 
-A 2026-10-16 offline replay of Next 15.5.6 uses the unchanged published-package fixture. QuickJS installs pass before and after the runtime changes. Its dev and build commands now get past the CommonJS and vectored-write failures and stop at the Web Streams APIs.
+A 2026-10-16 offline replay of Next 15.5.6 uses the unchanged published-package fixture. Fresh installs pass on QuickJS, JSC, and the browser-engine native host. Dev/build still fail and production start remains blocked. The counts are unchanged at 3 pass, 6 fail, and 3 blocked; the changes remove earlier runtime boundaries rather than establish app compatibility.
 
 | Engine / host | Stage | Before | After |
 | --- | --- | --- | --- |
 | QuickJS / native | dev | `ReferenceError: module is not defined` | `ReferenceError: TextEncoderStream is not defined` |
 | QuickJS / native | build | `ReferenceError: module is not defined` | `ReferenceError: TextEncoderStream is not defined` |
 | QuickJS / native | start | Blocked by build | Blocked by build |
+| JSC / native | dev | `ReferenceError: module is not defined` | `ReferenceError: TextEncoderStream is not defined` |
+| JSC / native | build | `ReferenceError: module is not defined` | `ReferenceError: TextEncoderStream is not defined` |
+| JSC / native | start | Blocked by build | Blocked by build |
+| Browser engine / native | dev | Fails HTTP assertion without a diagnostic | Same observed failure |
+| Browser engine / native | build | `Error: No such module: fs` | `SyntaxError: Unexpected token '.'` in `bloom-filter.js` |
+| Browser engine / native | start | Blocked by build | Blocked by build |
 
-The original module error came from a minified CommonJS module with `await` inside an async method. The loader treated any unindented line containing `await` as top-level await. It now uses Bun's parser classification. Next's bundled tar library also probes `fs.writev`; its absence selected an unsupported private `process.binding("fs")` fallback. The public callback, synchronous, and FileHandle vectored-write APIs now use the existing descriptor writes. Positioned writes preserve the descriptor cursor.
+The original module error came from a minified CommonJS module with `await` inside an async method. The loader treated any unindented line containing `await` as top-level await. It now uses Bun's parser syntax flags, import records, and CommonJS classification. Syntax-free scripts retain package and filename classification; data loaders report their generated ESM format.
 
-The next measured blocker is category d. Reproduce with `bun run node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3000` or `bun run node_modules/next/dist/bin/next build` after a normal install. Both report `ReferenceError: TextEncoderStream is not defined` at `node_modules/next/dist/compiled/@edge-runtime/primitives/load.js:18588`, while loading `@edge-runtime/ponyfill`. The loader reads both `TextEncoderStream` and `TextDecoderStream`. The runtime currently supplies only a minimal `ReadableStream` at `crates/bunwasm-runtime/src/js/web.js:764`, with no `WritableStream` or `TransformStream`. A complete generic Web Streams implementation, including text-stream state, cancellation and backpressure, is a separate concern. No stream implementation or fixture substitute was added. Production start remains blocked because the build has not produced `.next/BUILD_ID`.
+Next's bundled tar library probes `fs.writev`; its absence selected an unsupported private `process.binding("fs")` fallback. The public callback, synchronous, and FileHandle vectored-write APIs now use the existing descriptor writes. Positioned writes preserve the descriptor cursor. The browser engine then reached a legacy `Stream.call(this)` constructor call; the base Node Stream constructor now supports that public subclass pattern.
 
-Evidence lives in `/work/reports/bun-wasm-next-2026-10-16/before/` and `after-quickjs/`. The replay command is `scripts/app-matrix.sh --apps=next --engines=quickjs --hosts=native --timeout=90 --output=<fresh-directory>`. The default registry cache is the same offline mirror as the initial census.
+The next measured QuickJS/JSC blocker is category d. Reproduce with `bun run node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3000` or `bun run node_modules/next/dist/bin/next build` after a normal install. Both report `ReferenceError: TextEncoderStream is not defined` in `node_modules/next/dist/compiled/@edge-runtime/primitives/load.js:18588` on QuickJS, or line 18592 on JSC, while loading `@edge-runtime/ponyfill`. That loader reads both `TextEncoderStream` and `TextDecoderStream`. The runtime supplies only a minimal `ReadableStream` at `crates/bunwasm-runtime/src/js/web.js:764`, with no `WritableStream` or `TransformStream`. Correct text streams require the larger Web Streams implementation, including state, cancellation, and backpressure.
+
+The next measured browser-engine build blocker is also category d. Next's `dist/shared/lib/bloom-filter.js` declares an ordinary `import(data)` class method. `crates/bunwasm-runtime/src/engine_host.rs:455` treats its name as a dynamic-import expression. `host_dynamic_imports` at line 301 replaces the method name with `globalThis.__bunwasm_dynamicImport(...)`, producing an invalid method declaration. A diagnostic-only host copy identified the failing filename; the stock host reports the same syntax error. The earlier unsupported-SWC-platform line is a warning, not evidence for classifying this first blocker as a platform limitation.
+
+The original [six-line reproducer](repros/import-method.cjs) prints `42` on QuickJS and fails to compile on the browser engine. Run it with `node --no-warnings web/scripts/node-host.mjs --wasm dist/bun-browser.wasm --dir "$PWD/docs/app-matrix/repros::/" -- run /import-method.cjs`. A follow-up must obtain semantic dynamic-import locations from Bun's parser/printer for both CommonJS and ESM, including nonliteral imports, and remove the lexical method/call ambiguity. Its tests must cover method names, member calls, multiline declarations, and automatic semicolon insertion. The Next follow-up owns moving this reproducer into a passing runtime fixture after the scanner fix.
+
+Production start remains blocked because neither build has produced `.next/BUILD_ID`. The browser dev command's missing HTTP response and diagnostic are still unresolved; an IPC dependency in Next's source is not treated as a measured first blocker.
+
+Evidence lives in `/work/reports/bun-wasm-next-2026-10-16/before/`, `after-final/`, and `browser-module-diagnostic/`. Replay with `scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser --hosts=native --timeout=90 --output=<fresh-directory>`. The four selected upstream files retain 19 passed, 27 failed, 5 skipped, and 3 todo before and after, with one collection error. They are `cli/run/commonjs-no-export.test.ts`, `js/bun/resolve/require.test.ts`, `js/node/fs/promises.test.js`, and `js/node/stream/node-stream.test.js`.
