@@ -50,8 +50,8 @@ Values cross as a small tagged encoding that mirrors `Val`:
 
 | tag | type | payload |
 |---|---|---|
-| 0, 1 | undefined, null | none |
-| 2, 3 | false, true | none |
+| 0, 1 | undefined, null |
+| 2, 3 | false, true |
 | 4 | f64 | 8 bytes LE |
 | 5 | string | u32 length + UTF-8 |
 | 6 | bytes | u32 length + data |
@@ -98,10 +98,15 @@ Every user module is a real host ES module, so bindings are live, top-level awai
 
 1. `ensureModule(key)` asks the wasm for `hostModuleSource(key)`. That is the transpiled code plus a list of import spans found by a small Rust lexer (`scan_imports`). The lexer skips strings, templates, comments and regex literals, and it handles `import … from`, `export … from`, bare `import "x"` and `import(...)`. Each static specifier is resolved in Rust, with Bun's resolver semantics.
 2. `linkEsm` replaces each static specifier span with the URL of the dependency, created recursively. Replacement runs on UTF-8 bytes from the end. Each dynamic `import(` becomes `globalThis.__bunwasm_dynamicImport(<referrer>)(`, which resolves at call time, creates the module URL and is tracked by the loop.
-3. The code becomes a `blob:` URL in the browser or a `data:` URL in Node, and the URL → path table is recorded.
+3. The code is stored under a named URL that the host's module loader serves (`o.modules`), and the URL → path table is recorded. Because a module's URL is known before its source exists, imports can form cycles and link natively, with live bindings and hoisted functions callable before their module has evaluated, as in Bun (fixture `esm-cycle`):
+   - **Playground:** the service worker (`web/src/sw.ts`) has a second scope, `./__bunwasm/`. Bun workers start from `./__bunwasm/worker.js`, so the service worker controls them. The worker puts each module into a per-run Cache Storage cache, and the service worker serves `./__bunwasm/m/<run>/<key>` from it. The page deletes the cache when the run ends.
+   - **Node:** in-thread module hooks (`module.registerHooks`) serve `bunwasm:/m/<key>` from memory.
+   - **Without a store** (no service workers): `blob:` (browser) or `data:` (Node) URLs made from the finished source. These can't express cycles, so a cycle is an `ERR_CIRCULAR_IMPORT` error.
 4. A prologue line (`globalThis.__bunwasm_meta(import.meta, "/path")`) gives `import.meta` Bun's `path`, `dir`, `file`, `main`, `resolve` and `require`. It is one line, and the source map's line offset accounts for it (`PositionMap.line_offset`).
 
-CommonJS, JSON, text and builtin (`node:*`, `bun:*`) imports are evaluated through the polyfill `require` machinery, so they share `require.cache`. A wrapper module re-exports the result: `export default` plus one named export per enumerable key at import time, which is Bun's CJS interop. CommonJS itself is compiled by indirect `eval` of the wrapped source, with `//# sourceURL=<path>`.
+CommonJS, JSON, text and builtin (`node:*`, `bun:*`) imports are evaluated through the polyfill `require` machinery, so they share `require.cache`. A wrapper module re-exports the result: `export default` plus one named export per enumerable key at import time, which is Bun's CJS interop. CommonJS itself is compiled by indirect `eval` of the wrapped source, with `//# sourceURL=<path>`. Its `import(…)` calls are routed through the same dynamic-import hook as in ES modules.
+
+**`require()` of an ES module** can't evaluate the host ES module synchronously. Instead, Bun's bundler converts the file (`Transpiler::esm_to_cjs`: format `cjs`, every import external, inline source map), and the result runs as CommonJS. Its imports become `require()` calls read through live getters, and stack positions map back to the file. As in Bun, top-level await in such a module is an error. A file that is both required and imported runs twice: once as the converted CommonJS copy, once as the ES module.
 
 The entry is `import(url)` of the main module. `bun -e` code goes through the same path, as a virtual `[eval]` module. `bun test` loads each test file as a module under the polyfill test runner.
 
@@ -130,13 +135,36 @@ These are Chromium medians of three runs on localhost, from `web/tests/bench-eng
 
 In WebKit the browser engine takes 36/18 ms cold/warm and 131 ms for the micro run. QuickJS takes 911 ms for the micro run and JSC 1155 ms.
 
+## Networking
+
+`startEngineHost` takes `o.net`: the `bun_wasm` host ABI (`docs/host-abi.md`) as the JS functions the runtime's `net.js` calls (`native.hostListen`, `hostRead`, …), the slots it covers, and an `onNews` callback that wakes the loop. Nothing blocks. `pump()` steps net.js's waiters, and keeps the program alive while any are referenced. With `o.net`, `fetch`, `Bun.serve`, `node:http` and `node:net` work as on the wasm engines:
+
+- **Playground:** the worker uses the same `NetHost` as the wasm engines, through `engineNet()`: byte arrays instead of guest memory, and `Atomics.waitAsync` on the ring instead of a blocking `poll`. Bun.serve previews therefore go through the service worker's `/__preview/<port>/` route, and `fetch` through the page's helper. This needs a cross-origin isolated page. Without one, user code gets the worker's own `fetch` and no servers.
+- **Node** (`node-host.mjs --net`, used for fixtures marked `host`): `web/scripts/node-net.mjs` runs real sockets (`node:net`) and a `node:http(s)` client. Node's own `fetch` can't be used once the polyfills replace the web stream globals.
+
+## Promise state and AsyncLocalStorage
+
+The host engine exposes neither, so the browser engine reconstructs both:
+
+- **Promise state:**
+  - The host records a promise's state where it sees the promise settle: `Promise.resolve`, `Promise.reject` and `Promise.withResolvers` (synchronously at creation), and every `then` callback, which now always runs and defaults to what the missing handler would do.
+  - The constructor is not replaced, so `instanceof`, `constructor` identity, species and `await`'s fast path are unchanged.
+  - Promises settled elsewhere (`new Promise`, async functions, runtime APIs) print as `<pending>`.
+- **AsyncLocalStorage across `await`:**
+  - For this build, Bun's printer (patch `0008`) prints `await x` as `__bunwasm_resume(__bunwasm_capture(), await x)`. Arguments evaluate in order, so the context is captured before the suspension and restored when the function resumes.
+  - `for await` loops get the same hooks: `{ const c = capture(); for await (…) { resume(c); … } resume(c); }`.
+  - Plain `.js` files that contain `await` go through the transpiler in this build so that they get the hooks, and their stacks stay source-mapped.
+  - `then` callbacks, timers, ticks and immediates carry their own context.
+  - The TC39 AsyncContext proposal (`AsyncContext.Variable`) would make the hooks unnecessary. It was at stage 2 at the time of writing and no engine we target ships it, even behind a flag.
+  - **Leak, and how it is contained:** a resumed context would stay set for whatever runs after the function suspends again or returns. A microtask puts the previous context back once the resumed job left it unchanged. Native jobs queued before that microtask (for example a MessagePort event in user code) can still see the resumed context.
+
 ## Headless testing
 
 `scripts/test.sh --engine browser` runs every fixture under Node (V8) through `web/scripts/node-host.mjs`:
 
 - `node:wasi` with the fixture dir preopened as `/`;
-- `startEngineHost` with `data:` module URLs;
-- Node's `fetch` as the host fetch.
+- `startEngineHost` with module hooks serving the program's ES modules;
+- with `--net` (fixtures marked `host`): real sockets and an HTTP client (`node-net.mjs`); otherwise Node's `fetch` as the host fetch.
 
 Node is the closest headless stand-in for a worker: it has V8, ES modules from `data:` URLs, `MessageChannel`, `fetch` and `process` events. Bun can't host it, because its `Bun` global is not configurable and the polyfills must replace it.
 
@@ -144,18 +172,17 @@ The browser side is covered by `scripts/test-web.sh`, which includes `web/tests/
 
 ## What is inherently different
 
-These follow from running on a standard JS engine without engine hooks. Each is a fixture that fails only under `--engine browser`:
+These follow from running on a standard JS engine without engine hooks. Every fixture passes under `--engine browser`; the remaining differences are:
 
-| what | browser engine | fixtures |
-|---|---|---|
-| Promise state | Standard JS has no way to inspect it. `Bun.peek(p)` returns `p`, and `console.log(promise)` always prints `Promise { <pending> }`. | bun-apis, console-format |
-| AsyncLocalStorage across `await` | The context survives timers, ticks, immediates and `.then` callbacks, but not `await`. A native `await` doesn't call `then`, and browsers have no AsyncContext yet. | async-local-storage |
-| `require()` of an ES module | Fails with `ERR_REQUIRE_ESM`, because host ES modules can't be evaluated synchronously. `import` works. | cjs-interop |
-| `Bun.serve`, `node:http`/`node:net` servers | Not available. The other engines get them through the `bun_wasm` host ABI (`docs/host-abi.md`); this engine has no listener backend yet. | net-serve, net-node-http |
-| Import cycles between ES modules | Unsupported (an error), because each module URL must exist before its importers. CommonJS cycles work. | none |
-| Proxy detection, Map/Set iterator entries in `console.log` | Inspection prints less, e.g. a Proxy prints as its target. | none |
-| `process.memoryUsage()` | `performance.memory` where available (Chromium), else zeros. `rss` equals `heapUsed`. | none |
-| Stack strings | `err.stack` read directly is V8's `    at f (url:line:col)` or JSC's `f@url:line:col`, with blob URLs. Bun-style printing (uncaught errors, `console.log(err)`, `bun test`) is mapped and matches the other engines. | none |
-| `process.nextTick` vs `await` continuations | Ticks run before `.then`/`queueMicrotask` callbacks queued earlier, but not before `await` continuations queued earlier. | none |
+| what | browser engine |
+|---|---|
+| Promise state | Known only for promises settled where the host sees it (see above). Others print as `<pending>`, and `Bun.peek` returns them unchanged. |
+| AsyncLocalStorage | Carried across `await` by the transpiler hooks. Code that skips the transpiler (`eval`, `new Function`) and native jobs (see above) are not covered. |
+| `require()` of an ES module | A converted CommonJS copy, separate from the ES module instance if the file is also imported. |
+| Import cycles | Need the module store (a service worker in the browser). Without it, a cycle is an error. |
+| Proxy detection, Map/Set iterator entries in `console.log` | Inspection prints less, e.g. a Proxy prints as its target. |
+| `process.memoryUsage()` | `performance.memory` where available (Chromium), else zeros. `rss` equals `heapUsed`. |
+| Stack strings | `err.stack` read directly is V8's `    at f (url:line:col)` or JSC's `f@url:line:col`, with module URLs. Bun-style printing (uncaught errors, `console.log(err)`, `bun test`) is mapped and matches the other engines. |
+| `process.nextTick` vs `await` continuations | Ticks run before `.then`/`queueMicrotask` callbacks queued earlier, but not before `await` continuations queued earlier. |
 
 Everything else, including the transpiler, resolver, `bun test`, `bun build`, sqlite, fetch, timers, the file system, stdin and exit codes, matches the other engines on the fixture suite.

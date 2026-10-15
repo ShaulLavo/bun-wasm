@@ -29,8 +29,9 @@ The header dropdown (`?engine=`) picks what runs the program:
 With `browser`, the wasm's `_start` sets the program up and returns; the worker then hands the
 instance to `src/engine-host.js`, which runs the runtime's JS and the user's code on the worker's
 own engine (V8 or JavaScriptCore, with JIT). `bun build`, `--version` and `--help` still finish
-inside `_start`. `fetch` is the worker's own (CORS applies, no networking ring); `Bun.serve`
-previews are not supported: use `?engine=quickjs` for those (tests/browser-net.mjs does). (`JSC_WASM` is not `BUN_JSC_WASM` because Bun refuses to start when a
+inside `_start`. Networking is the same as on the wasm engines (below), through the same
+`NetHost`. ES modules are served by the service worker's `./__bunwasm/` scope so that imports can
+form cycles (`src/sw.ts`; docs/engine-browser.md). (`JSC_WASM` is not `BUN_JSC_WASM` because Bun refuses to start when a
 `BUN_JSC_*` variable is not a JSC option.)
 
 ## Preview
@@ -52,10 +53,11 @@ Cross-Origin-Embedder-Policy: require-corp
 
 ## Networking
 
-This section covers the wasm engines (`?engine=quickjs` or `jsc`). When the page is cross-origin
-isolated, bun.wasm gets the `bun_wasm` host functions (docs/host-abi.md): `fetch`, `Bun.serve` and
-`node:http` work. Without isolation there is no
-SharedArrayBuffer, the slots stay empty and network APIs report "not supported".
+When the page is cross-origin isolated, the program gets the `bun_wasm` host functions
+(docs/host-abi.md): `fetch`, `Bun.serve` and `node:http` work, on every engine (the browser engine
+calls the same `NetHost` from JS). Without isolation there is no SharedArrayBuffer: on the wasm
+engines the slots stay empty and network APIs report "not supported"; the browser engine falls back
+to the worker's own `fetch`, with no servers.
 
 - **fetch** runs as the page's own `fetch`, so CORS applies: a cross-origin server must send
   `Access-Control-Allow-Origin`, or the guest gets the browser's `TypeError` ("Failed to fetch" in
