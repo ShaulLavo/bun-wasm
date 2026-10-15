@@ -28,6 +28,7 @@ const nativeGc = typeof globalThis.gc === "function" ? globalThis.gc.bind(global
 const NativeMessageChannel = globalThis.MessageChannel;
 const NativeAbortController = globalThis.AbortController;
 const NativePromise = globalThis.Promise;
+const NativeString = globalThis.String;
 const PENDING = Object.freeze({ state: "pending", value: undefined });
 const nativeProcess = typeof process === "object" && process && process.versions && process.versions.node ? process : null;
 const nativeAddEventListener = typeof globalThis.addEventListener === "function" ? globalThis.addEventListener.bind(globalThis) : null;
@@ -396,7 +397,7 @@ class EngineHost {
         return host.importKey(spec);
       },
       evalScript(code, filename) {
-        return host.evalAt(String(code), filename || "evalmachine.<anonymous>");
+        return host.evalAt(NativeString(code), filename || "evalmachine.<anonymous>");
       },
       loadPolyfill(name) {
         return host.evalPolyfill(name);
@@ -558,7 +559,7 @@ class EngineHost {
     });
     hidden("__bunwasm_dynamicImport", (from) => (spec) =>
       host.track(
-        (async () => host.importReady(host.native.resolve(String(spec), from, false)))(),
+        (async () => host.importReady(host.native.resolve(NativeString(spec), from, false)))(),
       ),
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));
@@ -589,7 +590,7 @@ class EngineHost {
     const web = this.internal.web;
     const polyfillFetch = globalThis.fetch;
     async function fetch(input, init = {}) {
-      const url = input instanceof web.Request ? input.url : String(input instanceof web.URL ? input.href : input);
+      const url = input instanceof web.Request ? input.url : NativeString(input instanceof web.URL ? input.href : input);
       if (url.startsWith("file:") || url.startsWith("data:")) return polyfillFetch(input, init);
       const req = input instanceof web.Request && Object.keys(init).length === 0 ? input : new web.Request(input, init);
       // The runtime's AbortSignal drives a native one for the host request.
