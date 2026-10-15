@@ -85,7 +85,6 @@ fn init_state() -> Result<State, String> {
     transpiler.configure_defines().map_err(|e| format!("transpiler defines: {e:?}"))?;
     transpiler.options.transform_only = true;
     transpiler.options.tree_shaking = false;
-    transpiler.options.trim_unused_imports = Some(false);
     Ok(State { transpiler, log, _arena: arena })
 }
 

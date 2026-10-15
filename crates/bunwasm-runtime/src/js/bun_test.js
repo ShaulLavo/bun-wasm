@@ -1391,6 +1391,8 @@
 
   function makeTest(modifiers) {
     const fn = (name, callback, timeout) => registerTest(modifiers, name, callback, timeout);
+    fn.concurrent = fn;
+    fn.serial = fn;
     fn.each = (table) => (name, callback, timeout) => {
       eachRows(table).forEach((args, index) => {
         const label = formatLabel(String(name), args, index);
@@ -1404,6 +1406,8 @@
 
   function makeDescribe(modifiers) {
     const fn = (name, callback) => registerDescribe(modifiers, name, callback);
+    fn.concurrent = fn;
+    fn.serial = fn;
     fn.each = (table) => (name, callback) => {
       eachRows(table).forEach((args, index) => {
         registerDescribe(modifiers, formatLabel(String(name), args, index), () => callback(...args));
@@ -1417,8 +1421,6 @@
   test.todo = makeTest({ mode: "todo" });
   test.only = makeTest({ only: true });
   test.failing = makeTest({ failing: true });
-  test.concurrent = test;
-  test.serial = test;
   test.if = (condition) => (condition ? test : test.skip);
   test.skipIf = (condition) => (condition ? test.skip : test);
   test.todoIf = (condition) => (condition ? test.todo : test);
@@ -1428,8 +1430,6 @@
   describe.skip = makeDescribe({ mode: "skip" });
   describe.todo = makeDescribe({ mode: "todo" });
   describe.only = makeDescribe({ only: true });
-  describe.concurrent = describe;
-  describe.serial = describe;
   describe.if = (condition) => (condition ? describe : describe.skip);
   describe.skipIf = (condition) => (condition ? describe.skip : describe);
   describe.todoIf = (condition) => (condition ? describe.todo : describe);
@@ -1971,6 +1971,10 @@
     spyOn,
     jest,
     vi: jest,
+    setDefaultTimeout(ms) {
+      if (typeof ms !== "number") throw new Error("setTimeout() expects a number (milliseconds)");
+      options.timeout = ms;
+    },
   };
 
   return { exports, run };
