@@ -278,7 +278,7 @@ fn module_kind(ast: &bun_ast::Ast<'_>, loader: Loader) -> ModuleKind {
     if matches!(ast.exports_kind, bun_ast::ExportsKind::Cjs | bun_ast::ExportsKind::EsmWithDynamicFallbackFromCjs) {
         return ModuleKind::CommonJs;
     }
-    let imports = ast.import_records.items().iter().any(|record| {
+    let imports = ast.import_records.as_slice().iter().any(|record| {
         record.kind == bun_ast::ImportKind::Stmt
             && !record.flags.intersects(bun_ast::import_record::Flags::IS_INTERNAL | bun_ast::import_record::Flags::IS_UNUSED)
     });
