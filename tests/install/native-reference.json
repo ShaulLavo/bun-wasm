@@ -1,0 +1,5 @@
+{
+  "stdout": "bun install v1.4.2 (744846f84)\n\n+ is-odd@3.0.1\n\n2 packages installed [TIME]\n",
+  "stderr": "Resolving dependencies\nResolved, downloaded and extracted [8]\nSaved lockfile\n",
+  "lock": "{\n  \"lockfileVersion\": 2,\n  \"configVersion\": 1,\n  \"workspaces\": {\n    \"\": {\n      \"name\": \"install-fixture\",\n      \"dependencies\": {\n        \"is-odd\": \"3.0.1\",\n      },\n    },\n  },\n  \"packages\": {\n    \"is-number\": [\"is-number@7.0.0\", \"REGISTRY/tarballs/is-number-7.0.0.tgz\", {}, \"sha512-1Eh/67oIHaay3u0hnzASJieU8tjLdtocJU4xWb/dfVsEDZe2sxfCQKs7LcUKUQm0SLtPJOVLBiIU9azycD5vyA==\"],\n\n    \"is-odd\": [\"is-odd@3.0.1\", \"REGISTRY/tarballs/is-odd-3.0.1.tgz\", { \"dependencies\": { \"is-number\": \"^7.0.0\" } }, \"sha512-jpzoZndIXYz4UDnr/3CSEjjspPNOAf6+sxtRIJjLtDeYv7jvo7tovOhmGInaXWy1Xw3bDrObzVgnDVsGBbBJng==\"],\n  }\n}\n"
+}
