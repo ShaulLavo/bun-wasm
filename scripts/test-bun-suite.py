@@ -9,6 +9,9 @@ import unittest
 spec = importlib.util.spec_from_file_location("suite", Path(__file__).with_name("bun-suite.py"))
 suite = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(suite)
+report_spec = importlib.util.spec_from_file_location("suite_report", Path(__file__).with_name("bun-suite-report.py"))
+report = importlib.util.module_from_spec(report_spec)
+report_spec.loader.exec_module(report)
 
 
 class ReportTests(unittest.TestCase):
@@ -37,6 +40,17 @@ class ReportTests(unittest.TestCase):
             opts = types.SimpleNamespace(output=output, resume=True)
             with self.assertRaisesRegex(SystemExit, "Resume refused"):
                 suite.load_results(opts, {"wasm": "new"})
+
+    def test_classification_uses_error_not_unrelated_source_context(self):
+        record = {"file": "bundler/cli.test.ts", "first_errors": ["error: Bun.spawn is not supported: no processes"], "excerpt": "describe.concurrent('build', callback)"}
+        self.assertEqual(report.classify(record, "", {})[0], "b")
+
+    def test_engine_difference_requires_a_fully_passing_file(self):
+        record = {"file": "js/node/assertion.test.ts", "first_errors": ["error: expect(received).toBe(expected)"], "excerpt": "", "timed_out": False}
+        other = {"browser": {record["file"]: {"fully_passing": False}}}
+        self.assertNotEqual(report.classify(record, "", other)[0], "f")
+        other["browser"][record["file"]]["fully_passing"] = True
+        self.assertEqual(report.classify(record, "", other)[0], "f")
 
 
 if __name__ == "__main__":

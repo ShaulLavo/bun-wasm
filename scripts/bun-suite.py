@@ -274,7 +274,7 @@ def drain_record(finished, records, checkpoint, selected):
     checkpoint.write(json.dumps(record) + "\n")
     checkpoint.flush()
     label = "PASS" if record["fully_passing"] else "TIME" if record["timed_out"] else "FAIL"
-    print(f"{len(records)}/{len(selected)} {label} {record['file']} {record['counts']}", flush=True)
+    print(f"{len(records)}/{len(set(records).union(selected))} {label} {record['file']} {record['counts']}", flush=True)
 
 
 def main():
