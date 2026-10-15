@@ -503,6 +503,11 @@ fn builtin_index(args: Args<'_>) -> Result<usize, NativeError> {
     }
 }
 
+fn import_index(value: &Val) -> Result<usize, NativeError> {
+    let Val::Num(index) = value else { return Err(NativeError::type_error("expected an import index")) };
+    Ok(*index as usize)
+}
+
 fn install_modules(t: &mut Table, state: &Rc<State>) {
     t.add("bunBuiltinNames", |_| {
         Ok(Val::Array(modules::BUN_BUILTIN_NAMES.iter().map(|name| Val::from(*name)).collect()))
@@ -514,7 +519,14 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
     t.add("bunBuiltinErrorCode", |a| {
         Ok(modules::BUN_BUILTIN_ERROR_CODES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
     });
-    t.add("rewriteDynamicImports", |a| Ok(crate::module_imports::rewrite_dynamic_imports(a.str(0)?, a.str(1)?).into()));
+    t.add("rewriteDynamicImports", |a| {
+        if !a.is_missing(2) && a.array(2).is_none() {
+            return Err(NativeError::type_error("expected import indices"));
+        }
+        let selected = a.array(2).map(|items| items.iter().map(import_index).collect::<Result<Vec<_>, _>>()).transpose()?;
+        Ok(crate::module_imports::rewrite_selected_imports(a.str(0)?, a.str(1)?, selected.as_deref()).into())
+    });
+    t.add("dynamicImportCount", |a| Ok((crate::module_imports::scan_imports(a.str(0)?).into_iter().filter(|s| s.dynamic).count() as f64).into()));
     let st = state.clone();
     t.add("resolve", move |a| {
         let spec = a.str(0)?;

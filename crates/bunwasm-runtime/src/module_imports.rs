@@ -2,7 +2,17 @@
 /// host's dynamic-import hook, like in ES modules (engine-host.js): the
 /// engine would resolve it against the host's own URL.
 pub(crate) fn rewrite_dynamic_imports(code: &str, from: &str) -> String {
-    let spans: Vec<Span> = scan_imports(code).into_iter().filter(|s| s.dynamic).collect();
+    rewrite_selected_imports(code, from, None)
+}
+
+pub(crate) fn rewrite_selected_imports(code: &str, from: &str, selected: Option<&[usize]>) -> String {
+    let spans: Vec<Span> = scan_imports(code)
+        .into_iter()
+        .filter(|s| s.dynamic)
+        .enumerate()
+        .filter(|(i, _)| selected.is_none_or(|indices| indices.contains(i)))
+        .map(|(_, span)| span)
+        .collect();
     if spans.is_empty() {
         return code.to_owned();
     }

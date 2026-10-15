@@ -103,7 +103,11 @@ Function, AsyncFunction, GeneratorFunction and AsyncGeneratorFunction constructo
 It uses the caller-origin helper and the existing import lexer, moved from
 `engine_host.rs` into `module_imports.rs`, to route generated dynamic imports
 through the runtime resolver. No Bun, Node, QuickJS or WebKit implementation is
-copied. Native constructors still parse the arguments and construct the function.
+copied. Native constructors still parse the arguments and construct the function. On QuickJS
+and the host engine, native parsing selects valid import replacements so methods
+named `import` remain intact and invalid original syntax still throws. Temporary
+validation functions are never executed. JSC keeps its native constructors because
+its generated imports already preserve the caller origin.
 This fixes the published Prettier 3.6.2 CLI's generated import without changing
 its package or fixture. Caller-origin lookup temporarily uses the runtime's own
 stack formatter so user custom formatters cannot change module resolution.

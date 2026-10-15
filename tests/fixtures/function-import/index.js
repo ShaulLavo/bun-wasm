@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import factory from './nested/factory.cjs';
 import { load as esmLoad } from './nested/factory.mjs';
 
-for (const key of ['load', 'call', 'indirect', 'asyncLoad']) {
+for (const key of ['load', 'call', 'indirect', 'asyncLoad', 'asi']) {
   assert.equal((await factory[key]('./value.mjs')).value, 'relative to factory');
   console.log(key);
 }
 assert.equal((await factory.generator('./value.mjs').next().value).value, 'relative to factory');
 console.log('generator');
+assert.equal((await factory.parameter()).value, 'relative to factory');
+console.log('parameter default');
+assert.equal((await factory.object.import('./value.mjs')).value, 'relative to factory');
+console.log('method import');
 assert.equal((await factory.asyncGenerator('./value.mjs').next()).value.value, 'relative to factory');
 console.log('async generator');
 assert.equal((await esmLoad('./value.mjs')).value, 'relative to factory');
@@ -37,6 +41,7 @@ assert.equal(new Function(parameter, body)(4), 4);
 assert.deepEqual(order, ['parameter', 'body']);
 assert.throws(() => Function(Symbol()), TypeError);
 assert.throws(() => Function('return import('), SyntaxError);
+assert.throws(() => Function('return new import("node:fs")'), SyntaxError);
 assert.equal(new Function('return { import(value) { return value; } }')().import(7), 7);
 assert.equal(new Function('return class { import(value) { return value; } }')().prototype.import(8), 8);
 assert.equal(new Function('return { import(value = /[()]/) { return value.source; } }')().import(), '[()]');
