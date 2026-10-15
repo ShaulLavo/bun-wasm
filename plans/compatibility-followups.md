@@ -35,3 +35,23 @@ stack trace mapping. Keep the upstream tests unchanged and make excessive depth
 throw a catchable error before reaching the engine's WASM call-stack limit.
 Verify the exact file on QuickJS, JSC and browser, plus the existing format
 fixtures. No suite timeout increase is needed.
+
+## Integration with the separate HTTP/WebSocket lane
+
+`js/node/http/node-http-with-ws.test.ts` changes from 25 failures and a completed
+file to 24 observed failures and a 15-second file timeout after real server
+async disposal is available. The first error is `Unexpected server response:
+200` from `ws/lib/websocket.js:913`; the file expects Node HTTP upgrade support.
+HTTP upgrade/WebSocket work belongs to the parallel lane, so no protocol
+implementation was added here. Preserve the new close/drain contract when
+integrating that lane and rerun this exact file through `scripts/bun-suite.sh`
+with the same loopback/dependency arguments above. See `before-extra.json` and
+`final.json` in the retained report directory.
+
+The other new timeout in the measured selection is
+`js/node/child_process/child_process.test.ts`: it previously stopped during
+collection because Bun.semver was missing. It now reaches 26 passes, 55 failures,
+4 skips and 1 todo before the file deadline. Its first failure invokes the
+unimplemented `ChildProcess.spawn` instance method at line 71. Existing
+subprocess/IPC support is a separate follow-up; do not restore the collection
+failure to hide it.
