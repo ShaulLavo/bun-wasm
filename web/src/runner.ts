@@ -108,10 +108,10 @@ export interface Run {
   kill(): void;
 }
 
-/** `?slots=imports|off` on the page: how the wasm engines get networking (see RunRequest.slots). */
+/** `?slots=table|off` on the page: how the wasm engines get networking (see RunRequest.slots). */
 function slotsMode(): RunRequest["slots"] {
   const value = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("slots");
-  return value === "imports" || value === "off" ? value : "table";
+  return value === "table" || value === "off" ? value : "imports";
 }
 
 /** Starts `bun <args>` in a fresh worker. Networking needs a cross-origin isolated page. */
