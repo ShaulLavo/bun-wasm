@@ -1129,6 +1129,11 @@
     "node:punycode": () => ({ toASCII: (s) => native.domainToASCII(s), toUnicode: (s) => s, encode: thrower("punycode.encode", "not implemented"), decode: thrower("punycode.decode", "not implemented") }),
     bun: () => globalThis.Bun,
     "bun:jsc": () => ({
+      callerSourceOrigin() {
+        const frame = internal.require("inspect").parseStack(new Error().stack)[0];
+        if (!frame) return null;
+        return frame.file.startsWith("/") ? internal.pathToFileHref(frame.file) : frame.file;
+      },
       gcAndSweep: () => native.gc(),
       fullGC: () => native.gc(),
       edenGC: () => native.gc(),

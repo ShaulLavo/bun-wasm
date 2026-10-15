@@ -54,7 +54,17 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/bun_test.js`, diff formatting](#bun-test-diff-formatting) | Port | Translate Bun's colorless diff rendering around a local line differ. |
 | [`crates/bunwasm-runtime/src/js/node_url.js`](#node-url-helpers) | Port | Adapt Node URL helpers around the local URL implementation. |
 | [`crates/bunwasm-runtime/src/js/builtins.js`, `crates/bunwasm-runtime/src/js/net.js`, HTTP tables](#http-status-tables) | Port | Retain HTTP status data separately from the original networking adapters. |
+| [`crates/bunwasm-runtime/src/js/builtins.js`, caller origin](#caller-source-origin) | Host feature | Read caller origins through the existing engine stack parser. Original adapter. |
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
+
+## Caller source origin
+
+Class **Host feature**. Original bun-wasm adapter for `bun:jsc.callerSourceOrigin`.
+The contract is defined by `src/jsc/modules/BunJSCModule.h`, `functionCallerSourceOrigin`,
+at Bun revision `4ceda2c2868d3a7703c7737ddd9de7244ec384df`. No upstream implementation is copied.
+The native implementation walks JSC call frames. This adapter uses the existing stack parser
+for QuickJS, JSC and browser engines, then encodes the calling file as a file URL.
+Browser module URL mapping stays in the engine host. Without a caller frame, it returns `null`.
 
 ## Bun patch series
 
