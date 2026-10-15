@@ -1070,6 +1070,7 @@ dependencies = [
  "bun_semver",
  "bun_sys",
  "bun_wyhash",
+ "bunwasm-glue",
  "bunwasm-jsc",
  "flate2",
  "getrandom 0.3.4",

@@ -806,6 +806,7 @@ mod builtin_tests {
 
     #[test]
     fn generated_builtins_use_shared_data_natives() {
+        bunwasm_glue::init();
         let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
         let table = table(&state);
         let Val::Array(names) = call(&table, "bunBuiltinNames", &[]).unwrap() else { panic!("module names must be data") };
