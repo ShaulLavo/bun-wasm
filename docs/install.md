@@ -167,6 +167,6 @@ No upstream Rollup implementation is copied, patched, or replaced.
 
 `bun tests/rollup/run.mjs` replays the real Rollup 4.64.7 distribution from the
 app-matrix mirror. It checks the parser on Unicode and invalid syntax, the three
-hash exports, and a frozen reinstall on each engine. Set `BUN_WASM_LAUNCHER` to
+hash exports, a complete bundle generation, and a frozen reinstall on each engine. Set `BUN_WASM_LAUNCHER` to
 your launcher and `ENGINES` to a comma-separated subset. This check never
 records or contacts the public registry.

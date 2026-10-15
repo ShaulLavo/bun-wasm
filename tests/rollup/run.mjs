@@ -35,6 +35,8 @@ try {
   writeFileSync(join(scratch, 'check.js'), `
 import assert from 'node:assert/strict';
 import { parseAst, parseAstAsync } from 'rollup/parseAst';
+import { rollup } from 'rollup';
+import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { xxhashBase16, xxhashBase36, xxhashBase64Url } = require('./node_modules/rollup/dist/native.js');
@@ -47,7 +49,14 @@ for (const hash of [xxhashBase16, xxhashBase36, xxhashBase64Url]) {
   assert.equal(typeof hash(new Uint8Array([1,2,3])), 'string');
   assert.notEqual(hash(new Uint8Array([1,2,3])), hash(new Uint8Array([4,5,6])));
 }
-console.log('rollup parser and hashes passed');
+writeFileSync('/entry.js', source);
+const bundle = await rollup({ input: '/entry.js' });
+try {
+  const generated = await bundle.generate({ format: 'es' });
+  assert.match(generated.output[0].code, /日本語/);
+  assert.match(generated.output[0].code, /export/);
+} finally { await bundle.close(); }
+console.log('rollup parser and hashes passed; bundle generated');
 `);
   for (const engine of (process.env.ENGINES ?? 'quickjs,jsc,browser').split(',')) {
     rmSync(join(scratch, 'node_modules'), { recursive: true, force: true });
@@ -62,7 +71,7 @@ console.log('rollup parser and hashes passed');
     await run(engine, ['install', '--frozen-lockfile']);
     assert.equal(readFileSync(join(scratch, 'bun.lock'), 'utf8'), lock);
     assert.match(await run(engine, ['run', '/check.js']), /rollup parser and hashes passed/);
-    console.log(`PASS ${engine} official Rollup parser, hashes, frozen reinstall`);
+    console.log(`PASS ${engine} official Rollup parser, hashes, bundle, frozen reinstall`);
   }
   assert.deepEqual(mirror.misses, []);
   assert.deepEqual(mirror.errors, []);
