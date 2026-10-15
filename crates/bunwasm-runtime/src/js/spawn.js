@@ -457,7 +457,8 @@
     }
 
     function failure(command, result) {
-      if (result.error) return Object.assign(result.error, result);
+      const { error, ...details } = result;
+      if (error) return Object.assign(error, details);
       return Object.assign(new Error(`Command failed: ${command}\n${result.stderr}`), result, { code: result.status });
     }
 
