@@ -50,9 +50,8 @@ mod bun_transpiler {
 
     /// Bun's real parser and printer (crates/bunwasm-transpiler).
     ///
-    /// Plain JavaScript skips it: QuickJS runs it as is, and the original
-    /// line numbers then show up in stack traces (the printer reformats code
-    /// and there are no source maps yet).
+    /// Plain JavaScript keeps its original text unless await hooks are needed.
+    /// The parser still classifies its module syntax.
     pub struct BunTranspiler;
 
     impl Transpiler for BunTranspiler {
@@ -73,8 +72,7 @@ mod bun_transpiler {
             let loader = match loader {
                 // The browser engine needs every `await` printed with its
                 // AsyncLocalStorage hooks, plain JavaScript included.
-                Loader::Js if AWAIT_HOOKS && source.contains("await") => BunLoader::Js,
-                Loader::Js => return Ok(Transpiled { code: source.to_owned(), mappings: None }),
+                Loader::Js => BunLoader::Js,
                 Loader::Jsx => BunLoader::Jsx,
                 Loader::Ts => BunLoader::Ts,
                 Loader::Tsx => BunLoader::Tsx,
@@ -88,7 +86,17 @@ mod bun_transpiler {
             let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
                 bunwasm_transpiler::transpile_with_source_map(source, path, loader)
             })?;
-            Ok(Transpiled { code: out.code, mappings: Some(out.mappings) })
+            use bunwasm_runtime::transpiler::ModuleKind;
+            use bunwasm_transpiler::ModuleKind as ParsedKind;
+            let module_kind = Some(match out.module_kind {
+                ParsedKind::Script => ModuleKind::Script,
+                ParsedKind::CommonJs => ModuleKind::CommonJs,
+                ParsedKind::Esm => ModuleKind::Esm,
+            });
+            if loader == BunLoader::Js && !(AWAIT_HOOKS && source.contains("await")) {
+                return Ok(Transpiled { code: source.to_owned(), mappings: None, module_kind });
+            }
+            Ok(Transpiled { code: out.code, mappings: Some(out.mappings), module_kind })
         }
 
         /// Bun's bundler on the one file, every import external: `bun build
@@ -121,7 +129,7 @@ mod bun_transpiler {
                 }
                 None => (code, None),
             };
-            Ok(Transpiled { code, mappings })
+            Ok(Transpiled { code, mappings, ..Default::default() })
         }
 
         #[cfg(feature = "bun-build")]

@@ -240,7 +240,7 @@ impl State {
                     .transpiler
                     .transpile_with_map(&raw, path, loader)
                     .map_err(|msg| build_error(&msg, &raw))?;
-                let format = self.detect_format(path, &out.code);
+                let format = self.detect_format(path, &out.code, out.module_kind);
                 if let Some(mappings) = out.mappings.filter(|m| !m.is_empty()) {
                     let mut positions = self.positions.borrow_mut();
                     let entry = positions.entry(path.to_owned()).or_default();
@@ -255,7 +255,7 @@ impl State {
         Ok(entry)
     }
 
-    fn detect_format(&self, path: &str, code: &str) -> Format {
+    fn detect_format(&self, path: &str, code: &str, parsed_kind: Option<crate::transpiler::ModuleKind>) -> Format {
         if code.starts_with(CJS_WRAPPER_PREFIX) {
             return Format::Cjs;
         }
@@ -265,8 +265,12 @@ impl State {
         if path.ends_with(".cjs") || path.ends_with(".cts") {
             return Format::Cjs;
         }
-        if has_esm_syntax(code) || has_top_level_await(code) {
-            return Format::Esm;
+        use crate::transpiler::ModuleKind;
+        match parsed_kind {
+            Some(ModuleKind::CommonJs) => return Format::Cjs,
+            Some(ModuleKind::Esm) => return Format::Esm,
+            None if has_esm_syntax(code) || has_top_level_await(code) => return Format::Esm,
+            _ => {}
         }
         // `"type": "module"` makes even syntax-free files ESM.
         match self.resolver.package_type_is_module(path) {

@@ -336,6 +336,36 @@
     return native.write(fd, view.slice(offset, offset + length), typeof position === "number" ? position : -1);
   }
 
+  function validateWritev(fd, buffers) {
+    if (typeof fd !== "number") throw invalidArg("fd", "of type number", fd);
+    if (!Array.isArray(buffers)) throw invalidArg("buffers", "an array", buffers);
+    for (const buffer of buffers) {
+      if (!ArrayBuffer.isView(buffer)) throw invalidArg("buffers", "an array of ArrayBufferView instances", buffers);
+    }
+  }
+
+  function writevSync(fd, buffers, position) {
+    validateWritev(fd, buffers);
+    let written = 0;
+    for (const buffer of buffers) {
+      const at = typeof position === "number" && position >= 0 ? position + written : -1;
+      const count = native.write(fd, internal.toUint8(buffer), at);
+      written += count;
+      if (count < buffer.byteLength) break;
+    }
+    return written;
+  }
+
+  function writev(fd, buffers, position, callback) {
+    if (typeof position === "function") { callback = position; position = null; }
+    if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
+    validateWritev(fd, buffers);
+    let written = 0;
+    let error = null;
+    try { written = writevSync(fd, buffers, position); } catch (err) { error = err; }
+    later(() => callback(error, written, buffers));
+  }
+
   const noop = () => {};
 
   function globSync(pattern, options) {
@@ -397,7 +427,7 @@
   const sync = {
     readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, mkdirSync, readdirSync,
     rmSync, rmdirSync, unlinkSync, renameSync, copyFileSync, cpSync, realpathSync, accessSync, mkdtempSync,
-    openSync, closeSync, readSync, writeSync, globSync,
+    openSync, closeSync, readSync, writeSync, writevSync, globSync,
     fstatSync: (fd) => new Stats(native.fstat(fd)),
     ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
     truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
@@ -449,6 +479,7 @@
     later(() => callback(result));
   };
   callbackApi.glob = glob;
+  callbackApi.writev = writev;
   callbackApi.read = callbackify("read", readSync, (cb, err, n, args) => cb(err, n, args[1]));
   callbackApi.write = callbackify("write", writeSync, (cb, err, n, args) => cb(err, n, args[1]));
 
@@ -490,6 +521,9 @@
     async write(data, offset, length, position) {
       const bytesWritten = writeSync(this.fd, data, offset, length, position);
       return { bytesWritten, buffer: data };
+    }
+    async writev(buffers, position) {
+      return { bytesWritten: writevSync(this.fd, buffers, position), buffers };
     }
     async stat() {
       return new Stats(native.fstat(this.fd));

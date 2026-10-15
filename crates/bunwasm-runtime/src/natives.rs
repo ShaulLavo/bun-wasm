@@ -417,6 +417,15 @@ fn symlink(_: &str, _: &str) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
 }
 
+fn write_file_at(file: &mut File, bytes: &[u8], position: Option<u64>) -> io::Result<()> {
+    let Some(position) = position else { return file.write_all(bytes) };
+    let cursor = file.stream_position()?;
+    file.seek(SeekFrom::Start(position))?;
+    let result = file.write_all(bytes);
+    let restored = file.seek(SeekFrom::Start(cursor)).map(|_| ());
+    result.and(restored)
+}
+
 fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("open", move |a| {
@@ -471,10 +480,8 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
             _ => {
                 let mut fds = st.fds.borrow_mut();
                 let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("write"))?;
-                if let Some(p) = a.opt_num(2).filter(|p| *p >= 0.0) {
-                    file.seek(SeekFrom::Start(p as u64)).map_err(|e| io_error(e, "write", None))?;
-                }
-                file.write_all(bytes).map_err(|e| io_error(e, "write", None))?;
+                let position = a.opt_num(2).filter(|p| *p >= 0.0).map(|p| p as u64);
+                write_file_at(file, bytes, position).map_err(|e| io_error(e, "write", None))?;
             }
         }
         Ok(Val::Num(bytes.len() as f64))

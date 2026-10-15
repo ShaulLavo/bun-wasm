@@ -102,11 +102,19 @@ fn init_state() -> Result<State, String> {
 /// Transpile one module to ESM JavaScript. `path` is used for error messages
 /// and the JSX/TS pragma lookups; it is not read from disk.
 pub fn transpile(source: &str, path: &str, loader: Loader) -> Result<String, String> {
-    with_state(|state| run(state, source, path, loader, None))
+    with_state(|state| run(state, source, path, loader, None)).map(|out| out.code)
 }
 
-/// Output plus its source map.
+#[derive(Clone, Copy, Debug)]
+pub enum ModuleKind {
+    Script,
+    CommonJs,
+    Esm,
+}
+
+/// Output plus its source map and parser classification.
 pub struct Transpiled {
+    pub module_kind: ModuleKind,
     pub code: String,
     /// Source map v3 `mappings` (base64 VLQ, one source: the input file).
     pub mappings: String,
@@ -116,12 +124,13 @@ pub struct Transpiled {
 /// so stack traces can point at the original TypeScript lines.
 pub fn transpile_with_source_map(source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
     let mut collector = ChunkCollector(None);
-    let code = with_state(|state| run(state, source, path, loader, Some(&mut collector)))?;
+    let mut out = with_state(|state| run(state, source, path, loader, Some(&mut collector)))?;
     let mappings = collector
         .0
         .map(|chunk| String::from_utf8_lossy(chunk.buffer.list.as_slice()).into_owned())
         .unwrap_or_default();
-    Ok(Transpiled { code, mappings })
+    out.mappings = mappings;
+    Ok(out)
 }
 
 /// Runs `f` with Bun's printer emitting the bun-wasm `await` hooks
@@ -191,7 +200,7 @@ fn run(
     path: &str,
     loader: Loader,
     source_map: Option<&mut ChunkCollector>,
-) -> Result<String, String> {
+) -> Result<Transpiled, String> {
     let arena = Arena::new();
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&arena);
     let _ast_scope = ast_alloc.enter();
@@ -243,6 +252,11 @@ fn run(
     }
     let mut printer = bun_js_printer::BufferPrinter::init(bun_js_printer::BufferWriter::init());
     let parsed = parsed.expect("checked above");
+    let module_kind = match parsed.ast.exports_kind {
+        bun_ast::ExportsKind::None => ModuleKind::Script,
+        bun_ast::ExportsKind::Cjs | bun_ast::ExportsKind::EsmWithDynamicFallbackFromCjs => ModuleKind::CommonJs,
+        bun_ast::ExportsKind::Esm | bun_ast::ExportsKind::EsmWithDynamicFallback => ModuleKind::Esm,
+    };
     let format = bun_bundler::transpiler::PrintFormat::Esm;
     let printed = match source_map {
         Some(collector) => state.transpiler.print_with_source_map(
@@ -257,7 +271,8 @@ fn run(
     };
     restore(&mut state.transpiler, &mut state.log);
     printed.map_err(|e| format!("failed to print {path}: {e:?}"))?;
-    String::from_utf8(printer.ctx.written().to_vec()).map_err(|e| e.to_string())
+    let code = String::from_utf8(printer.ctx.written().to_vec()).map_err(|e| e.to_string())?;
+    Ok(Transpiled { code, mappings: String::new(), module_kind })
 }
 
 fn format_log(log: &bun_ast::Log, path: &str) -> String {

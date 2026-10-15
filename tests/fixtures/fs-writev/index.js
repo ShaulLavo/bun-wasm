@@ -6,7 +6,7 @@ const vectors = [bytes.subarray(1, 3), new DataView(new Uint8Array([67, 68]).buf
 console.log(fs.writevSync(fd, vectors), fs.writevSync(fd, []));
 let returned = false;
 await new Promise((resolve, reject) => {
-  fs.writev(fd, [Buffer.from('xy'), Buffer.from('z')], 1, (error, count, buffers) => {
+  fs.writev(fd, [Buffer.from('xy'), Buffer.from('z')], 0, (error, count, buffers) => {
     if (error) return reject(error);
     assert(returned);
     console.log(count, buffers.length);
