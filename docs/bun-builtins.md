@@ -90,7 +90,21 @@ The catalog is the complete hook inventory. The following groups block the next 
 
 `scripts/measure-bun-builtins.py --before <old-dist> --after <new-dist> --output <report.json>` records byte sizes, gzip sizes, artifact hashes, and the raw startup samples. Run it through the host's benchmark slot. Size, startup, upstream-suite comparisons, and gate results are recorded per PR. A passing fixture suite does not establish Bun's entire upstream compatibility.
 
-## Loader mechanism measurements
+## Intrinsic-global review fix
+
+The intrinsic table now holds original constructor values captured during bootstrap, before application code runs. Replacing a public String or Buffer before the first import or after it does not replace the corresponding intrinsic. Adapter primitives such as Object, Function, Map, Set, Reflect, Proxy, Symbol, and error constructors are captured too. The browser engine separately captures its original String for evaluator, import, and fetch coercions.
+
+Capturing the original Buffer realizes the existing runtime Buffer module during bootstrap. The generated Bun factories still compile only on first require. Loader regressions check zero factory compilations at adapter initialization, one on first require, and no additional compilation on a cache hit.
+
+The following measurements compare the reviewed mechanism artifact with the fixed mechanism. Each median discards the first of seven samples. The shared-host timing differences do not establish a speed improvement. Raw samples and artifact hashes are in `/work/reports/bun-wasm-builtins-review/mechanism-size-startup.json`.
+
+| Engine | Wasm bytes before → after | Gzip-9 bytes before → after | Empty startup median ms before → after |
+| --- | --- | --- | --- |
+| quickjs | 10,903,625 → 10,904,811 | 3,830,428 → 3,831,040 | 58.85 → 60.46 |
+| jsc | 46,269,095 → 46,270,347 | 12,871,492 → 12,872,506 | 176.14 → 173.74 |
+| browser | 10,179,703 → 10,180,804 | 3,532,793 → 3,533,582 | 76.54 → 74.08 |
+
+## Loader mechanism measurements (initial artifacts)
 
 The loader-only artifact passes 89 of 89 runtime fixtures on each engine. The generated FreeList and loader checks pass on all three engines. Web verification passes its 16 unit tests, local networking and registry checks, Chromium and WebKit checks, and all six HMR engine/browser combinations. Public modules are unchanged in this PR.
 
