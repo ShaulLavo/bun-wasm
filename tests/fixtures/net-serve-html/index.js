@@ -5,6 +5,7 @@ const server = Bun.serve({ port: 0, hostname: "127.0.0.1", development: false, r
 try {
   const built = await Bun.build({ entrypoints: ["./page.html"], target: "browser" });
   assert(built.success);
+  assert.equal(built.outputs.find((output) => output.path.endsWith(".png")).loader, "file");
   assert(built.outputs.find((output) => output.path.endsWith(".html")).type.startsWith("text/html"));
   console.log("build:", built.outputs.length);
   const response = await fetch(server.url);

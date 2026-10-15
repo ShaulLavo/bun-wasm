@@ -351,6 +351,7 @@
 
   // An entry point's loader is its source's (`tsx` for App.tsx -> App.js), like Bun's.
   function entryLoader(output, entrypoints) {
+    if (output.kind === "asset") return "file";
     if (output.kind !== "entry-point") return "js";
     const stem = (p) => p.slice(p.lastIndexOf("/") + 1).replace(/\.[^.]*$/, "");
     const source = entrypoints.find((e) => stem(e) === stem(output.path));

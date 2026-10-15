@@ -61,7 +61,8 @@ still return 404 for unmatched paths.
 The module loader distinguishes HTML from text through `modules::Format::Html`.
 All engines share the HTMLBundle factory and route handling in the JS runtime.
 Single-entry HTML builds now allow multiple in-memory outputs, and build
-artifacts derive their MIME types from their output paths. No generated build
+artifacts derive their MIME types from their output paths, and emitted assets
+report the file loader. No generated build
 directory is written into the project.
 
 This is a static serving slice. It uses Bun's ordinary HTML bundler, not bake's
@@ -123,15 +124,15 @@ loopback isolation, two workers and 15-second file deadlines.
 
 | Engine | Before passes | After passes | Fully passing files before/after | Timeouts before/after |
 |---|---:|---:|---:|---:|
-| QuickJS | 2 | 67 | 0 / 3 | 1 / 0 |
+| QuickJS | 2 | 66 | 0 / 3 | 1 / 0 |
 | Browser | 15 | 61 | 1 / 3 | 2 / 0 |
-| JSC | 2 | 66 | 0 / 3 | 1 / 0 |
+| JSC | 2 | 67 | 0 / 3 | 1 / 0 |
 
-Each run selects 65 files. The after-runs still report 217, 223 and 218 failed
+Each run selects 65 files. The after-runs still report 218, 223 and 217 failed
 observed tests respectively, seven skips and 29 errors. Most bake tests still
 stop at unsupported runtime or subprocess APIs. These are compatibility
-measurements, not a passing upstream suite. The one-pass QuickJS/JSC difference
-is the upstream `instances should be finalized when GC'd` test; the portable
+measurements, not a passing upstream suite. The upstream `instances should be finalized when GC'd`
+test varied by one pass between repeated QuickJS and JSC runs. The portable
 heap statistics do not prove object finalization.
 
 All 69 local fixtures pass on each engine. The external WebSocket checks pass
