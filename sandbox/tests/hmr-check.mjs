@@ -1,0 +1,128 @@
+// Drives the sandbox in real browsers through the HMR checklist, for every engine:
+//   1. the app renders in the preview; 2. clicking the counter changes state;
+//   3. editing App.tsx text updates the preview and the count survives (Fast Refresh);
+//   4. editing App.css restyles without a reload; 5. a syntax error shows the overlay, the next
+//   good save clears it (and the count still survives).
+//
+//   node sandbox/tests/hmr-check.mjs <url> [--engines browser,quickjs,jsc] [--browsers chromium,webkit] [--shots dir]
+//
+// PLAYWRIGHT=<path to playwright's index.mjs> when `playwright` isn't resolvable from here.
+
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+
+const args = process.argv.slice(2);
+const base = args.find((a) => !a.startsWith("--")) ?? "http://127.0.0.1:4173/";
+const option = (name, fallback) => {
+  const at = args.indexOf(`--${name}`);
+  return at >= 0 ? args[at + 1] : fallback;
+};
+const engines = option("engines", "browser,quickjs,jsc").split(",");
+const browsers = option("browsers", "chromium,webkit").split(",");
+const shots = option("shots", null);
+if (shots) mkdirSync(shots, { recursive: true });
+
+const pw = await import(process.env.PLAYWRIGHT ?? "playwright");
+const { chromium, webkit, devices } = pw.default ?? pw;
+
+const STARTUP_MS = Number(process.env.STARTUP_MS ?? 180_000);
+const STEP_MS = 20_000;
+
+async function check(browserName, engine) {
+  const browser = await (browserName === "webkit" ? webkit : chromium).launch();
+  const context = await browser.newContext(browserName === "webkit" ? { ...devices["iPhone 15"] } : { viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const logs = [];
+  page.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
+  page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));
+  const tag = `${browserName}/${engine}`;
+  const shot = async (step) => shots && (await page.screenshot({ path: join(shots, `${browserName}-${engine}-${step}.png`) }));
+  const results = [];
+  const step = async (name, fn) => {
+    const started = Date.now();
+    try {
+      await fn();
+      results.push({ name, ok: true, ms: Date.now() - started });
+      console.log(`  ok   ${tag} ${name} (${Date.now() - started} ms)`);
+    } catch (err) {
+      results.push({ name, ok: false, error: String(err).split("\n")[0] });
+      console.log(`  FAIL ${tag} ${name}: ${String(err).split("\n")[0]}`);
+      await shot(`fail-${name.replace(/\W+/g, "-")}`);
+      throw err;
+    }
+  };
+  const app = page.frameLocator("#preview");
+  const frame = () => page.frames().find((f) => f.url().includes("/__preview/"));
+  const setFile = async (path, edit) => {
+    await page.evaluate(([path, edit]) => {
+      const { editor, fs } = globalThis.sandbox;
+      editor.open(path);
+      const text = new TextDecoder().decode(fs.readFile(`/home/user/app/${path}`));
+      editor.setText(edit.reduce((t, [from, to]) => t.replace(from, to), text));
+    }, [path, edit]);
+  };
+  try {
+    const url = new URL(base);
+    url.searchParams.set("engine", engine);
+    await page.goto(url.href);
+    await step("1 renders", async () => {
+      await app.locator("button.counter").waitFor({ timeout: STARTUP_MS });
+      await app.locator("h1", { hasText: "Hello from bun.wasm" }).waitFor({ timeout: STEP_MS });
+      await shot("1-rendered");
+    });
+    await step("2 counter", async () => {
+      for (let i = 0; i < 3; i++) await app.locator("button.counter").click();
+      await app.locator("button.counter", { hasText: "count is 3" }).waitFor({ timeout: STEP_MS });
+    });
+    await step("3 edit tsx keeps state", async () => {
+      await setFile("src/App.tsx", [["Hello from bun.wasm", "Hello, hot reload"]]);
+      await app.locator("h1", { hasText: "Hello, hot reload" }).waitFor({ timeout: STEP_MS });
+      const count = await app.locator("button.counter").textContent();
+      if (count !== "count is 3") throw new Error(`state lost: ${count}`);
+      await shot("3-edited");
+    });
+    await step("4 edit css", async () => {
+      await setFile("src/App.css", [["color: #fbf0df;", "color: rgb(244, 114, 182);"]]);
+      await page.waitForFunction(
+        () => {
+          const f = Array.from(document.querySelectorAll("iframe"))[0]?.contentDocument;
+          const h1 = f?.querySelector("h1");
+          return h1 && getComputedStyle(h1).color === "rgb(244, 114, 182)";
+        },
+        null,
+        { timeout: STEP_MS },
+      );
+      const count = await app.locator("button.counter").textContent();
+      if (count !== "count is 3") throw new Error(`css update reloaded the page: ${count}`);
+      await shot("4-css");
+    });
+    await step("5 syntax error overlay and recovery", async () => {
+      await setFile("src/App.tsx", [["<h1>", "<h1 "]]);
+      await app.locator("#__bun_dev_overlay", { hasText: "Build error" }).waitFor({ timeout: STEP_MS });
+      await shot("5-overlay");
+      await setFile("src/App.tsx", [["<h1 ", "<h1>"], ["Hello, hot reload", "Fixed it"]]);
+      await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
+      await app.locator("#__bun_dev_overlay").waitFor({ state: "detached", timeout: STEP_MS });
+      const count = await app.locator("button.counter").textContent();
+      if (count !== "count is 3") throw new Error(`state lost after recovery: ${count}`);
+      await shot("5-recovered");
+    });
+  } catch {
+    console.log(logs.slice(-15).map((l) => `      ${l}`).join("\n"));
+  } finally {
+    void frame;
+    await browser.close();
+  }
+  return { browser: browserName, engine, results };
+}
+
+const summary = [];
+for (const browserName of browsers) {
+  for (const engine of engines) {
+    console.log(`${browserName} / ${engine}`);
+    summary.push(await check(browserName, engine));
+  }
+}
+const failed = summary.filter((s) => s.results.length < 5 || s.results.some((r) => !r.ok));
+console.log(failed.length ? `\n${failed.length} of ${summary.length} runs failed` : `\nall ${summary.length} runs passed`);
+process.exit(failed.length ? 1 : 0);
