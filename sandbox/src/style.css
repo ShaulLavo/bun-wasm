@@ -360,3 +360,15 @@ main {
     font-size: 12px;
   }
 }
+
+a.nav {
+  flex: none;
+  color: var(--dim);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+a.nav:hover {
+  color: inherit;
+  text-decoration: underline;
+}

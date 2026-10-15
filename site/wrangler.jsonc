@@ -1,5 +1,6 @@
 {
-  // Public playground: static assets only (no Worker code), on a Custom Domain.
+  // bun.sprockt.dev: the sandbox at /, the terminal playground at /playground/.
+  // Static assets only (no Worker code), on a Custom Domain.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "bun-wasm",
   "compatibility_date": "2026-10-15",

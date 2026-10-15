@@ -1,0 +1,12 @@
+{
+  "name": "bun-wasm-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build.ts",
+    "deploy": "bun build.ts && wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.151.0"
+  }
+}
