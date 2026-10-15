@@ -130,6 +130,7 @@ def provenance(opts, wasm):
     return {"schema": 1, "engine": opts.engine, "suite_commit": git(opts.suite, "rev-parse", "HEAD"),
             "wasm_sha256": digest(wasm), "runner_sha256": digest(Path(__file__)),
             "launcher_sha256": digest(opts.launcher) if opts.engine != "browser" else digest(ROOT / "web/scripts/node-host.mjs"),
+            "host_sources": {path: digest(ROOT / path) for path in ["web/src/engine-host.js", "web/scripts/node-net.mjs"]} if opts.engine == "browser" else {},
             "dependencies": dependency_digest(opts.suite / "node_modules"),
             "test_dependencies": dependency_digest(opts.dependencies or opts.suite / "test/node_modules"),
             "network": opts.network, "timeout_seconds": opts.timeout, "test_timeout_ms": opts.test_timeout}
@@ -312,6 +313,8 @@ def main():
             source = snapshot(opts, scratch)
             frozen_wasm = scratch / "engine.wasm"
             shutil.copyfile(wasm, frozen_wasm)
+            if digest(frozen_wasm) != meta["wasm_sha256"]:
+                raise RuntimeError("Wasm changed during suite setup; rerun with a stable artifact")
             run_workers(opts, frozen_wasm, source, scratch, preloads, records, selected)
     finally:
         write_results(opts, meta, records, selected)
