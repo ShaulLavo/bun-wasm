@@ -1,6 +1,6 @@
 # A portable backend for Bun's Rust host functions
 
-The first slice compiles Bun's 126-line `SemverObject.rs` unchanged against a small
+The first slice compiles Bun's 126-line [SemverObject.rs](https://github.com/oven-sh/bun/blob/9510e74152073d850a18758ca41114d8f214ffa6/src/semver_jsc/SemverObject.rs) unchanged against a small
 `bun_jsc` facade. Its public `Bun.semver.order` and `Bun.semver.satisfies` functions
 replace our duplicate bridge. The same upstream module also supplies
 `bun:internal-for-testing.semverIntersects`.
@@ -72,13 +72,18 @@ native JSC thunk. Methods and getter attributes fail compilation instead of
 silently producing an invalid ABI. `create_host_function_object` records the
 original function table, which the runtime adapter uses to register natives.
 
-JavaScript retains the existing argument-count checks and template-string
-coercion. Consequently, custom `toString` methods and their exceptions run in the
+JavaScript retains the argument-count checks and template-string coercion, with
+an explicit canonical TypeError for Symbol primitives. Custom `toString` methods and their exceptions run in the
 actual engine before the data boundary. The facade accepts string slots only.
 Its string-conversion method names do not promise general ECMAScript coercion for
 arbitrary `JSValue`s. Direct calls with other values return a `TypeError`.
 This restriction is sufficient for the chosen wrapper and must not be copied to
 a future module that expects arbitrary engine values.
+
+The upstream suite also replaces global `gc` with a wrapper around `Bun.gc`.
+The host engine now captures its original GC function at module initialization,
+like its existing timer hooks. This prevents recursion into user code. Forced
+host collection remains available only when the host exposes a GC function.
 
 ## API inventory and coverage
 
@@ -220,10 +225,63 @@ bash /work/tmp/wave-heavy/run.sh --class suite "bun_jsc backend" -- \
 
 The fixture covers valid and invalid versions, prereleases, build metadata,
 Unicode, intersections, argument counts, coercion order, thrown-object identity,
-and 500 consecutive calls. The full gates and upstream suite results are recorded
-in the PR together with the optimized wasm sizes and hashes. No speed claim is
-made, and the string copies should be measured before using this design for
+and 500 consecutive calls. A separate fixture replaces global `gc` with a user
+wrapper and verifies that `Bun.gc` still calls the captured host capability.
+All three engine fixture gates pass with 89 passed
+and 0 failed per engine, including this new fixture.
+
+The optimized artifact sizes are:
+
+| Artifact | Captured baseline bytes | Rebuilt bytes | Change |
+| --- | ---: | ---: | ---: |
+| `bun.wasm`, QuickJS | 10,859,284 | 10,867,162 | +7,878 |
+| `bun-jsc.wasm` | 46,219,559 | 46,232,098 | +12,539 |
+| `bun-browser.wasm` | 10,138,476 | 10,144,959 | +6,483 |
+
+These are whole-artifact deltas against the captured pre-change binaries. They
+include the facade, the intersection hook, the patch version bump, and resulting
+link layout changes. The retained comparison results record the SHA256 of each
+artifact. They do not isolate the size of each individual function.
+No speed claim is made. Measure the string copies before using this design for
 large buffers.
+
+All required gates pass on this branch:
+
+| Command | Result |
+| --- | --- |
+| `scripts/test.sh` | 89 passed, 0 failed |
+| `scripts/test.sh --engine jsc` | 89 passed, 0 failed |
+| `scripts/test.sh --engine browser` | 89 passed, 0 failed |
+| `bash scripts/test-bun-jsc-backend.sh` | Two focused fixtures pass on every engine; inventory matches |
+| `scripts/test-web.sh` | Type check, 16 unit tests, CLI networking, Chromium and WebKit checks pass |
+| `cd site && bun install --frozen-lockfile && bun run build` | Pass |
+| `node sandbox/tests/hmr-check.mjs <local site URL>` | All six browser/engine runs pass |
+
+The targeted upstream selection is `cli/install/semver.test.ts` and
+`regression/issue/08040.test.ts`, run through `scripts/bun-suite.sh` with
+`--network loopback --jobs 1` and the pinned supplemental dependencies.
+The suite revision, runner, dependency hashes, and 15-second file and 2-second
+test limits match before and after.
+
+| Engine | Before passing tests | After passing tests | After failing tests | Timeouts |
+| --- | ---: | ---: | ---: | ---: |
+| QuickJS | 1 | 346 | 5 | 0 |
+| JSC | 1 | 346 | 5 | 0 |
+| Browser host | 1 | 346 | 5 | 0 |
+
+Before, the semver file fails to load because `semverIntersects` is missing.
+The runner records that as one failure and one error, with no tests registered
+from that file. After, it records 345 passing tests and five package-manager
+failures there. The separate regression still contributes one passing test.
+Fully passing files remain one of two. These are newly reachable passing cases,
+not 345 independent bugs fixed by changing the parser.
+
+The five remaining cases cover `--lockfile-only`, `bun pm version`, and the
+diagnostic for an invalid range when the package exists. They fail on every
+engine and are recorded with commands and source locations in
+[the compatibility follow-up plan](../plans/compatibility-followups.md#package-manager-cases-reached-by-the-portable-semver-bridge).
+The final raw reports are retained at
+`/work/reports/bun-wasm-track2-2026-10-15/{quickjs,jsc,browser}-final.json`.
 
 ## Recommendation
 

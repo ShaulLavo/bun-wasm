@@ -22,6 +22,16 @@ check(Bun.semver.satisfies({ toString() { calls.push("left"); return "1.2.3"; } 
 }), true);
 check(calls.join(","), "left,right");
 
+for (const method of [Bun.semver.satisfies, Bun.semver.order]) {
+  try {
+    method(Symbol("version"), "1.0.0");
+    throw new Error("expected symbol failure");
+  } catch (error) {
+    check(error instanceof TypeError, true);
+    check(error.message, "Cannot convert a symbol to a string");
+  }
+}
+
 const marker = new Error("coercion");
 try {
   Bun.semver.order({ toString() { throw marker; } }, "1.0.0");

@@ -56,7 +56,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/builtins.js`, `crates/bunwasm-runtime/src/js/net.js`, HTTP tables](#http-status-tables) | Port | Retain HTTP status data separately from the original networking adapters. |
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
 | [`crates/bunwasm-semver/src/lib.rs`](#portable-semver-host-functions) | Port | Compile Bun's semver host functions unchanged against a portable `bun_jsc` subset. |
-| [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver adapter](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface. |
+| [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
 
 ## Portable semver host functions
 
@@ -70,13 +70,18 @@ Its `order`, `satisfies`, and `intersects_for_testing` bodies all compile.
 
 Class **Host feature** for the original adapters in `crates/bunwasm-bun-jsc/`,
 `crates/bunwasm-bun-jsc-macros/`, `crates/bunwasm-semver/src/lib.rs`, and
-`crates/bunwasm-runtime/src/semver.rs`. These implementations are ours.
+`crates/bunwasm-runtime/src/semver.rs`, `crates/bunwasm-runtime/src/js/bun.js`, and
+the GC hook in `web/src/engine-host.js`. These implementations are ours.
 They provide the source-compatible names and free-host-function macro needed by this
 one module. They use call-scoped string slots, immediate boolean and int32 results,
 and explicit errors instead of JSC's tagged values and C++ call ABI.
 The runtime adapter maps the actual upstream function table to its native names.
 `crates/bunwasm-runtime/src/js/builtins.js` exposes the upstream intersection function
 through the existing internal test module. JavaScript still owns argument coercion.
+The public semver wrapper rejects Symbol primitives with Bun's canonical error
+message. The host GC adapter captures the host's original function before user
+code can replace it. Bun's upstream harness replaces global `gc` with a wrapper
+around `Bun.gc`; looking up global `gc` on every call otherwise recurses.
 
 This replaces our duplicated semver host-function logic, while retaining the existing
 pure Bun semver parser used by package installation. See
