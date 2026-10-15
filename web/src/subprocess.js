@@ -1,0 +1,346 @@
+// Shared transport for browser and Node workers. No native executables are launched.
+const NativeEncoder = TextEncoder;
+const NativeDecoder = TextDecoder;
+const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
+const encode = new NativeEncoder();
+const decode = new NativeDecoder();
+const AGAIN = -2;
+const BADF = -3;
+const PIPE_SIZE = 1 << 20;
+const SNAPSHOT_SIZE = 8 << 20;
+const FIRST_HANDLE = 0x60000000;
+export const MAX_CHILDREN = 4;
+
+export function createProcessBudget() {
+  return new SharedArrayBuffer(8 + MAX_CHILDREN * 4);
+}
+
+function wake(budget) {
+  const cells = new Int32Array(budget);
+  Atomics.add(cells, 1, 1);
+  Atomics.notify(cells, 1);
+}
+
+export class SharedPipe {
+  constructor(buffer = new SharedArrayBuffer(16 + PIPE_SIZE), budget) {
+    this.buffer = buffer;
+    this.cells = new Int32Array(buffer, 0, 4);
+    this.bytes = new Uint8Array(buffer, 16);
+    this.budget = budget;
+  }
+  read(cap = 65536) {
+    const read = Atomics.load(this.cells, 0) >>> 0;
+    const written = Atomics.load(this.cells, 1) >>> 0;
+    const size = Math.min((written - read) >>> 0, cap);
+    if (!size) return Atomics.load(this.cells, 2) ? 0 : AGAIN;
+    const start = read % PIPE_SIZE;
+    const first = Math.min(size, PIPE_SIZE - start);
+    const out = new Uint8Array(size);
+    out.set(this.bytes.subarray(start, start + first));
+    if (first < size) out.set(this.bytes.subarray(0, size - first), first);
+    Atomics.store(this.cells, 0, (read + size) | 0);
+    Atomics.add(this.cells, 3, 1);
+    Atomics.notify(this.cells, 3);
+    return out;
+  }
+  write(bytes) {
+    if (Atomics.load(this.cells, 2)) return -1;
+    const read = Atomics.load(this.cells, 0) >>> 0;
+    const written = Atomics.load(this.cells, 1) >>> 0;
+    const size = Math.min(PIPE_SIZE - ((written - read) >>> 0), bytes.length);
+    if (!size) return bytes.length ? AGAIN : 0;
+    const start = written % PIPE_SIZE;
+    const first = Math.min(size, PIPE_SIZE - start);
+    this.bytes.set(bytes.subarray(0, first), start);
+    if (first < size) this.bytes.set(bytes.subarray(first, size), 0);
+    Atomics.store(this.cells, 1, (written + size) | 0);
+    Atomics.add(this.cells, 3, 1);
+    Atomics.notify(this.cells, 3);
+    wake(this.budget);
+    return size;
+  }
+  writeAll(bytes) {
+    let at = 0;
+    while (at < bytes.length) {
+      const seen = Atomics.load(this.cells, 3);
+      const n = this.write(bytes.subarray(at));
+      if (n === AGAIN) Atomics.wait(this.cells, 3, seen, 100);
+      else if (n < 0) return;
+      else at += n;
+    }
+  }
+  readBlocking(cap) {
+    for (;;) {
+      const seen = Atomics.load(this.cells, 3);
+      const value = this.read(cap);
+      if (value !== AGAIN) return value;
+      Atomics.wait(this.cells, 3, seen, 100);
+    }
+  }
+  close() {
+    Atomics.store(this.cells, 2, 1);
+    Atomics.add(this.cells, 3, 1);
+    Atomics.notify(this.cells, 3);
+    wake(this.budget);
+  }
+}
+
+export function childTransport(transport) {
+  return {
+    stdin: new SharedPipe(transport.pipes[0], transport.budget),
+    stdout: new SharedPipe(transport.pipes[1], transport.budget),
+    stderr: new SharedPipe(transport.pipes[2], transport.budget),
+    finish(code, snapshot) {
+      const cells = new Int32Array(transport.control, 0, 4);
+      if (Atomics.load(cells, 0)) return;
+      let result = snapshot ? encode.encode(snapshot) : new Uint8Array();
+      if (result.length > SNAPSHOT_SIZE) {
+        result = new Uint8Array();
+        code = 1;
+        new SharedPipe(transport.pipes[2], transport.budget).writeAll(encode.encode("bun-wasm: child filesystem changes exceed 8 MiB\n"));
+      }
+      new Uint8Array(transport.control, 16).set(result);
+      Atomics.store(cells, 2, result.length);
+      Atomics.store(cells, 1, code);
+      for (const [fd, pipe] of transport.pipes.entries()) {
+        if (fd === 0 && transport.inheritedStdin) continue;
+        new SharedPipe(pipe, transport.budget).close();
+      }
+      Atomics.store(cells, 0, 1);
+      Atomics.notify(cells, 0);
+      wake(transport.budget);
+    },
+  };
+}
+
+export class SubprocessHost {
+  constructor(options) {
+    this.options = options;
+    this.budget = options.budget || createProcessBudget();
+    this.children = new Map();
+    this.handles = new Map();
+    this.nextHandle = FIRST_HANDLE;
+    this.lastError = null;
+    this.timer = null;
+    this.notify = () => {};
+    this.memory = null;
+  }
+  attach(memory) { this.memory = memory; }
+  fail(message, code) {
+    this.lastError = JSON.stringify({ name: "Error", message, code });
+    return -1;
+  }
+  reserve() {
+    const cells = new Int32Array(this.budget);
+    const parent = this.options.slot;
+    if (parent !== undefined && Atomics.load(cells, parent + 2) <= 0) return -1;
+    for (let slot = 0; slot < MAX_CHILDREN; slot++) {
+      if (Atomics.compareExchange(cells, slot + 2, 0, parent === undefined ? 1 : parent + 2) !== 0) continue;
+      if (parent === undefined || Atomics.load(cells, parent + 2) > 0) return slot;
+      Atomics.store(cells, slot + 2, 0);
+      return -1;
+    }
+    return -1;
+  }
+  releaseSlot(slot) {
+    const cells = new Int32Array(this.budget);
+    Atomics.store(cells, slot + 2, -1);
+    for (let child = 0; child < MAX_CHILDREN; child++) {
+      if (Atomics.load(cells, child + 2) === slot + 2) this.releaseSlot(child);
+    }
+    Atomics.store(cells, slot + 2, 0);
+  }
+  spawn(text) {
+    let meta;
+    try { meta = JSON.parse(text); } catch { return this.fail("spawn: invalid metadata", "EINVAL"); }
+    if (!meta || typeof meta !== "object") return this.fail("spawn: invalid metadata", "EINVAL");
+    if (!Array.isArray(meta.argv) || !meta.argv.length || meta.argv.some((v) => typeof v !== "string")) return this.fail("spawn: invalid argv", "EINVAL");
+    if (!["bun", "/bun"].includes(meta.argv[0])) return this.fail(`spawn ${meta.argv[0]}: not supported in bun-wasm`, "ENOENT");
+    if (meta.cwd !== undefined && typeof meta.cwd !== "string") return this.fail("spawn: invalid cwd", "EINVAL");
+    if (meta.env !== undefined && (!meta.env || typeof meta.env !== "object" || Array.isArray(meta.env) || Object.values(meta.env).some((v) => typeof v !== "string"))) return this.fail("spawn: invalid env", "EINVAL");
+    const modes = [meta.stdin || "pipe", meta.stdout || "pipe", meta.stderr || "pipe"];
+    if (modes.some((mode) => !["pipe", "inherit", "ignore"].includes(mode))) return this.fail("spawn: invalid stdio", "EINVAL");
+    const slot = this.reserve();
+    if (slot < 0) return this.fail("spawn: at most four bun-wasm child instances may run", "EAGAIN");
+    const buffers = modes.map(() => new SharedArrayBuffer(16 + PIPE_SIZE));
+    const inheritedStdin = modes[0] === "inherit" && Boolean(this.options.stdin);
+    if (inheritedStdin) buffers[0] = this.options.stdin;
+    const transport = { budget: this.budget, slot, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16 + SNAPSHOT_SIZE) };
+    const id = this.nextHandle++;
+    const pipes = transport.pipes.map((buffer) => new SharedPipe(buffer, this.budget));
+    const handles = pipes.map((pipe, fd) => {
+      if (modes[fd] !== "pipe") return 0;
+      const handle = this.nextHandle++;
+      this.handles.set(handle, { pipe, fd, child: id });
+      return handle;
+    });
+    const child = { transport, pipes, handles, modes, worker: null, ended: false };
+    this.children.set(id, child);
+    if (modes[0] !== "pipe" && !inheritedStdin) pipes[0].close();
+    try { child.worker = this.options.launch(meta, transport, (error) => this.workerError(id, error)); }
+    catch (error) {
+      this.kill(id, 9);
+      this.release(id);
+      return this.fail(String(error), error?.code || "EIO");
+    }
+    this.watch();
+    return id;
+  }
+  workerError(id, error) {
+    const child = this.children.get(id);
+    if (!child || child.ended) return;
+    child.pipes[2].write(encode.encode(`bun-wasm: ${String(error)}\n`));
+    childTransport(child.transport).finish(1);
+    this.notify();
+  }
+  pipe(id, fd) {
+    const child = this.children.get(id);
+    return child && fd >= 0 && fd <= 2 ? child.handles[fd] : BADF;
+  }
+  read(handle, cap) {
+    const h = this.handles.get(handle);
+    return h && h.fd !== 0 ? h.pipe.read(cap) : BADF;
+  }
+  write(handle, bytes) {
+    const h = this.handles.get(handle);
+    return h && h.fd === 0 ? h.pipe.write(bytes) : BADF;
+  }
+  close(handle) {
+    if (this.children.has(handle)) {
+      this.kill(handle, 9);
+      this.release(handle);
+      return 0;
+    }
+    const h = this.handles.get(handle);
+    if (!h) return BADF;
+    h.pipe.close();
+    this.handles.delete(handle);
+    return 0;
+  }
+  wait(id) {
+    const child = this.children.get(id);
+    if (!child) return BADF;
+    this.drainInherited(child);
+    const cells = new Int32Array(child.transport.control, 0, 4);
+    if (!Atomics.load(cells, 0)) return AGAIN;
+    if (!child.ended) this.reap(child, cells);
+    return Atomics.load(cells, 1);
+  }
+  reap(child, cells) {
+    child.ended = true;
+    this.releaseSlot(child.transport.slot);
+    const size = Atomics.load(cells, 2);
+    if (size && this.options.sync) this.options.sync(decode.decode(new Uint8Array(child.transport.control, 16, size).slice()));
+    child.worker?.terminate();
+  }
+  release(id) {
+    const child = this.children.get(id);
+    if (!child) return;
+    for (const handle of child.handles) this.handles.delete(handle);
+    this.children.delete(id);
+  }
+  kill(id, signal = 15) {
+    const child = this.children.get(id);
+    if (!child) return BADF;
+    if (!Number.isInteger(signal) || signal < 0 || signal > 64) return this.fail("kill: invalid signal", "EINVAL");
+    if (this.wait(id) !== AGAIN || signal === 0) return 0;
+    child.worker?.terminate();
+    childTransport(child.transport).finish(128 + signal);
+    this.wait(id);
+    return 0;
+  }
+  drainInherited(child) {
+    for (const fd of [1, 2]) {
+      if (child.modes[fd] === "pipe") continue;
+      this.drainPipe(child, fd);
+    }
+  }
+  drainPipe(child, fd) {
+    for (;;) {
+      const bytes = child.pipes[fd].read();
+      if (typeof bytes === "number") return;
+      if (child.modes[fd] === "inherit") this.options.output(fd, bytes);
+    }
+  }
+  poll(timeout = 0) {
+    for (const id of this.children.keys()) this.wait(id);
+    if (!timeout) return 0;
+    const cells = new Int32Array(this.budget);
+    const seen = Atomics.load(cells, 1);
+    Atomics.wait(cells, 1, seen, timeout < 0 ? 4 : Math.min(timeout, 4));
+    for (const id of this.children.keys()) this.wait(id);
+    return Atomics.load(cells, 1) !== seen ? 1 : 0;
+  }
+  watch() {
+    if (this.timer !== null) return;
+    this.timer = nativeSetTimeout(() => {
+      this.timer = null;
+      this.poll();
+      this.notify();
+      if (Array.from(this.children.values()).some((child) => !child.ended)) this.watch();
+    }, 4);
+  }
+  dispose() {
+    if (this.timer !== null) nativeClearTimeout(this.timer);
+    this.timer = null;
+    for (const id of this.children.keys()) {
+      this.kill(id, 9);
+      this.release(id);
+    }
+  }
+  owns(handle) { return handle >= FIRST_HANDLE; }
+  engineNet(net) {
+    const fallback = Object.fromEntries(Object.entries(net?.natives || {}).map(([name, fn]) => [name, (...args) => {
+      if (name !== "hostError") this.lastError = null;
+      return fn(...args);
+    }]));
+    const route = (name, operation) => (handle, ...args) => this.owns(handle) ? operation(handle, ...args) : (fallback[name]?.(handle, ...args) ?? BADF);
+    return {
+      natives: {
+        ...fallback,
+        hostPoll: (timeout) => this.poll(timeout),
+        hostSpawn: (meta) => this.spawn(meta),
+        hostChildWait: (id) => this.wait(id),
+        hostChildPipe: (id, fd) => this.pipe(id, fd),
+        hostChildKill: (id, signal) => this.kill(id, signal),
+        hostRead: route("hostRead", (id, cap) => this.read(id, cap)),
+        hostWrite: route("hostWrite", (id, bytes) => this.write(id, bytes)),
+        hostClose: route("hostClose", (id) => this.close(id)),
+        hostError: (id) => id === 0 && this.lastError ? this.lastError : (fallback.hostError?.(id) ?? this.lastError ?? BADF),
+      },
+      caps: { ...net?.caps, spawn: true, child_wait: true, child_pipe: true, child_kill: true, read: true, write: true, close: true, error: true },
+      onNews: (cb) => { this.notify = cb; net?.onNews(cb); },
+    };
+  }
+  slots(network = {}) {
+    const net = Object.fromEntries(Object.entries(network).map(([name, fn]) => [name, (...args) => {
+      if (name !== "error" && name !== "poll") this.lastError = null;
+      return fn(...args);
+    }]));
+    const bytes = (ptr, len) => new Uint8Array(this.memory.buffer, ptr >>> 0, len);
+    const read = (id, ptr, cap) => {
+      const value = this.read(id, cap);
+      if (typeof value === "number") return value;
+      bytes(ptr, value.length).set(value);
+      return value.length;
+    };
+    const error = (ptr, cap) => {
+      const value = encode.encode(this.lastError || '{"message":"no error"}');
+      if (value.length <= cap) bytes(ptr, value.length).set(value);
+      return value.length;
+    };
+    return {
+      ...net,
+      spawn: (ptr, len) => this.spawn(decode.decode(bytes(ptr, len))),
+      child_wait: (id) => this.wait(id),
+      child_pipe: (id, fd) => this.pipe(id, fd),
+      child_kill: (id, signal) => this.kill(id, signal),
+      read: (id, ptr, cap) => this.owns(id) ? read(id, ptr, cap) : (net.read?.(id, ptr, cap) ?? BADF),
+      write: (id, ptr, len) => this.owns(id) ? this.write(id, bytes(ptr, len)) : (net.write?.(id, ptr, len) ?? BADF),
+      close: (id) => this.owns(id) ? this.close(id) : (net.close?.(id) ?? BADF),
+      error: (id, ptr, cap) => id === 0 && this.lastError ? error(ptr, cap) : (net.error?.(id, ptr, cap) ?? BADF),
+      poll: (timeout) => { const news = net.poll?.(0) || 0; return this.poll(news ? 0 : timeout) || news; },
+    };
+  }
+}

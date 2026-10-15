@@ -1,0 +1,58 @@
+import type { EngineNet } from "./net/host";
+import type { SlotImpls } from "./net/trampoline";
+export interface SpawnMeta {
+  argv: string[];
+  cwd: string;
+  env: Record<string, string>;
+  stdin?: "pipe" | "inherit" | "ignore";
+  stdout?: "pipe" | "inherit" | "ignore";
+  stderr?: "pipe" | "inherit" | "ignore";
+}
+export interface ChildTransport {
+  budget: SharedArrayBuffer;
+  slot: number;
+  inheritedStdin?: boolean;
+  pipes: SharedArrayBuffer[];
+  control: SharedArrayBuffer;
+}
+export const MAX_CHILDREN: number;
+export function createProcessBudget(): SharedArrayBuffer;
+export class SharedPipe {
+  constructor(buffer: SharedArrayBuffer | undefined, budget: SharedArrayBuffer);
+  buffer: SharedArrayBuffer;
+  read(cap?: number): Uint8Array | number;
+  write(bytes: Uint8Array): number;
+  writeAll(bytes: Uint8Array): void;
+  readBlocking(cap: number): Uint8Array | number;
+  close(): void;
+}
+export function childTransport(transport: ChildTransport): {
+  stdin: SharedPipe;
+  stdout: SharedPipe;
+  stderr: SharedPipe;
+  finish(code: number, snapshot?: string): void;
+};
+export class SubprocessHost {
+  constructor(options: {
+    budget?: SharedArrayBuffer;
+    slot?: number;
+    stdin?: SharedArrayBuffer;
+    launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): { terminate(): unknown };
+    output(fd: number, bytes: Uint8Array): void;
+    sync?(snapshot: string): void;
+  });
+  budget: SharedArrayBuffer;
+  attach(memory: WebAssembly.Memory): void;
+  spawn(meta: string): number;
+  pipe(id: number, fd: number): number;
+  wait(id: number): number;
+  read(id: number, cap?: number): Uint8Array | number;
+  write(id: number, bytes: Uint8Array): number;
+  close(id: number): number;
+  kill(id: number, signal?: number): number;
+  owns(id: number): boolean;
+  poll(timeout?: number): number;
+  dispose(): void;
+  engineNet(net?: EngineNet): EngineNet;
+  slots(net?: SlotImpls): SlotImpls;
+}

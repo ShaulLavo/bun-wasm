@@ -8,15 +8,17 @@
 // --net gives the program fetch, Bun.serve, node:http and node:net on real
 // sockets, like crates/bunwasm-host; without it, network APIs are missing as
 // under plain wasmtime (fetch still works, through Node's fetch).
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { registerHooks } from "node:module";
 import * as http from "node:http";
 import * as https from "node:https";
 import * as net from "node:net";
 import * as zlib from "node:zlib";
-import { resolve } from "node:path";
+import { resolve, posix } from "node:path";
 import { WASI } from "node:wasi";
 import { fileURLToPath } from "node:url";
+import { Worker, workerData } from "node:worker_threads";
+import { SubprocessHost, childTransport } from "../src/subprocess.js";
 
 // The runtime replaces globalThis.process with its own; keep Node's.
 const nodeProcess = process;
@@ -44,44 +46,126 @@ for (; i < argv.length; i++) {
     env[kv.slice(0, eq)] = kv.slice(eq + 1);
   } else break;
 }
-const args = argv.slice(i);
+let args = argv.slice(i);
+if (workerData?.bunwasmChild) {
+  args = workerData.meta.argv.slice(1);
+  Object.assign(preopens, workerData.preopens);
+  Object.assign(env, workerData.meta.env, { PWD: workerData.meta.cwd || "/" });
+  withNet = workerData.withNet;
+}
 if (Object.keys(preopens).length === 0) {
   preopens[process.cwd()] = process.cwd();
   env.PWD ??= process.cwd();
 }
 
-const wasi = new WASI({ version: "preview1", args: ["bun", ...args], env, preopens, returnOnExit: true });
-const module = await WebAssembly.compile(readFileSync(wasmPath));
-const instance = await WebAssembly.instantiate(module, wasi.getImportObject());
-const code = wasi.start(instance);
-if (!instance.exports.bunwasm_ready || instance.exports.bunwasm_ready() !== 1) process.exit(code);
+const child = workerData?.bunwasmChild ? childTransport(workerData.transport) : null;
+let subprocess;
+function finish(code) {
+  subprocess?.dispose();
+  child?.finish(code);
+  nodeProcess.exit(code);
+}
 
-// Load Node's fetch (undici) now: it is loaded lazily and reads globals the
-// runtime's polyfills replace (Blob, TextEncoder, streams).
-await globalThis.fetch("data:,").catch(() => {});
-const nodeFetch = globalThis.fetch.bind(globalThis);
+function installChildStdio(imports, getInstance) {
+  const originalRead = imports.wasi_snapshot_preview1.fd_read;
+  const originalWrite = imports.wasi_snapshot_preview1.fd_write;
+  const vectors = (ptr, count) => {
+    const view = new DataView(getInstance().exports.memory.buffer);
+    return Array.from({ length: count }, (_, i) => new Uint8Array(view.buffer, view.getUint32(ptr + i * 8, true), view.getUint32(ptr + i * 8 + 4, true)));
+  };
+  imports.wasi_snapshot_preview1.fd_read = (fd, ptr, count, result) => {
+    if (fd !== 0 || workerData.meta.stdin === "inherit" && !workerData.transport.inheritedStdin) return originalRead(fd, ptr, count, result);
+    const chunks = vectors(ptr, count);
+    const bytes = child.stdin.readBlocking(chunks.reduce((n, chunk) => n + chunk.length, 0));
+    let at = 0;
+    for (const chunk of chunks) {
+      if (typeof bytes === "number") break;
+      const n = Math.min(chunk.length, bytes.length - at);
+      chunk.set(bytes.subarray(at, at + n));
+      at += n;
+    }
+    new DataView(getInstance().exports.memory.buffer).setUint32(result, at, true);
+    return 0;
+  };
+  imports.wasi_snapshot_preview1.fd_write = (fd, ptr, count, result) => {
+    if (fd !== 1 && fd !== 2) return originalWrite(fd, ptr, count, result);
+    const chunks = vectors(ptr, count);
+    for (const chunk of chunks) child[fd === 2 ? "stderr" : "stdout"].writeAll(chunk);
+    new DataView(getInstance().exports.memory.buffer).setUint32(result, chunks.reduce((n, chunk) => n + chunk.length, 0), true);
+    return 0;
+  };
+}
 
-// The program's ES modules: named bunwasm: URLs served from memory by
-// in-thread module hooks, so imports can form cycles (see engine-host.js).
-const PREFIX = "bunwasm:/m/";
-const sources = new Map();
-registerHooks({
-  resolve: (specifier, context, next) => (specifier.startsWith(PREFIX) ? { url: specifier, shortCircuit: true } : next(specifier, context)),
-  load: (url, context, next) => (url.startsWith(PREFIX) ? { format: "module", source: sources.get(url), shortCircuit: true } : next(url, context)),
-});
-const modules = {
-  url: (key) => PREFIX + encodeURIComponent(key),
-  put: (url, source) => void sources.set(url, source),
-};
-const { createNodeNet } = await import("./node-net.mjs");
-const { startEngineHost } = await import("../src/engine-host.js");
-await startEngineHost({
-  instance,
-  moduleUrls: "data",
-  modules,
-  fetch: nodeFetch,
-  net: withNet ? createNodeNet({ net, http, https, zlib }) : undefined,
-  onExit(exitCode) {
-    nodeProcess.exit(exitCode);
-  },
+function validateCwd(cwd) {
+  const path = posix.resolve("/", cwd || "/");
+  const mounts = Object.entries(preopens).sort(([a], [b]) => b.length - a.length);
+  const mount = mounts.find(([guest]) => guest === "/" || path === guest || path.startsWith(`${guest}/`));
+  if (!mount) throw Object.assign(new Error(`spawn: cwd does not exist: ${path}`), { code: "ENOENT" });
+  const [guest, host] = mount;
+  const directory = resolve(host, `.${path.slice(guest === "/" ? 0 : guest.length)}`);
+  if (!statSync(directory).isDirectory()) throw Object.assign(new Error(`spawn: cwd is not a directory: ${path}`), { code: "ENOTDIR" });
+}
+
+async function run() {
+  const module = workerData?.module || await WebAssembly.compile(readFileSync(wasmPath));
+  subprocess = new SubprocessHost({
+    budget: workerData?.transport?.budget,
+    slot: workerData?.transport?.slot,
+    stdin: child && (workerData.meta.stdin !== "inherit" || workerData.transport.inheritedStdin) ? workerData.transport.pipes[0] : undefined,
+    output: (fd, bytes) => {
+      if (child) child[fd === 2 ? "stderr" : "stdout"].writeAll(bytes);
+      else (fd === 2 ? nodeProcess.stderr : nodeProcess.stdout).write(bytes);
+    },
+    launch: (meta, transport, onError) => {
+      validateCwd(meta.cwd);
+      const worker = new Worker(new URL(import.meta.url), {
+        workerData: { bunwasmChild: true, module, preopens, meta, transport, withNet },
+        resourceLimits: { maxOldGenerationSizeMb: 128 },
+      });
+      worker.on("error", onError);
+      return worker;
+    },
+  });
+  const wasi = new WASI({ version: "preview1", args: ["bun"].concat(args), env, preopens, returnOnExit: true });
+  const imports = wasi.getImportObject();
+  let instance;
+  if (child) installChildStdio(imports, () => instance);
+  instance = await WebAssembly.instantiate(module, imports);
+  const code = wasi.start(instance);
+  if (!instance.exports.bunwasm_ready || instance.exports.bunwasm_ready() !== 1) finish(code);
+
+  // Load Node's fetch (undici) now: it is loaded lazily and reads globals the
+  // runtime's polyfills replace (Blob, TextEncoder, streams).
+  await globalThis.fetch("data:,").catch(() => {});
+  const nodeFetch = globalThis.fetch.bind(globalThis);
+
+  // The program's ES modules: named bunwasm: URLs served from memory by
+  // in-thread module hooks, so imports can form cycles (see engine-host.js).
+  const PREFIX = "bunwasm:/m/";
+  const sources = new Map();
+  registerHooks({
+    resolve: (specifier, context, next) => (specifier.startsWith(PREFIX) ? { url: specifier, shortCircuit: true } : next(specifier, context)),
+    load: (url, context, next) => (url.startsWith(PREFIX) ? { format: "module", source: sources.get(url), shortCircuit: true } : next(url, context)),
+  });
+  const modules = {
+    url: (key) => PREFIX + encodeURIComponent(key),
+    put: (url, source) => void sources.set(url, source),
+  };
+  const { createNodeNet } = await import("./node-net.mjs");
+  const { startEngineHost } = await import("../src/engine-host.js");
+  await startEngineHost({
+    instance,
+    moduleUrls: "data",
+    modules,
+    fetch: nodeFetch,
+    net: subprocess.engineNet(withNet ? createNodeNet({ net, http, https, zlib }) : undefined),
+    onExit(exitCode) {
+      finish(exitCode);
+    },
+  });
+}
+run().catch((error) => {
+  if (child) child.stderr.writeAll(new TextEncoder().encode(`${error.stack || error}\n`));
+  else nodeProcess.stderr.write(`${error.stack || error}\n`);
+  finish(1);
 });
