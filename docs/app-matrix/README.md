@@ -158,7 +158,7 @@ are separate runtime API and module-linker work:
   The emitted module has
   `async globalThis.__bunwasm_dynamicImport("/node_modules/vite/dist/node/module-runner.js")(url) {`.
   `crates/bunwasm-runtime/src/engine_host.rs:450` treats the method declaration
-  as a dynamic import, and `web/src/engine-host.js:543` substitutes the helper.
+  as a dynamic import, and `web/src/engine-host.js:545` substitutes the helper.
   A two-line reproduction, independent of any installed package, is:
 
   ```js
