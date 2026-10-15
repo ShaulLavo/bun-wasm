@@ -1,0 +1,7 @@
+globals
+encode/decode
+tee/pipe/iterate
+byob
+abort
+compression
+node interop
