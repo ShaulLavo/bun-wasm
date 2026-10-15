@@ -90,7 +90,7 @@ export function createNodeNet({ net, http, https, zlib }) {
   // body streams use the global (polyfill) ReadableStream once the runtime
   // replaced it. Redirects and content-encoding are handled here, as a
   // browser's fetch would.
-  function send(h, url, request, redirects) {
+  function send(h, url, request, redirects, freshConnection = false) {
     const client = url.protocol === "https:" ? https : http;
     // An object (repeated names become arrays): with an array, Node sends no Host header.
     const headers = { "accept-encoding": "gzip, deflate, br" };
@@ -99,9 +99,13 @@ export function createNodeNet({ net, http, https, zlib }) {
       if (key === "accept-encoding" || !Object.hasOwn(headers, key)) headers[key] = value;
       else headers[key] = [].concat(headers[key], value);
     }
-    const req = client.request(url, { method: request.method, headers });
+    const req = client.request(url, { method: request.method, headers, agent: freshConnection ? false : undefined });
     h.request = req;
     req.on("error", (err) => {
+      if (!freshConnection && !h.closed && !h.head && req.reusedSocket && err.code === "ECONNRESET" && ["GET", "HEAD"].includes(request.method)) {
+        send(h, url, request, redirects, true);
+        return;
+      }
       h.error = errorInfo({ name: "TypeError", message: err.message, code: err.code }, "fetch failed");
       news();
     });
@@ -212,6 +216,7 @@ export function createNodeNet({ net, http, https, zlib }) {
       const h = handles.get(handle);
       if (!h) return BADF;
       handles.delete(handle);
+      h.closed = true;
       if (h.kind === "listener") {
         for (const id of h.pending) {
           const conn = handles.get(id);
