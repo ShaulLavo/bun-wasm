@@ -1,6 +1,6 @@
 # Real app compatibility
 
-This matrix measures complete app commands after a fresh `bun install` in bun-wasm. It covers 17 pinned projects. QuickJS and JSC use the native launcher and real loopback HTTP. The browser-engine native row uses Node's engine host with the same wasm runtime, not native Bun. Hono, Vite React, Drizzle, and Prettier also run inside the playground in headless Chromium, across all three engines.
+This matrix measures complete app commands after a fresh `bun install` in bun-wasm. It covers 17 pinned projects. QuickJS and JSC use the native launcher and real loopback HTTP. The browser-engine native row uses Node's engine host with the same wasm runtime, not native Bun. Hono, Vite React, Drizzle, Prettier, TypeScript, and ESLint also run inside the playground in headless Chromium, across all three engines.
 
 The fixtures are original minimal projects that import the real published packages. No package implementation is replaced. Vite React uses React's public `createElement` API, and Vite Vue uses Vue's `h` API. SvelteKit uses the static adapter. These projects avoid template generators and their moving defaults.
 
@@ -40,13 +40,13 @@ bash /work/tmp/wave-heavy/run.sh --class light "app matrix hono" -- \
 
 All options use `--key=value`. `--timeout=90` bounds each command in seconds. Choose a fresh output directory for each run. A complete census exits zero even when apps fail. Missing artifacts, corrupt or absent registry objects, and runner errors exit nonzero. `--apps`, `--engines`, and `--hosts` restrict the run. The playground always restricts apps to its representative subset. `--reference` also runs installed native Bun as a fixture control. Recording runs that control automatically to capture dependency tarballs used on the native platform; native Bun never substitutes for a bun-wasm result.
 
-The cache keeps original abbreviated npm metadata and tarballs by SHA-256, with a request-path index. Metadata and tarball responses remain fixed after the first recording. Package versions and integrity hashes come from those recorded documents. The loopback mirror rewrites registry tarball URLs to itself at replay time, so ephemeral ports do not change recorded bytes. The default mode cannot fetch missing objects upstream. Chromium contexts also reject requests outside loopback. Telemetry is disabled and Prisma engine downloads are explicitly blocked at the mirror. Registry traffic is local after recording; native framework code is not a general network sandbox.
+The cache keeps original abbreviated npm metadata and tarballs by SHA-256, with a request-path index. Metadata and tarball responses remain fixed after the first recording. Package versions and integrity hashes come from those recorded documents. The loopback mirror rewrites registry tarball URLs to itself at replay time, so ephemeral ports do not change recorded bytes. The complete harness, including native launchers, framework subprocesses, web server and Chromium, runs inside a new Linux user/network namespace with only loopback enabled. Linux `unshare` and `ip` are required. Replay has no upstream connection. Non-mirror tarball origins other than the supported npm registry are rejected as infrastructure errors. Recording alone starts an upstream npm broker outside the namespace, reached by the mirror over a private Unix socket. Native commands stay isolated while recording too. Chromium contexts additionally reject requests outside loopback. Telemetry is disabled and Prisma engine downloads are explicitly blocked at the mirror.
 
 `results.json` contains the runtime commit, fixture and runner hashes, wasm hashes, launcher hash, browser build hashes, registry digest, options, and stage records. `results.jsonl` checkpoints each completed stage. `matrix.md` is the complete table. Logs and successful browser preview screenshots stay beside the results. Scratch projects, install caches inside those projects, servers, browser contexts, and launched process groups are removed on completion, errors, and handled signals. SIGKILL cannot run teardown.
 
 ## Read the scoreboard
 
-`pass` requires a zero exit and the declared output assertion, or a successful HTTP response with the expected body. Frontend dev checks additionally wait for rendered DOM text in headless Chromium. Build checks require the declared output file and content. Playground servers must answer through their service-worker preview and render the expected page. Install success alone does not establish app compatibility.
+`pass` requires the declared exit and output assertion, or a successful HTTP response with the expected body. Frontend dev checks additionally wait for rendered DOM text in headless Chromium. Build checks require the declared output file and content. Playground servers must answer through their service-worker preview and render the expected page. A server that exits before its HTTP/DOM assertion fails even with exit zero. Install passes require the pinned package names and versions, package main files and declared CLI entry points on disk. TypeScript must emit the clean fixture and reject a deliberate type error with exit 2 and TS2322. ESLint must report zero errors on clean input and reject `debugger` with exit 1 and the `no-debugger` diagnostic. Install success alone does not establish app compatibility.
 
 Categories match [Bun's upstream suite](../bun-test-suite/README.md). They describe the first blocker only.
 
@@ -67,8 +67,11 @@ The native census ran every fixture on native Bun as a control and on QuickJS, J
 
 | Run | Pass | Fail | Blocked | Notes |
 | --- | ---: | ---: | ---: | --- |
-| Native launcher and browser-engine host | 102 | 52 | 14 | 17 apps, native control plus three wasm engines |
+| Native Bun control | 39 | 1 | 2 | Fixture control only |
+| Native launcher and browser-engine host | 63 | 51 | 12 | Three wasm engines |
 | Playground host | 19 | 8 | 0 | Hono, Vite React, Drizzle, and Prettier |
+
+The [regenerated failure classifications](classifications.md) use the retained stage logs, exclude source frames and earlier install warnings, and apply category f only when the same command passes on another wasm engine on the same host. Allocation failures remain d. The original pass counts above predate the stronger TypeScript, ESLint and install assertions; they are historical evidence, not a rerun.
 
 The native run's main blockers were Rollup's native binary refusing the wasm32 platform. That affected Vite, Astro, SvelteKit, and Vitest builds. Next.js and several tooling commands reached missing Node APIs. Prisma installation reached the deliberately blocked native engine download on the control and ran out of wasm memory on the three wasm engines. Express and Koa server startup reached stack inspection differences on QuickJS and JSC. Hono, Elysia, Fastify, and Drizzle passed on all three wasm engines. The browser playground passed Hono and Drizzle on all three engines. Vite React reached the same Rollup blocker. Prettier passed in JSC and failed on missing CLI module resolution in QuickJS and the browser host.
 

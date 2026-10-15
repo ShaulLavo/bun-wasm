@@ -72,13 +72,19 @@ export const apps = [
   },
   {
     id: "typescript", dependencies: { typescript: "5.9.3" },
-    files: { "index.ts": 'const message: string = "matrix"; export { message };', "tsconfig.json": '{"compilerOptions":{"strict":true,"noEmit":true},"files":["index.ts"]}' },
-    commands: [{ name: "check", args: ["run", "node_modules/typescript/bin/tsc", "--noEmit"], check: { kind: "exit" } }],
+    files: { "index.ts": 'const message: string = "matrix"; export { message };', "invalid.ts": 'const value: string = 42;\n', "tsconfig.json": '{"compilerOptions":{"strict":true,"outDir":"clean-output"},"files":["index.ts"]}' },
+    commands: [
+      { name: "check", args: ["run", "node_modules/typescript/bin/tsc", "--pretty", "false"], check: { kind: "files", paths: ["clean-output/index.js"], text: "matrix" } },
+      { name: "reject", args: ["run", "node_modules/typescript/bin/tsc", "--noEmit", "--pretty", "false", "invalid.ts"], check: { kind: "diagnostics", exit: 2, texts: ["error TS2322", "Type 'number' is not assignable to type 'string'"] } },
+    ],
   },
   {
     id: "eslint", dependencies: { eslint: "9.38.0" },
-    files: { "index.js": "export const message = 1;\n", "eslint.config.js": "export default [{ rules: { 'no-debugger': 'error' } }];" },
-    commands: [{ name: "lint", args: ["run", "node_modules/eslint/bin/eslint.js", "index.js"], check: { kind: "exit" } }],
+    files: { "index.js": "export const message = 1;\n", "invalid.js": "debugger;\n", "eslint.config.js": "export default [{ rules: { 'no-debugger': 'error' } }];" },
+    commands: [
+      { name: "lint", args: ["run", "node_modules/eslint/bin/eslint.js", "--format", "json", "index.js"], check: { kind: "stdout", text: '"errorCount":0' } },
+      { name: "reject", args: ["run", "node_modules/eslint/bin/eslint.js", "--format", "json", "invalid.js"], check: { kind: "diagnostics", exit: 1, texts: ['"ruleId":"no-debugger"', `"message":"Unexpected 'debugger' statement."`, '"errorCount":1'] } },
+    ],
   },
   {
     id: "prettier", dependencies: { prettier: "3.6.2" },
@@ -92,7 +98,7 @@ export const apps = [
   },
 ];
 
-export const browserSubset = ["hono", "vite-react", "drizzle", "prettier"];
+export const browserSubset = ["hono", "vite-react", "drizzle", "prettier", "typescript", "eslint"];
 
 export function projectFiles(app, registry) {
   return {

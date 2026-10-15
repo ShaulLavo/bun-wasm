@@ -32,3 +32,27 @@ test("offline mirror rewrites tarballs, verifies objects, and refuses missing re
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("recording uses only the explicit Unix-socket broker", async () => {
+  const directory = mkdtempSync("/work/tmp/bun-wasm-app-matrix-recorder-test-");
+  let mirror;
+  let broker;
+  const previous = process.env.MATRIX_RECORDER_SOCKET;
+  try {
+    const socket = join(directory, "broker.sock");
+    const paths = [];
+    broker = Bun.serve({ unix: socket, fetch(request) { paths.push(new URL(request.url).pathname); return Response.json({ dist: { tarball: "https://registry.npmjs.org/pkg/-/pkg.tgz" } }); } });
+    process.env.MATRIX_RECORDER_SOCKET = socket;
+    mirror = await registry({ directory, record: true });
+    const response = await fetch(`${mirror.base}/pkg`);
+    expect(response.status).toBe(200);
+    expect((await response.json()).dist.tarball).toBe(`${mirror.base}/pkg/-/pkg.tgz`);
+    expect(paths).toEqual(["/pkg"]);
+  } finally {
+    if (previous === undefined) delete process.env.MATRIX_RECORDER_SOCKET;
+    else process.env.MATRIX_RECORDER_SOCKET = previous;
+    await mirror?.close();
+    await broker?.stop(true);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -5,6 +5,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps, browserSubset, projectFiles } from "./apps.mjs";
 import { registry, sha256 } from "./registry.mjs";
+import { checkCommand, checkInstall } from "./checks.mjs";
+import { failure, compareEngines } from "./classify.mjs";
+
+const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
+if (interfaces.some(line => line.split(":")[0].trim() !== "lo")) throw new Error("Use scripts/app-matrix.sh in its loopback-only network namespace");
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const flags = new Map();
@@ -38,19 +43,20 @@ if (options.hosts.includes("native") && options.engines.some(engine => engine !=
 if (options.hosts.includes("playground") && !existsSync(join(root, "web/dist/index.html"))) throw new Error("Build web/ first");
 if (existsSync(join(options.output, "results.json"))) throw new Error("Results already exist; choose another --output");
 mkdirSync(options.output, { recursive: true });
-const scratch = mkdtempSync("/work/tmp/bun-wasm-app-matrix-run-");
-const artifacts = Object.fromEntries(options.engines.map(engine => {
-  const path = join(scratch, wasmName[engine]);
-  copyFileSync(join(root, "dist", wasmName[engine]), path);
-  return [engine, { path, sha256: sha256(readFileSync(path)) }];
-}));
-const launcher = join(scratch, "bun-wasm");
-if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
-const launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-const runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs"].map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
-const playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
+const scratch = mkdtempSync(join(process.env.MATRIX_SCRATCH_ROOT ?? "/work/tmp", "bun-wasm-app-matrix-run-"));
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => void cleanup().then(() => process.exit(130)));
+process.on("exit", () => {
+  for (const child of children) stop(child);
+  rmSync(scratch, { recursive: true, force: true });
+});
+
+let artifacts = {};
+let launcher;
+let launcherDigest;
+let runnerSources = {};
+let playgroundBuilds;
 const children = new Set();
-const results = [];
+let results = [];
 let mirror;
 let browserSession;
 let cleaned = false;
@@ -69,11 +75,6 @@ async function cleanup() {
   await Promise.allSettled(exited);
   rmSync(scratch, { recursive: true, force: true });
 }
-for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => void cleanup().then(() => process.exit(130)));
-process.on("exit", () => {
-  for (const child of children) stop(child);
-  rmSync(scratch, { recursive: true, force: true });
-});
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const text = path => existsSync(path) ? readFileSync(path, "utf8") : "";
@@ -116,18 +117,6 @@ function guestCommand(engine, project, args, port) {
   return host.concat(dirs, vars, ["--"], args);
 }
 
-function firstError(output) {
-  const lines = output.replace(/\x1b\[[0-9;]*m/g, "").split("\n").filter(Boolean);
-  return (lines.find(line => /error|not implemented|not supported|cannot|unsupported|failed|not found|panic/i.test(line)) ?? lines.at(-1) ?? "No output before deadline").slice(0, 500);
-}
-function failure(output, stage) {
-  const blocker = firstError(output);
-  if (/throwUnsupportedError|current platform .* wasm32|Native Prisma engine|memory allocation of/i.test(blocker)) return { category: "a", blocker };
-  if (/node:child_process|external executable|IPC.*not|spawn.*(not supported|not implemented)/i.test(blocker)) return { category: "b", blocker };
-  if (/tryEnableSourceMapsForHost|legacy-cli\.mjs|No such module: fs/i.test(blocker)) return { category: "c", blocker };
-  if (/native addon|\.node\b|dlopen|unsupported.*(platform|architecture)/i.test(blocker)) return { category: "a", blocker };
-  return { category: "d", blocker: `${stage}: ${blocker}` };
-}
 function record(app, engine, host, stage, command, result) {
   const row = { app: app.id, versions: app.dependencies, engine, host, stage, command: command.join(" "), ...result };
   results.push(row);
@@ -146,16 +135,18 @@ function prepare(app, name) {
   return project;
 }
 
+async function checkPage(url, check) {
+  try { return await browserSession.checkPage(url, check); }
+  catch (error) { return { status: "fail", ...failure(String(error), "server") }; }
+}
+
 async function checkServer(proc, url, check, logfile) {
   const deadline = Date.now() + options.timeout;
   while (Date.now() < deadline && proc.child.exitCode === null && proc.child.signalCode === null) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(500) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      if (check.kind === "page") {
-        const checked = await browserSession.checkPage(url, check).catch(error => ({ status: "fail", category: "d", blocker: String(error).slice(0, 500) }));
-        return checked;
-      }
+      if (check.kind === "page") return checkPage(url, check);
       const body = await response.text();
       if (body.includes(check.text)) return { status: "pass", assertion: `HTTP ${response.status}, body contains ${JSON.stringify(check.text)}` };
     } catch { /* The server may still be starting. */ }
@@ -176,13 +167,7 @@ async function execute(app, engine, project, command, native = false) {
     finally { stop(proc.child); await proc.done; }
   }
   const result = await capture(argv, project, logfile, env);
-  if (result.code !== 0) return { status: "fail", exit: result.code, timedOut: result.timedOut, ...failure(result.output, command.name) };
-  if (command.check.kind === "stdout" && !result.output.includes(command.check.text)) return { status: "fail", category: "d", blocker: `Missing output ${command.check.text}` };
-  if (command.check.kind === "files") {
-    const invalid = command.check.paths.find(path => !existsSync(join(project, path)) || !text(join(project, path)).length || !text(join(project, path)).includes(command.check.text));
-    if (invalid) return { status: "fail", category: "d", blocker: `Missing or invalid build output ${invalid}` };
-  }
-  return { status: "pass", exit: 0, assertion: JSON.stringify(command.check) };
+  return checkCommand(command, result, path => text(join(project, path)));
 }
 
 async function nativeApp(app, engine, reference = false) {
@@ -191,7 +176,7 @@ async function nativeApp(app, engine, reference = false) {
   const args = ["install"];
   const argv = reference ? ["bun", "install", "--ignore-scripts", "--linker", "hoisted", "--registry", mirror.base] : guestCommand(engine, project, args, 0);
   const installed = await capture(argv, project, logfile, { BUN_INSTALL_CACHE_DIR: join(project, ".native-cache"), DO_NOT_TRACK: "1" });
-  const install = record(app, engine, "native", "install", ["bun"].concat(args), installed.code === 0 ? { status: "pass" } : { status: "fail", exit: installed.code, ...failure(installed.output, "install") });
+  const install = record(app, engine, "native", "install", ["bun"].concat(args), await checkInstall(app, installed, path => text(join(project, path))));
   const outcomes = new Map();
   for (const command of app.commands) {
     const prerequisite = command.after && outcomes.get(command.after);
@@ -206,6 +191,8 @@ async function nativeApp(app, engine, reference = false) {
 }
 
 function report(provenance) {
+  results = compareEngines(results);
+  writeFileSync(join(options.output, "results.jsonl"), results.map(row => JSON.stringify(row)).join("\n") + "\n");
   writeFileSync(join(options.output, "results.json"), JSON.stringify({ provenance, results }, null, 2) + "\n");
   const lines = ["# App matrix run", "", "| App | Version | Command | Engine / host | Result | First blocker | Category | Reproducer |", "| --- | --- | --- | --- | --- | --- | --- | --- |"];
   for (const row of results) {
@@ -218,6 +205,16 @@ function report(provenance) {
 
 let infrastructureError;
 try {
+  artifacts = Object.fromEntries(options.engines.map(engine => {
+    const path = join(scratch, wasmName[engine]);
+    copyFileSync(join(root, "dist", wasmName[engine]), path);
+    return [engine, { path, sha256: sha256(readFileSync(path)) }];
+  }));
+  launcher = join(scratch, "bun-wasm");
+  if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
+  launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
+  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.mjs", "isolate.mjs"].map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
   mirror = await registry({ directory: options.cache, record: options.record });
   const { browserHost } = await import("./browser.mjs");
   browserSession = await browserHost({ root, scratch, options, launch, stop });
@@ -232,15 +229,16 @@ try {
   infrastructureError = String(error.stack ?? error);
   console.error(infrastructureError);
 } finally {
-  const revision = await capture(["git", "rev-parse", "HEAD"], root, join(options.output, "revision.log"));
-  report({ date: new Date().toISOString(), revision: revision.output.trim(), nativeBun: Bun.version, options,
-    fixtures_sha256: runnerSources["apps.mjs"],
-    artifacts: Object.fromEntries(Object.entries(artifacts).map(([engine, artifact]) => [engine, artifact.sha256])),
-    runner_sources: runnerSources,
-    playground_builds: playgroundBuilds,
-    launcher_sha256: launcherDigest,
-    registry: mirror?.snapshot(), infrastructureError });
-  await cleanup();
+  try {
+    const revision = await capture(["git", "rev-parse", "HEAD"], root, join(options.output, "revision.log"));
+    report({ date: new Date().toISOString(), revision: revision.output.trim(), nativeBun: Bun.version, options,
+      fixtures_sha256: runnerSources["apps.mjs"],
+      artifacts: Object.fromEntries(Object.entries(artifacts).map(([engine, artifact]) => [engine, artifact.sha256])),
+      runner_sources: runnerSources,
+      playground_builds: playgroundBuilds,
+      launcher_sha256: launcherDigest,
+      registry: mirror?.snapshot(), infrastructureError });
+  } finally { await cleanup(); }
 }
 const counts = Object.fromEntries(["pass", "fail", "blocked"].map(status => [status, results.filter(row => row.status === status).length]));
 console.log(JSON.stringify({ counts, output: options.output, cleanup: !existsSync(scratch), registry: mirror?.snapshot() }));
