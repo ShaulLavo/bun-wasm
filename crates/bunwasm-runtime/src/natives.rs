@@ -793,3 +793,31 @@ fn platform_info() -> Val {
         .set("arch", if cfg!(target_arch = "wasm32") { "wasm32" } else { std::env::consts::ARCH })
         .into()
 }
+
+#[cfg(test)]
+mod builtin_tests {
+    use super::*;
+    use crate::transpiler::PassthroughTranspiler;
+
+    fn call(table: &Table, name: &str, args: &[Val]) -> NativeResult {
+        let (_, function) = table.functions.iter().find(|(key, _)| *key == name).expect("shared data native");
+        function(Args(args))
+    }
+
+    #[test]
+    fn generated_builtins_use_shared_data_natives() {
+        let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
+        let table = table(&state);
+        let Val::Array(names) = call(&table, "bunBuiltinNames", &[]).unwrap() else { panic!("module names must be data") };
+        let id = names.iter().position(|name| *name == Val::from("internal:freelist")).unwrap();
+        let Val::Str(source) = call(&table, "bunBuiltinSource", &[Val::Num(id as f64)]).unwrap() else { panic!("factory must be source text") };
+        assert!(source.contains("class FreeList"));
+        assert_eq!(call(&table, "bunBuiltinSource", &[Val::Num(u32::MAX as f64)]).unwrap(), Val::Undefined);
+        assert!(matches!(call(&table, "bunBuiltinHookName", &[Val::Num(0.0)]).unwrap(), Val::Str(_)));
+        let error_id = modules::BUN_BUILTIN_ERROR_CODES.iter().position(|code| *code == "ERR_INVALID_URI").unwrap();
+        assert_eq!(call(&table, "bunBuiltinErrorCode", &[Val::Num(error_id as f64)]).unwrap(), Val::from("ERR_INVALID_URI"));
+        for invalid in [Val::Num(-1.0), Val::Num(0.5), Val::Num(f64::INFINITY), Val::Bool(true), Val::from("22")] {
+            assert_eq!(call(&table, "bunBuiltinSource", &[invalid]).unwrap_err().kind, crate::engine::ErrorKind::TypeError);
+        }
+    }
+}
