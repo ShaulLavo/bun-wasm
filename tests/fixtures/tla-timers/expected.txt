@@ -1,0 +1,5 @@
+start
+after Bun.sleep
+after setTimeout
+after setImmediate
+interval ticks 3

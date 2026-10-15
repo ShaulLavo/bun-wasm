@@ -215,6 +215,8 @@
       else hi = mid;
     }
     timerQueue.splice(lo, 0, timer);
+    // A host-owned event loop (engine-host) may be idle waiting on a promise.
+    if (native.wake) native.wake(timer._delay);
   }
 
   function removeTimer(timer) {
@@ -341,6 +343,7 @@
     checkCallback(callback);
     const immediate = new Immediate(callback, args);
     immediates.push(immediate);
+    if (native.wake) native.wake(0);
     return immediate;
   }
 

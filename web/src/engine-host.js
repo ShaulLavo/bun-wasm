@@ -358,6 +358,11 @@ class EngineHost {
         nativeQueueMicrotask(() => host.drainTicks());
       },
       runMicrotasks() {},
+      // A timer or immediate was added, maybe while the loop waits on a
+      // promise (top-level await) with nothing armed.
+      wake(ms) {
+        host.schedule(ms > 0 ? ms : 0);
+      },
       compileCjs(path) {
         return host.evalAt(host.native.hostCjsSource(path), path);
       },
@@ -670,9 +675,18 @@ class EngineHost {
     if (this.o.debug) this.o.debug(`pump next=${next} pending=${this.pendingAsync}`);
     this.flush();
     if (this.exited) return;
+    if (next >= 0 || this.pendingAsync > 0) this.idleWait = false;
     if (next === 0) return this.schedule(0);
     if (next > 0) return this.schedule(next);
     if (this.pendingAsync > 0) return undefined;
+    // Chromium reports unhandled rejections in a later task: look once more
+    // after one before deciding the program is done.
+    if (!this.idleWait) {
+      this.idleWait = true;
+      nativeSetTimeout(() => this.pump(), 0);
+      return undefined;
+    }
+    this.idleWait = false;
     const more = this.guard(() => this.internal.emitBeforeExit(), false);
     if (more) return this.schedule(0);
     const code = this.guard(() => this.internal.beforeExit(), 1);
