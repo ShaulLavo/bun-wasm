@@ -14,6 +14,8 @@ engine-jsc = ["dep:bunwasm-jsc"]
 engine-host = []
 
 [dependencies]
+bun_glob = { path = "../../vendor/bun/src/glob" }
+bun_sys = { path = "../../vendor/bun/src/sys" }
 bunwasm-jsc = { path = "../bunwasm-jsc", optional = true }
 rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"], optional = true }
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }

@@ -16,6 +16,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 mod encoding;
+mod glob;
 pub mod engine;
 #[cfg(feature = "engine-host")]
 pub mod engine_host;

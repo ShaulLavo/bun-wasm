@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { Glob } from "bun";
+
+fs.mkdirSync("tree/sub/deep", { recursive: true });
+for (const file of ["a.ts", "b.js", ".hidden.ts", "sub/c.ts", "sub/deep/d.ts"]) fs.writeFileSync("tree/" + file, "");
+fs.symlinkSync("sub", "tree/link", "dir");
+fs.symlinkSync("missing", "tree/broken");
+const cwd = path.resolve("tree");
+const sorted = (items) => Array.from(items).sort();
+const g = new Glob("**/*.ts");
+assert.equal(g.match("src/a.ts"), true);
+assert.equal(new Glob("{a,b}.[tj]s").match("a.ts"), true);
+assert.equal(new Glob("!*.js").match("a.ts"), true);
+assert.deepEqual(sorted(g.scanSync({ cwd })), ["a.ts", "sub/c.ts", "sub/deep/d.ts"]);
+assert.deepEqual(sorted(await Array.fromAsync(g.scan(cwd))), sorted(g.scanSync({ cwd })));
+assert.deepEqual(sorted(g.scanSync({ cwd, dot: true })), [".hidden.ts", "a.ts", "sub/c.ts", "sub/deep/d.ts"]);
+assert.equal(Array.from(g.scanSync({ cwd, absolute: true })).every((p) => p.startsWith(cwd + "/")), true);
+assert.equal(sorted(new Glob("*").scanSync({ cwd, onlyFiles: false })).includes("sub"), true);
+assert.equal(sorted(g.scanSync({ cwd, followSymlinks: true })).includes("link/c.ts"), true);
+assert.throws(() => Array.from(new Glob("*").scanSync({ cwd, followSymlinks: true, throwErrorOnBrokenSymlink: true })));
+assert.throws(() => Array.from(g.scanSync({ cwd: cwd + "/missing" })), { code: "ENOENT" });
+console.log("Bun.Glob match/scan/options/errors");
+
+assert.deepEqual(fs.globSync(["*.{ts,js}", "sub/*.ts", "a.ts"], { cwd }).sort(), ["a.ts", "b.js", "sub/c.ts"]);
+assert.deepEqual(fs.globSync("**/*.ts", { cwd, exclude: ["sub"] }).sort(), ["a.ts"]);
+assert.deepEqual(fs.globSync("sub/**", { cwd, exclude: (p) => p.endsWith("deep") }).sort(), ["sub", "sub/c.ts"]);
+const entries = fs.globSync("sub/*", { cwd, withFileTypes: true });
+assert.equal(entries.find((e) => e.name === "c.ts").isFile(), true);
+assert.equal(entries.find((e) => e.name === "deep").isDirectory(), true);
+assert.equal(entries.every((e) => e.parentPath === path.join(cwd, "sub")), true);
+await new Promise((resolve, reject) => fs.glob("*.{ts,js}", { cwd }, (err, files) => {
+  if (err) return reject(err);
+  assert.deepEqual(files.sort(), ["a.ts", "b.js"]);
+  resolve();
+}));
+assert.deepEqual((await Array.fromAsync(fs.promises.glob("sub/*.ts", { cwd }))), ["sub/c.ts"]);
+const bad = fs.promises.glob(1);
+await assert.rejects(bad.next(), { code: "ERR_INVALID_ARG_TYPE" });
+console.log("fs glob/callback/promises/exclude/Dirent");
+fs.rmSync("tree", { recursive: true });

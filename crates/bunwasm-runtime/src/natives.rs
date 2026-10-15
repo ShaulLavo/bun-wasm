@@ -170,6 +170,7 @@ pub fn table(state: &Rc<State>) -> Table {
     install_fs(&mut t);
     install_fds(&mut t, state);
     install_modules(&mut t, state);
+    crate::glob::install(&mut t);
     install_encoding(&mut t);
     install_crypto(&mut t);
     install_url(&mut t);

@@ -422,7 +422,9 @@
   const noProcesses = "WASI has no processes";
   const noNetwork = "WASI has no network access";
 
+  const { Glob } = internal.require("glob");
   const Bun = {
+    Glob,
     version: info.version,
     revision: info.revision,
     get argv() {

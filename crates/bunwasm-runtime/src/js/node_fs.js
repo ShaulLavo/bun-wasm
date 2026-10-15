@@ -338,10 +338,66 @@
 
   const noop = () => {};
 
+  function globSync(pattern, options) {
+    const patterns = typeof pattern === "string" ? [pattern] : pattern;
+    if (!Array.isArray(patterns) || patterns.some((p) => typeof p !== "string")) throw invalidArg("pattern", "a string or an array of strings", pattern);
+    if (options == null) options = {};
+    if (typeof options !== "object") throw invalidArg("options", "an object", options);
+    const exclude = options.exclude;
+    if (exclude !== undefined && typeof exclude !== "function" && (!Array.isArray(exclude) || exclude.some((p) => typeof p !== "string"))) throw invalidArg("options.exclude", "a function or an array of strings", exclude);
+    for (const key of ["withFileTypes", "followSymlinks"]) {
+      if (options[key] !== undefined && typeof options[key] !== "boolean") throw invalidArg("options." + key, "a boolean", options[key]);
+    }
+    const path = internal.require("path");
+    let givenCwd = options.cwd === undefined ? process.cwd() : options.cwd;
+    if (givenCwd instanceof String) givenCwd = String(givenCwd);
+    const cwd = path.resolve(toPath(givenCwd, "options.cwd"));
+    const withTypes = options.withFileTypes === true;
+    const excluded = new Map();
+    const found = new Set();
+    const out = [];
+    function dirent(p) {
+      const abs = path.resolve(cwd, p);
+      const stat = lstatSync(abs);
+      return new Dirent(path.basename(p), stat.isDirectory() ? "dir" : stat.isSymbolicLink() ? "symlink" : "file", path.dirname(abs));
+    }
+    function isExcluded(p) {
+      if (!exclude) return false;
+      if (excluded.has(p)) return excluded.get(p);
+      const parent = path.dirname(p);
+      const ancestor = parent !== "." && parent !== "/" && parent !== p && isExcluded(parent);
+      const skip = ancestor || (typeof exclude === "function" ? exclude(withTypes ? dirent(p) : p) : exclude.some((g) => native.globMatch(g, p)));
+      excluded.set(p, !!skip);
+      return !!skip;
+    }
+    for (const glob of patterns) {
+      let paths = native.globScan(glob, cwd, false, false, options.followSymlinks === true, false, false, true);
+      if (glob.endsWith("/**")) {
+        const base = glob.slice(0, -3) || ".";
+        const parents = native.globScan(base, cwd, false, false, options.followSymlinks === true, false, false, true);
+        paths = parents.concat(paths);
+      }
+      for (const p of paths) {
+        if (found.has(p) || isExcluded(p)) continue;
+        found.add(p);
+        out.push(withTypes ? dirent(p) : p);
+      }
+    }
+    return out;
+  }
+
+  function glob(pattern, options, callback) {
+    if (typeof options === "function") { callback = options; options = undefined; }
+    if (typeof callback !== "function") throw invalidArg("callback", "of type function", callback);
+    let result, error = null;
+    try { result = globSync(pattern, options); } catch (err) { error = err; }
+    later(() => callback(error, result));
+  }
+
   const sync = {
     readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, mkdirSync, readdirSync,
     rmSync, rmdirSync, unlinkSync, renameSync, copyFileSync, cpSync, realpathSync, accessSync, mkdtempSync,
-    openSync, closeSync, readSync, writeSync,
+    openSync, closeSync, readSync, writeSync, globSync,
     fstatSync: (fd) => new Stats(native.fstat(fd)),
     ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
     truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
@@ -392,6 +448,7 @@
     const result = existsSync(path);
     later(() => callback(result));
   };
+  callbackApi.glob = glob;
   callbackApi.read = callbackify("read", readSync, (cb, err, n, args) => cb(err, n, args[1]));
   callbackApi.write = callbackify("write", writeSync, (cb, err, n, args) => cb(err, n, args[1]));
 
@@ -454,6 +511,7 @@
   for (const name of Object.keys(sync)) {
     promises[name.slice(0, -4)] = promisifySync(sync[name]);
   }
+  promises.glob = async function* glob(pattern, options) { yield* globSync(pattern, options); };
   promises.open = async (path, flags) => new FileHandle(openSync(path, flags));
   promises.constants = constants;
   delete promises.close;
