@@ -68,6 +68,13 @@ fn load_polyfill<E: Engine>(e: &E, name: &str) -> Result<E::Value, E::Value> {
     e.eval_script(source, &format!("bun-wasm:{name}"), 1)
 }
 
+fn arg_index<E: Engine>(e: &E, args: &[E::Value]) -> Result<usize, E::Value> {
+    match e.to_val(&arg(e, args, 0)) {
+        Val::Num(n) if n >= 0.0 && n.fract() == 0.0 && n <= u32::MAX as f64 => Ok(n as usize),
+        _ => Err(e.error_value(&NativeError::type_error("expected a builtin registry index"))),
+    }
+}
+
 fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str, ValueFn<E>)> {
     let mut list: Vec<(&'static str, ValueFn<E>)> = Vec::new();
     let c = core.clone();
@@ -86,6 +93,23 @@ fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str, ValueFn<E>
         e.eval_script(&code, &filename, 1)
     })));
     list.push(("loadPolyfill", Rc::new(|e: &E, args: &[E::Value]| load_polyfill(e, &arg_str(e, args, 0)?))));
+    list.push(("bunBuiltinNames", Rc::new(|e: &E, _: &[E::Value]| {
+        Ok(e.from_val(Val::Array(modules::BUN_BUILTIN_NAMES.iter().map(|name| Val::from(*name)).collect())))
+    })));
+    list.push(("loadBunBuiltin", Rc::new(|e: &E, args: &[E::Value]| {
+        let id = arg_index(e, args)?;
+        let Some(source) = modules::bun_builtin_source(id) else { return Ok(e.undefined()) };
+        e.eval_script(source, &format!("bun-builtin:{}", modules::BUN_BUILTIN_NAMES[id]), 1)
+    })));
+    list.push(("bunBuiltinHookName", Rc::new(|e: &E, args: &[E::Value]| {
+        let id = arg_index(e, args)?;
+        Ok(e.from_val(modules::BUN_BUILTIN_HOOK_NAMES.get(id).copied().unwrap_or("unknown").into()))
+    })));
+    list.push(("bunBuiltinErrorCode", Rc::new(|e: &E, args: &[E::Value]| {
+        let id = arg_index(e, args)?;
+        Ok(e.from_val(modules::BUN_BUILTIN_ERROR_CODES.get(id).copied().unwrap_or("unknown").into()))
+    })));
+
     list.push(("promiseState", Rc::new(|e: &E, args: &[E::Value]| {
         let state = match e.promise_state(&arg(e, args, 0)) {
             Some(PromiseState::Pending) => "pending",
