@@ -784,6 +784,10 @@ class EngineHost {
       }, 0);
       return;
     }
+    // runTimers hands back fractional ms, and setTimeout drops the fraction: the
+    // wake would land just before the timer is due, and the sub-millisecond retry
+    // that follows gets the browser's 4ms nested-timer clamp.
+    ms = Math.ceil(ms);
     const at = Date.now() + ms;
     if (this.timer !== null && this.timerAt <= at) return;
     if (this.timer !== null) nativeClearTimeout(this.timer);
