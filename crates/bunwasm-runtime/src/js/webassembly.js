@@ -40,7 +40,8 @@
     valueOf() { return this.value; }
   }
   function flush(state) {
-    for (const memory of state.memories) native.write(state.id, memory.name, new Uint8Array(memory.buffer));
+    // JSC pins buffers passed through its C API. Keep the mirror detachable on growth.
+    for (const memory of state.memories) native.write(state.id, memory.name, new Uint8Array(memory.buffer).slice());
   }
   function refresh(state) {
     for (const memory of state.memories) {

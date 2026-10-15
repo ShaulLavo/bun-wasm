@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-const bytes = readFileSync('/module.wasm');
+const bytes = readFileSync('./module.wasm');
 console.log(WebAssembly.validate(bytes), WebAssembly.validate(new Uint8Array([1])));
 const module = new WebAssembly.Module(bytes);
 console.log(WebAssembly.Module.imports(module)[0].name);
