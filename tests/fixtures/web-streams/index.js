@@ -3,7 +3,10 @@ import * as web from "node:stream/web";
 import { Readable, Writable } from "node:stream";
 
 const names = ["ReadableStream", "ReadableStreamDefaultReader", "ReadableStreamBYOBReader", "ReadableStreamBYOBRequest", "ReadableByteStreamController", "ReadableStreamDefaultController", "WritableStream", "WritableStreamDefaultWriter", "WritableStreamDefaultController", "TransformStream", "TransformStreamDefaultController", "TextEncoderStream", "TextDecoderStream", "CompressionStream", "DecompressionStream", "ByteLengthQueuingStrategy", "CountQueuingStrategy"];
-for (const name of names) assert.equal(web[name], globalThis[name], name);
+for (const name of names) {
+  assert.equal(typeof web[name], "function", name);
+  assert.equal(web[name], globalThis[name], name);
+}
 new TextEncoderStream();
 console.log("globals");
 
