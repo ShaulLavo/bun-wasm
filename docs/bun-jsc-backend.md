@@ -206,14 +206,14 @@ platform limitations regardless of which JavaScript engine supplies values.
 
 ## Verification and size
 
-The shared vendor checkout was missing already committed Bun patch `0009`.
-All three initial full builds failed at `dev_server/mod.rs:275` because
-`BundleV2::finish_wasi_dev_server` was absent. Verification therefore uses a private
-vendor worktree at the same pinned HEAD with the existing patch applied. The
-semver source, tests, generated code, and dependency inputs are unchanged. No new
-vendor patch is introduced, and the shared vendor checkout remains untouched.
-The coordinator must synchronize that existing patch before rebuilding from the
-shared checkout. The private vendor worktree is removed after verification.
+When this work was verified, the shared vendor checkout was missing already
+committed Bun patch `0009`. All three initial full builds failed at
+`dev_server/mod.rs:275` because `BundleV2::finish_wasi_dev_server` was absent.
+Verification therefore used a private vendor worktree at the same pinned HEAD with
+the existing patch applied. The semver source, tests, generated code, and
+dependency inputs are unchanged, and no new vendor patch is introduced. The shared
+checkout has since received patch `0009` (2026-10-16), so rebuilds from it need no
+workaround.
 
 Run the focused probe after building all three artifacts:
 
