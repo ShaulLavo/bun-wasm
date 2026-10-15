@@ -28,11 +28,12 @@
     const name = names[id];
     if (!name) throw unsupported(`module ${id}`);
     if (loading.has(id)) throw unsupported(`circular initialization of ${name}`);
-    const factory = native.loadBunBuiltin(id);
-    if (factory === undefined) {
+    const source = native.bunBuiltinSource(id);
+    if (source === undefined) {
       if (name === "bun" || name.startsWith("node:") || name.startsWith("bun:")) return internal.builtin(name);
       throw unsupported(`module ${name}`);
     }
+    const factory = native.evalScript(source, `bun-builtin:${name}`);
     loading.add(id);
     try {
       const exports = factory(intrinsics);

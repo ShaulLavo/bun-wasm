@@ -12,10 +12,11 @@ const factories = new Map([[freelist, eval(readFileSync(`${freelist}.js`, "utf8"
 const bridged = {};
 const native = {
   bunBuiltinNames: () => names,
-  loadBunBuiltin(id) {
+  bunBuiltinSource(id) {
     counts.set(id, (counts.get(id) || 0) + 1);
-    return factories.get(id);
+    return factories.has(id) ? String(id) : undefined;
   },
+  evalScript: source => factories.get(Number(source)),
   bunBuiltinHookName: id => id === 124 ? "createTestBinding" : `js2native_wrap_test_hook_${id}`,
   bunBuiltinErrorCode: () => "ERR_INVALID_URI",
   isPromise: value => value instanceof Promise,
