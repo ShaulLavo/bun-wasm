@@ -780,6 +780,7 @@
     });
   }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
+  if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
   internal.require("builtins");
 
   return internal;

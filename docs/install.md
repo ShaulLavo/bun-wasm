@@ -143,3 +143,30 @@ package binaries, patches, migrations and additional commands still fail. The
 before/after results are bounded observations, not a complete assertion census.
 Installer requests use gzip; browsers select their own transport encoding.
 The checked-in upstream baseline remains unchanged.
+
+## WebAssembly distributions
+
+On wasm32-wasip1, the installer selects Rollup 4's official `@rollup/wasm-node`
+distribution at the exact version selected for `rollup`. This policy applies to
+root and transitive dependencies. Projects keep their existing dependency names
+and imports. The package installs at the requested `node_modules/rollup` path;
+its original package name, files, tarball integrity, and version remain intact.
+The lockfile records the actual distribution identity under that path. Frozen
+reinstalls use that identity. Rollup versions before 4 keep their original
+JavaScript distribution. A missing same-version wasm distribution fails install.
+
+QuickJS and JSC wasm execute the published parser through the Rust `wasmi`
+interpreter. The browser engine uses its native WebAssembly implementation.
+The interpreter adapter supports numeric functions, JavaScript function imports,
+exported memories, and exported globals. It supports reentrant function imports,
+i64 values, and memory growth with detached old buffers. Imported memories,
+tables, standalone memory/global construction, shared memory, and JavaScript
+imports called by a module's start function are not yet supported. The adapter
+implements the listed subset of the WebAssembly JavaScript API.
+No upstream Rollup implementation is copied, patched, or replaced.
+
+`bun tests/rollup/run.mjs` replays the real Rollup 4.64.7 distribution from the
+app-matrix mirror. It checks the parser on Unicode and invalid syntax, the three
+hash exports, and a frozen reinstall on each engine. Set `BUN_WASM_LAUNCHER` to
+your launcher and `ENGINES` to a comma-separated subset. This check never
+records or contacts the public registry.

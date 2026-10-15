@@ -182,6 +182,7 @@ pub fn table(state: &Rc<State>) -> Table {
     install_url(&mut t);
     install_host(&mut t);
     crate::sqlite::install(&mut t);
+    crate::wasm::install(&mut t);
     t.constants.push(("platformInfo", platform_info()));
     t
 }
