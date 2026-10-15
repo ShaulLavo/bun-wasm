@@ -5,8 +5,9 @@ import { gzipSync } from "node:zlib";
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
-  async fetch(req) {
+  async fetch(req, srv) {
     const url = new URL(req.url);
+    if (url.pathname === "/websocket" && srv.upgrade(req)) return;
     switch (url.pathname) {
       case "/text":
         return new Response("hello from the test server");
@@ -30,6 +31,9 @@ const server = Bun.serve({
       default:
         return new Response("not found", { status: 404 });
     }
+  },
+  websocket: {
+    message(ws, data) { ws.send(data); },
   },
 });
 console.log(server.port);

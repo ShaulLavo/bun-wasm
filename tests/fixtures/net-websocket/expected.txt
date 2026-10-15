@@ -1,0 +1,9 @@
+http: ordinary HTTP
+connected: 1 1 1
+binary: 0,1,254,255
+large: 70000
+pubsub: published
+client closed: 1000 done true
+closed: 0 0
+host: native host echo
+host pong: PING

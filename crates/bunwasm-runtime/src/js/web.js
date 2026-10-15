@@ -518,6 +518,15 @@
     }
   }
 
+  class CloseEvent extends Event {
+    constructor(type, init = {}) {
+      super(type, init);
+      this.code = init.code || 0;
+      this.reason = init.reason || "";
+      this.wasClean = Boolean(init.wasClean);
+    }
+  }
+
   class MessageEvent extends Event {
     constructor(type, init = {}) {
       super(type, init);
@@ -1367,11 +1376,11 @@
   return function install(defineGlobal, defineLazyGlobal) {
     const globals = {
       DOMException, TextEncoder, TextDecoder, btoa, atob, URL, URLSearchParams, Event, CustomEvent,
-      ErrorEvent, MessageEvent, EventTarget, AbortController, AbortSignal, Blob, File, Headers,
+      ErrorEvent, MessageEvent, CloseEvent, EventTarget, AbortController, AbortSignal, Blob, File, Headers,
       Request, Response, fetch, ReadableStream, performance, crypto, FormData, MessageChannel,
       MessagePort, navigator,
     };
     for (const name of Object.keys(globals)) defineGlobal(name, globals[name]);
-    void defineLazyGlobal;
+    defineLazyGlobal("WebSocket", () => internal.require("net").WebSocket);
   };
 })

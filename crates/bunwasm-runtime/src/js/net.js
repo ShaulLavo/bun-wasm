@@ -357,6 +357,7 @@
           const done = this.flush();
           if (done || this.closed) {
             this.writer = null;
+            if (!this.closed && this.onDrain) this.onDrain();
             return true;
           }
           return false;
@@ -375,10 +376,11 @@
       if (this.reader) waiters.delete(this.reader);
       if (this.writer) waiters.delete(this.writer);
       native.hostClose(this.handle);
+      if (this.onClose) this.onClose();
     }
     fail(err) {
-      this.destroy();
-      if (this.onError) this.onError(err);
+      try { if (this.onError) this.onError(err); }
+      finally { this.destroy(); }
     }
     peer() {
       const text = native.hostPeerAddr(this.handle);
@@ -416,6 +418,8 @@
 
   // Serve HTTP/1.1 requests on a connection, one at a time (keep-alive and
   // pipelining are supported; responses go out in request order).
+  const UPGRADED = Symbol("websocket upgrade");
+
   function serveHttp(conn, handleRequest) {
     let buffer = new Uint8Array(0);
     let busy = false;
@@ -446,6 +450,11 @@
           return false;
         })
         .then((stillOpen) => {
+          if (stillOpen === UPGRADED) {
+            conn.upgraded.activate(buffer);
+            buffer = new Uint8Array(0);
+            return;
+          }
           busy = false;
           conn.busy = false;
           if (stillOpen === false || !keepAlive) {
@@ -532,6 +541,10 @@
     if (typeof options.fetch !== "function" && !options.routes) {
       throw new TypeError("Bun.serve expects a `fetch` function or `routes`");
     }
+    let websocket = options.websocket;
+    if (websocket && !["message", "open", "ping", "pong"].some((name) => typeof websocket[name] === "function")) throw new TypeError("websocket requires a message, open, ping or pong handler");
+    if (options.tls) throw new Error("Bun.serve TLS is not supported by this networking host");
+    const ws = internal.require("websocket");
     const hostname = options.hostname || "0.0.0.0";
     const requested = options.port !== undefined ? Number(options.port) : Number(globalThis.process.env.BUN_PORT || globalThis.process.env.PORT || 3000);
     const listener = listenOrThrow(hostname, requested);
@@ -544,6 +557,17 @@
     const connections = new Set();
     const displayHost = hostname === "0.0.0.0" || hostname === "::" ? "localhost" : hostname;
     const peers = new WeakMap();
+    const requests = new WeakMap();
+    const sockets = new Set();
+
+    function publish(topic, data, exclude = null) {
+      let sent = 0;
+      for (const socket of sockets) {
+        if (socket === exclude || !socket.isSubscribed(topic)) continue;
+        sent += socket.send(data);
+      }
+      return sent;
+    }
 
     const server = {
       port,
@@ -557,7 +581,7 @@
         return pending;
       },
       get pendingWebSockets() {
-        return 0;
+        return sockets.size;
       },
       requestIP(req) {
         return peers.get(req) || null;
@@ -569,6 +593,7 @@
         if (next.fetch) fetchHandler = next.fetch;
         if (next.error) errorHandler = next.error;
         if (next.routes) routes = compileRoutes(next.routes);
+        if (next.websocket) websocket = next.websocket;
         return server;
       },
       stop(closeActive = false) {
@@ -578,8 +603,8 @@
           native.hostClose(listener);
           // Idle keep-alive connections close now; busy ones after their
           // response (they no longer keep alive once stopped).
-          for (const c of Array.from(connections)) if (closeActive || !c.busy) c.destroy();
         }
+        for (const c of Array.from(connections)) if (closeActive || (!c.busy && !c.upgraded)) c.destroy();
         return Promise.resolve();
       },
       ref() {
@@ -588,12 +613,29 @@
       unref() {
         accepting.ref = false;
       },
-      upgrade() {
-        return false;
+      upgrade(req, upgradeOptions = {}) {
+        const state = requests.get(req);
+        if (!websocket || !state || state.conn.closed || state.conn.upgraded || stopped) return false;
+        const key = req.headers.get("sec-websocket-key");
+        const connection = req.headers.get("connection") || "";
+        if (req.method !== "GET" || req.headers.get("upgrade")?.toLowerCase() !== "websocket" || !connection.toLowerCase().split(/\s*,\s*/).includes("upgrade")) return false;
+        if (req.headers.get("sec-websocket-version") !== "13" || !/^[a-zA-Z0-9+/]{22}==$/.test(key || "") || internal.require("buffer").Buffer.from(key, "base64").length !== 16) return false;
+        const headers = new Headers(upgradeOptions.headers);
+        headers.set("upgrade", "websocket");
+        headers.set("connection", "Upgrade");
+        headers.set("sec-websocket-accept", ws.acceptKey(key));
+        headers.delete("content-length");
+        headers.delete("transfer-encoding");
+        // Compression is never negotiated: this parser handles uncompressed frames.
+        headers.delete("sec-websocket-extensions");
+        const upgraded = ws.serverSocket(state.conn, () => websocket, upgradeOptions, (socket) => sockets.delete(socket), publish);
+        state.conn.upgraded = upgraded;
+        sockets.add(upgraded.socket);
+        state.conn.write(serializeHead(101, "Switching Protocols", Array.from(headers)));
+        return true;
       },
-      publish() {
-        return 0;
-      },
+      publish(topic, data) { return publish(String(topic), data); },
+      subscriberCount(topic) { return Array.from(sockets).filter((socket) => socket.isSubscribed(topic)).length; },
       [Symbol.dispose]() {
         server.stop(true);
       },
@@ -606,6 +648,7 @@
       const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined });
       const peer = conn.peer();
       peers.set(req, { address: peer.address, port: peer.port, family: peer.family });
+      requests.set(req, { conn });
       pending++;
       let res;
       try {
@@ -620,7 +663,9 @@
         res = errorHandler ? await errorHandler.call(server, err) : errorResponse(err);
       } finally {
         pending--;
+        requests.delete(req);
       }
+      if (conn.upgraded) return UPGRADED;
       if (res === undefined && errorHandler === undefined) res = new Response("", { status: 404 });
       return writeResponse(conn, res, request.method, keepAlive && !stopped);
     }
@@ -1138,5 +1183,6 @@
     return { Socket, Server, Stream: Socket, createServer: (o, l) => new Server(o, l), connect, createConnection: connect };
   }
 
-  return { fetch, serve, nodeHttp, nodeNet, caps };
+  const WebSocket = internal.require("websocket").clientClass(Connection);
+  return { fetch, serve, nodeHttp, nodeNet, caps, WebSocket };
 })
