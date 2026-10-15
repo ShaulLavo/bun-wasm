@@ -1,0 +1,9 @@
+[package]
+name = "bunwasm-bun-jsc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Call-scoped bun_jsc subset for engine-independent Bun host functions"
+
+[dependencies]
+bunwasm-bun-jsc-macros = { path = "../bunwasm-bun-jsc-macros" }
