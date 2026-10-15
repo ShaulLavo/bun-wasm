@@ -1,3 +1,5 @@
+import { memoryViews } from "./memory-views.js";
+
 // Shared transport for browser and Node workers. No native executables are launched.
 const NativeEncoder = TextEncoder;
 const NativeDecoder = TextDecoder;
@@ -128,7 +130,7 @@ export class SubprocessHost {
     this.notify = () => {};
     this.memory = null;
   }
-  attach(memory) { this.memory = memory; }
+  attach(memory) { this.memory = memoryViews(memory); }
   fail(message, code) {
     this.lastError = JSON.stringify({ name: "Error", message, code });
     return -1;
@@ -333,7 +335,7 @@ export class SubprocessHost {
       if (name !== "error" && name !== "poll") this.lastError = null;
       return fn(...args);
     }]));
-    const bytes = (ptr, len) => new Uint8Array(this.memory.buffer, ptr >>> 0, len);
+    const bytes = (ptr, len) => this.memory.range(ptr >>> 0, len);
     const read = (id, ptr, cap) => {
       const value = this.read(id, cap);
       if (typeof value === "number") return value;
@@ -347,7 +349,7 @@ export class SubprocessHost {
     };
     return {
       ...net,
-      spawn: (ptr, len) => this.spawn(decode.decode(bytes(ptr, len))),
+      spawn: (ptr, len) => this.spawn(decode.decode(bytes(ptr, len).slice())),
       child_wait: (id) => this.wait(id),
       child_pipe: (id, fd) => this.pipe(id, fd),
       child_kill: (id, signal) => this.kill(id, signal),
