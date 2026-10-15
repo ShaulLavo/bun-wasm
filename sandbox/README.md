@@ -1,10 +1,12 @@
 # sandbox: Bun's dev server in your browser
 
 The sandbox edits a plain app in an in-memory filesystem and runs `bun ./index.html`
-in a worker. The React template uses Bun's HTML bundler, incremental graph, HMR
-client, Fast Refresh, and error overlay.
+in a worker. Choose React or vanilla TypeScript in the template picker. Both templates
+use Bun's HTML bundler, incremental graph, HMR client, and error overlay.
 
-Edits survive engine switches and page reloads.
+The React template uses Bun's built-in Fast Refresh. The vanilla template saves its
+counter through `import.meta.hot.data` and accepts module updates without a framework.
+Each template keeps its own edits across engine switches and page reloads.
 
 ## Build and run
 
@@ -21,8 +23,8 @@ The build needs `../dist/bun.wasm`, `../dist/bun-browser.wasm`, and
 needed by the worker's shared-memory networking.
 
 `build.ts` packages the page and the shared worker, filesystem, WASI shim, and service
-worker from `web/src`. It writes `template.json` with the starter source files.
-React's dependency sources come from a native `bun install`.
+worker from `web/src`. It writes `template.json` and `template-vanilla.json` with the
+starter source files. React's dependency sources come from a native `bun install`.
 The site build does not ship a prebuilt React bundle. Bun compiles React in the browser.
 
 ## How edits reach the app

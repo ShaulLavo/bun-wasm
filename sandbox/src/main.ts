@@ -25,15 +25,24 @@ const HOME = "/home/user";
 const APP = `${HOME}/app`;
 const PORT = 5173;
 /** Files the user changed, kept across reloads and engine switches. */
-const templateFile = "template.json";
-const EDITS_KEY = "bun-wasm-sandbox:edits:react";
+const template = new URLSearchParams(location.search).get("template") === "vanilla" ? "vanilla" : "react";
+const templateFile = template === "vanilla" ? "template-vanilla.json" : "template.json";
+const EDITS_KEY = `bun-wasm-sandbox:edits:${template}`;
 const SAVE_DELAY_MS = 350;
 /** Opened first. */
-const START_FILE = "src/App.tsx";
+const START_FILE = template === "vanilla" ? "src/main.ts" : "src/App.tsx";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const statusEl = $<HTMLSpanElement>("#status");
 const engineSelect = $<HTMLSelectElement>("#engine");
+const templateSelect = $<HTMLSelectElement>("#template");
+templateSelect.value = template;
+templateSelect.addEventListener("change", () => {
+  const next = new URL(location.href);
+  if (templateSelect.value === "react") next.searchParams.delete("template");
+  else next.searchParams.set("template", templateSelect.value);
+  location.assign(next);
+});
 const restartButton = $<HTMLButtonElement>("#restart");
 const treeEl = $<HTMLUListElement>("#tree");
 const fileSelect = $<HTMLSelectElement>("#file-select");
@@ -537,4 +546,4 @@ async function boot(): Promise<void> {
 
 void boot();
 
-Object.assign(globalThis, { sandbox: { fs, editor, term, restart: startDevServer, server: () => server, engine } });
+Object.assign(globalThis, { sandbox: { fs, editor, term, restart: startDevServer, server: () => server, engine, template } });

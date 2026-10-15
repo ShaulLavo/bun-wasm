@@ -1,0 +1,6 @@
+{
+  "name": "vanilla-app",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "bun ./index.html" }
+}

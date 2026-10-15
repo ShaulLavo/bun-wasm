@@ -1,8 +1,8 @@
 # Bun dev server port
 
-Status: Approved. Slices 1–4 implement WebSockets, HTML serving, Bun bake
-incremental HMR, React refresh and the plain-app sandbox. Slice 5 adds a
-second template.
+Status: Approved. Slices 1–5 are implemented: WebSockets, HTML serving, Bun
+bake incremental HMR, React refresh, the plain-app sandbox and a selectable
+vanilla TypeScript template.
 
 ## WebSockets
 
@@ -154,8 +154,7 @@ then removes them.
 
 3. Complete. See the slice 3 implementation and verification below.
 4. Complete. See the slice 4 implementation and verification below.
-5. Add a vanilla TypeScript template that exercises `import.meta.hot`, and an
-   HTML CLI fixture with an HMR WebSocket client.
+5. Complete. See the slice 5 implementation and verification below.
 
 ## Slice 3: incremental bake on WASI
 
@@ -217,6 +216,8 @@ layout sample directly to xterm, removing its dependency on `.dev/dev.ts`.
 The HMR upgrade hook follows Bun's origin policy: matching hosts, localhost
 names and non-browser clients without Origin are accepted; unrelated and
 opaque origins are rejected. The HTML fixture checks these cases on each engine.
+The preview tunnel connects to the guest port while forwarding the page's
+Host and Origin together, so the same policy applies through the proxy.
 
 Bun's generated error runtime handles a page first opened with invalid source;
 it receives the same serialized failures and configuration prelude as native
@@ -243,3 +244,51 @@ paths, independent tabs, engine switching and phone/clipboard behavior. All
 six cache runs pass cold compilation, cached Restart/reload, HMR after restore,
 corruption recovery and manifest invalidation. The CLI cache checks pass on
 all three engines, including 36 malformed-cache cases and three empty caches.
+
+## Slice 5: framework-independent template
+
+The sandbox picker switches between React and vanilla TypeScript. The vanilla
+manifest contains four app files and no React dependencies. Its entry accepts
+updates through `import.meta.hot` and keeps the counter in `hot.data` through
+its dispose handler. Edits are stored separately for each template.
+
+The combined acceptance checklist adds vanilla rendering, state retention, CSS
+changes and syntax-error recovery to the existing React, engine-switch, new-tab
+and phone checks. Run it from the repository root against the local sandbox:
+
+```sh
+node sandbox/tests/hmr-check.mjs http://127.0.0.1:4173/
+node sandbox/tests/startup-cache.mjs http://127.0.0.1:4173/
+```
+
+## Controlled slices 3–5 comparison
+
+Each engine selects the same 65 upstream files at
+`4ceda2c2868d3a7703c7737ddd9de7244ec384df`, using the same launcher, runner,
+dependency hashes, loopback isolation, two workers and 15-second file limit.
+Only the wasm artifact differs. The checked-in full-suite baseline is untouched.
+
+| Engine | Observed passes before / after | Fully passing files before / after | Timeouts before / after | Failures before / after | Errors before / after |
+|---|---:|---:|---:|---:|---:|
+| QuickJS | 79 / 79 | 6 / 6 | 1 / 1 | 212 / 212 | 27 / 27 |
+| Browser | 74 / 74 | 6 / 6 | 2 / 2 | 216 / 216 | 27 / 27 |
+| JSC | 79 / 79 | 6 / 6 | 1 / 1 | 212 / 212 | 27 / 27 |
+
+Each run has seven skips. The upstream bake harness still stops at unsupported
+APIs before reaching the browser acceptance paths. Intermediate runs varied
+by one pass in `instances should be finalized when GC'd`, as earlier work
+also observed. These counts do not establish object finalization.
+
+Final records, raw JSON/JSONL and test logs are retained in
+`/work/reports/bun-wasm-dev-server-slices-3-5-2026-10-15/`. `comparison.json`
+verifies matching inputs and records final artifact sizes and hashes. The
+coordinator owns this small report until review is accepted, and the worktree
+and its wasm artifacts until integration. Private Cargo targets, suite copies,
+dependency installs, generated preview builds and test processes are removed
+after verification. Shared toolchains, launcher and owner services are preserved.
+
+Remaining limits are one HTML root per HMR listener, missing-import directory
+notifications and HTTP source-map/error-report endpoints. Source maps remain
+in the graph and persistent dependency cache; syntax-error overlays and
+recovery work on both templates. These limits do not affect the acceptance
+checks above.

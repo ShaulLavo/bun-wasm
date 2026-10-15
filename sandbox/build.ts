@@ -1,6 +1,6 @@
 // Builds the sandbox into sandbox/dist as plain static files: the page, the shared bun worker and
-// service worker from web/src, each engine's wasm (gzipped), and template.json, the starter project
-// with its node_modules.
+// service worker from web/src, each engine's wasm (gzipped), and the React and vanilla template sources.
+// The React template includes the dependency sources Bun bundles in the browser.
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { previewWebsocketScript } from "../web/preview-build";
@@ -107,6 +107,20 @@ try {
 const templateBytes = new TextEncoder().encode(JSON.stringify({ files }));
 engineBuilds["template.json"] = new Bun.CryptoHasher("sha256").update(templateBytes).digest("hex");
 await Bun.write(join(out, "template.json"), templateBytes);
+
+const vanillaFiles: Record<string, string> = {};
+async function readTree(dir: string, base: string): Promise<void> {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) await readTree(path, base);
+    else vanillaFiles[relative(base, path)] = await Bun.file(path).text();
+  }
+}
+const vanilla = join(here, "template-vanilla");
+await readTree(vanilla, vanilla);
+const vanillaBytes = new TextEncoder().encode(JSON.stringify({ files: vanillaFiles }));
+engineBuilds["template-vanilla.json"] = new Bun.CryptoHasher("sha256").update(vanillaBytes).digest("hex");
+await Bun.write(join(out, "template-vanilla.json"), vanillaBytes);
 
 await Bun.write(join(out, "engine-builds.json"), JSON.stringify(engineBuilds));
 const index = await Bun.file(join(here, "index.html")).text();

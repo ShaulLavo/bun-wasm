@@ -3,6 +3,8 @@
 //   3. editing App.tsx text updates the preview and the count survives (Fast Refresh);
 //   4. editing App.css restyles without a reload; 5. a syntax error shows the overlay, the next
 //   good save clears it (and the count still survives); 6. switching the engine keeps the edits.
+// Also checks a separate preview tab, the vanilla template's import.meta.hot.data, an initial
+// build error after Restart, phone layouts, and terminal copy.
 //
 //   node sandbox/tests/hmr-check.mjs <url> [--engines browser,quickjs,jsc] [--browsers chromium,webkit] [--shots dir]
 //
@@ -127,6 +129,28 @@ async function check(browserName, engine) {
         await tab.close();
       }
     });
+    await step("5c vanilla template uses import.meta.hot", async () => {
+      await Promise.all([page.waitForNavigation(), page.selectOption("#template", "vanilla")]);
+      await app.locator("h1", { hasText: "Hello from vanilla TypeScript" }).waitFor({ timeout: STARTUP_MS });
+      for (let i = 0; i < 2; i++) await app.locator("button.counter").click();
+      await setFile("src/main.ts", [["Hello from vanilla TypeScript", "Vanilla hot update"]]);
+      await app.locator("h1", { hasText: "Vanilla hot update" }).waitFor({ timeout: STEP_MS });
+      const count = await app.locator("button.counter").textContent();
+      if (count !== "count is 2") throw new Error(`import.meta.hot.data lost state: ${count}`);
+      await setFile("src/App.css", [["color: #fbf0df;", "color: rgb(34, 197, 94);"]]);
+      await page.waitForFunction(() => {
+        const heading = document.querySelector("iframe")?.contentDocument?.querySelector("h1");
+        return heading && getComputedStyle(heading).color === "rgb(34, 197, 94)";
+      }, null, { timeout: STEP_MS });
+      await setFile("src/main.ts", [["const root =", "const root: ="]]);
+      await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
+      await setFile("src/main.ts", [["const root: =", "const root ="]]);
+      await app.locator("bun-hmr").waitFor({ state: "hidden", timeout: STEP_MS });
+      await app.locator("button.counter", { hasText: "count is 2" }).waitFor({ timeout: STEP_MS });
+      await shot("5c-vanilla");
+      await Promise.all([page.waitForNavigation(), page.selectOption("#template", "react")]);
+      await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STARTUP_MS });
+    });
     await step("6 engine switch keeps edits", async () => {
       const other = engine === "quickjs" ? "browser" : "quickjs";
       await Promise.all([page.waitForNavigation(), page.selectOption("#engine", other)]);
@@ -163,6 +187,6 @@ for (const browserName of browsers) {
     summary.push(await check(browserName, engine));
   }
 }
-const failed = summary.filter((s) => s.results.length < 9 || s.results.some((r) => !r.ok));
+const failed = summary.filter((s) => s.results.length < 10 || s.results.some((r) => !r.ok));
 console.log(failed.length ? `\n${failed.length} of ${summary.length} runs failed` : `\nall ${summary.length} runs passed`);
 process.exit(failed.length ? 1 : 0);
