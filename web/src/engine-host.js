@@ -23,8 +23,8 @@ const NativeBlob = globalThis.Blob;
 const nativeCreateObjectURL = globalThis.URL && globalThis.URL.createObjectURL ? globalThis.URL.createObjectURL.bind(globalThis.URL) : null;
 const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
-const nativeGC = typeof globalThis.gc === "function" ? globalThis.gc.bind(globalThis) : null;
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
+const nativeGc = typeof globalThis.gc === "function" ? globalThis.gc.bind(globalThis) : null;
 const NativeMessageChannel = globalThis.MessageChannel;
 const NativeAbortController = globalThis.AbortController;
 const NativePromise = globalThis.Promise;
@@ -417,7 +417,7 @@ class EngineHost {
       setAsyncContext: (v) => {
         host.asyncContext = v;
       },
-      gc: () => (nativeGC ? nativeGC() : undefined),
+      gc: () => nativeGc?.(),
       memoryUsage() {
         const mem = typeof performance === "object" && performance.memory;
         const used = mem ? mem.usedJSHeapSize : 0;

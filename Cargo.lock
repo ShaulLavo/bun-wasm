@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-build"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "bitflags",
  "bstr",
@@ -1010,8 +1010,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-bun-jsc"
+version = "0.0.11"
+dependencies = [
+ "bunwasm-bun-jsc-macros",
+]
+
+[[package]]
+name = "bunwasm-bun-jsc-macros"
+version = "0.0.11"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "bunwasm-cli"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "bunwasm-build",
  "bunwasm-glue",
@@ -1021,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-glue"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "bstr",
  "bun_ast",
@@ -1036,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-host"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "anyhow",
  "brotli-decompressor",
@@ -1053,24 +1068,25 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-jsc"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "bunwasm-posix"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "bunwasm-runtime"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "bun_glob",
  "bun_semver",
  "bun_sys",
  "bun_wyhash",
  "bunwasm-jsc",
+ "bunwasm-semver",
  "flate2",
  "getrandom 0.3.4",
  "hmac",
@@ -1086,8 +1102,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-semver"
+version = "0.0.11"
+dependencies = [
+ "bstr",
+ "bun_core",
+ "bun_semver",
+ "bunwasm-bun-jsc",
+]
+
+[[package]]
 name = "bunwasm-transpiler"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "bun_alloc",
  "bun_ast",
