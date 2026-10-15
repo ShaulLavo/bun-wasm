@@ -2,8 +2,9 @@
 
 Bun's own Rust source, built for `wasm32-wasip1`. It runs in the browser and under wasmtime.
 
-- `bun run`, `bun test`, `bun build`, `bun:sqlite`, `fetch`, `Bun.serve`
+- `bun run`, `bun test`, `bun build`, `Bun.build`, `bun:sqlite`, `fetch`, `Bun.serve`
 - Bun's real transpiler and bundler
+- In the browser: a playground ([web/](web/README.md)) and a React sandbox with hot reload ([sandbox/](sandbox/README.md))
 - JS engine: QuickJS or Bun's JavaScriptCore compiled to wasm, or the browser's own engine ([docs/engine-browser.md](docs/engine-browser.md))
 
 ```sh

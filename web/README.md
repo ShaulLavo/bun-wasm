@@ -105,7 +105,9 @@ role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `1
   exits. Ctrl-C terminates the worker (exit 130, filesystem changes from that run are dropped).
 - `src/shell.ts`: line editing, history, Tab completion, `;`/`&&`, `>`/`>>`, and the builtins
   `ls cat echo cd pwd mkdir rm mv touch edit clear history help`.
-- `src/main.ts`: layout, editor tabs, Run button, loading bun.wasm.
+- `src/runner.ts`: loading an engine's wasm and starting one `bun …` run in a worker with its
+  networking; the sandbox (../sandbox/) uses it too.
+- `src/main.ts`: layout, editor tabs, Run button.
 
 The guest gets `/` preopened and `PWD=/home/user`. WASI has no working directory of its own, so
 bun.wasm must `chdir($PWD)` at startup for relative paths to resolve from `/home/user`.
