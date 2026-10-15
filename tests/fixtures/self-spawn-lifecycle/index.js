@@ -24,3 +24,7 @@ for (const child of children) child.kill();
 console.log("children stopped", (await Promise.all(children.map((child) => child.exited))).join(","));
 const inherited = Bun.spawnSync(cmd("const c = Bun.spawnSync(['bun', '-e', 'console.log(42)'], {stdout:'inherit'}); process.exit(c.exitCode)"));
 console.log("inherit", inherited.exitCode, inherited.stdout.toString().trim());
+const done = Bun.spawn(cmd(""), { stdout: "pipe", stderr: "pipe" });
+Bun.sleepSync(150);
+done.kill();
+console.log("late kill", await done.exited, done.signalCode);

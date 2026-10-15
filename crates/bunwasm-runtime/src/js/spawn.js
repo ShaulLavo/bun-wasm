@@ -208,7 +208,11 @@
       kill(signal) {
         if (settled) return;
         const number = signalNumber(signal);
-        if (native.hostChildKill(spec.handle, number) < 0) throw hostError(spec.handle);
+        if (native.hostChildWait(spec.handle) >= 0) return;
+        if (native.hostChildKill(spec.handle, number) < 0) {
+          if (native.hostChildWait(spec.handle) >= 0) return;
+          throw hostError(spec.handle);
+        }
         if (number) { child.killed = true; signalCode = number; }
       },
       ref() { waiter.ref = true; return child; },

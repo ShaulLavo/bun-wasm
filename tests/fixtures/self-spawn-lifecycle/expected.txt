@@ -8,3 +8,4 @@ clock timeout true SIGTERM
 child limit EAGAIN
 children stopped 143,143,143,143
 inherit 0 42
+late kill 0 null
