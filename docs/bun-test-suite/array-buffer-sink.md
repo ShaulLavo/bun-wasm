@@ -52,3 +52,24 @@ scripts/bun-suite.sh --network loopback --jobs 1 \
 
 Repeat with `--engine browser` and `--engine jsc`, using separate output paths. The local
 check is `scripts/test.sh --no-build --engine <engine> array-buffer-sink test-preload`.
+
+## Review regressions
+
+`array-buffer-sink-strings` covers lone high and low UTF-16 surrogates, mixed text and
+a valid pair. A lone surrogate writes three bytes, `[239, 191, 189]`. QuickJS retains
+its valid UTF-8 conversion path and decodes malformed UTF-16 through the engine boundary
+instead of dropping the native argument. The fixture also checks `TextEncoder` so this
+cannot regress into a sink-only workaround.
+
+`array-buffer-sink-view-slots` covers DataView, Uint8Array and Uint16Array inputs with
+shadowed backing buffers and bounds, including throwing getters. It changes the original
+bytes after each write to check ownership. Captured intrinsic getters read the actual slots.
+
+| Regression | QuickJS before / after | Browser host before / after | Wasm JSC before / after |
+| --- | --- | --- | --- |
+| Lone surrogates | fail / pass | pass / pass | pass / pass |
+| Shadowed view slots | fail / pass | fail / pass | fail / pass |
+
+The pre-fix runs use the immutable published artifacts at `16766ff`. Native Bun 1.4.2
+passes all ten new sink cases. Review evidence is retained in
+`/work/tmp/bun-wasm-track4-review/`, including engine-specific red and green logs.
