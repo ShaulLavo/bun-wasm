@@ -139,3 +139,22 @@ const failedSink = Writable.fromWeb(new WritableStream({ write() { throw new Err
 await new Promise(resolve => { failedSink.once("error", error => { failed = error.message; resolve(); }); failedSink.write("x"); });
 assert.equal(failed, "sink failed");
 console.log("writable errors");
+
+const manual = Readable.fromWeb(ReadableStream.from([new Uint8Array([90])]));
+const manualChunk = await new Promise((resolve, reject) => {
+  manual.on("error", reject);
+  manual.once("readable", () => resolve(manual.read()));
+});
+assert.equal(manualChunk.toString(), "Z");
+manual.destroy();
+console.log("node readable mode");
+
+const pendingSink = new Writable({ write() {} });
+const pendingWriter = Writable.toWeb(pendingSink).getWriter();
+const pendingWrite = pendingWriter.write("pending");
+pendingWrite.catch(() => {});
+await new Promise(resolve => setTimeout(resolve, 1));
+pendingSink.destroy(new Error("destroyed sink"));
+await assert.rejects(pendingWrite, /destroyed sink/);
+await assert.rejects(pendingWriter.closed, /destroyed sink/);
+console.log("node pending write error");

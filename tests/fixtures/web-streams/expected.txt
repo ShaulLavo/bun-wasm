@@ -13,3 +13,5 @@ backpressure
 incremental compression/cancel
 iterator cancellation
 writable errors
+node readable mode
+node pending write error

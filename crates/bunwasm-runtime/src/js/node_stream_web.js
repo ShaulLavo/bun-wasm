@@ -67,8 +67,18 @@
     const reader = web.getReader();
     let ended = false;
     let reading = false;
+    let requested = false;
     let cleanup = () => {};
-    const node = new Readable(Object.assign({}, options, { read() { void pump(); } }));
+    const node = new Readable(Object.assign({}, options, { read() { requested = true; void pump(); } }));
+    const read = node.read;
+    node.read = function () {
+      const chunk = read.call(this);
+      if (!ended && this._buffer.length === 0) { requested = true; void pump(); }
+      return chunk;
+    };
+    node.on("newListener", event => {
+      if (event === "readable") setImmediate(() => { requested = true; void pump(); });
+    });
     const destroy = node.destroy;
     node.destroy = function (error) {
       if (ended) return destroy.call(this, error);
@@ -81,12 +91,14 @@
       if (reading || ended) return;
       reading = true;
       try {
-        while (!ended && node._flowing) {
+        while (!ended && (node._flowing || requested)) {
+          requested = false;
           const { done, value } = await reader.read();
           if (done) { finish(); return; }
           const chunk = options.objectMode || typeof value === "string" ? value : Buffer.from(internal.toUint8(value));
           node.push(chunk);
-          node._flush();
+          if (node._flowing) node._flush();
+          else node.emit("readable");
         }
       } catch (error) {
         node.destroy(error);
@@ -99,6 +111,7 @@
       cleanup();
       reader.releaseLock();
       node.push(null);
+      if (!node._flowing) node.emit("readable");
     }
     reader.closed.catch(error => { if (!ended) node.destroy(error); });
     cleanup = aborted(options.signal, error => node.destroy(error));
@@ -108,11 +121,16 @@
   function toWebWritable(node) {
     checkNode(node, "write");
     let finished = false;
+    const pending = new Set();
     let fail;
     let cleanup;
     return new WritableStream({
       start(controller) {
-        fail = error => controller.error(error);
+        fail = error => {
+          for (const reject of pending) reject(error);
+          pending.clear();
+          controller.error(error);
+        };
         const finish = () => { finished = true; };
         const close = () => {
           if (!finished) fail(new Error("Premature close"));
@@ -126,12 +144,20 @@
         node.on("error", fail).on("finish", finish).on("close", close);
       },
       write(chunk) {
-        return new Promise((resolve, reject) => node.write(chunk, error => error ? reject(error) : resolve()));
+        return new Promise((resolve, reject) => {
+          pending.add(reject);
+          node.write(chunk, error => {
+            pending.delete(reject);
+            if (error) reject(error);
+            else resolve();
+          });
+        });
       },
       close() {
         return new Promise((resolve, reject) => {
-          const error = reason => { node.removeListener("finish", finish); reject(reason); };
-          const finish = () => { node.removeListener("error", error); cleanup(); resolve(); };
+          pending.add(reject);
+          const error = reason => { pending.delete(reject); node.removeListener("finish", finish); reject(reason); };
+          const finish = () => { pending.delete(reject); node.removeListener("error", error); cleanup(); resolve(); };
           node.once("error", error).once("finish", finish);
           node.end();
         });
