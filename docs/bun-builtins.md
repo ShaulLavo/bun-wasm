@@ -92,16 +92,16 @@ The catalog is the complete hook inventory. The following groups block the next 
 
 ## Loader mechanism measurements
 
-The loader-only artifact passes 87 of 87 runtime fixtures on each engine. The generated FreeList and loader checks pass on all three engines. Web verification passes its 16 unit tests, local networking and registry checks, Chromium and WebKit checks, and all six HMR engine/browser combinations. Public modules are unchanged in this PR.
+The loader-only artifact passes 89 of 89 runtime fixtures on each engine. The generated FreeList and loader checks pass on all three engines. Web verification passes its 16 unit tests, local networking and registry checks, Chromium and WebKit checks, and all six HMR engine/browser combinations. Public modules are unchanged in this PR.
 
-Before artifacts are frozen copies of the shared dist files at lane start. After artifacts are rebuilt with the repository's existing patch 0009 applied in a private Bun worktree. The shared vendor was missing that committed patch. No new upstream patch was created. The private vendor uses the shared generated build options read-only.
+Before artifacts are rebuilt from main at 78e0ff8. After artifacts add this loader mechanism. Both use the same private Bun worktree with the repository's existing patch 0009 applied. The shared vendor was missing that patch at lane start. No new upstream patch was created. The private vendor uses the shared generated build options read-only.
 
 Startup is wall time for an empty `-e 0` process. Seven sequential runs use wasmtime for QuickJS and JSC, and Node's host engine for browser. The first run is discarded. The table reports the median of the remaining six on this shared host. Small timing differences do not establish a speed improvement.
 
 | Engine | Wasm bytes before | Wasm bytes after | Gzip-9 bytes before | Gzip-9 bytes after | Startup median ms before | Startup median ms after |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| quickjs | 10,859,284 | 10,895,736 | 3,813,786 | 3,826,482 | 57.31 | 58.21 |
-| jsc | 46,219,559 | 46,258,047 | 12,853,644 | 12,864,806 | 171.76 | 168.83 |
-| browser | 10,138,476 | 10,173,649 | 3,520,240 | 3,530,946 | 71.52 | 71.40 |
+| quickjs | 10,867,217 | 10,903,625 | 3,818,700 | 3,830,428 | 58.38 | 59.28 |
+| jsc | 46,231,974 | 46,269,095 | 12,858,478 | 12,871,492 | 171.52 | 170.51 |
+| browser | 10,145,021 | 10,179,703 | 3,523,665 | 3,532,793 | 72.41 | 73.34 |
 
 Raw samples, artifact hashes, upstream results, command logs, and cleanup evidence are retained in `/work/reports/bun-wasm-builtins/` for coordinator review.
