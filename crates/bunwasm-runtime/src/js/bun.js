@@ -426,6 +426,7 @@
   const { TOML, YAML, JSON5, JSONC } = internal.require("formats");
   const { Glob } = internal.require("glob");
   const { Cookie, CookieMap } = internal.require("cookie");
+  const { ArrayBufferSink } = internal.require("array_buffer_sink");
   const semver = {
     satisfies(version, range) {
       if (arguments.length < 2) throw new Error("Expected two arguments");
@@ -438,6 +439,7 @@
   };
 
   const Bun = {
+    ArrayBufferSink,
     semver,
     TOML, YAML, JSON5, JSONC, Glob, Cookie, CookieMap, JSONL: internal.require("jsonl"),
     version: info.version,

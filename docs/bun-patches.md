@@ -49,6 +49,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/util.js`](#node-utility-fragments) | Port | Adapt argument parsing, comparison helpers, and inspection tables. |
 | [`crates/bunwasm-runtime/src/js/assert.js`](#node-assertions) | Port | Adapt assertion helpers and messages to the local inspector and equality implementation. |
 | [`crates/bunwasm-runtime/src/js/bun_sqlite.js`](#bun-sqlite) | Port | Move Bun's SQLite wrapper and inherited transaction code onto Rust SQLite natives. |
+| [`crates/bunwasm-runtime/src/js/array_buffer_sink.js`](#bun-array-buffer-sink) | Port | Adapt Bun's byte sink lifecycle and option parsing to engine-owned typed arrays. |
 | [`crates/bunwasm-runtime/src/js/cookie.js`](#bun-cookies) | Port | Translate Bun's cookie parsing, validation, and binding behavior. |
 | [`crates/bunwasm-runtime/src/js/string_decoder.js`](#node-string-decoder) | Port | Translate Node's chunk-decoder state machine to JavaScript. |
 | [`crates/bunwasm-runtime/src/js/bun_test.js`, diff formatting](#bun-test-diff-formatting) | Port | Translate Bun's colorless diff rendering around a local line differ. |
@@ -393,6 +394,23 @@ Retain assertion dispatch, expected-exception matching, async rejection helpers,
 Adapt Database/Statement behavior, constants, named-parameter handling, strict mode, query caching, and transaction wrappers. Replace `$cpp` calls and JSC statement objects with numeric handles and `native.sqlite` operations implemented in Rust in `crates/bunwasm-runtime/src/sqlite.rs`. JavaScript shapes values and rows while Rust binds and steps the unmodified SQLite library. This keeps SQLite usable without Bun's C++ engine bindings. The Rust ABI adapter is original code, not a copy of `JSSQLStatement.cpp`.
 
 The transaction controller and wrapper retain code Bun explicitly attributes to Joshua Wise's better-sqlite3 `lib/methods/transaction.js`. The retained upstream revision is Bun's pin. A separate better-sqlite3 import revision is not recorded in that section. Keep BEGIN/COMMIT, nested savepoints, rollback, and the four transaction modes, replacing statement ownership/preparation with the local native-handle model. This is inherited copied implementation, not an original transaction adapter.
+
+### Bun ArrayBufferSink
+
+Class **Port**. Upstream `src/runtime/webcore/ArrayBufferSink.rs`,
+`src/runtime/webcore/streams.rs` and `src/runtime/webcore/Sink.rs` at Bun
+`9510e74152073d850a18758ca41114d8f214ffa6`.
+
+Translate the byte ownership, streaming flush, repeated end, restart and closed-sink behavior
+to JavaScript typed arrays. Preserve the start option parser's own-property check, strict
+boolean modes, numeric watermark detection and getter ordering before the live-sink check.
+The closed-sink error text comes from `Sink.rs`.
+
+The upstream module depends on `bun_jsc`, so it cannot be imported as an independent Rust
+crate. Engine-owned buffers let every engine reclaim abandoned sinks without a new native
+handle table or finalizer interface. String writes use the existing Rust UTF-8 encoder.
+The watermark remains an allocation hint and causes no eager reservation in this adapter.
+The callable constructor and private JavaScript storage are original binding adapters.
 
 ### Bun cookies
 
