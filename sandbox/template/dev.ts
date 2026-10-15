@@ -84,6 +84,8 @@ interface ModuleInfo {
   imports: Set<string>;
   /** Every export is a component React Refresh registered: React can swap it in place. */
   boundary: boolean;
+  /** The ids its components are registered under ("src/App.tsx:App"). */
+  refreshIds: string;
 }
 
 const modules = new Map<string, ModuleInfo>();
@@ -93,7 +95,7 @@ const errors = new Map<string, string>();
 
 function info(file: string): ModuleInfo {
   let mod = modules.get(file);
-  if (!mod) modules.set(file, (mod = { version: 0, imports: new Set(), boundary: false }));
+  if (!mod) modules.set(file, (mod = { version: 0, imports: new Set(), boundary: false, refreshIds: "" }));
   return mod;
 }
 
@@ -145,6 +147,7 @@ async function transpile(file: string): Promise<string> {
   });
   setImports(file, imports);
   info(file).boundary = isBoundary(code);
+  info(file).refreshIds = Array.from(code.matchAll(/\$RefreshReg\$\([\w$]+, ("[^"]*")\)/g), (m) => m[1]).join(",");
   return code;
 }
 
@@ -235,6 +238,7 @@ async function update(path: string, text: string): Promise<{ ok: boolean; error?
     emit({ type: "reload" });
     return { ok: true };
   }
+  const before = info(file).refreshIds;
   try {
     await transpile(file);
   } catch (err) {
@@ -266,6 +270,9 @@ async function update(path: string, text: string): Promise<{ ok: boolean; error?
     else for (const parent of parents) walk(parent);
   };
   walk(file);
+  // Components registered under new ids (`function App` became `export default function App`)
+  // are new to React: it would keep showing the old ones.
+  if (boundaries.has(file) && before !== "" && info(file).refreshIds !== before) reload = true;
   if (reload) {
     console.log(`\x1b[32m[hmr]\x1b[0m reload (${name})`);
     emit({ type: "reload" });

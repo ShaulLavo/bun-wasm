@@ -2,7 +2,7 @@
 //   1. the app renders in the preview; 2. clicking the counter changes state;
 //   3. editing App.tsx text updates the preview and the count survives (Fast Refresh);
 //   4. editing App.css restyles without a reload; 5. a syntax error shows the overlay, the next
-//   good save clears it (and the count still survives).
+//   good save clears it (and the count still survives); 6. switching the engine keeps the edits.
 //
 //   node sandbox/tests/hmr-check.mjs <url> [--engines browser,quickjs,jsc] [--browsers chromium,webkit] [--shots dir]
 //
@@ -52,7 +52,6 @@ async function check(browserName, engine) {
     }
   };
   const app = page.frameLocator("#preview");
-  const frame = () => page.frames().find((f) => f.url().includes("/__preview/"));
   const setFile = async (path, edit) => {
     await page.evaluate(([path, edit]) => {
       const { editor, fs } = globalThis.sandbox;
@@ -107,10 +106,16 @@ async function check(browserName, engine) {
       if (count !== "count is 3") throw new Error(`state lost after recovery: ${count}`);
       await shot("5-recovered");
     });
+    await step("6 engine switch keeps edits", async () => {
+      const other = engine === "quickjs" ? "browser" : "quickjs";
+      await Promise.all([page.waitForNavigation(), page.selectOption("#engine", other)]);
+      if (new URL(page.url()).searchParams.get("engine") !== (other === "browser" ? null : other)) throw new Error(`not switched: ${page.url()}`);
+      await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STARTUP_MS });
+      await shot("6-switched");
+    });
   } catch {
     console.log(logs.slice(-15).map((l) => `      ${l}`).join("\n"));
   } finally {
-    void frame;
     await browser.close();
   }
   return { browser: browserName, engine, results };
@@ -123,6 +128,6 @@ for (const browserName of browsers) {
     summary.push(await check(browserName, engine));
   }
 }
-const failed = summary.filter((s) => s.results.length < 5 || s.results.some((r) => !r.ok));
+const failed = summary.filter((s) => s.results.length < 6 || s.results.some((r) => !r.ok));
 console.log(failed.length ? `\n${failed.length} of ${summary.length} runs failed` : `\nall ${summary.length} runs passed`);
 process.exit(failed.length ? 1 : 0);
