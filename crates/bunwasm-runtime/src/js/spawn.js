@@ -160,18 +160,30 @@
     const sink = writer(spec.pipes[0]);
     const outputs = [];
     const states = spec.pipes.slice(1).map((handle) => {
-      const state = { handle, end() {} };
+      const state = { handle, size: 0, end() {} };
       let controller;
       let wake;
       let cancelled = false;
+      let ended = false;
       const notify = () => { if (wake) wake(); wake = null; };
       const stream = handle ? new internal.web.ReadableStream({
         start(c) { controller = c; },
         pull() { if (state.handle) return new Promise((resolve) => { wake = resolve; }); },
         cancel() { cancelled = true; if (state.handle) native.hostClose(state.handle); state.handle = 0; notify(); },
       }) : null;
-      state.end = () => { if (controller && !cancelled) controller.close(); notify(); };
-      state.consume = (chunk) => { if (!cancelled) controller.enqueue(chunk); notify(); };
+      state.end = () => { if (controller && !cancelled && !ended) controller.close(); ended = true; notify(); };
+      state.error = (error) => { if (controller && !cancelled && !ended) controller.error(error); ended = true; notify(); };
+      state.consume = (chunk) => {
+        if (!cancelled) controller.enqueue(chunk);
+        notify();
+        state.size += chunk.length;
+        if (state.size <= (spec.options.maxBuffer === undefined ? 64 * 1024 * 1024 : Number(spec.options.maxBuffer))) return;
+        child.exitedDueToMaxBuffer = true;
+        child.kill(spec.options.killSignal);
+        native.hostClose(state.handle);
+        state.handle = 0;
+        state.end();
+      };
       if (stream) Object.assign(stream, {
         text: () => new internal.web.Response(stream).text(),
         bytes: () => globalThis.Bun.readableStreamToBytes(stream),
@@ -192,6 +204,7 @@
     const child = {
       pid: spec.handle, stdin: spec.pipes[0] ? sink : null, stdout: outputs[0], stderr: outputs[1],
       exited, exitCode: null, signalCode: null, killed: false,
+      exitedDueToTimeout: false, exitedDueToMaxBuffer: false,
       kill(signal) {
         if (settled) return;
         const number = signalNumber(signal);
@@ -228,9 +241,18 @@
       if (settled && states.every((state) => !state.handle)) { close(); return true; }
       return progress ? "progress" : false;
     }
-    const waiter = internal.addIoWaiter({ step, fail(err) { close(); rejectExit(err); }, ref: true });
+    function fail(error) {
+      for (const state of states) {
+        if (state.handle) native.hostClose(state.handle);
+        state.handle = 0;
+        state.error(error);
+      }
+      close();
+      rejectExit(error);
+    }
+    const waiter = internal.addIoWaiter({ step, fail, ref: true });
     initialInput(spec.input, sink);
-    if (spec.options.timeout > 0) timer = setTimeout(() => child.kill(spec.options.killSignal), spec.options.timeout);
+    if (spec.options.timeout > 0) timer = setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, spec.options.timeout);
     if (spec.options.signal) {
       abort = () => child.kill(spec.options.killSignal);
       spec.options.signal.addEventListener("abort", abort, { once: true });
@@ -405,6 +427,11 @@
       child.stdio = [child.stdin, child.stdout, child.stderr];
       child._drains = [child.stdout, child.stderr].filter(Boolean).map((stream) => stream._childDrained);
       internal.nextTick(() => child.emit("spawn"));
+      if (options.signal) {
+        const aborted = () => child.emit("error", Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR", cause: options.signal.reason }));
+        options.signal.addEventListener("abort", aborted, { once: true });
+        child.once("close", () => options.signal.removeEventListener("abort", aborted));
+      }
       child._child.exited.then((code) => reportExit(child, code), (error) => child.emit("error", error));
       return child;
     }
