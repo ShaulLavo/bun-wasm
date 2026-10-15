@@ -1,3 +1,4 @@
 # Preserve whitespace inside generated JavaScript string literals and patch context.
 crates/bunwasm-build/generated/*.js -whitespace
 patches/bun/*.patch -whitespace
+scripts/app-matrix/review-evidence/*.log -whitespace

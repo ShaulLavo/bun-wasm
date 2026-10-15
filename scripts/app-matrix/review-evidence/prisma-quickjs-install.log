@@ -1,0 +1,16 @@
+bun install v1.4.4 (f58c9656e)
+
+memory allocation of 16777216 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+bun-wasm: bun.wasm trapped: error while executing at wasm backtrace:
+    0:   0x797d - bun.wasm!alloc[d455822f3580cad8]::alloc::handle_alloc_error
+    1:   0x7478 - bun.wasm!alloc[d455822f3580cad8]::raw_vec::handle_error
+    2: 0x26dc65 - bun.wasm!<alloc[d455822f3580cad8]::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc[d455822f3580cad8]::alloc::Global>
+    3: 0x34c514 - bun.wasm!<alloc[d455822f3580cad8]::vec::Vec<u8, bun_alloc[84e511200167e85b]::DefaultAlloc> as alloc[d455822f3580cad8]::vec::spec_extend::SpecExtend<&u8, core[ed0de40c73363fc9]::slice::iter::Iter<u8>>>::spec_extend
+    4: 0x559516 - bun.wasm!bunwasm_runtime[7918ac16ba8e5b8d]::install::io::fetch
+    5:  0x1cdd2 - bun.wasm!bun[a39c754b8fb23a06]::main
+    6:  0x27cc2 - bun.wasm!__main_void
+    7:   0x70eb - bun.wasm!_start
+
+Caused by:
+    wasm trap: wasm `unreachable` instruction executed
