@@ -372,7 +372,7 @@ The incremental graph, packed map, and serialized-failure implementations are co
 
 `crates/bunwasm-transpiler/src/lib.rs`, `ChunkCollector` and its `OnSourceMapChunk` implementation. Class **Port**. Upstream `src/runtime/cli/pm_diff_normalize.rs` at the Bun pin.
 
-Retain the small callback that stores the emitted `bun_sourcemap::Chunk` in an `Option`. The local caller converts its buffer into the returned mappings string. This supplies source maps without the native runtime. The surrounding arena lifecycle, public transpile API, parser module-kind reporting, diagnostic conversion, and await-hook control are local adapters to Bun's parse/print APIs. Module classification uses the pinned parser's `Ast.exports_kind`, rather than searching printed strings for module syntax. `node_fs.js` vectored writes are an original adapter over the runtime's existing WASI descriptor writes; no Node implementation is copied. They do not copy `src/runtime/api/JSTranspiler.rs` as an implementation.
+Retain the small callback that stores the emitted `bun_sourcemap::Chunk` in an `Option`. The local caller converts its buffer into the returned mappings string. This supplies source maps without the native runtime. The surrounding arena lifecycle, public transpile API, parser module-kind reporting, diagnostic conversion, and await-hook control are local adapters to Bun's parse/print APIs. Module classification uses the pinned parser's export kind, syntax flags and live static import records, rather than searching printed strings. Syntax-free scripts retain package and filename classification, and data loaders report their generated ESM format. `node_fs.js` vectored writes are an original adapter over the runtime's existing WASI descriptor writes; no Node implementation is copied. They do not copy `src/runtime/api/JSTranspiler.rs` as an implementation.
 
 ### Bun console formatter
 
@@ -458,7 +458,7 @@ Retain HTTP option extraction, IPv6 hostname handling, auth decoding, legacy fie
 
 `crates/bunwasm-runtime/src/js/builtins.js` (`STATUS_CODES`) and `crates/bunwasm-runtime/src/js/net.js` (`STATUS_TEXT`). Class **Port** for packaging shared HTTP data. Comparison source `src/js/internal/http.ts` at the Bun pin.
 
-The builtins module retains the status-code/reason table. The network module keeps a smaller reason-phrase table for response output. These are standard HTTP values rather than a copied server implementation. Networking, streams, request dispatch, and host transport around the tables are original bun-wasm adapters.
+The builtins module retains the status-code/reason table. The network module keeps a smaller reason-phrase table for response output. The callable Node `Stream` constructor and descriptor vectored writes are original adapters, not copied Node implementations. These are standard HTTP values rather than a copied server implementation. Networking, streams, request dispatch, and host transport around the tables are original bun-wasm adapters.
 
 ### Temporal
 

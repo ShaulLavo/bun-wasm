@@ -1,2 +1,2 @@
   await Promise.resolve();
-export const value = 'top-level await';
+console.log('top-level await');

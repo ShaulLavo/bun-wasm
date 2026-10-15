@@ -252,11 +252,7 @@ fn run(
     }
     let mut printer = bun_js_printer::BufferPrinter::init(bun_js_printer::BufferWriter::init());
     let parsed = parsed.expect("checked above");
-    let module_kind = match parsed.ast.exports_kind {
-        bun_ast::ExportsKind::None => ModuleKind::Script,
-        bun_ast::ExportsKind::Cjs | bun_ast::ExportsKind::EsmWithDynamicFallbackFromCjs => ModuleKind::CommonJs,
-        bun_ast::ExportsKind::Esm | bun_ast::ExportsKind::EsmWithDynamicFallback => ModuleKind::Esm,
-    };
+    let module_kind = module_kind(&parsed.ast, loader);
     let format = bun_bundler::transpiler::PrintFormat::Esm;
     let printed = match source_map {
         Some(collector) => state.transpiler.print_with_source_map(
@@ -273,6 +269,23 @@ fn run(
     printed.map_err(|e| format!("failed to print {path}: {e:?}"))?;
     let code = String::from_utf8(printer.ctx.written().to_vec()).map_err(|e| e.to_string())?;
     Ok(Transpiled { code, mappings: String::new(), module_kind })
+}
+
+fn module_kind(ast: &bun_ast::Ast<'_>, loader: Loader) -> ModuleKind {
+    if matches!(loader, Loader::Json | Loader::Toml | Loader::Yaml | Loader::Json5 | Loader::Jsonc | Loader::Text) {
+        return ModuleKind::Esm;
+    }
+    if matches!(ast.exports_kind, bun_ast::ExportsKind::Cjs | bun_ast::ExportsKind::EsmWithDynamicFallbackFromCjs) {
+        return ModuleKind::CommonJs;
+    }
+    let imports = ast.import_records.items().iter().any(|record| {
+        record.kind == bun_ast::ImportKind::Stmt
+            && !record.flags.intersects(bun_ast::import_record::Flags::IS_INTERNAL | bun_ast::import_record::Flags::IS_UNUSED)
+    });
+    if ast.export_keyword.len > 0 || ast.top_level_await_keyword.len > 0 || ast.has_import_meta || imports {
+        return ModuleKind::Esm;
+    }
+    ModuleKind::Script
 }
 
 fn format_log(log: &bun_ast::Log, path: &str) -> String {
