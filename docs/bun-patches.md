@@ -57,6 +57,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
 | [`crates/bunwasm-semver/src/lib.rs`](#portable-semver-host-functions) | Port | Compile Bun's semver host functions unchanged against a portable `bun_jsc` subset. |
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
+| [`crates/bunwasm-runtime/src/js/stack_trace.js`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
+| [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 
 ## Portable semver host functions
@@ -87,6 +89,30 @@ around `Bun.gc`; looking up global `gc` on every call otherwise recurses.
 This replaces our duplicated semver host-function logic, while retaining the existing
 pure Bun semver parser used by package installation. See
 [the backend spike](bun-jsc-backend.md) for the limits of this subset.
+
+## Structured call sites
+
+`crates/bunwasm-runtime/src/js/stack_trace.js` is an original adapter for the public
+`Error.captureStackTrace` and `Error.prepareStackTrace` contracts. It does not copy
+Bun, Node or WebKit source. QuickJS-ng at the vendored rquickjs-sys 0.11.0 revision
+already supplies structured frames but omits queries used by stack-inspection
+packages. The adapter extends that frame prototype. Bun's WebKit fork at
+`3d3257150c40a1aabdc5f8b48d5b33d0413674cb` supplies captured stack text through
+`Source/JavaScriptCore/runtime/ErrorConstructor.cpp`. The adapter parses those
+frames through our existing inspector before invoking a custom capture formatter.
+Native Error constructors and ordinary stack formatting stay in place.
+Receiver and method metadata unavailable from these engines returns undefined or
+null; eval-origin recovery remains limited to source names exposed by the engine.
+The regression fixture uses the public capture API without copying a package.
+
+## HTTP socket state
+
+The HTTP server socket facade in `crates/bunwasm-runtime/src/js/net.js` is an
+original adapter, with no upstream implementation copied. Its `writable` getter
+reads the existing host connection's closed and closing states. Published Koa
+3.0.1 checks this Node socket property before sending the response body; an
+absent property made a live connection appear unwritable. The lifecycle fixture
+checks both an open connection and a connection closed after its response.
 
 ## App compatibility fixtures
 

@@ -118,6 +118,8 @@
     return site.isConstructor() && isErrorConstructor(site.getFunction());
   }
 
+  internal.formatCallSite = formatCallSite;
+
   // --- small path helpers (the full node:path lives in path.js) ------------
 
   function dirname(path) {
@@ -150,6 +152,7 @@
     }
   }
   internal.defineHidden = defineHidden;
+  internal.require("stack_trace");
 
   function defineGlobal(name, value) {
     Object.defineProperty(globalThis, name, {
