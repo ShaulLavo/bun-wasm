@@ -1,0 +1,2697 @@
+{
+  "bun_revision": "4ceda2c2868d3a7703c7737ddd9de7244ec384df",
+  "semver_source_sha256": "5c659d399c03eaedd95e2f4f4c44ffb1f2e682d1fc1d4feebb8c17b693b046a9",
+  "method": "Lexical imports and identifier references outside use declarations; comments and strings excluded. Not method resolution; aliases may be shadowed. Wildcard and extension-trait calls are not attributable.",
+  "scopes": [
+    {
+      "scope": "src/runtime",
+      "rust_files": 440,
+      "files_using_bun_jsc": 287,
+      "import_bindings": 1611,
+      "references": 17684,
+      "wildcard_imports": 5,
+      "symbols": [
+        {
+          "api": "JSValue",
+          "imports": 207,
+          "references": 5308
+        },
+        {
+          "api": "JSGlobalObject",
+          "imports": 213,
+          "references": 2589
+        },
+        {
+          "api": "JsResult",
+          "imports": 186,
+          "references": 2047
+        },
+        {
+          "api": "CallFrame",
+          "imports": 139,
+          "references": 893
+        },
+        {
+          "api": "JsCell",
+          "imports": 52,
+          "references": 772
+        },
+        {
+          "api": "host_fn",
+          "imports": 4,
+          "references": 723
+        },
+        {
+          "api": "virtual_machine::VirtualMachine",
+          "imports": 63,
+          "references": 363
+        },
+        {
+          "api": "JSType",
+          "imports": 13,
+          "references": 305
+        },
+        {
+          "api": "ErrorCode",
+          "imports": 11,
+          "references": 238
+        },
+        {
+          "api": "JsError",
+          "imports": 26,
+          "references": 196
+        },
+        {
+          "api": "JsThread",
+          "imports": 3,
+          "references": 192
+        },
+        {
+          "api": "webcore_types::Blob",
+          "imports": 1,
+          "references": 177
+        },
+        {
+          "api": "resolved_source::Tag",
+          "imports": 10,
+          "references": 166
+        },
+        {
+          "api": "bun_string_jsc",
+          "imports": 51,
+          "references": 163
+        },
+        {
+          "api": "JSPromiseStrong",
+          "imports": 7,
+          "references": 116
+        },
+        {
+          "api": "mark_binding",
+          "imports": 0,
+          "references": 113
+        },
+        {
+          "api": "JSPromise",
+          "imports": 17,
+          "references": 108
+        },
+        {
+          "api": "AbortHandle",
+          "imports": 0,
+          "references": 82
+        },
+        {
+          "api": "JsClass",
+          "imports": 23,
+          "references": 81
+        },
+        {
+          "api": "ArrayBuffer",
+          "imports": 15,
+          "references": 80
+        },
+        {
+          "api": "JsRef",
+          "imports": 19,
+          "references": 77
+        },
+        {
+          "api": "StrongOptional",
+          "imports": 10,
+          "references": 76
+        },
+        {
+          "api": "virtual_machine",
+          "imports": 0,
+          "references": 69
+        },
+        {
+          "api": "ContextId",
+          "imports": 0,
+          "references": 68
+        },
+        {
+          "api": "JSFunction",
+          "imports": 13,
+          "references": 65
+        },
+        {
+          "api": "SystemError",
+          "imports": 10,
+          "references": 61
+        },
+        {
+          "api": "GlobalRef",
+          "imports": 17,
+          "references": 60
+        },
+        {
+          "api": "HTTPHeaderName",
+          "imports": 7,
+          "references": 58
+        },
+        {
+          "api": "Strong",
+          "imports": 10,
+          "references": 55
+        },
+        {
+          "api": "FormatTag",
+          "imports": 2,
+          "references": 50
+        },
+        {
+          "api": "ConsoleObject",
+          "imports": 2,
+          "references": 49
+        },
+        {
+          "api": "BuiltinName",
+          "imports": 0,
+          "references": 48
+        },
+        {
+          "api": "EventLoopHandle",
+          "imports": 6,
+          "references": 47
+        },
+        {
+          "api": "JSObject",
+          "imports": 9,
+          "references": 46
+        },
+        {
+          "api": "js_promise",
+          "imports": 1,
+          "references": 44
+        },
+        {
+          "api": "ArgumentsSlice",
+          "imports": 5,
+          "references": 43
+        },
+        {
+          "api": "ResolvedSource",
+          "imports": 1,
+          "references": 40
+        },
+        {
+          "api": "Completion",
+          "imports": 0,
+          "references": 39
+        },
+        {
+          "api": "RangeErrorOptions",
+          "imports": 3,
+          "references": 35
+        },
+        {
+          "api": "webcore_types::store::Store",
+          "imports": 3,
+          "references": 34
+        },
+        {
+          "api": "JSPropertyIterator",
+          "imports": 9,
+          "references": 30
+        },
+        {
+          "api": "strong",
+          "imports": 0,
+          "references": 30
+        },
+        {
+          "api": "ScriptExecutionContext",
+          "imports": 0,
+          "references": 29
+        },
+        {
+          "api": "WorkPoolTask",
+          "imports": 5,
+          "references": 29
+        },
+        {
+          "api": "MarkedArgumentBuffer",
+          "imports": 6,
+          "references": 27
+        },
+        {
+          "api": "webcore_types::SizeType",
+          "imports": 1,
+          "references": 27
+        },
+        {
+          "api": "VirtualMachine",
+          "imports": 2,
+          "references": 26
+        },
+        {
+          "api": "TemporalType",
+          "imports": 1,
+          "references": 25
+        },
+        {
+          "api": "codegen_cached_accessors",
+          "imports": 0,
+          "references": 25
+        },
+        {
+          "api": "call_frame::ArgumentsSlice",
+          "imports": 4,
+          "references": 24
+        },
+        {
+          "api": "impl_abort_handle_owner",
+          "imports": 0,
+          "references": 24
+        },
+        {
+          "api": "webcore_types::BlobContentType",
+          "imports": 1,
+          "references": 24
+        },
+        {
+          "api": "from_js_host_call",
+          "imports": 0,
+          "references": 23
+        },
+        {
+          "api": "generated",
+          "imports": 0,
+          "references": 23
+        },
+        {
+          "api": "webcore_types::MAX_SIZE",
+          "imports": 1,
+          "references": 23
+        },
+        {
+          "api": "Error",
+          "imports": 1,
+          "references": 22
+        },
+        {
+          "api": "PinnedArrayBuffer",
+          "imports": 5,
+          "references": 22
+        },
+        {
+          "api": "Ticket",
+          "imports": 0,
+          "references": 22
+        },
+        {
+          "api": "generated::JSTimeout",
+          "imports": 2,
+          "references": 22
+        },
+        {
+          "api": "jsc_host_abi",
+          "imports": 0,
+          "references": 22
+        },
+        {
+          "api": "JSPropertyIteratorOptions",
+          "imports": 4,
+          "references": 21
+        },
+        {
+          "api": "PromiseResult",
+          "imports": 0,
+          "references": 21
+        },
+        {
+          "api": "EnsureStillAlive",
+          "imports": 0,
+          "references": 20
+        },
+        {
+          "api": "event_loop::EventLoop",
+          "imports": 7,
+          "references": 20
+        },
+        {
+          "api": "js_promise::Status",
+          "imports": 4,
+          "references": 20
+        },
+        {
+          "api": "JSHostFn",
+          "imports": 1,
+          "references": 18
+        },
+        {
+          "api": "Job",
+          "imports": 3,
+          "references": 18
+        },
+        {
+          "api": "JobContext",
+          "imports": 3,
+          "references": 18
+        },
+        {
+          "api": "Task",
+          "imports": 2,
+          "references": 17
+        },
+        {
+          "api": "debugger::DebuggerId",
+          "imports": 3,
+          "references": 17
+        },
+        {
+          "api": "event_loop",
+          "imports": 0,
+          "references": 17
+        },
+        {
+          "api": "node_path::PathLike",
+          "imports": 1,
+          "references": 17
+        },
+        {
+          "api": "to_js_host_call",
+          "imports": 0,
+          "references": 17
+        },
+        {
+          "api": "MarkedArrayBuffer",
+          "imports": 2,
+          "references": 16
+        },
+        {
+          "api": "VirtualMachineRef",
+          "imports": 2,
+          "references": 16
+        },
+        {
+          "api": "AnyPromise",
+          "imports": 4,
+          "references": 15
+        },
+        {
+          "api": "ScriptExecutionStatus",
+          "imports": 1,
+          "references": 15
+        },
+        {
+          "api": "array_buffer::BinaryType",
+          "imports": 3,
+          "references": 15
+        },
+        {
+          "api": "codegen",
+          "imports": 0,
+          "references": 15
+        },
+        {
+          "api": "host_fn::DomCall",
+          "imports": 1,
+          "references": 15
+        },
+        {
+          "api": "AbortSignal",
+          "imports": 5,
+          "references": 14
+        },
+        {
+          "api": "CommonAbortReason",
+          "imports": 2,
+          "references": 14
+        },
+        {
+          "api": "Debugger::TestStatus",
+          "imports": 1,
+          "references": 14
+        },
+        {
+          "api": "IntegerRange",
+          "imports": 1,
+          "references": 14
+        },
+        {
+          "api": "call_frame",
+          "imports": 0,
+          "references": 14
+        },
+        {
+          "api": "cpp",
+          "imports": 0,
+          "references": 14
+        },
+        {
+          "api": "generated::JSShellInterpreter",
+          "imports": 2,
+          "references": 14
+        },
+        {
+          "api": "hot_reloader",
+          "imports": 1,
+          "references": 14
+        },
+        {
+          "api": "jsc_abi_extern",
+          "imports": 0,
+          "references": 14
+        },
+        {
+          "api": "to_js_host_fn_result",
+          "imports": 0,
+          "references": 14
+        },
+        {
+          "api": "uuid",
+          "imports": 1,
+          "references": 14
+        },
+        {
+          "api": "debugger::AsyncTaskTracker",
+          "imports": 3,
+          "references": 13
+        },
+        {
+          "api": "node_path::PathOrFileDescriptor",
+          "imports": 3,
+          "references": 13
+        },
+        {
+          "api": "CommonString",
+          "imports": 0,
+          "references": 12
+        },
+        {
+          "api": "ConsoleFormatter",
+          "imports": 1,
+          "references": 12
+        },
+        {
+          "api": "CrateError",
+          "imports": 0,
+          "references": 12
+        },
+        {
+          "api": "ErrorableResolvedSource",
+          "imports": 1,
+          "references": 12
+        },
+        {
+          "api": "JsPtr",
+          "imports": 2,
+          "references": 12
+        },
+        {
+          "api": "console_object::Formatter",
+          "imports": 3,
+          "references": 12
+        },
+        {
+          "api": "webcore_types::store::File",
+          "imports": 2,
+          "references": 12
+        },
+        {
+          "api": "AbortCause",
+          "imports": 0,
+          "references": 11
+        },
+        {
+          "api": "AbortSignalRef",
+          "imports": 5,
+          "references": 11
+        },
+        {
+          "api": "JSInternalPromise",
+          "imports": 2,
+          "references": 11
+        },
+        {
+          "api": "JsAffine",
+          "imports": 0,
+          "references": 11
+        },
+        {
+          "api": "call_check_slow",
+          "imports": 0,
+          "references": 11
+        },
+        {
+          "api": "node_compile_cache",
+          "imports": 0,
+          "references": 11
+        },
+        {
+          "api": "ref_string::RefString",
+          "imports": 1,
+          "references": 11
+        },
+        {
+          "api": "Debugger",
+          "imports": 2,
+          "references": 10
+        },
+        {
+          "api": "Weak",
+          "imports": 0,
+          "references": 10
+        },
+        {
+          "api": "wtf",
+          "imports": 4,
+          "references": 10
+        },
+        {
+          "api": "DOMFormData",
+          "imports": 1,
+          "references": 9
+        },
+        {
+          "api": "JSUint8Array",
+          "imports": 2,
+          "references": 9
+        },
+        {
+          "api": "abort_signal::Timeout",
+          "imports": 2,
+          "references": 9
+        },
+        {
+          "api": "async_module",
+          "imports": 0,
+          "references": 9
+        },
+        {
+          "api": "call_zero_is_throw",
+          "imports": 0,
+          "references": 9
+        },
+        {
+          "api": "host_call",
+          "imports": 0,
+          "references": 9
+        },
+        {
+          "api": "js_promise::Unwrapped",
+          "imports": 1,
+          "references": 9
+        },
+        {
+          "api": "virtual_machine::ResolveMode",
+          "imports": 1,
+          "references": 9
+        },
+        {
+          "api": "virtual_machine::SweepResult",
+          "imports": 2,
+          "references": 9
+        },
+        {
+          "api": "JSString",
+          "imports": 3,
+          "references": 8
+        },
+        {
+          "api": "MAX_SAFE_INTEGER",
+          "imports": 0,
+          "references": 8
+        },
+        {
+          "api": "SysErrorJsc",
+          "imports": 21,
+          "references": 8
+        },
+        {
+          "api": "impl_js_class_via_generated",
+          "imports": 0,
+          "references": 8
+        },
+        {
+          "api": "job",
+          "imports": 0,
+          "references": 8
+        },
+        {
+          "api": "js_string::Iterator",
+          "imports": 1,
+          "references": 8
+        },
+        {
+          "api": "node_module_module::CustomLoader",
+          "imports": 2,
+          "references": 8
+        },
+        {
+          "api": "strong::Optional",
+          "imports": 2,
+          "references": 8
+        },
+        {
+          "api": "webcore_types::store::Bytes",
+          "imports": 1,
+          "references": 8
+        },
+        {
+          "api": "webcore_types::store::Data",
+          "imports": 2,
+          "references": 8
+        },
+        {
+          "api": "ConcurrentPoster",
+          "imports": 0,
+          "references": 7
+        },
+        {
+          "api": "ErrCode",
+          "imports": 0,
+          "references": 7
+        },
+        {
+          "api": "JSArray",
+          "imports": 3,
+          "references": 7
+        },
+        {
+          "api": "JSMap",
+          "imports": 2,
+          "references": 7
+        },
+        {
+          "api": "PromiseUnwrapMode",
+          "imports": 0,
+          "references": 7
+        },
+        {
+          "api": "Stopped",
+          "imports": 0,
+          "references": 7
+        },
+        {
+          "api": "console_object",
+          "imports": 0,
+          "references": 7
+        },
+        {
+          "api": "create_host_function_object",
+          "imports": 0,
+          "references": 7
+        },
+        {
+          "api": "debugger::Debugger",
+          "imports": 1,
+          "references": 7
+        },
+        {
+          "api": "module_loader",
+          "imports": 0,
+          "references": 7
+        },
+        {
+          "api": "rare_data::PathBuf",
+          "imports": 1,
+          "references": 7
+        },
+        {
+          "api": "vm_handle",
+          "imports": 0,
+          "references": 7
+        },
+        {
+          "api": "FormatAs",
+          "imports": 0,
+          "references": 6
+        },
+        {
+          "api": "InitializeOptions",
+          "imports": 0,
+          "references": 6
+        },
+        {
+          "api": "JSArrayIterator",
+          "imports": 2,
+          "references": 6
+        },
+        {
+          "api": "JSTypedArrayBytesDeallocator",
+          "imports": 0,
+          "references": 6
+        },
+        {
+          "api": "PropertyIteratorOptions",
+          "imports": 0,
+          "references": 6
+        },
+        {
+          "api": "ProtectedJSValue",
+          "imports": 1,
+          "references": 6
+        },
+        {
+          "api": "StopReason",
+          "imports": 0,
+          "references": 6
+        },
+        {
+          "api": "UUID",
+          "imports": 2,
+          "references": 6
+        },
+        {
+          "api": "VM",
+          "imports": 5,
+          "references": 6
+        },
+        {
+          "api": "ZigStackFramePosition",
+          "imports": 1,
+          "references": 6
+        },
+        {
+          "api": "from_js_host_call_generic",
+          "imports": 0,
+          "references": 6
+        },
+        {
+          "api": "generated::JSImmediate",
+          "imports": 1,
+          "references": 6
+        },
+        {
+          "api": "http_server_agent::Route",
+          "imports": 1,
+          "references": 6
+        },
+        {
+          "api": "initialize",
+          "imports": 0,
+          "references": 6
+        },
+        {
+          "api": "js_error_to_write_error",
+          "imports": 1,
+          "references": 6
+        },
+        {
+          "api": "ComparisonResult",
+          "imports": 1,
+          "references": 5
+        },
+        {
+          "api": "FromAny",
+          "imports": 1,
+          "references": 5
+        },
+        {
+          "api": "JSStringView",
+          "imports": 1,
+          "references": 5
+        },
+        {
+          "api": "LoopKind",
+          "imports": 0,
+          "references": 5
+        },
+        {
+          "api": "PosixSignalTask",
+          "imports": 1,
+          "references": 5
+        },
+        {
+          "api": "PromiseStatus",
+          "imports": 0,
+          "references": 5
+        },
+        {
+          "api": "VmHandle",
+          "imports": 0,
+          "references": 5
+        },
+        {
+          "api": "event_loop::ConcurrentTaskItem",
+          "imports": 1,
+          "references": 5
+        },
+        {
+          "api": "generated::JSBlob",
+          "imports": 1,
+          "references": 5
+        },
+        {
+          "api": "generated::JSRequest",
+          "imports": 1,
+          "references": 5
+        },
+        {
+          "api": "module_loader::FetchFlags",
+          "imports": 1,
+          "references": 5
+        },
+        {
+          "api": "module_loader::TranspileArgs",
+          "imports": 1,
+          "references": 5
+        },
+        {
+          "api": "ConcurrentTask::ConcurrentTask",
+          "imports": 2,
+          "references": 4
+        },
+        {
+          "api": "DebuggerId",
+          "imports": 0,
+          "references": 4
+        },
+        {
+          "api": "Ref",
+          "imports": 0,
+          "references": 4
+        },
+        {
+          "api": "RuntimeTranspilerStore",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "WorkPool",
+          "imports": 2,
+          "references": 4
+        },
+        {
+          "api": "cpp_task::CppTask",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "debugger",
+          "imports": 0,
+          "references": 4
+        },
+        {
+          "api": "debugger::Mode",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "debugger::TestType",
+          "imports": 2,
+          "references": 4
+        },
+        {
+          "api": "debugger::Wait",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "generated::SocketConfigHandlers",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "generated::SocketConfigHandlersBinaryType",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "http_server_agent::RouteType",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "js_value",
+          "imports": 0,
+          "references": 4
+        },
+        {
+          "api": "jsc_promise_handler",
+          "imports": 0,
+          "references": 4
+        },
+        {
+          "api": "jsc_scheduler::JSCDeferredWorkTask",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "node::PathLike",
+          "imports": 2,
+          "references": 4
+        },
+        {
+          "api": "node_module_module::find_longest_registered_extension",
+          "imports": 2,
+          "references": 4
+        },
+        {
+          "api": "rare_data",
+          "imports": 0,
+          "references": 4
+        },
+        {
+          "api": "task",
+          "imports": 0,
+          "references": 4
+        },
+        {
+          "api": "to_js_time",
+          "imports": 0,
+          "references": 4
+        },
+        {
+          "api": "webcore_types::store::IsAllAscii",
+          "imports": 2,
+          "references": 4
+        },
+        {
+          "api": "webcore_types::store::S3",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "ConcurrentTask",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "ContextTimer",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "DOMExceptionCode",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "DOMURL",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "FromJsEnum",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "GregorianDateTime",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "HostReturn",
+          "imports": 4,
+          "references": 3
+        },
+        {
+          "api": "INIT_TIMESTAMP",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "ImportWatcher",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "Node",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "RareData",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "RegularExpression",
+          "imports": 2,
+          "references": 3
+        },
+        {
+          "api": "URL",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "ZigStackFrame",
+          "imports": 2,
+          "references": 3
+        },
+        {
+          "api": "abort_signal",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "bun_cpu_profiler",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "dom_url::ToFileSystemPathError",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "generated::SocketConfigTls",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "http_server_agent::HTTPServerAgent",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "http_server_agent::InspectorHTTPServerAgent",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "js_promise::UnwrapMode",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "js_value::Protected",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "posix_signal_handle",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "task::report_error_or_terminate",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "virtual_machine::GCLevel",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "wtf::MAX_ECMASCRIPT_TIME",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "AsyncTaskTracker",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "BuildMessage",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "CrateResult",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "DeprecatedStrong",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "ExceptionList",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "Formatter",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "IndentScope",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "JSModuleLoader",
+          "imports": 2,
+          "references": 2
+        },
+        {
+          "api": "MIN_SAFE_INTEGER",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "Protected",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "ResolveMessage",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "URLSearchParams",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "VirtualMachineInitOptions",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "__macro_support",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "array_buffer",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "bindgen_test",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "counters",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "debugger::ErasedAgentSlot",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "debugger::TestReporterHandle",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "event_loop::Stopped",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "fmt_jsc",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "garbage_collection_controller::GarbageCollectionController",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "generated::SocketConfig",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "js_global_object::SysErrOptions",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "module_loader::ArenaResetGuard",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "module_loader::TranspileExtra",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "resolved_source::Bytecode",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "runtime_transpiler_cache::Entry",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "runtime_transpiler_cache::ModuleType",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "top_exception_scope",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "top_scope",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "url::Parsed",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "uuid::UUID",
+          "imports": 2,
+          "references": 2
+        },
+        {
+          "api": "validation_scope",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "virtual_machine::InitOptions",
+          "imports": 2,
+          "references": 2
+        },
+        {
+          "api": "virtual_machine::RuntimeHooks",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "virtual_machine::RuntimeState",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "virtual_machine::WorkerExecArgvFlags",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "virtual_machine_exports",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "AnyTaskWithExtraContext",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "ConcurrentTask::Task",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "Debugger::DebuggerId",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "DecodedJSValue",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "Exception",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "FetchHeaders",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "JSBigInt",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "JSCArrayBuffer",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "JSErrorCode",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "JSHostFnZig",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "JSRuntimeType",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "JSTimeType",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "Plugin",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "SerializedFlags",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "TypedArrayType",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "UUID7",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "WeakRefType",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "WebWorker",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "ZigException",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "ZigStackFrameCode",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "ZigStackTrace",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "bun_heap_profiler",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "decoded_js_value",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "event_loop_handle",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "exception_list",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "exception_list::JsException",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "exception_list::StackTrace",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "expect_vm_per_thread",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "generated::bun_object::BracesOptions",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "is_one_shot_eval_invocation",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "js_object",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "js_object::ObjectInitializer",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "js_object::PojoFields",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "marked_argument_buffer_wrap",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "node_module_module",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "rare_data::HotMapEntry",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "regular_expression::Flags",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "resolved_source",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "runtime_transpiler_cache",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "runtime_transpiler_store",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "sizes",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "url",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "uuid::UUID5",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "uuid::UUID7",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "virtual_machine::HotReload",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "web_worker",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "webcore_types::ClosingState",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "CommonAbortReasonExt",
+          "imports": 2,
+          "references": 0
+        },
+        {
+          "api": "ComptimeStringMapExt",
+          "imports": 8,
+          "references": 0
+        },
+        {
+          "api": "EncodedSliceJsc",
+          "imports": 24,
+          "references": 0
+        },
+        {
+          "api": "JsCellRefExt",
+          "imports": 3,
+          "references": 0
+        },
+        {
+          "api": "LogJsc",
+          "imports": 4,
+          "references": 0
+        },
+        {
+          "api": "StringJsc",
+          "imports": 56,
+          "references": 0
+        },
+        {
+          "api": "URLJsc",
+          "imports": 2,
+          "references": 0
+        },
+        {
+          "api": "Utf8WithStringJsc",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "bindgen_test::get_bindgen_test_functions",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "bun_string_jsc::js_escape_reg_exp",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "bun_string_jsc::js_escape_reg_exp_for_package_name_matching",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "bun_string_jsc::unicode_testing_apis::to_utf16_alloc_sentinel",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "bytecode_order_recorder::names_for_testing",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "counters::create_counters_object",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "event_loop::get_active_tasks",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "js_global_object::ScriptExecutionContextIdentifier",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "node_path::PathOrFileDescriptorSerializeTag",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "self",
+          "imports": 58,
+          "references": 0
+        },
+        {
+          "api": "system_error::verify_error_to_js",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "virtual_machine::ExceptionList",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "virtual_machine_exports::Bun__setSyntheticAllocationLimitForTesting",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "webcore_types::store::DataTag",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "webcore_types::store::SerializeTag",
+          "imports": 1,
+          "references": 0
+        }
+      ]
+    },
+    {
+      "scope": "src/ast_jsc",
+      "rust_files": 1,
+      "files_using_bun_jsc": 1,
+      "import_bindings": 4,
+      "references": 4,
+      "wildcard_imports": 0,
+      "symbols": [
+        {
+          "api": "JSGlobalObject",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "JSValue",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "JsResult",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "zig_exception",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "self",
+          "imports": 1,
+          "references": 0
+        }
+      ]
+    },
+    {
+      "scope": "src/bundler_jsc",
+      "rust_files": 4,
+      "files_using_bun_jsc": 2,
+      "import_bindings": 7,
+      "references": 0,
+      "wildcard_imports": 0,
+      "symbols": [
+        {
+          "api": "ComptimeStringMapExt",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "ErrorableString",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "JSGlobalObject",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "JSValue",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "JsError",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "JsResult",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "VM",
+          "imports": 1,
+          "references": 0
+        }
+      ]
+    },
+    {
+      "scope": "src/css_jsc",
+      "rust_files": 3,
+      "files_using_bun_jsc": 3,
+      "import_bindings": 13,
+      "references": 68,
+      "wildcard_imports": 0,
+      "symbols": [
+        {
+          "api": "JSValue",
+          "imports": 2,
+          "references": 36
+        },
+        {
+          "api": "JSGlobalObject",
+          "imports": 2,
+          "references": 15
+        },
+        {
+          "api": "CallFrame",
+          "imports": 2,
+          "references": 10
+        },
+        {
+          "api": "ArgumentsSlice",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "bun_string_jsc",
+          "imports": 2,
+          "references": 3
+        },
+        {
+          "api": "FromJsEnum",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "ComptimeStringMapExt",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "JsResult",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "LogJsc",
+          "imports": 2,
+          "references": 0
+        },
+        {
+          "api": "StringJsc",
+          "imports": 1,
+          "references": 0
+        }
+      ]
+    },
+    {
+      "scope": "src/http_jsc",
+      "rust_files": 11,
+      "files_using_bun_jsc": 6,
+      "import_bindings": 23,
+      "references": 118,
+      "wildcard_imports": 0,
+      "symbols": [
+        {
+          "api": "JSGlobalObject",
+          "imports": 6,
+          "references": 34
+        },
+        {
+          "api": "JSValue",
+          "imports": 4,
+          "references": 27
+        },
+        {
+          "api": "mark_binding",
+          "imports": 0,
+          "references": 15
+        },
+        {
+          "api": "JsResult",
+          "imports": 3,
+          "references": 7
+        },
+        {
+          "api": "virtual_machine::VirtualMachine",
+          "imports": 1,
+          "references": 7
+        },
+        {
+          "api": "FetchHeaders",
+          "imports": 1,
+          "references": 5
+        },
+        {
+          "api": "CallFrame",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "VirtualMachineRef",
+          "imports": 2,
+          "references": 4
+        },
+        {
+          "api": "ContextId",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "GlobalRef",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "ScriptExecutionContext",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "virtual_machine",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "HTTPHeaderName",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "MicrotaskCallback",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "bun_string_jsc",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "from_js_host_call",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "rare_data",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "task",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "StringJsc",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "self",
+          "imports": 1,
+          "references": 0
+        }
+      ]
+    },
+    {
+      "scope": "src/install_jsc",
+      "rust_files": 5,
+      "files_using_bun_jsc": 4,
+      "import_bindings": 24,
+      "references": 85,
+      "wildcard_imports": 0,
+      "symbols": [
+        {
+          "api": "JSValue",
+          "imports": 4,
+          "references": 27
+        },
+        {
+          "api": "JSGlobalObject",
+          "imports": 4,
+          "references": 16
+        },
+        {
+          "api": "JsResult",
+          "imports": 3,
+          "references": 14
+        },
+        {
+          "api": "CallFrame",
+          "imports": 3,
+          "references": 10
+        },
+        {
+          "api": "JsError",
+          "imports": 2,
+          "references": 5
+        },
+        {
+          "api": "bun_string_jsc",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "JSFunction",
+          "imports": 2,
+          "references": 2
+        },
+        {
+          "api": "host_fn",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "CrateError",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "JSObject",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "JSPropertyIterator",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "JSPropertyIteratorOptions",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "js_object",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "LogJsc",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "StringJsc",
+          "imports": 4,
+          "references": 0
+        }
+      ]
+    },
+    {
+      "scope": "src/js_parser_jsc",
+      "rust_files": 4,
+      "files_using_bun_jsc": 3,
+      "import_bindings": 20,
+      "references": 116,
+      "wildcard_imports": 0,
+      "symbols": [
+        {
+          "api": "JSValue",
+          "imports": 2,
+          "references": 44
+        },
+        {
+          "api": "JSGlobalObject",
+          "imports": 2,
+          "references": 18
+        },
+        {
+          "api": "JsError",
+          "imports": 2,
+          "references": 13
+        },
+        {
+          "api": "virtual_machine::VirtualMachine",
+          "imports": 1,
+          "references": 12
+        },
+        {
+          "api": "ConsoleObject",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "WebCore",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "virtual_machine",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "virtual_machine::MacroModeGuard",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "BuildMessage",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "CrateError",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "InitializeOptions",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "JSArrayIterator",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "JSPropertyIterator",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "JSType",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "JsResult",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "ModuleLoader",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "PromiseResult",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "PromiseUnwrapMode",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "ResolveMessage",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "VM",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "cpp",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "from_js_host_call",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "initialize",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "js_promise",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "js_property_iterator::JSPropertyIteratorOptions",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "mark_binding",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "virtual_machine::InitOptions",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "virtual_machine::runtime_hooks",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "StringJsc",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "self",
+          "imports": 1,
+          "references": 0
+        }
+      ]
+    },
+    {
+      "scope": "src/patch_jsc",
+      "rust_files": 2,
+      "files_using_bun_jsc": 1,
+      "import_bindings": 7,
+      "references": 39,
+      "wildcard_imports": 0,
+      "symbols": [
+        {
+          "api": "CallFrame",
+          "imports": 1,
+          "references": 7
+        },
+        {
+          "api": "JSGlobalObject",
+          "imports": 1,
+          "references": 7
+        },
+        {
+          "api": "JSValue",
+          "imports": 1,
+          "references": 7
+        },
+        {
+          "api": "JsResult",
+          "imports": 1,
+          "references": 7
+        },
+        {
+          "api": "ArgumentsSlice",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "host_fn",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "SysErrorJsc",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "bun_string_jsc",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "AnyEventLoop",
+          "imports": 0,
+          "references": 1
+        }
+      ]
+    },
+    {
+      "scope": "src/semver_jsc",
+      "rust_files": 2,
+      "files_using_bun_jsc": 1,
+      "import_bindings": 4,
+      "references": 29,
+      "wildcard_imports": 0,
+      "symbols": [
+        {
+          "api": "JSValue",
+          "imports": 1,
+          "references": 15
+        },
+        {
+          "api": "JSGlobalObject",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "CallFrame",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "JsResult",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "host_fn",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "create_host_function_object",
+          "imports": 0,
+          "references": 1
+        }
+      ]
+    },
+    {
+      "scope": "src/sourcemap_jsc",
+      "rust_files": 4,
+      "files_using_bun_jsc": 3,
+      "import_bindings": 16,
+      "references": 127,
+      "wildcard_imports": 0,
+      "symbols": [
+        {
+          "api": "JSValue",
+          "imports": 3,
+          "references": 67
+        },
+        {
+          "api": "JSGlobalObject",
+          "imports": 3,
+          "references": 25
+        },
+        {
+          "api": "JsResult",
+          "imports": 2,
+          "references": 15
+        },
+        {
+          "api": "CallFrame",
+          "imports": 2,
+          "references": 11
+        },
+        {
+          "api": "bun_string_jsc",
+          "imports": 3,
+          "references": 3
+        },
+        {
+          "api": "ArrayBuffer",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "VM",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "VirtualMachine",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "host_fn",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "jsc_abi_extern",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "mark_binding",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "StringJsc",
+          "imports": 1,
+          "references": 0
+        }
+      ]
+    },
+    {
+      "scope": "src/sql_jsc",
+      "rust_files": 39,
+      "files_using_bun_jsc": 36,
+      "import_bindings": 190,
+      "references": 803,
+      "wildcard_imports": 1,
+      "symbols": [
+        {
+          "api": "JSValue",
+          "imports": 33,
+          "references": 265
+        },
+        {
+          "api": "JSGlobalObject",
+          "imports": 33,
+          "references": 120
+        },
+        {
+          "api": "JsCell",
+          "imports": 6,
+          "references": 48
+        },
+        {
+          "api": "JsResult",
+          "imports": 17,
+          "references": 45
+        },
+        {
+          "api": "CallFrame",
+          "imports": 8,
+          "references": 32
+        },
+        {
+          "api": "JsError",
+          "imports": 5,
+          "references": 22
+        },
+        {
+          "api": "VirtualMachine",
+          "imports": 4,
+          "references": 19
+        },
+        {
+          "api": "js_error_to_mysql",
+          "imports": 3,
+          "references": 18
+        },
+        {
+          "api": "codegen::JSPostgresSQLQuery",
+          "imports": 1,
+          "references": 17
+        },
+        {
+          "api": "js_error_to_postgres",
+          "imports": 2,
+          "references": 17
+        },
+        {
+          "api": "EventLoopTimerState",
+          "imports": 2,
+          "references": 14
+        },
+        {
+          "api": "JSType",
+          "imports": 5,
+          "references": 14
+        },
+        {
+          "api": "EventLoopTimer",
+          "imports": 2,
+          "references": 12
+        },
+        {
+          "api": "virtual_machine::VirtualMachine",
+          "imports": 1,
+          "references": 11
+        },
+        {
+          "api": "ExternColumnIdentifier",
+          "imports": 3,
+          "references": 10
+        },
+        {
+          "api": "JsRef",
+          "imports": 4,
+          "references": 10
+        },
+        {
+          "api": "ErrorCode",
+          "imports": 1,
+          "references": 9
+        },
+        {
+          "api": "bun_string_jsc",
+          "imports": 7,
+          "references": 9
+        },
+        {
+          "api": "codegen::js_mysql_query",
+          "imports": 1,
+          "references": 9
+        },
+        {
+          "api": "codegen::js_mysql_connection",
+          "imports": 2,
+          "references": 8
+        },
+        {
+          "api": "webcore::AutoFlusher",
+          "imports": 2,
+          "references": 8
+        },
+        {
+          "api": "api::server_config::SSLConfig",
+          "imports": 2,
+          "references": 7
+        },
+        {
+          "api": "host_fn::JsHostFn",
+          "imports": 1,
+          "references": 7
+        },
+        {
+          "api": "JSObject",
+          "imports": 3,
+          "references": 5
+        },
+        {
+          "api": "StrongOptional",
+          "imports": 4,
+          "references": 5
+        },
+        {
+          "api": "EventLoopTimerTag",
+          "imports": 2,
+          "references": 4
+        },
+        {
+          "api": "MarkedArgumentBuffer",
+          "imports": 3,
+          "references": 4
+        },
+        {
+          "api": "ScriptExecutionContext",
+          "imports": 0,
+          "references": 4
+        },
+        {
+          "api": "js_class_module",
+          "imports": 0,
+          "references": 4
+        },
+        {
+          "api": "verify_error_to_js",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "EventLoop",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "codegen",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "CrateError",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "ErrorBuilder",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "GlobalRef",
+          "imports": 2,
+          "references": 2
+        },
+        {
+          "api": "HasAutoFlush",
+          "imports": 2,
+          "references": 2
+        },
+        {
+          "api": "IntegerRange",
+          "imports": 2,
+          "references": 2
+        },
+        {
+          "api": "JSArrayIterator",
+          "imports": 2,
+          "references": 2
+        },
+        {
+          "api": "JsClass",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "KeepAlive",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "Strong",
+          "imports": 2,
+          "references": 2
+        },
+        {
+          "api": "cached_prop_hostfns",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "event_loop::EventLoop",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "event_loop::EventLoopEnterGuard",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "rare_data",
+          "imports": 0,
+          "references": 2
+        },
+        {
+          "api": "JSFunction",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "api",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "call_frame",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "create_bun_socket_error_to_js",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "host_fn",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "impl_js_class_via_generated",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "jsc_abi_extern",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "poll_ref_hostfns",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "validation_scope",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "webcore::Blob",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "EventLoopSqlExt",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "JSGlobalObjectSqlExt",
+          "imports": 3,
+          "references": 0
+        },
+        {
+          "api": "StringJsc",
+          "imports": 2,
+          "references": 0
+        },
+        {
+          "api": "VirtualMachineSqlExt",
+          "imports": 7,
+          "references": 0
+        },
+        {
+          "api": "self",
+          "imports": 2,
+          "references": 0
+        },
+        {
+          "api": "system_error::verify_error_to_js",
+          "imports": 1,
+          "references": 0
+        }
+      ]
+    },
+    {
+      "scope": "src/sys_jsc",
+      "rust_files": 4,
+      "files_using_bun_jsc": 3,
+      "import_bindings": 12,
+      "references": 21,
+      "wildcard_imports": 0,
+      "symbols": [
+        {
+          "api": "SystemError",
+          "imports": 1,
+          "references": 6
+        },
+        {
+          "api": "JSGlobalObject",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "JSValue",
+          "imports": 1,
+          "references": 4
+        },
+        {
+          "api": "host_fn",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "JSPromise",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "bun_string_jsc",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "CallFrame",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "FromJsEnum",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "JSString",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "JsError",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "JsResult",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "RangeErrorOptions",
+          "imports": 1,
+          "references": 0
+        },
+        {
+          "api": "VM",
+          "imports": 1,
+          "references": 0
+        }
+      ]
+    }
+  ]
+}
