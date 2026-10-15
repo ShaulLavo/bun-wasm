@@ -23,6 +23,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [0007](#0007-string-equality) | Upstream bug | Correct string comparisons that skip bytes with 32-bit `usize`. |
 | [0008](#0008-await-context-hooks) | Host feature | Add optional printer hooks to preserve browser async context. |
 | [0009](#0009-bake-completion) | Port | Complete bake bundles through the synchronous WASI event loop. |
+| [0010](#0010-semantic-import-locations) | Host feature | Report dynamic-import keyword locations from Bun's parser for host module linking. |
 | [`jsc/webkit-wasi.patch`, platform hunks](#webkit-platform-hunks) | Port | Compile the C-loop interpreter and WTF for WASI. |
 | [`jsc/webkit-wasi.patch`, module slots](#webkit-module-import-slots) | Upstream bug | Give import slots a full JSValue stride and initialize the whole slot. |
 | [`jsc/webkit-wasi.patch`, non-JIT declarations](#webkit-non-jit-declarations) | Upstream bug | Expose a required enum without DFG and add two missing includes. |
@@ -261,6 +262,15 @@ File `0009-Drive-bake-completion-from-the-WASI-mini-event-loop.patch`. Class **P
 
 `src/bundler/bundle_v2.rs` exposes `finish_wasi_dev_server` to wait for parsing and call the existing bake completion path. Without it bun-wasm's synchronous mini event loop cannot drive the native asynchronous completion task, so dev-server bundles cannot finish through that path. Native bake already schedules its completion.
 
+### 0010 semantic import locations
+
+File `0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch`. Class **Host feature**.
+
+Upstream paths are `src/js_parser/lib.rs` and `src/js_parser/parse/parse_import_export.rs` at pinned Bun revision `9510e74152073d850a18758ca41114d8f214ffa6`. A scoped, thread-local collector records the original UTF-8 keyword offset when Bun parses a dynamic import expression. It restores the previous collector on return or unwind. Import.meta and property names never enter that branch. The parser otherwise behaves unchanged.
+
+The original adapters in `crates/bunwasm-transpiler/src/lib.rs`, `crates/bunwasm-cli/src/main.rs`, and `crates/bunwasm-runtime/src/{transpiler,engine_host}.rs` combine these locations with Bun's existing static import records. Host module linking now uses semantic spans rather than a second JavaScript lexer. The source bytes and import arguments remain intact, including import attributes and template substitutions. This is a bun-wasm host requirement, not an upstream Bun bug.
+
+
 ## Other vendored changes
 
 ### WebKit platform hunks
@@ -493,7 +503,7 @@ git ls-files crates web sandbox scripts jsc site third_party
 rg -n -i --max-columns 240 'copyright|license|ported|port of|adapted|copied|derived|based on' crates web sandbox scripts jsc site
 ```
 
-Retained libc and rquickjs-sys files were compared byte-for-byte with the matching published crates in Cargo's registry. The `vendor/bun` working tree must be clean after applying all nine commits. There are no additional unexported Bun source modifications in the audited checkout.
+Retained libc and rquickjs-sys files were compared byte-for-byte with the matching published crates in Cargo's registry. The `vendor/bun` working tree must be clean after applying all ten commits. There are no additional unexported Bun source modifications in the audited checkout.
 
 SQLite is supplied by the unmodified `libsqlite3-sys` crate. `.cargo/config.toml` sets its documented compile flags to match Bun where possible and disable unsupported WASI facilities; it does not rewrite the amalgamation. No additional third-party source rewrites were found in crate build scripts. Test fixture npm packages are source inputs for compatibility tests, not runtime forks.
 

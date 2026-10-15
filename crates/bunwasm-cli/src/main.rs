@@ -91,6 +91,20 @@ mod bun_transpiler {
             Ok(Transpiled { code: out.code, mappings: Some(out.mappings) })
         }
 
+        fn module_imports(&self, source: &str, path: &str) -> Result<Vec<bunwasm_runtime::transpiler::ModuleImport>, String> {
+            use bunwasm_runtime::transpiler::{ModuleImport, ModuleImportKind};
+            bunwasm_transpiler::module_imports(source, path).map(|imports| {
+                imports.into_iter().map(|import| ModuleImport {
+                    start: import.start,
+                    end: import.end,
+                    kind: match import.specifier {
+                        Some(specifier) => ModuleImportKind::Static(specifier),
+                        None => ModuleImportKind::Dynamic,
+                    },
+                }).collect()
+            })
+        }
+
         /// Bun's bundler on the one file, every import external: `bun build
         /// --format=cjs --target=bun --external '*' --sourcemap=inline`.
         /// Imports become `require()` calls read through live getters. No

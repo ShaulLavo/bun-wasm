@@ -63,6 +63,19 @@ impl fmt::Display for Loader {
     }
 }
 
+#[derive(Debug)]
+pub struct ModuleImport {
+    pub start: usize,
+    pub end: usize,
+    pub kind: ModuleImportKind,
+}
+
+#[derive(Debug)]
+pub enum ModuleImportKind {
+    Static(String),
+    Dynamic,
+}
+
 /// Turns a source file into ESM JavaScript the engine can run.
 ///
 /// `path` is the absolute path of the file (used for error messages and JSX/TS
@@ -80,6 +93,11 @@ pub trait Transpiler {
     /// runtime uses it to report original positions in stack traces.
     fn transpile_with_map(&self, source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
         self.transpile(source, path, loader).map(|code| Transpiled { code, mappings: None })
+    }
+
+    /// Semantic imports for the host engine's module URL and dynamic-import hooks.
+    fn module_imports(&self, _source: &str, path: &str) -> Result<Vec<ModuleImport>, String> {
+        Err(format!("host module linking for {path} needs Bun's parser"))
     }
 
     /// The ES module at `path` (read from disk) as CommonJS, for `require()`

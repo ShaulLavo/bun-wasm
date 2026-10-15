@@ -1,0 +1,60 @@
+From ddab8382bdf6b02f22653758d901fb83ceb85aa8 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Fri, 16 Oct 2026 01:46:27 +0300
+Subject: [PATCH 10/10] wasm: expose semantic dynamic import locations to the
+ host
+
+---
+ src/js_parser/lib.rs                       | 29 ++++++++++++++++++++++
+ src/js_parser/parse/parse_import_export.rs |  1 +
+ 2 files changed, 30 insertions(+)
+
+diff --git a/src/js_parser/lib.rs b/src/js_parser/lib.rs
+index fecb03f8..045bf990 100644
+--- a/src/js_parser/lib.rs
++++ b/src/js_parser/lib.rs
+@@ -770,3 +770,32 @@ pub mod renamer {
+     // The remaining renamer types are only consumed by the printer and bundler
+     // — they live in `bun_js_printer`.
+ }
++
++/// bun-wasm: collect dynamic-import keyword locations during a semantic parse.
++/// Property names, literals, and import.meta never enter parse_import_expr's
++/// dynamic-import branch. The guard restores the outer collector on unwind.
++pub fn with_bunwasm_dynamic_imports<T>(f: impl FnOnce() -> T) -> (T, Vec<usize>) {
++    struct Restore(Option<Vec<usize>>);
++    impl Drop for Restore {
++        fn drop(&mut self) {
++            BUNWASM_DYNAMIC_IMPORTS.with(|slot| { slot.replace(self.0.take()); });
++        }
++    }
++    let previous = BUNWASM_DYNAMIC_IMPORTS.with(|slot| slot.replace(Some(Vec::new())));
++    let _restore = Restore(previous);
++    let result = f();
++    let imports = BUNWASM_DYNAMIC_IMPORTS.with(|slot| slot.take().unwrap_or_default());
++    (result, imports)
++}
++
++thread_local! {
++    static BUNWASM_DYNAMIC_IMPORTS: core::cell::RefCell<Option<Vec<usize>>> = const { core::cell::RefCell::new(None) };
++}
++
++fn bunwasm_dynamic_import(loc: bun_ast::Loc) {
++    BUNWASM_DYNAMIC_IMPORTS.with_borrow_mut(|slot| {
++        if let Some(imports) = slot {
++            imports.push(loc.start as usize);
++        }
++    });
++}
+diff --git a/src/js_parser/parse/parse_import_export.rs b/src/js_parser/parse/parse_import_export.rs
+index f862d5ad..b37952e9 100644
+--- a/src/js_parser/parse/parse_import_export.rs
++++ b/src/js_parser/parse/parse_import_export.rs
+@@ -44,6 +44,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+ 
+         p.lexer.preserve_all_comments_before = true;
+         p.lexer.expect(T::TOpenParen)?;
++        crate::bunwasm_dynamic_import(loc);
+ 
+         // const comments = try p.lexer.comments_to_preserve_before.toOwnedSlice();
+         p.lexer.comments_to_preserve_before.clear();

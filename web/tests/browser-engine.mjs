@@ -3,6 +3,7 @@
 // ENGINE=quickjs|jsc runs the same checks on another engine.
 // Needs web/dist/bun-browser.wasm.gz (dist/bun-browser.wasm from scripts/build-bun-browser.sh).
 // Starts web/serve.ts and a CORS fixture server on another origin (no public internet); kills both on exit.
+import { readFileSync, readdirSync } from "node:fs";
 import { checkPhoneUI } from "./phone-ui.mjs";
 import { firstVisit } from "./first-visit.mjs";
 import { playwright, ready, run, session, terminalText, writeFile } from "./playground.mjs";
@@ -72,6 +73,18 @@ async function checkPage(name, page, visit, fixtureBase) {
 
   await writeFile(page, `${HOME}/throws.ts`, `console.log("before");\nthrow new Error("kaboom");\n`);
   await expectRun(page, `${name}: uncaught error`, "bun run throws.ts", 1, ["before", "kaboom"]);
+
+  for (const fixture of ["import-method", "import-syntax"]) {
+    const root = new URL(`../../tests/fixtures/${fixture}/`, import.meta.url);
+    for (const file of readdirSync(root, { recursive: true })) {
+      if (!/\.(?:cjs|mjs|json)$/.test(file)) continue;
+      await writeFile(page, `${HOME}/${fixture}/${file}`, readFileSync(new URL(file, root), "utf8"));
+    }
+    const entry = fixture === "import-method" ? "index.cjs" : "index.mjs";
+    const expected = readFileSync(new URL("expected.txt", root), "utf8").trim().split("\n")
+      .map(line => line.replace("meta /index.mjs true", `meta ${HOME}/${fixture}/index.mjs true`));
+    await expectRun(page, `${name}: ${fixture}`, `bun run ${fixture}/${entry}`, 0, expected);
+  }
 
   await writeFile(page, `${HOME}/rejects.ts`, `setTimeout(() => Promise.reject(new TypeError("late rejection")), 10);\n`);
   await expectRun(page, `${name}: unhandled rejection`, "bun run rejects.ts", 1, ["late rejection"]);
