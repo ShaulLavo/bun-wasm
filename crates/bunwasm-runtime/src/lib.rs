@@ -26,6 +26,7 @@ pub mod host;
 mod modules;
 mod natives;
 mod resolve;
+mod semver;
 mod sourcemap;
 mod sqlite;
 pub mod transpiler;

@@ -1061,6 +1061,7 @@ name = "bunwasm-runtime"
 version = "0.0.5"
 dependencies = [
  "bun_glob",
+ "bun_semver",
  "bun_sys",
  "bun_wyhash",
  "bunwasm-jsc",

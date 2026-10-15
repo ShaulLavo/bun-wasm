@@ -176,6 +176,7 @@ pub fn table(state: &Rc<State>) -> Table {
             .map(Val::Str)
     });
     crate::glob::install(&mut t);
+    crate::semver::install(&mut t);
     install_encoding(&mut t);
     install_crypto(&mut t);
     install_url(&mut t);

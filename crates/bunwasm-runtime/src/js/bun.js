@@ -425,7 +425,19 @@
 
   const { TOML, YAML, JSON5, JSONC } = internal.require("formats");
   const { Glob } = internal.require("glob");
+  const semver = {
+    satisfies(version, range) {
+      if (arguments.length < 2) throw new Error("Expected two arguments");
+      return native.semverSatisfies(`${version}`, `${range}`);
+    },
+    order(left, right) {
+      if (arguments.length < 2) throw new Error("Expected two arguments");
+      return native.semverOrder(`${left}`, `${right}`);
+    },
+  };
+
   const Bun = {
+    semver,
     TOML, YAML, JSON5, JSONC, Glob, JSONL: internal.require("jsonl"),
     version: info.version,
     revision: info.revision,
