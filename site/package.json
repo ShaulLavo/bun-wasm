@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "bun build.ts",
-    "deploy": "bun build.ts && wrangler deploy"
+    "deploy": "bun build.ts && wrangler deploy && bun wait-live.ts"
   },
   "devDependencies": {
     "wrangler": "^4.151.0"
