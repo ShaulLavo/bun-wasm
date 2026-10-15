@@ -20,6 +20,8 @@ const statusEl = $<HTMLSpanElement>("#status");
 const runButton = $<HTMLButtonElement>("#run");
 const engineSelect = $<HTMLSelectElement>("#engine");
 const tabsEl = $<HTMLDivElement>("#tabs");
+// Phones get a file dropdown instead of the tab strip, so nothing scrolls sideways.
+const fileSelect = $<HTMLSelectElement>("#file-select");
 const newFileButton = $<HTMLButtonElement>("#new-file");
 
 const params = new URLSearchParams(location.search);
@@ -310,6 +312,16 @@ class Editor {
       }),
     );
     tabsEl.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    fileSelect.replaceChildren(
+      ...files.map((path) => {
+        const option = document.createElement("option");
+        option.value = path;
+        option.textContent = path.slice(HOME.length + 1) + (this.dirty(path) ? " •" : "");
+        return option;
+      }),
+    );
+    fileSelect.value = this.path;
+    fileSelect.onchange = () => this.open(fileSelect.value);
   }
 
   focus(): void {

@@ -137,6 +137,19 @@ main {
   display: none;
 }
 
+#file-select {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  margin: 6px 0 6px 8px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+}
+
 .tab {
   flex: none;
   background: none;
@@ -146,6 +159,9 @@ main {
   color: var(--dim);
   font: 13px ui-monospace, "SF Mono", Menlo, monospace;
   white-space: nowrap;
+  max-width: 18em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tab[aria-selected="true"] {
@@ -198,6 +214,14 @@ main {
 }
 
 @media (max-width: 800px) {
+  #tabs {
+    display: none;
+  }
+
+  #file-select {
+    display: block;
+  }
+
   header {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -314,3 +338,15 @@ a.nav:hover {
 #copy-terminal:hover {
   border-color: var(--dim);
 }
+
+/* Phones held sideways are wider than 800px but short: they get the file dropdown too. */
+@media (max-height: 500px) {
+  #tabs {
+    display: none;
+  }
+
+  #file-select {
+    display: block;
+  }
+}
+
