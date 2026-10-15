@@ -1694,6 +1694,7 @@
 
   function reportUnhandledError(error) {
     summary.errors++;
+    globalThis.process.exitCode = 1;
     printFileHeaderIfNeeded();
     writeErr("\n# Unhandled error between tests\n-------------------------------\n");
     writeErr(formatErrorText(error));

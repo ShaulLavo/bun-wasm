@@ -369,7 +369,7 @@ fn run_in_engine<E: Engine>(e: &E, core: &Rc<Core<E>>, entry: &Entry, main_path:
             None
         }
     };
-    run_event_loop(e, core, main_promise);
+    run_event_loop(e, core, main_promise, matches!(entry, Entry::Test(_)));
     match core.call_internal_num(e, "beforeExit") {
         Ok(code) => code as i32,
         Err(err) => {
@@ -383,7 +383,7 @@ fn run_in_engine<E: Engine>(e: &E, core: &Rc<Core<E>>, entry: &Entry, main_path:
 /// The event loop: microtasks and ticks, then one due timer at a time;
 /// sleeps (WASI `poll_oneoff`, or the host's poll while sockets are open)
 /// until the next timer when idle.
-fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>) {
+fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test_command: bool) {
     let mut main = main;
     loop {
         core.drain_jobs(e);
@@ -391,6 +391,9 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>) {
             main = check_main_promise(e, core, promise);
         }
         core.check_rejections(e);
+        if test_command && main.is_none() {
+            break;
+        }
         // runTimers returns: 0 = a timer ran (loop again), >0 = ms until the
         // next timer, <0 = nothing left keeping the loop alive.
         let next = match core.call_internal_num(e, "runTimers") {

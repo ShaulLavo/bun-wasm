@@ -275,6 +275,7 @@ class EngineHost {
     this.wasm = wasmCaller(o.instance.exports);
     this.exited = false;
     this.pendingAsync = 0;
+    this.testComplete = false;
     this.timer = null;
     this.timerAt = Infinity;
     this.immediate = false;
@@ -755,8 +756,17 @@ class EngineHost {
       return;
     }
     if (started && typeof started.then === "function") {
-      this.track(started).then(undefined, (err) => this.uncaught(err));
+      this.track(started).then(
+        () => this.entrySettled(),
+        (err) => { this.uncaught(err); this.entrySettled(); },
+      );
     }
+  }
+
+  entrySettled() {
+    if (this.entry.kind !== "test") return;
+    this.testComplete = true;
+    this.schedule(0);
   }
 
   // --- the event loop ---
@@ -803,6 +813,7 @@ class EngineHost {
   // then decide when to come back.
   pump() {
     if (this.exited) return;
+    if (this.testComplete) return this.finish();
     let next = this.guard(() => this.internal.runTimers(), 0);
     // Network handles (net.js waiters): step them; the networking host's
     // onNews wakes the loop when something changes.
@@ -815,6 +826,10 @@ class EngineHost {
     if (next === 0) return this.schedule(0);
     if (next > 0) return this.schedule(next);
     if (this.pendingAsync > 0 || io > 0) return undefined;
+    return this.finish();
+  }
+
+  finish() {
     // Chromium reports unhandled rejections in a later task: look once more
     // after one before deciding the program is done.
     if (!this.idleWait) {
@@ -823,7 +838,7 @@ class EngineHost {
       return undefined;
     }
     this.idleWait = false;
-    const more = this.guard(() => this.internal.emitBeforeExit(), false);
+    const more = !this.testComplete && this.guard(() => this.internal.emitBeforeExit(), false);
     if (more) return this.schedule(0);
     const code = this.guard(() => this.internal.beforeExit(), 1);
     this.exit(typeof code === "number" ? code : 0);

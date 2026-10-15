@@ -1,0 +1,2 @@
+bun test vVERSION
+cleanup true
