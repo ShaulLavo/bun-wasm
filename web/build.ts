@@ -39,11 +39,21 @@ if (!sw.success) {
 
 await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 
-if (existsSync(wasmSource)) {
-  await Bun.write(join(out, "bun.wasm"), Bun.file(wasmSource));
-  console.log(`bun.wasm: copied ${wasmSource} (${(statSync(wasmSource).size / 1024 / 1024).toFixed(1)} MB)`);
-} else {
+// Each wasm gets a .gz twin; serve.ts sends that when the browser accepts gzip.
+async function copyWasm(source: string, name: string): Promise<boolean> {
+  if (!existsSync(source)) return false;
+  const bytes = new Uint8Array(await Bun.file(source).arrayBuffer());
+  await Bun.write(join(out, name), bytes);
+  await Bun.write(join(out, `${name}.gz`), Bun.gzipSync(bytes, { level: 9 }));
+  console.log(`${name}: copied ${source} (${(statSync(source).size / 1024 / 1024).toFixed(1)} MB)`);
+  return true;
+}
+if (!(await copyWasm(wasmSource, "bun.wasm"))) {
   console.warn(`bun.wasm: ${wasmSource} not found; the site will say bun.wasm is missing (or pass ?wasm=<url>).`);
+}
+const jscSource = resolve(here, process.env.BUN_JSC_WASM ?? "../dist/bun-jsc.wasm");
+if (!(await copyWasm(jscSource, "bun-jsc.wasm"))) {
+  console.warn(`bun-jsc.wasm: ${jscSource} not found; the JavaScriptCore engine option will fail to load.`);
 }
 
 for (const output of result.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);

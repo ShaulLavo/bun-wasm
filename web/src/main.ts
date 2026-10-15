@@ -19,14 +19,27 @@ import type { RunRequest, WorkerMessage } from "./worker";
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const statusEl = $<HTMLSpanElement>("#status");
 const runButton = $<HTMLButtonElement>("#run");
+const engineSelect = $<HTMLSelectElement>("#engine");
 const tabsEl = $<HTMLDivElement>("#tabs");
 const newFileButton = $<HTMLButtonElement>("#new-file");
 
 const params = new URLSearchParams(location.search);
-const wasmUrl = params.get("wasm") ?? "bun.wasm";
+// ?engine=jsc runs the same runtime on Bun's JavaScriptCore instead of QuickJS.
+const engine = params.get("engine") === "jsc" ? "jsc" : "quickjs";
+const engineName = engine === "jsc" ? "JavaScriptCore" : "QuickJS";
+const wasmUrl = params.get("wasm") ?? (engine === "jsc" ? "bun-jsc.wasm" : "bun.wasm");
 const trace = params.has("trace");
 const isolated = globalThis.crossOriginIsolated === true;
 const sleepMode = isolated ? "Atomics.wait (cross-origin isolated)" : "busy-wait (page is not cross-origin isolated)";
+
+engineSelect.value = engine;
+engineSelect.addEventListener("change", () => {
+  const next = new URL(location.href);
+  if (engineSelect.value === "jsc") next.searchParams.set("engine", "jsc");
+  else next.searchParams.delete("engine");
+  next.searchParams.delete("wasm");
+  location.assign(next);
+});
 
 // Networking needs SharedArrayBuffer: without cross-origin isolation bun.wasm gets no fetch slots.
 const previews = new Previews();
@@ -52,7 +65,8 @@ async function loadWasm(): Promise<void> {
     setStatus("loading bun.wasm…");
     const res = await fetch(wasmUrl);
     if (!res.ok) throw new Error(`${wasmUrl}: HTTP ${res.status}`);
-    const total = Number(res.headers.get("content-length")) || 0;
+    // serve.ts sends wasm gzipped; this header carries the size the reader will see.
+    const total = Number(res.headers.get("x-uncompressed-length") ?? res.headers.get("content-length")) || 0;
     const chunks: Uint8Array[] = [];
     let received = 0;
     const reader = res.body!.getReader();
@@ -72,7 +86,7 @@ async function loadWasm(): Promise<void> {
     setStatus(`compiling bun.wasm (${mb(received)})…`);
     const module = await WebAssembly.compile(bytes);
     wasm = { module, size: received };
-    setStatus(`bun.wasm ready · ${mb(received)}`, "ok");
+    setStatus(`bun.wasm ready · ${engineName} · ${mb(received)}`, "ok");
   } catch (err) {
     const missing = String(err).includes("HTTP 404");
     const error = missing

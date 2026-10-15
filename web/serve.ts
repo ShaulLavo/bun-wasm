@@ -13,9 +13,26 @@ const server = Bun.serve({
     const url = new URL(req.url);
     let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");
     if (path.endsWith("/")) path += "index.html";
+    const headers: Record<string, string> = { "cache-control": "no-cache" };
+    // .wasm files may be published only as their .gz twin (Mesh apps cap source size).
+    const gz = Bun.file(join(root, `${path}.gz`));
+    if (path.endsWith(".wasm") && (await gz.exists())) {
+      if (isolate) {
+        headers["cross-origin-opener-policy"] = "same-origin";
+        headers["cross-origin-embedder-policy"] = "require-corp";
+      }
+      headers["content-type"] = "application/wasm";
+      if (!/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) {
+        return new Response(Bun.gunzipSync(new Uint8Array(await gz.arrayBuffer())), { headers });
+      }
+      // gzip's trailer holds the uncompressed size (mod 2^32), for the progress bar.
+      const trailer = new DataView(await gz.slice(gz.size - 4).arrayBuffer());
+      headers["content-encoding"] = "gzip";
+      headers["x-uncompressed-length"] = String(trailer.getUint32(0, true));
+      return new Response(gz, { headers });
+    }
     const file = Bun.file(join(root, path));
     if (!(await file.exists())) return new Response("not found", { status: 404 });
-    const headers: Record<string, string> = { "cache-control": "no-cache" };
     if (isolate) {
       headers["cross-origin-opener-policy"] = "same-origin";
       headers["cross-origin-embedder-policy"] = "require-corp";

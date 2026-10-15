@@ -206,3 +206,15 @@ main {
     font-size: 13px;
   }
 }
+
+#engine {
+  flex: none;
+  max-width: 11em;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg, #15171c);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}

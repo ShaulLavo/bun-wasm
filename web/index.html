@@ -13,6 +13,10 @@
       <header>
         <h1><span class="logo" aria-hidden="true">🥟</span> bun<span class="dim">.wasm</span></h1>
         <span id="status" role="status" aria-live="polite"></span>
+        <select id="engine" aria-label="JavaScript engine" title="JavaScript engine (reloads the page)">
+          <option value="quickjs">QuickJS (9 MB)</option>
+          <option value="jsc">JSC (43 MB)</option>
+        </select>
         <button id="run" type="button" title="Save and run (Ctrl/Cmd-Enter)">▶ Run</button>
       </header>
       <main>

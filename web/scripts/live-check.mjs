@@ -48,6 +48,6 @@ for (const [name, type, ctx] of [["desktop-chromium", chromium, { viewport: { wi
   await page.click(".xterm");
   await page.keyboard.press("Control+C");
   await page.screenshot({ path: `${process.env.SHOTS ?? "/work/tmp/bun-wasm-shots"}/live-${name}.png` });
-  console.log(name, "isolated:", isolated, "first run ms:", first, "page errors:", errors.length ? errors : "none");
+  console.log(name, "status:", await page.textContent("#status"), "isolated:", isolated, "first run ms:", first, "page errors:", errors.length ? errors : "none");
   await browser.close();
 }
