@@ -1,3 +1,5 @@
+import { memoryViews } from "./memory-views.js";
+
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
 // headless tests). bun-browser.wasm (cargo feature engine-host) keeps doing what is real Bun:
@@ -133,10 +135,10 @@ class Writer {
 }
 
 class Reader {
-  constructor(bytes) {
+  constructor(bytes, view, pos) {
     this.bytes = bytes;
-    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    this.pos = 0;
+    this.view = view;
+    this.pos = pos;
   }
   u32() {
     const n = this.view.getUint32(this.pos, true);
@@ -174,7 +176,7 @@ class Reader {
         return n;
       }
       case T.STR:
-        return fromUtf8.decode(this.raw());
+        return fromUtf8.decode(this.raw().slice());
       case T.BYTES:
         // Copied out: wasm memory can grow (and detach) on the next call.
         return this.raw().slice();
@@ -188,7 +190,7 @@ class Reader {
         const n = this.u32();
         const out = {};
         for (let i = 0; i < n; i++) {
-          const k = fromUtf8.decode(this.raw());
+          const k = fromUtf8.decode(this.raw().slice());
           out[k] = this.value();
         }
         return out;
@@ -202,16 +204,16 @@ class Reader {
 // --- calling the wasm --------------------------------------------------------------------
 
 function wasmCaller(exports) {
+  const memory = memoryViews(exports.memory);
   const result = () => {
     const ptr = exports.bunwasm_result_ptr();
-    const len = exports.bunwasm_result_len();
-    return new Reader(new Uint8Array(exports.memory.buffer, ptr, len)).value();
+    return new Reader(memory.bytes(), memory.view(), ptr).value();
   };
   function call(index, args) {
     const w = new Writer();
     w.value(args);
     const ptr = exports.bunwasm_alloc(w.len);
-    new Uint8Array(exports.memory.buffer, ptr, w.len).set(w.buf.subarray(0, w.len));
+    memory.bytes().set(w.buf.subarray(0, w.len), ptr);
     const status = exports.bunwasm_call(index, ptr, w.len);
     const value = result();
     if (status !== 0) throw nativeError(value);

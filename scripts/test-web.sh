@@ -52,6 +52,7 @@ if [[ $browser == 1 ]]; then
   node tests/browser-subprocess.mjs || failed=1
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
     node tests/browser-engine.mjs || failed=1
+    node tests/browser-memory.mjs || failed=1
   else
     echo "skip browser engine: no dist/bun-browser.wasm (scripts/build-bun-browser.sh)"
   fi
