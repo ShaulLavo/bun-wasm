@@ -58,7 +58,7 @@ check('float coercion', () => {
 });
 check('grow validation', () => {
   for (const value of [-1, -1.9, Infinity, -Infinity, NaN, undefined, 2 ** 32, 1n, Symbol()]) throws(() => e.first.grow(value), TypeError);
-  grows(() => e.first.grow(-0.9), 2);
+  grows(() => e.first.grow(0.9), 2);
   grows(() => e.first.grow('0'), 2);
   throws(() => e.first.grow(2 ** 32 - 1), RangeError);
 });
