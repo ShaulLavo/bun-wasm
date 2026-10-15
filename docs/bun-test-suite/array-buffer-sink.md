@@ -21,15 +21,15 @@ three synthetic failures and three errors, all blocked by the missing sink impor
 | --- | ---: | ---: | ---: | ---: |
 | QuickJS | 0 / 1 | 0 / 18 | 173 | 0 / 0 |
 | Browser host | 0 / 1 | 0 / 17 | 174 | 0 / 0 |
-| Wasm JSC | 0 / 1 | 0 / 18 | 173 | 0 / 0 |
+| Wasm JSC | 0 / 1 | 0 / 19 | 172 | 0 / 0 |
 
 The sink file fully passes on every engine with 13 passes and one ASAN-only skip. The
-spawn file now collects 177 cases, with 5, 4 and 5 passes respectively. Its remaining
+spawn file now collects 177 cases, with 5, 4 and 6 passes respectively. Its remaining
 assertions cover broader subprocess behavior. The streams file next requires the missing
 `Bun.readableStreamToArray` export. Newly collected failures are not lost passing tests.
 
 A JSC spawn-only repeat with identical provenance has six passes. The `dispose keyword works`
-case varies with child-process timing; the earlier three-file JSC run had 19 observed passes.
+case varies with child-process timing; an intermediate three-file JSC run had 18 observed passes.
 The sink file has the same 13 passes and one skip in every measurement.
 
 Both sides use identical pinned hoisted dependencies, Bun source `4ceda2c` plus exported
