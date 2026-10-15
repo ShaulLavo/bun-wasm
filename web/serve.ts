@@ -1,8 +1,9 @@
 // Local preview of web/dist. Sends COOP/COEP so the page is cross-origin isolated
 // (SharedArrayBuffer + Atomics.wait for sleeps). ISOLATE=0 previews the busy-wait fallback.
-import { join, normalize } from "node:path";
+// ROOT=<dir> serves another build (the sandbox: `ROOT=dist bun ../web/serve.ts`).
+import { join, normalize, resolve } from "node:path";
 
-const root = join(import.meta.dir, "dist");
+const root = process.env.ROOT ? resolve(process.env.ROOT) : join(import.meta.dir, "dist");
 const isolate = process.env.ISOLATE !== "0";
 const port = Number(process.env.PORT ?? 4173);
 

@@ -10,11 +10,9 @@ import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
 import { MemFS, adoptInodes, decode, normalize } from "./fs";
-import { NetHelper } from "./net/helper";
-import { createRing } from "./net/ring";
-import { Previews, activated } from "./preview";
+import { Previews } from "./preview";
+import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
 import { type Output, Shell } from "./shell";
-import type { Engine, RunRequest, WorkerMessage } from "./worker";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const statusEl = $<HTMLSpanElement>("#status");
@@ -26,14 +24,9 @@ const newFileButton = $<HTMLButtonElement>("#new-file");
 const params = new URLSearchParams(location.search);
 // The default (browser) runs the program in the browser's own JS engine, with bun-browser.wasm for
 // the transpiler and natives; ?engine=quickjs and ?engine=jsc run the whole runtime in wasm.
-const engines: Record<Engine, { name: string; wasm: string; script: string }> = {
-  quickjs: { name: "QuickJS", wasm: "bun.wasm", script: "scripts/build.sh" },
-  jsc: { name: "JavaScriptCore", wasm: "bun-jsc.wasm", script: "scripts/build-bun-jsc.sh" },
-  browser: { name: "Browser (native)", wasm: "bun-browser.wasm", script: "scripts/build-bun-browser.sh" },
-};
 const defaultEngine: Engine = "browser";
 const requested = params.get("engine");
-const engine: Engine = requested !== null && Object.hasOwn(engines, requested) ? (requested as Engine) : defaultEngine;
+const engine: Engine = isEngine(requested) ? requested : defaultEngine;
 const engineName = engines[engine].name;
 const wasmUrl = params.get("wasm") ?? engines[engine].wasm;
 const trace = params.has("trace");
@@ -70,32 +63,11 @@ function setStatus(text: string, kind: "" | "ok" | "error" = ""): void {
 
 async function loadWasm(): Promise<void> {
   try {
-    setStatus("loading bun.wasm…");
-    // The site ships wasm gzipped (static hosts cap file sizes, and it is 3-4x smaller);
-    // the browser decompresses it. A plain .wasm URL (?wasm=...) still works.
-    const gzUrl = wasmUrl.endsWith(".gz") ? wasmUrl : `${wasmUrl}.gz`;
-    let res = await fetch(gzUrl);
-    const gzipped = res.ok;
-    if (!gzipped) res = await fetch(wasmUrl);
-    if (!res.ok) throw new Error(`${wasmUrl}: HTTP ${res.status}`);
-    const total = Number(res.headers.get("content-length")) || 0;
-    let received = 0;
-    const progress = new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        received += chunk.length;
-        setStatus(`loading bun.wasm… ${mb(received)}${total ? ` / ${mb(total)}` : ""}`);
-        controller.enqueue(chunk);
-      },
-    });
-    let body = res.body!.pipeThrough(progress);
-    if (gzipped) body = body.pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>);
-    const bytes = new Uint8Array(await new Response(body).arrayBuffer());
-    setStatus(`compiling bun.wasm (${mb(bytes.length)})…`);
-    const module = await WebAssembly.compile(bytes);
-    wasm = { module, size: bytes.length };
-    setStatus(`bun.wasm ready · ${engineName} · ${mb(bytes.length)}`, "ok");
+    const loaded = await fetchWasm(wasmUrl, (text) => setStatus(text));
+    wasm = loaded;
+    setStatus(`bun.wasm ready · ${engineName} · ${mb(loaded.size)}`, "ok");
   } catch (err) {
-    const missing = String(err).includes("HTTP 404");
+    const missing = err instanceof WasmMissing;
     const error = missing
       ? `${wasmUrl} is not in this build. Build it with ${engines[engine].script} (dist/${engines[engine].wasm}), then rebuild web/.`
       : `could not load bun.wasm: ${String(err)}`;
@@ -104,30 +76,10 @@ async function loadWasm(): Promise<void> {
   }
 }
 
-function mb(bytes: number): string {
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-// The browser engine imports program modules from named URLs served by the service worker at
-// ./__bunwasm/ (sw.ts), which is what lets imports form cycles. Workers started from that scope are
-// controlled by it; without it (no service workers, or registration failed) modules use blob URLs.
-const MODULE_SCOPE = "./__bunwasm/";
+// The browser engine's modules are served under ./__bunwasm/ (runner.ts), so imports can form cycles.
 const moduleScope: Promise<boolean> = engine === "browser" ? registerModuleScope() : Promise.resolve(false);
 
-async function registerModuleScope(): Promise<boolean> {
-  const container = navigator.serviceWorker;
-  if (!container) return false;
-  try {
-    const registration = await container.register("./sw.js", { scope: MODULE_SCOPE });
-    await activated(registration);
-    return registration.active !== null;
-  } catch (err) {
-    console.warn("module service worker registration failed:", err);
-    return false;
-  }
-}
-
-let current: { worker: Worker; finish(code: number): void } | null = null;
+let current: Run | null = null;
 const savedDuringRun = new Map<string, string>();
 
 async function runBun(args: string[], cwd: string, io: Output): Promise<number> {
@@ -147,62 +99,30 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
     LINES: String(term.rows),
     TMPDIR: "/tmp",
   };
-  // Networking (fetch through the helper, Bun.serve previews) needs a SharedArrayBuffer ring.
-  const net = isolated ? createRing() : null;
-  const helper = net ? startNet(net, io) : null;
   const scoped = await moduleScope;
-  // One Cache Storage cache per run holds its modules; deleted when the run ends.
-  const moduleCache = scoped ? `bunwasm-m-${crypto.randomUUID()}` : null;
-  const request: RunRequest = { engine, module: wasm.module, args: ["bun", ...args], env, root: fs.root, trace, net, moduleCache };
-  const worker = new Worker(scoped ? `${MODULE_SCOPE}worker.js` : "./worker.js", { type: "module" });
   runButton.disabled = true;
-  return new Promise<number>((resolve) => {
-    const finish = (code: number) => {
-      worker.terminate();
-      helper?.dispose();
-      if (moduleCache) void caches.delete(moduleCache);
-      current = null;
-      runButton.disabled = false;
-      for (const [path, text] of savedDuringRun) fs.writeFile(path, text);
-      savedDuringRun.clear();
-      editor.syncFromFs();
-      resolve(code);
-    };
-    current = { worker, finish };
-    worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
-      const msg = event.data;
-      if (msg.type === "net") {
-        helper?.handle(msg.req);
-        return;
-      }
-      if (msg.type === "stdout" || msg.type === "stderr") {
-        (msg.type === "stdout" ? io.out : io.err)(msg.data);
-        return;
-      }
-      fs.root = msg.root;
-      adoptInodes(fs.root);
-      if (msg.type === "error") io.err(`\x1b[31mbun.wasm crashed: ${msg.message}\x1b[0m\r\n`);
-      finish(msg.type === "exit" ? msg.code : 134);
-    };
-    worker.onerror = (event) => {
-      event.preventDefault();
-      io.err(`\x1b[31mworker error: ${event.message}\x1b[0m\r\n`);
-      finish(1);
-    };
-    worker.postMessage(request);
-  });
-}
-
-/** The I/O side of one run's networking; prints a preview link when a guest server starts. */
-function startNet(ring: SharedArrayBuffer, io: Output): NetHelper {
-  const helper: NetHelper = new NetHelper(ring, {
-    listening: (port) => {
+  const run = startRun({ engine, module: wasm.module, args, env, root: fs.root, moduleScope: scoped, trace }, {
+    stdout: (data) => io.out(data),
+    stderr: (data) => io.err(data),
+    listening: (port, helper) => {
       previews.register(port, helper);
       void previews.ready.then((state) => io.out(previewLine(port, state)));
     },
-    stopped: (port) => previews.unregister(port, helper),
+    stopped: (port, helper) => previews.unregister(port, helper),
   });
-  return helper;
+  current = run;
+  const result = await run.done;
+  current = null;
+  runButton.disabled = false;
+  if (result.root) {
+    fs.root = result.root;
+    adoptInodes(fs.root);
+  }
+  if (result.error) io.err(`\x1b[31m${result.error}\x1b[0m\r\n`);
+  for (const [path, text] of savedDuringRun) fs.writeFile(path, text);
+  savedDuringRun.clear();
+  editor.syncFromFs();
+  return result.code;
 }
 
 function previewLine(port: number, state: string): string {
@@ -215,7 +135,7 @@ function previewLine(port: number, state: string): string {
 function kill(): void {
   if (!current) return;
   term.write("^C\r\n");
-  current.finish(130);
+  current.kill();
 }
 
 // ---------- terminal ----------
