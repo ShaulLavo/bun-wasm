@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { recorderErrorHeader } from "./registry.mjs";
 
 const scratch = mkdtempSync("/work/tmp/bun-wasm-app-matrix-isolate-");
 let child;
@@ -19,7 +20,7 @@ try {
           const url = new URL(path, "https://registry.npmjs.org");
           if (url.origin !== "https://registry.npmjs.org") throw new Error("Invalid recorder origin");
           return await fetch(url, { headers: { accept: "application/vnd.npm.install-v1+json" }, redirect: "error", signal: AbortSignal.timeout(60000) });
-        } catch (error) { return new Response(String(error), { status: 502 }); }
+        } catch (error) { return new Response(String(error), { status: 502, headers: { [recorderErrorHeader]: "1" } }); }
       },
     });
   }

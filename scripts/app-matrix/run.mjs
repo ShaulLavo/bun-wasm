@@ -7,6 +7,7 @@ import { apps, browserSubset, projectFiles } from "./apps.mjs";
 import { registry, sha256 } from "./registry.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
 import { failure, compareEngines } from "./classify.mjs";
+import { earlyServerExit } from "./browser.mjs";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
 if (interfaces.some(line => line.split(":")[0].trim() !== "lo")) throw new Error("Use scripts/app-matrix.sh in its loopback-only network namespace");
@@ -146,9 +147,11 @@ async function checkServer(proc, url, check, logfile) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(500) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      if (check.kind === "page") return checkPage(url, check);
-      const body = await response.text();
-      if (body.includes(check.text)) return { status: "pass", assertion: `HTTP ${response.status}, body contains ${JSON.stringify(check.text)}` };
+      let result;
+      if (check.kind === "page") result = await checkPage(url, check);
+      else if ((await response.text()).includes(check.text)) result = { status: "pass", assertion: `HTTP ${response.status}, body contains ${JSON.stringify(check.text)}` };
+      if (proc.child.exitCode !== null || proc.child.signalCode !== null) return earlyServerExit({ code: proc.child.exitCode ?? proc.child.signalCode, output: text(logfile) }, "server");
+      if (result) return result;
     } catch { /* The server may still be starting. */ }
     await sleep(100);
   }

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from "node:path";
 
 export const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
+export const recorderErrorHeader = "x-bun-wasm-recorder-error";
 
 export async function registry(options) {
   const { directory, record } = options;
@@ -39,6 +40,7 @@ async function openMirror({ directory, record }, release) {
     const socket = process.env.MATRIX_RECORDER_SOCKET;
     if (!socket) throw new Error("Recording requires the isolated runner and upstream broker");
     const response = await fetch(`http://recorder${url.pathname}`, { unix: socket, headers: { accept: "application/vnd.npm.install-v1+json" }, redirect: "error", signal: AbortSignal.timeout(60000) });
+    if (response.headers.has(recorderErrorHeader)) throw new Error(`Registry recorder transport failure ${path}: ${await response.text()}`);
     const bytes = Buffer.from(await response.arrayBuffer());
     const entry = { status: response.status, type: response.headers.get("content-type") ?? "application/octet-stream", sha256: sha256(bytes) };
     writeFileSync(join(directory, "objects", entry.sha256), bytes);
