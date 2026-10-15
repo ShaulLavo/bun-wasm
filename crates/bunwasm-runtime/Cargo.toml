@@ -3,10 +3,16 @@ name = "bunwasm-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Bun-compatible JS runtime on QuickJS-ng (rquickjs), targeting wasm32-wasip1"
+description = "Bun-compatible JS runtime for wasm32-wasip1, on QuickJS-ng or JavaScriptCore behind an Engine trait"
+
+[features]
+default = ["engine-quickjs"]
+# The JS engine (exactly one): QuickJS-ng, or Bun's JavaScriptCore.
+engine-quickjs = ["dep:rquickjs"]
+engine-jsc = []
 
 [dependencies]
-rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"] }
+rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"], optional = true }
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
 url = "2"
 serde_json = { version = "1", features = ["preserve_order"] }

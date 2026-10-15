@@ -1,5 +1,7 @@
-//! ES module loading (QuickJS resolver/loader hooks), CommonJS compilation,
-//! and the embedded JS polyfills.
+//! Module sources: reading, transpiling and classifying files, the
+//! CommonJS wrapper, the ESM prologue, wrapper modules for non-ES modules,
+//! and the embedded JS polyfills. Engine-agnostic; the engine-facing glue is
+//! the [`ModuleHost`](crate::engine::ModuleHost) implementation in lib.rs.
 //!
 //! Every non-ESM module (built-ins, CommonJS, JSON, text) is exposed to ESM
 //! importers through a tiny generated wrapper module that re-exports the keys
@@ -7,12 +9,8 @@
 
 use std::rc::Rc;
 
-use rquickjs::loader::{ImportAttributes, Loader, Resolver};
-use rquickjs::module::Declared;
-use rquickjs::{Ctx, Function, Module, Object, Result, Value};
-
-use crate::natives;
-use crate::resolve::{self, Kind, Resolved};
+use crate::engine::NativeError;
+use crate::resolve::Kind;
 use crate::transpiler::Loader as SourceLoader;
 use crate::State;
 
@@ -20,9 +18,9 @@ include!(concat!(env!("OUT_DIR"), "/polyfills.rs"));
 
 /// Bun's transpiler emits CommonJS modules already wrapped in this function
 /// expression (that is how it reports a file is CommonJS).
-const CJS_WRAPPER_PREFIX: &str = "(function(exports, require, module, __filename, __dirname) {";
+pub const CJS_WRAPPER_PREFIX: &str = "(function(exports, require, module, __filename, __dirname) {";
 
-/// How positions in the code QuickJS evaluated map to the file on disk.
+/// How positions in the code the engine evaluated map to the file on disk.
 #[derive(Default)]
 pub struct PositionMap {
     /// Source map from transpiled to original code.
@@ -64,27 +62,16 @@ impl Format {
     }
 }
 
-pub fn throw_resolve_error(ctx: &Ctx<'_>, msg: &str, spec: &str, kind: Kind) -> rquickjs::Error {
-    let exception = match natives::new_error(ctx, msg) {
-        Ok(e) => e,
-        Err(e) => return e,
-    };
-    let obj = exception.as_object();
+pub fn resolve_error(msg: &str, spec: &str, kind: Kind) -> NativeError {
     // require() and import report different codes, like Node and Bun.
     let code = if kind == Kind::Require { "MODULE_NOT_FOUND" } else { "ERR_MODULE_NOT_FOUND" };
-    let _ = obj.set("code", code);
-    let _ = obj.set("specifier", spec);
-    exception.throw()
-}
-
-fn throw_error(ctx: &Ctx<'_>, msg: &str) -> rquickjs::Error {
-    natives::throw_error(ctx, msg)
+    NativeError::error(msg).prop("code", code).prop("specifier", spec)
 }
 
 /// A transpiler failure, reported like Bun's build errors: the offending
 /// source line, a caret, `error: message` and the location. The transpiler
 /// formats each error as `file:line:col: message`.
-fn throw_build_error(ctx: &Ctx<'_>, report: &str, source: &str) -> rquickjs::Error {
+fn build_error(report: &str, source: &str) -> NativeError {
     let mut text = String::new();
     let mut first_message = None;
     for entry in report.lines().filter(|l| !l.trim().is_empty()) {
@@ -101,13 +88,7 @@ fn throw_build_error(ctx: &Ctx<'_>, report: &str, source: &str) -> rquickjs::Err
         text.push_str(&format!("error: {message}\n    at {file}:{line}:{col}\n\n"));
     }
     let message = first_message.unwrap_or_else(|| report.trim().to_owned());
-    let exception = match natives::new_error(ctx, &message) {
-        Ok(e) => e,
-        Err(e) => return e,
-    };
-    let _ = exception.as_object().set("name", "BuildError");
-    let _ = exception.as_object().set("__bunwasmFormatted", text);
-    exception.throw()
+    NativeError::error(message).prop("name", "BuildError").prop("__bunwasmFormatted", text)
 }
 
 /// Split `file:line:col: message`.
@@ -194,11 +175,11 @@ fn esm_prologue(source: &str) -> String {
 
 impl State {
     /// Read, transpile and classify a file. Results are cached.
-    pub fn load_source(&self, ctx: &Ctx<'_>, path: &str) -> Result<(Rc<str>, Format)> {
+    pub fn load_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
         if let Some(hit) = self.sources.borrow().get(path) {
             return Ok(hit.clone());
         }
-        let raw = std::fs::read(path).map_err(|e| crate::natives::throw_io(ctx, e, "open", Some(path)))?;
+        let raw = std::fs::read(path).map_err(|e| crate::natives::io_error(e, "open", Some(path)))?;
         let raw = String::from_utf8(raw).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
         let loader = SourceLoader::from_path(path);
         let (code, format) = match loader {
@@ -208,7 +189,7 @@ impl State {
                 let out = self
                     .transpiler
                     .transpile_with_map(&raw, path, loader)
-                    .map_err(|msg| throw_build_error(ctx, &msg, &raw))?;
+                    .map_err(|msg| build_error(&msg, &raw))?;
                 let format = self.detect_format(path, &out.code);
                 if let Some(mappings) = out.mappings.filter(|m| !m.is_empty()) {
                     let mut positions = self.positions.borrow_mut();
@@ -260,102 +241,29 @@ impl State {
     }
 
     /// Remember that `len` characters were injected before line 1 of `path`.
-    fn record_prologue(&self, path: &str, len: usize) {
+    pub fn record_prologue(&self, path: &str, len: usize) {
         if len == 0 {
             return;
         }
         self.positions.borrow_mut().entry(path.to_owned()).or_default().line1_shift = len as u32;
     }
 
-    fn internal<'js>(&self, ctx: &Ctx<'js>) -> Result<Object<'js>> {
-        let saved = self.internal.borrow().clone().ok_or(rquickjs::Error::Unknown)?;
-        saved.restore(ctx)
-    }
 }
 
-pub fn module_format(ctx: &Ctx<'_>, state: &State, path: &str) -> Result<&'static str> {
-    state.load_source(ctx, path).map(|(_, f)| f.name())
-}
-
-/// Compile a CommonJS file into `function (exports, require, module, __filename, __dirname)`.
-pub fn compile_cjs<'js>(ctx: &Ctx<'js>, state: &State, path: &str) -> Result<Function<'js>> {
-    let (code, _) = state.load_source(ctx, path)?;
-    // Already wrapped by Bun's transpiler (its lines follow the printed code).
+/// The CommonJS wrapper for `code` and the line its first line must get.
+/// Our wrapper takes lines -1 and 0 (engines treat a start line of 0 as
+/// "default"), so the file's own lines and columns are unchanged; code Bun's
+/// transpiler already wrapped keeps the printed code's lines.
+pub fn cjs_wrapper(code: &str) -> (String, i32) {
     if code.starts_with(CJS_WRAPPER_PREFIX) {
-        return eval_script_at(ctx, &code, path, 1)?.get();
+        return (code.to_owned(), 1);
     }
-    // Our wrapper takes lines -1 and 0 (QuickJS treats a start line of 0 as
-    // "default"), so the file's own lines and columns are unchanged in stack
-    // traces.
-    let wrapped = format!("(function (exports, require, module, __filename, __dirname) {{\n\n{code}\n}})");
-    eval_script_at(ctx, &wrapped, path, -1)?.get()
+    (format!("(function (exports, require, module, __filename, __dirname) {{\n\n{code}\n}})"), -1)
 }
 
-/// Evaluate a classic script whose first line is numbered `first_line`.
-fn eval_script_at<'js>(ctx: &Ctx<'js>, source: &str, filename: &str, first_line: i32) -> Result<Value<'js>> {
-    use rquickjs::qjs;
-    let c_source = std::ffi::CString::new(source)?;
-    let c_filename = std::ffi::CString::new(filename)?;
-    let mut options = qjs::JSEvalOptions {
-        version: qjs::JS_EVAL_OPTIONS_VERSION as i32,
-        eval_flags: qjs::JS_EVAL_TYPE_GLOBAL as i32,
-        filename: c_filename.as_ptr(),
-        line_num: first_line,
-    };
-    // SAFETY: the source is NUL-terminated as JS_Eval2 requires; the result is
-    // a new reference (or JS_EXCEPTION with the exception left on the context).
-    unsafe {
-        let raw = qjs::JS_Eval2(ctx.as_raw().as_ptr(), c_source.as_ptr(), source.len() as _, &mut options);
-        if qjs::JS_IsException(raw) {
-            return Err(rquickjs::Error::Exception);
-        }
-        Ok(Value::from_raw(ctx.clone(), raw))
-    }
-}
-
-/// `require()` of an ES module: import it and run the job queue until it
-/// settles. Modules waiting on timers (top-level await) can't be required.
-pub fn require_esm<'js>(ctx: &Ctx<'js>, state: &State, path: &str) -> Result<Value<'js>> {
-    let promise = Module::import(ctx, path)?;
-    use rquickjs::promise::PromiseState;
-    while promise.state() == PromiseState::Pending {
-        if !state.drain_jobs(ctx) {
-            break;
-        }
-    }
-    match promise.state() {
-        PromiseState::Resolved => Ok(promise_result(ctx, &promise)),
-        PromiseState::Rejected => Err(ctx.throw(promise_result(ctx, &promise))),
-        PromiseState::Pending => Err(throw_error(
-            ctx,
-            &format!("require() async module \"{path}\" is unsupported. use \"await import()\" instead."),
-        )),
-    }
-}
-
-/// Fulfillment value or rejection reason of a settled promise.
-pub fn promise_result<'js>(ctx: &Ctx<'js>, promise: &rquickjs::Promise<'js>) -> Value<'js> {
-    // SAFETY: JS_PromiseResult returns a new reference we take ownership of.
-    unsafe {
-        let raw = rquickjs::qjs::JS_PromiseResult(ctx.as_raw().as_ptr(), promise.as_value().as_raw());
-        Value::from_raw(ctx.clone(), raw)
-    }
-}
-
-pub fn load_polyfill<'js>(ctx: &Ctx<'js>, name: &str) -> Result<Value<'js>> {
-    let Some((_, source)) = POLYFILLS.iter().find(|(n, _)| *n == name) else {
-        return Err(throw_error(ctx, &format!("bun-wasm: missing internal module {name}")));
-    };
-    let mut opts = rquickjs::context::EvalOptions::default();
-    opts.global = true;
-    opts.strict = false;
-    opts.filename = Some(format!("bun-wasm:{name}"));
-    ctx.eval_with_options(*source, opts)
-}
-
-pub fn run_bootstrap<'js>(ctx: &Ctx<'js>, native: Object<'js>) -> Result<Object<'js>> {
-    let factory: Function = load_polyfill(ctx, "bootstrap")?.get()?;
-    factory.call((native,))
+/// Source of an embedded polyfill (src/js/<name>.js).
+pub fn polyfill_source(name: &str) -> Option<&'static str> {
+    POLYFILLS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
 }
 
 fn is_plain_identifier(key: &str) -> bool {
@@ -363,7 +271,7 @@ fn is_plain_identifier(key: &str) -> bool {
 }
 
 /// Wrapper ESM source re-exporting `import.meta.m` (default) and its keys.
-fn wrapper_source(keys: &[String]) -> String {
+pub fn wrapper_source(keys: &[String]) -> String {
     let mut src = String::from("const m = import.meta.m.value; export default import.meta.m.default;\n");
     let mut exports = Vec::new();
     for (i, key) in keys.iter().enumerate() {
@@ -379,95 +287,20 @@ fn wrapper_source(keys: &[String]) -> String {
     src
 }
 
-fn declare_wrapper<'js>(ctx: &Ctx<'js>, name: &str, value: Value<'js>, default: Value<'js>) -> Result<Module<'js, Declared>> {
-    let keys: Vec<String> = match value.as_object() {
-        Some(obj) => obj.keys::<String>().collect::<Result<_>>()?,
-        None => Vec::new(),
-    };
-    let module = Module::declare(ctx.clone(), name, wrapper_source(&keys))?;
-    let handoff = Object::new(ctx.clone())?;
-    handoff.set("value", value)?;
-    handoff.set("default", default)?;
-    module.meta()?.set("m", handoff)?;
-    Ok(module)
-}
-
-pub struct ModuleResolver {
-    pub state: Rc<State>,
-}
-
-impl Resolver for ModuleResolver {
-    fn resolve<'js>(&mut self, ctx: &Ctx<'js>, base: &str, name: &str, _: Option<ImportAttributes<'js>>) -> Result<String> {
-        let from = if base.is_empty() || base.starts_with("node:") || base.starts_with("bun") {
-            format!("{}/", self.state.cwd())
-        } else {
-            base.to_owned()
-        };
-        match self.state.resolver.resolve(name, &from, Kind::Import) {
-            Ok(Resolved::Builtin(b)) => Ok(b),
-            Ok(Resolved::File(f)) => Ok(f),
-            Err(msg) => Err(throw_resolve_error(ctx, &msg, name, Kind::Import)),
-        }
-    }
-}
-
-pub struct ModuleLoader {
-    pub state: Rc<State>,
-}
-
-impl Loader for ModuleLoader {
-    fn load<'js>(&mut self, ctx: &Ctx<'js>, name: &str, _: Option<ImportAttributes<'js>>) -> Result<Module<'js, Declared>> {
-        let internal = self.state.internal(ctx)?;
-        if resolve::builtin_name(name).is_some() {
-            let builtin: Function = internal.get("builtin")?;
-            let exports: Value = builtin.call((name,))?;
-            // A builtin marked `__esModule` (bun:sqlite) names its own default
-            // export; for the rest the default is the exports object.
-            let default = match exports.as_object() {
-                Some(obj) if obj.get::<_, bool>("__esModule").unwrap_or(false) => obj.get("default")?,
-                _ => exports.clone(),
-            };
-            return declare_wrapper(ctx, name, exports, default);
-        }
-        let (code, format) = self.state.load_source(ctx, name)?;
-        match format {
-            Format::Esm => {
-                let prologue = esm_prologue(&code);
-                self.state.record_prologue(name, prologue.chars().count());
-                let source = format!("{prologue}{code}");
-                let module = Module::declare(ctx.clone(), name, source)?;
-                let init: Function = internal.get("initImportMeta")?;
-                let is_main = *self.state.main.borrow() == name;
-                init.call::<_, ()>((module.meta()?, name, is_main))?;
-                Ok(module)
-            }
-            Format::Cjs | Format::Json | Format::Text => {
-                // The JS side evaluates it (sharing require's cache) and
-                // returns [namespaceObject, defaultExport].
-                let import_cjs: Function = internal.get("importNonEsm")?;
-                let pair: rquickjs::Array = import_cjs.call((name, format.name()))?;
-                declare_wrapper(ctx, name, pair.get(0)?, pair.get(1)?)
-            }
-        }
-    }
-}
-
-/// Declare and evaluate `-e` code as an ES module named `<cwd>/[eval]`.
-pub fn eval_main<'js>(ctx: &Ctx<'js>, state: &State, code: &str) -> Result<rquickjs::Promise<'js>> {
-    let name = format!("{}/[eval]", state.cwd().trim_end_matches('/'));
+/// ESM source for a module file: the prologue (recorded for stack-position
+/// fixups) plus the code.
+pub fn esm_source(state: &State, name: &str, code: &str) -> String {
     let prologue = esm_prologue(code);
-    state.record_prologue(&name, prologue.chars().count());
-    let source = format!("{prologue}{code}");
-    state
-        .sources
-        .borrow_mut()
-        .insert(name.clone(), (Rc::from(code), Format::Esm));
-    let module = Module::declare(ctx.clone(), name.clone(), source)?;
-    let internal = state.internal(ctx)?;
-    let init: Function = internal.get("initImportMeta")?;
-    init.call::<_, ()>((module.meta()?, name, true))?;
-    let (_, promise) = module.eval()?;
-    Ok(promise)
+    state.record_prologue(name, prologue.chars().count());
+    format!("{prologue}{code}")
+}
+
+/// Register `-e` code as the module `<cwd>/[eval]`; returns (name, source).
+pub fn eval_entry(state: &State, code: &str) -> (String, String) {
+    let name = format!("{}/[eval]", state.cwd().trim_end_matches('/'));
+    state.sources.borrow_mut().insert(name.clone(), (Rc::from(code), Format::Esm));
+    let source = esm_source(state, &name, code);
+    (name, source)
 }
 
 #[cfg(test)]

@@ -1,10 +1,10 @@
-//! bun-wasm runtime: a Bun-compatible JavaScript runtime on QuickJS-ng
-//! (through rquickjs), built for `wasm32-wasip1`.
+//! bun-wasm runtime: a Bun-compatible JavaScript runtime for `wasm32-wasip1`.
 //!
-//! Rust owns the engine, the module loader, the event loop and the native
-//! primitives (files, clocks, randomness, hashing, URL parsing). The public
+//! Rust owns the module loader, the event loop and the native primitives
+//! (files, clocks, randomness, hashing, URL parsing, networking). The public
 //! Bun/Node/Web APIs are JS polyfills in `src/js/`, built on the `native`
-//! object from [`natives`].
+//! object from [`natives`]. The JavaScript engine sits behind the [`Engine`]
+//! trait: QuickJS-ng by default, JavaScriptCore with the `engine-jsc` feature.
 
 #![cfg_attr(target_os = "wasi", feature(wasi_ext))]
 #![feature(io_error_more)]
@@ -15,9 +15,9 @@ use std::io::{self, BufWriter, Write};
 use std::rc::Rc;
 use std::time::Instant;
 
-use rquickjs::{Context, Ctx, Function, Object, Persistent, Promise, Runtime, Value};
-
 mod encoding;
+pub mod engine;
+mod engine_natives;
 pub mod host;
 mod modules;
 mod natives;
@@ -26,7 +26,19 @@ mod sourcemap;
 mod sqlite;
 pub mod transpiler;
 
+#[cfg(not(feature = "engine-jsc"))]
+mod engine_quickjs;
+#[cfg(feature = "engine-jsc")]
+mod engine_jsc;
+
+pub use engine::{Engine, ModuleHost, NativeError, PromiseState, Val};
 pub use transpiler::{Loader, PassthroughTranspiler, Transpiled, Transpiler};
+
+/// The engine this build uses.
+#[cfg(not(feature = "engine-jsc"))]
+pub type ActiveEngine = engine_quickjs::QuickJs;
+#[cfg(feature = "engine-jsc")]
+pub type ActiveEngine = engine_jsc::Jsc;
 
 /// Bun version this runtime reports (from vendor/bun/package.json).
 pub const BUN_VERSION: &str = env!("BUNWASM_BUN_VERSION");
@@ -50,9 +62,8 @@ pub struct Options {
     pub transpiler: Box<dyn Transpiler>,
 }
 
-type SavedValue = Persistent<Value<'static>>;
-
-/// Shared by the module loader, the natives and the event loop.
+/// Engine-independent process state, shared by the module loader, the
+/// natives and the event loop.
 pub(crate) struct State {
     resolver: resolve::Resolver,
     transpiler: Box<dyn Transpiler>,
@@ -68,9 +79,6 @@ pub(crate) struct State {
     stdout: RefCell<BufWriter<io::Stdout>>,
     /// Set when `process.nextTick` queued work.
     tick_pending: Cell<bool>,
-    /// Rejected promises without a handler yet: (promise, reason).
-    rejections: RefCell<Vec<(SavedValue, SavedValue)>>,
-    internal: RefCell<Option<Persistent<Object<'static>>>>,
     fds: RefCell<natives::FdTable>,
     start: Instant,
     argv: Vec<String>,
@@ -87,8 +95,6 @@ impl State {
             positions: RefCell::new(HashMap::new()),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
             tick_pending: Cell::new(false),
-            rejections: RefCell::new(Vec::new()),
-            internal: RefCell::new(None),
             fds: RefCell::new(natives::FdTable::default()),
             start: Instant::now(),
             argv,
@@ -119,24 +125,54 @@ impl State {
 
     pub(crate) fn exit(&self, code: i32) -> ! {
         self.flush();
-        // Skip runtime teardown: QuickJS would assert on objects still held
-        // by persistent handles, and the process is going away anyway.
+        // Skip engine teardown: values are still rooted (and JSC's VM
+        // teardown aborts); the process is going away anyway.
         std::process::exit(code)
+    }
+}
+
+/// The runtime's engine-facing half: the `internal` object the bootstrap
+/// returned, pending wrapper-module handoffs, and the module host.
+pub(crate) struct Core<E: Engine> {
+    pub(crate) state: Rc<State>,
+    internal: RefCell<Option<E::Value>>,
+    /// Exports objects of wrapper modules, until their `import.meta` is set.
+    handoffs: RefCell<HashMap<String, (E::Value, E::Value)>>,
+}
+
+impl<E: Engine> Core<E> {
+    pub(crate) fn internal(&self, e: &E) -> E::Value {
+        self.internal.borrow().clone().unwrap_or_else(|| e.undefined())
+    }
+
+    pub(crate) fn call_internal(&self, e: &E, name: &str, args: &[E::Value]) -> Result<E::Value, E::Value> {
+        let internal = self.internal(e);
+        let f = e.get(&internal, name)?;
+        e.call(&f, &internal, args)
+    }
+
+    fn call_internal_num(&self, e: &E, name: &str) -> Result<f64, E::Value> {
+        let v = self.call_internal(e, name, &[])?;
+        Ok(match e.to_val(&v) {
+            Val::Num(n) => n,
+            Val::Bool(b) => f64::from(u8::from(b)),
+            _ => 0.0,
+        })
     }
 
     /// Run `process.nextTick` callbacks and promise jobs until both queues
     /// are empty. Returns whether anything ran.
-    pub(crate) fn drain_jobs(&self, ctx: &Ctx<'_>) -> bool {
+    pub(crate) fn drain_jobs(&self, e: &E) -> bool {
         let mut ran = false;
         loop {
-            if self.tick_pending.replace(false) {
+            if self.state.tick_pending.replace(false) {
                 ran = true;
-                if let Err(err) = self.call_internal::<()>(ctx, "runTicks", ()) {
-                    self.uncaught(ctx, err);
+                if let Err(err) = self.call_internal(e, "runTicks", &[]) {
+                    self.uncaught(e, err);
                 }
                 continue;
             }
-            if !ctx.execute_pending_job() {
+            if !e.run_jobs() {
                 break;
             }
             ran = true;
@@ -144,67 +180,95 @@ impl State {
         ran
     }
 
-    fn call_internal<'js, R: rquickjs::FromJs<'js>>(
-        &self,
-        ctx: &Ctx<'js>,
-        name: &str,
-        args: impl rquickjs::function::IntoArgs<'js>,
-    ) -> rquickjs::Result<R> {
-        let internal = self.internal.borrow().clone().ok_or(rquickjs::Error::Unknown)?.restore(ctx)?;
-        let f: Function = internal.get(name)?;
-        f.call(args)
-    }
-
-    /// Turn a thrown rquickjs error into the JS value that was thrown.
-    fn take_exception<'js>(&self, ctx: &Ctx<'js>, err: rquickjs::Error) -> Value<'js> {
-        match err {
-            rquickjs::Error::Exception => ctx.catch(),
-            other => {
-                self.write_stderr(format!("error: {other}\n").as_bytes());
-                self.exit(1);
-            }
-        }
-    }
-
     /// An uncaught error: `process.on("uncaughtException")` handlers get it
     /// first, otherwise it is printed the way Bun does and the process exits 1.
-    fn uncaught(&self, ctx: &Ctx<'_>, err: rquickjs::Error) {
-        let value = self.take_exception(ctx, err);
-        self.uncaught_value(ctx, "handleUncaught", value);
+    pub(crate) fn uncaught(&self, e: &E, err: E::Value) {
+        self.uncaught_value(e, "handleUncaught", err);
     }
 
-    fn uncaught_value<'js>(&self, ctx: &Ctx<'js>, handler: &str, value: Value<'js>) {
-        match self.call_internal::<bool>(ctx, handler, (value,)) {
-            Ok(true) => return,
-            Ok(false) => {}
-            Err(_) => {
-                let fallback = ctx.catch();
-                let text = fallback.as_string().and_then(|s| s.to_string().ok()).unwrap_or_default();
-                self.write_stderr(format!("error: {text}\n").as_bytes());
+    fn uncaught_value(&self, e: &E, handler: &str, value: E::Value) {
+        match self.call_internal(e, handler, &[value]) {
+            Ok(handled) if e.to_val(&handled) == Val::Bool(true) => return,
+            Ok(_) => {}
+            Err(fallback) => {
+                let text = match e.to_val(&fallback) {
+                    Val::Str(s) => s,
+                    _ => String::from("uncaught error while reporting an error"),
+                };
+                self.state.write_stderr(format!("error: {text}\n").as_bytes());
             }
         }
-        self.exit(1)
+        self.state.exit(1)
     }
 
     /// Report promises that are still unhandled once the microtask queue
     /// drained (Bun treats an unhandled rejection as fatal).
-    fn check_rejections(&self, ctx: &Ctx<'_>) {
-        let pending: Vec<_> = self.rejections.borrow_mut().drain(..).collect();
-        for (_, reason) in pending {
-            let Ok(reason) = reason.restore(ctx) else { continue };
-            self.uncaught_value(ctx, "handleRejection", reason);
+    fn check_rejections(&self, e: &E) {
+        for (_, reason) in e.take_unhandled_rejections() {
+            self.uncaught_value(e, "handleRejection", reason);
         }
+    }
+}
+
+impl<E: Engine> ModuleHost<E> for Core<E> {
+    fn resolve(&self, e: &E, specifier: &str, referrer: &str) -> Result<String, E::Value> {
+        let from = if referrer.is_empty() || resolve::builtin_name(referrer).is_some() {
+            format!("{}/", self.state.cwd())
+        } else {
+            referrer.to_owned()
+        };
+        match self.state.resolver.resolve(specifier, &from, resolve::Kind::Import) {
+            Ok(resolve::Resolved::Builtin(b)) => Ok(b),
+            Ok(resolve::Resolved::File(f)) => Ok(f),
+            Err(msg) => Err(e.error_value(&modules::resolve_error(&msg, specifier, resolve::Kind::Import))),
+        }
+    }
+
+    fn load(&self, e: &E, name: &str) -> Result<String, E::Value> {
+        if resolve::builtin_name(name).is_some() {
+            let exports = self.call_internal(e, "builtin", &[e.from_val(name.into())])?;
+            let keys = e.keys(&exports);
+            // A builtin marked `__esModule` (bun:sqlite) names its own default
+            // export; for the rest the default is the exports object.
+            let flagged = e.get(&exports, "__esModule").map(|v| e.to_val(&v) == Val::Bool(true)).unwrap_or(false);
+            let default = if flagged { e.get(&exports, "default")? } else { exports.clone() };
+            self.handoffs.borrow_mut().insert(name.to_owned(), (exports, default));
+            return Ok(modules::wrapper_source(&keys));
+        }
+        let (code, format) = self.state.load_source(name).map_err(|err| e.error_value(&err))?;
+        if format == modules::Format::Esm {
+            return Ok(modules::esm_source(&self.state, name, &code));
+        }
+        // The JS side evaluates it (sharing require's cache) and returns
+        // [namespaceObject, defaultExport].
+        let args = [e.from_val(name.into()), e.from_val(format.name().into())];
+        let pair = self.call_internal(e, "importNonEsm", &args)?;
+        let (value, default) = (e.get(&pair, "0")?, e.get(&pair, "1")?);
+        let keys = e.keys(&value);
+        self.handoffs.borrow_mut().insert(name.to_owned(), (value, default));
+        Ok(modules::wrapper_source(&keys))
+    }
+
+    fn init_meta(&self, e: &E, name: &str, meta: &E::Value) -> Result<(), E::Value> {
+        let handoff = self.handoffs.borrow_mut().remove(name);
+        if let Some((value, default)) = handoff {
+            let m = e.new_object();
+            e.set(&m, "value", value)?;
+            e.set(&m, "default", default)?;
+            return e.set(meta, "m", m);
+        }
+        let is_main = *self.state.main.borrow() == name;
+        let args = [meta.clone(), e.from_val(name.into()), e.from_val(is_main.into())];
+        self.call_internal(e, "initImportMeta", &args).map(|_| ())
     }
 }
 
 /// Run a program to completion; returns the process exit code.
 pub fn run(options: Options) -> i32 {
-    let rt = Runtime::new().expect("create QuickJS runtime");
-    // The default 256 KiB native stack limit is far below what wasm gives
-    // us; QuickJS checks against it to throw RangeError instead of crashing.
-    rt.set_max_stack_size(4 * 1024 * 1024);
-    let ctx = Context::full(&rt).expect("create QuickJS context");
+    run_with::<ActiveEngine>(options)
+}
 
+fn run_with<E: Engine>(options: Options) -> i32 {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "/".to_owned());
@@ -229,91 +293,68 @@ pub fn run(options: Options) -> i32 {
         *state.main_arg.borrow_mut() = arg.clone();
     }
 
-    let tracker_state = state.clone();
-    rt.set_host_promise_rejection_tracker(Some(Box::new(move |ctx, promise, reason, is_handled| {
-        let mut list = tracker_state.rejections.borrow_mut();
-        if is_handled {
-            list.retain(|(p, _)| p.clone().restore(&ctx).map(|p| p != promise).unwrap_or(false));
-        } else {
-            list.push((Persistent::save(&ctx, promise), Persistent::save(&ctx, reason)));
-        }
-    })));
-    rt.set_loader(
-        modules::ModuleResolver { state: state.clone() },
-        modules::ModuleLoader { state: state.clone() },
-    );
-
-    let code = ctx.with(|ctx| {
-        let code = run_in_context(&ctx, &state, &options.entry, &main_path);
-        state.flush();
-        code
-    });
-    // Skip teardown: persistent handles (timers, the internal object) are
-    // still alive and QuickJS asserts on leaked objects; the process exits next.
-    std::mem::forget(ctx);
-    std::mem::forget(rt);
+    let core = Rc::new(Core::<E> { state: state.clone(), internal: RefCell::new(None), handoffs: RefCell::new(HashMap::new()) });
+    let engine = E::new(core.clone());
+    let code = run_in_engine(&engine, &core, &options.entry, &main_path);
+    state.flush();
+    // Skip teardown (see State::exit).
+    std::mem::forget(engine);
     code
 }
 
-fn run_in_context(ctx: &Ctx<'_>, state: &Rc<State>, entry: &Entry, main_path: &str) -> i32 {
-    let internal = natives::install(ctx, state).and_then(|native| modules::run_bootstrap(ctx, native));
-    let internal = match internal {
-        Ok(internal) => internal,
+fn run_in_engine<E: Engine>(e: &E, core: &Rc<Core<E>>, entry: &Entry, main_path: &str) -> i32 {
+    match engine_natives::bootstrap(e, core) {
+        Ok(internal) => *core.internal.borrow_mut() = Some(internal),
         Err(err) => {
-            let detail = match err {
-                rquickjs::Error::Exception => format!("{:?}", ctx.catch()),
-                other => other.to_string(),
-            };
-            eprintln!("bun-wasm: bootstrap failed: {detail}");
+            eprintln!("bun-wasm: bootstrap failed: {:?}", e.to_val(&err));
             return 70;
         }
-    };
-    *state.internal.borrow_mut() = Some(Persistent::save(ctx, internal));
-
+    }
     let started = match entry {
-        Entry::Eval(code) => modules::eval_main(ctx, state, code).map(|p| p.into_value()),
-        Entry::File(_) => state.call_internal::<Value>(ctx, "runMain", (main_path,)),
+        Entry::Eval(code) => {
+            let (name, source) = modules::eval_entry(&core.state, code);
+            e.eval_module(&name, &source)
+        }
+        Entry::File(_) => core.call_internal(e, "runMain", &[e.from_val(main_path.into())]),
         Entry::Test(args) => {
-            let list = rquickjs::Array::new(ctx.clone());
-            let list = list.and_then(|list| {
-                for (i, arg) in args.iter().enumerate() {
-                    list.set(i, arg.as_str())?;
-                }
-                Ok(list)
-            });
-            list.and_then(|list| state.call_internal::<Value>(ctx, "runTests", (list,)))
+            let list = Val::Array(args.iter().map(|a| Val::from(a.as_str())).collect());
+            core.call_internal(e, "runTests", &[e.from_val(list)])
         }
     };
     let main_promise = match started {
-        Ok(v) => v.into_promise(),
+        Ok(v) => e.promise_state(&v).map(|_| v),
         Err(err) => {
-            state.uncaught(ctx, err);
+            core.uncaught(e, err);
             None
         }
     };
-    run_event_loop(ctx, state, main_promise);
-    state.call_internal::<i32>(ctx, "beforeExit", ()).unwrap_or_else(|err| {
-        state.uncaught(ctx, err);
-        0
-    })
+    run_event_loop(e, core, main_promise);
+    match core.call_internal_num(e, "beforeExit") {
+        Ok(code) => code as i32,
+        Err(err) => {
+            core.uncaught(e, err);
+            0
+        }
+    }
 }
 
 /// The event loop: microtasks and ticks, then one due timer at a time;
-/// sleeps (WASI `poll_oneoff`) until the next timer when idle.
-fn run_event_loop<'js>(ctx: &Ctx<'js>, state: &Rc<State>, main: Option<Promise<'js>>) {
+/// sleeps (WASI `poll_oneoff`, or the host's poll while sockets are open)
+/// until the next timer when idle.
+fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>) {
     let mut main = main;
     loop {
-        state.drain_jobs(ctx);
+        core.drain_jobs(e);
         if let Some(promise) = main.take() {
-            main = check_main_promise(ctx, state, promise);
+            main = check_main_promise(e, core, promise);
         }
-        state.check_rejections(ctx);
+        core.check_rejections(e);
         // runTimers returns: 0 = a timer ran (loop again), >0 = ms until the
         // next timer, <0 = nothing left keeping the loop alive.
-        let next = match state.call_internal::<f64>(ctx, "runTimers", ()) {
+        let next = match core.call_internal_num(e, "runTimers") {
             Ok(next) => next,
             Err(err) => {
-                state.uncaught(ctx, err);
+                core.uncaught(e, err);
                 0.0
             }
         };
@@ -322,61 +363,65 @@ fn run_event_loop<'js>(ctx: &Ctx<'js>, state: &Rc<State>, main: Option<Promise<'
         }
         // Network handles (docs/host-abi.md): pump them, then sleep in the
         // host's poll until news or the next timer instead of a plain sleep.
-        if state.call_internal::<i32>(ctx, "ioPending", ()).unwrap_or(0) > 0 {
-            match state.call_internal::<bool>(ctx, "pumpIo", ()) {
-                Ok(true) => continue,
-                Ok(false) => {}
+        if core.call_internal_num(e, "ioPending").unwrap_or(0.0) > 0.0 {
+            match core.call_internal_num(e, "pumpIo") {
+                Ok(progressed) if progressed != 0.0 => continue,
+                Ok(_) => {}
                 Err(err) => {
-                    state.uncaught(ctx, err);
+                    core.uncaught(e, err);
                     continue;
                 }
             }
-            if state.drain_jobs(ctx) {
+            if core.drain_jobs(e) {
                 continue;
             }
-            state.flush();
+            core.state.flush();
             let wait = if next < 0.0 { -1 } else { next.ceil() as i32 };
             if host::poll(wait) == host::UNSUPPORTED {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
-            let _ = state.call_internal::<bool>(ctx, "pumpIo", ()).map_err(|err| state.uncaught(ctx, err));
+            if let Err(err) = core.call_internal(e, "pumpIo", &[]) {
+                core.uncaught(e, err);
+            }
             continue;
         }
         if next < 0.0 {
-            if state.drain_jobs(ctx) {
+            if core.drain_jobs(e) {
                 continue;
             }
             if let Some(promise) = main.take() {
                 // Top-level await that can never finish: Bun exits quietly.
-                main = check_main_promise(ctx, state, promise);
+                main = check_main_promise(e, core, promise);
             }
             // `beforeExit` listeners may schedule more work.
-            match state.call_internal::<bool>(ctx, "emitBeforeExit", ()) {
-                Ok(true) => continue,
+            match core.call_internal_num(e, "emitBeforeExit") {
+                Ok(n) if n != 0.0 => continue,
                 _ => break,
             }
         }
-        state.flush();
+        core.state.flush();
         std::thread::sleep(std::time::Duration::from_secs_f64(next / 1000.0));
     }
 }
 
 /// Surface a rejected entry module; keep pending ones around.
-fn check_main_promise<'js>(ctx: &Ctx<'js>, state: &State, promise: Promise<'js>) -> Option<Promise<'js>> {
-    use rquickjs::promise::PromiseState;
-    match promise.state() {
-        PromiseState::Pending => Some(promise),
-        PromiseState::Resolved => None,
-        PromiseState::Rejected => {
-            let reason = modules::promise_result(ctx, &promise);
+fn check_main_promise<E: Engine>(e: &E, core: &Core<E>, promise: E::Value) -> Option<E::Value> {
+    match e.promise_state(&promise) {
+        Some(PromiseState::Pending) => Some(promise),
+        Some(PromiseState::Rejected) => {
+            let reason = e.promise_result(&promise);
             // The rejection tracker saw this promise too; don't report twice.
-            let promise_value = promise.into_value();
-            state
-                .rejections
-                .borrow_mut()
-                .retain(|(p, _)| p.clone().restore(ctx).map(|p| p != promise_value).unwrap_or(false));
-            state.uncaught_value(ctx, "handleUncaught", reason);
+            let others: Vec<_> = e
+                .take_unhandled_rejections()
+                .into_iter()
+                .filter(|(p, _)| !e.same_value(p, &promise))
+                .collect();
+            core.uncaught_value(e, "handleUncaught", reason);
+            for (_, r) in others {
+                core.uncaught_value(e, "handleRejection", r);
+            }
             None
         }
+        _ => None,
     }
 }

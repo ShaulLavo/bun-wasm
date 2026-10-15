@@ -2,9 +2,12 @@
 //! object. The JS polyfills (src/js/*.js) build the public Bun/Node/Web APIs on
 //! top of these; nothing here is reachable from user code directly.
 //!
-//! Conventions: byte buffers cross the boundary as `Uint8Array` (JS converts
-//! other views first), paths are absolute strings, and failures throw
-//! Node-style errors (`code`, `errno`, `syscall`, `path`).
+//! These natives are engine-agnostic: they take and return plain data
+//! ([`Val`]). Byte buffers cross as `Uint8Array` (JS converts other views
+//! first), paths are absolute strings, and failures throw Node-style errors
+//! (`code`, `errno`, `syscall`, `path`). The natives that need engine values
+//! (module loading, promise and proxy introspection) are in
+//! engine_natives.rs.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -12,88 +15,21 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rquickjs::function::{IntoJsFunc, Opt};
-use rquickjs::object::Property;
-use rquickjs::{
-    qjs, Array, BigInt, Ctx, Exception, Function, IntoJs, Object, Promise, Result, TypedArray, Value,
-};
-
-use crate::modules;
+use crate::engine::{Args, DataFn, NativeError, NativeResult, Record, Val};
 use crate::resolve::{self, Kind, Resolved};
 use crate::State;
 
-unsafe extern "C" {
-    /// Added to QuickJS by bun-wasm (third_party/rquickjs-sys): remaining
-    /// entries of a Map/Set iterator, without advancing it.
-    fn JS_bunwasm_IteratorEntries(ctx: *mut qjs::JSContext, value: qjs::JSValue) -> qjs::JSValue;
-    /// Own keys in JSC's console order (index keys, then insertion order with
-    /// symbols interleaved); undefined for exotic objects.
-    fn JS_bunwasm_OwnKeysInOrder(ctx: *mut qjs::JSContext, value: qjs::JSValue) -> qjs::JSValue;
-    /// The async context promise reactions capture and restore (new reference).
-    fn JS_bunwasm_GetAsyncContext(ctx: *mut qjs::JSContext) -> qjs::JSValue;
-    fn JS_bunwasm_SetAsyncContext(ctx: *mut qjs::JSContext, value: qjs::JSValue);
+/// Natives by name, plus constant properties of the `native` object.
+#[derive(Default)]
+pub struct Table {
+    pub functions: Vec<(&'static str, DataFn)>,
+    pub constants: Vec<(&'static str, Val)>,
 }
 
-type EngineHelper = unsafe extern "C" fn(*mut qjs::JSContext, qjs::JSValue) -> qjs::JSValue;
-
-/// Call one of the bun-wasm helpers added to QuickJS.
-fn call_engine_helper<'js>(ctx: &Ctx<'js>, value: &Value<'js>, helper: EngineHelper) -> Result<Value<'js>> {
-    // SAFETY: the helpers borrow `value` and return a new reference, or
-    // JS_EXCEPTION with the exception left on the context.
-    unsafe {
-        let raw = helper(ctx.as_raw().as_ptr(), value.as_raw());
-        if qjs::JS_IsException(raw) {
-            return Err(rquickjs::Error::Exception);
-        }
-        Ok(Value::from_raw(ctx.clone(), raw))
+impl Table {
+    pub(crate) fn add(&mut self, name: &'static str, f: impl Fn(Args<'_>) -> NativeResult + 'static) {
+        self.functions.push((name, Rc::new(f)));
     }
-}
-
-pub(crate) fn set_fn<'js, F, P>(obj: &Object<'js>, name: &str, f: F) -> Result<()>
-where
-    F: IntoJsFunc<'js, P> + 'js,
-{
-    let func = Function::new(obj.ctx().clone(), f)?.with_name(name)?;
-    obj.set(name, func)
-}
-
-/// Bytes of a string (UTF-8) or a `Uint8Array` / `ArrayBuffer`.
-pub fn bytes_of(value: &Value<'_>) -> Result<Vec<u8>> {
-    if let Some(s) = value.as_string() {
-        return Ok(s.to_string()?.into_bytes());
-    }
-    if let Ok(arr) = TypedArray::<u8>::from_value(value.clone()) {
-        // SAFETY: no JS runs while the slice is alive; it is copied at once.
-        return Ok(unsafe { arr.as_bytes() }.unwrap_or(&[]).to_vec());
-    }
-    if let Some(buf) = value.as_object().and_then(|o| rquickjs::ArrayBuffer::from_object(o.clone())) {
-        // SAFETY: as above.
-        return Ok(unsafe { buf.as_bytes() }.unwrap_or(&[]).to_vec());
-    }
-    Err(Exception::throw_type(value.ctx(), "expected a string, Uint8Array or ArrayBuffer"))
-}
-
-/// A plain `Error` with a non-enumerable `message`, as `new Error(message)`
-/// makes it (`Exception::from_message` defines an enumerable one, which then
-/// shows in `Object.keys(err)` and in inspected output).
-pub fn new_error<'js>(ctx: &Ctx<'js>, message: &str) -> Result<Exception<'js>> {
-    let err = Exception::from_message(ctx.clone(), message)?;
-    // Redefining keeps the old enumerability, so delete first.
-    err.as_object().remove("message")?;
-    err.as_object().prop("message", Property::from(message).writable().configurable())?;
-    Ok(err)
-}
-
-/// Throw [`new_error`].
-pub fn throw_error(ctx: &Ctx<'_>, message: &str) -> rquickjs::Error {
-    match new_error(ctx, message) {
-        Ok(err) => err.throw(),
-        Err(e) => e,
-    }
-}
-
-fn uint8<'js>(ctx: &Ctx<'js>, bytes: Vec<u8>) -> Result<Value<'js>> {
-    TypedArray::<u8>::new(ctx.clone(), bytes).map(|a| a.into_value())
 }
 
 /// Node's (code, negative Linux errno, description) for an I/O error.
@@ -116,30 +52,25 @@ fn errno_info(err: &io::Error) -> (&'static str, i32, &'static str) {
     }
 }
 
-pub fn throw_io(ctx: &Ctx<'_>, err: io::Error, syscall: &str, path: Option<&str>) -> rquickjs::Error {
+/// A Node-style system error (`ENOENT: no such file or directory, open '/x'`).
+pub fn io_error(err: io::Error, syscall: &str, path: Option<&str>) -> NativeError {
     let (code, errno, desc) = errno_info(&err);
     let message = match path {
         Some(p) => format!("{code}: {desc}, {syscall} '{p}'"),
         None => format!("{code}: {desc}, {syscall}"),
     };
-    let exception = match new_error(ctx, &message) {
-        Ok(e) => e,
-        Err(e) => return e,
-    };
-    let obj = exception.as_object();
-    let attach = || -> Result<()> {
-        if let Some(p) = path {
-            obj.set("path", p)?;
-        }
-        obj.set("syscall", syscall)?;
-        obj.set("errno", errno)?;
-        obj.set("code", code)?;
-        Ok(())
-    };
-    if let Err(e) = attach() {
-        return e;
+    let mut e = NativeError::error(message);
+    if let Some(p) = path {
+        e = e.prop("path", p);
     }
-    exception.throw()
+    e.prop("syscall", syscall).prop("errno", errno).prop("code", code)
+}
+
+fn bad_fd(syscall: &str) -> NativeError {
+    NativeError::error(format!("EBADF: bad file descriptor, {syscall}"))
+        .prop("syscall", syscall)
+        .prop("errno", -9)
+        .prop("code", "EBADF")
 }
 
 fn millis(time: io::Result<SystemTime>) -> f64 {
@@ -149,7 +80,7 @@ fn millis(time: io::Result<SystemTime>) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn stat_object<'js>(ctx: &Ctx<'js>, meta: &fs::Metadata) -> Result<Object<'js>> {
+fn stat_record(meta: &fs::Metadata) -> Val {
     let ft = meta.file_type();
     let (kind_bits, perm) = if ft.is_dir() {
         (0o040000, 0o755)
@@ -158,24 +89,24 @@ fn stat_object<'js>(ctx: &Ctx<'js>, meta: &fs::Metadata) -> Result<Object<'js>> 
     } else {
         (0o100000, 0o644)
     };
-    let obj = Object::new(ctx.clone())?;
     let (dev, ino, nlink) = inode_info(meta);
-    obj.set("dev", dev)?;
-    obj.set("ino", ino)?;
-    obj.set("mode", kind_bits | perm)?;
-    obj.set("nlink", nlink)?;
-    obj.set("uid", 0)?;
-    obj.set("gid", 0)?;
-    obj.set("rdev", 0)?;
-    obj.set("size", meta.len() as f64)?;
-    obj.set("blksize", 4096)?;
-    obj.set("blocks", meta.len().div_ceil(512) as f64)?;
     let mtime = millis(meta.modified());
-    obj.set("atimeMs", millis(meta.accessed()))?;
-    obj.set("mtimeMs", mtime)?;
-    obj.set("ctimeMs", mtime)?;
-    obj.set("birthtimeMs", millis(meta.created()))?;
-    Ok(obj)
+    Record::new()
+        .set("dev", dev)
+        .set("ino", ino)
+        .set("mode", (kind_bits | perm) as f64)
+        .set("nlink", nlink)
+        .set("uid", 0)
+        .set("gid", 0)
+        .set("rdev", 0)
+        .set("size", meta.len() as f64)
+        .set("blksize", 4096)
+        .set("blocks", meta.len().div_ceil(512) as f64)
+        .set("atimeMs", millis(meta.accessed()))
+        .set("mtimeMs", mtime)
+        .set("ctimeMs", mtime)
+        .set("birthtimeMs", millis(meta.created()))
+        .into()
 }
 
 #[cfg(target_os = "wasi")]
@@ -232,125 +163,130 @@ fn open_options(flags: &str) -> OpenOptions {
     opts
 }
 
-pub fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> Result<Object<'js>> {
-    let native = Object::new(ctx.clone())?;
-    install_process(&native, state)?;
-    install_fs(&native)?;
-    install_fds(&native, state)?;
-    install_modules(&native, state)?;
-    install_encoding(&native)?;
-    install_crypto(&native)?;
-    install_url(&native)?;
-    install_engine(&native, state)?;
-    install_host(&native)?;
-    crate::sqlite::install(&native)?;
-    Ok(native)
+/// Every data native.
+pub fn table(state: &Rc<State>) -> Table {
+    let mut t = Table::default();
+    install_process(&mut t, state);
+    install_fs(&mut t);
+    install_fds(&mut t, state);
+    install_modules(&mut t, state);
+    install_encoding(&mut t);
+    install_crypto(&mut t);
+    install_url(&mut t);
+    install_host(&mut t);
+    crate::sqlite::install(&mut t);
+    t.constants.push(("platformInfo", platform_info()));
+    t
 }
 
-fn install_process<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
+fn ok() -> NativeResult {
+    Ok(Val::Undefined)
+}
+
+fn install_process(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
-    set_fn(native, "writeStdout", move |data: Value<'js>| -> Result<()> {
-        let bytes = bytes_of(&data)?;
-        st.write_stdout(&bytes);
-        Ok(())
-    })?;
+    t.add("writeStdout", move |a| {
+        st.write_stdout(a.bytes(0)?);
+        ok()
+    });
     let st = state.clone();
-    set_fn(native, "writeStderr", move |data: Value<'js>| -> Result<()> {
-        let bytes = bytes_of(&data)?;
-        st.write_stderr(&bytes);
-        Ok(())
-    })?;
+    t.add("writeStderr", move |a| {
+        st.write_stderr(a.bytes(0)?);
+        ok()
+    });
     let st = state.clone();
-    set_fn(native, "exit", move |code: Opt<i32>| -> Result<()> {
-        st.exit(code.0.unwrap_or(0));
-    })?;
+    t.add("exit", move |a| st.exit(a.opt_num(0).unwrap_or(0.0) as i32));
     let st = state.clone();
-    set_fn(native, "argv", move |ctx: Ctx<'js>| -> Result<Array<'js>> {
-        let arr = Array::new(ctx)?;
-        for (i, arg) in st.argv.iter().enumerate() {
-            arr.set(i, arg.as_str())?;
-        }
-        Ok(arr)
-    })?;
+    t.add("argv", move |_| Ok(Val::Array(st.argv.iter().map(|s| Val::from(s.as_str())).collect())));
     let st = state.clone();
-    set_fn(native, "mainPath", move || -> String { st.main.borrow().clone() })?;
+    t.add("mainPath", move |_| Ok(st.main.borrow().clone().into()));
     let st = state.clone();
-    set_fn(native, "setMainPath", move |path: String| *st.main.borrow_mut() = path)?;
+    t.add("setMainPath", move |a| {
+        *st.main.borrow_mut() = a.string(0)?;
+        ok()
+    });
     let st = state.clone();
-    set_fn(native, "mainArg", move || -> String { st.main_arg.borrow().clone() })?;
-    set_fn(native, "env", |ctx: Ctx<'js>| -> Result<Object<'js>> {
-        let obj = Object::new(ctx)?;
-        for (k, v) in std::env::vars_os() {
-            obj.set(k.to_string_lossy().as_ref(), v.to_string_lossy().as_ref())?;
-        }
-        Ok(obj)
-    })?;
-    set_fn(native, "cwd", || -> String {
-        std::env::current_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .ok()
-            .filter(|p| p.starts_with('/'))
-            .unwrap_or_else(|| "/".to_owned())
-    })?;
-    set_fn(native, "chdir", |ctx: Ctx<'js>, path: String| -> Result<()> {
-        std::env::set_current_dir(&path).map_err(|e| throw_io(&ctx, e, "chdir", Some(&path)))
-    })?;
+    t.add("mainArg", move |_| Ok(st.main_arg.borrow().clone().into()));
+    t.add("env", |_| {
+        let fields = std::env::vars_os()
+            .map(|(k, v)| (k.to_string_lossy().into_owned(), Val::Str(v.to_string_lossy().into_owned())))
+            .collect();
+        Ok(Val::Object(fields))
+    });
     let st = state.clone();
-    set_fn(native, "now", move || -> f64 { st.start.elapsed().as_secs_f64() * 1000.0 })?;
+    t.add("cwd", move |_| Ok(st.cwd().into()));
+    t.add("chdir", |a| {
+        let path = a.str(0)?;
+        std::env::set_current_dir(path).map_err(|e| io_error(e, "chdir", Some(path)))?;
+        ok()
+    });
     let st = state.clone();
-    set_fn(native, "nanoseconds", move || -> f64 { st.start.elapsed().as_nanos() as f64 })?;
-    set_fn(native, "timeOrigin", || -> f64 { millis(Ok(SystemTime::now())) })?;
+    t.add("now", move |_| Ok(Val::Num(st.start.elapsed().as_secs_f64() * 1000.0)));
     let st = state.clone();
-    set_fn(native, "sleep", move |ms: f64| {
+    t.add("nanoseconds", move |_| Ok(Val::Num(st.start.elapsed().as_nanos() as f64)));
+    t.add("timeOrigin", |_| Ok(Val::Num(millis(Ok(SystemTime::now())))));
+    let st = state.clone();
+    t.add("sleep", move |a| {
         st.flush();
+        let ms = a.opt_num(0).unwrap_or(0.0);
         if ms > 0.0 {
             std::thread::sleep(Duration::from_secs_f64(ms / 1000.0));
         }
-    })?;
-    set_fn(native, "isatty", |fd: i32| -> bool {
+        ok()
+    });
+    t.add("isatty", |a| {
         use std::io::IsTerminal;
-        match fd {
+        let tty = match a.i32(0)? {
             0 => io::stdin().is_terminal(),
             1 => io::stdout().is_terminal(),
             2 => io::stderr().is_terminal(),
             _ => false,
-        }
-    })?;
-    set_fn(native, "readStdin", |ctx: Ctx<'js>| -> Result<Value<'js>> {
+        };
+        Ok(tty.into())
+    });
+    t.add("readStdin", |_| {
         let mut buf = Vec::new();
-        io::stdin().read_to_end(&mut buf).map_err(|e| throw_io(&ctx, e, "read", None))?;
-        uint8(&ctx, buf)
-    })?;
-    Ok(())
+        io::stdin().read_to_end(&mut buf).map_err(|e| io_error(e, "read", None))?;
+        Ok(Val::Bytes(buf))
+    });
+    let st = state.clone();
+    t.add("scheduleTick", move |_| {
+        st.tick_pending.set(true);
+        ok()
+    });
 }
 
-fn install_fs<'js>(native: &Object<'js>) -> Result<()> {
-    set_fn(native, "readFile", |ctx: Ctx<'js>, path: String| -> Result<Value<'js>> {
-        let bytes = fs::read(&path).map_err(|e| throw_io(&ctx, e, "open", Some(&path)))?;
-        uint8(&ctx, bytes)
-    })?;
-    set_fn(native, "readFileUtf8", |ctx: Ctx<'js>, path: String| -> Result<String> {
-        let bytes = fs::read(&path).map_err(|e| throw_io(&ctx, e, "open", Some(&path)))?;
-        Ok(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
-    })?;
-    set_fn(native, "writeFile", |ctx: Ctx<'js>, path: String, data: Value<'js>, append: Opt<bool>| -> Result<f64> {
-        let bytes = bytes_of(&data)?;
-        let opts = open_options(if append.0.unwrap_or(false) { "a" } else { "w" });
-        let mut file = opts.open(&path).map_err(|e| throw_io(&ctx, e, "open", Some(&path)))?;
-        file.write_all(&bytes).map_err(|e| throw_io(&ctx, e, "write", Some(&path)))?;
-        Ok(bytes.len() as f64)
-    })?;
-    set_fn(native, "exists", |path: String| fs::symlink_metadata(&path).is_ok())?;
-    set_fn(native, "stat", |ctx: Ctx<'js>, path: String, lstat: Opt<bool>| -> Result<Object<'js>> {
-        let lstat = lstat.0.unwrap_or(false);
-        let meta = if lstat { fs::symlink_metadata(&path) } else { fs::metadata(&path) };
-        let meta = meta.map_err(|e| throw_io(&ctx, e, if lstat { "lstat" } else { "stat" }, Some(&path)))?;
-        stat_object(&ctx, &meta)
-    })?;
-    set_fn(native, "mkdir", |ctx: Ctx<'js>, path: String, recursive: Opt<bool>| -> Result<Option<String>> {
-        if !recursive.0.unwrap_or(false) {
-            fs::create_dir(&path).map_err(|e| throw_io(&ctx, e, "mkdir", Some(&path)))?;
-            return Ok(None);
+fn install_fs(t: &mut Table) {
+    t.add("readFile", |a| {
+        let path = a.str(0)?;
+        Ok(Val::Bytes(fs::read(path).map_err(|e| io_error(e, "open", Some(path)))?))
+    });
+    t.add("readFileUtf8", |a| {
+        let path = a.str(0)?;
+        let bytes = fs::read(path).map_err(|e| io_error(e, "open", Some(path)))?;
+        Ok(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()).into())
+    });
+    t.add("writeFile", |a| {
+        let path = a.str(0)?;
+        let bytes = a.bytes(1)?;
+        let opts = open_options(if a.bool(2) { "a" } else { "w" });
+        let mut file = opts.open(path).map_err(|e| io_error(e, "open", Some(path)))?;
+        file.write_all(bytes).map_err(|e| io_error(e, "write", Some(path)))?;
+        Ok(Val::Num(bytes.len() as f64))
+    });
+    t.add("exists", |a| Ok(fs::symlink_metadata(a.str(0)?).is_ok().into()));
+    t.add("stat", |a| {
+        let path = a.str(0)?;
+        let lstat = a.bool(1);
+        let meta = if lstat { fs::symlink_metadata(path) } else { fs::metadata(path) };
+        let meta = meta.map_err(|e| io_error(e, if lstat { "lstat" } else { "stat" }, Some(path)))?;
+        Ok(stat_record(&meta))
+    });
+    t.add("mkdir", |a| {
+        let path = a.str(0)?;
+        if !a.bool(1) {
+            fs::create_dir(path).map_err(|e| io_error(e, "mkdir", Some(path)))?;
+            return Ok(Val::Null);
         }
         // Node returns the first directory actually created.
         let mut first = None;
@@ -360,89 +296,103 @@ fn install_fs<'js>(native: &Object<'js>) -> Result<()> {
             if fs::metadata(&current).is_ok() {
                 continue;
             }
-            fs::create_dir(&current).map_err(|e| throw_io(&ctx, e, "mkdir", Some(&path)))?;
+            fs::create_dir(&current).map_err(|e| io_error(e, "mkdir", Some(path)))?;
             first.get_or_insert_with(|| current.clone());
         }
-        Ok(first)
-    })?;
-    set_fn(native, "readdir", |ctx: Ctx<'js>, path: String| -> Result<Array<'js>> {
-        let entries = fs::read_dir(&path).map_err(|e| throw_io(&ctx, e, "scandir", Some(&path)))?;
-        let mut list: Vec<(String, &str)> = Vec::new();
+        Ok(first.map_or(Val::Null, Val::Str))
+    });
+    t.add("readdir", |a| {
+        let path = a.str(0)?;
+        let entries = fs::read_dir(path).map_err(|e| io_error(e, "scandir", Some(path)))?;
+        let mut list = Vec::new();
         for entry in entries {
-            let entry = entry.map_err(|e| throw_io(&ctx, e, "scandir", Some(&path)))?;
+            let entry = entry.map_err(|e| io_error(e, "scandir", Some(path)))?;
             let kind = match entry.file_type() {
                 Ok(t) if t.is_dir() => "dir",
                 Ok(t) if t.is_symlink() => "symlink",
                 Ok(t) if t.is_file() => "file",
                 _ => "other",
             };
-            list.push((entry.file_name().to_string_lossy().into_owned(), kind));
+            // Host directory order, like Node (no sorting).
+            let name = entry.file_name().to_string_lossy().into_owned();
+            list.push(Val::Array(vec![Val::Str(name), kind.into()]));
         }
-        // Host directory order, like Node (no sorting).
-        let arr = Array::new(ctx.clone())?;
-        for (i, (name, kind)) in list.into_iter().enumerate() {
-            let pair = Array::new(ctx.clone())?;
-            pair.set(0, name)?;
-            pair.set(1, kind)?;
-            arr.set(i, pair)?;
-        }
-        Ok(arr)
-    })?;
-    set_fn(native, "rm", |ctx: Ctx<'js>, path: String, recursive: Opt<bool>, force: Opt<bool>| -> Result<()> {
-        let meta = match fs::symlink_metadata(&path) {
+        Ok(Val::Array(list))
+    });
+    t.add("rm", |a| {
+        let path = a.str(0)?;
+        let meta = match fs::symlink_metadata(path) {
             Ok(m) => m,
-            Err(_) if force.0.unwrap_or(false) => return Ok(()),
-            Err(e) => return Err(throw_io(&ctx, e, "rm", Some(&path))),
+            Err(_) if a.bool(2) => return ok(),
+            Err(e) => return Err(io_error(e, "rm", Some(path))),
         };
-        let result = match (meta.is_dir(), recursive.0.unwrap_or(false)) {
-            (true, true) => fs::remove_dir_all(&path),
+        let result = match (meta.is_dir(), a.bool(1)) {
+            (true, true) => fs::remove_dir_all(path),
             (true, false) => Err(io::Error::from(io::ErrorKind::IsADirectory)),
-            _ => fs::remove_file(&path),
+            _ => fs::remove_file(path),
         };
-        result.map_err(|e| throw_io(&ctx, e, "rm", Some(&path)))
-    })?;
-    set_fn(native, "rmdir", |ctx: Ctx<'js>, path: String, recursive: Opt<bool>| -> Result<()> {
-        let result = if recursive.0.unwrap_or(false) { fs::remove_dir_all(&path) } else { fs::remove_dir(&path) };
-        result.map_err(|e| throw_io(&ctx, e, "rmdir", Some(&path)))
-    })?;
-    set_fn(native, "unlink", |ctx: Ctx<'js>, path: String| -> Result<()> {
-        fs::remove_file(&path).map_err(|e| throw_io(&ctx, e, "unlink", Some(&path)))
-    })?;
-    set_fn(native, "rename", |ctx: Ctx<'js>, from: String, to: String| -> Result<()> {
-        fs::rename(&from, &to).map_err(|e| throw_io(&ctx, e, "rename", Some(&from)))
-    })?;
-    set_fn(native, "copyFile", |ctx: Ctx<'js>, from: String, to: String| -> Result<()> {
-        fs::copy(&from, &to).map(|_| ()).map_err(|e| throw_io(&ctx, e, "copyfile", Some(&from)))
-    })?;
-    set_fn(native, "copyDir", |ctx: Ctx<'js>, from: String, to: String| -> Result<()> {
-        copy_dir_all(&from, &to).map_err(|e| throw_io(&ctx, e, "cp", Some(&from)))
-    })?;
-    set_fn(native, "realpath", |ctx: Ctx<'js>, path: String| -> Result<String> {
-        fs::canonicalize(&path)
+        result.map_err(|e| io_error(e, "rm", Some(path)))?;
+        ok()
+    });
+    t.add("rmdir", |a| {
+        let path = a.str(0)?;
+        let result = if a.bool(1) { fs::remove_dir_all(path) } else { fs::remove_dir(path) };
+        result.map_err(|e| io_error(e, "rmdir", Some(path)))?;
+        ok()
+    });
+    t.add("unlink", |a| {
+        let path = a.str(0)?;
+        fs::remove_file(path).map_err(|e| io_error(e, "unlink", Some(path)))?;
+        ok()
+    });
+    t.add("rename", |a| {
+        let (from, to) = (a.str(0)?, a.str(1)?);
+        fs::rename(from, to).map_err(|e| io_error(e, "rename", Some(from)))?;
+        ok()
+    });
+    t.add("copyFile", |a| {
+        let (from, to) = (a.str(0)?, a.str(1)?);
+        fs::copy(from, to).map_err(|e| io_error(e, "copyfile", Some(from)))?;
+        ok()
+    });
+    t.add("copyDir", |a| {
+        let (from, to) = (a.str(0)?, a.str(1)?);
+        copy_dir_all(from, to).map_err(|e| io_error(e, "cp", Some(from)))?;
+        ok()
+    });
+    t.add("realpath", |a| {
+        let path = a.str(0)?;
+        let real = fs::canonicalize(path)
             .map(|p| p.to_string_lossy().into_owned())
-            .or_else(|e| match fs::metadata(&path) {
+            .or_else(|e| match fs::metadata(path) {
                 // WASI has no realpath; a lexically normalized path is the best we can do.
-                Ok(_) => Ok(resolve::normalize(&path)),
+                Ok(_) => Ok(resolve::normalize(path)),
                 Err(_) => Err(e),
             })
-            .map_err(|e| throw_io(&ctx, e, "realpath", Some(&path)))
-    })?;
-    set_fn(native, "readlink", |ctx: Ctx<'js>, path: String| -> Result<String> {
-        fs::read_link(&path)
-            .map(|p| p.to_string_lossy().into_owned())
-            .map_err(|e| throw_io(&ctx, e, "readlink", Some(&path)))
-    })?;
-    set_fn(native, "symlink", |ctx: Ctx<'js>, target: String, path: String| -> Result<()> {
-        symlink(&target, &path).map_err(|e| throw_io(&ctx, e, "symlink", Some(&path)))
-    })?;
-    set_fn(native, "link", |ctx: Ctx<'js>, from: String, to: String| -> Result<()> {
-        fs::hard_link(&from, &to).map_err(|e| throw_io(&ctx, e, "link", Some(&from)))
-    })?;
-    set_fn(native, "truncate", |ctx: Ctx<'js>, path: String, len: Opt<f64>| -> Result<()> {
-        let file = OpenOptions::new().write(true).open(&path).map_err(|e| throw_io(&ctx, e, "open", Some(&path)))?;
-        file.set_len(len.0.unwrap_or(0.0) as u64).map_err(|e| throw_io(&ctx, e, "ftruncate", Some(&path)))
-    })?;
-    Ok(())
+            .map_err(|e| io_error(e, "realpath", Some(path)))?;
+        Ok(real.into())
+    });
+    t.add("readlink", |a| {
+        let path = a.str(0)?;
+        let target = fs::read_link(path).map_err(|e| io_error(e, "readlink", Some(path)))?;
+        Ok(target.to_string_lossy().into_owned().into())
+    });
+    t.add("symlink", |a| {
+        let (target, path) = (a.str(0)?, a.str(1)?);
+        symlink(target, path).map_err(|e| io_error(e, "symlink", Some(path)))?;
+        ok()
+    });
+    t.add("link", |a| {
+        let (from, to) = (a.str(0)?, a.str(1)?);
+        fs::hard_link(from, to).map_err(|e| io_error(e, "link", Some(from)))?;
+        ok()
+    });
+    t.add("truncate", |a| {
+        let path = a.str(0)?;
+        let file = OpenOptions::new().write(true).open(path).map_err(|e| io_error(e, "open", Some(path)))?;
+        file.set_len(a.opt_num(1).unwrap_or(0.0) as u64).map_err(|e| io_error(e, "ftruncate", Some(path)))?;
+        ok()
+    });
 }
 
 #[cfg(target_os = "wasi")]
@@ -460,224 +410,166 @@ fn symlink(_: &str, _: &str) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
 }
 
-fn install_fds<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
+fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
-    set_fn(native, "open", move |ctx: Ctx<'js>, path: String, flags: Opt<String>| -> Result<i32> {
-        let flags = flags.0.unwrap_or_else(|| "r".to_owned());
-        let file = open_options(&flags).open(&path).map_err(|e| throw_io(&ctx, e, "open", Some(&path)))?;
+    t.add("open", move |a| {
+        let path = a.str(0)?;
+        let flags = a.opt_str(1).unwrap_or("r");
+        let file = open_options(flags).open(path).map_err(|e| io_error(e, "open", Some(path)))?;
         let mut fds = st.fds.borrow_mut();
         let fd = fds.next.max(3);
         fds.next = fd + 1;
         fds.files.insert(fd, file);
-        Ok(fd)
-    })?;
+        Ok(fd.into())
+    });
     let st = state.clone();
-    set_fn(native, "close", move |ctx: Ctx<'js>, fd: i32| -> Result<()> {
+    t.add("close", move |a| {
+        let fd = a.i32(0)?;
         if fd <= 2 {
-            return Ok(());
+            return ok();
         }
         match st.fds.borrow_mut().files.remove(&fd) {
-            Some(_) => Ok(()),
-            None => Err(throw_io(&ctx, io::Error::from_raw_os_error(8), "close", None)),
+            Some(_) => ok(),
+            None => Err(bad_fd("close")),
         }
-    })?;
+    });
     let st = state.clone();
-    set_fn(native, "read", move |ctx: Ctx<'js>, fd: i32, len: f64, pos: Opt<f64>| -> Result<Value<'js>> {
-        let mut buf = vec![0u8; len as usize];
+    t.add("read", move |a| {
+        let fd = a.i32(0)?;
+        let mut buf = vec![0u8; a.num(1)? as usize];
         let n = if fd == 0 {
             io::stdin().read(&mut buf)
         } else {
             let mut fds = st.fds.borrow_mut();
-            let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd(&ctx, "read"))?;
-            if let Some(p) = pos.0.filter(|p| *p >= 0.0) {
-                file.seek(SeekFrom::Start(p as u64)).map_err(|e| throw_io(&ctx, e, "read", None))?;
+            let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("read"))?;
+            if let Some(p) = a.opt_num(2).filter(|p| *p >= 0.0) {
+                file.seek(SeekFrom::Start(p as u64)).map_err(|e| io_error(e, "read", None))?;
             }
             file.read(&mut buf)
         };
-        let n = n.map_err(|e| throw_io(&ctx, e, "read", None))?;
+        let n = n.map_err(|e| io_error(e, "read", None))?;
         buf.truncate(n);
-        uint8(&ctx, buf)
-    })?;
+        Ok(Val::Bytes(buf))
+    });
     let st = state.clone();
-    set_fn(native, "write", move |ctx: Ctx<'js>, fd: i32, data: Value<'js>, pos: Opt<f64>| -> Result<f64> {
-        let bytes = bytes_of(&data)?;
+    t.add("write", move |a| {
+        let fd = a.i32(0)?;
+        let bytes = a.bytes(1)?;
         match fd {
-            1 => st.write_stdout(&bytes),
-            2 => st.write_stderr(&bytes),
+            1 => st.write_stdout(bytes),
+            2 => st.write_stderr(bytes),
             _ => {
                 let mut fds = st.fds.borrow_mut();
-                let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd(&ctx, "write"))?;
-                if let Some(p) = pos.0.filter(|p| *p >= 0.0) {
-                    file.seek(SeekFrom::Start(p as u64)).map_err(|e| throw_io(&ctx, e, "write", None))?;
+                let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("write"))?;
+                if let Some(p) = a.opt_num(2).filter(|p| *p >= 0.0) {
+                    file.seek(SeekFrom::Start(p as u64)).map_err(|e| io_error(e, "write", None))?;
                 }
-                file.write_all(&bytes).map_err(|e| throw_io(&ctx, e, "write", None))?;
+                file.write_all(bytes).map_err(|e| io_error(e, "write", None))?;
             }
         }
-        Ok(bytes.len() as f64)
-    })?;
+        Ok(Val::Num(bytes.len() as f64))
+    });
     let st = state.clone();
-    set_fn(native, "fstat", move |ctx: Ctx<'js>, fd: i32| -> Result<Object<'js>> {
+    t.add("fstat", move |a| {
         let fds = st.fds.borrow();
-        let file = fds.files.get(&fd).ok_or_else(|| bad_fd(&ctx, "fstat"))?;
-        let meta = file.metadata().map_err(|e| throw_io(&ctx, e, "fstat", None))?;
-        stat_object(&ctx, &meta)
-    })?;
+        let file = fds.files.get(&a.i32(0)?).ok_or_else(|| bad_fd("fstat"))?;
+        let meta = file.metadata().map_err(|e| io_error(e, "fstat", None))?;
+        Ok(stat_record(&meta))
+    });
     let st = state.clone();
-    set_fn(native, "ftruncate", move |ctx: Ctx<'js>, fd: i32, len: Opt<f64>| -> Result<()> {
+    t.add("ftruncate", move |a| {
         let fds = st.fds.borrow();
-        let file = fds.files.get(&fd).ok_or_else(|| bad_fd(&ctx, "ftruncate"))?;
-        file.set_len(len.0.unwrap_or(0.0) as u64).map_err(|e| throw_io(&ctx, e, "ftruncate", None))
-    })?;
-    Ok(())
+        let file = fds.files.get(&a.i32(0)?).ok_or_else(|| bad_fd("ftruncate"))?;
+        file.set_len(a.opt_num(1).unwrap_or(0.0) as u64).map_err(|e| io_error(e, "ftruncate", None))?;
+        ok()
+    });
 }
 
-fn bad_fd(ctx: &Ctx<'_>, syscall: &str) -> rquickjs::Error {
-    let err = new_error(ctx, &format!("EBADF: bad file descriptor, {syscall}"));
-    match err {
-        Ok(e) => {
-            let _ = e.as_object().set("syscall", syscall);
-            let _ = e.as_object().set("errno", -9);
-            let _ = e.as_object().set("code", "EBADF");
-            e.throw()
+fn install_modules(t: &mut Table, state: &Rc<State>) {
+    let st = state.clone();
+    t.add("resolve", move |a| {
+        let spec = a.str(0)?;
+        let kind = if a.bool(2) { Kind::Require } else { Kind::Import };
+        match st.resolver.resolve(spec, a.str(1)?, kind) {
+            Ok(Resolved::Builtin(name)) => Ok(name.into()),
+            Ok(Resolved::File(path)) => Ok(path.into()),
+            Err(msg) => Err(crate::modules::resolve_error(&msg, spec, kind)),
         }
-        Err(e) => e,
-    }
+    });
+    let st = state.clone();
+    t.add("moduleFormat", move |a| Ok(st.load_source(a.str(0)?)?.1.name().into()));
+    let st = state.clone();
+    t.add("mapPosition", move |a| {
+        let mapped = st.map_position(a.str(0)?, a.u32(1)?, a.u32(2)?);
+        Ok(mapped.map_or(Val::Undefined, |(l, c)| Val::Array(vec![l.into(), c.into()])))
+    });
+    let st = state.clone();
+    t.add("getSourceLine", move |a| Ok(st.source_line(a.str(0)?, a.num(1)? as usize).into()));
 }
 
-fn install_modules<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
-    let st = state.clone();
-    set_fn(native, "resolve", move |ctx: Ctx<'js>, spec: String, from: String, require: Opt<bool>| -> Result<String> {
-        let kind = if require.0.unwrap_or(false) { Kind::Require } else { Kind::Import };
-        match st.resolver.resolve(&spec, &from, kind) {
-            Ok(Resolved::Builtin(name)) => Ok(name),
-            Ok(Resolved::File(path)) => Ok(path),
-            Err(msg) => Err(modules::throw_resolve_error(&ctx, &msg, &spec, kind)),
+fn install_encoding(t: &mut Table) {
+    t.add("utf8Encode", |a| Ok(Val::Bytes(a.str(0)?.as_bytes().to_vec())));
+    t.add("utf8Decode", |a| {
+        let bytes = a.bytes(0)?;
+        match std::str::from_utf8(bytes) {
+            Ok(s) => Ok(s.into()),
+            Err(_) if a.bool(1) => Err(NativeError::type_error("The encoded data was not valid for encoding utf-8")),
+            Err(_) => Ok(String::from_utf8_lossy(bytes).into_owned().into()),
         }
-    })?;
-    let st = state.clone();
-    set_fn(native, "moduleFormat", move |ctx: Ctx<'js>, path: String| -> Result<&'static str> {
-        modules::module_format(&ctx, &st, &path)
-    })?;
-    let st = state.clone();
-    set_fn(native, "compileCjs", move |ctx: Ctx<'js>, path: String| -> Result<Function<'js>> {
-        modules::compile_cjs(&ctx, &st, &path)
-    })?;
-    let st = state.clone();
-    set_fn(native, "requireEsm", move |ctx: Ctx<'js>, path: String| -> Result<Value<'js>> {
-        modules::require_esm(&ctx, &st, &path)
-    })?;
-    set_fn(native, "importModule", |ctx: Ctx<'js>, spec: String| -> Result<Promise<'js>> {
-        rquickjs::Module::import(&ctx, spec)
-    })?;
-    set_fn(native, "evalScript", |ctx: Ctx<'js>, code: String, filename: Opt<String>| -> Result<Value<'js>> {
-        let mut opts = rquickjs::context::EvalOptions::default();
-        opts.global = true;
-        opts.strict = false;
-        opts.filename = Some(filename.0.unwrap_or_else(|| "evalmachine.<anonymous>".to_owned()));
-        ctx.eval_with_options(code, opts)
-    })?;
-    set_fn(native, "loadPolyfill", |ctx: Ctx<'js>, name: String| -> Result<Value<'js>> {
-        modules::load_polyfill(&ctx, &name)
-    })?;
-    let st = state.clone();
-    set_fn(native, "mapPosition", move |ctx: Ctx<'js>, file: String, line: u32, col: u32| -> Result<Value<'js>> {
-        let Some((line, col)) = st.map_position(&file, line, col) else {
-            return Ok(Value::new_undefined(ctx));
-        };
-        let pair = Array::new(ctx.clone())?;
-        pair.set(0, line)?;
-        pair.set(1, col)?;
-        Ok(pair.into_value())
-    })?;
-    let st = state.clone();
-    set_fn(native, "getSourceLine", move |file: String, line: f64| -> Option<String> {
-        st.source_line(&file, line as usize)
-    })?;
-    Ok(())
+    });
+    t.add("latin1Decode", |a| Ok(a.bytes(0)?.iter().map(|&b| char::from(b)).collect::<String>().into()));
+    t.add("utf16leDecode", |a| {
+        let units: Vec<u16> = a.bytes(0)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        Ok(String::from_utf16_lossy(&units).into())
+    });
+    t.add("base64Encode", |a| Ok(crate::encoding::base64_encode(a.bytes(0)?, a.bool(1)).into()));
+    t.add("base64Decode", |a| Ok(Val::Bytes(crate::encoding::base64_decode(a.str(0)?))));
 }
 
-fn install_encoding<'js>(native: &Object<'js>) -> Result<()> {
-    set_fn(native, "utf8Encode", |ctx: Ctx<'js>, s: String| uint8(&ctx, s.into_bytes()))?;
-    set_fn(native, "utf8Decode", |ctx: Ctx<'js>, data: Value<'js>, fatal: Opt<bool>| -> Result<String> {
-        let bytes = bytes_of(&data)?;
-        match String::from_utf8(bytes) {
-            Ok(s) => Ok(s),
-            Err(_) if fatal.0.unwrap_or(false) => Err(Exception::throw_type(
-                &ctx,
-                "The encoded data was not valid for encoding utf-8",
-            )),
-            Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).into_owned()),
-        }
-    })?;
-    set_fn(native, "latin1Decode", |data: Value<'js>| -> Result<String> {
-        Ok(bytes_of(&data)?.into_iter().map(char::from).collect())
-    })?;
-    set_fn(native, "utf16leDecode", |data: Value<'js>| -> Result<String> {
-        let bytes = bytes_of(&data)?;
-        let units: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
-        Ok(String::from_utf16_lossy(&units))
-    })?;
-    set_fn(native, "base64Encode", |data: Value<'js>, url: Opt<bool>| -> Result<String> {
-        Ok(crate::encoding::base64_encode(&bytes_of(&data)?, url.0.unwrap_or(false)))
-    })?;
-    set_fn(native, "base64Decode", |ctx: Ctx<'js>, s: String| uint8(&ctx, crate::encoding::base64_decode(&s)))?;
-    Ok(())
-}
-
-fn install_crypto<'js>(native: &Object<'js>) -> Result<()> {
-    set_fn(native, "randomBytes", |ctx: Ctx<'js>, n: f64| -> Result<Value<'js>> {
-        let mut buf = vec![0u8; n as usize];
-        getrandom::fill(&mut buf).map_err(|e| Exception::throw_internal(&ctx, &e.to_string()))?;
-        uint8(&ctx, buf)
-    })?;
-    set_fn(native, "hash", |ctx: Ctx<'js>, alg: String, data: Value<'js>| -> Result<Value<'js>> {
-        let bytes = bytes_of(&data)?;
-        let digest = crate::encoding::digest(&alg, &bytes)
-            .ok_or_else(|| Exception::throw_type(&ctx, &format!("Digest method not supported: {alg}")))?;
-        uint8(&ctx, digest)
-    })?;
-    set_fn(native, "hmac", |ctx: Ctx<'js>, alg: String, key: Value<'js>, data: Value<'js>| -> Result<Value<'js>> {
-        let (key, bytes) = (bytes_of(&key)?, bytes_of(&data)?);
-        let digest = crate::encoding::hmac(&alg, &key, &bytes)
-            .ok_or_else(|| Exception::throw_type(&ctx, &format!("Invalid digest: {alg}")))?;
-        uint8(&ctx, digest)
-    })?;
-    set_fn(native, "wyhash", |ctx: Ctx<'js>, data: Value<'js>, seed: Opt<f64>| -> Result<BigInt<'js>> {
-        let bytes = bytes_of(&data)?;
-        let seed = seed.0.unwrap_or(0.0) as u64;
-        BigInt::from_u64(ctx, bun_wyhash::hash_with_seed(seed, &bytes))
-    })?;
-    set_fn(native, "compress", |ctx: Ctx<'js>, data: Value<'js>, level: f64, format: String| -> Result<Value<'js>> {
-        let wrapper = crate::encoding::Wrapper::parse(&format)
-            .ok_or_else(|| Exception::throw_type(&ctx, &format!("unknown compression format {format}")))?;
+fn install_crypto(t: &mut Table) {
+    t.add("randomBytes", |a| {
+        let mut buf = vec![0u8; a.num(0)? as usize];
+        getrandom::fill(&mut buf).map_err(|e| NativeError::error(e.to_string()))?;
+        Ok(Val::Bytes(buf))
+    });
+    t.add("hash", |a| {
+        let alg = a.str(0)?;
+        let digest = crate::encoding::digest(alg, a.bytes(1)?)
+            .ok_or_else(|| NativeError::type_error(format!("Digest method not supported: {alg}")))?;
+        Ok(Val::Bytes(digest))
+    });
+    t.add("hmac", |a| {
+        let alg = a.str(0)?;
+        let digest = crate::encoding::hmac(alg, a.bytes(1)?, a.bytes(2)?)
+            .ok_or_else(|| NativeError::type_error(format!("Invalid digest: {alg}")))?;
+        Ok(Val::Bytes(digest))
+    });
+    t.add("wyhash", |a| {
+        let seed = a.opt_num(1).unwrap_or(0.0) as u64;
+        Ok(Val::BigUint(bun_wyhash::hash_with_seed(seed, a.bytes(0)?)))
+    });
+    t.add("compress", |a| {
+        let format = a.str(2)?;
+        let wrapper = crate::encoding::Wrapper::parse(format)
+            .ok_or_else(|| NativeError::type_error(format!("unknown compression format {format}")))?;
+        let level = a.num(1)?;
         let level = if level < 0.0 { 6 } else { level.min(10.0) as u8 };
-        uint8(&ctx, crate::encoding::compress(&bytes_of(&data)?, level, wrapper))
-    })?;
-    set_fn(native, "decompress", |ctx: Ctx<'js>, data: Value<'js>, format: String| -> Result<Value<'js>> {
-        let wrapper = crate::encoding::Wrapper::parse(&format)
-            .ok_or_else(|| Exception::throw_type(&ctx, &format!("unknown compression format {format}")))?;
-        match crate::encoding::decompress(&bytes_of(&data)?, wrapper) {
-            Ok(out) => uint8(&ctx, out),
-            Err(msg) => {
-                let err = new_error(&ctx, &msg)?;
-                err.as_object().set("code", "Z_DATA_ERROR")?;
-                err.as_object().set("errno", -3)?;
-                Err(err.throw())
-            }
-        }
-    })?;
-    set_fn(native, "crc32", |data: Value<'js>| -> Result<f64> {
-        Ok(crate::encoding::crc32(&bytes_of(&data)?) as f64)
-    })?;
-    set_fn(native, "adler32", |data: Value<'js>| -> Result<f64> {
-        Ok(crate::encoding::adler32(&bytes_of(&data)?) as f64)
-    })?;
-    Ok(())
+        Ok(Val::Bytes(crate::encoding::compress(a.bytes(0)?, level, wrapper)))
+    });
+    t.add("decompress", |a| {
+        let format = a.str(1)?;
+        let wrapper = crate::encoding::Wrapper::parse(format)
+            .ok_or_else(|| NativeError::type_error(format!("unknown compression format {format}")))?;
+        crate::encoding::decompress(a.bytes(0)?, wrapper)
+            .map(Val::Bytes)
+            .map_err(|msg| NativeError::error(msg).prop("code", "Z_DATA_ERROR").prop("errno", -3))
+    });
+    t.add("crc32", |a| Ok(Val::Num(f64::from(crate::encoding::crc32(a.bytes(0)?)))));
+    t.add("adler32", |a| Ok(Val::Num(f64::from(crate::encoding::adler32(a.bytes(0)?)))));
 }
 
 /// URL components in the order the JS `URL` class expects.
-fn url_parts<'js>(ctx: &Ctx<'js>, url: &url::Url) -> Result<Array<'js>> {
-    let arr = Array::new(ctx.clone())?;
+fn url_parts(url: &url::Url) -> Val {
     let parts = [
         url.as_str().to_owned(),
         format!("{}:", url.scheme()),
@@ -690,171 +582,100 @@ fn url_parts<'js>(ctx: &Ctx<'js>, url: &url::Url) -> Result<Array<'js>> {
         url.fragment().filter(|f| !f.is_empty()).map(|f| format!("#{f}")).unwrap_or_default(),
         url.origin().ascii_serialization(),
     ];
-    for (i, part) in parts.into_iter().enumerate() {
-        arr.set(i, part)?;
-    }
-    Ok(arr)
+    Val::Array(parts.into_iter().map(Val::Str).collect())
 }
 
-fn install_url<'js>(native: &Object<'js>) -> Result<()> {
-    set_fn(native, "urlParse", |ctx: Ctx<'js>, input: String, base: Opt<String>| -> Result<Option<Array<'js>>> {
-        let parsed = match base.0 {
-            Some(base) => url::Url::parse(&base).and_then(|b| b.join(&input)),
-            None => url::Url::parse(&input),
+fn install_url(t: &mut Table) {
+    t.add("urlParse", |a| {
+        let input = a.str(0)?;
+        let parsed = match a.opt_str(1) {
+            Some(base) => url::Url::parse(base).and_then(|b| b.join(input)),
+            None => url::Url::parse(input),
         };
-        parsed.ok().map(|u| url_parts(&ctx, &u)).transpose()
-    })?;
-    set_fn(native, "urlSet", |ctx: Ctx<'js>, href: String, prop: String, value: String| -> Result<Option<Array<'js>>> {
-        let Ok(mut url) = url::Url::parse(&href) else { return Ok(None) };
+        Ok(parsed.ok().map_or(Val::Undefined, |u| url_parts(&u)))
+    });
+    t.add("urlSet", |a| {
+        let Ok(mut url) = url::Url::parse(a.str(0)?) else { return ok() };
+        let value = a.str(2)?;
         // Setters that fail leave the URL unchanged, like the WHATWG spec says.
-        let _ = match prop.as_str() {
+        let _ = match a.str(1)? {
             "protocol" => url.set_scheme(value.trim_end_matches(':')),
-            "username" => url.set_username(&value),
-            "password" => url.set_password(Some(&value).filter(|v| !v.is_empty()).map(|v| v.as_str())),
-            "host" => url::quirks::set_host(&mut url, &value),
-            "hostname" => url::quirks::set_hostname(&mut url, &value),
-            "port" => url::quirks::set_port(&mut url, &value),
+            "username" => url.set_username(value),
+            "password" => url.set_password(Some(value).filter(|v| !v.is_empty())),
+            "host" => url::quirks::set_host(&mut url, value),
+            "hostname" => url::quirks::set_hostname(&mut url, value),
+            "port" => url::quirks::set_port(&mut url, value),
             "pathname" => {
-                url::quirks::set_pathname(&mut url, &value);
+                url::quirks::set_pathname(&mut url, value);
                 Ok(())
             }
             "search" => {
-                url::quirks::set_search(&mut url, &value);
+                url::quirks::set_search(&mut url, value);
                 Ok(())
             }
             "hash" => {
-                url::quirks::set_hash(&mut url, &value);
+                url::quirks::set_hash(&mut url, value);
                 Ok(())
             }
             _ => Ok(()),
         };
-        url_parts(&ctx, &url).map(Some)
-    })?;
-    set_fn(native, "domainToASCII", |s: String| -> String {
-        url::Url::parse(&format!("http://{s}/")).ok().and_then(|u| u.host_str().map(str::to_owned)).unwrap_or_default()
-    })?;
-    Ok(())
-}
-
-fn install_engine<'js>(native: &Object<'js>, state: &Rc<State>) -> Result<()> {
-    set_fn(native, "promiseState", |p: Value<'js>| -> &'static str {
-        let Some(promise) = p.as_promise() else { return "fulfilled" };
-        match promise.state() {
-            rquickjs::promise::PromiseState::Pending => "pending",
-            rquickjs::promise::PromiseState::Resolved => "fulfilled",
-            rquickjs::promise::PromiseState::Rejected => "rejected",
-        }
-    })?;
-    set_fn(native, "promiseResult", |ctx: Ctx<'js>, p: Promise<'js>| modules::promise_result(&ctx, &p))?;
-    set_fn(native, "isProxy", |v: Value<'js>| v.is_proxy())?;
-    set_fn(native, "iteratorEntries", |ctx: Ctx<'js>, v: Value<'js>| call_engine_helper(&ctx, &v, JS_bunwasm_IteratorEntries))?;
-    set_fn(native, "ownKeysInOrder", |ctx: Ctx<'js>, v: Value<'js>| call_engine_helper(&ctx, &v, JS_bunwasm_OwnKeysInOrder))?;
-    // SAFETY: plain accessors on the context's async-context slot.
-    set_fn(native, "getAsyncContext", |ctx: Ctx<'js>| unsafe {
-        Value::from_raw(ctx.clone(), JS_bunwasm_GetAsyncContext(ctx.as_raw().as_ptr()))
-    })?;
-    set_fn(native, "setAsyncContext", |ctx: Ctx<'js>, v: Value<'js>| unsafe {
-        JS_bunwasm_SetAsyncContext(ctx.as_raw().as_ptr(), v.as_raw())
-    })?;
-    set_fn(native, "isPromise", |v: Value<'js>| v.is_promise())?;
-    // SAFETY: JS_IsError only inspects the value's class.
-    set_fn(native, "isError", |v: Value<'js>| unsafe { qjs::JS_IsError(v.as_raw()) })?;
-    set_fn(native, "getProxyTarget", |ctx: Ctx<'js>, v: Value<'js>| -> Result<Value<'js>> {
-        if !v.is_proxy() {
-            return Ok(Value::new_undefined(ctx));
-        }
-        // SAFETY: returns a new reference to the proxy's target.
-        unsafe {
-            let raw = qjs::JS_GetProxyTarget(ctx.as_raw().as_ptr(), v.as_raw());
-            Ok(Value::from_raw(ctx.clone(), raw))
-        }
-    })?;
-    let st = state.clone();
-    set_fn(native, "scheduleTick", move || st.tick_pending.set(true))?;
-    let st = state.clone();
-    set_fn(native, "runMicrotasks", move |ctx: Ctx<'js>| -> Result<()> {
-        st.drain_jobs(&ctx);
-        Ok(())
-    })?;
-    set_fn(native, "gc", |ctx: Ctx<'js>| ctx.run_gc())?;
-    set_fn(native, "memoryUsage", |ctx: Ctx<'js>| -> Result<Object<'js>> {
-        let mut usage = std::mem::MaybeUninit::<qjs::JSMemoryUsage>::zeroed();
-        // SAFETY: the runtime pointer is live for the duration of this call.
-        let usage = unsafe {
-            qjs::JS_ComputeMemoryUsage(qjs::JS_GetRuntime(ctx.as_raw().as_ptr()), usage.as_mut_ptr());
-            usage.assume_init()
-        };
-        let obj = Object::new(ctx.clone())?;
-        let heap = usage.malloc_size as f64;
-        obj.set("rss", wasm_memory_bytes().max(heap))?;
-        obj.set("heapTotal", usage.malloc_limit.max(usage.malloc_size) as f64)?;
-        obj.set("heapUsed", usage.memory_used_size as f64)?;
-        obj.set("external", 0)?;
-        obj.set("arrayBuffers", 0)?;
-        Ok(obj)
-    })?;
-    native.set("platformInfo", platform_info(native.ctx())?)?;
-    Ok(())
+        Ok(url_parts(&url))
+    });
+    t.add("domainToASCII", |a| {
+        let host = url::Url::parse(&format!("http://{}/", a.str(0)?))
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .unwrap_or_default();
+        Ok(host.into())
+    });
 }
 
 /// The `bun_wasm` host ABI (docs/host-abi.md) for the JS networking layer
 /// (src/js/net.js). Functions return the ABI's raw codes (negative = error);
 /// byte results come back as Uint8Array / strings.
-fn install_host<'js>(native: &Object<'js>) -> Result<()> {
+fn install_host(t: &mut Table) {
     use crate::host;
-    let ctx = native.ctx().clone();
-    let caps = Object::new(ctx)?;
-    for (i, name) in host::SLOT_NAMES.iter().enumerate() {
-        caps.set(*name, host::provided(i))?;
-    }
-    native.set("hostCaps", caps)?;
-    set_fn(native, "hostPoll", |timeout: i32| host::poll(timeout))?;
-    set_fn(native, "hostFetch", |meta: String, body: Value<'js>| -> Result<i32> {
-        let body = if body.is_undefined() || body.is_null() { Vec::new() } else { bytes_of(&body)? };
-        Ok(host::fetch(meta.as_bytes(), &body))
-    })?;
+    let caps = host::SLOT_NAMES
+        .iter()
+        .enumerate()
+        .map(|(i, name)| ((*name).to_owned(), Val::Bool(host::provided(i))))
+        .collect();
+    t.constants.push(("hostCaps", Val::Object(caps)));
     // String on success, the negative code otherwise.
-    fn text_or_code<'js>(ctx: &Ctx<'js>, result: std::result::Result<Vec<u8>, i32>) -> Result<Value<'js>> {
-        match result {
-            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned().into_js(ctx),
-            Err(code) => Ok(Value::new_int(ctx.clone(), code)),
-        }
+    fn text_or_code(result: Result<Vec<u8>, i32>) -> NativeResult {
+        Ok(match result {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned().into(),
+            Err(code) => code.into(),
+        })
     }
-    set_fn(native, "hostFetchHead", |ctx: Ctx<'js>, h: i32| text_or_code(&ctx, host::fetch_head(h)))?;
-    set_fn(native, "hostError", |ctx: Ctx<'js>, h: i32| text_or_code(&ctx, host::error(h)))?;
-    set_fn(native, "hostPeerAddr", |ctx: Ctx<'js>, h: i32| text_or_code(&ctx, host::peer_addr(h)))?;
-    set_fn(native, "hostRead", |ctx: Ctx<'js>, h: i32, cap: Opt<i32>| -> Result<Value<'js>> {
-        let cap = cap.0.unwrap_or(65536).max(1) as usize;
-        match host::read(h, cap) {
-            Ok(bytes) if bytes.is_empty() => Ok(Value::new_int(ctx, 0)),
-            Ok(bytes) => uint8(&ctx, bytes),
-            Err(code) => Ok(Value::new_int(ctx, code)),
-        }
-    })?;
-    set_fn(native, "hostWrite", |h: i32, data: Value<'js>| -> Result<i32> { Ok(host::write(h, &bytes_of(&data)?)) })?;
-    set_fn(native, "hostClose", |h: i32| host::close(h))?;
-    set_fn(native, "hostListen", |hostname: String, port: i32| host::listen(&hostname, port))?;
-    set_fn(native, "hostLocalPort", |h: i32| host::local_port(h))?;
-    set_fn(native, "hostAccept", |h: i32| host::accept(h))?;
-    set_fn(native, "hostConnect", |hostname: String, port: i32| host::connect(&hostname, port))?;
-    Ok(())
+    t.add("hostPoll", |a| Ok(host::poll(a.i32(0)?).into()));
+    t.add("hostFetch", |a| {
+        let body = if a.is_missing(1) { &[][..] } else { a.bytes(1)? };
+        Ok(host::fetch(a.str(0)?.as_bytes(), body).into())
+    });
+    t.add("hostFetchHead", |a| text_or_code(host::fetch_head(a.i32(0)?)));
+    t.add("hostError", |a| text_or_code(host::error(a.i32(0)?)));
+    t.add("hostPeerAddr", |a| text_or_code(host::peer_addr(a.i32(0)?)));
+    t.add("hostRead", |a| {
+        let cap = a.opt_num(1).unwrap_or(65536.0).max(1.0) as usize;
+        Ok(match host::read(a.i32(0)?, cap) {
+            Ok(bytes) if bytes.is_empty() => 0.into(),
+            Ok(bytes) => Val::Bytes(bytes),
+            Err(code) => code.into(),
+        })
+    });
+    t.add("hostWrite", |a| Ok(host::write(a.i32(0)?, a.bytes(1)?).into()));
+    t.add("hostClose", |a| Ok(host::close(a.i32(0)?).into()));
+    t.add("hostListen", |a| Ok(host::listen(a.str(0)?, a.i32(1)?).into()));
+    t.add("hostLocalPort", |a| Ok(host::local_port(a.i32(0)?).into()));
+    t.add("hostAccept", |a| Ok(host::accept(a.i32(0)?).into()));
+    t.add("hostConnect", |a| Ok(host::connect(a.str(0)?, a.i32(1)?).into()));
 }
 
-fn wasm_memory_bytes() -> f64 {
-    #[cfg(target_arch = "wasm32")]
-    {
-        (core::arch::wasm32::memory_size(0) * 65536) as f64
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        0.0
-    }
-}
-
-fn platform_info<'js>(ctx: &Ctx<'js>) -> Result<Value<'js>> {
-    let obj = Object::new(ctx.clone())?;
-    obj.set("version", crate::BUN_VERSION)?;
-    obj.set("revision", crate::BUN_REVISION)?;
-    obj.set("arch", if cfg!(target_arch = "wasm32") { "wasm32" } else { std::env::consts::ARCH })?;
-    obj.into_js(ctx)
+fn platform_info() -> Val {
+    Record::new()
+        .set("version", crate::BUN_VERSION)
+        .set("revision", crate::BUN_REVISION)
+        .set("arch", if cfg!(target_arch = "wasm32") { "wasm32" } else { std::env::consts::ARCH })
+        .into()
 }

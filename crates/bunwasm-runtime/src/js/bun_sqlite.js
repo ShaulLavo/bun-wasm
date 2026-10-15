@@ -442,8 +442,14 @@
       if (bindings !== undefined && (bindings === null || typeof bindings !== "object")) {
         throw new TypeError("Expected bindings to be an object or array");
       }
-      const binder = bindings === undefined ? undefined : (names) => toValues(bindings, names, strict, safeIntegers);
-      const [changes, lastInsertRowid] = sql.exec(this.#handle, String(query), binder, safeIntegers);
+      const text = String(query);
+      // Bind to the first statement's parameters (by their names).
+      let values = null;
+      if (bindings !== undefined) {
+        const names = sql.firstParamNames(this.#handle, text);
+        if (names !== null) values = toValues(bindings, names, strict, safeIntegers);
+      }
+      const [changes, lastInsertRowid] = sql.exec(this.#handle, text, values, safeIntegers);
       return { changes, lastInsertRowid };
     }
 
