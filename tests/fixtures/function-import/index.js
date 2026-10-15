@@ -37,4 +37,7 @@ assert.equal(new Function(parameter, body)(4), 4);
 assert.deepEqual(order, ['parameter', 'body']);
 assert.throws(() => Function(Symbol()), TypeError);
 assert.throws(() => Function('return import('), SyntaxError);
+assert.equal(new Function('return { import(value) { return value; } }')().import(7), 7);
+assert.equal(new Function('return class { import(value) { return value; } }')().prototype.import(8), 8);
+assert.equal(new Function('return { import(value = /[()]/) { return value.source; } }')().import(), '[()]');
 console.log('constructor semantics');
