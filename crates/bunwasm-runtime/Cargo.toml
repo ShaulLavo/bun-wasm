@@ -36,3 +36,4 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 
 [dev-dependencies]
 bunwasm-glue = { path = "../bunwasm-glue" }
+bunwasm-posix = { path = "../bunwasm-posix" }
