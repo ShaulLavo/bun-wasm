@@ -1,0 +1,9 @@
+
+index.test.js:
+(pass) own keys, empty keys and holes
+(pass) exact non-overlapping repetition counts
+
+ 2 pass
+ 0 fail
+ 19 expect() calls
+Ran 2 tests across 1 file. [TIME]

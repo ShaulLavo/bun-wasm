@@ -925,6 +925,44 @@
     return items !== null && items.some((item) => equals(item, expected, false));
   });
 
+  defineContainMatcher("toContainKey", (received, key) => {
+    if (!isObjectLike(received)) throw new TypeError(`Expected value must be an object\nReceived: ${inspect(received)}`);
+    return Object.prototype.hasOwnProperty.call(received, key);
+  });
+
+  function containsKeys(received, keys, any, name) {
+    if (!Array.isArray(keys)) throw new TypeError(`Expected expected to be a array for '${name}'.`);
+    if (!isObjectLike(received)) return !any && keys.length === 0;
+    for (const key of keys) {
+      const own = Object.prototype.hasOwnProperty.call(received, key);
+      if (own === any) return any;
+    }
+    return !any;
+  }
+
+  defineContainMatcher("toContainKeys", (received, keys) => containsKeys(received, keys, false, "toContainKeys"));
+  defineContainMatcher("toContainAnyKeys", (received, keys) => containsKeys(received, keys, true, "toContainAnyKeys"));
+
+  defineMatcher("toIncludeRepeated", "expected", (ctx, received, ...args) => {
+    if (args.length < 2) throw new TypeError("toIncludeRepeated() requires 2 arguments");
+    const [substring, count] = args;
+    if (typeof substring !== "string") throw new Error("toIncludeRepeated() requires the first argument to be a string");
+    if (!Number.isInteger(count)) throw new Error("toIncludeRepeated() requires the second argument to be a number");
+    if (typeof received !== "string") throw new Error("toIncludeRepeated() requires the expect(value) to be a string");
+    if (substring.length === 0) throw new Error("toIncludeRepeated() requires the first argument to be a non-empty string");
+    let actual = 0;
+    let at = received.indexOf(substring);
+    while (at !== -1) {
+      actual++;
+      at = received.indexOf(substring, at + substring.length);
+    }
+    const expected = count >>> 0;
+    if (!failed(ctx, actual === expected)) return null;
+    const prefix = ctx.not ? (expected === 0 ? "Expected to include: " : "Expected not to include: ") : (expected === 0 ? "Expected to not include: " : "Expected to include: ");
+    const times = expected > 1 ? ` ${inspect(count)} times ` : ctx.not ? " " : "";
+    return { body: `\n\n${prefix}${inspect(substring)}${times}\nReceived: ${inspect(received)}\n` };
+  });
+
   defineMatcher("toHaveLength", "expected", (ctx, received, expected) => {
     const length = received === null || received === undefined ? undefined : received.length;
     if (!failed(ctx, length === expected)) return null;
