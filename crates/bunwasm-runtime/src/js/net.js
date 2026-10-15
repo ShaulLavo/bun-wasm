@@ -139,10 +139,13 @@
     const req = input instanceof Request && Object.keys(init).length === 0 ? input : new Request(input, init);
     const signal = init.signal || req.signal;
     if (signal && signal.aborted) throw signal.reason;
+    const headers = Array.from(req.headers);
+    // Like Bun, identify as Bun unless the caller set a user agent.
+    if (!req.headers.has("user-agent")) headers.push(["user-agent", `Bun/${native.platformInfo.version}`]);
     const meta = JSON.stringify({
       method: req.method,
       url: req.url,
-      headers: Array.from(req.headers),
+      headers,
       redirect: init.redirect || req.redirect || "follow",
     });
     const handle = native.hostFetch(meta, await requestBody(req));
@@ -1015,6 +1018,9 @@
         if (callback) this.once("connect", callback);
         this._attach(new Connection(handle));
         internal.nextTick(() => {
+          // The peer is known once connected.
+          const peer = this._conn.peer();
+          if (peer.port) Object.assign(this, { remoteAddress: peer.address, remotePort: peer.port, remoteFamily: peer.family });
           this.emit("connect");
           this.emit("ready");
         });
@@ -1023,6 +1029,16 @@
       setEncoding(enc) {
         this._encoding = enc;
         return this;
+      }
+      // Sockets always flow; pause/resume exist for stream-style callers.
+      pause() {
+        return this;
+      }
+      resume() {
+        return this;
+      }
+      get localPort() {
+        return this._conn ? native.hostLocalPort(this._conn.handle) : undefined;
       }
       write(data, encoding, cb) {
         if (typeof encoding === "function") cb = encoding;
