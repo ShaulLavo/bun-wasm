@@ -23,6 +23,20 @@ if (!result.success) {
   process.exit(1);
 }
 
+// The service worker is a classic script (module service workers are newer in Safari).
+const sw = await Bun.build({
+  entrypoints: [join(here, "src/sw.ts")],
+  outdir: out,
+  target: "browser",
+  format: "iife",
+  minify: true,
+  naming: "[name].[ext]",
+});
+if (!sw.success) {
+  for (const log of sw.logs) console.error(log);
+  process.exit(1);
+}
+
 await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 
 if (existsSync(wasmSource)) {
@@ -32,4 +46,4 @@ if (existsSync(wasmSource)) {
   console.warn(`bun.wasm: ${wasmSource} not found; the site will say bun.wasm is missing (or pass ?wasm=<url>).`);
 }
 
-for (const output of result.outputs) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);
+for (const output of result.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);

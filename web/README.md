@@ -33,10 +33,42 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
+## Networking
+
+When the page is cross-origin isolated, bun.wasm gets the `bun_wasm` host functions
+(docs/host-abi.md): `fetch`, `Bun.serve` and `node:http` work. Without isolation there is no
+SharedArrayBuffer, the slots stay empty and network APIs report "not supported".
+
+- **fetch** runs as the page's own `fetch`, so CORS applies: a cross-origin server must send
+  `Access-Control-Allow-Origin`, or the guest gets the browser's `TypeError` ("Failed to fetch" in
+  Chromium, "Load failed" in Safari). Custom response headers need `Access-Control-Expose-Headers`.
+  `redirect: "manual"` gives the browser's opaque redirect (status 0, no headers).
+- **Bun.serve / node:http**: when a guest server listens, the terminal prints a preview link,
+  `./__preview/<port>/`. A service worker (scope `./__preview/`, so it never controls the playground
+  page) forwards those requests to the page, which hands them to the guest as HTTP/1.1 connections.
+  Root-relative URLs inside a preview page (`/app.js`) go to the same server. `http://localhost:<port>`
+  printed in the terminal is clickable too. Ctrl-C stops the server.
+- A guest fetching its own server (`fetch(server.url)`) or `net.connect`ing to its own listener stays
+  inside the worker; other TCP connections are unsupported in the browser.
+
+How it moves: the bun worker is blocked in wasm, so it can't receive messages. It posts requests to
+the page (`src/net/host.ts` → `src/net/helper.ts`), and the page writes results (response head, body
+chunks, end, errors, new connections) into a per-run SharedArrayBuffer ring (`src/net/ring.ts`). The
+guest's `poll` sleeps on the ring with `Atomics.wait`; every other host call drains it without
+blocking. Fetch bodies are flow-controlled (at most 512 KiB ahead of what the guest has read).
+`src/net/trampoline.ts` installs the JS functions in bun.wasm's function table through a tiny
+hand-encoded wasm module (no `WebAssembly.Function`, which Safari lacks).
+
+Tests: `bun test tests/` (unit), `node tests/browser-net.mjs [chromium|webkit]` (after `bun run build`;
+Chromium desktop and WebKit iPhone against local servers), or `scripts/test-web.sh` for everything.
+
 ## Without a browser
 
 `bun scripts/run.ts <file.wasm> [args…]` runs a wasm binary under the same WASI shim and seeded
 filesystem from the command line (`WASI_TRACE=1` traces syscalls), for comparing with wasmtime.
+It provides the same networking slots, with a Bun worker (`scripts/net-helper.ts`) in the page's
+role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `127.0.0.1` ports.
+`NET=0` turns networking off; `TEST_*` environment variables pass through to the guest.
 `bun run check` type-checks.
 
 ## How it works

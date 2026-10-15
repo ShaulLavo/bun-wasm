@@ -10,6 +10,9 @@ import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
 import { MemFS, adoptInodes, decode, normalize } from "./fs";
+import { NetHelper } from "./net/helper";
+import { createRing } from "./net/ring";
+import { Previews } from "./preview";
 import { type Output, Shell } from "./shell";
 import type { RunRequest, WorkerMessage } from "./worker";
 
@@ -24,6 +27,9 @@ const wasmUrl = params.get("wasm") ?? "bun.wasm";
 const trace = params.has("trace");
 const isolated = globalThis.crossOriginIsolated === true;
 const sleepMode = isolated ? "Atomics.wait (cross-origin isolated)" : "busy-wait (page is not cross-origin isolated)";
+
+// Networking needs SharedArrayBuffer: without cross-origin isolation bun.wasm gets no fetch slots.
+const previews = new Previews();
 
 // ---------- filesystem ----------
 
@@ -101,12 +107,15 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
     LINES: String(term.rows),
     TMPDIR: "/tmp",
   };
-  const request: RunRequest = { module: wasm.module, args: ["bun", ...args], env, root: fs.root, trace };
+  const net = isolated ? createRing() : null;
+  const helper = net ? startNet(net, io) : null;
+  const request: RunRequest = { module: wasm.module, args: ["bun", ...args], env, root: fs.root, trace, net };
   const worker = new Worker("./worker.js", { type: "module" });
   runButton.disabled = true;
   return new Promise<number>((resolve) => {
     const finish = (code: number) => {
       worker.terminate();
+      helper?.dispose();
       current = null;
       runButton.disabled = false;
       for (const [path, text] of savedDuringRun) fs.writeFile(path, text);
@@ -117,6 +126,10 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
     current = { worker, finish };
     worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
       const msg = event.data;
+      if (msg.type === "net") {
+        helper?.handle(msg.req);
+        return;
+      }
       if (msg.type === "stdout" || msg.type === "stderr") {
         (msg.type === "stdout" ? io.out : io.err)(msg.data);
         return;
@@ -135,6 +148,25 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
   });
 }
 
+/** The I/O side of one run's networking; prints a preview link when a guest server starts. */
+function startNet(ring: SharedArrayBuffer, io: Output): NetHelper {
+  const helper: NetHelper = new NetHelper(ring, {
+    listening: (port) => {
+      previews.register(port, helper);
+      void previews.ready.then((state) => io.out(previewLine(port, state)));
+    },
+    stopped: (port) => previews.unregister(port, helper),
+  });
+  return helper;
+}
+
+function previewLine(port: number, state: string): string {
+  if (state !== "ready") return `\x1b[2m[preview] port ${port}: previews need a service worker (${state} here)\x1b[0m\r\n`;
+  const url = previews.url(port);
+  // OSC 8 hyperlink; the terminal's linkHandler opens it in a new tab.
+  return `\x1b[2m[preview]\x1b[0m \x1b]8;;${url}\x07\x1b[4;36m${url}\x1b[0m\x1b]8;;\x07 \x1b[2m(Ctrl-C stops the server)\x1b[0m\r\n`;
+}
+
 function kill(): void {
   if (!current) return;
   term.write("^C\r\n");
@@ -150,6 +182,7 @@ const term = new Terminal({
   fontSize: window.matchMedia("(max-width: 800px)").matches ? 13 : 14,
   scrollback: 5000,
   theme: { background: "#14151a", foreground: "#e6e6e6", cursor: "#fbf0df", selectionBackground: "#3a3d4a" },
+  linkHandler: { activate: (_event, uri) => openLink(uri), allowNonHttpProtocols: false },
 });
 const fit = new FitAddon();
 term.loadAddon(fit);
@@ -161,6 +194,26 @@ new ResizeObserver(() => fit.fit()).observe(termEl);
 termEl.addEventListener("touchend", () => term.focus(), { passive: true });
 termEl.addEventListener("click", () => term.focus());
 
+function openLink(uri: string): void {
+  window.open(uri, "_blank", "noopener");
+}
+
+// `http://localhost:<port>/…` printed by a guest server (server.url) opens that server's preview.
+const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{1,5})(\/[^\s'"`)]*)?/g;
+term.registerLinkProvider({
+  provideLinks(y, callback) {
+    const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
+    const links = Array.from(text.matchAll(LOCAL_URL))
+      .filter((m) => previews.serves(Number(m[1])))
+      .map((m) => ({
+        text: m[0],
+        range: { start: { x: m.index + 1, y }, end: { x: m.index + m[0].length, y } },
+        activate: () => openLink(previews.url(Number(m[1]), m[2] ?? "/")),
+      }));
+    callback(links.length > 0 ? links : undefined);
+  },
+});
+
 const shell = new Shell(term, {
   fs,
   runBun,
@@ -170,6 +223,7 @@ const shell = new Shell(term, {
   info: () => [
     `bun.wasm: ${wasm && "module" in wasm ? `${wasmUrl}, ${mb(wasm.size)}` : (wasm?.error ?? "loading")}`,
     `sleeps: ${sleepMode}`,
+    `network: ${isolated ? "fetch via the page; Bun.serve previews at ./__preview/<port>/" : "off (needs cross-origin isolation)"}`,
     `filesystem: in memory, preopened at /, cwd ${HOME}; reloading the page resets it`,
   ],
 });
