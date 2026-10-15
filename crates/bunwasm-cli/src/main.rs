@@ -136,6 +136,20 @@ fn parse(args: Vec<String>) -> Command {
     Command::Exit(0)
 }
 
+// Referenced so the linker keeps the host-engine exports (docs/engine-browser.md).
+#[cfg(feature = "engine-host")]
+#[used]
+static KEEP_HOST_ENGINE: [extern "C" fn() -> i32; 2] =
+    [bunwasm_runtime::engine_host::bunwasm_ready, bunwasm_runtime::engine_host::bunwasm_describe];
+#[cfg(feature = "engine-host")]
+#[used]
+static KEEP_HOST_CALL: (extern "C" fn(u32) -> *mut u8, unsafe extern "C" fn(u32, *mut u8, u32) -> i32, extern "C" fn() -> *const u8, extern "C" fn() -> u32) = (
+    bunwasm_runtime::engine_host::bunwasm_alloc,
+    bunwasm_runtime::engine_host::bunwasm_call,
+    bunwasm_runtime::engine_host::bunwasm_result_ptr,
+    bunwasm_runtime::engine_host::bunwasm_result_len,
+);
+
 // Referenced so the linker keeps the exported slot table (docs/host-abi.md).
 #[used]
 static KEEP_HOST_SLOTS: extern "C" fn() -> *mut bunwasm_runtime::host::HostSlots = bunwasm_runtime::host::bun_wasm_host_slots;
@@ -166,5 +180,9 @@ fn main() {
         }
     };
     let code = bunwasm_runtime::run(Options { entry, args, transpiler: transpiler() });
+    // The host engine runs the program after `_start` returns.
+    if code == 0 && bunwasm_runtime::host_engine_ready() {
+        return;
+    }
     std::process::exit(code);
 }

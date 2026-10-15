@@ -15,6 +15,8 @@ default = ["engine-quickjs", "bun-transpiler", "bun-build"]
 # scripts/build-bun-jsc.sh). Pick exactly one.
 engine-quickjs = ["bunwasm-runtime/engine-quickjs"]
 engine-jsc = ["bunwasm-runtime/engine-jsc"]
+# The host's JS engine (bun-browser.wasm, scripts/build-bun-browser.sh).
+engine-host = ["bunwasm-runtime/engine-host"]
 # Bun's real transpiler (crates/bunwasm-transpiler) for .ts/.tsx/.jsx/.toml.
 # Without it only plain JavaScript runs.
 bun-transpiler = ["dep:bunwasm-transpiler", "dep:bunwasm-glue"]

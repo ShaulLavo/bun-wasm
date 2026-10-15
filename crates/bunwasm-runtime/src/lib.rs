@@ -17,6 +17,9 @@ use std::time::Instant;
 
 mod encoding;
 pub mod engine;
+#[cfg(feature = "engine-host")]
+pub mod engine_host;
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 mod engine_natives;
 pub mod host;
 mod modules;
@@ -30,8 +33,8 @@ pub mod transpiler;
 mod engine_quickjs;
 #[cfg(all(feature = "engine-jsc", not(feature = "engine-quickjs")))]
 mod engine_jsc;
-#[cfg(not(any(feature = "engine-quickjs", feature = "engine-jsc")))]
-compile_error!("bunwasm-runtime needs an engine: feature engine-quickjs or engine-jsc");
+#[cfg(not(any(feature = "engine-quickjs", feature = "engine-jsc", feature = "engine-host")))]
+compile_error!("bunwasm-runtime needs an engine: feature engine-quickjs, engine-jsc or engine-host");
 
 pub use engine::{Engine, ModuleHost, NativeError, PromiseState, Val};
 pub use transpiler::{Loader, PassthroughTranspiler, Transpiled, Transpiler};
@@ -265,35 +268,67 @@ impl<E: Engine> ModuleHost<E> for Core<E> {
     }
 }
 
-/// Run a program to completion; returns the process exit code.
+/// Run a program to completion; returns the process exit code. With the
+/// host engine (`engine-host`) this only sets the program up: the host runs
+/// it after `_start` returns (see [`host_engine_ready`]).
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 pub fn run(options: Options) -> i32 {
     run_with::<ActiveEngine>(options)
 }
 
-fn run_with<E: Engine>(options: Options) -> i32 {
+#[cfg(all(feature = "engine-host", not(any(feature = "engine-quickjs", feature = "engine-jsc"))))]
+pub fn run(options: Options) -> i32 {
+    let Options { entry, args, transpiler } = options;
+    let (state, main_path) = new_state(&entry, &args, transpiler);
+    engine_host::init(entry, state, main_path)
+}
+
+/// True when `run` handed the program to the host engine (the binary must
+/// then return from `main` instead of exiting).
+pub fn host_engine_ready() -> bool {
+    #[cfg(feature = "engine-host")]
+    {
+        engine_host::bunwasm_ready() == 1
+    }
+    #[cfg(not(feature = "engine-host"))]
+    {
+        false
+    }
+}
+
+/// The process state for a program, and the entry's absolute path.
+fn new_state(entry: &Entry, args: &[String], transpiler: Box<dyn Transpiler>) -> (Rc<State>, String) {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "/".to_owned());
-    let main_path = match &options.entry {
+    let main_path = match entry {
         Entry::File(path) => resolve::join(&cwd, path),
         Entry::Eval(_) => format!("{}/[eval]", cwd.trim_end_matches('/')),
         Entry::Test(_) => format!("{}/", cwd.trim_end_matches('/')),
     };
     // Like Bun, `-e` code gets no script path in argv.
-    let script = match &options.entry {
+    let script = match entry {
         Entry::File(_) => Some(main_path.clone()),
         Entry::Eval(_) => None,
         Entry::Test(_) => Some("test".to_owned()),
     };
     let argv = std::iter::once(String::from("bun"))
         .chain(script)
-        .chain(options.args.iter().cloned())
+        .chain(args.iter().cloned())
         .collect::<Vec<_>>();
-    let state = Rc::new(State::new(argv, options.transpiler));
+    let state = Rc::new(State::new(argv, transpiler));
     *state.main.borrow_mut() = main_path.clone();
-    if let Entry::File(arg) = &options.entry {
+    if let Entry::File(arg) = entry {
         *state.main_arg.borrow_mut() = arg.clone();
     }
+    (state, main_path)
+}
+
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+fn run_with<E: Engine>(options: Options) -> i32 {
+    let Options { entry, args, transpiler } = options;
+    let (state, main_path) = new_state(&entry, &args, transpiler);
+    let options = Options { entry, args, transpiler: Box::new(PassthroughTranspiler) };
 
     let core = Rc::new(Core::<E> { state: state.clone(), internal: RefCell::new(None), handoffs: RefCell::new(HashMap::new()) });
     let engine = E::new(core.clone());
@@ -304,6 +339,7 @@ fn run_with<E: Engine>(options: Options) -> i32 {
     code
 }
 
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 fn run_in_engine<E: Engine>(e: &E, core: &Rc<Core<E>>, entry: &Entry, main_path: &str) -> i32 {
     match engine_natives::bootstrap(e, core) {
         Ok(internal) => *core.internal.borrow_mut() = Some(internal),

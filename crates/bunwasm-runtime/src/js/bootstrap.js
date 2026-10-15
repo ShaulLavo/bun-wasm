@@ -49,7 +49,9 @@
   }
 
   function formatCallSite(site) {
-    const file = site.getFileName();
+    // The host engine loads modules from blob:/data: URLs; show their paths.
+    const rawFile = site.getFileName();
+    const file = internal.displayName ? internal.displayName(rawFile) : rawFile;
     const name = site.getFunctionName();
     // A syntax error's location: no function, just file:line:col.
     if (site.getFunction() === undefined && !name && file) {

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Build dist/bun-browser.wasm: bunwasm-cli with the host engine (feature engine-host): the
+# browser's (or Node's) own JS engine runs user code and the polyfills; the wasm does transpiling,
+# resolution, bun build, sqlite and the natives. See docs/engine-browser.md.
+#
+# Its own target dir: the feature set differs from bun.wasm's (no QuickJS), and both binaries
+# are named bun.wasm in cargo's output.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=/dev/null
+source "$root/env.sh"
+export CARGO_TARGET_DIR="${BROWSER_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR}-browser}"
+export WASI_SDK="${WASI_SDK:-$WASI_SDK_PATH}"
+
+cargo build -j "${JOBS:-12}" --release --target wasm32-wasip1 -p bunwasm-cli \
+  --no-default-features --features engine-host,bun-transpiler,bun-build
+raw="$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm"
+mkdir -p "$root/dist"
+wasm-opt -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
+  --enable-mutable-globals "$raw" -o "$root/dist/bun-browser.wasm"
+printf 'dist/bun-browser.wasm: %s bytes (cargo output: %s bytes)\n' \
+  "$(stat -c %s "$root/dist/bun-browser.wasm")" "$(stat -c %s "$raw")"

@@ -32,7 +32,9 @@
 # land on the real filesystem.
 #
 #   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc] [name...]
-#     --engine jsc  run dist/bun-jsc.wasm (JavaScriptCore; scripts/build-bun-jsc.sh)
+#     --engine jsc      run dist/bun-jsc.wasm (JavaScriptCore; scripts/build-bun-jsc.sh)
+#     --engine browser  run dist/bun-browser.wasm with Node's V8 as the host engine
+#                       (web/scripts/node-host.mjs; docs/engine-browser.md)
 #     --update   regenerate expected.txt with native `bun` (review the diff!)
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -57,7 +59,8 @@ done
 case "$engine" in
   quickjs) wasm="$root/dist/bun.wasm"; build_script="$root/scripts/build.sh" ;;
   jsc) wasm="$root/dist/bun-jsc.wasm"; build_script="$root/scripts/build-bun-jsc.sh" ;;
-  *) echo "unknown engine $engine (quickjs or jsc)"; exit 2 ;;
+  browser) wasm="$root/dist/bun-browser.wasm"; build_script="$root/scripts/build-bun-browser.sh" ;;
+  *) echo "unknown engine $engine (quickjs, jsc or browser)"; exit 2 ;;
 esac
 
 scratch="$(mktemp -d /work/tmp/bun-wasm-runtime-test-XXXXXX)"
@@ -158,7 +161,11 @@ for name in "${names[@]}"; do
     continue
   fi
 
-  if [[ $is_host == 1 ]]; then
+  if [[ $engine == browser ]]; then
+    (cd "$work" && timeout 60 node --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --dir "$work::/" \
+      --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env "TEST_SERVER=${TEST_SERVER:-}" -- \
+      "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+  elif [[ $is_host == 1 ]]; then
     (cd "$work" && BUN_WASM="$wasm" timeout 60 "$launcher" --dir "$work::/" --env PWD=/ --env HOME=/ \
       --env BUNWASM_TEST=1 --env "TEST_SERVER=$TEST_SERVER" \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")

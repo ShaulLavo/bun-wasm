@@ -15,6 +15,12 @@ fn main() {
     println!("cargo:rustc-link-arg-bin=bun=--export-table");
     println!("cargo:rustc-link-arg-bin=bun=--growable-table");
     println!("cargo:rustc-link-arg-bin=bun=--export=bun_wasm_host_slots");
+    // Host-engine build: the exports web/src/engine-host.js calls.
+    if std::env::var_os("CARGO_FEATURE_ENGINE_HOST").is_some() {
+        for name in ["bunwasm_ready", "bunwasm_alloc", "bunwasm_call", "bunwasm_describe", "bunwasm_result_ptr", "bunwasm_result_len"] {
+            println!("cargo:rustc-link-arg-bin=bun=--export={name}");
+        }
+    }
     // JavaScriptCore build: one libc (wasi-sdk's; scripts/build-bun-jsc.sh
     // links with -C link-self-contained=no), so the startup object comes from
     // the wasi-sdk sysroot too.

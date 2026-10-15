@@ -1409,7 +1409,8 @@
   function parseJscFrameLine(line) {
     const m = /^(.*?)@(.*):(\d+):(\d+)$/.exec(line);
     if (!m || m[2].startsWith("bun-wasm:")) return null;
-    let [file, lineNo, column] = [m[2], Number(m[3]), Number(m[4])];
+    const url = typeof internal.displayName === "function" ? internal.displayName(m[2]) : m[2];
+    let [file, lineNo, column] = [url, Number(m[3]), Number(m[4])];
     const mapped = typeof internal.mapPosition === "function" ? internal.mapPosition(file, lineNo, column) : undefined;
     if (mapped) [lineNo, column] = mapped;
     column = calleeColumn(file, lineNo, column);

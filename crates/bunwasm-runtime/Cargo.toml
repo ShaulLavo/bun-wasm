@@ -10,6 +10,8 @@ default = ["engine-quickjs"]
 # The JS engine (exactly one): QuickJS-ng, or Bun's JavaScriptCore.
 engine-quickjs = ["dep:rquickjs"]
 engine-jsc = ["dep:bunwasm-jsc"]
+# The host's own JS engine (browser/Node): see docs/engine-browser.md.
+engine-host = []
 
 [dependencies]
 bunwasm-jsc = { path = "../bunwasm-jsc", optional = true }

@@ -29,11 +29,15 @@ pub struct PositionMap {
     pub original: Option<Rc<str>>,
     /// Characters injected at the start of line 1 (the ESM prologue).
     pub line1_shift: u32,
+    /// Lines injected above the file's line 1 (the host engine's CommonJS
+    /// wrapper, which can't start at line -1).
+    pub line_offset: u32,
 }
 
 impl PositionMap {
     /// Original 1-based (line, column) for a position in evaluated code.
     pub fn original_position(&self, line: u32, col: u32) -> (u32, u32) {
+        let line = if line > self.line_offset { line - self.line_offset } else { line };
         let col = if line == 1 { col.saturating_sub(self.line1_shift).max(1) } else { col };
         match &self.map {
             Some(map) => map.lookup(line, col).unwrap_or((line, col)),
@@ -240,6 +244,11 @@ impl State {
         Some(positions.get(file)?.original_position(line, col))
     }
 
+    /// Remember that `lines` lines were injected above line 1 of `path`.
+    pub fn record_line_offset(&self, path: &str, lines: u32) {
+        self.positions.borrow_mut().entry(path.to_owned()).or_default().line_offset = lines;
+    }
+
     /// Remember that `len` characters were injected before line 1 of `path`.
     pub fn record_prologue(&self, path: &str, len: usize) {
         if len == 0 {
@@ -292,7 +301,13 @@ pub fn wrapper_source(keys: &[String]) -> String {
 /// ESM source for a module file: the prologue (recorded for stack-position
 /// fixups) plus the code.
 pub fn esm_source(state: &State, name: &str, code: &str) -> String {
-    let prologue = esm_prologue(code);
+    esm_source_with(state, name, code, "")
+}
+
+/// [`esm_source`] with `extra` code put first on line 1 (the host engine's
+/// `import.meta` set-up).
+pub fn esm_source_with(state: &State, name: &str, code: &str, extra: &str) -> String {
+    let prologue = format!("{extra}{}", esm_prologue(code));
     state.record_prologue(name, prologue.chars().count());
     format!("{prologue}{code}")
 }

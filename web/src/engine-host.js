@@ -1,0 +1,677 @@
+// The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
+// whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
+// headless tests). bun-browser.wasm (cargo feature engine-host) keeps doing what is real Bun:
+// transpiling, module resolution, `bun build`, sqlite, and every Rust native. This file:
+//
+// - calls those natives through the wasm's exports (arguments and results in a small binary
+//   encoding mirrored in crates/bunwasm-runtime/src/engine_host.rs),
+// - implements the natives that need engine values (module loading, eval, promise/proxy
+//   introspection) on the host engine,
+// - evaluates the runtime's JS polyfills (src/js/*.js, served by the wasm) natively,
+// - loads ES modules natively: each file becomes a blob: (browser) or data: (Node) URL whose
+//   import specifiers point at its dependencies' URLs, so live bindings, top-level await and
+//   import.meta are the engine's own,
+// - and drives the runtime's event loop from the host's (timers on setTimeout/MessageChannel,
+//   microtasks native).
+//
+// Plain JS (no TypeScript) so Node can import it directly.
+
+// The host's own versions of what the polyfills replace on globalThis.
+const NativeTextEncoder = globalThis.TextEncoder;
+const NativeTextDecoder = globalThis.TextDecoder;
+const NativeBlob = globalThis.Blob;
+const nativeCreateObjectURL = globalThis.URL && globalThis.URL.createObjectURL ? globalThis.URL.createObjectURL.bind(globalThis.URL) : null;
+const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
+const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
+const NativeMessageChannel = globalThis.MessageChannel;
+const nativeProcess = typeof process === "object" && process && process.versions && process.versions.node ? process : null;
+const nativeAddEventListener = typeof globalThis.addEventListener === "function" ? globalThis.addEventListener.bind(globalThis) : null;
+
+const utf8 = new NativeTextEncoder();
+const fromUtf8 = new NativeTextDecoder();
+
+// --- the value encoding (engine_host.rs encode/decode) ------------------------------------
+
+const T = { UNDEFINED: 0, NULL: 1, FALSE: 2, TRUE: 3, NUM: 4, STR: 5, BYTES: 6, ARRAY: 7, OBJECT: 8, BIGINT: 9, BIGUINT: 10 };
+const I64_MIN = -(2n ** 63n);
+const I64_MAX = 2n ** 63n - 1n;
+
+class Writer {
+  constructor() {
+    this.buf = new Uint8Array(256);
+    this.view = new DataView(this.buf.buffer);
+    this.len = 0;
+  }
+  room(n) {
+    if (this.len + n <= this.buf.length) return;
+    let size = this.buf.length * 2;
+    while (size < this.len + n) size *= 2;
+    const next = new Uint8Array(size);
+    next.set(this.buf.subarray(0, this.len));
+    this.buf = next;
+    this.view = new DataView(next.buffer);
+  }
+  byte(b) {
+    this.room(1);
+    this.buf[this.len++] = b;
+  }
+  u32(n) {
+    this.room(4);
+    this.view.setUint32(this.len, n, true);
+    this.len += 4;
+  }
+  bytes(b) {
+    this.u32(b.length);
+    this.room(b.length);
+    this.buf.set(b, this.len);
+    this.len += b.length;
+  }
+  value(v) {
+    switch (typeof v) {
+      case "undefined":
+        return this.byte(T.UNDEFINED);
+      case "boolean":
+        return this.byte(v ? T.TRUE : T.FALSE);
+      case "number":
+        this.byte(T.NUM);
+        this.room(8);
+        this.view.setFloat64(this.len, v, true);
+        this.len += 8;
+        return undefined;
+      case "string":
+        this.byte(T.STR);
+        return this.bytes(utf8.encode(v));
+      case "bigint":
+        return this.bigint(v);
+      case "object":
+        return this.object(v);
+      default:
+        return this.byte(T.UNDEFINED);
+    }
+  }
+  bigint(v) {
+    const signed = v >= I64_MIN && v <= I64_MAX;
+    this.byte(signed ? T.BIGINT : T.BIGUINT);
+    this.room(8);
+    if (signed) this.view.setBigInt64(this.len, v, true);
+    else this.view.setBigUint64(this.len, BigInt.asUintN(64, v), true);
+    this.len += 8;
+  }
+  object(v) {
+    if (v === null) return this.byte(T.NULL);
+    if (v instanceof Uint8Array) {
+      this.byte(T.BYTES);
+      return this.bytes(v);
+    }
+    if (ArrayBuffer.isView(v)) {
+      this.byte(T.BYTES);
+      return this.bytes(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+    }
+    if (v instanceof ArrayBuffer) {
+      this.byte(T.BYTES);
+      return this.bytes(new Uint8Array(v));
+    }
+    if (Array.isArray(v)) {
+      this.byte(T.ARRAY);
+      this.u32(v.length);
+      for (const item of v) this.value(item);
+      return undefined;
+    }
+    const keys = Object.keys(v);
+    this.byte(T.OBJECT);
+    this.u32(keys.length);
+    for (const k of keys) {
+      this.bytes(utf8.encode(k));
+      this.value(v[k]);
+    }
+    return undefined;
+  }
+}
+
+class Reader {
+  constructor(bytes) {
+    this.bytes = bytes;
+    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    this.pos = 0;
+  }
+  u32() {
+    const n = this.view.getUint32(this.pos, true);
+    this.pos += 4;
+    return n;
+  }
+  raw() {
+    const n = this.u32();
+    const s = this.bytes.subarray(this.pos, this.pos + n);
+    this.pos += n;
+    return s;
+  }
+  value() {
+    const tag = this.bytes[this.pos++];
+    switch (tag) {
+      case T.NULL:
+        return null;
+      case T.FALSE:
+        return false;
+      case T.TRUE:
+        return true;
+      case T.NUM: {
+        const n = this.view.getFloat64(this.pos, true);
+        this.pos += 8;
+        return n;
+      }
+      case T.BIGINT: {
+        const n = this.view.getBigInt64(this.pos, true);
+        this.pos += 8;
+        return n;
+      }
+      case T.BIGUINT: {
+        const n = this.view.getBigUint64(this.pos, true);
+        this.pos += 8;
+        return n;
+      }
+      case T.STR:
+        return fromUtf8.decode(this.raw());
+      case T.BYTES:
+        // Copied out: wasm memory can grow (and detach) on the next call.
+        return this.raw().slice();
+      case T.ARRAY: {
+        const n = this.u32();
+        const out = new Array(n);
+        for (let i = 0; i < n; i++) out[i] = this.value();
+        return out;
+      }
+      case T.OBJECT: {
+        const n = this.u32();
+        const out = {};
+        for (let i = 0; i < n; i++) {
+          const k = fromUtf8.decode(this.raw());
+          out[k] = this.value();
+        }
+        return out;
+      }
+      default:
+        return undefined;
+    }
+  }
+}
+
+// --- calling the wasm --------------------------------------------------------------------
+
+function wasmCaller(exports) {
+  const result = () => {
+    const ptr = exports.bunwasm_result_ptr();
+    const len = exports.bunwasm_result_len();
+    return new Reader(new Uint8Array(exports.memory.buffer, ptr, len)).value();
+  };
+  function call(index, args) {
+    const w = new Writer();
+    w.value(args);
+    const ptr = exports.bunwasm_alloc(w.len);
+    new Uint8Array(exports.memory.buffer, ptr, w.len).set(w.buf.subarray(0, w.len));
+    const status = exports.bunwasm_call(index, ptr, w.len);
+    const value = result();
+    if (status !== 0) throw nativeError(value);
+    return value;
+  }
+  function describe() {
+    exports.bunwasm_describe();
+    return result();
+  }
+  return { call, describe };
+}
+
+const ERRORS = { Error, TypeError, RangeError, SyntaxError };
+
+function nativeError(info) {
+  const Ctor = ERRORS[info.kind] || Error;
+  const err = new Ctor(info.message);
+  for (const [k, v] of Object.entries(info.props || {})) {
+    if (k === "name") Object.defineProperty(err, "name", { value: v, writable: true, configurable: true });
+    else err[k] = v;
+  }
+  if (info.name) Object.defineProperty(err, "name", { value: info.name, writable: true, configurable: true });
+  return err;
+}
+
+// Thrown to unwind after process.exit; never reported.
+class ExitSignal {
+  constructor(code) {
+    this.code = code;
+  }
+}
+
+/**
+ * Run the program bun-browser.wasm set up (after its `_start` returned with
+ * `bunwasm_ready() === 1`) on this JS engine.
+ * @param {object} o
+ * @param {WebAssembly.Instance} o.instance
+ * @param {"blob" | "data"} o.moduleUrls  how module sources become importable URLs
+ * @param {(code: number) => void} o.onExit  called once when the program ends
+ * @param {typeof fetch} [o.fetch]  the host's fetch, for user code (else fetch rejects)
+ * @returns {Promise<number>} the exit code (if onExit returns)
+ */
+export function startEngineHost(o) {
+  return new Promise((resolve) => {
+    const host = new EngineHost(o, resolve);
+    host.start();
+  });
+}
+
+class EngineHost {
+  constructor(o, resolve) {
+    this.o = o;
+    this.resolveDone = resolve;
+    this.wasm = wasmCaller(o.instance.exports);
+    this.exited = false;
+    this.pendingAsync = 0;
+    this.timer = null;
+    this.timerAt = Infinity;
+    this.immediate = false;
+    // Module graph: key (path or builtin) -> URL; URL -> path for stack traces.
+    this.urls = new Map();
+    this.building = new Set();
+    this.paths = new Map();
+    this.handoffs = new Map();
+    this.asyncContext = undefined;
+    if (NativeMessageChannel) {
+      this.channel = new NativeMessageChannel();
+      this.channel.port1.onmessage = () => {
+        this.immediate = false;
+        this.pump();
+      };
+    }
+  }
+
+  start() {
+    const d = this.wasm.describe();
+    this.entry = d.entry;
+    const native = this.buildNative(d);
+    this.native = native;
+    let internal;
+    try {
+      const factory = this.evalPolyfill("bootstrap");
+      internal = factory(native);
+    } catch (err) {
+      this.o.onExit && this.writeErr(`bun-wasm: bootstrap failed: ${err && err.stack ? err.stack : err}\n`);
+      return this.exit(70);
+    }
+    this.internal = internal;
+    internal.displayName = (file) => this.paths.get(file) || file;
+    this.installGlobals();
+    this.watchRejections();
+    this.runEntry();
+    this.schedule(0);
+    return undefined;
+  }
+
+  writeErr(text) {
+    try {
+      this.native.writeStderr(text);
+    } catch {
+      // nothing else to do
+    }
+  }
+
+  // --- natives ---
+
+  buildNative(d) {
+    const native = {};
+    const call = this.wasm.call;
+    d.natives.forEach((name, index) => {
+      const fn = (...args) => call(index, args);
+      const dot = name.indexOf(".");
+      if (dot < 0) {
+        native[name] = fn;
+        return;
+      }
+      const group = name.slice(0, dot);
+      (native[group] || (native[group] = {}))[name.slice(dot + 1)] = fn;
+    });
+    Object.assign(native, d.constants);
+    // This engine fetches natively (see installGlobals), not through the bun_wasm ABI.
+    native.hostCaps = Object.fromEntries(Object.keys(native.hostCaps || {}).map((k) => [k, false]));
+    native.engine = "host";
+    Object.assign(native, this.valueNatives());
+    return native;
+  }
+
+  valueNatives() {
+    const host = this;
+    return {
+      exit(code) {
+        host.exit(code === undefined ? 0 : code | 0);
+        throw new ExitSignal(code);
+      },
+      scheduleTick() {
+        if (host.tickQueued) return;
+        host.tickQueued = true;
+        nativeQueueMicrotask(() => {
+          host.tickQueued = false;
+          host.guard(() => host.internal.runTicks());
+        });
+      },
+      runMicrotasks() {},
+      compileCjs(path) {
+        return host.evalAt(host.native.hostCjsSource(path), path);
+      },
+      requireEsm(path) {
+        const err = new Error(`require() of ES module ${path} is not supported by the browser engine yet; use import`);
+        err.code = "ERR_REQUIRE_ESM";
+        throw err;
+      },
+      importModule(spec) {
+        return host.importKey(spec);
+      },
+      evalScript(code, filename) {
+        return host.evalAt(String(code), filename || "evalmachine.<anonymous>");
+      },
+      loadPolyfill(name) {
+        return host.evalPolyfill(name);
+      },
+      // The engine doesn't expose these to JS; console.log shows less.
+      promiseState: () => "pending",
+      promiseResult: () => undefined,
+      isProxy: () => false,
+      getProxyTarget: () => undefined,
+      isPromise: (v) => v instanceof Promise,
+      isError: (v) => (typeof Error.isError === "function" ? Error.isError(v) : v instanceof Error),
+      iteratorEntries: () => undefined,
+      ownKeysInOrder: () => undefined,
+      // Carried through timers and ticks by the polyfills; not across await.
+      getAsyncContext: () => host.asyncContext,
+      setAsyncContext: (v) => {
+        host.asyncContext = v;
+      },
+      gc: () => (typeof globalThis.gc === "function" ? globalThis.gc() : undefined),
+      memoryUsage() {
+        const mem = typeof performance === "object" && performance.memory;
+        const used = mem ? mem.usedJSHeapSize : 0;
+        return { rss: used, heapTotal: mem ? mem.totalJSHeapSize : 0, heapUsed: used, external: 0, arrayBuffers: 0 };
+      },
+    };
+  }
+
+  evalPolyfill(name) {
+    const source = this.native ? this.native.polyfillSource(name) : this.wasm.call(this.indexOf("polyfillSource"), [name]);
+    if (typeof source !== "string") throw new Error(`bun-wasm: missing internal module ${name}`);
+    return this.evalAt(source, `bun-wasm:${name}`);
+  }
+
+  indexOf(name) {
+    return this.wasm.describe().natives.indexOf(name);
+  }
+
+  // Indirect eval: global scope, sloppy unless the code says otherwise; the
+  // sourceURL names the file in stack traces.
+  evalAt(code, filename) {
+    return (0, eval)(`${code}\n//# sourceURL=${filename}`);
+  }
+
+  // --- ES modules ---
+
+  url(source, key) {
+    let url;
+    if (this.o.moduleUrls === "blob" && nativeCreateObjectURL) {
+      url = nativeCreateObjectURL(new NativeBlob([source], { type: "text/javascript" }));
+    } else {
+      url = `data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`;
+    }
+    this.paths.set(url, key);
+    return url;
+  }
+
+  importKey(key) {
+    return this.track((async () => import(this.ensureModule(key)))());
+  }
+
+  /** The URL of module `key` (a path or a builtin name), built with its dependencies. */
+  ensureModule(key) {
+    const cached = this.urls.get(key);
+    if (cached) return cached;
+    if (this.building.has(key)) {
+      const err = new Error(`Circular ES module imports are not supported by the browser engine yet (${key})`);
+      err.code = "ERR_CIRCULAR_IMPORT";
+      throw err;
+    }
+    this.building.add(key);
+    try {
+      const url = this.url(this.moduleSource(key), key);
+      this.urls.set(key, url);
+      return url;
+    } finally {
+      this.building.delete(key);
+    }
+  }
+
+  moduleSource(key) {
+    const info = this.native.hostModuleSource(key);
+    if (info.format === "esm") return this.linkEsm(key, info);
+    // CommonJS, JSON, text and builtins: evaluated now (sharing require's
+    // cache), re-exported by a small wrapper.
+    let value;
+    let def;
+    if (info.format === "builtin") {
+      value = this.internal.builtin(key);
+      def = value && typeof value === "object" && value.__esModule ? value.default : value;
+    } else {
+      [value, def] = this.internal.importNonEsm(key, info.format);
+    }
+    this.handoffs.set(key, { value, default: def });
+    return wrapperSource(key, value);
+  }
+
+  linkEsm(key, info) {
+    let code = info.code;
+    // Replace from the end so earlier offsets stay valid. Offsets are UTF-8
+    // byte offsets: work on bytes.
+    const bytes = utf8.encode(code);
+    const parts = [];
+    let end = bytes.length;
+    const imports = info.imports.slice().sort((a, b) => b.start - a.start);
+    for (const imp of imports) {
+      parts.push(bytes.subarray(imp.end, end));
+      parts.push(utf8.encode(this.replacement(key, imp)));
+      end = imp.start;
+    }
+    parts.push(bytes.subarray(0, end));
+    parts.reverse();
+    code = parts.map((p) => fromUtf8.decode(p)).join("");
+    return code;
+  }
+
+  replacement(from, imp) {
+    if (imp.kind === "dynamic") return `globalThis.__bunwasm_dynamicImport(${JSON.stringify(from)})`;
+    if (imp.key === null) {
+      const err = new Error(imp.error);
+      err.code = "ERR_MODULE_NOT_FOUND";
+      throw err;
+    }
+    return JSON.stringify(this.ensureModule(imp.key));
+  }
+
+  installGlobals() {
+    const host = this;
+    const hidden = (name, value) => Object.defineProperty(globalThis, name, { value, configurable: true, writable: true, enumerable: false });
+    hidden("__bunwasm_meta", (meta, path) => {
+      host.internal.initImportMeta(meta, path, path === host.entry.main);
+    });
+    hidden("__bunwasm_dynamicImport", (from) => (spec) =>
+      host.track(
+        (async () => {
+          const key = host.native.resolve(String(spec), from, false);
+          return import(host.ensureModule(key));
+        })(),
+      ),
+    );
+    hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));
+    if (this.o.fetch) this.installFetch(this.o.fetch);
+  }
+
+  // User code gets the host's real fetch, adapted to the runtime's Response.
+  installFetch(hostFetch) {
+    const host = this;
+    const web = this.internal.web;
+    const polyfillFetch = globalThis.fetch;
+    async function fetch(input, init = {}) {
+      const url = input instanceof web.Request ? input.url : String(input instanceof web.URL ? input.href : input);
+      if (url.startsWith("file:") || url.startsWith("data:")) return polyfillFetch(input, init);
+      const req = input instanceof web.Request && Object.keys(init).length === 0 ? input : new web.Request(input, init);
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : new Uint8Array(await req.arrayBuffer());
+      const res = await host.track(hostFetch(req.url, { method: req.method, headers: Array.from(req.headers), body, redirect: init.redirect || "follow" }));
+      const bytes = new Uint8Array(await host.track(res.arrayBuffer()));
+      const nullBody = req.method === "HEAD" || res.status === 204 || res.status === 304;
+      const out = new web.Response(nullBody ? null : bytes, {
+        status: res.status >= 200 && res.status <= 599 ? res.status : 200,
+        statusText: res.statusText,
+        headers: Array.from(res.headers),
+      });
+      web.Response._setNetwork(out, res.url || req.url, Boolean(res.redirected));
+      return out;
+    }
+    Object.defineProperty(globalThis, "fetch", { value: fetch, configurable: true, writable: true, enumerable: false });
+  }
+
+  watchRejections() {
+    const onRejection = (reason) => {
+      if (this.exited || reason instanceof ExitSignal) return;
+      if (!this.guard(() => this.internal.handleRejection(reason))) this.exit(1);
+    };
+    if (nativeProcess) {
+      nativeProcess.on("unhandledRejection", onRejection);
+      nativeProcess.on("uncaughtException", (err) => this.uncaught(err));
+    } else if (nativeAddEventListener) {
+      nativeAddEventListener("unhandledrejection", (event) => {
+        event.preventDefault();
+        onRejection(event.reason);
+      });
+      nativeAddEventListener("error", (event) => {
+        event.preventDefault();
+        this.uncaught(event.error);
+      });
+    }
+  }
+
+  runEntry() {
+    const { entry, internal } = this;
+    let started;
+    try {
+      if (entry.kind === "eval") started = this.importKey(entry.main);
+      else if (entry.kind === "test") started = internal.runTests(entry.args);
+      else started = internal.runMain(entry.main);
+    } catch (err) {
+      this.uncaught(err);
+      return;
+    }
+    if (started && typeof started.then === "function") {
+      this.track(started).then(undefined, (err) => this.uncaught(err));
+    }
+  }
+
+  // --- the event loop ---
+
+  /** Keep the process alive until `promise` settles; wake the loop then. */
+  track(promise) {
+    this.pendingAsync++;
+    const done = () => {
+      this.pendingAsync--;
+      this.schedule(0);
+    };
+    promise.then(done, done);
+    return promise;
+  }
+
+  schedule(ms) {
+    if (this.exited) return;
+    if (ms <= 0) {
+      if (this.immediate) return;
+      this.immediate = true;
+      if (this.channel) this.channel.port2.postMessage(0);
+      else nativeSetTimeout(() => {
+        this.immediate = false;
+        this.pump();
+      }, 0);
+      return;
+    }
+    const at = Date.now() + ms;
+    if (this.timer !== null && this.timerAt <= at) return;
+    if (this.timer !== null) nativeClearTimeout(this.timer);
+    this.timerAt = at;
+    this.timer = nativeSetTimeout(() => {
+      this.timer = null;
+      this.timerAt = Infinity;
+      this.pump();
+    }, ms);
+  }
+
+  // One turn: run one due timer/immediate (microtasks then run natively),
+  // then decide when to come back.
+  pump() {
+    if (this.exited) return;
+    const next = this.guard(() => this.internal.runTimers(), 0);
+    if (this.o.debug) this.o.debug(`pump next=${next} pending=${this.pendingAsync}`);
+    this.flush();
+    if (this.exited) return;
+    if (next === 0) return this.schedule(0);
+    if (next > 0) return this.schedule(next);
+    if (this.pendingAsync > 0) return undefined;
+    const more = this.guard(() => this.internal.emitBeforeExit(), false);
+    if (more) return this.schedule(0);
+    const code = this.guard(() => this.internal.beforeExit(), 1);
+    this.exit(typeof code === "number" ? code : 0);
+    return undefined;
+  }
+
+  flush() {
+    try {
+      this.native.flushOutput();
+    } catch {
+      // the wasm is gone
+    }
+  }
+
+  /** Run `fn`; uncaught errors go to process.on("uncaughtException") or end the run. */
+  guard(fn, fallback) {
+    try {
+      return fn();
+    } catch (err) {
+      this.uncaught(err);
+      return fallback;
+    }
+  }
+
+  uncaught(err) {
+    if (this.exited || err instanceof ExitSignal) return;
+    let handled = false;
+    try {
+      handled = this.internal.handleUncaught(err);
+    } catch (inner) {
+      if (inner instanceof ExitSignal) return;
+      this.writeErr(`error: ${inner}\n`);
+    }
+    if (!handled) this.exit(1);
+  }
+
+  exit(code) {
+    if (this.exited) return;
+    this.exited = true;
+    this.flush();
+    if (this.timer !== null) nativeClearTimeout(this.timer);
+    if (this.o.onExit) this.o.onExit(code);
+    this.resolveDone(code);
+  }
+}
+
+/** ES module re-exporting a CommonJS/JSON/builtin module's exports (handed over by __bunwasm_wrap). */
+function wrapperSource(key, value) {
+  const keys = value !== null && (typeof value === "object" || typeof value === "function") ? Object.keys(value) : [];
+  let src = `const h = globalThis.__bunwasm_wrap(${JSON.stringify(key)}); const m = h.value; export default h.default;\n`;
+  const exports = [];
+  keys.forEach((k, i) => {
+    if (k === "default" || k === "__esModule" || !/^[\p{L}\p{N}_$]+$/u.test(k)) return;
+    src += `const e${i} = m[${JSON.stringify(k)}];\n`;
+    exports.push(`e${i} as ${JSON.stringify(k)}`);
+  });
+  if (exports.length) src += `export { ${exports.join(", ")} };\n`;
+  return src;
+}
