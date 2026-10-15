@@ -137,11 +137,15 @@ heap statistics do not prove object finalization.
 All 69 local fixtures pass on each engine. The external WebSocket checks pass
 72 checks across the engines. Direct HTML CLI checks pass on all three, and
 the full web checks pass in Chromium and WebKit with every engine, including
-HTML rendering, linked CSS and phone layout.
+HTML rendering, linked CSS and phone layout. The existing sandbox HMR
+checklist also passes all six browser/engine combinations. That checklist
+still exercises the existing `.dev/` server; it does not establish that Bun
+HMR has been ported. A close-timer regression test fails before the write-error
+cleanup fix and passes after it.
 
 Raw results and logs are retained in
 `/work/tmp/bun-wasm-real-dev-server-results/` for coordinator review. The
-`baseline-*.json` and `html-*.json` files hold the controlled comparison.
+`baseline-*.json` and `measured-*.json` files hold the controlled comparison.
 The coordinator owns those results and the review worktree until integration,
 then removes them.
 

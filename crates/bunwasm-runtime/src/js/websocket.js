@@ -173,8 +173,8 @@
       const bytes = closePayload(code, reason);
       if (this.state !== 1) return;
       this.state = 2;
-      this.sendFrame(8, bytes);
       this.closeTimer = setTimeout(() => this.conn.destroy(), 10000);
+      this.sendFrame(8, bytes);
     }
     terminate() {
       this.conn.destroy();
