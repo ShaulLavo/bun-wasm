@@ -107,6 +107,50 @@ index 73c7f54d..aa6dad8c 100644
  #include <dlfcn.h>
  #if OS(DARWIN)
  #include <mach-o/dyld.h>
+diff --git i/Source/JavaScriptCore/runtime/JSModuleEnvironment.cpp w/Source/JavaScriptCore/runtime/JSModuleEnvironment.cpp
+index 6127fa1a..ef4289f6 100644
+--- i/Source/JavaScriptCore/runtime/JSModuleEnvironment.cpp
++++ w/Source/JavaScriptCore/runtime/JSModuleEnvironment.cpp
+@@ -69,8 +69,11 @@ inline JSModuleEnvironment::JSModuleEnvironment(VM& vm, Structure* structure, JS
+ {
+     moduleRecordSlot().setWithoutWriteBarrier(moduleRecord);
+     importSlotCountSlot() = importSlotCount;
+-    for (unsigned i = 0; i < importSlotCount; ++i)
++    for (unsigned i = 0; i < importSlotCount; ++i) {
++        // Zero the whole slot: op_resolve_scope tests it with a JSValue-sized load.
++        memset(&importSlot(i), 0, importSlotStride);
+         importSlot(i).clear();
++    }
+ }
+ 
+ JSModuleEnvironment* JSModuleEnvironment::fillImportSlot(JSGlobalObject* globalObject, JSScope* scope, unsigned depth, ScopeOffset slot)
+diff --git i/Source/JavaScriptCore/runtime/JSModuleEnvironment.h w/Source/JavaScriptCore/runtime/JSModuleEnvironment.h
+index 4125087c..acbeafcd 100644
+--- i/Source/JavaScriptCore/runtime/JSModuleEnvironment.h
++++ w/Source/JavaScriptCore/runtime/JSModuleEnvironment.h
+@@ -63,14 +63,20 @@ public:
+         return offset;
+     }
+ 
++    // The module record, the count and each import slot take a whole variable slot
++    // (sizeof(WriteBarrier<Unknown>)): op_resolve_scope reads an import slot as a variable of this
++    // environment (importSlotScopeOffset), a JSValue-sized load. With 32-bit pointers a
++    // pointer-sized stride would put two import slots in one variable.
++    static constexpr size_t importSlotStride = std::max(sizeof(WriteBarrier<Unknown>), sizeof(WriteBarrier<JSModuleEnvironment>));
++
+     static size_t offsetOfImportSlotCount(SymbolTable* symbolTable)
+     {
+-        return offsetOfModuleRecord(symbolTable) + sizeof(WriteBarrier<AbstractModuleRecord>);
++        return offsetOfModuleRecord(symbolTable) + std::max(sizeof(WriteBarrier<AbstractModuleRecord>), importSlotStride);
+     }
+ 
+     static size_t offsetOfImportSlot(SymbolTable* symbolTable, unsigned index)
+     {
+-        return offsetOfImportSlotCount(symbolTable) + sizeof(uintptr_t) + sizeof(WriteBarrier<JSModuleEnvironment>) * index;
++        return offsetOfImportSlotCount(symbolTable) + std::max(sizeof(uintptr_t), importSlotStride) + importSlotStride * index;
+     }
+ 
+     // An import slot addressed like a variable of this environment, past the symbol table's own.
 diff --git i/Source/JavaScriptCore/runtime/JSModuleLoader.cpp w/Source/JavaScriptCore/runtime/JSModuleLoader.cpp
 index bda17b3b..5b39e656 100644
 --- i/Source/JavaScriptCore/runtime/JSModuleLoader.cpp

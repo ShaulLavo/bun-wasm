@@ -15,7 +15,7 @@ wasmtime run --dir .::/ dist/bun-jsc.wasm run /app.ts
 ```
 
 Everything the build produces goes to `${JSC_BUILD_DIR:-/work/tmp/bun-wasm-jsc}`, never the repo.
-A full build from nothing takes about 25 minutes at `-j6`. Every compile step runs inside
+A full build from nothing takes about 10 minutes at `-j6` on this machine (ICU ~3, JSC ~6). Every compile step runs inside
 `systemd-run --user --scope -p MemoryMax=5G -p CPUWeight=20 nice -n 10` (`CAGE=` turns that off,
 `JOBS=` sets the parallelism).
 
@@ -34,7 +34,7 @@ A full build from nothing takes about 25 minutes at `-j6`. Every compile step ru
 
 | File | What |
 |---|---|
-| `webkit-wasi.patch` | The WebKit patch (17 files, ~+75 lines), mostly `OS(WASI)` arms |
+| `webkit-wasi.patch` | The WebKit patch (19 files, +88/-15 lines), mostly `OS(WASI)` arms |
 | `shim/wasi-compat.h` | Forced into every WebKit TU: inert POSIX signal API (`sigaction` etc.), `mkostemp`, `mkdtemp`, sched params |
 | `shim/wasi-compat.c`, `shim/madvise.c` | Their implementations (`libwasi-compat.a`; `madvise` is its own member so links with bunwasm-posix don't pull a duplicate) |
 | `wasi-jsc.cmake` | CMake toolchain (wasi-sdk) |
@@ -55,6 +55,12 @@ The patch, by area:
   binaries for its tables, and wasm-ld otherwise trims trailing zero bytes off data segments.
 - Bit rot in the fork's non-JIT configuration: `DFGAbstractHeap.h` guards an enum that
   `DOMJITEffect.h` uses even without the DFG, and two missing `<wtf/Scope.h>` includes.
+- A 32-bit bug in the fork's module import slots (`JSModuleEnvironment.h`): the slots are
+  pointer-sized but addressed as JSValue-sized variables (`importSlotScopeOffset`, and the LLInt's
+  `loadq` in `op_resolve_scope`), so with 4-byte pointers import slots 0 and 1 shared a variable
+  and the second import read the first one's module (`import a from "./c"; import { f } from
+  "./b"` made `f` read `c`'s binding). Each slot now takes a whole variable slot. Bun only ships
+  64-bit builds, so it never shows there; `tests/jsc/esm-imports` covers it.
 
 ## The GC and `--spill-pointers`
 
@@ -107,11 +113,26 @@ wasi-libc's mman/signal/getpid emulation libraries stay out: bunwasm-posix defin
 functions. The changed `RUSTFLAGS` would invalidate the shared cargo cache, so this build uses its
 own target dir (`$JSC_BUILD_DIR/target`).
 
+### Numbers
+
+| | dist/bun.wasm (QuickJS) | dist/bun-jsc.wasm (JSC) |
+|---|---|---|
+| size | 8.9 MB (3.3 MB gzip) | 40.0 MB (11.3 MB gzip, 8.8 MB zstd -19): 29.9 MB code, 10.1 MB data (8 MB ICU) |
+| `tests/bench/micro.js` loop | 210 ms | 280 ms |
+| regexp | 122 ms | 72 ms |
+| json | 190 ms | 50 ms |
+| alloc (GC churn) | 493 ms | 580 ms |
+| startup (`console.log(1)`, compiled module cached) | ~60 ms | ~150 ms |
+
+No JIT: tight loops are ~1.35x slower than QuickJS; RegExp (YARR interpreter) and JSON are
+1.7x and 3.8x faster.
+
 ### Not done
 
 - `bun test`, `bun build`, `-e` beyond plain JS, and most of `node:*` (events, crypto, url,
   zlib, streams, http) and web APIs (URL, fetch, AbortController); `scripts/test-jsc.sh --fixtures
-  tests/fixtures` passes 7 of the 46 QuickJS fixtures. The gap is the polyfill surface, not the
+  tests/fixtures` passes 7 of the 49 QuickJS fixtures (typescript, node-path, node-buffer,
+  cli-eval, errors-uncaught, errors-rejection, ts-stack-trace). The gap is the polyfill surface, not the
   engine: bunwasm-runtime's JS polyfills are mostly engine-agnostic (see below).
 - `err.stack` read by user code keeps JSC's format (only printed errors are converted); the fork
   doesn't honour `Error.prepareStackTrace` without Bun's global object.

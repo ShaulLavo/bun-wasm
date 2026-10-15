@@ -5,13 +5,25 @@
 #pragma once
 #if defined(__wasi__)
 #include <time.h>
-#include <signal.h>
-#include <pthread.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
 int mkostemp(char* tmpl, int flags);
 char* mkdtemp(char* tmpl);
+#ifdef __cplusplus
+}
+#endif
+#ifndef CLOCK_THREAD_CPUTIME_ID
+#define CLOCK_THREAD_CPUTIME_ID CLOCK_MONOTONIC
+#endif
+
+// The signal and pthread stand-ins are for WTF's C++ only. Kept out of C so CMake's C feature
+// checks (which declare functions like `char pthread_create(void)`) still compile.
+#ifdef __cplusplus
+#include <pthread.h>
+#include <sched.h>
+#include <signal.h>
+extern "C" {
 
 #ifndef SA_SIGINFO
 typedef struct {
@@ -58,14 +70,9 @@ static inline int sigsuspend(const sigset_t* s) { (void)s; return -1; }
 static inline int pthread_kill(pthread_t t, int n) { (void)t; (void)n; return 0; }
 #endif
 
-#include <sched.h>
 static inline int pthread_getschedparam(pthread_t t, int* policy, struct sched_param* p) { (void)t; if (policy) *policy = 0; if (p) p->sched_priority = 0; return 0; }
 static inline int pthread_setschedparam(pthread_t t, int policy, const struct sched_param* p) { (void)t; (void)policy; (void)p; return 0; }
 
-#ifdef __cplusplus
 }
-#endif
-#ifndef CLOCK_THREAD_CPUTIME_ID
-#define CLOCK_THREAD_CPUTIME_ID CLOCK_MONOTONIC
-#endif
-#endif
+#endif // __cplusplus
+#endif // __wasi__

@@ -29,6 +29,10 @@ fn main() {
     let obj = jsc.join("build/jsc");
     for lib in ["lib/libJavaScriptCore.a", "lib/libWTF.a", "lib/libbmalloc.a"] {
         assert!(obj.join(lib).exists(), "{} missing: run scripts/build-jsc.sh", obj.join(lib).display());
+        println!("cargo:rerun-if-changed={}", obj.join(lib).display());
+    }
+    for lib in ["icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a"] {
+        println!("cargo:rerun-if-changed={}", jsc.join(lib).display());
     }
 
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());

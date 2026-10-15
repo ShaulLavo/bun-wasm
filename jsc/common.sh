@@ -23,3 +23,16 @@ CAGE="${CAGE-systemd-run --user --scope -q -p MemoryMax=5G -p CPUWeight=20 nice 
 WASM_OPT="$(command -v wasm-opt)"
 PATH_NO_BINARYEN="$(echo "$PATH" | tr ':' '\n' | grep -v binaryen | paste -sd:)"
 mkdir -p "$JSC_BUILD_DIR"
+
+# The shim: wasi-compat.o (temp files) and madvise.o, separate members so a link that already
+# defines madvise (bunwasm-posix) doesn't pull a duplicate. configure.sh needs it to exist
+# (every CMake link test links it), build.sh refreshes it.
+build_shim() {
+  mkdir -p "$SHIM_DIR"
+  local c
+  for c in wasi-compat madvise; do
+    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 -O2 -c "$JSC_SRC/shim/$c.c" -o "$SHIM_DIR/$c.o"
+  done
+  rm -f "$SHIM_DIR/libwasi-compat.a"
+  "$WASI_SDK_PATH/bin/llvm-ar" rcs "$SHIM_DIR/libwasi-compat.a" "$SHIM_DIR/wasi-compat.o" "$SHIM_DIR/madvise.o"
+}
