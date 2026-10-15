@@ -1,0 +1,4 @@
+sync empty reads returned 0
+file and closed fd checked
+callback empty read returned 0
+promise empty read returned 0

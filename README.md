@@ -13,3 +13,5 @@ source env.sh && scripts/sync-bun.sh
 scripts/build.sh                      # dist/bun.wasm
 wasmtime run --dir .::/ dist/bun.wasm run /index.ts
 ```
+
+[Changes to Bun and vendored dependencies](docs/bun-patches.md) lists each patch and distinguishes port work, host features, and upstream bugs.

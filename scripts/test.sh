@@ -122,6 +122,15 @@ pass=0
 fail=0
 failed=()
 for name in "${names[@]}"; do
+  if [[ $update == 0 && "$name" == fs-empty-read ]]; then
+    if python3 "$root/tests/test-empty-stdin.py" --engine "$engine" --wasm "$wasm"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      failed+=("$name")
+    fi
+    continue
+  fi
   src="$root/tests/fixtures/$name"
   work="$scratch/$name"
   rm -rf "$work" && cp -r "$src" "$work"
