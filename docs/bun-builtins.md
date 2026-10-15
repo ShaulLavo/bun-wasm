@@ -120,7 +120,7 @@ Startup is wall time for an empty `-e 0` process. Seven sequential runs use wasm
 
 Raw samples, artifact hashes, upstream results, command logs, and cleanup evidence are retained in `/work/reports/bun-wasm-builtins/` for coordinator review.
 
-## First public module batch
+## First public module batch (initial measurements)
 
 The first batch replaces the local querystring implementation and incomplete punycode stub with Bun's generated modules. Both load lazily and require no native JS2Native hooks. Querystring reuses the runtime's Buffer implementation and the adapter's URIError constructor. Punycode uses portable string operations and RangeError.
 
@@ -191,3 +191,19 @@ First-import process startup includes the module require. Querystring compares i
 | punycode | quickjs | 63.28 → 58.11 |
 | punycode | jsc | 170.77 → 177.18 |
 | punycode | browser | 70.75 → 74.40 |
+
+## Public module verification after intrinsic capture
+
+Four failing-first fixtures cover String and Buffer overrides in separate processes, both before the first import and afterward. The String cases also decode punycode. All four failed on each engine's reviewed artifact and pass on the fixed artifacts. The complete module fixture suite now passes 95/95 on QuickJS, JSC, and the browser engine. Both branches pass the generator and loader checks, web verification, site build, and all six HMR combinations.
+
+The reviewer's exact querystring script prints Error with each reviewed module artifact and {"a":"1"} with each fixed artifact. The five focused upstream assertion scripts still pass on all engines. The documented common-harness limitation is unchanged.
+
+These measurements compare the reviewed module artifacts with the fixed artifacts. They include bootstrap's earlier Buffer initialization. Generated Bun factories still compile lazily. Each startup median discards the first of seven samples; shared-host differences do not establish a speed improvement.
+
+| Engine | Wasm bytes before → after | Gzip-9 bytes before → after | Empty startup median ms before → after |
+| --- | --- | --- | --- |
+| quickjs | 10,927,547 → 10,928,781 | 3,833,450 → 3,834,055 | 61.02 → 59.98 |
+| jsc | 46,293,057 → 46,294,456 | 12,873,385 → 12,874,114 | 179.05 → 171.05 |
+| browser | 10,203,739 → 10,204,866 | 3,536,518 → 3,537,175 | 71.78 → 72.99 |
+
+Raw logs, samples, and hashes are in `/work/reports/bun-wasm-builtins-review/`. Updated artifacts are in `/work/artifacts/bun-wasm-builtins-review/{mechanism,modules}/dist/`.
