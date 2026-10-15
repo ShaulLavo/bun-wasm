@@ -4,8 +4,10 @@ import cjs from "./helper.cjs";
 import { helper as special } from "./space # ü.mjs";
 
 console.log("top", callerSourceOrigin() === import.meta.url);
+console.log("native callback", [0].map(callerSourceOrigin)[0] === import.meta.url);
 console.log("helper", helper().origin === new URL("./helper.mjs", import.meta.url).href);
-console.log("cjs", cjs.helper().origin === new URL("./helper.cjs", import.meta.url).href);
+const cjsOrigin = cjs.helper().origin;
+console.log("cjs", cjsOrigin === null ? "unavailable" : cjsOrigin === new URL("./helper.cjs", import.meta.url).href);
 console.log("encoded", special().origin === new URL("./space%20%23%20%C3%BC.mjs", import.meta.url).href);
 console.log("await", (await afterAwait()).origin === new URL("./helper.mjs", import.meta.url).href);
 console.log("timer", (await later()).origin === new URL("./helper.mjs", import.meta.url).href);

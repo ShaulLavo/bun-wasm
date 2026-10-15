@@ -65,6 +65,10 @@ at Bun revision `4ceda2c2868d3a7703c7737ddd9de7244ec384df`. No upstream implemen
 The native implementation walks JSC call frames. This adapter uses the existing stack parser
 for QuickJS, JSC and browser engines, then encodes the calling file as a file URL.
 Browser module URL mapping stays in the engine host. Without a caller frame, it returns `null`.
+WebKit's browser engine omits eval source locations even with `sourceURL` directives.
+CommonJS uses eval in this host, so its caller origin is `null` there. The adapter stops at
+an opaque caller frame instead of reporting a later ES module as the caller. ES modules work
+in WebKit, and CommonJS origins work in QuickJS, wasm JSC and the Node host.
 
 ## Bun patch series
 

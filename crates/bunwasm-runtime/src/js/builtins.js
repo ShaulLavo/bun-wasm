@@ -1130,9 +1130,15 @@
     bun: () => globalThis.Bun,
     "bun:jsc": () => ({
       callerSourceOrigin() {
-        const frame = internal.require("inspect").parseStack(new Error().stack)[0];
-        if (!frame) return null;
-        return frame.file.startsWith("/") ? internal.pathToFileHref(frame.file) : frame.file;
+        const lines = String(new Error().stack || "").split("\n").slice(1);
+        const inspector = internal.require("inspect");
+        for (const line of lines) {
+          if (line.trim().endsWith("@")) return null;
+          const frame = inspector.parseStack(line)[0];
+          if (!frame) continue;
+          return frame.file.startsWith("/") ? internal.pathToFileHref(frame.file) : frame.file;
+        }
+        return null;
       },
       gcAndSweep: () => native.gc(),
       fullGC: () => native.gc(),

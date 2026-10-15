@@ -65,7 +65,8 @@ async function checkPage(name, page, visit, fixtureBase) {
   for (const file of readdirSync(callerFixture).filter((file) => /\.[cm]?js$/.test(file))) {
     await writeFile(page, `${HOME}/caller-origin/${file}`, readFileSync(new URL(encodeURIComponent(file), callerFixture), "utf8"));
   }
-  const callerOutput = readFileSync(new URL("expected.txt", callerFixture), "utf8").trim().split("\n");
+  const callerOutput = readFileSync(new URL("expected.txt", callerFixture), "utf8").trim().split("\n")
+    .map((line) => engine === "browser" && name === "webkit" && line === "cjs true" ? "cjs unavailable" : line);
   await expectRun(page, `${name}: caller source origin across modules and callbacks`, "bun run caller-origin/index.js", 0, callerOutput);
 
   // An import cycle with a hoisted function called before its module evaluated (the browser engine

@@ -1,4 +1,5 @@
 top true
+native callback true
 helper true
 cjs true
 encoded true
