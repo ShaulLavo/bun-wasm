@@ -646,6 +646,11 @@
       const url = `http://${host}${request.target.startsWith("/") ? request.target : "/" + request.target}`;
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
       const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined });
+      let cookies;
+      Object.defineProperty(req, "cookies", {
+        get() { return cookies || (cookies = new (internal.require("cookie").CookieMap)(req.headers.get("cookie"))); },
+        configurable: true,
+      });
       const peer = conn.peer();
       peers.set(req, { address: peer.address, port: peer.port, family: peer.family });
       requests.set(req, { conn });
@@ -670,6 +675,9 @@
       }
       if (conn.upgraded) return UPGRADED;
       if (res === undefined && errorHandler === undefined) res = new Response("", { status: 404 });
+      if (cookies) {
+        for (const value of cookies.toSetCookieHeaders()) res.headers.append("Set-Cookie", value);
+      }
       return writeResponse(conn, res, request.method, keepAlive && !stopped);
     }
 

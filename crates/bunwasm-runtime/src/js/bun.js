@@ -425,6 +425,7 @@
 
   const { TOML, YAML, JSON5, JSONC } = internal.require("formats");
   const { Glob } = internal.require("glob");
+  const { Cookie, CookieMap } = internal.require("cookie");
   const semver = {
     satisfies(version, range) {
       if (arguments.length < 2) throw new Error("Expected two arguments");
@@ -438,7 +439,7 @@
 
   const Bun = {
     semver,
-    TOML, YAML, JSON5, JSONC, Glob, JSONL: internal.require("jsonl"),
+    TOML, YAML, JSON5, JSONC, Glob, Cookie, CookieMap, JSONL: internal.require("jsonl"),
     version: info.version,
     revision: info.revision,
     get argv() {

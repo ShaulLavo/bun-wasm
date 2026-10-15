@@ -1,0 +1,3 @@
+Cookie parsing, validation, mutation and serialization pass
+CookieMap headers, literals, decoding, changes and identity pass
+CookieMap iteration and subclassing pass
