@@ -1,3 +1,5 @@
+export {};
+
 const server = Bun.serve({
   port: 0,
   routes: { "/": (req) => {

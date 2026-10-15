@@ -498,6 +498,7 @@
   }
 
   function matchRoute(compiled, pathname, method) {
+    pathname = pathname.replace(/^\/+/, "/");
     for (const route of compiled) {
       const m = route.regex.exec(pathname);
       if (!m) continue;
