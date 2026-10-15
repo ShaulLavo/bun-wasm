@@ -55,6 +55,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/node_url.js`](#node-url-helpers) | Port | Adapt Node URL helpers around the local URL implementation. |
 | [`crates/bunwasm-runtime/src/js/builtins.js`, `crates/bunwasm-runtime/src/js/net.js`, HTTP tables](#http-status-tables) | Port | Retain HTTP status data separately from the original networking adapters. |
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
+| [`crates/bunwasm-runtime/src/js/streams_polyfill.js`](#web-streams) | Host feature | Package the unmodified WHATWG Streams ponyfill for embedded engines. |
+| [`streams.js`, `node_stream_web.js`, `streams.rs`](#web-streams) | Host feature | Original encoding, compression, body and Node adapters around the selected stream implementation. |
 | [`crates/bunwasm-semver/src/lib.rs`](#portable-semver-host-functions) | Port | Compile Bun's semver host functions unchanged against a portable `bun_jsc` subset. |
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
@@ -465,6 +467,41 @@ The builtins module retains the status-code/reason table. The network module kee
 `third_party/temporal/entry.js`, `package.json`, and `bun.lock` pin `@js-temporal/polyfill` **0.5.1** and **jsbi 4.3.2**. Class **Host feature** for packaging the fallback.
 
 `scripts/vendor-temporal.py` bundles the unmodified packages, minifies them, and wraps the CommonJS output as a factory in `crates/bunwasm-runtime/src/js/temporal.js`. Without the wrapper our engine cannot load the fallback used for Bun's TOML date values. There are no local changes to either dependency's source. The entry, lockfile, and copied licenses record its provenance.
+
+### Web Streams
+
+`third_party/streams/entry.js`, `package.json`, and `bun.lock` pin
+**web-streams-polyfill 4.2.0**, published from MattiasBuelens/web-streams-polyfill.
+The upstream implementation is `dist/ponyfill.mjs` in that npm release. Class
+**Host feature** for packaging the fallback.
+
+`scripts/vendor-streams.py` installs the frozen dependency into disposable scratch,
+bundles and minifies it without source edits, copies its MIT license, and wraps
+the CommonJS output as a runtime factory in
+`crates/bunwasm-runtime/src/js/streams_polyfill.js`. The bundle is about 60 KB.
+It includes byte streams, BYOB readers, tee, pipe cancellation and backpressure,
+async iteration, `ReadableStream.from`, writable/transform streams and queuing
+strategies. The browser engine retains its native stream constructors as one set.
+
+Bun's pinned `src/js/node/stream.web.ts` only reexports globals. Its stream
+implementations live in `src/jsc/bindings/webcore/streams/*.cpp` and depend on JSC
+objects, rather than engine-independent TypeScript builtins. The WHATWG-reference
+ponyfill supplies those algorithms without translating or copying Bun's bindings.
+
+`crates/bunwasm-runtime/src/js/streams.js`, `node_stream_web.js`, and `streams.rs`
+are original adapters, class **Host feature**, with no copied upstream algorithm.
+They connect encoding streams to `encoding_rs` and compression streams to the
+existing `flate2` Rust backend. Codecs retain incremental state, reject truncated
+or trailing input, and release resources on completion, failure, cancellation,
+and collection of abandoned transforms. Text decoding preserves BOM, partial
+characters and fatal-error state across chunks. Text encoding carries a trailing
+high surrogate into the next chunk before converting to Unicode scalar values.
+
+The changes in `web.js` select constructors before creating fetch/Blob body
+producers, expose byte readers, and tee streamed bodies when cloning. `net.js`
+marks network body streams as byte streams. `builtins.js` exports the complete
+`node:stream/web` module and connects Node readable and writable streams
+to the selected Web Streams constructors. These are original host adapters.
 
 ## Port bugs fixed in bun-wasm's own code
 

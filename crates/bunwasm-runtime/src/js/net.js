@@ -108,6 +108,7 @@
   function handleStream(handle, onEnd) {
     let done = false;
     return new ReadableStream({
+      type: "bytes",
       pull(controller) {
         if (done) {
           controller.close();
@@ -116,11 +117,13 @@
         return new Promise((resolve, reject) => {
           addWaiter({
             step() {
+              if (done) { resolve(); return true; }
               const chunk = native.hostRead(handle);
               if (chunk === AGAIN) return false;
               if (chunk === 0) {
                 done = true;
                 controller.close();
+                if (controller.byobRequest) controller.byobRequest.respond(0);
                 if (onEnd) onEnd();
               } else if (typeof chunk === "number") {
                 done = true;
@@ -135,6 +138,10 @@
             fail: reject,
           });
         });
+      },
+      cancel() {
+        done = true;
+        if (onEnd) onEnd();
       },
     });
   }

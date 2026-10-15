@@ -694,11 +694,12 @@
         this._buffer = [];
         this._ended = false;
         this._flowing = false;
+        this._paused = false;
         this._encoding = options.encoding || null;
         this._objectMode = Boolean(options.objectMode || options.readableObjectMode);
         if (typeof options.read === "function") this._read = options.read;
         this.on("newListener", (event) => {
-          if (event === "data") setImmediate(() => this.resume());
+          if (event === "data") setImmediate(() => { if (!this._paused) this.resume(); });
         });
       }
       static from(iterable, options) {
@@ -726,14 +727,15 @@
       }
       _flush() {
         if (!this._flowing) return;
-        while (this._buffer.length) this.emit("data", this._buffer.shift());
-        if (this._ended && !this._endEmitted) {
+        while (this._flowing && this._buffer.length) this.emit("data", this._buffer.shift());
+        if (this._flowing && this._buffer.length === 0 && this._ended && !this._endEmitted) {
           this._endEmitted = true;
           this.emit("end");
           this.emit("close");
         }
       }
       resume() {
+        this._paused = false;
         if (!this._flowing) {
           this._flowing = true;
           this._read();
@@ -742,6 +744,7 @@
         return this;
       }
       pause() {
+        this._paused = true;
         this._flowing = false;
         return this;
       }
@@ -753,39 +756,40 @@
         return this._buffer.length ? this._buffer.shift() : null;
       }
       destroy(err) {
+        if (this.destroyed) return this;
+        this.destroyed = true;
+        this.readable = false;
+        this._flowing = false;
+        this._buffer.length = 0;
         if (err) setImmediate(() => this.emit("error", err));
         setImmediate(() => this.emit("close"));
         return this;
       }
       async *[Symbol.asyncIterator]() {
         const queue = [];
-        let done = false;
+        let done = Boolean(this._endEmitted);
         let failure = null;
         let wake = null;
         const notify = () => wake && wake();
-        this.on("data", (c) => {
-          queue.push(c);
-          notify();
-        });
-        this.on("end", () => {
-          done = true;
-          notify();
-        });
-        this.on("error", (e) => {
-          failure = e;
-          notify();
-        });
-        while (true) {
-          if (failure) throw failure;
-          if (queue.length) {
-            yield queue.shift();
-            continue;
+        const data = chunk => { queue.push(chunk); notify(); };
+        const end = () => { done = true; notify(); };
+        const error = reason => { failure = reason; notify(); };
+        const close = () => { if (!done) error(new Error("Premature close")); };
+        this.on("data", data).on("end", end).on("error", error).on("close", close);
+        try {
+          while (!done || queue.length) {
+            if (failure) throw failure;
+            if (queue.length) yield queue.shift();
+            else await new Promise(resolve => { wake = resolve; });
           }
-          if (done) return;
-          await new Promise((r) => (wake = r));
+          if (failure) throw failure;
+        } finally {
+          this.removeListener("data", data).removeListener("end", end).removeListener("error", error).removeListener("close", close);
+          if (!done) this.destroy();
         }
       }
     }
+
     class Writable extends Stream {
       constructor(options = {}) {
         super();
@@ -799,12 +803,13 @@
       write(chunk, encoding, callback) {
         if (typeof encoding === "function") callback = encoding;
         this._write(chunk, typeof encoding === "string" ? encoding : "utf8", (err) => {
-          if (err) this.emit("error", err);
+          if (err) this.destroy(err);
           if (typeof callback === "function") callback(err);
         });
         return true;
       }
       end(chunk, encoding, callback) {
+        if (typeof encoding === "function") { callback = encoding; encoding = undefined; }
         if (typeof chunk === "function") callback = chunk;
         else if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
         const finish = () => {
@@ -813,11 +818,19 @@
           this.emit("close");
           if (typeof callback === "function") callback();
         };
-        if (this._final) this._final(() => setImmediate(finish));
+        if (this._final) this._final((err) => {
+          if (err) { this.destroy(err); if (typeof callback === "function") callback(err); return; }
+          setImmediate(finish);
+        });
         else setImmediate(finish);
         return this;
       }
-      destroy() {
+      destroy(err) {
+        if (this.destroyed) return this;
+        this.destroyed = true;
+        this.writable = false;
+        if (err) setImmediate(() => this.emit("error", err));
+        setImmediate(() => this.emit("close"));
         return this;
       }
     }
@@ -846,6 +859,7 @@
         });
       }
       end(chunk, encoding, callback) {
+        if (typeof encoding === "function") { callback = encoding; encoding = undefined; }
         if (typeof chunk === "function") callback = chunk;
         else if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
         const done = () => {
@@ -897,6 +911,7 @@
     Stream.promises = promises;
     Stream.isReadable = (s) => Boolean(s && s.readable);
     Stream.isErrored = () => false;
+    internal.require("node_stream_web")({ Readable, Writable });
     return Stream;
   }
 
@@ -1075,7 +1090,7 @@
     "node:readline/promises": () => internal.builtin("node:readline").promises,
     "node:stream": streamModule,
     "node:stream/promises": () => internal.builtin("node:stream").promises,
-    "node:stream/web": () => ({ ReadableStream: globalThis.ReadableStream }),
+    "node:stream/web": () => internal.require("streams"),
     "node:perf_hooks": () => ({
       performance: globalThis.performance,
       PerformanceObserver: class PerformanceObserver {
