@@ -214,4 +214,5 @@ pub static BUN_BUILTIN_NAMES: &[&str] = &[
 ];
 pub static BUN_BUILTINS: &[(usize, &str)] = &[
     (22, include_str!("22.js")),
+    (168, include_str!("168.js")),
 ];
