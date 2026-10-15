@@ -101,7 +101,7 @@ native constructors. The selection also exposed a QuickJS data conversion bug.
 A buffer type probe left a pending exception for ordinary arrays and objects;
 the bridge now checks buffer class tags before calling the throwing getter.
 
-All 89 fixtures pass on each engine on this branch's measured base. The bounded
+All 93 fixtures pass on each engine on the revised caller-origin base. The bounded
 upstream selection is unchanged before and after. Two of three files fully pass
 on each engine. QuickJS records 5 observed passes, 18 failures, 1 skip and 1 file
 timeout; JSC records 5 passes, 17 failures, 1 skip and no timeout; the browser
@@ -128,8 +128,8 @@ bash /work/tmp/wave-heavy/run.sh --class light "CLI module suite" -- \
 
 Repeat the suite command with JSC and browser engines, using separate output
 paths. Evidence is retained in `/work/reports/bun-wasm-app-blockers-2026-10-16/`,
-including `before-native/`, `after-cli-verified-native/`,
-`after-cli-playground-verified/` and `cli-suite-verified-*.json`. The playground
+including `before-native/`, `after-cli-resumed-native/`,
+`after-cli-resumed-playground/` and `cli-suite-resumed-*.json`. The playground
 baseline is the original `playground-light/` census under the 2026-10-15 report.
 
 ## Next fixes
