@@ -498,7 +498,6 @@
     spawn: (cmd, options) => internal.require("spawn").spawn(cmd, options),
     spawnSync: (cmd, options) => internal.require("spawn").spawnSync(cmd, options),
     unsafe: {
-      gcAggressionLevel: unsupported("Bun.unsafe.gcAggressionLevel", "engine GC scheduling is not exposed"),
       arrayBufferToString: unsupported("Bun.unsafe.arrayBufferToString", "zero-copy strings are not exposed"),
     },
     $: unsupported("Bun.$", noProcesses),

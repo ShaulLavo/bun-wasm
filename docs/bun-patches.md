@@ -411,6 +411,8 @@ crate. Engine-owned buffers let every engine reclaim abandoned sinks without a n
 handle table or finalizer interface. String writes use the existing Rust UTF-8 encoder.
 The watermark remains an allocation hint and causes no eager reservation in this adapter.
 The callable constructor and private JavaScript storage are original binding adapters.
+The unsupported GC-tuning member is absent from `Bun.unsafe`, so the upstream harness's
+capability check can run byte-content tests without requesting unavailable GC controls.
 
 ### Bun cookies
 
