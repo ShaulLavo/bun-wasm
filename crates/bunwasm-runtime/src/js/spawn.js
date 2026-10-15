@@ -41,6 +41,11 @@
     throw unsupported(`stdio redirection ${String(value)}`);
   }
 
+  function validateCommandLength(cmd) {
+    const argv = Array.isArray(cmd) ? cmd : cmd && cmd.cmd;
+    if (Array.isArray(argv) && argv.length > 0xfffffffd) throw new TypeError("cmd array is too large");
+  }
+
   function normalize(cmd, options, sync) {
     if (!Array.isArray(cmd)) {
       options = cmd || {};
@@ -48,6 +53,8 @@
     }
     options = options || {};
     if (!Array.isArray(cmd) || !cmd.length) throw new TypeError("cmd must be a non-empty array");
+    validateCommandLength(cmd);
+    if (options.ipc !== undefined) throw unsupported("Child process IPC");
     const argv = cmd.map(String);
     if (argv.some((arg) => arg.includes("\0"))) throw new TypeError("Command arguments cannot contain null bytes");
     const proc = globalThis.process;
@@ -265,6 +272,7 @@
   }
 
   function spawnSync(cmd, options) {
+    validateCommandLength(cmd);
     let spec;
     try { spec = start(cmd, options, true); } catch (error) {
       return { pid: 0, success: false, exitCode: 1, signalCode: null, stdout: Buffer.alloc(0), stderr: Buffer.from(error.message + "\n"), error };
