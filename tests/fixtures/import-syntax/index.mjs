@@ -13,7 +13,7 @@ const template = `import(never) ${a.import(46)}`;
 /* import("never") */
 // import("never")
 console.log("literals", text, /import\(never\)/.test(text), template);
-if (true) /import\(never\)/.test(text) && console.log("regex statement", true);
+if (true) /import(x)/.test("importx") && console.log("regex statement", true);
 const computed = "./lib/" + "value.mjs";
 console.log("imports", value, other, (await import("./lib/value.mjs")).value, (await import(computed)).value);
 console.log("template import", `value ${(await import(`./lib/${"value"}.mjs`)).value}`);
