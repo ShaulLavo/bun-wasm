@@ -8,6 +8,7 @@
 //
 // PLAYWRIGHT=<path to playwright's index.mjs> when `playwright` isn't resolvable from here.
 
+import { checkPhoneUI } from "../../web/tests/phone-ui.mjs";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -113,6 +114,7 @@ async function check(browserName, engine) {
       await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STARTUP_MS });
       await shot("6-switched");
     });
+    await step("7 phone layout and terminal copy", () => checkPhoneUI(page, "sandbox", browserName === "chromium"));
   } catch {
     console.log(logs.slice(-15).map((l) => `      ${l}`).join("\n"));
   } finally {
@@ -128,6 +130,6 @@ for (const browserName of browsers) {
     summary.push(await check(browserName, engine));
   }
 }
-const failed = summary.filter((s) => s.results.length < 6 || s.results.some((r) => !r.ok));
+const failed = summary.filter((s) => s.results.length < 7 || s.results.some((r) => !r.ok));
 console.log(failed.length ? `\n${failed.length} of ${summary.length} runs failed` : `\nall ${summary.length} runs passed`);
 process.exit(failed.length ? 1 : 0);
