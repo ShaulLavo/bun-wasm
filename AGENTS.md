@@ -32,7 +32,7 @@ The machine has ~9 GB free RAM: use `cargo build -j 12` or less for big builds.
 
 - Patches to Bun go in vendor/bun on branch `wasm` as commits, then export:
   `scripts/export-patches.sh`. Keep them minimal: add `target_os = "wasi"` arms, don't rewrite.
-- No GitHub issues; this repo is local until the owner says otherwise.
+- No GitHub issues. The repo is public at github.com/ShaulLavo/bun-wasm; the site deploys from site/ (`bun run deploy`).
 - Scratch in /work/tmp/bun-wasm-*; clean it up.
 
 ## Direction (owner, 2026-10-15)
