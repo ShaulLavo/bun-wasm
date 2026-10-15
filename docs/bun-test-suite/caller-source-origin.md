@@ -55,3 +55,24 @@ scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 \
 Repeat with `--engine browser` and `--engine jsc`, using separate output paths. The local
 fixture is `scripts/test.sh --no-build --engine <engine> caller-source-origin`. The real
 Chromium and WebKit check is part of `scripts/test-web.sh`.
+
+## Opaque eval regressions
+
+`caller-source-origin-eval` invokes an eval-created function from another module,
+direct eval and a Function constructor. Each must report its creation module or `null`.
+It must never report an unrelated invocation module or a pseudo filename such as `<input>`.
+
+The stack formatter preserves V8 eval creation metadata and keeps opaque eval frames
+distinct from native callbacks. The builtin stops at an unidentified user frame instead
+of skipping it. QuickJS rejects its `<input>` placeholder as an origin. JSC retains its
+honest `null` when the engine omits the source.
+
+Before the fix, QuickJS and the browser host fail the cross-module case; wasm JSC
+already passes with `null`. Immutable published artifacts at `fe674cf` reproduce those
+results. The existing native-callback fixture also covers V8 Array.map frames, which
+have neither a file nor the native flag but are not eval frames.
+
+Native Bun 1.4.2 falls back to the invocation module for the cross-module Function
+constructor control. This manual fixture follows the stricter requested contract and
+accepts only the creation module or `null`. Review evidence is retained in
+`/work/tmp/bun-wasm-track4-review/` until coordinator acceptance.
