@@ -34,6 +34,7 @@ assert.equal(list.alloc(), item);
 assert.equal(runtime.require("internal:freelist"), FreeList);
 assert.equal(counts.get(freelist), 1);
 assert.equal(runtime.require("node:assert"), bridged);
+assert.equal(runtime.require("bun"), bridged);
 assert.throws(() => runtime.require(-1), { code: "ERR_BUN_BUILTIN_UNSUPPORTED" });
 
 let retries = 0;
