@@ -18,6 +18,7 @@ import { resolve, posix } from "node:path";
 import { WASI } from "node:wasi";
 import { fileURLToPath } from "node:url";
 import { Worker, workerData } from "node:worker_threads";
+import { installCliFetch } from "./node-install-net.mjs";
 import { SubprocessHost, childTransport } from "../src/subprocess.js";
 
 // The runtime replaces globalThis.process with its own; keep Node's.
@@ -60,7 +61,9 @@ if (Object.keys(preopens).length === 0) {
 
 const child = workerData?.bunwasmChild ? childTransport(workerData.transport) : null;
 let subprocess;
+let cliFetch;
 function finish(code) {
+  cliFetch?.dispose();
   subprocess?.dispose();
   child?.finish(code);
   nodeProcess.exit(code);
@@ -131,7 +134,9 @@ async function run() {
   const imports = wasi.getImportObject();
   let instance;
   if (child) installChildStdio(imports, () => instance);
+  if (withNet) cliFetch = installCliFetch(imports, () => instance);
   instance = await WebAssembly.instantiate(module, imports);
+  cliFetch?.install();
   const code = wasi.start(instance);
   if (!instance.exports.bunwasm_ready || instance.exports.bunwasm_ready() !== 1) finish(code);
 
