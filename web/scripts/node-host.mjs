@@ -19,6 +19,7 @@ import { WASI } from "node:wasi";
 import { fileURLToPath } from "node:url";
 import { Worker, workerData } from "node:worker_threads";
 import { installCliFetch } from "./node-install-net.mjs";
+import { memoryViews } from "../src/memory-views.js";
 import { SubprocessHost, childTransport } from "../src/subprocess.js";
 
 // The runtime replaces globalThis.process with its own; keep Node's.
@@ -72,9 +73,14 @@ function finish(code) {
 function installChildStdio(imports, getInstance) {
   const originalRead = imports.wasi_snapshot_preview1.fd_read;
   const originalWrite = imports.wasi_snapshot_preview1.fd_write;
+  let memory;
+  const views = () => (memory ??= memoryViews(getInstance().exports.memory));
   const vectors = (ptr, count) => {
-    const view = new DataView(getInstance().exports.memory.buffer);
-    return Array.from({ length: count }, (_, i) => new Uint8Array(view.buffer, view.getUint32(ptr + i * 8, true), view.getUint32(ptr + i * 8 + 4, true)));
+    const view = views().view();
+    return Array.from({ length: count }, (_, i) => {
+      const start = view.getUint32(ptr + i * 8, true);
+      return views().range(start, view.getUint32(ptr + i * 8 + 4, true));
+    });
   };
   imports.wasi_snapshot_preview1.fd_read = (fd, ptr, count, result) => {
     if (fd !== 0 || workerData.meta.stdin === "inherit" && !workerData.transport.inheritedStdin) return originalRead(fd, ptr, count, result);
@@ -87,14 +93,14 @@ function installChildStdio(imports, getInstance) {
       chunk.set(bytes.subarray(at, at + n));
       at += n;
     }
-    new DataView(getInstance().exports.memory.buffer).setUint32(result, at, true);
+    views().view().setUint32(result, at, true);
     return 0;
   };
   imports.wasi_snapshot_preview1.fd_write = (fd, ptr, count, result) => {
     if (fd !== 1 && fd !== 2) return originalWrite(fd, ptr, count, result);
     const chunks = vectors(ptr, count);
     for (const chunk of chunks) child[fd === 2 ? "stderr" : "stdout"].writeAll(chunk);
-    new DataView(getInstance().exports.memory.buffer).setUint32(result, chunks.reduce((n, chunk) => n + chunk.length, 0), true);
+    views().view().setUint32(result, chunks.reduce((n, chunk) => n + chunk.length, 0), true);
     return 0;
   };
 }

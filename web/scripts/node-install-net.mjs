@@ -1,5 +1,6 @@
 // Rust CLI commands run synchronously before the host JS engine starts. Keep
 // their fetches on a worker so WASI poll can wait without blocking Node I/O.
+import { memoryViews } from "../src/memory-views.js";
 import { MessageChannel, Worker, receiveMessageOnPort, workerData } from "node:worker_threads";
 
 const AGAIN = -2;
@@ -56,8 +57,9 @@ export function installCliFetch(imports, getInstance) {
   let worker;
   let next = 1;
   const handles = new Map();
-  const memory = () => getInstance().exports.memory;
-  const bytes = (ptr, length) => new Uint8Array(memory().buffer, ptr, length);
+  let memory;
+  const views = () => (memory ??= memoryViews(getInstance().exports.memory));
+  const bytes = (ptr, length) => views().range(ptr, length);
   function drain() {
     let changed = false;
     for (let packet; (packet = receiveMessageOnPort(port1));) {
@@ -105,18 +107,18 @@ export function installCliFetch(imports, getInstance) {
   const original = imports.wasi_snapshot_preview1.sock_send;
   imports.wasi_snapshot_preview1.sock_send = (fd, packet, count, flags, result) => {
     if (fd !== 0x7fffb0b0) return original(fd, packet, count, flags, result);
-    const view = new DataView(memory().buffer);
+    const view = views().view();
     const slot = view.getInt32(packet, true);
     if (![0, 1, 2, 3, 5, 10].includes(slot)) return original(fd, packet, count, flags, result);
     const value = call(slot, view.getInt32(packet + 4, true), view.getInt32(packet + 8, true),
       view.getInt32(packet + 12, true), view.getInt32(packet + 16, true));
-    new DataView(memory().buffer).setInt32(result, value, true);
+    views().view().setInt32(result, value, true);
     return 0;
   };
   return {
     install() {
       const pointer = getInstance().exports.bun_wasm_host_slots();
-      const view = new DataView(memory().buffer);
+      const view = views().view();
       for (const slot of [0, 1, 2, 3, 5, 10]) view.setUint32(pointer + 8 + slot * 4, 0xffffffff, true);
     },
     dispose() { port1.close(); if (!worker) port2.close(); void worker?.terminate(); },
