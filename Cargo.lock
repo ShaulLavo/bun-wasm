@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-build"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "bstr",
  "bun_alloc",
@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-cli"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "bunwasm-build",
  "bunwasm-glue",
@@ -1015,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-glue"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "bstr",
  "bun_ast",
@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-host"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "brotli-decompressor",
@@ -1047,24 +1047,25 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-jsc"
-version = "0.0.6"
+version = "0.0.7"
 
 [[package]]
 name = "bunwasm-posix"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "bunwasm-runtime"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "bun_glob",
  "bun_semver",
  "bun_sys",
  "bun_wyhash",
  "bunwasm-jsc",
+ "flate2",
  "getrandom 0.3.4",
  "hmac",
  "libsqlite3-sys",
@@ -1074,12 +1075,13 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "tar",
  "url",
 ]
 
 [[package]]
 name = "bunwasm-transpiler"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "bun_alloc",
  "bun_ast",
@@ -1717,6 +1719,16 @@ dependencies = [
  "cfg-if",
  "rustix 1.1.5",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
@@ -3257,6 +3269,16 @@ dependencies = [
  "rustix 0.38.44",
  "windows-sys 0.59.0",
  "winx",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
 ]
 
 [[package]]

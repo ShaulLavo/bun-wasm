@@ -1,0 +1,1 @@
+error: bun upgrade is not supported in bun-wasm

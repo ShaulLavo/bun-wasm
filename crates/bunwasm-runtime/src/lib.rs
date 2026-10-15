@@ -23,6 +23,7 @@ pub mod engine_host;
 #[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 mod engine_natives;
 pub mod host;
+pub mod install;
 mod modules;
 mod natives;
 mod resolve;

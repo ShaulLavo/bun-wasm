@@ -12,6 +12,10 @@ Commands:
   run       ./my-script.ts       Execute a file with Bun
   test      [filters]            Run unit tests with Bun's test runner
   build     ./a.ts --outdir out  Bundle TypeScript & JavaScript into a single file
+  install, i                     Install dependencies
+  add       <package>           Add dependencies
+  remove    <package>           Remove dependencies
+  pm ls                          List installed dependencies
   <file>                         Same as `bun run <file>`
   -e, --eval <code>              Evaluate JavaScript source code
   -p, --print <code>             Evaluate and print the result
@@ -21,7 +25,7 @@ Flags:
       --revision                 Print version with revision and exit
   -h, --help                     Display this menu and exit
 
-Not available in bun.wasm: install, add, x, create, upgrade.
+Not available in bun.wasm: x, create, upgrade.
 ";
 
 fn transpiler() -> Box<dyn Transpiler> {
@@ -274,6 +278,7 @@ fn build(_: Vec<String>) -> i32 {
 enum Command {
     Run(Entry, Vec<String>),
     Build(Vec<String>),
+    Install(String, Vec<String>),
     Print(String),
     Exit(i32),
 }
@@ -310,7 +315,16 @@ fn parse(args: Vec<String>) -> Command {
                 return Command::Print(code);
             }
             "test" => return Command::Run(Entry::Test(rest.collect()), Vec::new()),
-            "build" => return Command::Build(rest.collect()),
+            "build" | "bun" => return Command::Build(rest.collect()),
+            "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm" =>
+                return Command::Install(arg, rest.collect()),
+            "x" | "bunx" | "create" | "c" | "init" | "update" | "upgrade" | "link" | "unlink"
+            | "outdated" | "publish" | "patch" | "patch-commit" | "repl" | "info" | "why"
+            | "audit" | "completions" | "getcompletes" | "discord" | "exec" | "up" | "dedupe" | "prune" | "check" | "lint" | "fmt"
+            | "deploy" | "cloud" | "config" | "use" | "auth" | "login" | "logout" => {
+                eprintln!("error: bun {arg} is not supported in bun-wasm");
+                return Command::Exit(1);
+            }
             "run" => {
                 let Some(file) = rest.next() else { return usage_error("bun run needs a file to run") };
                 return Command::Run(Entry::File(file), rest.collect());
@@ -358,6 +372,9 @@ fn main() {
     let (entry, args) = match command {
         Command::Exit(code) => std::process::exit(code),
         Command::Build(args) => std::process::exit(build(args)),
+        Command::Install(command, args) => std::process::exit(
+            bunwasm_runtime::install::run(&command, args, transpiler().as_ref())
+        ),
         Command::Run(entry, args) => (entry, args),
         // `-p`: evaluate an expression and print it like Bun.
         Command::Print(code) => {
