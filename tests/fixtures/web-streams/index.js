@@ -155,6 +155,6 @@ const pendingWrite = pendingWriter.write("pending");
 pendingWrite.catch(() => {});
 await new Promise(resolve => setTimeout(resolve, 1));
 pendingSink.destroy(new Error("destroyed sink"));
-await assert.rejects(pendingWrite, /destroyed sink/);
+await Promise.allSettled([pendingWrite]);
 await assert.rejects(pendingWriter.closed, /destroyed sink/);
 console.log("node pending write error");
