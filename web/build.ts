@@ -1,5 +1,6 @@
 // Builds the playground into web/dist as plain static files.
-// BUN_WASM=<path> overrides the default ../dist/bun.wasm.
+// BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
+// (Not BUN_JSC_WASM: Bun refuses to start when a BUN_JSC_* variable is not a JSC option.)
 import { existsSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -55,9 +56,13 @@ async function copyWasm(source: string, name: string): Promise<boolean> {
 if (!(await copyWasm(wasmSource, "bun.wasm"))) {
   console.warn(`bun.wasm: ${wasmSource} not found; the site will say bun.wasm is missing (or pass ?wasm=<url>).`);
 }
-const jscSource = resolve(here, process.env.BUN_JSC_WASM ?? "../dist/bun-jsc.wasm");
+const jscSource = resolve(here, process.env.JSC_WASM ?? "../dist/bun-jsc.wasm");
 if (!(await copyWasm(jscSource, "bun-jsc.wasm"))) {
   console.warn(`bun-jsc.wasm: ${jscSource} not found; the JavaScriptCore engine option will fail to load.`);
+}
+const browserSource = resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun-browser.wasm");
+if (!(await copyWasm(browserSource, "bun-browser.wasm"))) {
+  console.warn(`bun-browser.wasm: ${browserSource} not found; the Browser (native) engine option will fail to load.`);
 }
 
 for (const output of result.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);

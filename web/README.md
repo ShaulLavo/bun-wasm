@@ -12,9 +12,26 @@ bun run build                       # -> web/dist/ (static files)
 BUN_WASM=/path/to/x.wasm bun run build   # use another wasm instead of ../dist/bun.wasm
 ```
 
-The build copies `../dist/bun.wasm` (made by `scripts/build.sh`) into `dist/bun.wasm`. If it is
-missing the build still succeeds and the page says bun.wasm is missing. `?wasm=<url>` loads a
-different module at runtime; `?trace` logs every WASI call to the worker's console.
+The build gzips each engine's wasm from `../dist` into `dist/<name>.wasm.gz`; the page decompresses
+it. If one is missing the build still succeeds and that engine says it is missing. `?wasm=<url>`
+loads a different module at runtime; `?trace` logs every WASI call to the worker's console.
+
+## Engines
+
+The header dropdown (`?engine=`) picks what runs the program:
+
+| `?engine=` | wasm | built by | override |
+| --- | --- | --- | --- |
+| `browser` (default) | `bun-browser.wasm`: transpiler, resolver, `bun build`, sqlite and natives only | `scripts/build-bun-browser.sh` | `BUN_BROWSER_WASM` |
+| `quickjs` | `bun.wasm`: QuickJS compiled to wasm | `scripts/build.sh` | `BUN_WASM` |
+| `jsc` | `bun-jsc.wasm`: JavaScriptCore compiled to wasm (no JIT) | `scripts/build-bun-jsc.sh` | `JSC_WASM` |
+
+With `browser`, the wasm's `_start` sets the program up and returns; the worker then hands the
+instance to `src/engine-host.js`, which runs the runtime's JS and the user's code on the worker's
+own engine (V8 or JavaScriptCore, with JIT). `bun build`, `--version` and `--help` still finish
+inside `_start`. `fetch` is the worker's own (CORS applies, no networking ring); `Bun.serve`
+previews are not supported: use `?engine=quickjs` for those (tests/browser-net.mjs does). (`JSC_WASM` is not `BUN_JSC_WASM` because Bun refuses to start when a
+`BUN_JSC_*` variable is not a JSC option.)
 
 ## Preview
 
@@ -35,8 +52,9 @@ Cross-Origin-Embedder-Policy: require-corp
 
 ## Networking
 
-When the page is cross-origin isolated, bun.wasm gets the `bun_wasm` host functions
-(docs/host-abi.md): `fetch`, `Bun.serve` and `node:http` work. Without isolation there is no
+This section covers the wasm engines (`?engine=quickjs` or `jsc`). When the page is cross-origin
+isolated, bun.wasm gets the `bun_wasm` host functions (docs/host-abi.md): `fetch`, `Bun.serve` and
+`node:http` work. Without isolation there is no
 SharedArrayBuffer, the slots stay empty and network APIs report "not supported".
 
 - **fetch** runs as the page's own `fetch`, so CORS applies: a cross-origin server must send
@@ -60,7 +78,11 @@ blocking. Fetch bodies are flow-controlled (at most 512 KiB ahead of what the gu
 hand-encoded wasm module (no `WebAssembly.Function`, which Safari lacks).
 
 Tests: `bun test tests/` (unit), `node tests/browser-net.mjs [chromium|webkit]` (after `bun run build`;
-Chromium desktop and WebKit iPhone against local servers), or `scripts/test-web.sh` for everything.
+Chromium desktop and WebKit iPhone against local servers), `node tests/browser-engine.mjs
+[chromium|webkit]` (the `browser` engine: examples, exit codes, Ctrl-C, readline, fetch; `ENGINE=quickjs`
+runs it on another engine), or `scripts/test-web.sh` for everything. `node tests/bench-engines.mjs
+[chromium|webkit]` prints a table comparing the engines (wasm size, startup, `tests/bench/micro.js`,
+which examples pass).
 
 ## Without a browser
 

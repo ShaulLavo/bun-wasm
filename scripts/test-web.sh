@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Tests for the browser host (web/): type check, unit tests, the network fixtures under the CLI shim
 # (web/scripts/run.ts, same NetHost/NetHelper code as the page), then Chromium and WebKit via
-# playwright (web/tests/browser-net.mjs). Needs dist/bun.wasm (scripts/build.sh). No public internet.
+# playwright (web/tests/browser-net.mjs), and the Browser (native) engine smoke test
+# (web/tests/browser-engine.mjs) when dist/bun-browser.wasm exists (scripts/build-bun-browser.sh).
+# Needs dist/bun.wasm (scripts/build.sh). No public internet.
 #   scripts/test-web.sh            # everything
 #   scripts/test-web.sh --no-browser
 set -euo pipefail
@@ -42,5 +44,10 @@ done
 
 if [[ $browser == 1 ]]; then
   node tests/browser-net.mjs || failed=1
+  if [[ -f "$root/dist/bun-browser.wasm" ]]; then
+    node tests/browser-engine.mjs || failed=1
+  else
+    echo "skip browser engine: no dist/bun-browser.wasm (scripts/build-bun-browser.sh)"
+  fi
 fi
 exit $failed

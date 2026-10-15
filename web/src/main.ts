@@ -14,7 +14,7 @@ import { NetHelper } from "./net/helper";
 import { createRing } from "./net/ring";
 import { Previews } from "./preview";
 import { type Output, Shell } from "./shell";
-import type { RunRequest, WorkerMessage } from "./worker";
+import type { Engine, RunRequest, WorkerMessage } from "./worker";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const statusEl = $<HTMLSpanElement>("#status");
@@ -24,10 +24,18 @@ const tabsEl = $<HTMLDivElement>("#tabs");
 const newFileButton = $<HTMLButtonElement>("#new-file");
 
 const params = new URLSearchParams(location.search);
-// ?engine=jsc runs the same runtime on Bun's JavaScriptCore instead of QuickJS.
-const engine = params.get("engine") === "jsc" ? "jsc" : "quickjs";
-const engineName = engine === "jsc" ? "JavaScriptCore" : "QuickJS";
-const wasmUrl = params.get("wasm") ?? (engine === "jsc" ? "bun-jsc.wasm" : "bun.wasm");
+// The default (browser) runs the program in the browser's own JS engine, with bun-browser.wasm for
+// the transpiler and natives; ?engine=quickjs and ?engine=jsc run the whole runtime in wasm.
+const engines: Record<Engine, { name: string; wasm: string; script: string }> = {
+  quickjs: { name: "QuickJS", wasm: "bun.wasm", script: "scripts/build.sh" },
+  jsc: { name: "JavaScriptCore", wasm: "bun-jsc.wasm", script: "scripts/build-bun-jsc.sh" },
+  browser: { name: "Browser (native)", wasm: "bun-browser.wasm", script: "scripts/build-bun-browser.sh" },
+};
+const defaultEngine: Engine = "browser";
+const requested = params.get("engine");
+const engine: Engine = requested !== null && Object.hasOwn(engines, requested) ? (requested as Engine) : defaultEngine;
+const engineName = engines[engine].name;
+const wasmUrl = params.get("wasm") ?? engines[engine].wasm;
 const trace = params.has("trace");
 const isolated = globalThis.crossOriginIsolated === true;
 const sleepMode = isolated ? "Atomics.wait (cross-origin isolated)" : "busy-wait (page is not cross-origin isolated)";
@@ -35,8 +43,8 @@ const sleepMode = isolated ? "Atomics.wait (cross-origin isolated)" : "busy-wait
 engineSelect.value = engine;
 engineSelect.addEventListener("change", () => {
   const next = new URL(location.href);
-  if (engineSelect.value === "jsc") next.searchParams.set("engine", "jsc");
-  else next.searchParams.delete("engine");
+  if (engineSelect.value === defaultEngine) next.searchParams.delete("engine");
+  else next.searchParams.set("engine", engineSelect.value);
   next.searchParams.delete("wasm");
   location.assign(next);
 });
@@ -89,7 +97,7 @@ async function loadWasm(): Promise<void> {
   } catch (err) {
     const missing = String(err).includes("HTTP 404");
     const error = missing
-      ? `bun.wasm is not in this build. Build it with scripts/build.sh (dist/bun.wasm), then rebuild web/.`
+      ? `${wasmUrl} is not in this build. Build it with ${engines[engine].script} (dist/${engines[engine].wasm}), then rebuild web/.`
       : `could not load bun.wasm: ${String(err)}`;
     wasm = { error };
     setStatus(missing ? "bun.wasm missing" : "bun.wasm failed to load", "error");
@@ -120,9 +128,10 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
     LINES: String(term.rows),
     TMPDIR: "/tmp",
   };
-  const net = isolated ? createRing() : null;
+  // The browser engine uses the worker's own fetch; the ring is only for the wasm engines.
+  const net = isolated && engine !== "browser" ? createRing() : null;
   const helper = net ? startNet(net, io) : null;
-  const request: RunRequest = { module: wasm.module, args: ["bun", ...args], env, root: fs.root, trace, net };
+  const request: RunRequest = { engine, module: wasm.module, args: ["bun", ...args], env, root: fs.root, trace, net };
   const worker = new Worker("./worker.js", { type: "module" });
   runButton.disabled = true;
   return new Promise<number>((resolve) => {
@@ -236,10 +245,16 @@ const shell = new Shell(term, {
   info: () => [
     `bun.wasm: ${wasm && "module" in wasm ? `${wasmUrl}, ${mb(wasm.size)}` : (wasm?.error ?? "loading")}`,
     `sleeps: ${sleepMode}`,
-    `network: ${isolated ? "fetch via the page; Bun.serve previews at ./__preview/<port>/" : "off (needs cross-origin isolation)"}`,
+    `engine: ${engineName}`,
+    `network: ${networkInfo()}`,
     `filesystem: in memory, preopened at /, cwd ${HOME}; reloading the page resets it`,
   ],
 });
+
+function networkInfo(): string {
+  if (engine === "browser") return "the browser's own fetch (CORS applies); no Bun.serve previews";
+  return isolated ? "fetch via the page; Bun.serve previews at ./__preview/<port>/" : "off (needs cross-origin isolation)";
+}
 
 // ---------- editor ----------
 
