@@ -125,6 +125,8 @@
     return out;
   };
 
+  internal.defaultPrepareStackTrace = Error.prepareStackTrace;
+
   function isErrorConstructorFrame(site) {
     return site.isConstructor() && isErrorConstructor(site.getFunction());
   }
@@ -793,6 +795,7 @@
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
+  internal.require("function");
 
   return internal;
 })

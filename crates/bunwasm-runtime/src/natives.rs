@@ -514,6 +514,7 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
     t.add("bunBuiltinErrorCode", |a| {
         Ok(modules::BUN_BUILTIN_ERROR_CODES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
     });
+    t.add("rewriteDynamicImports", |a| Ok(crate::module_imports::rewrite_dynamic_imports(a.str(0)?, a.str(1)?).into()));
     let st = state.clone();
     t.add("resolve", move |a| {
         let spec = a.str(0)?;

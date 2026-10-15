@@ -61,6 +61,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
+| [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-imports) | Host feature | Original generated-function adapter with module-relative dynamic imports. |
 
 ## Portable semver host functions
 
@@ -94,6 +95,18 @@ pure Bun semver parser used by package installation. See
 ## App compatibility fixtures
 
 `scripts/app-matrix/apps.mjs` contains original minimal projects that use published framework APIs. The dependency versions in that file identify the npm upstream revisions. No template source or upstream implementation is copied or adapted. The runner, registry recorder, network namespace wrapper, shared assertions/classifier, and browser driver are original bun-wasm host adapters. The namespace wrapper uses Linux user/network namespaces without changing any upstream source. Retained diagnostic fixtures under `scripts/app-matrix/review-evidence/` are unmodified logs from the pinned packages in the 2026-10-15 census, including Next 15.5.6, Prisma 6.17.1, Vite 7.1.12 and Rollup 4.64.7; they are regression inputs, not adapted implementations. The browser driver calls the existing playground test helpers. Recorded dependency tarballs remain unmodified in the external cache, verified by SHA-256; registry metadata is rewritten only in loopback responses to point tarballs at that mirror.
+
+## Generated function imports
+
+`crates/bunwasm-runtime/src/js/function.js` is an original adapter for the public
+Function, AsyncFunction, GeneratorFunction and AsyncGeneratorFunction constructors.
+It uses the caller-origin helper and the existing import lexer, moved from
+`engine_host.rs` into `module_imports.rs`, to route generated dynamic imports
+through the runtime resolver. No Bun, Node, QuickJS or WebKit implementation is
+copied. Native constructors still parse the arguments and construct the function.
+This fixes the published Prettier 3.6.2 CLI's generated import without changing
+its package or fixture. Caller-origin lookup temporarily uses the runtime's own
+stack formatter so user custom formatters cannot change module resolution.
 
 ## Caller source origin
 

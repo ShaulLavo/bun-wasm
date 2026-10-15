@@ -4,4 +4,6 @@ indirect
 asyncLoad
 generator
 async generator
+esm factory
+custom formatter
 constructor semantics

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import factory from './nested/factory.cjs';
+import { load as esmLoad } from './nested/factory.mjs';
 
 for (const key of ['load', 'call', 'indirect', 'asyncLoad']) {
   assert.equal((await factory[key]('./value.mjs')).value, 'relative to factory');
@@ -9,6 +10,23 @@ assert.equal((await factory.generator('./value.mjs').next().value).value, 'relat
 console.log('generator');
 assert.equal((await factory.asyncGenerator('./value.mjs').next()).value.value, 'relative to factory');
 console.log('async generator');
+assert.equal((await esmLoad('./value.mjs')).value, 'relative to factory');
+console.log('esm factory');
+const previousPrepare = Error.prepareStackTrace;
+let customLoad;
+try {
+  Error.prepareStackTrace = () => 'custom stack';
+  customLoad = factory.make();
+  assert.equal(Error.prepareStackTrace(), 'custom stack');
+} finally {
+  Error.prepareStackTrace = previousPrepare;
+}
+assert.equal((await customLoad('./value.mjs')).value, 'relative to factory');
+console.log('custom formatter');
+class Derived extends Function {}
+const derived = new Derived('specifier', 'return import(specifier)');
+assert.ok(derived instanceof Derived);
+assert.equal((await derived('./nested/value.mjs')).value, 'relative to factory');
 assert.equal(Function.prototype.constructor, Function);
 assert.equal(new Function('x', 'return x + 1').name, 'anonymous');
 assert.equal(new Function('x', 'return x + 1')(2), 3);
