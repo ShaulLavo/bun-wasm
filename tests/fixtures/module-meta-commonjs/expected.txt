@@ -1,0 +1,4 @@
+require-meta meta-require.js
+dirname-meta true
+await-meta meta-await.js
+types-meta true meta-typescript.ts
