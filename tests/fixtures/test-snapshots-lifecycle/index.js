@@ -14,6 +14,8 @@ test("saved", () => {
   expect({ n: 1 }).toMatchInlineSnapshot();
   expect({ id: 42 }).toMatchInlineSnapshot({ id: expect.any(Number) });
   expect("file one").toMatchSnapshot();
+  expect(() => { throw new Error("error one"); }).toThrowErrorMatchingInlineSnapshot();
+  expect(() => { throw new Error("file error one"); }).toThrowErrorMatchingSnapshot("error");
 });
 test("same line", () => { expect("first").toMatchInlineSnapshot(); expect("second").toMatchInlineSnapshot(); });
 `;
@@ -27,12 +29,14 @@ const first = run("saved", { CI: "false", GITHUB_ACTIONS: "true" });
 const createdSource = read("saved/case.test.js");
 const createdFile = read("saved/__snapshots__/case.test.js.snap");
 console.log("create", first.code, createdSource.includes('"n": 1,'), createdSource.includes('"id": Any<Number>,'), createdFile.includes('exports[`saved 3`] = `"file one"`;'));
+console.log("error create", createdSource.includes('toThrowErrorMatchingInlineSnapshot(`"error one"`)'), createdFile.includes('`"file error one"`'));
 console.log("same line", createdSource.includes('toMatchInlineSnapshot(`"first"`)'), createdSource.includes('toMatchInlineSnapshot(`"second"`)'));
 console.log("existing CI", run("saved", { CI: "true" }).code);
-writeFileSync("saved/case.test.js", createdSource.replace("n: 1", "n: 2").replace("file one", "file two"));
+writeFileSync("saved/case.test.js", createdSource.replace("n: 1", "n: 2").replace("file one", "file two").replace('new Error("error one")', 'new Error("error two")').replace("file error one", "file error two"));
 const mismatchSource = read("saved/case.test.js");
 console.log("mismatch", run("saved", { CI: "false" }).code, read("saved/case.test.js") === mismatchSource, read("saved/__snapshots__/case.test.js.snap") === createdFile);
 console.log("update short", run("saved", { CI: "true" }, ["-u"]).code, read("saved/case.test.js").includes('"n": 2,'), read("saved/__snapshots__/case.test.js.snap").includes('`"file two"`'));
+console.log("error update", read("saved/case.test.js").includes('toThrowErrorMatchingInlineSnapshot(`"error two"`)'), read("saved/__snapshots__/case.test.js.snap").includes('`"file error two"`'));
 console.log("updated CI", run("saved", { CI: "true" }).code);
 
 make("vendor", source);

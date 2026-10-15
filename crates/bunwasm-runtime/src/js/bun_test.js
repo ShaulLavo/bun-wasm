@@ -1434,7 +1434,7 @@
     snapshots.added++;
   }
 
-  defineMatcher("toMatchSnapshot", "expected", (ctx, received, ...args) => {
+  function matchFileSnapshot(ctx, received, ...args) {
     const prepared = prepareSnapshot(ctx, received, args, false);
     if (prepared.failure) return prepared.failure;
     const state = fileSnapshots(currentTest.file);
@@ -1445,7 +1445,9 @@
     }
     addFileSnapshot(state, name, prepared.text);
     return null;
-  });
+  }
+
+  defineMatcher("toMatchSnapshot", "expected", matchFileSnapshot);
 
   function compareSnapshot(received, expected) {
     if (received === expected) { snapshots.passed++; return null; }
@@ -1463,7 +1465,7 @@
     return "\n" + middle.map((line) => line.startsWith(indent) ? line.slice(indent.length) : "").join("\n") + "\n";
   }
 
-  defineMatcher("toMatchInlineSnapshot", "expected", (ctx, received, ...args) => {
+  function matchInlineSnapshot(ctx, received, ...args) {
     const prepared = prepareSnapshot(ctx, received, args, true);
     if (prepared.failure) return prepared.failure;
     nextSnapshotName("");
@@ -1477,7 +1479,26 @@
     if (expected === undefined) snapshots.added++;
     else snapshots.passed++;
     return null;
-  });
+  }
+
+  defineMatcher("toMatchInlineSnapshot", "expected", matchInlineSnapshot);
+
+  function defineErrorSnapshotMatcher(name, inline) {
+    defineMatcher(name, "expected", (ctx, received, ...args) => {
+      if (ctx.not) return { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used with not\n" };
+      if (args.length > 1) throw new Error("\n\nMatcher error: Expected zero or one arguments\n");
+      if (args.length === 1 && typeof args[0] !== "string") throw new Error("\n\nMatcher error: Expected first argument to be a string\n");
+      const outcome = typeof received === "function" ? throwOutcome({}, received) : throwOutcome(ctx, received);
+      if (outcome.invalid) throw new Error("Expected value must be a function");
+      const threw = outcome.threw || outcome.value instanceof Error || (ctx.promise && typeof received !== "function");
+      if (!threw) return { params: "", body: "\n\nMatcher error: Received function did not throw\n" };
+      const message = outcome.value instanceof Error ? outcome.value.message || undefined : undefined;
+      return inline ? matchInlineSnapshot(ctx, message, ...args) : matchFileSnapshot(ctx, message, ...args);
+    });
+  }
+
+  defineErrorSnapshotMatcher("toThrowErrorMatchingInlineSnapshot", true);
+  defineErrorSnapshotMatcher("toThrowErrorMatchingSnapshot", false);
 
   function inlineCaller(error) {
     for (const raw of String(error.stack || "").split("\n")) {
@@ -1529,7 +1550,7 @@
     const tokens = snapshotTokens(source);
     const sites = [];
     for (let i = 1; i < tokens.length - 1; i++) {
-      if (tokens[i].text !== "toMatchInlineSnapshot" || tokens[i - 1].text !== "." || tokens[i + 1].text !== "(") continue;
+      if ((tokens[i].text !== "toMatchInlineSnapshot" && tokens[i].text !== "toThrowErrorMatchingInlineSnapshot") || tokens[i - 1].text !== "." || tokens[i + 1].text !== "(") continue;
       const site = inlineSiteArguments(tokens, i);
       if (site) sites.push(site);
     }

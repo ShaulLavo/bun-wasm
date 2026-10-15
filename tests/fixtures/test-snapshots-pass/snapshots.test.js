@@ -67,6 +67,25 @@ describe("snapshots", () => {
   test("duplicate label", () => expect(1).toMatchSnapshot());
   test("duplicate label", () => expect(2).toMatchSnapshot());
 
+  test("error snapshots", async () => {
+    const boom = () => { throw new TypeError("cookie validation"); };
+    expect(boom).toThrowErrorMatchingInlineSnapshot(`"cookie validation"`);
+    expect(() => { throw new Error(""); }).toThrowErrorMatchingInlineSnapshot(`undefined`);
+    expect(() => { throw "primitive"; }).toThrowErrorMatchingInlineSnapshot(`undefined`);
+    expect(() => { throw undefined; }).toThrowErrorMatchingInlineSnapshot(`undefined`);
+    expect(() => { throw { message: "plain object" }; }).toThrowErrorMatchingInlineSnapshot(`undefined`);
+    expect(() => new Error("returned")).toThrowErrorMatchingInlineSnapshot(`"returned"`);
+    expect(boom).toThrowErrorMatchingSnapshot();
+    expect(boom).toThrowErrorMatchingSnapshot("hint");
+    await expect(Promise.reject(new Error("rejected"))).rejects.toThrowErrorMatchingInlineSnapshot(`"rejected"`);
+    await expect(Promise.resolve(new Error("resolved"))).resolves.toThrowErrorMatchingInlineSnapshot(`"resolved"`);
+    await expect(Promise.resolve(boom)).resolves.toThrowErrorMatchingInlineSnapshot(`"cookie validation"`);
+    expect(() => expect(() => {}).toThrowErrorMatchingInlineSnapshot(`undefined`)).toThrow("did not throw");
+    expect(() => expect(boom).not.toThrowErrorMatchingSnapshot()).toThrow("cannot be used with not");
+    expect(() => expect(boom).toThrowErrorMatchingSnapshot({})).toThrow("Expected first argument to be a string");
+    expect(() => expect(boom).toThrowErrorMatchingInlineSnapshot("one", "two")).toThrow("Expected zero or one arguments");
+  });
+
   test("errors reject bad snapshots", () => {
     expect(() => expect(1).toMatchInlineSnapshot(`2`)).toThrow();
     expect(() => expect(1).not.toMatchSnapshot()).toThrow("cannot be used with not");

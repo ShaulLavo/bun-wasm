@@ -5,10 +5,11 @@ snapshots.test.js:
 (pass) snapshots > file values
 (pass) snapshots > duplicate label
 (pass) snapshots > duplicate label
+(pass) snapshots > error snapshots
 (pass) snapshots > errors reject bad snapshots
 
- 6 pass
+ 7 pass
  0 fail
-snapshots: 23 passed, 2 failed
- 37 expect() calls
-Ran 6 tests across 1 file. [TIME]
+snapshots: 34 passed, 2 failed
+ 56 expect() calls
+Ran 7 tests across 1 file. [TIME]

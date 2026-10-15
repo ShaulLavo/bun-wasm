@@ -101,3 +101,7 @@ exports[`snapshots duplicate label 1`] = `1`;
 exports[`snapshots duplicate label 2`] = `2`;
 
 exports[`snapshots file values 13`] = `"controls \x00\b\f\v	"`;
+
+exports[`snapshots error snapshots 7`] = `"cookie validation"`;
+
+exports[`snapshots error snapshots: hint 1`] = `"cookie validation"`;
