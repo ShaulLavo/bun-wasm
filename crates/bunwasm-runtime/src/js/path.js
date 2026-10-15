@@ -9,7 +9,8 @@
 
   // Bun's wording: `The "path" property must be of type string, got number`.
   function validateString(value, name) {
-    if (typeof value === "string") return;
+    if (typeof value === "string") return value;
+    if (value instanceof String) return String.prototype.valueOf.call(value);
     throw invalidType(name, "string", value);
   }
 
@@ -89,8 +90,7 @@
     let resolvedPath = "";
     let resolvedAbsolute = false;
     for (let i = arguments.length - 1; i >= -1 && !resolvedAbsolute; i--) {
-      const path = i >= 0 ? arguments[i] : cwd();
-      validateString(path, `paths[${i}]`);
+      const path = validateString(i >= 0 ? arguments[i] : cwd(), `paths[${i}]`);
       if (path.length === 0) continue;
       resolvedPath = `${path}/${resolvedPath}`;
       resolvedAbsolute = path.charCodeAt(0) === CHAR_FORWARD_SLASH;
@@ -101,7 +101,7 @@
   }
 
   function normalize(path) {
-    validateString(path, "path");
+    path = validateString(path, "path");
     if (path.length === 0) return ".";
     const isAbs = path.charCodeAt(0) === CHAR_FORWARD_SLASH;
     const trailingSeparator = path.charCodeAt(path.length - 1) === CHAR_FORWARD_SLASH;
@@ -115,7 +115,7 @@
   }
 
   function isAbsolute(path) {
-    validateString(path, "path");
+    path = validateString(path, "path");
     return path.length > 0 && path.charCodeAt(0) === CHAR_FORWARD_SLASH;
   }
 
@@ -123,8 +123,7 @@
     if (arguments.length === 0) return ".";
     const parts = [];
     for (let i = 0; i < arguments.length; ++i) {
-      const arg = arguments[i];
-      validateString(arg, `paths[${i}]`);
+      const arg = validateString(arguments[i], `paths[${i}]`);
       if (arg.length > 0) parts.push(arg);
     }
     if (parts.length === 0) return ".";
@@ -132,8 +131,8 @@
   }
 
   function relative(from, to) {
-    validateString(from, "from");
-    validateString(to, "to");
+    from = validateString(from, "from");
+    to = validateString(to, "to");
     if (from === to) return "";
     from = resolve(from);
     to = resolve(to);
@@ -178,7 +177,7 @@
   }
 
   function dirname(path) {
-    validateString(path, "path");
+    path = validateString(path, "path");
     if (path.length === 0) return ".";
     const hasRoot = path.charCodeAt(0) === CHAR_FORWARD_SLASH;
     let end = -1;
@@ -219,7 +218,7 @@
 
   function basename(path, suffix) {
     if (suffix !== undefined) validateString(suffix, "ext");
-    validateString(path, "path");
+    path = validateString(path, "path");
     if (suffix === undefined || suffix.length === 0 || suffix.length > path.length) return basenameNoExt(path);
     if (suffix === path) return "";
     return basenameWithSuffix(path, suffix);
@@ -295,7 +294,7 @@
   }
 
   function extname(path) {
-    validateString(path, "path");
+    path = validateString(path, "path");
     const scan = scanExt(path, 0);
     if (scan.noExt) return "";
     return path.slice(scan.startDot, scan.end);
@@ -312,7 +311,7 @@
   }
 
   function parse(path) {
-    validateString(path, "path");
+    path = validateString(path, "path");
     const ret = { root: "", dir: "", base: "", ext: "", name: "" };
     if (path.length === 0) return ret;
     const isAbs = path.charCodeAt(0) === CHAR_FORWARD_SLASH;

@@ -28,6 +28,7 @@
   function toPath(path, name = "path") {
     let p;
     if (typeof path === "string") p = path;
+    else if (path instanceof String) p = String.prototype.valueOf.call(path);
     else if (path instanceof Uint8Array) p = native.utf8Decode(path);
     else if (path instanceof URL) {
       if (path.protocol !== "file:") throw Object.assign(new TypeError("The URL must be of scheme file"), { code: "ERR_INVALID_URL_SCHEME" });
@@ -451,7 +452,6 @@
 
   const promises = {};
   for (const name of Object.keys(sync)) {
-    if (name === "existsSync") continue;
     promises[name.slice(0, -4)] = promisifySync(sync[name]);
   }
   promises.open = async (path, flags) => new FileHandle(openSync(path, flags));

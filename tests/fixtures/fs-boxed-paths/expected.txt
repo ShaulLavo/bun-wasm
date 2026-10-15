@@ -1,0 +1,7 @@
+true boxed true
+a/b b
+b.txt a .txt
+b true
+{"root":"/","dir":"/a","base":"b.txt","ext":".txt","name":"b"}
+false false false false
+ERR_INVALID_ARG_TYPE
