@@ -1,7 +1,8 @@
 // Smoke test against a deployed playground: node web/scripts/live-check.mjs <url>
 // Runs every example command, Bun.serve + preview, at desktop and iPhone sizes.
 // Screenshots go to $SHOTS (default /work/tmp/bun-wasm-shots).
-import { chromium, webkit, devices } from "/home/shaul/.local/share/mise/installs/npm-playwright/1.63.0/node_modules/.mise/playwright@1.63.0/node_modules/playwright/index.mjs";
+// PLAYWRIGHT=<path to playwright/index.mjs> if it is not resolvable as a package.
+const { chromium, webkit, devices } = await import(process.env.PLAYWRIGHT ?? "playwright");
 const url = process.argv[2];
 const term = async (page) => (await page.evaluate(() => document.querySelector(".xterm-rows")?.innerText ?? "")).replace(/\n/g, "");
 async function waitFor(page, re, ms = 60000) {
