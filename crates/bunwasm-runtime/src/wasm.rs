@@ -32,6 +32,7 @@ struct Guest {
     instance: Instance,
     calls: BTreeMap<u32, Suspended>,
     next_call: u32,
+    memories: Vec<Memory>,
 }
 #[derive(Default)]
 struct Runtime {
@@ -51,6 +52,36 @@ fn kind(ty: &ExternType) -> &'static str {
         ExternType::Table(_) => "table",
     }
 }
+fn numeric_type(ty: &ValType) -> Val {
+    Val::Str(
+        match ty {
+            ValType::I32 => "i32",
+            ValType::I64 => "i64",
+            ValType::F32 => "f32",
+            ValType::F64 => "f64",
+            _ => "reference",
+        }
+        .into(),
+    )
+}
+fn describe(record: Record, ty: &ExternType) -> Record {
+    let record = record.set("kind", kind(ty));
+    match ty {
+        ExternType::Func(ty) => record
+            .set(
+                "params",
+                Val::Array(ty.params().iter().map(numeric_type).collect()),
+            )
+            .set(
+                "results",
+                Val::Array(ty.results().iter().map(numeric_type).collect()),
+            ),
+        ExternType::Global(ty) => record
+            .set("type", numeric_type(&ty.content()))
+            .set("mutable", ty.mutability().is_mut()),
+        _ => record,
+    }
+}
 fn js(value: &WVal) -> Result<Val, NativeError> {
     let value = match value {
         WVal::I32(n) => Val::Num(*n as f64),
@@ -68,8 +99,7 @@ fn js(value: &WVal) -> Result<Val, NativeError> {
 
 fn wasm(value: &Val, ty: ValType) -> Result<WVal, NativeError> {
     match (ty, value) {
-        (ValType::I32, Val::Num(n)) => Ok(WVal::I32(*n as i64 as i32)),
-        (ValType::I32, Val::Bool(b)) => Ok(WVal::I32(i32::from(*b))),
+        (ValType::I32, Val::Num(n)) => Ok(WVal::I32(*n as i32)),
         (ValType::I64, Val::BigInt(n)) => Ok(WVal::I64(*n)),
         (ValType::I64, Val::BigUint(n)) => Ok(WVal::I64(*n as i64)),
         (ValType::F32, Val::Num(n)) => Ok(WVal::F32((*n as f32).into())),
@@ -166,21 +196,18 @@ impl Runtime {
         let imports: Vec<Val> = module
             .imports()
             .map(|i| {
-                Record::new()
-                    .set("module", i.module())
-                    .set("name", i.name())
-                    .set("kind", kind(i.ty()))
-                    .into()
+                describe(
+                    Record::new()
+                        .set("module", i.module())
+                        .set("name", i.name()),
+                    i.ty(),
+                )
+                .into()
             })
             .collect();
         let exports: Vec<Val> = module
             .exports()
-            .map(|i| {
-                Record::new()
-                    .set("name", i.name())
-                    .set("kind", kind(i.ty()))
-                    .into()
-            })
+            .map(|i| describe(Record::new().set("name", i.name()), i.ty()).into())
             .collect();
         let id = self.modules.len();
         self.modules.push(module);
@@ -218,12 +245,23 @@ impl Runtime {
             .map_err(error)?
             .start(&mut store)
             .map_err(error)?;
+        let mut memories = Vec::new();
+        for memory in instance
+            .exports(&store)
+            .filter_map(|export| export.into_memory())
+        {
+            if memories.contains(&memory) {
+                continue;
+            }
+            memories.push(memory);
+        }
         let id = self.guests.len();
         self.guests.push(Guest {
             store,
             instance,
             calls: BTreeMap::new(),
             next_call: 0,
+            memories,
         });
         Ok(Val::Num(id as f64))
     }
@@ -266,8 +304,22 @@ pub fn install(table: &mut Table) {
     table.add("wasm.read", move |a| {
         let mut rt = rt.borrow_mut();
         let guest = rt.guest(a.u32(0)?)?;
-        Ok(Val::Bytes(
-            guest.memory(a.str(1)?)?.data(&guest.store).to_vec(),
+        let memory = guest.memory(a.str(1)?)?;
+        Ok(Record::new()
+            .set("bytes", Val::Bytes(memory.data(&guest.store).to_vec()))
+            .set(
+                "generation",
+                Val::BigUint(memory.growth_generation(&guest.store)),
+            )
+            .into())
+    });
+    let rt = runtime.clone();
+    table.add("wasm.memoryIdentity", move |a| {
+        let mut rt = rt.borrow_mut();
+        let guest = rt.guest(a.u32(0)?)?;
+        let memory = guest.memory(a.str(1)?)?;
+        Ok(Val::Num(
+            guest.memories.iter().position(|m| *m == memory).unwrap() as f64,
         ))
     });
     let rt = runtime.clone();

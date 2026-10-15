@@ -18,17 +18,20 @@
       try { modules.set(this, native.compile(input)); }
       catch (error) { throw new CompileError(error.message); }
     }
-    static imports(module) { return modules.get(module).imports.map(item => Object.assign({}, item)); }
-    static exports(module) { return modules.get(module).exports.map(item => Object.assign({}, item)); }
+    static imports(module) { return modules.get(module).imports.map(({ module, name, kind }) => ({ module, name, kind })); }
+    static exports(module) { return modules.get(module).exports.map(({ name, kind }) => ({ name, kind })); }
   }
   class Memory {
     constructor() { throw new LinkError('Standalone WebAssembly memories are not supported'); }
     get buffer() { return instances.get(this).buffer; }
     grow(pages) {
       const state = instances.get(this);
+      if (!state?.owner) throw new TypeError('Expected a WebAssembly.Memory');
+      const count = Math.trunc(+pages);
+      if (!Number.isFinite(count) || count < 0 || count > 0xffffffff) throw new TypeError('Invalid WebAssembly page count');
       flush(state.owner);
       let old;
-      try { old = native.grow(state.id, state.name, pages); }
+      try { old = native.grow(state.id, state.name, count); }
       catch (error) { throw new RangeError(error.message); }
       refresh(state.owner);
       return old;
@@ -37,7 +40,11 @@
   class Global {
     constructor() { throw new LinkError('Standalone WebAssembly globals are not supported'); }
     get value() { const state = instances.get(this); return native.global(state.id, state.name); }
-    set value(value) { const state = instances.get(this); native.global(state.id, state.name, value); }
+    set value(value) {
+      const state = instances.get(this);
+      if (!state.mutable) throw new TypeError('Immutable WebAssembly global');
+      native.global(state.id, state.name, coerce(value, state.type));
+    }
     valueOf() { return this.value; }
   }
   function flush(state) {
@@ -45,21 +52,36 @@
   }
   function refresh(state) {
     for (const memory of state.memories) {
-      const data = native.read(state.id, memory.name);
-      if (memory.buffer.byteLength !== data.byteLength) {
+      const { bytes: data, generation } = native.read(state.id, memory.name);
+      if (memory.generation !== generation) {
         memory.buffer.transfer(0);
         memory.buffer = new ArrayBuffer(data.byteLength);
+        memory.generation = generation;
       }
       new Uint8Array(memory.buffer).set(data);
     }
   }
   function execute(action) {
-    try { return action(); } catch (error) { throw new RuntimeError(error.message); }
+    try { return action(); }
+    catch (error) {
+      if (error instanceof TypeError) throw error;
+      throw new RuntimeError(error.message);
+    }
   }
-  function invoke(state, name, args) {
+  function coerce(value, type) {
+    switch (type) {
+      case 'i32': return value >> 0;
+      case 'i64': return BigInt.asIntN(64, value);
+      case 'f32': return Math.fround(+value);
+      case 'f64': return +value;
+      default: throw new TypeError('WebAssembly reference values are not supported');
+    }
+  }
+  function invoke(state, item, args) {
+    const inputs = item.params.map((type, index) => coerce(args[index], type));
     flush(state);
     let result;
-    try { result = execute(() => native.call(state.id, name, args)); }
+    try { result = execute(() => native.call(state.id, item.name, inputs)); }
     finally { refresh(state); }
     while (result.import !== undefined) result = imported(state, result);
     const values = result.values;
@@ -67,11 +89,19 @@
     return values.length === 0 ? undefined : values;
   }
   function imported(state, result) {
-    let value;
-    try { value = state.imports[result.import](...result.args); }
-    catch (error) { native.cancel(state.id, result.call); throw error; }
+    const entry = state.imports[result.import];
+    let values;
+    try {
+      const value = entry.callback(...result.args);
+      if (entry.results.length === 0) values = [];
+      else if (entry.results.length === 1) values = [coerce(value, entry.results[0])];
+      else {
+        values = [...value];
+        if (values.length !== entry.results.length) throw new TypeError('Invalid WebAssembly result count');
+        values = values.map((value, index) => coerce(value, entry.results[index]));
+      }
+    } catch (error) { native.cancel(state.id, result.call); throw error; }
     flush(state);
-    const values = value === undefined ? [] : Array.isArray(value) ? value : [value];
     try { return execute(() => native.resume(state.id, result.call, values)); }
     finally { refresh(state); }
   }
@@ -82,12 +112,12 @@
       const functions = description.imports.map(item => {
         const value = imports[item.module]?.[item.name];
         if (item.kind !== 'function' || typeof value !== 'function') throw new LinkError(`Missing WebAssembly import ${item.module}.${item.name}`);
-        return value;
+        return { callback: value, results: item.results };
       });
       let id;
       try { id = native.instantiate(description.id); }
       catch (error) { throw new LinkError(error.message); }
-      const state = { id, imports: functions, memories: [] };
+      const state = { id, imports: functions, memories: [], memoryObjects: new Map() };
       const exports = Object.create(null);
       for (const item of description.exports) installExport(state, exports, item);
       refresh(state);
@@ -96,18 +126,21 @@
   }
   function installExport(state, exports, item) {
     const name = item.name;
-    if (item.kind === 'function') { exports[name] = (...args) => invoke(state, name, args); return; }
+    if (item.kind === 'function') { exports[name] = (...args) => invoke(state, item, args); return; }
     if (item.kind === 'global') {
       const global = Object.create(Global.prototype);
-      instances.set(global, { id: state.id, name });
+      instances.set(global, { id: state.id, name, type: item.type, mutable: item.mutable });
       exports[name] = global;
       return;
     }
     if (item.kind !== 'memory') throw new LinkError(`Unsupported WebAssembly export ${item.kind}`);
+    const identity = native.memoryIdentity(state.id, name);
+    if (state.memoryObjects.has(identity)) { exports[name] = state.memoryObjects.get(identity); return; }
     const memory = Object.create(Memory.prototype);
-    const record = { id: state.id, name, buffer: new ArrayBuffer(0), owner: state };
+    const record = { id: state.id, name, buffer: new ArrayBuffer(0), owner: state, generation: undefined };
     instances.set(memory, record);
     state.memories.push(record);
+    state.memoryObjects.set(identity, memory);
     exports[name] = memory;
   }
   async function compile(source) { return new Module(source); }

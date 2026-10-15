@@ -158,11 +158,22 @@ JavaScript distribution. A missing same-version wasm distribution fails install.
 QuickJS and JSC wasm execute the published parser through the Rust `wasmi`
 interpreter. The browser engine uses its native WebAssembly implementation.
 The interpreter adapter supports numeric functions, JavaScript function imports,
-exported memories, and exported globals. It supports reentrant function imports,
+exported 32-bit memories, and exported globals. It supports reentrant function imports,
 i64 values, and memory growth with detached old buffers. Imported memories,
 tables, standalone memory/global construction, shared memory, and JavaScript
 imports called by a module's start function are not yet supported. The adapter
-implements the listed subset of the WebAssembly JavaScript API.
+implements the listed subset of the WebAssembly JavaScript API. Aliased memory
+exports share one object and buffer. Successful growth detaches the old buffer,
+including zero-page growth from JavaScript or wasm; failed growth preserves it.
+Numeric arguments, imported results, and global assignments use the JavaScript
+API conversions. Invalid page counts throw TypeError, capacity failures throw
+RangeError, and execution traps throw WebAssembly.RuntimeError. Exceptions from
+JavaScript imports and coercion keep their original identity.
+
+Compiled modules and instances are retained until the program exits, even after
+their JavaScript wrappers become unreachable. Reuse modules and instances in
+long-lived programs. Unbounded repeated compilation or instantiation is outside
+this adapter's supported subset until interpreter handles can be reclaimed.
 No upstream Rollup implementation is copied, patched, or replaced.
 
 `bun tests/rollup/run.mjs` replays the real Rollup 4.64.7 distribution from the
