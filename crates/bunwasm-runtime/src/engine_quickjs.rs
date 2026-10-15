@@ -445,3 +445,22 @@ fn unerase<'js>(v: V) -> Value<'js> {
     // SAFETY: see `erase`.
     unsafe { std::mem::transmute::<V, Value<'js>>(v) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_arrays_leave_no_exception() {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            let array = ctx.eval::<Value, _>("[1, 2]").unwrap();
+            assert_eq!(to_val(&array), Val::Array(vec![Val::Num(1.0), Val::Num(2.0)]));
+            assert!(ctx.catch().is_null(), "array conversion left an exception pending");
+            let object = ctx.eval::<Value, _>("({ answer: 3 })").unwrap();
+            assert_eq!(to_val(&object), Val::Object(vec![("answer".into(), Val::Num(3.0))]));
+            assert!(ctx.catch().is_null(), "object conversion left an exception pending");
+        });
+    }
+}
