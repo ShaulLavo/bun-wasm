@@ -8,6 +8,16 @@ export interface EngineHostOptions {
   moduleUrls: "blob" | "data";
   /** The fetch exposed to user code (without it, fetch rejects). */
   fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  /**
+   * Networking: the bun_wasm host ABI (docs/host-abi.md) as the functions the runtime's net.js
+   * calls (hostListen, hostRead, …), which slots they cover, and a way to wake the event loop.
+   * Without it (or without its fetch), user code gets `fetch` above and no servers.
+   */
+  net?: {
+    natives: Record<string, (...args: never[]) => unknown>;
+    caps: Record<string, boolean>;
+    onNews(cb: () => void): void;
+  };
   /** Called exactly once when the program ends (process.exit, uncaught error, empty event loop). */
   onExit(code: number): void;
 }

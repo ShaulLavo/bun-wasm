@@ -249,7 +249,11 @@ class ExitSignal {
  * @param {WebAssembly.Instance} o.instance
  * @param {"blob" | "data"} o.moduleUrls  how module sources become importable URLs
  * @param {(code: number) => void} o.onExit  called once when the program ends
- * @param {typeof fetch} [o.fetch]  the host's fetch, for user code (else fetch rejects)
+ * @param {typeof fetch} [o.fetch]  the host's fetch, for user code when o.net has no fetch (else fetch rejects)
+ * @param {{natives: object, caps: Record<string, boolean>, onNews(cb: () => void): void}} [o.net]
+ *   networking: the bun_wasm ABI (docs/host-abi.md) as the JS functions net.js
+ *   calls (hostListen, hostRead, …), which slots they cover, and a way to be
+ *   told when any handle may have changed
  * @returns {Promise<number>} the exit code (if onExit returns)
  */
 export function startEngineHost(o) {
@@ -338,8 +342,14 @@ class EngineHost {
       (native[group] || (native[group] = {}))[name.slice(dot + 1)] = fn;
     });
     Object.assign(native, d.constants);
-    // This engine fetches natively (see installGlobals), not through the bun_wasm ABI.
-    native.hostCaps = Object.fromEntries(Object.keys(native.hostCaps || {}).map((k) => [k, false]));
+    // Networking: the bun_wasm ABI functions net.js calls (native.host*),
+    // implemented in JS by the host (o.net), not by wasm slots.
+    const net = this.o.net;
+    native.hostCaps = Object.fromEntries(Object.keys(native.hostCaps || {}).map((k) => [k, Boolean(net && net.caps[k])]));
+    if (net) {
+      Object.assign(native, net.natives);
+      net.onNews(() => this.schedule(0));
+    }
     native.engine = "host";
     Object.assign(native, this.valueNatives());
     return native;
@@ -516,7 +526,8 @@ class EngineHost {
       ),
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));
-    if (this.o.fetch) this.installFetch(this.o.fetch);
+    // Without a networking host, user code gets the host's own fetch.
+    if (this.o.fetch && !this.native.hostCaps.fetch) this.installFetch(this.o.fetch);
   }
 
   // User code gets the host's real fetch, adapted to the runtime's Response.
@@ -671,14 +682,18 @@ class EngineHost {
   // then decide when to come back.
   pump() {
     if (this.exited) return;
-    const next = this.guard(() => this.internal.runTimers(), 0);
-    if (this.o.debug) this.o.debug(`pump next=${next} pending=${this.pendingAsync}`);
+    let next = this.guard(() => this.internal.runTimers(), 0);
+    // Network handles (net.js waiters): step them; the networking host's
+    // onNews wakes the loop when something changes.
+    const io = this.guard(() => this.internal.ioPending(), 0);
+    if (io > 0 && this.guard(() => this.internal.pumpIo(), false) && next !== 0) next = 0;
+    if (this.o.debug) this.o.debug(`pump next=${next} pending=${this.pendingAsync} io=${io}`);
     this.flush();
     if (this.exited) return;
-    if (next >= 0 || this.pendingAsync > 0) this.idleWait = false;
+    if (next >= 0 || this.pendingAsync > 0 || io > 0) this.idleWait = false;
     if (next === 0) return this.schedule(0);
     if (next > 0) return this.schedule(next);
-    if (this.pendingAsync > 0) return undefined;
+    if (this.pendingAsync > 0 || io > 0) return undefined;
     // Chromium reports unhandled rejections in a later task: look once more
     // after one before deciding the program is done.
     if (!this.idleWait) {

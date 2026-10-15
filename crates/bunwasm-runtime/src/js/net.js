@@ -22,6 +22,8 @@
   function addWaiter(waiter) {
     if (waiter.ref === undefined) waiter.ref = true;
     waiters.add(waiter);
+    // A host-owned event loop (engine-host) steps waiters only when woken.
+    if (native.wake) native.wake(0);
     return waiter;
   }
 

@@ -20,10 +20,7 @@ for (const [name, type, ctx] of [["desktop-chromium", chromium, { viewport: { wi
   const page = await (await browser.newContext(ctx)).newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  // The Bun.serve preview below needs a wasm engine (the default browser engine has none).
-  const quickjs = new URL(url);
-  quickjs.searchParams.set("engine", "quickjs");
-  await page.goto(quickjs.href);
+  await page.goto(url);
   await waitFor(page, /user@bun:~\$/);
   const isolated = await page.evaluate(() => crossOriginIsolated);
   const t0 = Date.now();

@@ -128,8 +128,8 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
     LINES: String(term.rows),
     TMPDIR: "/tmp",
   };
-  // The browser engine uses the worker's own fetch; the ring is only for the wasm engines.
-  const net = isolated && engine !== "browser" ? createRing() : null;
+  // Networking (fetch through the helper, Bun.serve previews) needs a SharedArrayBuffer ring.
+  const net = isolated ? createRing() : null;
   const helper = net ? startNet(net, io) : null;
   const request: RunRequest = { engine, module: wasm.module, args: ["bun", ...args], env, root: fs.root, trace, net };
   const worker = new Worker("./worker.js", { type: "module" });
@@ -252,7 +252,7 @@ const shell = new Shell(term, {
 });
 
 function networkInfo(): string {
-  if (engine === "browser") return "the browser's own fetch (CORS applies); no Bun.serve previews";
+  if (!isolated && engine === "browser") return "the browser's own fetch (CORS applies); no Bun.serve previews (needs cross-origin isolation)";
   return isolated ? "fetch via the page; Bun.serve previews at ./__preview/<port>/" : "off (needs cross-origin isolation)";
 }
 

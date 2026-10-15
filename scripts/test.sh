@@ -162,7 +162,9 @@ for name in "${names[@]}"; do
   fi
 
   if [[ $engine == browser ]]; then
-    (cd "$work" && timeout 60 node --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --dir "$work::/" \
+    net_flag=()
+    [[ $is_host == 1 ]] && net_flag=(--net)
+    (cd "$work" && timeout 60 node --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" "${net_flag[@]}" --dir "$work::/" \
       --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   elif [[ $is_host == 1 ]]; then
