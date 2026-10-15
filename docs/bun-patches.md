@@ -106,7 +106,9 @@ vendored QuickJS-ng API. No upstream source is copied. The adapter now checks
 `JS_bunwasm_IsArrayBufferLike` before `ArrayBuffer::from_object`. The latter calls the throwing
 `JS_GetArrayBuffer` getter even for non-buffer objects and leaves a TypeError
 pending while returning None. Ordinary arrays and objects must cross the native
-boundary without creating an exception. The import-selector regression exposed
+boundary without creating an exception. Native Rust tests also require the
+WASI-only import in the original `host.rs` adapter to be target-gated; native
+builds report that import route unsupported rather than linking a WASI symbol. The import-selector regression exposed
 this on QuickJS; a native Rust regression also observes the pending exception.
 The original helper added to `third_party/rquickjs-sys/quickjs/quickjs.c` checks
 both ArrayBuffer and SharedArrayBuffer class tags without invoking a getter.
