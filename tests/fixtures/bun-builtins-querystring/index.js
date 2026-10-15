@@ -1,0 +1,20 @@
+import assert from "node:assert/strict";
+import querystring, { parse, stringify } from "node:querystring";
+
+Bun.gc(true);
+assert.equal(querystring, require("querystring"));
+assert.equal(parse, querystring.parse);
+assert.equal(stringify, querystring.stringify);
+assert.equal(querystring.escape("!'()*"), "!'()*");
+assert.equal(querystring.unescape("%C3%A9%ZZ"), "é%ZZ");
+assert.equal(querystring.unescapeBuffer("a+b%20c", true).toString(), "a b c");
+assert.equal(Object.getPrototypeOf(parse("__proto__=safe")), null);
+assert.equal(parse("__proto__=safe").__proto__, "safe");
+assert.deepEqual(parse("a=1&b=2", "&", "=", { maxKeys: -1 }), { __proto__: null, a: "1", b: "2" });
+assert.deepEqual(parse("a=1&b=2", "&", "=", { maxKeys: Infinity }), { __proto__: null, a: "1", b: "2" });
+assert.deepEqual(parse("a=1&b=2", "&", "=", { maxKeys: NaN }), { __proto__: null, a: "1", b: "2" });
+assert.deepEqual(parse("a:1||a:2", "||", ":"), { __proto__: null, a: ["1", "2"] });
+assert.deepEqual(parse("a=%C3%A9", "&", "=", { decodeURIComponent() { throw new Error("custom decoder"); } }), { __proto__: null, a: "é" });
+assert.equal(stringify({ q: "é", n: 12n }), "q=%C3%A9&n=12");
+assert.throws(() => querystring.escape("\uD800"), { code: "ERR_INVALID_URI" });
+console.log("Bun querystring passed");

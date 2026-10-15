@@ -36,11 +36,29 @@ def run(command, cwd):
         process.wait()
 
 
+def invoke(opts, wasm, scratch, file):
+    path = "test/js/node/test/parallel/" + file
+    script = ["run", "/" + path]
+    if opts.isolated_common:
+        script = ["-e", 'require.cache["/test/js/node/test/common/index.js"] = { exports: {} }; require(' + json.dumps("/" + path) + ');']
+    flags = ["--dir", f"{scratch}::/", "--env", "PWD=/", "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp", "--env", "BUNWASM_TEST=1"]
+    if opts.engine == "browser":
+        command = ["node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm)] + flags + ["--"] + script
+    else:
+        command = ["wasmtime", "run"] + flags + [str(wasm)] + script
+    started = time.monotonic()
+    record = run(command, scratch)
+    record.update({"file": path, "source_sha256": hashlib.sha256((scratch / path).read_bytes()).hexdigest(), "seconds": time.monotonic() - started})
+    print(f"{'PASS' if record['exit_code'] == 0 else 'FAIL'} {opts.engine} {file}", flush=True)
+    return record
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", choices=["quickjs", "jsc", "browser"], required=True)
     parser.add_argument("--dist", type=Path, default=ROOT / "dist")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--module", choices=["querystring", "punycode", "all"], default="all")
     parser.add_argument("--isolated-common", action="store_true", help="replace the unused Node common import with an empty fixture module")
     opts = parser.parse_args()
     filename = {"quickjs": "bun.wasm", "jsc": "bun-jsc.wasm", "browser": "bun-browser.wasm"}[opts.engine]
@@ -55,21 +73,8 @@ def main():
             tar.extractall(scratch, filter="tar")
         archive.unlink()
         (scratch / "tmp").mkdir()
-        for file in FILES:
-            path = "test/js/node/test/parallel/" + file
-            script = ["run", "/" + path]
-            if opts.isolated_common:
-                script = ["-e", 'require.cache["/test/js/node/test/common/index.js"] = { exports: {} }; require(' + json.dumps("/" + path) + ');']
-            flags = ["--dir", f"{scratch}::/", "--env", "PWD=/", "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp", "--env", "BUNWASM_TEST=1"]
-            if opts.engine == "browser":
-                command = ["node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm)] + flags + ["--"] + script
-            else:
-                command = ["wasmtime", "run"] + flags + [str(wasm)] + script
-            started = time.monotonic()
-            record = run(command, scratch)
-            record.update({"file": path, "source_sha256": hashlib.sha256((scratch / path).read_bytes()).hexdigest(), "seconds": time.monotonic() - started})
-            records.append(record)
-            print(f"{'PASS' if record['exit_code'] == 0 else 'FAIL'} {opts.engine} {file}", flush=True)
+        files = [file for file in FILES if opts.module == "all" or opts.module in file]
+        records = [invoke(opts, wasm, scratch, file) for file in files]
     result = {"engine": opts.engine, "isolated_common": opts.isolated_common, "suite_revision": subprocess.check_output(["git", "-C", str(suite), "rev-parse", "HEAD"], text=True).strip(), "wasm_sha256": hashlib.sha256(wasm.read_bytes()).hexdigest(), "files": len(records), "passing_files": sum(record["exit_code"] == 0 for record in records), "results": records}
     opts.output.parent.mkdir(parents=True, exist_ok=True)
     opts.output.write_text(json.dumps(result, indent=2) + "\n")
