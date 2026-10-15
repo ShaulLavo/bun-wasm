@@ -93,18 +93,23 @@
       try {
         while (!ended && (node._flowing || requested)) {
           requested = false;
-          const { done, value } = await reader.read();
-          if (done) { finish(); return; }
-          const chunk = options.objectMode || typeof value === "string" ? value : Buffer.from(internal.toUint8(value));
-          node.push(chunk);
-          if (node._flowing) node._flush();
-          else node.emit("readable");
+          if (!(await pullNext())) return;
         }
       } catch (error) {
         node.destroy(error);
       } finally {
         reading = false;
       }
+    }
+    async function pullNext() {
+      const { done, value } = await reader.read();
+      if (ended) return false;
+      if (done) { finish(); return false; }
+      const chunk = options.objectMode || typeof value === "string" ? value : Buffer.from(internal.toUint8(value));
+      node.push(chunk);
+      if (node._flowing) node._flush();
+      else node.emit("readable");
+      return true;
     }
     function finish() {
       ended = true;
