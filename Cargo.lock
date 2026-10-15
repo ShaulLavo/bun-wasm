@@ -1084,11 +1084,13 @@ dependencies = [
  "bun_bundler",
  "bun_js_printer",
  "bun_options_types",
+ "bun_parsers",
  "bun_sourcemap",
  "bun_sys",
  "bun_wyhash",
  "bunwasm-glue",
  "bunwasm-posix",
+ "serde_json",
 ]
 
 [[package]]

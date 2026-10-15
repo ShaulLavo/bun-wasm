@@ -5,6 +5,8 @@
 //! glue: TypeScript/JSX/JSON/TOML in, ESM JavaScript out.
 use std::cell::RefCell;
 
+pub mod data;
+
 use bun_alloc::Arena;
 use bun_ast::Loader as BunLoader;
 use bun_bundler::transpiler::{ParseOptions, Transpiler};
@@ -25,6 +27,9 @@ pub enum Loader {
     Tsx,
     Json,
     Toml,
+    Yaml,
+    Json5,
+    Jsonc,
     Text,
 }
 
@@ -37,6 +42,9 @@ impl Loader {
             Loader::Tsx => BunLoader::Tsx,
             Loader::Json => BunLoader::Json,
             Loader::Toml => BunLoader::Toml,
+            Loader::Yaml => BunLoader::Yaml,
+            Loader::Json5 => BunLoader::Json5,
+            Loader::Jsonc => BunLoader::Jsonc,
             Loader::Text => BunLoader::Text,
         }
     }
@@ -49,7 +57,10 @@ impl Loader {
             "jsx" => Loader::Jsx,
             "ts" | "mts" | "cts" => Loader::Ts,
             "tsx" => Loader::Tsx,
-            "json" | "jsonc" => Loader::Json,
+            "json" => Loader::Json,
+            "jsonc" => Loader::Jsonc,
+            "json5" => Loader::Json5,
+            "yaml" | "yml" => Loader::Yaml,
             "toml" => Loader::Toml,
             "txt" => Loader::Text,
             _ => return None,

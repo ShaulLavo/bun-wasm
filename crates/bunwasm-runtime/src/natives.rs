@@ -170,6 +170,11 @@ pub fn table(state: &Rc<State>) -> Table {
     install_fs(&mut t);
     install_fds(&mut t, state);
     install_modules(&mut t, state);
+    let st = state.clone();
+    t.add("parseData", move |a| {
+        st.transpiler.parse_data(a.bytes(0)?, a.str(1)?)
+            .map(Val::Str)
+    });
     crate::glob::install(&mut t);
     install_encoding(&mut t);
     install_crypto(&mut t);

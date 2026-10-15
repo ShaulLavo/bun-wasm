@@ -422,9 +422,10 @@
   const noProcesses = "WASI has no processes";
   const noNetwork = "WASI has no network access";
 
+  const { TOML, YAML, JSON5, JSONC } = internal.require("formats");
   const { Glob } = internal.require("glob");
   const Bun = {
-    Glob,
+    TOML, YAML, JSON5, JSONC, Glob, JSONL: internal.require("jsonl"),
     version: info.version,
     revision: info.revision,
     get argv() {

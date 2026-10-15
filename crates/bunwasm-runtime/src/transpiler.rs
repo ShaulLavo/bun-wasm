@@ -20,6 +20,9 @@ pub enum Loader {
     Tsx,
     Json,
     Toml,
+    Yaml,
+    Json5,
+    Jsonc,
     Text,
 }
 
@@ -31,7 +34,10 @@ impl Loader {
             "jsx" => Loader::Jsx,
             "ts" | "mts" | "cts" => Loader::Ts,
             "tsx" => Loader::Tsx,
-            "json" | "jsonc" => Loader::Json,
+            "json" => Loader::Json,
+            "jsonc" => Loader::Jsonc,
+            "json5" => Loader::Json5,
+            "yaml" | "yml" => Loader::Yaml,
             "toml" => Loader::Toml,
             "txt" | "md" | "html" | "css" | "svg" => Loader::Text,
             _ => Loader::Js,
@@ -48,6 +54,9 @@ impl fmt::Display for Loader {
             Loader::Tsx => "tsx",
             Loader::Json => "json",
             Loader::Toml => "toml",
+            Loader::Yaml => "yaml",
+            Loader::Json5 => "json5",
+            Loader::Jsonc => "jsonc",
             Loader::Text => "text",
         };
         f.write_str(name)
@@ -60,6 +69,10 @@ impl fmt::Display for Loader {
 /// settings lookups). Errors are returned as a human readable message, which
 /// the runtime throws as a `SyntaxError`-like error in JS.
 pub trait Transpiler {
+    fn parse_data(&self, _source: &[u8], format: &str) -> Result<String, crate::engine::NativeError> {
+        Err(crate::engine::NativeError::error(format!("{format}.parse needs Bun's parser, which this bun.wasm was built without")))
+    }
+
     fn transpile(&self, source: &str, path: &str, loader: Loader) -> Result<String, String>;
 
     /// Like [`Transpiler::transpile`], plus the source map v3 `mappings`

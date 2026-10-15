@@ -6,6 +6,8 @@ license.workspace = true
 description = "Bun's own Rust transpiler (vendor/bun) behind a small transpile() API"
 
 [dependencies]
+bun_parsers = { path = "../../vendor/bun/src/parsers" }
+serde_json = "1"
 bun_alloc = { path = "../../vendor/bun/src/bun_alloc" }
 bun_ast = { path = "../../vendor/bun/src/ast" }
 bun_bundler = { path = "../../vendor/bun/src/bundler" }

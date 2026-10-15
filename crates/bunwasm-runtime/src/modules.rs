@@ -223,6 +223,15 @@ impl State {
         let (code, format) = match loader {
             SourceLoader::Json => (raw, Format::Json),
             SourceLoader::Text => (raw, Format::Text),
+            SourceLoader::Jsonc => {
+                let value = if raw.trim().is_empty() {
+                    "{}".to_owned()
+                } else {
+                    format!("require('bun').JSONC.parse({})", serde_json::to_string(&raw).unwrap())
+                };
+                let source = format!("{CJS_WRAPPER_PREFIX} module.exports = {value}; }})");
+                (source, Format::Cjs)
+            }
             _ => {
                 let out = self
                     .transpiler
