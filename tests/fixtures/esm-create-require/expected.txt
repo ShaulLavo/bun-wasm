@@ -1,0 +1,3 @@
+root is a string: true
+require is a function: true
+json: 42 cjs: hello esm

@@ -128,10 +128,44 @@ fn has_top_level_await(source: &str) -> bool {
         .any(|line| !line.starts_with([' ', '\t', '}', ')', '/', '*']) && line.contains("await "))
 }
 
+/// Whether `source` binds `name` itself, so the prologue must not declare it
+/// again. Heuristic over the transpiled text: `const name`, `function name`,
+/// …, plus the forms Bun's printer produces when it merges declarations
+/// (`const a = 1, name = …`) or destructures (`const { name } = …`), and
+/// imports (`import { name }`, `import name from`). A false positive only
+/// skips the prologue binding.
 fn declares(source: &str, name: &str) -> bool {
-    ["const ", "let ", "var ", "function ", "class "]
+    let simple = ["const ", "let ", "var ", "function ", "class ", "import "]
         .iter()
-        .any(|kw| source.contains(&format!("{kw}{name}")) && declares_exactly(source, kw, name))
+        .any(|kw| source.contains(&format!("{kw}{name}")) && declares_exactly(source, kw, name));
+    simple || identifier_positions(source, name).any(|i| declared_at(source, i, name.len()))
+}
+
+/// `name` at byte `i` is a declarator in a list or pattern: preceded by `,`
+/// `{` or `[` and followed by `=` (not `==`/`=>`), `,`, `}`, `]` or `;`, inside a
+/// `const`/`let`/`var`/`import` statement.
+fn declared_at(source: &str, i: usize, len: usize) -> bool {
+    let before = source[..i].trim_end();
+    let after = source[i + len..].trim_start();
+    if !before.ends_with([',', '{', '[']) {
+        return false;
+    }
+    let follows = after.starts_with([',', '}', ']', ';']) || (after.starts_with('=') && !after.starts_with("==") && !after.starts_with("=>"));
+    if !follows {
+        return false;
+    }
+    // The statement this sits in starts with a declaration keyword.
+    let start = before.rfind([';', '\n']).map_or(0, |at| at + 1);
+    let statement = before[start..].trim_start();
+    ["const ", "let ", "var ", "import "].iter().any(|kw| statement.starts_with(kw))
+}
+
+fn identifier_positions<'a>(source: &'a str, name: &'a str) -> impl Iterator<Item = usize> + 'a {
+    let ident = |c: Option<char>| matches!(c, Some(c) if c.is_alphanumeric() || c == '_' || c == '$');
+    source.match_indices(name).map(|(i, _)| i).filter(move |&i| {
+        let before = source[..i].chars().next_back();
+        !ident(before) && !ident(source[i + name.len()..].chars().next()) && before != Some('.')
+    })
 }
 
 fn declares_exactly(source: &str, kw: &str, name: &str) -> bool {
@@ -355,5 +389,13 @@ mod tests {
         assert!(!uses_identifier("import.meta.require('x')", "require"));
         assert!(declares("const require = createRequire(1)", "require"));
         assert!(!declares("const requireX = 1", "require"));
+        // Bun's printer merges adjacent declarations.
+        assert!(declares("const root = 1, require = createRequire(import.meta.url);", "require"));
+        assert!(declares("const { require } = mod;", "require"));
+        assert!(declares("let a, require;", "require"));
+        assert!(declares("import { require } from \"m\";", "require"));
+        assert!(!declares("const a = 1;\nfoo(a, require);", "require"));
+        assert!(!declares("const x = { require: 1 };\nrequire('y');", "require"));
+        assert!(!declares("if (a == require) {}", "require"));
     }
 }
