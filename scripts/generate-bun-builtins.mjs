@@ -73,6 +73,10 @@ const catalog = names.map((name, id) => {
   const source = sources.get(name);
   return { id, name, file: fileNames[id], upstream: upstream(id), sourceSha256: hash(readFileSync(join(bun, "src/js", upstream(id)))), sha256: hash(source), ...describe(source) };
 });
+const expectedHooks = Number(readFileSync(join(build, "codegen/GeneratedJS2Native.h"), "utf8").match(/#define JS2NATIVE_COUNT (\d+)/)?.[1]);
+if (Object.keys(hooks).length !== expectedHooks || Array.from({ length: expectedHooks }, (_, id) => hooks[id]).some(name => !name)) {
+  throw new Error("Bun native-hook dispatch is not contiguous");
+}
 const errorsTree = ts.createSourceFile("ErrorCode.ts", readFileSync(join(bun, "src/jsc/bindings/ErrorCode.ts"), "utf8"), ts.ScriptTarget.Latest, true);
 const errorCodes = [];
 function collectErrors(node) {
