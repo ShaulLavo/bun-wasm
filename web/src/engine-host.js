@@ -247,7 +247,10 @@ class ExitSignal {
  * `bunwasm_ready() === 1`) on this JS engine.
  * @param {object} o
  * @param {WebAssembly.Instance} o.instance
- * @param {"blob" | "data"} o.moduleUrls  how module sources become importable URLs
+ * @param {"blob" | "data"} o.moduleUrls  how module sources become importable URLs without o.modules
+ * @param {{url(key: string): string, put(url: string, source: string): void | Promise<void>}} [o.modules]
+ *   a module store: named URLs the host's module loader serves from what was
+ *   put (a service worker, Node's module hooks). Needed for import cycles.
  * @param {(code: number) => void} o.onExit  called once when the program ends
  * @param {typeof fetch} [o.fetch]  the host's fetch, for user code when o.net has no fetch (else fetch rejects)
  * @param {{natives: object, caps: Record<string, boolean>, onNews(cb: () => void): void}} [o.net]
@@ -276,6 +279,8 @@ class EngineHost {
     // Module graph: key (path or builtin) -> URL; URL -> path for stack traces.
     this.urls = new Map();
     this.building = new Set();
+    // Pending writes to o.modules, awaited before the next import().
+    this.storing = [];
     this.paths = new Map();
     this.handoffs = new Map();
     this.asyncContext = undefined;
@@ -443,13 +448,39 @@ class EngineHost {
   }
 
   importKey(key) {
-    return this.track((async () => import(this.ensureModule(key)))());
+    return this.track(this.importReady(key));
+  }
+
+  /** Builds module `key` and its static dependencies, waits until the store has them, imports it. */
+  async importReady(key) {
+    const url = this.ensureModule(key);
+    if (this.storing.length > 0) await Promise.all(this.storing.splice(0));
+    return import(url);
   }
 
   /** The URL of module `key` (a path or a builtin name), built with its dependencies. */
   ensureModule(key) {
     const cached = this.urls.get(key);
     if (cached) return cached;
+    const store = this.o.modules;
+    if (store) {
+      // A named URL is known before its source exists, so import cycles link
+      // natively, with live bindings, like in Bun.
+      const url = store.url(key);
+      this.urls.set(key, url);
+      this.paths.set(url, key);
+      let source;
+      try {
+        source = this.moduleSource(key);
+      } catch (err) {
+        this.urls.delete(key);
+        throw err;
+      }
+      const write = store.put(url, source);
+      if (write) this.storing.push(write);
+      return url;
+    }
+    // Content URLs (blob:/data:) exist only once their source is final: no cycles.
     if (this.building.has(key)) {
       const err = new Error(`Circular ES module imports are not supported by the browser engine yet (${key})`);
       err.code = "ERR_CIRCULAR_IMPORT";
@@ -519,10 +550,7 @@ class EngineHost {
     });
     hidden("__bunwasm_dynamicImport", (from) => (spec) =>
       host.track(
-        (async () => {
-          const key = host.native.resolve(String(spec), from, false);
-          return import(host.ensureModule(key));
-        })(),
+        (async () => host.importReady(host.native.resolve(String(spec), from, false)))(),
       ),
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));

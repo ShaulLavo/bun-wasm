@@ -9,6 +9,7 @@
 // sockets, like crates/bunwasm-host; without it, network APIs are missing as
 // under plain wasmtime (fetch still works, through Node's fetch).
 import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
 import * as http from "node:http";
 import * as https from "node:https";
 import * as net from "node:net";
@@ -59,11 +60,25 @@ if (!instance.exports.bunwasm_ready || instance.exports.bunwasm_ready() !== 1) p
 // runtime's polyfills replace (Blob, TextEncoder, streams).
 await globalThis.fetch("data:,").catch(() => {});
 const nodeFetch = globalThis.fetch.bind(globalThis);
+
+// The program's ES modules: named bunwasm: URLs served from memory by
+// in-thread module hooks, so imports can form cycles (see engine-host.js).
+const PREFIX = "bunwasm:/m/";
+const sources = new Map();
+registerHooks({
+  resolve: (specifier, context, next) => (specifier.startsWith(PREFIX) ? { url: specifier, shortCircuit: true } : next(specifier, context)),
+  load: (url, context, next) => (url.startsWith(PREFIX) ? { format: "module", source: sources.get(url), shortCircuit: true } : next(url, context)),
+});
+const modules = {
+  url: (key) => PREFIX + encodeURIComponent(key),
+  put: (url, source) => void sources.set(url, source),
+};
 const { createNodeNet } = await import("./node-net.mjs");
 const { startEngineHost } = await import("../src/engine-host.js");
 await startEngineHost({
   instance,
   moduleUrls: "data",
+  modules,
   fetch: nodeFetch,
   net: withNet ? createNodeNet({ net, http, https, zlib }) : undefined,
   onExit(exitCode) {

@@ -6,6 +6,12 @@ export interface EngineHostOptions {
   instance: WebAssembly.Instance;
   /** How ES modules are loaded: blob: URLs in browsers, data: URLs in Node. */
   moduleUrls: "blob" | "data";
+  /**
+   * A module store: named URLs that the host's module loader serves from what was put (the
+   * service worker in the playground, module hooks in Node). Needed for import cycles; without it
+   * modules get `moduleUrls` URLs.
+   */
+  modules?: { url(key: string): string; put(url: string, source: string): void | Promise<void> };
   /** The fetch exposed to user code (without it, fetch rejects). */
   fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   /**

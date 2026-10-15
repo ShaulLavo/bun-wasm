@@ -1,0 +1,5 @@
+odd.mjs evaluated first
+even.mjs evaluated; odd.mjs said: even(2) = true
+even(10): true odd(7): true
+evenCalls is live: true
+self import: function
