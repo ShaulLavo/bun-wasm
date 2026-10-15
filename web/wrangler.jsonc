@@ -1,0 +1,8 @@
+{
+  // Public playground: static assets only (no Worker code), on a Custom Domain.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bun-wasm",
+  "compatibility_date": "2026-10-15",
+  "assets": { "directory": "./dist" },
+  "routes": [{ "pattern": "bun.sprockt.dev", "custom_domain": true }]
+}

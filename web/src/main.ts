@@ -63,30 +63,29 @@ function setStatus(text: string, kind: "" | "ok" | "error" = ""): void {
 async function loadWasm(): Promise<void> {
   try {
     setStatus("loading bun.wasm…");
-    const res = await fetch(wasmUrl);
+    // The site ships wasm gzipped (static hosts cap file sizes, and it is 3-4x smaller);
+    // the browser decompresses it. A plain .wasm URL (?wasm=...) still works.
+    const gzUrl = wasmUrl.endsWith(".gz") ? wasmUrl : `${wasmUrl}.gz`;
+    let res = await fetch(gzUrl);
+    const gzipped = res.ok;
+    if (!gzipped) res = await fetch(wasmUrl);
     if (!res.ok) throw new Error(`${wasmUrl}: HTTP ${res.status}`);
-    // serve.ts sends wasm gzipped; this header carries the size the reader will see.
-    const total = Number(res.headers.get("x-uncompressed-length") ?? res.headers.get("content-length")) || 0;
-    const chunks: Uint8Array[] = [];
+    const total = Number(res.headers.get("content-length")) || 0;
     let received = 0;
-    const reader = res.body!.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      setStatus(`loading bun.wasm… ${mb(received)}${total ? ` / ${mb(total)}` : ""}`);
-    }
-    const bytes = new Uint8Array(received);
-    let at = 0;
-    for (const c of chunks) {
-      bytes.set(c, at);
-      at += c.length;
-    }
-    setStatus(`compiling bun.wasm (${mb(received)})…`);
+    const progress = new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        received += chunk.length;
+        setStatus(`loading bun.wasm… ${mb(received)}${total ? ` / ${mb(total)}` : ""}`);
+        controller.enqueue(chunk);
+      },
+    });
+    let body = res.body!.pipeThrough(progress);
+    if (gzipped) body = body.pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>);
+    const bytes = new Uint8Array(await new Response(body).arrayBuffer());
+    setStatus(`compiling bun.wasm (${mb(bytes.length)})…`);
     const module = await WebAssembly.compile(bytes);
-    wasm = { module, size: received };
-    setStatus(`bun.wasm ready · ${engineName} · ${mb(received)}`, "ok");
+    wasm = { module, size: bytes.length };
+    setStatus(`bun.wasm ready · ${engineName} · ${mb(bytes.length)}`, "ok");
   } catch (err) {
     const missing = String(err).includes("HTTP 404");
     const error = missing

@@ -38,12 +38,16 @@ if (!sw.success) {
 }
 
 await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
+// Cloudflare Static Assets headers: cross-origin isolation (SharedArrayBuffer for
+// Atomics.wait sleeps and the networking bridge). serve.ts sends the same locally.
+await Bun.write(join(out, "_headers"), Bun.file(join(here, "_headers")));
 
 // Each wasm gets a .gz twin; serve.ts sends that when the browser accepts gzip.
 async function copyWasm(source: string, name: string): Promise<boolean> {
   if (!existsSync(source)) return false;
   const bytes = new Uint8Array(await Bun.file(source).arrayBuffer());
-  await Bun.write(join(out, name), bytes);
+  // Only the .gz ships: the page decompresses it, and static hosts cap file sizes
+  // (Cloudflare: 25 MiB; bun-jsc.wasm is 43 MB raw, 12 MB gzipped).
   await Bun.write(join(out, `${name}.gz`), Bun.gzipSync(bytes, { level: 9 }));
   console.log(`${name}: copied ${source} (${(statSync(source).size / 1024 / 1024).toFixed(1)} MB)`);
   return true;
