@@ -442,6 +442,7 @@
   };
 
   const Bun = {
+    jest: () => internal.require("bun_test").exports,
     semver,
     TOML, YAML, JSON5, JSONC, Glob, Cookie, CookieMap, JSONL: internal.require("jsonl"),
     version: info.version,
@@ -506,8 +507,8 @@
     $: unsupported("Bun.$", noProcesses),
     build,
     serve: native.hostCaps.listen ? (options) => internal.require("net").serve(options) : unsupported("Bun.serve", noNetwork),
-    listen: unsupported("Bun.listen", noNetwork),
-    connect: unsupported("Bun.connect", noNetwork),
+    listen: (options) => internal.require("net").bunTcp().listen(options),
+    connect: (options) => internal.require("net").bunTcp().connect(options),
     udpSocket: unsupported("Bun.udpSocket", noNetwork),
     dns: { lookup: unsupported("Bun.dns.lookup", noNetwork) },
     openInEditor: unsupported("Bun.openInEditor", noProcesses),

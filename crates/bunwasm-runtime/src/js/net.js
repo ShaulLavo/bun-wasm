@@ -72,6 +72,7 @@
     const Ctor = info.name === "TypeError" ? TypeError : Error;
     const err = new Ctor(info.message);
     if (info.code) err.code = info.code;
+    if (info.syscall) err.syscall = info.syscall;
     if (info.name && info.name !== "TypeError" && info.name !== "Error") err.name = info.name;
     return err;
   }
@@ -298,18 +299,21 @@
       this.reading = false;
       this.writer = null;
     }
+    get bufferedAmount() { return this.queue.reduce((size, item) => size + item.bytes.length, 0); }
     startReading() {
       if (this.reading || this.closed) return;
       this.reading = true;
       this.reader = addWaiter({
         step: () => this.pumpRead(),
         fail: (err) => this.fail(err),
+        ref: this.referenced !== false,
       });
     }
     pumpRead() {
       if (this.closed) return true;
       let progressed = false;
       for (;;) {
+        if (this.canRead && !this.canRead()) return progressed ? "progress" : false;
         const chunk = native.hostRead(this.handle);
         if (chunk === AGAIN) return progressed ? "progress" : false;
         if (typeof chunk === "number") {
@@ -326,14 +330,15 @@
         if (this.closed) return true;
       }
     }
-    write(bytes) {
+    write(bytes, callback) {
       if (this.closed || this.closing) return;
-      if (bytes.length > 0) this.queue.push(bytes);
+      this.queue.push({ bytes, callback });
       this.flush();
     }
     flush() {
       while (this.queue.length > 0) {
-        const chunk = this.queue[0];
+        const item = this.queue[0];
+        const chunk = item.bytes;
         const n = native.hostWrite(this.handle, chunk);
         if (n === AGAIN) {
           this.waitWritable();
@@ -343,8 +348,17 @@
           this.fail(hostError(this.handle, "write failed"));
           return false;
         }
-        if (n < chunk.length) this.queue[0] = chunk.subarray(n);
-        else this.queue.shift();
+        if (n < chunk.length) item.bytes = chunk.subarray(n);
+        else {
+          this.queue.shift();
+          if (item.callback) internal.nextTick(item.callback);
+        }
+      }
+      if (this._shutdown && !this.writeEnded) {
+        this.writeEnded = true;
+        const result = native.hostShutdown(this.handle);
+        if (result < 0) { this.fail(hostError(this.handle, "shutdown failed")); return false; }
+        if (this._shutdownCallback) internal.nextTick(this._shutdownCallback);
       }
       if (this.closing) this.destroy();
       return true;
@@ -352,6 +366,7 @@
     waitWritable() {
       if (this.writer) return;
       this.writer = addWaiter({
+        ref: this.referenced !== false,
         step: () => {
           if (this.closed) return true;
           const done = this.flush();
@@ -363,6 +378,16 @@
           return false;
         },
       });
+    }
+    ref(value) {
+      this.referenced = value;
+      if (this.reader) this.reader.ref = value;
+      if (this.writer) this.writer.ref = value;
+    }
+    shutdown(callback) {
+      this._shutdown = true;
+      this._shutdownCallback = callback;
+      this.flush();
     }
     // Close after queued bytes are written.
     end() {
@@ -732,6 +757,7 @@
     if (typeof callback === "function" && !running) internal.nextTick(() => callback(Object.assign(new Error("Server is not running."), { code: "ERR_SERVER_NOT_RUNNING" })));
     if (server.listening) {
       waiters.delete(server._accepting);
+      waiters.delete(server._starting);
       native.hostClose(server._listener);
       server.listening = false;
       server._closing = true;
@@ -920,24 +946,40 @@
         return this;
       }
       _onConnection(conn) {
-        trackServerConnection(this, conn);
         const peer = conn.peer();
-        const socket = { remoteAddress: peer.address, remotePort: peer.port, remoteFamily: peer.family, encrypted: protocol === "https:", destroy: () => conn.destroy(), setTimeout() {}, setNoDelay() {}, setKeepAlive() {}, on() {}, once() {} };
+        const { Socket } = internal.builtin("node:net");
+        const socket = new Socket();
+        socket._conn = conn;
+        socket._phase = "open";
+        socket._updatePeer();
+        socket.encrypted = protocol === "https:";
+        conn.onClose = () => socket.destroy();
+        trackServerConnection(this, conn);
         this.emit("connection", socket);
-        serveHttp(conn, (request, c, keepAlive) => new Promise((resolve) => {
+        serveHttp(conn, (request, c, keepAlive) => {
           const req = new IncomingMessage();
           req.method = request.method;
           req.url = request.target;
           req.httpVersion = request.version.slice(5);
           req.socket = req.connection = socket;
           setHeaderPairs(req, request.headers);
-          const res = new ServerResponse(c, req, keepAlive, resolve);
-          res.socket = res.connection = socket;
-          this.emit("request", req, res);
-          if (request.body.length) req.push(Buffer.from(request.body));
-          req.push(null);
-          req.complete = true;
-        }));
+          if (header(request.headers, "upgrade")) {
+            if (!this.listenerCount("upgrade")) { conn.destroy(); return false; }
+            conn.upgraded = { activate: head => {
+              socket._attach(conn);
+              this.emit("upgrade", req, socket, Buffer.from(head));
+            } };
+            return UPGRADED;
+          }
+          return new Promise(resolve => {
+            const res = new ServerResponse(c, req, keepAlive, resolve);
+            res.socket = res.connection = socket;
+            this.emit("request", req, res);
+            if (request.body.length) req.push(Buffer.from(request.body));
+            req.push(null);
+            req.complete = true;
+          });
+        });
       }
       address() {
         if (!this.listening) return null;
@@ -1007,6 +1049,7 @@
       }
       destroy(err) {
         this._aborted = true;
+        if (this.socket) this.socket.destroy();
         if (err) internal.nextTick(() => this.emit("error", err));
         return this;
       }
@@ -1016,7 +1059,40 @@
       setNoDelay() {}
       setSocketKeepAlive() {}
       flushHeaders() {}
+      _sendUpgrade() {
+        const options = this._options;
+        const net = internal.builtin("node:net");
+        const socket = options.createConnection ? options.createConnection(options) : net.connect({ host: options.hostname || options.host || "localhost", port: options.port || 80 });
+        this.socket = this.connection = socket;
+        this.emit("socket", socket);
+        socket.on("error", err => this.emit("error", err));
+        if (options.timeout) socket.setTimeout(options.timeout, () => this.emit("timeout"));
+        let buffer = new Uint8Array(0);
+        const receive = chunk => {
+          buffer = internal.concatBytes([buffer, chunk]);
+          const end = indexOfCrlfCrlf(buffer, 0);
+          if (end < 0) return;
+          socket.removeListener("data", receive);
+          const lines = latin1(buffer.subarray(0, end)).split("\r\n");
+          const status = /^HTTP\/1\.[01] (\d{3})(?: (.*))?$/.exec(lines.shift());
+          if (!status) { socket.destroy(new Error("Invalid HTTP response")); return; }
+          const msg = new IncomingMessage();
+          msg.statusCode = Number(status[1]);
+          msg.statusMessage = status[2] || "";
+          msg.socket = socket;
+          setHeaderPairs(msg, lines.map(line => { const colon = line.indexOf(":"); return [line.slice(0, colon), line.slice(colon + 1).trim()]; }));
+          const head = Buffer.from(buffer.subarray(end + 4));
+          if (msg.statusCode === 101) this.emit("upgrade", msg, socket, head);
+          else { this.emit("response", msg); socket.destroy(); }
+        };
+        socket.on("data", receive);
+        const headers = Object.assign({}, this._headers);
+        if (!Object.keys(headers).some(key => key.toLowerCase() === "host")) headers.Host = `${options.hostname || options.host || "localhost"}:${options.port || 80}`;
+        const lines = [`${this.method} ${this.path} HTTP/1.1`].concat(Object.keys(headers).map(key => `${key}: ${headers[key]}`), ["", ""]);
+        socket.write(lines.join("\r\n"));
+      }
       async _send() {
+        if (Object.keys(this._headers).some(key => key.toLowerCase() === "upgrade")) return this._sendUpgrade();
         const o = this._options;
         const url = o.href || `${o.protocol || protocol}//${o.hostname || o.host || "localhost"}${o.port ? ":" + o.port : ""}${this.path}`;
         const body = this._chunks.length ? internal.concatBytes(this._chunks) : undefined;
@@ -1085,168 +1161,11 @@
   // --- node:net -----------------------------------------------------------------
 
   function nodeNet() {
-    const EventEmitter = internal.require("events");
-    const { Buffer } = internal.require("buffer");
-
-    class Socket extends EventEmitter {
-      constructor(conn) {
-        super();
-        this._conn = conn || null;
-        this._encoding = null;
-        this.remoteAddress = undefined;
-        this.remotePort = undefined;
-        this.destroyed = false;
-        if (conn) this._attach(conn);
-      }
-      _attach(conn) {
-        this._conn = conn;
-        const peer = conn.peer();
-        this.remoteAddress = peer.address;
-        this.remotePort = peer.port;
-        this.remoteFamily = peer.family;
-        conn.onData = (chunk) => this.emit("data", this._encoding ? Buffer.from(chunk).toString(this._encoding) : Buffer.from(chunk));
-        conn.onEnd = () => {
-          this.emit("end");
-          this.destroy();
-        };
-        conn.onError = (err) => {
-          this.emit("error", err);
-          this.destroy();
-        };
-        conn.onClose = () => {
-          if (this.destroyed) return;
-          this.destroyed = true;
-          internal.nextTick(() => this.emit("close", false));
-        };
-        conn.startReading();
-      }
-      connect(...args) {
-        const callback = typeof args[args.length - 1] === "function" ? args.pop() : null;
-        const opts = typeof args[0] === "object" ? args[0] : { port: args[0], host: args[1] };
-        const handle = native.hostConnect(opts.host || "localhost", Number(opts.port));
-        if (handle < 0) {
-          const err = hostError(0, "connect failed");
-          internal.nextTick(() => this.emit("error", err));
-          return this;
-        }
-        if (callback) this.once("connect", callback);
-        this._attach(new Connection(handle));
-        internal.nextTick(() => {
-          // The peer is known once connected.
-          const peer = this._conn.peer();
-          if (peer.port) Object.assign(this, { remoteAddress: peer.address, remotePort: peer.port, remoteFamily: peer.family });
-          this.emit("connect");
-          this.emit("ready");
-        });
-        return this;
-      }
-      setEncoding(enc) {
-        this._encoding = enc;
-        return this;
-      }
-      // Sockets always flow; pause/resume exist for stream-style callers.
-      pause() {
-        return this;
-      }
-      resume() {
-        return this;
-      }
-      get localPort() {
-        return this._conn ? native.hostLocalPort(this._conn.handle) : undefined;
-      }
-      write(data, encoding, cb) {
-        if (typeof encoding === "function") cb = encoding;
-        this._conn.write(typeof data === "string" ? Buffer.from(data, typeof encoding === "string" ? encoding : "utf8") : internal.toUint8(data));
-        if (typeof cb === "function") internal.nextTick(cb);
-        return true;
-      }
-      end(data, encoding, cb) {
-        if (typeof data === "function") cb = data;
-        else if (data !== undefined && data !== null) this.write(data, encoding);
-        this._conn.end();
-        if (typeof cb === "function") internal.nextTick(cb);
-        return this;
-      }
-      destroy(err) {
-        if (this.destroyed) return this;
-        this.destroyed = true;
-        if (this._conn) this._conn.destroy();
-        internal.nextTick(() => {
-          if (err) this.emit("error", err);
-          this.emit("close", Boolean(err));
-        });
-        return this;
-      }
-      setTimeout() {
-        return this;
-      }
-      setNoDelay() {
-        return this;
-      }
-      setKeepAlive() {
-        return this;
-      }
-      ref() {
-        return this;
-      }
-      unref() {
-        return this;
-      }
-      address() {
-        return { port: this._conn ? native.hostLocalPort(this._conn.handle) : 0 };
-      }
-    }
-
-    class Server extends EventEmitter {
-      constructor(options, listener) {
-        super();
-        if (typeof options === "function") listener = options;
-        if (listener) this.on("connection", listener);
-        this.listening = false;
-        this._connections = new Set();
-      }
-      listen(...args) {
-        const callback = typeof args[args.length - 1] === "function" ? args.pop() : null;
-        const opts = args[0] !== null && typeof args[0] === "object" ? args[0] : { port: args[0], host: typeof args[1] === "string" ? args[1] : undefined };
-        if (callback) this.once("listening", callback);
-        try {
-          this._listener = listenOrThrow(opts.host || "0.0.0.0", Number(opts.port || 0));
-        } catch (err) {
-          internal.nextTick(() => this.emit("error", err));
-          return this;
-        }
-        this._port = native.hostLocalPort(this._listener);
-        this.listening = true;
-        this._accepting = acceptLoop(this._listener, (conn) => {
-          const socket = new Socket(conn);
-          trackServerConnection(this, conn);
-          this.emit("connection", socket);
-        });
-        internal.nextTick(() => this.emit("listening"));
-        return this;
-      }
-      address() {
-        return this.listening ? { address: "0.0.0.0", family: "IPv4", port: this._port } : null;
-      }
-      close(callback) {
-        return closeNodeServer(this, callback, false);
-      }
-      [Symbol.asyncDispose]() {
-        return disposeNodeServer(this, true);
-      }
-      ref() {
-        return this;
-      }
-      unref() {
-        if (this._accepting) this._accepting.ref = false;
-        return this;
-      }
-    }
-
-    const connect = (...args) => new Socket().connect(...args);
-    return { Socket, Server, Stream: Socket, createServer: (o, l) => new Server(o, l), connect, createConnection: connect };
+    return internal.require("node_net")({ Connection, addWaiter, waiters, hostError, listenOrThrow, acceptLoop, trackServerConnection, closeNodeServer, disposeNodeServer });
   }
 
+  function bunTcp() { return internal.require("bun_tcp")({ Connection, listenOrThrow, acceptLoop, waiters }); }
+
   const WebSocket = internal.require("websocket").clientClass(Connection);
-  return { fetch, serve, nodeHttp, nodeNet, caps, WebSocket };
+  return { fetch, serve, nodeHttp, nodeNet, bunTcp, caps, WebSocket };
 })

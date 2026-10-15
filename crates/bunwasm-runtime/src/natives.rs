@@ -769,6 +769,8 @@ fn install_host(t: &mut Table) {
     });
     t.add("hostFetchHead", |a| text_or_code(host::fetch_head(a.i32(0)?)));
     t.add("hostError", |a| text_or_code(host::error(a.i32(0)?)));
+    t.add("hostShutdown", |a| Ok(host::shutdown(a.i32(0)?).into()));
+    t.add("hostLocalAddr", |a| text_or_code(host::local_addr(a.i32(0)?)));
     t.add("hostPeerAddr", |a| text_or_code(host::peer_addr(a.i32(0)?)));
     t.add("hostRead", |a| {
         let cap = a.opt_num(1).unwrap_or(65536.0).max(1.0) as usize;

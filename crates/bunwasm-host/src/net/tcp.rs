@@ -49,6 +49,7 @@ pub fn addr_json(addr: SocketAddr) -> Vec<u8> {
 pub struct Listener {
     shared: Arc<ListenerShared>,
     port: u16,
+    local: SocketAddr,
     /// Where to connect to wake the accept thread when closing.
     wake: SocketAddr,
     thread: Option<JoinHandle<()>>,
@@ -102,8 +103,10 @@ impl Listener {
         let accept_shared = shared.clone();
         let thread = spawn("bun-wasm-accept", move || accept_loop(listener, accept_shared, notify))
             .map_err(|e| socket_error("listen", &e, &target))?;
-        Ok(Listener { shared, port: local.port(), wake, thread: Some(thread) })
+        Ok(Listener { shared, port: local.port(), local, wake, thread: Some(thread) })
     }
+
+    pub fn local_addr(&self) -> SocketAddr { self.local }
 
     pub fn port(&self) -> u16 {
         self.port
@@ -166,6 +169,7 @@ struct ConnState {
     want_writable: bool,
     /// The guest closed the handle: flush, then shut down.
     closed: bool,
+    write_shutdown: bool,
     /// The writer thread finished (flushed or failed).
     done: bool,
     error: Option<ErrorInfo>,
@@ -203,6 +207,7 @@ impl Conn {
             send: ByteQueue::default(),
             want_writable: false,
             closed: false,
+            write_shutdown: false,
             done: false,
             error: None,
         };
@@ -259,6 +264,9 @@ impl Conn {
             }
             Phase::Open => {}
         }
+        if state.write_shutdown || state.closed {
+            return ERROR;
+        }
         if data.is_empty() {
             return 0;
         }
@@ -272,6 +280,13 @@ impl Conn {
         drop(state);
         self.shared.wake.notify_all();
         n as i32
+    }
+
+    pub fn local_addr(&self) -> Option<SocketAddr> { self.shared.state.lock().unwrap().local }
+
+    pub fn shutdown(&self) {
+        self.shared.state.lock().unwrap().write_shutdown = true;
+        self.shared.wake.notify_all();
     }
 
     pub fn close(&self) {
@@ -397,7 +412,7 @@ fn write_loop(shared: &ConnShared, mut stream: TcpStream) {
     loop {
         let n = {
             let mut state = shared.state.lock().unwrap();
-            while state.send.is_empty() && !state.closed {
+            while state.send.is_empty() && !state.closed && !state.write_shutdown {
                 state = shared.wake.wait(state).unwrap();
             }
             if state.send.is_empty() {

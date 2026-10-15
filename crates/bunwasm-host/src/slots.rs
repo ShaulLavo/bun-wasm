@@ -11,9 +11,9 @@ use crate::Host;
 use crate::net::Output;
 
 const ABI_VERSION: u32 = 1;
-const SLOT_NAMES: [&str; 16] = [
+const SLOT_NAMES: [&str; 18] = [
     "poll", "fetch", "fetch_head", "read", "write", "close", "listen", "local_port", "accept", "connect", "error",
-    "peer_addr", "spawn", "child_wait", "child_pipe", "child_kill",
+    "peer_addr", "spawn", "child_wait", "child_pipe", "child_kill", "shutdown", "local_addr",
 ];
 
 /// Fills the guest's slot table. A bun.wasm without the export (older
@@ -211,6 +211,10 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, id: i32| caller.data_mut().processes.wait(id)),
         Func::wrap(&mut *store, |caller: Caller<'_, Host>, id: i32, fd: i32| caller.data().processes.child_pipe(id, fd)),
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, id: i32, signal: i32| caller.data_mut().processes.kill(id, signal)),
+        Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, id: i32| caller.data_mut().net.shutdown(id)),
+        Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, id: i32, buf: i32, cap: i32| {
+            with_memory(&mut caller, |memory, host| put(memory, buf, cap, host.net.local_addr(id)))
+        }),
     ]
 }
 
