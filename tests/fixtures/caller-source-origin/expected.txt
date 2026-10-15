@@ -1,0 +1,6 @@
+top true
+helper true
+cjs true
+encoded true
+await true
+timer true

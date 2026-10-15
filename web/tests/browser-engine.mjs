@@ -6,6 +6,7 @@
 import { checkPhoneUI } from "./phone-ui.mjs";
 import { firstVisit } from "./first-visit.mjs";
 import { playwright, ready, run, session, terminalText, writeFile } from "./playground.mjs";
+import { readFileSync, readdirSync } from "node:fs";
 
 const { chromium, webkit, devices } = playwright;
 const s = session("bun-wasm-web-engine-");
@@ -59,6 +60,13 @@ async function checkPage(name, page, visit, fixtureBase) {
   await writeFile(page, `${HOME}/lib/greet.ts`, `export interface Who { name: string }\nexport const greet = ({ name }: Who): string => \`hi \${name}\`;\nexport default 42;\n`);
   await writeFile(page, `${HOME}/app.ts`, `import answer, { greet, type Who } from "./lib/greet";\nconst who: Who = { name: "ts" };\nconsole.log(greet(who), answer satisfies number);\n`);
   await expectRun(page, `${name}: TS file importing another file`, "bun run app.ts", 0, ["hi ts 42"]);
+
+  const callerFixture = new URL("../../tests/fixtures/caller-source-origin/", import.meta.url);
+  for (const file of readdirSync(callerFixture).filter((file) => /\.[cm]?js$/.test(file))) {
+    await writeFile(page, `${HOME}/caller-origin/${file}`, readFileSync(new URL(encodeURIComponent(file), callerFixture), "utf8"));
+  }
+  const callerOutput = readFileSync(new URL("expected.txt", callerFixture), "utf8").trim().split("\n");
+  await expectRun(page, `${name}: caller source origin across modules and callbacks`, "bun run caller-origin/index.js", 0, callerOutput);
 
   // An import cycle with a hoisted function called before its module evaluated (the browser engine
   // needs the service worker's named module URLs for this).
