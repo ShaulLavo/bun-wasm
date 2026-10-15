@@ -50,6 +50,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/assert.js`](#node-assertions) | Port | Adapt assertion helpers and messages to the local inspector and equality implementation. |
 | [`crates/bunwasm-runtime/src/js/bun_sqlite.js`](#bun-sqlite) | Port | Move Bun's SQLite wrapper and inherited transaction code onto Rust SQLite natives. |
 | [`crates/bunwasm-runtime/src/js/array_buffer_sink.js`](#bun-array-buffer-sink) | Port | Adapt Bun's byte sink lifecycle and option parsing to engine-owned typed arrays. |
+| [`web/src/engine-host.js`, GC hook](#host-gc-hook) | Host feature | Capture host GC before guest code replaces globals. Original adapter. |
 | [`crates/bunwasm-runtime/src/js/cookie.js`](#bun-cookies) | Port | Translate Bun's cookie parsing, validation, and binding behavior. |
 | [`crates/bunwasm-runtime/src/js/string_decoder.js`](#node-string-decoder) | Port | Translate Node's chunk-decoder state machine to JavaScript. |
 | [`crates/bunwasm-runtime/src/js/bun_test.js`, diff formatting](#bun-test-diff-formatting) | Port | Translate Bun's colorless diff rendering around a local line differ. |
@@ -413,6 +414,14 @@ The watermark remains an allocation hint and causes no eager reservation in this
 The callable constructor and private JavaScript storage are original binding adapters.
 The unsupported GC-tuning member is absent from `Bun.unsafe`, so the upstream harness's
 capability check can run byte-content tests without requesting unavailable GC controls.
+
+### Host GC hook
+
+Class **Host feature**. Original host adapter. Capture an exposed host collector before
+installing guest globals. Bun's `test/harness.ts` at revision
+`9510e74152073d850a18758ca41114d8f214ffa6` replaces global `gc` with a call to `Bun.gc`;
+looking up that guest wrapper from the host hook recurses. Hosts without an exposed collector
+still cannot force collection. No upstream implementation is copied.
 
 ### Bun cookies
 

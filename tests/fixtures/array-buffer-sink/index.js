@@ -50,3 +50,6 @@ for (const key of ["highWaterMark", "asUint8Array", "stream"]) {
   catch (error) { rejected = /already been closed/.test(error.message); }
   check("reentrant " + key, rejected);
 }
+globalThis.gc = () => Bun.gc(true);
+gc();
+check("host GC ignores guest wrapper", true);

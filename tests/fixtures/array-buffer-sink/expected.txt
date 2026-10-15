@@ -20,3 +20,4 @@ close is idempotent
 reentrant highWaterMark
 reentrant asUint8Array
 reentrant stream
+host GC ignores guest wrapper
