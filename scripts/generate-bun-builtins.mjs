@@ -78,16 +78,14 @@ if (Object.keys(hooks).length !== expectedHooks || Array.from({ length: expected
   throw new Error("Bun native-hook dispatch is not contiguous");
 }
 const errorsTree = ts.createSourceFile("ErrorCode.ts", readFileSync(join(bun, "src/jsc/bindings/ErrorCode.ts"), "utf8"), ts.ScriptTarget.Latest, true);
-const errorCodes = [];
+let errorCodes = [];
+function codesForErrorRow(row) {
+  const code = row.elements[0].text;
+  const alternates = row.elements.slice(3).filter(node => node.kind !== ts.SyntaxKind.NullKeyword && node.text !== "undefined");
+  return [code].concat(alternates.map(() => code));
+}
 function collectErrors(node) {
-  if (ts.isVariableDeclaration(node) && node.name.text === "errors") {
-    for (const row of node.initializer.elements) {
-      errorCodes.push(row.elements[0].text);
-      for (const alternate of row.elements.slice(3)) {
-        if (alternate.kind !== ts.SyntaxKind.NullKeyword && alternate.text !== "undefined") errorCodes.push(row.elements[0].text);
-      }
-    }
-  }
+  if (ts.isVariableDeclaration(node) && node.name.text === "errors") errorCodes = node.initializer.elements.flatMap(codesForErrorRow);
   ts.forEachChild(node, collectErrors);
 }
 collectErrors(errorsTree);

@@ -87,4 +87,20 @@ The catalog is the complete hook inventory. The following groups block the next 
 
 `scripts/generate-bun-builtins.sh --check` repeats Bun's codegen and checks the committed generated outputs. `scripts/test-bun-builtins.sh` runs the generated FreeList factory and loader behavior on all three actual engines. It checks lazy initialization, identity, independent runtime caches, failed initialization retry, cycles, private symbols, direct property writes, intrinsic call immunity, and explicit failures for unavailable intrinsics and native hooks. Its injected native table isolates the loader. `scripts/bun-builtins-node.py` separately runs the upstream Node assertion scripts omitted by the bun:test filename census. `--isolated-common` supplies an empty common-module fixture for these five files, whose common imports are unused, to measure their assertions despite unrelated Node test-harness dependencies. It does not count as an unchanged full-harness suite pass. The full runtime gates separately exercise the Rust native registrations.
 
-Size, startup, upstream-suite comparisons, and gate results are recorded per PR. A passing fixture suite does not establish Bun's entire upstream compatibility.
+`scripts/measure-bun-builtins.py --before <old-dist> --after <new-dist> --output <report.json>` records byte sizes, gzip sizes, artifact hashes, and the raw startup samples. Run it through the host's benchmark slot. Size, startup, upstream-suite comparisons, and gate results are recorded per PR. A passing fixture suite does not establish Bun's entire upstream compatibility.
+
+## Loader mechanism measurements
+
+The loader-only artifact passes 87 of 87 runtime fixtures on each engine. Its generated FreeList and loader checks also pass on each engine. Public module implementations are unchanged in this measurement.
+
+Before artifacts are frozen copies of the shared dist files at lane start. After artifacts are rebuilt from this branch with the repository's existing patch 0009 applied in a private Bun worktree. The shared vendor was missing that committed patch. No new upstream patch was created. The private vendor uses the shared generated build options read-only.
+
+Startup is wall time for an empty `-e 0` process. Seven sequential runs use wasmtime for QuickJS and JSC, and Node's host engine for browser. The first run is discarded. The table reports the median of the remaining six on this shared host. Sub-millisecond differences do not establish a speed improvement.
+
+| Engine | Wasm bytes before | Wasm bytes after | Gzip-9 bytes before | Gzip-9 bytes after | Startup median ms before | Startup median ms after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| quickjs | 10,859,284 | 10,896,154 | 3,813,786 | 3,827,117 | 55.15 | 56.01 |
+| jsc | 46,219,559 | 46,255,962 | 12,853,644 | 12,864,745 | 169.05 | 169.67 |
+| browser | 10,138,476 | 10,142,916 | 3,520,240 | 3,521,525 | 71.25 | 70.49 |
+
+Raw startup samples, artifact hashes, upstream results, command logs, and cleanup evidence are retained in `/work/reports/bun-wasm-builtins/` for coordinator review.
