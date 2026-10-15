@@ -1512,12 +1512,17 @@
     const offset = start + caller.column - 1;
     const lineEnd = file.source.indexOf("\n", start);
     const sites = file.inlineSites.filter((site) => site.name >= start && site.name <= (lineEnd < 0 ? file.source.length : lineEnd));
-    sites.sort((a, b) => Math.abs(a.name - offset) - Math.abs(b.name - offset));
+    sites.sort((a, b) => inlineSiteDistance(a, offset) - inlineSiteDistance(b, offset));
     const site = sites[0];
     if (!site) throw new Error(`Failed to update inline snapshot: no matcher at ${caller.file}:${caller.line}:${caller.column}`);
     const previous = file.inlineWrites.get(site.name);
     if (previous && previous.text !== prepared.text) throw new Error("Failed to update inline snapshot: Multiple inline snapshots at the same call must all have the same value");
     file.inlineWrites.set(site.name, { site, text: prepared.text, properties: prepared.properties !== undefined });
+  }
+
+  function inlineSiteDistance(site, offset) {
+    if (offset < site.name) return site.name - offset;
+    return Math.max(0, offset - site.close - 1);
   }
 
   function inlineSnapshotSites(source) {
@@ -1561,7 +1566,11 @@
     const escaped = escapeSnapshot(text);
     const value = text.includes("\n") ? "`" + escaped.split("\n").map((line, i, lines) => i === 0 ? line : (i === lines.length - 1 ? indent : indent + "  ") + line).join("\n") + "`" : "`" + escaped + "`";
     const target = site.arguments[properties ? 1 : 0];
-    if (target) return { start: target.start, end: target.end, value };
+    if (target) {
+      const tokens = snapshotTokens(source.slice(target.start, target.end));
+      if (tokens.length !== 1 || !/^["'`]/.test(tokens[0].text)) throw new Error("Failed to update inline snapshot: Argument must be a string literal");
+      return { start: target.start, end: target.end, value };
+    }
     const trailingComma = site.commas.length > 0 && site.commas.length === site.arguments.length;
     return { start: site.close, end: site.close, value: (properties ? (trailingComma ? " " : ", ") : "") + value };
   }

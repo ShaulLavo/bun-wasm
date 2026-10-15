@@ -1,6 +1,7 @@
 missing CI 1 true true
 missing CI contents true
 create 0 true true true
+same line true true
 existing CI 0
 mismatch 1 true true
 update short 0 true true

@@ -15,6 +15,7 @@ test("saved", () => {
   expect({ id: 42 }).toMatchInlineSnapshot({ id: expect.any(Number) });
   expect("file one").toMatchSnapshot();
 });
+test("same line", () => { expect("first").toMatchInlineSnapshot(); expect("second").toMatchInlineSnapshot(); });
 `;
 make("ci", source);
 const ci = run("ci", { CI: "true" });
@@ -26,6 +27,7 @@ const first = run("saved", { CI: "false", GITHUB_ACTIONS: "true" });
 const createdSource = read("saved/case.test.js");
 const createdFile = read("saved/__snapshots__/case.test.js.snap");
 console.log("create", first.code, createdSource.includes('"n": 1,'), createdSource.includes('"id": Any<Number>,'), createdFile.includes('exports[`saved 3`] = `"file one"`;'));
+console.log("same line", createdSource.includes('toMatchInlineSnapshot(`"first"`)'), createdSource.includes('toMatchInlineSnapshot(`"second"`)'));
 console.log("existing CI", run("saved", { CI: "true" }).code);
 writeFileSync("saved/case.test.js", createdSource.replace("n: 1", "n: 2").replace("file one", "file two"));
 const mismatchSource = read("saved/case.test.js");
