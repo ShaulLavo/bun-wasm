@@ -30,7 +30,10 @@ The machine has ~9 GB free RAM: use `cargo build -j 12` or less for big builds.
 
 ## Rules
 
-- Every new patch to Bun or vendored source gets a row in `docs/bun-patches.md` with its class in the same PR.
+- Every new or changed upstream patch, copied file, or adapted implementation gets a classified
+  overview row and section in `docs/bun-patches.md` in the same PR. This covers Bun, Node, WebKit,
+  and other upstreams, including source outside vendor directories. Record the upstream path and
+  revision, local changes, and reasons. Identify original adapters separately.
 
 - Patches to Bun go in vendor/bun on branch `wasm` as commits, then export:
   `scripts/export-patches.sh`. Keep them minimal: add `target_os = "wasi"` arms, don't rewrite.

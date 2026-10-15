@@ -1,6 +1,10 @@
-# Changes to Bun and vendored dependencies
+# Changes to Bun and other upstream source
 
-This ledger covers the Bun patch series and all other local changes to third-party source at this revision. Bun is pinned to `9510e74152073d850a18758ca41114d8f214ffa6` by `scripts/sync-bun.sh`. WebKit is Bun's fork at `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`, pinned in `jsc/common.sh`.
+This ledger covers the Bun patch series, local changes to vendored dependencies, and copied or adapted upstream source outside vendor directories at this revision. Bun is pinned to `9510e74152073d850a18758ca41114d8f214ffa6` by `scripts/sync-bun.sh`. WebKit is Bun's fork at `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`, pinned in `jsc/common.sh`.
+
+Copied implementations include translations into another language and fragments retained inside otherwise original files. Generated upstream bundles and copied data tables are also listed. Directory names do not determine provenance.
+
+Original adapters that call upstream APIs, implement the same public contract, or reproduce observed output without retaining an upstream implementation are bun-wasm source. They do not get a fork entry merely for being inspired by Bun or Node. Mixed files below identify the adapted portions separately from original host code.
 
 Each row has one class. A file with independent changes has separate rows.
 
@@ -32,6 +36,24 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/sync-bun.sh`, generated linker config](#nested-bun-dependencies) | Port | Remove Bun configure's generated host linker override. |
 | [`vendor/bun/vendor/rust-argon2`, inherited patch](#nested-bun-dependencies) | Host feature | Preserve Bun's low-memory Argon2 hash verification behavior. |
 | [`crates/bunwasm-glue/src/bun_native.rs`](#copied-and-generated-bun-source) | Port | Replace standalone parser base64 and zlib stubs with working Rust implementations. |
+| [`crates/bunwasm-build/src/lib.rs`](#build-command) | Port | Extract Bun's build command from its JSC runtime. |
+| [`crates/bunwasm-build/src/dev_server/facade.rs`, `crates/bunwasm-build/src/dev_server/graph.rs`, `crates/bunwasm-build/src/dev_server/finalize.rs`](#bake-graph-adaptations) | Port | Adapt bake's graph owner, context types, and bundle finalization to synchronous WASI. |
+| [`crates/bunwasm-build/generated/bake.client.js`, `crates/bunwasm-build/generated/bake.error.js`](#generated-bake-clients) | Port | Embed Bun's generated browser HMR client and error overlay. |
+| [`crates/bunwasm-transpiler/src/lib.rs`, source-map collector](#transpiler-source-map-collector) | Port | Retain Bun's small printer callback outside its runtime crate. |
+| [`crates/bunwasm-runtime/src/js/inspect.js`, Bun formatter](#bun-console-formatter) | Port | Translate Bun's formatter and property enumeration to JavaScript. |
+| [`crates/bunwasm-runtime/src/js/inspect.js`, Node formatter](#node-inspection) | Port | Adapt Bun's Node inspection implementation to ordinary engine intrinsics. |
+| [`crates/bunwasm-runtime/src/js/inspect.js`, host hooks](#inspection-host-hooks) | Host feature | Let the host expose promise, proxy, namespace, and iterator state. |
+| [`crates/bunwasm-runtime/src/js/path.js`](#node-path) | Port | Adapt Node's POSIX path implementation to the guest filesystem. |
+| [`crates/bunwasm-runtime/src/js/buffer.js`](#node-buffer-fragments) | Port | Adapt Node Buffer construction and concatenation routines over typed arrays. |
+| [`crates/bunwasm-runtime/src/js/events.js`](#node-event-emitter) | Port | Adapt Node listener bookkeeping without native async hooks. |
+| [`crates/bunwasm-runtime/src/js/util.js`](#node-utility-fragments) | Port | Adapt argument parsing, comparison helpers, and inspection tables. |
+| [`crates/bunwasm-runtime/src/js/assert.js`](#node-assertions) | Port | Adapt assertion helpers and messages to the local inspector and equality implementation. |
+| [`crates/bunwasm-runtime/src/js/bun_sqlite.js`](#bun-sqlite) | Port | Move Bun's SQLite wrapper and inherited transaction code onto Rust SQLite natives. |
+| [`crates/bunwasm-runtime/src/js/cookie.js`](#bun-cookies) | Port | Translate Bun's cookie parsing, validation, and binding behavior. |
+| [`crates/bunwasm-runtime/src/js/string_decoder.js`](#node-string-decoder) | Port | Translate Node's chunk-decoder state machine to JavaScript. |
+| [`crates/bunwasm-runtime/src/js/bun_test.js`, diff formatting](#bun-test-diff-formatting) | Port | Translate Bun's colorless diff rendering around a local line differ. |
+| [`crates/bunwasm-runtime/src/js/node_url.js`](#node-url-helpers) | Port | Adapt Node URL helpers around the local URL implementation. |
+| [`crates/bunwasm-runtime/src/js/builtins.js`, `crates/bunwasm-runtime/src/js/net.js`, HTTP tables](#http-status-tables) | Port | Retain HTTP status data separately from the original networking adapters. |
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
 
 ## Bun patch series
@@ -284,7 +306,123 @@ Bun's configure generates its normal Rust build options and byte-class tables. `
 
 `crates/bunwasm-glue/src/bun_native.rs` copies the pinned Bun file `src/sema/standalone/native.rs`. Class **Port**. Its only implementation changes supply base64 length, encode, strict decode, and lenient decode functions and a working `compress2` backed by `miniz_oxide`. The standalone parser intentionally leaves these as stubs. Without replacements wasm bundling paths that need base64 or compression fail. This does not repair the native Bun implementations, which link their real libraries.
 
-`crates/bunwasm-build/generated/bake.client.js` and `bake.error.js` are Bun's generated HMR and error-overlay bundles. `scripts/generate-bake.sh` runs the pinned upstream generator and copies the output without a local source rewrite. The imported incremental graph, packed map, and serialized-failure modules are referenced directly from `vendor/bun` without additional edits. Our adapters around them are bun-wasm source.
+All Bun paths in the following sections refer to `oven-sh/bun` at `9510e74152073d850a18758ca41114d8f214ffa6`, the pin above. This includes Node implementations carried in Bun's tree. Bun's original MIT source and its inherited Node and better-sqlite3 code retain their respective upstream provenance.
+
+For direct Node ports, the historical import revision is **not recorded** in the source headers or introducing commit `45671e47b114b16d5953d3ebecee1fbebf2678b5`. The audit compares them with [`nodejs/node` v22.20.0, `caa20e28dc1f21a97f7b2a7134973fd6435b65f0`](https://github.com/nodejs/node/tree/caa20e28dc1f21a97f7b2a7134973fd6435b65f0). That is a reproducible comparison revision, not a claim about the original import. Recognizable adapted fragments are included even when their headers do not declare a port.
+
+### Build command
+
+`crates/bunwasm-build/src/lib.rs`. Class **Port**. Upstream `src/runtime/cli/build_command.rs` and build-option definitions in `src/runtime/cli/Arguments.rs` at the Bun pin.
+
+Retain the option setup, `BundleV2::generate_from_cli` flow, output writing, and summary formatting. Replace the JSC command context with `BuildArgs` and returned `BuildOutput` values. Printing and process exit belong to the caller. Omit native executable compilation, bytecode, app mode, server components, check/watch modes, macros, and plugins. This extraction lets WASI call the real bundler without linking Bun's JSC runtime. The local CLI parsers around it are adapters, not copies of the whole upstream argument parser.
+
+### Bake graph adaptations
+
+`crates/bunwasm-build/src/dev_server/facade.rs`, `crates/bunwasm-build/src/dev_server/graph.rs`, and `crates/bunwasm-build/src/dev_server/finalize.rs`. Class **Port**. Upstream `src/runtime/bake/DevServer.rs`, `src/runtime/bake/dev_server/mod.rs`, and `src/runtime/bake/dev_server/source_map_store.rs` at the Bun pin.
+
+The facade retains graph context and result structures, trace-bit handling, and CSS accumulation. The graph owner adapts bundle extraction, source-map entry shapes, route indices, and the HMR runtime accessor. Finalization translates the host-independent part of `DevServer::finalize_bundle`, including receiving emitted JS/CSS/HTML and updating import edges. These are adapted implementations, not merely original wrappers around unchanged graph modules.
+
+Replace the native server's locks, watchers, route machinery, and scheduling with single-thread state, host notifications, and synchronous output. Keep the frontend bundling path without native server-component execution. `dev_server/mod.rs` and `hooks.rs` wire this state into BundleV2. `cache.rs` adds bun-wasm's dependency-cache format. Those host adapters and the cache implementation are original code.
+
+The incremental graph, packed map, and serialized-failure implementations are compiled directly through `#[path]` from `src/runtime/bake/dev_server/{incremental_graph,packed_map,serialized_failure}.rs`. They are unchanged upstream modules, not additional copied forks.
+
+### Generated bake clients
+
+`crates/bunwasm-build/generated/bake.client.js` and `crates/bunwasm-build/generated/bake.error.js`. Class **Port**. Upstream `src/codegen/bake-codegen.ts` generates these from `src/runtime/bake/hmr-runtime-client.ts`, `src/runtime/bake/hmr-runtime-error.ts`, and their imported client/runtime modules at the Bun pin.
+
+`scripts/generate-bake.sh` runs that generator and copies the resulting bundles without a local source rewrite. They supply Bun's HMR protocol, React refresh integration, and browser error overlay to the WASI dev server. The script is our adapter. The generated JavaScript is upstream code, and `--check` compares both embedded files with fresh generator output.
+
+### Transpiler source-map collector
+
+`crates/bunwasm-transpiler/src/lib.rs`, `ChunkCollector` and its `OnSourceMapChunk` implementation. Class **Port**. Upstream `src/runtime/cli/pm_diff_normalize.rs` at the Bun pin.
+
+Retain the small callback that stores the emitted `bun_sourcemap::Chunk` in an `Option`. The local caller converts its buffer into the returned mappings string. This supplies source maps without the native runtime. The surrounding arena lifecycle, public transpile API, diagnostic conversion, and await-hook control are local adapters to Bun's parse/print APIs. They do not copy `src/runtime/api/JSTranspiler.rs` as an implementation.
+
+### Bun console formatter
+
+`crates/bunwasm-runtime/src/js/inspect.js`, the Bun formatting factory. Class **Port**. Upstream `src/jsc/ConsoleObject.rs`, `src/jsc/VirtualMachine.rs` (`print_error_instance_body`), and `src/jsc/bindings/bindings.cpp` (`JSC__JSValue__forEachPropertyImpl` and `JSC__JSValue__forEachPropertyOrdered`) at the Bun pin.
+
+Translate Rust and C++ formatting into JavaScript, retaining the estimated-line-length accounting, type-specific rendering, error frames, and property order. Replace direct JSC operations with intrinsic brand checks and host inspection calls. This preserves Bun's console and `Bun.inspect` output across QuickJS, JSC, and the browser engine without the native console bindings. `console.js` routes output and manages groups, counters, and timers using this formatter. It is an original adapter.
+
+### Node inspection
+
+`crates/bunwasm-runtime/src/js/inspect.js`, `createNodeInspect`. Class **Port**. Upstream `src/js/internal/util/inspect.js` at the Bun pin, itself Node's MIT-licensed inspection implementation.
+
+Retain substantial inspection and format logic, including layout, strings, containers, option handling, and substitution formatting. Replace primordials, Bun intrinsics, internal imports, and native preview helpers with captured ordinary intrinsics, JavaScript emulation, and the local engine hooks. Package the implementation as a factory with `nodeInspect`, `nodeFormat`, and `nodeFormatWithOptions` exports. This makes `node:util` inspection available outside Bun's internal module system. It is distinct from the Bun console formatter in the same file.
+
+### Inspection host hooks
+
+`crates/bunwasm-runtime/src/js/inspect.js`, host integration around both formatters. Class **Host feature**. These are original bun-wasm additions around the Bun sources cited above, not another copied upstream file.
+
+Read promise state/results, proxy targets, namespace brands, ordered keys, and remaining iterator entries through `internal` hooks. Use source-line lookup for error display. These hooks let an engine host expose information ordinary JavaScript cannot inspect reliably or without consuming an iterator. The QuickJS implementations are classified separately in the vendored-engine section.
+
+### Node path
+
+`crates/bunwasm-runtime/src/js/path.js`. Class **Port**. Upstream Node `lib/path.js`, POSIX implementation, at the Node comparison revision above. The import revision is not recorded. Bun's older browser fallback `src/node-fallbacks/path.js` at the Bun pin carries related POSIX code and identifies its own origin as Node v8.11.1. That does not establish bun-wasm's import revision.
+
+Retain the segment scans and POSIX normalize, resolve, relative, dirname, basename, extname, format, and parse algorithms. Extract helpers such as `popSegment` and `scanExt`, replace primordials and validators, accept boxed strings to match Bun, and resolve against guest `process.cwd()`. Export a factory. `win32` reuses the POSIX functions with different separator constants and does not implement Windows paths. The changes avoid host filesystem and native path dependencies.
+
+### Node Buffer fragments
+
+`crates/bunwasm-runtime/src/js/buffer.js`. Class **Port**. Comparison sources are Node `lib/buffer.js` at the Node comparison revision, plus Bun `src/js/builtins/JSBufferConstructor.ts` and `src/node-fallbacks/buffer.js` at the Bun pin. The direct Node import revision is not recorded.
+
+Retain recognizable Buffer constructor dispatch, `fromObject` array-like handling, and concatenation fragments. Adapt the FastBuffer pattern to locally allocated `Uint8Array` storage without Node's native binding, unsafe allocator, or pool. Local codecs, `DataView` numeric access, validation helpers, and factory wiring provide the remaining implementation. This is a mixed file with adapted routines, not an unmodified copy of Node's entire Buffer module.
+
+### Node event emitter
+
+`crates/bunwasm-runtime/src/js/events.js`. Class **Port**. Comparison sources are Node `lib/events.js` at the Node comparison revision and Bun `src/js/node/events.ts` at the Bun pin. The direct Node import revision is not recorded.
+
+Retain listener storage conventions, once-wrapper state, listener removal, and remove-all behavior. Replace primordials, internal validators, and native async-resource or EventTarget integration with local validation and runtime scheduling. The module also supplies local promise and async-iterator helpers. These changes provide Node-style listener semantics on the guest event loop without native async hooks.
+
+### Node utility fragments
+
+`crates/bunwasm-runtime/src/js/util.js`. Class **Port**. Upstream Node `lib/internal/util/parse_args/{parse_args,utils}.js`, `lib/internal/util/comparisons.js`, `lib/internal/util.js`, and `lib/util.js` at the Node comparison revision. Also compare Bun `src/js/node/util.ts` and inspection tables in `src/js/internal/util/inspect.js` at the Bun pin. The direct Node import revision is not recorded.
+
+Adapt parse-argument tokenization, own-property option lookup, short-option groups, strict validation, defaults, and negative options. Replace internal errors and primordials with local helpers and Bun's messages and token names. Retain comparison helper structure and memo conventions, inheritance and promisification fragments, and inspection option/color/style tables. Replace native type checks with intrinsic brand checks and engine hooks. Formatting delegates to the separate inspection port. Bun's deep-equality variant and the surrounding module wiring are local implementations, not copies of Node's whole utility module.
+
+### Node assertions
+
+`crates/bunwasm-runtime/src/js/assert.js`. Class **Port**. Upstream `src/js/node/assert.ts` and `src/js/internal/assert/assertion_error.ts` at the Bun pin, which carry Node assertion code.
+
+Retain assertion dispatch, expected-exception matching, async rejection helpers, readable operator messages, and assertion-error formatting conventions. Replace internal imports, native diff helpers, and primordials with the local utility inspector, equality functions, and a JavaScript diff renderer. Source-expression recovery is omitted, so `ok(false)` reports `false == true`. This runs assertions without Bun's internal bindings. The adapted helpers are separate from the locally written diff implementation.
+
+### Bun SQLite
+
+`crates/bunwasm-runtime/src/js/bun_sqlite.js`. Class **Port**. Upstream `src/js/bun/sqlite.ts` and the behavior implemented by `src/jsc/bindings/sqlite/JSSQLStatement.cpp` at the Bun pin.
+
+Adapt Database/Statement behavior, constants, named-parameter handling, strict mode, query caching, and transaction wrappers. Replace `$cpp` calls and JSC statement objects with numeric handles and `native.sqlite` operations implemented in Rust in `crates/bunwasm-runtime/src/sqlite.rs`. JavaScript shapes values and rows while Rust binds and steps the unmodified SQLite library. This keeps SQLite usable without Bun's C++ engine bindings. The Rust ABI adapter is original code, not a copy of `JSSQLStatement.cpp`.
+
+The transaction controller and wrapper retain code Bun explicitly attributes to Joshua Wise's better-sqlite3 `lib/methods/transaction.js`. The retained upstream revision is Bun's pin. A separate better-sqlite3 import revision is not recorded in that section. Keep BEGIN/COMMIT, nested savepoints, rollback, and the four transaction modes, replacing statement ownership/preparation with the local native-handle model. This is inherited copied implementation, not an original transaction adapter.
+
+### Bun cookies
+
+`crates/bunwasm-runtime/src/js/cookie.js`. Class **Port**. Upstream `src/jsc/bindings/{Cookie,CookieMap}.{cpp,h}` and `src/jsc/bindings/webcore/{JSCookie,JSCookieMap}.cpp` at the Bun pin.
+
+Translate cookie parsing, attribute validation, serialization, CookieMap behavior, and binding coercions into JavaScript. Replace native objects with WeakMap-backed state, use local string/date operations, and route inspection through Bun.inspect. These changes preserve the API without JSC host classes. This is a translated port even though it shares little literal source text with C++.
+
+### Node string decoder
+
+`crates/bunwasm-runtime/src/js/string_decoder.js`. Class **Port**. Upstream Node `src/string_decoder.cc` at the Node comparison revision. The import revision is not recorded.
+
+Translate the buffered/missing-byte state machine into JavaScript using a four-byte `lastChar`, `_buffered`, and `_missing`. Preserve UTF-8 continuation handling, UTF-16 surrogate tails, base64 groups, and flush behavior. Replace native buffers and binding calls with the local Buffer factory, and expose the StringDecoder methods and state getters. This handles split characters without Node's native decoder.
+
+### Bun test diff formatting
+
+`crates/bunwasm-runtime/src/js/bun_test.js`, pretty-value and diff-formatting helpers. Class **Port**. Upstream `src/runtime/test_runner/pretty_format.rs` and `src/runtime/test_runner/diff/printDiff.rs` at the Bun pin.
+
+Translate the colorless formatting path, sorted keys, expected/received sections, context chunking, line prefixes, and agent-mode thresholds to JavaScript. Replace Bun's tuned Myers line differ with a local common-prefix/suffix trim and LCS implementation for small diffs, with a bounded large-diff path. This reproduces useful test diagnostics without the native test runner. Discovery, scopes, matchers, mock tracking, scheduling, and snapshot storage in the rest of the file are local implementations that follow Bun's observable contract.
+
+### Node URL helpers
+
+`crates/bunwasm-runtime/src/js/node_url.js`. Class **Port**. Upstream `src/js/internal/url.ts` (`urlToHttpOptions`) and `src/js/node/url.ts` (legacy Url fields and format fragments) at the Bun pin. Related code also exists in `src/node-fallbacks/url.js`.
+
+Retain HTTP option extraction, IPv6 hostname handling, auth decoding, legacy field initialization, and format escaping. Replace native URL machinery and internal validators with the local WHATWG URL implementation and error helpers. File-URL conversion and the simplified legacy parse/resolve wrapper are local code. This adapts the copied helpers without importing Bun's native URL binding.
+
+### HTTP status tables
+
+`crates/bunwasm-runtime/src/js/builtins.js` (`STATUS_CODES`) and `crates/bunwasm-runtime/src/js/net.js` (`STATUS_TEXT`). Class **Port** for packaging shared HTTP data. Comparison source `src/js/internal/http.ts` at the Bun pin.
+
+The builtins module retains the status-code/reason table. The network module keeps a smaller reason-phrase table for response output. These are standard HTTP values rather than a copied server implementation. Networking, streams, request dispatch, and host transport around the tables are original bun-wasm adapters.
 
 ### Temporal
 
@@ -306,6 +444,17 @@ The normal `scripts/test.sh` runner uses the open-pipe driver for this fixture. 
 
 ## Audit method
 
-The inventory comes from `patches/bun/*.patch`, `git ls-files jsc third_party vendor`, the source-copy provenance above, and searches for patch, replacement, and source-write operations in `scripts/`, `jsc/`, and crate build scripts. Retained libc and rquickjs-sys files were compared byte-for-byte with the matching published crates in Cargo's registry. The `vendor/bun` working tree must be clean after applying all nine commits. There are no additional unexported Bun source modifications in the audited checkout.
+The inventory comes from `patches/bun/*.patch` and tracked files under `crates/`, `web/`, `sandbox/`, `scripts/`, `jsc/`, `site/`, and `third_party/`. The copied-source pass reads provenance headers, license notices, declared translations, generated-source inputs, and source-write operations. It also compares nontrivial implementation lines and token sequences against Bun's sources, then checks candidates against the exact Bun pin with `git show <pin>:<path>`. Direct Node comparisons use the exact reference revision above. Literal matching alone misses translated ports such as cookies, console formatting, and string decoding.
+
+The sweep includes browser WASI/FS/network/engine bridges, sandbox cache/editor wiring, script runners, JSC FFI declarations and C++ helpers, and build-time shims. These are original adapters, configuration, or API declarations except for the entries explicitly listed above. Shared calendar names, public field layouts, and ordinary API-call boilerplate do not establish copied implementations. For example, the PerformanceEntry field assignments in `web.js` match a public data shape, and the JSC loader callbacks use the engine's required signatures. They are not classified as upstream forks on that basis.
+
+The inventory and marker search can be repeated from the repository root. Marker hits are review candidates, not an automatic proof of copying.
+
+```sh
+git ls-files crates web sandbox scripts jsc site third_party
+rg -n -i --max-columns 240 'copyright|license|ported|port of|adapted|copied|derived|based on' crates web sandbox scripts jsc site
+```
+
+Retained libc and rquickjs-sys files were compared byte-for-byte with the matching published crates in Cargo's registry. The `vendor/bun` working tree must be clean after applying all nine commits. There are no additional unexported Bun source modifications in the audited checkout.
 
 SQLite is supplied by the unmodified `libsqlite3-sys` crate. `.cargo/config.toml` sets its documented compile flags to match Bun where possible and disable unsupported WASI facilities; it does not rewrite the amalgamation. No additional third-party source rewrites were found in crate build scripts. Test fixture npm packages are source inputs for compatibility tests, not runtime forks.
