@@ -42,7 +42,7 @@ for (const [name, type, ctx] of [["desktop-chromium", chromium, { viewport: { wi
   await run(page, `bun -e 'const s = Bun.serve({ port: 3000, routes: { "/hi/:name": (req) => Response.json({ hello: req.params.name, from: "bun.wasm" }) } }); const r = await fetch(s.url + "hi/phone"); console.log("self-fetch", await r.text())'`);
   await waitFor(page, /self-fetch \{"hello":"phone"/);
   const preview = await page.context().newPage();
-  const res = await preview.goto(new URL("/__preview/3000/hi/browser", url).href);
+  const res = await preview.goto(new URL("__preview/3000/hi/browser", url).href);
   const body = await preview.textContent("body");
   console.log(name, "preview", res.status(), body);
   await preview.close();
