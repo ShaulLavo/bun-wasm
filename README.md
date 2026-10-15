@@ -4,7 +4,7 @@ Bun's own Rust source, built for `wasm32-wasip1`. It runs in the browser and und
 
 - `bun run`, `bun test`, `bun build`, `bun:sqlite`, `fetch`, `Bun.serve`
 - Bun's real transpiler and bundler
-- JS engine: QuickJS, or Bun's JavaScriptCore compiled to wasm
+- JS engine: QuickJS or Bun's JavaScriptCore compiled to wasm, or the browser's own engine ([docs/engine-browser.md](docs/engine-browser.md))
 
 ```sh
 source env.sh && scripts/sync-bun.sh

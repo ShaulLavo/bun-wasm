@@ -118,6 +118,18 @@ The engine's stack is mapped back to the original TS/JS positions with the same 
 
 **JavaScriptCore (Safari) and SpiderMonkey** ignore `prepareStackTrace`. Their `name@url:line:col` stacks are parsed when printed (`parseJscFrameLine` in `inspect.js`), with the same `displayName` and `mapPosition` steps. The output is Bun's format in both cases. Raw `err.stack` strings read by user code follow the host engine's own format.
 
+## Performance
+
+These are Chromium medians of three runs on localhost, from `web/tests/bench-engines.mjs`, in ms. The micro columns are `tests/bench/micro.js`; "cold" is a first `console.log(1)` run and "warm" is a repeat.
+
+| engine | wasm .gz | page→ready | cold | warm | loop | regexp | json | alloc | strings | micro total |
+|---|---|---|---|---|---|---|---|---|---|---|
+| QuickJS | 3.2 MB | 195 | 57 | 24 | 195 | 96 | 163 | 434 | 9 | 922 |
+| JSC (no JIT) | 11.5 MB | 278 | 157 | 35 | 250 | 69 | 49 | 543 | 6 | 936 |
+| browser | 2.9 MB | 199 | 31 | 15 | 3 | 6 | 15 | 66 | 4 | 107 |
+
+In WebKit the browser engine takes 36/18 ms cold/warm and 131 ms for the micro run. QuickJS takes 911 ms for the micro run and JSC 1155 ms.
+
 ## Headless testing
 
 `scripts/test.sh --engine browser` runs every fixture under Node (V8) through `web/scripts/node-host.mjs`:

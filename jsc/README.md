@@ -129,7 +129,7 @@ own target dir (`$JSC_BUILD_DIR/target`).
 | | dist/bun.wasm (QuickJS) | dist/bun-jsc.wasm (JSC) |
 |---|---|---|
 | size | 8.9 MB | 42.7 MB (12.1 MB gzip) |
-| fixtures (`scripts/test.sh [--engine jsc]`) | 57/57 | 57/57 |
+| fixtures (`scripts/test.sh [--engine jsc]`) | 58/58 | 58/58 |
 | `tests/bench/micro.js` loop | 207 ms | 268 ms |
 | regexp | 122 ms | 75 ms |
 | json | 190 ms | 52 ms |
