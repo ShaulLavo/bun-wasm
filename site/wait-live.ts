@@ -10,7 +10,7 @@ const deadline = Date.now() + 120_000;
 for (const file of files) {
   const want = await Bun.file(join(dist, file)).text();
   for (;;) {
-    const got = await fetch(`${origin}/${file.replace(/index\.html$/, "")}`, { headers: { "cache-control": "no-cache" } }).then((r) => r.text(), () => "");
+    const got = await fetch(`${origin}/${file.replace(/index\.html$/, "")}`).then((r) => r.text(), () => "");
     if (got === want) break;
     if (Date.now() > deadline) throw new Error(`${file}: still stale after 2 minutes`);
     await Bun.sleep(2000);
