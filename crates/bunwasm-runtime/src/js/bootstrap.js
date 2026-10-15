@@ -71,9 +71,16 @@
     return m ? col + m[0].length : col;
   }
 
+  function evalOriginFile(site) {
+    if (typeof site.getEvalOrigin !== "function") return null;
+    const origin = site.getEvalOrigin();
+    const match = typeof origin === "string" && /\(([^()]+):\d+:\d+\)/.exec(origin);
+    return match ? match[1] : null;
+  }
+
   function formatCallSite(site) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
-    const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName();
+    const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
     const file = internal.displayName ? internal.displayName(rawFile) : rawFile;
     const name = site.getFunctionName();
     // A syntax error's location: no function, just file:line:col.
@@ -91,7 +98,11 @@
     const topLevel = isV8 ? !name && v8TopLevel(site) : isTopLevel(site.getFunction());
     if ((!name || name === "__bunwasm_cjs__") && file && line !== null && (topLevel || name === "__bunwasm_cjs__")) return `${file}:${line}:${col}`;
     const label = name || "<anonymous>";
-    if (site.isNative() || file === null || file === undefined) return `${label} (native)`;
+    if (site.isNative()) return `${label} (native)`;
+    if (file === null || file === undefined) {
+      const evalFrame = typeof site.isEval === "function" && site.isEval();
+      return `${label} (${evalFrame ? "unknown" : "native"})`;
+    }
     if (line === null) return `${label} (${file})`;
     return `${label} (${file}:${line}:${col})`;
   }

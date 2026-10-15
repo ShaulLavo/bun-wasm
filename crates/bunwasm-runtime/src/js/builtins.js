@@ -1130,13 +1130,18 @@
     bun: () => globalThis.Bun,
     "bun:jsc": () => ({
       callerSourceOrigin() {
-        const lines = String(new Error().stack || "").split("\n").slice(1);
+        const lines = String(new Error().stack || "").split("\n");
         const inspector = internal.require("inspect");
-        for (const line of lines) {
-          if (line.trim().endsWith("@")) return null;
+        for (const raw of lines) {
+          const line = raw.trim();
+          if (!line || line === "Error") continue;
           const frame = inspector.parseStack(line)[0];
-          if (!frame) continue;
-          return frame.file.startsWith("/") ? internal.pathToFileHref(frame.file) : frame.file;
+          if (frame) {
+            if (frame.file.startsWith("/")) return internal.pathToFileHref(frame.file);
+            return /^[a-z][a-z0-9+.-]*:/i.test(frame.file) ? frame.file : null;
+          }
+          if (/^(?:at (?:.* \()?|[^@]*@)bun-wasm:/.test(line) || /\(native\)$|@\[native code\]$/.test(line)) continue;
+          return null;
         }
         return null;
       },
