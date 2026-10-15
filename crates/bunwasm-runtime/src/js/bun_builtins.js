@@ -30,7 +30,7 @@
     if (loading.has(id)) throw unsupported(`circular initialization of ${name}`);
     const factory = native.loadBunBuiltin(id);
     if (factory === undefined) {
-      if (name.startsWith("node:") || name.startsWith("bun:")) return internal.builtin(name);
+      if (name === "bun" || name.startsWith("node:") || name.startsWith("bun:")) return internal.builtin(name);
       throw unsupported(`module ${name}`);
     }
     loading.add(id);
