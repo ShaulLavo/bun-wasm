@@ -65,8 +65,8 @@ When public call-site metadata exposes the eval origin, the test requires the ac
 module and rejects `null`. This prevents replacing every eval result with `null`.
 
 The stack formatter preserves V8 eval creation metadata and keeps opaque eval frames
-distinct from native callbacks. The builtin stops at an unidentified user frame instead
-of skipping it. QuickJS rejects its `<input>` placeholder as an origin. JSC retains its
+distinct from native callbacks. The builtin excludes its own capture frame, which also lacks a source URL in WebKit,
+then stops at an unidentified user frame instead of skipping it. QuickJS rejects its `<input>` placeholder as an origin. JSC retains its
 honest `null` when the engine omits the source.
 
 Before the fix, QuickJS and the browser host fail the cross-module case; wasm JSC

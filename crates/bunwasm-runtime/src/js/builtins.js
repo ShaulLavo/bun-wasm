@@ -1130,7 +1130,7 @@
     bun: () => globalThis.Bun,
     "bun:jsc": () => ({
       callerSourceOrigin() {
-        const lines = String(new Error().stack || "").split("\n");
+        const lines = String(new Error().stack || "").split("\n").slice(1);
         const inspector = internal.require("inspect");
         for (const raw of lines) {
           const line = raw.trim();
