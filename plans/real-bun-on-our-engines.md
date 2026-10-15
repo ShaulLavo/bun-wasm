@@ -37,3 +37,25 @@ where they help.
 
 Every failing file in Bun's suite is categorised as a platform limitation or "not worth it",
 with its reason, and the app matrix lists only failures with the same causes.
+
+## Compatibility follow-up after Web Streams
+
+Next 15.5.6 now loads past `TextEncoderStream` on QuickJS and JSC when the Streams
+change is combined with PR #9. Its bundled undici requires a WebAssembly llhttp
+parser, but the embedded engines have no `WebAssembly` global. The failure is in
+`next/dist/compiled/@edge-runtime/primitives/load.js:5626` and the fallback at
+line 5628, both `WebAssembly.compile(...)` calls. QuickJS dev reports
+`ReferenceError: WebAssembly is not defined`; JSC dev/build reports an undefined
+`WebAssembly.compile`; QuickJS build exits 1 with the same bracketed rejection.
+This reproduced on the all-engine native app-matrix replay with no registry misses.
+No missing Streams constructor appears in those diagnostics.
+
+The next lane owns that WebAssembly capability gap. Reproduce with
+`scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser --hosts=native --timeout=90`
+after PR #9 and the Streams change are present. Use an explicit fresh `--output`
+and the built native launcher. Keep the browser's existing dynamic-import-method
+rewrite failure distinct. Raw logs and provenance are in
+`/work/reports/bun-wasm-web-streams-2026-10-16/next-integration/`, including
+`next-quickjs-dev.log`, `next-quickjs-build.log`, `next-jsc-dev.log` and
+`next-jsc-build.log`. The coordinator owns preserving the evidence until the
+follow-up has reproduced it. See `docs/app-matrix/README.md` for the replay command.

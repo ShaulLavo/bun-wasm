@@ -89,3 +89,39 @@ These priorities count app projects, not individual command rows.
 
 
 Rank remaining causes by the number of distinct app projects they would unblock, rather than counting install, dev, and build rows as separate apps. An install or module-loading fix exposes the next blocker; it does not promise that the app will then pass.
+
+## Next after standard Web Streams
+
+The Streams lane replayed Next 15.5.6 with React 19.1.1 on all three native hosts.
+The disposable integration combines this branch with PR #9, which supplies the
+preceding module-classification, file-write and legacy-stream fixes. PR #9 is a
+prerequisite of this measurement, not a prerequisite included in the Streams diff.
+
+Run the replay with all three wasm artifacts built in that integration checkout:
+
+```sh
+source env.sh
+scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser --hosts=native \
+  --timeout=90 --launcher=/work/tmp/bun-wasm-target/release/bun-wasm \
+  --output=/work/reports/bun-wasm-streams-next-replay
+```
+
+Fresh installs still pass on all three engines. QuickJS dev and JSC dev/build
+advance beyond `TextEncoderStream` and fail while loading Next's bundled undici
+HTTP parser. `next/dist/compiled/@edge-runtime/primitives/load.js:5626` first
+tries the SIMD llhttp module; its fallback at line 5628 also calls
+`WebAssembly.compile`. QuickJS reports `ReferenceError: WebAssembly is not defined`.
+JSC reports `TypeError: undefined is not an object (evaluating 'WebAssembly.compile')`.
+QuickJS build exits 1 with `unhandledRejection [ReferenceError: WebAssembly is not defined]`.
+The matrix classifier now recognizes that bracketed diagnostic instead of calling
+it an exit without a diagnostic. There is no timeout in that build observation.
+
+Browser build still fails at the known dynamic-import rewrite of a method named
+`import`, and browser dev produces no diagnostic before exit. All starts remain
+blocked by failed builds. The replay therefore has 3 passing installs, 6 failed
+command rows and 3 blocked starts. No Next application is claimed to pass.
+
+Evidence, exact artifact hashes, raw logs, matrix results and cleanup ownership
+are retained in `/work/reports/bun-wasm-web-streams-2026-10-16/`. The next embedded
+engine requirement is execution of llhttp's WebAssembly module. It is separate
+from WHATWG Streams and is recorded in the approved runtime plan.
