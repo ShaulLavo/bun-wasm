@@ -1,0 +1,8 @@
+http pending true true
+http response complete
+http closed true
+http repeat ERR_SERVER_NOT_RUNNING
+tcp pending true true
+tcp closed true
+propagates close failed
+propagates close failed

@@ -457,7 +457,7 @@
           }
           busy = false;
           conn.busy = false;
-          if (stillOpen === false || !keepAlive) {
+          if (stillOpen === false || !keepAlive || conn.serverClosing) {
             conn.end();
             return;
           }
@@ -685,6 +685,56 @@
     return server;
   }
 
+  function finishServerClose(server) {
+    if (!server._closing || server._connections.size || server._closeQueued) return;
+    server._closeQueued = true;
+    internal.nextTick(() => {
+      server._closeQueued = false;
+      if (!server._closing || server._connections.size) return;
+      server._closing = false;
+      server.emit("close");
+    });
+  }
+
+  function trackServerConnection(server, conn) {
+    server._connections.add(conn);
+    const onClose = conn.onClose;
+    conn.onClose = () => {
+      if (onClose) onClose();
+      server._connections.delete(conn);
+      finishServerClose(server);
+    };
+  }
+
+  function closeNodeServer(server, callback, http) {
+    const running = server.listening || server._closing;
+    if (typeof callback === "function" && running) server.once("close", callback);
+    if (typeof callback === "function" && !running) internal.nextTick(() => callback(Object.assign(new Error("Server is not running."), { code: "ERR_SERVER_NOT_RUNNING" })));
+    if (server.listening) {
+      waiters.delete(server._accepting);
+      native.hostClose(server._listener);
+      server.listening = false;
+      server._closing = true;
+    }
+    if (http) {
+      for (const conn of server._connections) conn.serverClosing = true;
+      server.closeIdleConnections();
+    }
+    if (running) finishServerClose(server);
+    else internal.nextTick(() => server.emit("close"));
+    return server;
+  }
+
+  function disposeNodeServer(server, ignoreNotRunning) {
+    if (ignoreNotRunning && !server.listening && !server._closing) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      server.close((error) => {
+        if (error && !(ignoreNotRunning && error.code === "ERR_SERVER_NOT_RUNNING")) reject(error);
+        else resolve();
+      });
+    });
+  }
+
   // --- node:http ----------------------------------------------------------------
 
   function nodeHttp(protocol) {
@@ -850,12 +900,7 @@
         return this;
       }
       _onConnection(conn) {
-        this._connections.add(conn);
-        const destroy = conn.destroy.bind(conn);
-        conn.destroy = () => {
-          this._connections.delete(conn);
-          destroy();
-        };
+        trackServerConnection(this, conn);
         const peer = conn.peer();
         const socket = { remoteAddress: peer.address, remotePort: peer.port, remoteFamily: peer.family, encrypted: protocol === "https:", destroy: () => conn.destroy(), setTimeout() {}, setNoDelay() {}, setKeepAlive() {}, on() {}, once() {} };
         this.emit("connection", socket);
@@ -879,18 +924,10 @@
         return { address: this._host === "0.0.0.0" ? "0.0.0.0" : this._host, family: this._host.includes(":") ? "IPv6" : "IPv4", port: this._port };
       }
       close(callback) {
-        if (this.listening) {
-          waiters.delete(this._accepting);
-          native.hostClose(this._listener);
-          this.listening = false;
-        }
-        // Like Node 19+, idle keep-alive connections close with the server.
-        this.closeIdleConnections();
-        internal.nextTick(() => {
-          this.emit("close");
-          if (typeof callback === "function") callback();
-        });
-        return this;
+        return closeNodeServer(this, callback, true);
+      }
+      [Symbol.asyncDispose]() {
+        return disposeNodeServer(this, false);
       }
       closeAllConnections() {
         for (const c of Array.from(this._connections)) c.destroy();
@@ -1056,6 +1093,11 @@
           this.emit("error", err);
           this.destroy();
         };
+        conn.onClose = () => {
+          if (this.destroyed) return;
+          this.destroyed = true;
+          internal.nextTick(() => this.emit("close", false));
+        };
         conn.startReading();
       }
       connect(...args) {
@@ -1141,6 +1183,7 @@
         if (typeof options === "function") listener = options;
         if (listener) this.on("connection", listener);
         this.listening = false;
+        this._connections = new Set();
       }
       listen(...args) {
         const callback = typeof args[args.length - 1] === "function" ? args.pop() : null;
@@ -1154,7 +1197,11 @@
         }
         this._port = native.hostLocalPort(this._listener);
         this.listening = true;
-        this._accepting = acceptLoop(this._listener, (conn) => this.emit("connection", new Socket(conn)));
+        this._accepting = acceptLoop(this._listener, (conn) => {
+          const socket = new Socket(conn);
+          trackServerConnection(this, conn);
+          this.emit("connection", socket);
+        });
         internal.nextTick(() => this.emit("listening"));
         return this;
       }
@@ -1162,16 +1209,10 @@
         return this.listening ? { address: "0.0.0.0", family: "IPv4", port: this._port } : null;
       }
       close(callback) {
-        if (this.listening) {
-          waiters.delete(this._accepting);
-          native.hostClose(this._listener);
-          this.listening = false;
-        }
-        internal.nextTick(() => {
-          this.emit("close");
-          if (typeof callback === "function") callback();
-        });
-        return this;
+        return closeNodeServer(this, callback, false);
+      }
+      [Symbol.asyncDispose]() {
+        return disposeNodeServer(this, true);
       }
       ref() {
         return this;
