@@ -27,7 +27,7 @@ const fileNames = Array.from(readFileSync(join(build, "codegen/InternalModuleReg
 if (fileNames.length !== count) throw new Error("Bun registry filename count differs from blob");
 const nativeNames = Array.from(readFileSync(join(bun, "src/jsc/modules/NativeModuleList.h"), "utf8")
   .matchAll(/macro\("([^"]+)"_s,/g), match => match[1]);
-const names = [];
+let names = [];
 const sources = new Map();
 for (let id = 0; id < count; id++) {
   const record = records + id * 24;
@@ -35,7 +35,7 @@ for (let id = 0; id < count; id++) {
   names.push(name);
   sources.set(name, readFileSync(join(build, "tmp_modules/modules_out", fileNames[id]), "utf8").replace(/^\/\/.*tmp_modules.*$/gm, ""));
 }
-names.push(...nativeNames);
+names = names.concat(nativeNames);
 const hooks = Object.fromEntries(Array.from(readFileSync(join(build, "codegen/GeneratedJS2Native.h"), "utf8")
   .matchAll(/case (\d+): return ([^;]+);/g), match => [Number(match[1]), match[2].replace(/\(global\)/g, "")]));
 
