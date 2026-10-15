@@ -65,6 +65,72 @@ mod bun_transpiler {
             let out = bunwasm_transpiler::transpile_with_source_map(source, path, loader)?;
             Ok(Transpiled { code: out.code, mappings: Some(out.mappings) })
         }
+
+        /// Bun's bundler on the one file, every import external: `bun build
+        /// --format=cjs --target=bun --external '*' --sourcemap=inline`.
+        /// Imports become `require()` calls read through live getters. No
+        /// outdir: with one, the bundler writes the files itself.
+        #[cfg(feature = "bun-build")]
+        fn esm_to_cjs(&self, path: &str) -> Result<Transpiled, String> {
+            use bunwasm_build::{BuildArgs, Format, SourceMap, Target};
+            let args = BuildArgs {
+                entry_points: vec![path.to_owned()],
+                target: Some(Target::Bun),
+                format: Format::Cjs,
+                external: vec!["*".to_owned()],
+                sourcemap: SourceMap::Inline,
+                write: false,
+                ..BuildArgs::default()
+            };
+            let out = bunwasm_build::build(&args).map_err(|log| log.trim_end().to_owned())?;
+            let code = out.stdout.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default();
+            if code.is_empty() {
+                return Err(format!("bun build produced no output for {path}"));
+            }
+            const MARK: &str = "\n//# sourceMappingURL=data:application/json;base64,";
+            let (code, mappings) = match code.rfind(MARK) {
+                Some(at) => {
+                    let map = base64_decode(code[at + MARK.len()..].trim_end());
+                    (code[..at].to_owned(), map.and_then(|json| json_string_field(&json, "mappings")))
+                }
+                None => (code, None),
+            };
+            Ok(Transpiled { code, mappings })
+        }
+    }
+
+    #[cfg(feature = "bun-build")]
+    fn base64_decode(text: &str) -> Option<String> {
+        let mut out = Vec::with_capacity(text.len() * 3 / 4);
+        let (mut acc, mut bits) = (0u32, 0u32);
+        for c in text.bytes() {
+            let v = match c {
+                b'A'..=b'Z' => c - b'A',
+                b'a'..=b'z' => c - b'a' + 26,
+                b'0'..=b'9' => c - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'=' => break,
+                _ => return None,
+            };
+            acc = (acc << 6) | u32::from(v);
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((acc >> bits) as u8);
+                acc &= (1 << bits) - 1;
+            }
+        }
+        String::from_utf8(out).ok()
+    }
+
+    /// The string value of `"key"` in a JSON object (source map fields have
+    /// no nesting before `mappings`, and VLQ needs no unescaping).
+    #[cfg(feature = "bun-build")]
+    fn json_string_field(json: &str, key: &str) -> Option<String> {
+        let at = json.find(&format!("\"{key}\""))? + key.len() + 2;
+        let rest = json[at..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+        Some(rest[..rest.find('"')?].to_owned())
     }
 }
 

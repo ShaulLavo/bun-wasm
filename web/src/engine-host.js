@@ -381,10 +381,10 @@ class EngineHost {
       compileCjs(path) {
         return host.evalAt(host.native.hostCjsSource(path), path);
       },
-      requireEsm(path) {
-        const err = new Error(`require() of ES module ${path} is not supported by the browser engine yet; use import`);
-        err.code = "ERR_REQUIRE_ESM";
-        throw err;
+      // require() of an ES module: Bun's bundler converts it to CommonJS
+      // (imports become live require() bindings); see bootstrap.js.
+      compileEsmAsCjs(path) {
+        return host.evalAt(host.native.hostEsmAsCjs(path), path);
       },
       importModule(spec) {
         return host.importKey(spec);

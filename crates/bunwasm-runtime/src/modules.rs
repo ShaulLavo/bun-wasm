@@ -250,6 +250,22 @@ impl State {
         self.positions.borrow_mut().entry(path.to_owned()).or_default().line_offset = lines;
     }
 
+    /// [`crate::Transpiler::esm_to_cjs`] for `path`, with its source map
+    /// recorded unless the file already has one (when it is also imported as
+    /// a real ES module, that copy's positions win).
+    #[cfg(feature = "engine-host")]
+    pub fn esm_as_cjs(&self, path: &str) -> Result<String, NativeError> {
+        let out = self.transpiler.esm_to_cjs(path).map_err(|msg| build_error(&msg, ""))?;
+        if let Some(mappings) = out.mappings.filter(|m| !m.is_empty()) {
+            let mut positions = self.positions.borrow_mut();
+            if !positions.contains_key(path) {
+                let original = std::fs::read_to_string(path).ok().map(|s| Rc::from(s.as_str()));
+                positions.insert(path.to_owned(), PositionMap { map: Some(crate::sourcemap::SourceMap::parse(&mappings)), original, ..Default::default() });
+            }
+        }
+        Ok(out.code)
+    }
+
     /// Remember that `len` characters were injected before line 1 of `path`.
     pub fn record_prologue(&self, path: &str, len: usize) {
         if len == 0 {

@@ -513,6 +513,14 @@
       return;
     }
     if (kind === "esm") {
+      // The host engine can't evaluate an ES module synchronously: it runs
+      // the module converted to CommonJS by Bun's bundler instead.
+      if (native.compileEsmAsCjs) {
+        const wrapper = native.compileEsmAsCjs(path);
+        topLevelFunctions.add(wrapper);
+        wrapper.call(mod.exports, mod.exports, makeRequire(path, mod), mod, path, dirname(path));
+        return;
+      }
       mod.exports = native.requireEsm(path);
       return;
     }

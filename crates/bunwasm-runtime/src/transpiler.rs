@@ -68,6 +68,15 @@ pub trait Transpiler {
     fn transpile_with_map(&self, source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
         self.transpile(source, path, loader).map(|code| Transpiled { code, mappings: None })
     }
+
+    /// The ES module at `path` (read from disk) as CommonJS, for `require()`
+    /// on an engine that can't evaluate ES modules synchronously (the host
+    /// engine). The code starts with [`crate::modules::CJS_WRAPPER_PREFIX`]
+    /// (after an optional comment line); imports become `require()` calls with
+    /// live bindings. `mappings` maps it back to the file.
+    fn esm_to_cjs(&self, path: &str) -> Result<Transpiled, String> {
+        Err(format!("require() of ES module {path} needs Bun's bundler, which this bun.wasm was built without"))
+    }
 }
 
 /// Transpiler output with an optional source map.

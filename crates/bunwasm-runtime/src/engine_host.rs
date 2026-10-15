@@ -275,12 +275,18 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) {
     t.add("hostCjsSource", move |a| {
         let path = a.str(0)?;
         let (code, _) = st.load_source(path)?;
+        let code = with_dynamic_import_hook(&code, path);
         let (wrapped, first_line) = modules::cjs_wrapper(&code);
         // Our wrapper's two header lines sit above the file's line 1.
         if first_line == -1 {
             st.record_line_offset(path, 2);
         }
-        Ok(Val::Str(wrapped))
+        Ok(Val::Str(host_dynamic_imports(&wrapped, path)))
+    });
+    let st = state.clone();
+    t.add("hostEsmAsCjs", move |a| {
+        let path = a.str(0)?;
+        Ok(host_dynamic_imports(&st.esm_as_cjs(path)?, path).into())
     });
     t.add("polyfillSource", |a| Ok(modules::polyfill_source(a.str(0)?).map(Val::from).into()));
     let st = state.clone();
@@ -288,6 +294,60 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) {
         st.flush();
         Ok(Val::Undefined)
     });
+}
+
+/// CommonJS (or script) code with each `import(` routed through the host's
+/// loader, like ES modules get in `module_source`: a native `import()` in
+/// eval'd code would resolve against the host's own URL. Same line count.
+fn with_dynamic_import_hook(code: &str, path: &str) -> String {
+    let spans: Vec<Span> = scan_imports(code).into_iter().filter(|s| s.dynamic).collect();
+    if spans.is_empty() {
+        return code.to_owned();
+    }
+    let hook = format!("globalThis.__bunwasm_dynamicImport({})", serde_json::Value::from(path));
+    let mut out = String::with_capacity(code.len() + spans.len() * hook.len());
+    let mut at = 0;
+    for span in spans {
+        out.push_str(&code[at..span.start]);
+        out.push_str(&hook);
+        at = span.end;
+    }
+    out.push_str(&code[at..]);
+    out
+}
+
+/// `import(...)` in code evaluated as a script (CommonJS) goes through the
+/// host's dynamic-import hook, like in ES modules (engine-host.js): the
+/// engine would resolve it against the host's own URL.
+fn host_dynamic_imports(code: &str, from: &str) -> String {
+    let spans: Vec<Span> = scan_imports(code).into_iter().filter(|s| s.dynamic).collect();
+    if spans.is_empty() {
+        return code.to_owned();
+    }
+    let hook = format!("globalThis.__bunwasm_dynamicImport({})", json_string(from));
+    let mut out = String::with_capacity(code.len() + spans.len() * hook.len());
+    let mut at = 0;
+    for span in spans {
+        out.push_str(&code[at..span.start]);
+        out.push_str(&hook);
+        at = span.end;
+    }
+    out.push_str(&code[at..]);
+    out
+}
+
+fn json_string(s: &str) -> String {
+    let mut out = String::from('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The ES module a file becomes: `{format, code, imports}`. For ES modules,
