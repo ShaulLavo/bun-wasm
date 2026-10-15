@@ -23,7 +23,7 @@ def main():
         "quickjs": "bun.wasm", "jsc": "bun-jsc.wasm",
         "browser": "bun-browser.wasm", "native": "unused",
     }
-    wasm = args.wasm or root / "dist" / binaries[args.engine]
+    wasm = (args.wasm or root / "dist" / binaries[args.engine]).resolve()
     command = ["wasmtime", "run", "--dir", f"{fixture}::/", str(wasm), "run", "/index.js"]
     if args.engine == "native":
         command = ["bun", "run", "index.js"]

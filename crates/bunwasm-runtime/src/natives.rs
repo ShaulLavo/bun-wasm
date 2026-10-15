@@ -444,6 +444,9 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     t.add("read", move |a| {
         let fd = a.i32(0)?;
         let mut buf = vec![0u8; a.num(1)? as usize];
+        if fd == 0 && buf.is_empty() {
+            return Ok(Val::Bytes(buf));
+        }
         let n = if fd == 0 {
             io::stdin().read(&mut buf)
         } else {
