@@ -14,6 +14,7 @@ import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
 import { type Output, Shell } from "./shell";
 import { enableTerminalCopy } from "./terminal-copy";
+import { linkLocalUrls } from "./terminal-links";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const statusEl = $<HTMLSpanElement>("#status");
@@ -167,21 +168,7 @@ function openLink(uri: string): void {
   window.open(uri, "_blank", "noopener");
 }
 
-// `http://localhost:<port>/…` printed by a guest server (server.url) opens that server's preview.
-const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{1,5})(\/[^\s'"`)]*)?/g;
-term.registerLinkProvider({
-  provideLinks(y, callback) {
-    const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
-    const links = Array.from(text.matchAll(LOCAL_URL))
-      .filter((m) => previews.serves(Number(m[1])))
-      .map((m) => ({
-        text: m[0],
-        range: { start: { x: m.index + 1, y }, end: { x: m.index + m[0].length, y } },
-        activate: () => openLink(previews.url(Number(m[1]), m[2] ?? "/")),
-      }));
-    callback(links.length > 0 ? links : undefined);
-  },
-});
+linkLocalUrls(term, previews);
 
 const shell = new Shell(term, {
   fs,

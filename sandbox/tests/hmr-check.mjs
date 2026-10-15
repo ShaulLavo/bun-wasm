@@ -107,6 +107,23 @@ async function check(browserName, engine) {
       if (count !== "count is 3") throw new Error(`state lost after recovery: ${count}`);
       await shot("5-recovered");
     });
+    await step("5b preview in its own tab, with hot reload", async () => {
+      // The preview bar's localhost label links to the preview route, which works in any tab.
+      const href = await page.locator("#preview-url").getAttribute("href");
+      if (!href || !new URL(href, page.url()).pathname.includes("/__preview/")) throw new Error(`label link: ${href}`);
+      const tab = await context.newPage();
+      try {
+        await tab.goto(new URL(href, page.url()).href);
+        await tab.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
+        await setFile("src/App.tsx", [["Fixed it", "From another tab"]]);
+        await tab.locator("h1", { hasText: "From another tab" }).waitFor({ timeout: STEP_MS });
+        await app.locator("h1", { hasText: "From another tab" }).waitFor({ timeout: STEP_MS });
+        await setFile("src/App.tsx", [["From another tab", "Fixed it"]]);
+        await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
+      } finally {
+        await tab.close();
+      }
+    });
     await step("6 engine switch keeps edits", async () => {
       const other = engine === "quickjs" ? "browser" : "quickjs";
       await Promise.all([page.waitForNavigation(), page.selectOption("#engine", other)]);
@@ -130,6 +147,6 @@ for (const browserName of browsers) {
     summary.push(await check(browserName, engine));
   }
 }
-const failed = summary.filter((s) => s.results.length < 7 || s.results.some((r) => !r.ok));
+const failed = summary.filter((s) => s.results.length < 8 || s.results.some((r) => !r.ok));
 console.log(failed.length ? `\n${failed.length} of ${summary.length} runs failed` : `\nall ${summary.length} runs passed`);
 process.exit(failed.length ? 1 : 0);

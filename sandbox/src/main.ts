@@ -20,6 +20,7 @@ import type { NetHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
 import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
 import { enableTerminalCopy } from "../../web/src/terminal-copy";
+import { linkLocalUrls } from "../../web/src/terminal-links";
 
 const HOME = "/home/user";
 /** The project's directory in the guest's filesystem. */
@@ -40,7 +41,7 @@ const fileSelect = $<HTMLSelectElement>("#file-select");
 const fileName = $<HTMLSpanElement>("#file-name");
 const saveState = $<HTMLSpanElement>("#save-state");
 const previewFrame = $<HTMLIFrameElement>("#preview");
-const previewUrl = $<HTMLSpanElement>("#preview-url");
+const previewUrl = $<HTMLAnchorElement>("#preview-url");
 const openPreview = $<HTMLAnchorElement>("#open-preview");
 const serverDot = $<HTMLSpanElement>("#server-dot");
 
@@ -126,6 +127,7 @@ new ResizeObserver(() => fit.fit()).observe(termEl);
 // ---------- dev server ----------
 
 const previews = new Previews();
+linkLocalUrls(term, previews);
 const moduleScope: Promise<boolean> = engine === "browser" ? registerModuleScope() : Promise.resolve(false);
 let wasm: { module: WebAssembly.Module; size: number } | null = null;
 
@@ -142,6 +144,7 @@ const unsent = new Map<string, string>();
 function setServerState(state: "starting" | "up" | "down", text: string): void {
   serverDot.dataset.state = state;
   previewUrl.textContent = text;
+  if (state !== "up") previewUrl.removeAttribute("href");
   openPreview.setAttribute("aria-disabled", String(state !== "up"));
 }
 
@@ -207,6 +210,8 @@ async function showPreview(port: number, startupMs: number): Promise<void> {
   const url = previews.url(port, "/");
   setServerState("up", `localhost:${port}/`);
   openPreview.href = url;
+  // The label shows the server's own address; tapping it opens the preview, which works anywhere.
+  previewUrl.href = url;
   previewFrame.src = url;
   setStatus(`dev server ready in ${(startupMs / 1000).toFixed(1)} s · ${ENGINES[engine].name} · ${mb(wasm?.size ?? 0)}`, "ok");
 }
