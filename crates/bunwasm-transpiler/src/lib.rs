@@ -114,6 +114,19 @@ pub fn transpile_with_source_map(source: &str, path: &str, loader: Loader) -> Re
     Ok(Transpiled { code, mappings })
 }
 
+/// Runs `f` with Bun's printer emitting the bun-wasm `await` hooks
+/// (`__bunwasm_resume(__bunwasm_capture(), await x)`, see
+/// `bun_js_printer::BUNWASM_AWAIT_HOOKS`) when `on`. For the browser engine,
+/// which carries AsyncLocalStorage across `await` with them.
+pub fn with_await_hooks<T>(on: bool, f: impl FnOnce() -> T) -> T {
+    use std::sync::atomic::Ordering;
+    let hooks = &bun_js_printer::BUNWASM_AWAIT_HOOKS;
+    let previous = hooks.swap(on, Ordering::Relaxed);
+    let out = f();
+    hooks.store(previous, Ordering::Relaxed);
+    out
+}
+
 /// Renders a v3 source map JSON for a [`Transpiled`] result.
 pub fn source_map_json(path: &str, source: &str, mappings: &str) -> String {
     let quote = |s: &str| {

@@ -40,6 +40,10 @@ mod bun_transpiler {
     use bunwasm_runtime::{Loader, Transpiled, Transpiler};
     use bunwasm_transpiler::Loader as BunLoader;
 
+    /// The browser engine (feature engine-host) runs on a host JS engine
+    /// without AsyncContext: `await`s get hooks that carry AsyncLocalStorage.
+    const AWAIT_HOOKS: bool = cfg!(feature = "engine-host");
+
     /// Bun's real parser and printer (crates/bunwasm-transpiler).
     ///
     /// Plain JavaScript skips it: QuickJS runs it as is, and the original
@@ -54,6 +58,9 @@ mod bun_transpiler {
 
         fn transpile_with_map(&self, source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
             let loader = match loader {
+                // The browser engine needs every `await` printed with its
+                // AsyncLocalStorage hooks, plain JavaScript included.
+                Loader::Js if AWAIT_HOOKS && source.contains("await") => BunLoader::Js,
                 Loader::Js => return Ok(Transpiled { code: source.to_owned(), mappings: None }),
                 Loader::Jsx => BunLoader::Jsx,
                 Loader::Ts => BunLoader::Ts,
@@ -62,7 +69,9 @@ mod bun_transpiler {
                 Loader::Toml => BunLoader::Toml,
                 Loader::Text => BunLoader::Text,
             };
-            let out = bunwasm_transpiler::transpile_with_source_map(source, path, loader)?;
+            let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
+                bunwasm_transpiler::transpile_with_source_map(source, path, loader)
+            })?;
             Ok(Transpiled { code: out.code, mappings: Some(out.mappings) })
         }
 
@@ -82,7 +91,8 @@ mod bun_transpiler {
                 write: false,
                 ..BuildArgs::default()
             };
-            let out = bunwasm_build::build(&args).map_err(|log| log.trim_end().to_owned())?;
+            let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || bunwasm_build::build(&args))
+                .map_err(|log| log.trim_end().to_owned())?;
             let code = out.stdout.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default();
             if code.is_empty() {
                 return Err(format!("bun build produced no output for {path}"));

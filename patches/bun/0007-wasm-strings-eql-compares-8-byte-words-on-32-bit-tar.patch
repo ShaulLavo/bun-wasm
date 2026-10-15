@@ -1,7 +1,7 @@
 From 48658c2c16014add068e39a2178ff300e5ddc9d1 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 02:18:08 +0300
-Subject: [PATCH 7/7] wasm: strings::eql compares 8-byte words on 32-bit
+Subject: [PATCH 7/8] wasm: strings::eql compares 8-byte words on 32-bit
  targets
 
 eql_long counted len >> 3 words but read usize, which is 4 bytes on

@@ -1,0 +1,154 @@
+From 4ceda2c2868d3a7703c7737ddd9de7244ec384df Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 15 Oct 2026 09:15:42 +0300
+Subject: [PATCH 8/8] wasm: optional await hooks in the printer for a host
+ engine without AsyncContext
+
+BUNWASM_AWAIT_HOOKS (off by default) prints `await x` as
+`__bunwasm_resume(__bunwasm_capture(), await x)` and wraps `for await`
+loops so their body and the code after them see the context captured at the
+loop's start. bun-wasm's browser engine turns it on around its runtime
+transpiles to carry AsyncLocalStorage across await.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/js_printer/lib.rs | 85 ++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 84 insertions(+), 1 deletion(-)
+
+diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
+index 0e71d390..41580732 100644
+--- a/src/js_printer/lib.rs
++++ b/src/js_printer/lib.rs
+@@ -2136,6 +2136,26 @@ pub(crate) mod __gated_printer {
+             }
+         }
+ 
++        /// bun-wasm `for await` hooks (see BUNWASM_AWAIT_HOOKS): open a block
++        /// holding the context at the loop's start.
++        fn print_bunwasm_loop_start(&mut self) {
++            self.print_indent();
++            self.print(b"{");
++            self.print_space();
++            self.print(b"const __bunwasm_ctx = __bunwasm_capture();");
++            self.print_newline();
++        }
++
++        /// Restore that context after the loop and close the block.
++        fn print_bunwasm_loop_end(&mut self) {
++            self.print_indent();
++            self.print(b"__bunwasm_resume(__bunwasm_ctx);");
++            self.print_newline();
++            self.print_indent();
++            self.print(b"}");
++            self.print_newline();
++        }
++
+         pub(crate) fn print_body(&mut self, stmt: Stmt) {
+             match &stmt.data {
+                 StmtData::SBlock(block) => {
+@@ -4375,9 +4395,19 @@ pub(crate) mod __gated_printer {
+ 
+                     self.print_space_before_identifier();
+                     self.add_source_mapping(expr.loc);
++                    let hooks = bunwasm_await_hooks();
++                    if hooks {
++                        // Arguments run in order: the context is captured
++                        // before the suspension and restored after it.
++                        self.print(b"__bunwasm_resume(__bunwasm_capture(),");
++                        self.print_space();
++                    }
+                     self.print(b"await");
+                     self.print_space();
+                     self.print_expr(e.value, Level::Prefix.sub(1), ExprFlag::none());
++                    if hooks {
++                        self.print(b")");
++                    }
+ 
+                     if wrap {
+                         self.print(b")");
+@@ -5886,6 +5916,13 @@ pub(crate) mod __gated_printer {
+                     self.print_body(s.body);
+                 }
+                 StmtData::SForOf(s) => {
++                    // bun-wasm: `{ const c = capture(); for await (…) { resume(c); body } resume(c); }`
++                    // (a label goes right before `for`: SLabel prints the outer block).
++                    let labeled = BUNWASM_LABELED.with(|l| l.replace(false));
++                    let hooks = s.is_await && bunwasm_await_hooks();
++                    if hooks && !labeled {
++                        self.print_bunwasm_loop_start();
++                    }
+                     self.print_indent();
+                     self.print_space_before_identifier();
+                     self.add_source_mapping(stmt.loc);
+@@ -5903,7 +5940,25 @@ pub(crate) mod __gated_printer {
+                     self.print_space();
+                     self.print_expr(s.value, Level::Comma, ExprFlag::none());
+                     self.print(b")");
+-                    self.print_body(s.body);
++                    if hooks {
++                        self.print_space();
++                        self.print(b"{");
++                        self.print_newline();
++                        self.indent();
++                        self.print_indent();
++                        self.print(b"__bunwasm_resume(__bunwasm_ctx);");
++                        self.print_newline();
++                        self.print_stmt(s.body).expect("unreachable");
++                        self.unindent();
++                        self.print_indent();
++                        self.print(b"}");
++                        self.print_newline();
++                        if !labeled {
++                            self.print_bunwasm_loop_end();
++                        }
++                    } else {
++                        self.print_body(s.body);
++                    }
+                 }
+                 StmtData::SWhile(s) => {
+                     self.print_indent();
+@@ -5933,9 +5988,19 @@ pub(crate) mod __gated_printer {
+                     }
+                     self.print_space_before_identifier();
+                     self.add_source_mapping(stmt.loc);
++                    let hooked_loop = bunwasm_await_hooks() && matches!(s.stmt.data, StmtData::SForOf(f) if f.is_await);
++                    if hooked_loop {
++                        self.print_bunwasm_loop_start();
++                        self.print_indent();
++                    }
+                     self.print_symbol(s.name.ref_);
+                     self.print(b":");
++                    BUNWASM_LABELED.with(|l| l.set(hooked_loop));
+                     self.print_body(s.stmt);
++                    BUNWASM_LABELED.with(|l| l.set(false));
++                    if hooked_loop {
++                        self.print_bunwasm_loop_end();
++                    }
+                 }
+                 StmtData::STry(s) => {
+                     self.print_indent();
+@@ -7581,6 +7646,24 @@ pub type BufferPrinter = Writer<BufferWriter>;
+ // Format / GenerateSourceMap
+ // ───────────────────────────────────────────────────────────────────────────
+ 
++/// bun-wasm: print every `await x` as
++/// `__bunwasm_resume(__bunwasm_capture(), await x)` and give `for await`
++/// loops the same hooks, so a host JS engine without AsyncContext can carry
++/// AsyncLocalStorage across `await`. Off unless the runtime turns it on
++/// around a print (the browser engine build); never on for `bun build`.
++pub static BUNWASM_AWAIT_HOOKS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
++
++#[inline]
++fn bunwasm_await_hooks() -> bool {
++    BUNWASM_AWAIT_HOOKS.load(core::sync::atomic::Ordering::Relaxed)
++}
++
++thread_local! {
++    /// The statement being printed is the body of a label: a `for await` there
++    /// can't be wrapped in a block (labeled `continue` needs the loop).
++    static BUNWASM_LABELED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
++}
++
+ #[derive(Clone, Copy, PartialEq, Eq)]
+ pub enum Format {
+     Esm,

@@ -1,7 +1,7 @@
 From da641311cbb96dd2e43444f4de85976f6a0007b0 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 01:39:19 +0300
-Subject: [PATCH 3/7] wasm: io waker, crash handler, resolver: bun_transpiler
+Subject: [PATCH 3/8] wasm: io waker, crash handler, resolver: bun_transpiler
  closure type-checks on wasm32-wasip1
 
 ---

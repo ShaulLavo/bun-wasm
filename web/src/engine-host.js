@@ -560,6 +560,23 @@ class EngineHost {
       ),
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));
+    // AsyncLocalStorage across `await`: the transpiler prints `await x` as
+    // `__bunwasm_resume(__bunwasm_capture(), await x)` for this engine.
+    // A resumed context would stay set for whatever runs after the function
+    // suspends again or returns; jobs the host wraps (then callbacks, timers,
+    // ticks) set their own, and a microtask puts the previous one back if
+    // nothing changed it meanwhile.
+    hidden("__bunwasm_capture", () => host.asyncContext);
+    hidden("__bunwasm_resume", (saved, value) => {
+      const ambient = host.asyncContext;
+      if (ambient !== saved) {
+        host.asyncContext = saved;
+        nativeQueueMicrotask(() => {
+          if (host.asyncContext === saved) host.asyncContext = ambient;
+        });
+      }
+      return value;
+    });
     // Without a networking host, user code gets the host's own fetch.
     if (this.o.fetch && !this.native.hostCaps.fetch) this.installFetch(this.o.fetch);
   }

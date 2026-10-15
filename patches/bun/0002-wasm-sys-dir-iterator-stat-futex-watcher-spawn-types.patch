@@ -1,7 +1,7 @@
 From 2212f714a930ebbc545ffddeb16772a8feed9442 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 01:37:39 +0300
-Subject: [PATCH 2/7] wasm: sys dir iterator, stat, futex, watcher, spawn
+Subject: [PATCH 2/8] wasm: sys dir iterator, stat, futex, watcher, spawn
  types, 64-bit layout asserts
 
 ---
