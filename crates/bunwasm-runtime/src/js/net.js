@@ -502,7 +502,7 @@
       const m = route.regex.exec(pathname);
       if (!m) continue;
       let handler = route.handler;
-      if (handler && typeof handler === "object" && !(handler instanceof Response)) {
+      if (handler && typeof handler === "object" && !(handler instanceof Response) && !internal.require("html_server").isBundle(handler)) {
         handler = handler[method] || (method === "HEAD" ? handler.GET : undefined);
         if (!handler) continue;
       }
@@ -653,12 +653,15 @@
       let res;
       try {
         const route = matchRoute(routes, new URL(url).pathname, request.method);
-        if (route && route.handler instanceof Response) res = route.handler.clone();
+        if (route && internal.require("html_server").isBundle(route.handler)) res = await internal.require("html_server").respond(route.handler, new URL(url).pathname, request.method);
+        else if (route && route.handler instanceof Response) res = route.handler.clone();
         else if (route) {
           req.params = route.params;
           res = await route.handler.call(server, req, server);
-        } else if (fetchHandler) res = await fetchHandler.call(server, req, server);
-        else res = new Response("Not Found", { status: 404 });
+        } else {
+          res = await internal.require("html_server").asset(routes, new URL(url).pathname, request.method);
+          if (!res) res = fetchHandler ? await fetchHandler.call(server, req, server) : new Response("Not Found", { status: 404 });
+        }
       } catch (err) {
         res = errorHandler ? await errorHandler.call(server, err) : errorResponse(err);
       } finally {

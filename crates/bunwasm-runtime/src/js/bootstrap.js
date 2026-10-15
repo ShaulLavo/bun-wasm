@@ -508,6 +508,10 @@
       mod.exports = JSON.parse(native.readFileUtf8(path));
       return;
     }
+    if (kind === "html") {
+      mod.exports = internal.require("html_server").create(path);
+      return;
+    }
     if (kind === "text") {
       mod.exports = native.readFileUtf8(path);
       return;
@@ -621,6 +625,7 @@
       throw err;
     }
     const format = native.moduleFormat(path);
+    if (format === "html") return internal.require("html_server").start(path);
     if (format === "esm") return native.importModule(path);
     mainModule = new Module(path, null);
     mainModule.id = ".";

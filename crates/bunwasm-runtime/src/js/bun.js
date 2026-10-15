@@ -339,7 +339,7 @@
   class BuildArtifact extends Blob {
     constructor(output, entrypoints) {
       const kind = output.kind;
-      const type = /\.css$/.test(output.path) ? "text/css;charset=utf-8" : kind === "sourcemap" || kind === "metafile" ? "application/json;charset=utf-8" : "text/javascript;charset=utf-8";
+      const type = kind === "sourcemap" || kind === "metafile" ? "application/json;charset=utf-8" : internal.mimeType(output.path);
       super([output.contents], { type });
       this.path = output.path;
       this.kind = kind;

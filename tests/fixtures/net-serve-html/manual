@@ -1,0 +1,3 @@
+Pinned Bun 1.4.4 rejects non-GET/HEAD requests to HTML routes with 405.
+The installed native Bun 1.4.2 instead returns 200, so --update must preserve
+this expectation. See vendor/bun/test/js/bun/http/bun-serve-html-405.test.ts.

@@ -1,0 +1,38 @@
+import page from "./page.html";
+import other from "./other.html";
+import assert from "node:assert/strict";
+const server = Bun.serve({ port: 0, hostname: "127.0.0.1", development: false, routes: { "/": page, "/other": { GET: other } } });
+try {
+  const built = await Bun.build({ entrypoints: ["./page.html"], target: "browser" });
+  assert(built.success);
+  assert(built.outputs.find((output) => output.path.endsWith(".html")).type.startsWith("text/html"));
+  console.log("build:", built.outputs.length);
+  const response = await fetch(server.url);
+  const html = await response.text();
+  assert(html.includes("Vanilla HTML entry"));
+  assert(!html.includes("./app.ts"));
+  console.log("html:", response.status, response.headers.get("content-type"));
+  const script = /src="([^"]+\.js)"/.exec(html)[1];
+  const js = await fetch(new URL(script, server.url));
+  const source = await js.text();
+  assert(source.includes("hello from bundled TypeScript"));
+  assert(!source.includes(": HTMLElement"));
+  console.log("javascript:", js.status, js.headers.get("content-type"));
+  const style = /href="([^"]+\.css)"/.exec(html)[1];
+  const css = await fetch(new URL(style, server.url));
+  const styles = await css.text();
+  assert(/0c2238|rgb\(12,? *34,? *56\)/i.test(styles));
+  console.log("css:", css.status, css.headers.get("content-type"));
+  const image = /["']([^"']+\.png)["']/.exec(source)[1];
+  const asset = await fetch(new URL(image, server.url));
+  assert.equal(new Uint8Array(await asset.arrayBuffer())[0], 137);
+  console.log("asset:", asset.status, asset.headers.get("content-type"));
+  const second = await (await fetch(new URL("/other", server.url))).text();
+  assert(second.includes("Second route"));
+  console.log("second route: ok");
+  const post = await fetch(server.url, { method: "POST" });
+  console.log("post:", post.status, post.headers.get("allow"));
+  const head = await fetch(server.url, { method: "HEAD" });
+  console.log("head:", head.status, Number(head.headers.get("content-length")) > 0, (await head.text()).length);
+  console.log("missing:", (await fetch(new URL("/missing", server.url))).status);
+} finally { await server.stop(true); }

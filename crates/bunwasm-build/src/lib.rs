@@ -486,7 +486,9 @@ fn exec(
     let in_memory = !write
         && outfile.is_empty()
         && bo.outdir.is_empty()
-        && (this_transpiler.options.entry_points.len() > 1 || bo.code_splitting);
+        && (this_transpiler.options.entry_points.len() > 1
+            || bo.code_splitting
+            || this_transpiler.options.entry_points.iter().any(|entry| strings::has_suffix_comptime(entry, b".html")));
     this_transpiler.options.supports_multiple_outputs = !(output_to_stdout || !outfile.is_empty()) || in_memory;
     this_transpiler.options.public_path.clone_from(&bo.public_path);
     this_transpiler.options.entry_naming.clone_from(&bo.entry_naming);

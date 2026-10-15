@@ -1,0 +1,9 @@
+build: 4
+html: 200 text/html;charset=utf-8
+javascript: 200 text/javascript;charset=utf-8
+css: 200 text/css;charset=utf-8
+asset: 200 image/png
+second route: ok
+post: 405 GET, HEAD
+head: 200 true 0
+missing: 404

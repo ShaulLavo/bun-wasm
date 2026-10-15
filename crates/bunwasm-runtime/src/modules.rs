@@ -53,6 +53,7 @@ pub enum Format {
     Cjs,
     Json,
     Text,
+    Html,
 }
 
 impl Format {
@@ -62,6 +63,7 @@ impl Format {
             Format::Cjs => "cjs",
             Format::Json => "json",
             Format::Text => "text",
+            Format::Html => "html",
         }
     }
 }
@@ -222,6 +224,7 @@ impl State {
         let loader = SourceLoader::from_path(path);
         let (code, format) = match loader {
             SourceLoader::Json => (raw, Format::Json),
+            SourceLoader::Text if path.ends_with(".html") => (raw, Format::Html),
             SourceLoader::Text => (raw, Format::Text),
             SourceLoader::Jsonc => {
                 let value = if raw.trim().is_empty() {
