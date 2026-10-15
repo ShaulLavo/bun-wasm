@@ -56,7 +56,9 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   progress("downloading bun.wasm…");
   const started = performance.now();
   const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
-  let res = await fetch(gzUrl);
+  // The build hash in the query gives every build its own URL, so a CDN edge that still holds the
+  // previous build right after a deploy can't serve it in place of this one.
+  let res = await fetch(build ? `${gzUrl}?v=${build}` : gzUrl);
   const gzipped = res.ok;
   if (!gzipped) res = await fetch(url);
   if (res.status === 404) throw new WasmMissing(`${url}: HTTP 404`);
@@ -100,11 +102,18 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   const module = await WebAssembly.compileStreaming(response);
   measureStartup("compile", compiling, { streaming: true });
   const engine = { module, size };
-  if (build) setTimeout(() => {
-    const headers = { "content-type": "application/wasm", "content-length": String(size) };
-    void cacheEngine(key, build, new Response(new Blob(chunks), { headers }));
-  }, 0);
+  if (build) setTimeout(() => void cacheIfExpected(key, build, chunks, size), 0);
   return { ...engine, build };
+}
+
+/** Caches the downloaded engine only if its bytes are the build the page expects. */
+async function cacheIfExpected(key: string, build: string, chunks: Uint8Array<ArrayBuffer>[], size: number): Promise<void> {
+  const blob = new Blob(chunks);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()));
+  const hex = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+  if (hex !== build) return;
+  const headers = { "content-type": "application/wasm", "content-length": String(size) };
+  await cacheEngine(key, build, new Response(blob, { headers }));
 }
 
 // The browser engine imports program modules from named URLs served by the service worker at
