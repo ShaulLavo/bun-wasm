@@ -226,15 +226,20 @@ impl Js {
                 return None;
             }
             let obj = JSValueToObject(self.ctx, v, ptr::null_mut());
-            let (p, len) = if kind == kJSTypedArrayTypeArrayBuffer {
-                (JSObjectGetArrayBufferBytesPtr(self.ctx, obj, ptr::null_mut()), JSObjectGetArrayBufferByteLength(self.ctx, obj, ptr::null_mut()))
+            let (p, len, offset) = if kind == kJSTypedArrayTypeArrayBuffer {
+                (JSObjectGetArrayBufferBytesPtr(self.ctx, obj, ptr::null_mut()), JSObjectGetArrayBufferByteLength(self.ctx, obj, ptr::null_mut()), 0)
             } else {
-                (JSObjectGetTypedArrayBytesPtr(self.ctx, obj, ptr::null_mut()), JSObjectGetTypedArrayByteLength(self.ctx, obj, ptr::null_mut()))
+                (
+                    JSObjectGetTypedArrayBytesPtr(self.ctx, obj, ptr::null_mut()),
+                    JSObjectGetTypedArrayByteLength(self.ctx, obj, ptr::null_mut()),
+                    JSObjectGetTypedArrayByteOffset(self.ctx, obj, ptr::null_mut()),
+                )
             };
             if len == 0 || p.is_null() {
                 return Some(Vec::new());
             }
-            Some(core::slice::from_raw_parts(p.cast::<u8>(), len).to_vec())
+            // JSC returns the backing buffer pointer, so views need their byte offset.
+            Some(core::slice::from_raw_parts(p.cast::<u8>().add(offset), len).to_vec())
         }
     }
 
