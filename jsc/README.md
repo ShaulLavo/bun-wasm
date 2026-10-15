@@ -7,8 +7,8 @@ this is the experiment that shows how far Bun's real engine gets.
 
 ```sh
 scripts/build-jsc.sh        # WebKit checkout, ICU, JSC static libs, jsc.wasm (the jsc shell)
-scripts/build-bun-jsc.sh    # dist/bun-jsc.wasm (crates/bunwasm-jsc)
-scripts/test-jsc.sh         # tests/jsc fixtures vs native Bun (--fixtures tests/fixtures: the QuickJS suite)
+scripts/build-bun-jsc.sh    # dist/bun-jsc.wasm (bunwasm-cli --features engine-jsc)
+scripts/test.sh --engine jsc   # the fixture suite on JSC (scripts/test-jsc.sh is a shortcut)
 scripts/bench-jsc.sh        # tests/bench/micro.js on dist/bun.wasm and dist/bun-jsc.wasm
 
 wasmtime run --dir .::/ dist/bun-jsc.wasm run /app.ts
@@ -60,7 +60,7 @@ The patch, by area:
   `loadq` in `op_resolve_scope`), so with 4-byte pointers import slots 0 and 1 shared a variable
   and the second import read the first one's module (`import a from "./c"; import { f } from
   "./b"` made `f` read `c`'s binding). Each slot now takes a whole variable slot. Bun only ships
-  64-bit builds, so it never shows there; `tests/jsc/esm-imports` covers it.
+  64-bit builds, so it never shows there; `tests/fixtures/engine-esm-imports` covers it.
 
 ## The GC and `--spill-pointers`
 
@@ -83,23 +83,34 @@ JavaScript stack itself (the C loop's register file) is in linear memory and was
 
 When the GC heap itself runs out, JSC aborts (`handleResourceExhaustion`) instead of throwing.
 
-## bun-jsc.wasm (crates/bunwasm-jsc)
+## bun-jsc.wasm: the runtime on JSC
+
+`bun-jsc.wasm` is the same `bun` as `dist/bun.wasm`: bunwasm-cli built with
+`--no-default-features --features engine-jsc,bun-transpiler,bun-build`. The runtime
+(crates/bunwasm-runtime: module loader, event loop, natives, the 17k lines of JS polyfills) talks to
+its engine through the `Engine` trait (`src/engine.rs`); `src/engine_jsc.rs` implements it on
+`crates/bunwasm-jsc`, a library with:
 
 - `src/sys.rs`: hand-written declarations for the part of the C API used.
 - `cpp/helpers.cpp`: what the C API lacks, written against JSC internals and compiled with the
-  jsc shell's exact flags (read from `compile_commands.json` by `build.rs`): a global object with
-  ES module loader hooks (resolve/fetch/import()/import.meta), the VM lock, explicit microtask
-  draining, promise state and Proxy target for `console.log`.
-- `src/main.rs`: `bun-jsc run <entry>` bundles the entry with Bun's real bundler
-  (`bunwasm-build`, `--target bun --format esm`, inline source map), loads it through JSC's
-  module loader, then runs the event loop: timers over WASI clocks, the nextTick queue, then
-  microtasks, after every task.
-- `src/js/prelude.js`: console, timers, queueMicrotask, process (argv/env/exit/cwd/nextTick/on),
-  Bun (version/file/write/sleep/inspect), TextEncoder/TextDecoder, Buffer, `require` for
-  fs/path/util/buffer/timers. Formatting comes from bunwasm-runtime's engine-agnostic
-  `inspect.js`, `console.js`, `path.js` and `buffer.js` (`include_str!`, read-only). Error stacks
-  are converted from JSC's `name@file:line:col` to Bun's `at name (file:line:col)` and mapped
-  back through the source map, so uncaught errors print exactly like native Bun, excerpt included.
+  jsc shell's exact flags (read from `compile_commands.json` by `build.rs`): a global object whose
+  ES module loader calls back into the runtime per file (resolve, fetch = read + transpile,
+  import.meta), script evaluation with a file name and first line, top-level `import()`, the VM
+  lock, explicit microtask draining, promise state, Proxy target, Error detection, and Bun's
+  async-context slot (AsyncLocalStorage across `await`).
+- `build.rs`: links the JSC archives, ICU, the shim and libc++ (the binary's own build.rs adds
+  wasi-sdk's `crt1-command.o`).
+
+Engine specifics, handled in engine_jsc.rs and inspect.js:
+
+- Values the runtime keeps outside the stack are `JSValueProtect`ed handles (`JsVal`).
+- Natives are C API functions that all dispatch through one callback, keyed by function object.
+- Typed arrays handed to JS are made with `new Uint8Array(n)`: arrays made by the C API
+  (`JSObjectMakeTypedArray*`) read `.buffer` as undefined in this C-loop build (the getter itself
+  works when called directly).
+- JSC ignores `Error.prepareStackTrace`, so `err.stack` keeps JSC's `name@file:line:col` format;
+  inspect.js parses it, maps positions through the transpiler's source map, and moves call
+  positions from the open paren to the callee, so printed errors match native Bun.
 
 ### One libc
 
@@ -117,24 +128,23 @@ own target dir (`$JSC_BUILD_DIR/target`).
 
 | | dist/bun.wasm (QuickJS) | dist/bun-jsc.wasm (JSC) |
 |---|---|---|
-| size | 8.9 MB (3.3 MB gzip) | 40.0 MB (11.3 MB gzip, 8.8 MB zstd -19): 29.9 MB code, 10.1 MB data (8 MB ICU) |
-| `tests/bench/micro.js` loop | 210 ms | 280 ms |
-| regexp | 122 ms | 72 ms |
-| json | 190 ms | 50 ms |
-| alloc (GC churn) | 493 ms | 580 ms |
-| startup (`console.log(1)`, compiled module cached) | ~60 ms | ~150 ms |
+| size | 8.9 MB | 42.7 MB (12.1 MB gzip) |
+| fixtures (`scripts/test.sh [--engine jsc]`) | 57/57 | 57/57 |
+| `tests/bench/micro.js` loop | 207 ms | 268 ms |
+| regexp | 122 ms | 75 ms |
+| json | 190 ms | 52 ms |
+| alloc (GC churn) | 489 ms | 590 ms |
+| startup (`console.log(1)`, compiled module cached) | ~55 ms | ~165 ms |
 
-No JIT: tight loops are ~1.35x slower than QuickJS; RegExp (YARR interpreter) and JSON are
-1.7x and 3.8x faster.
+No JIT: tight loops are ~1.3x slower than QuickJS; RegExp (YARR interpreter) and JSON are
+1.6x and 3.7x faster.
 
-### Not done
+### Not done / engine-inherent
 
-- `bun test`, `bun build`, `-e` beyond plain JS, and most of `node:*` (events, crypto, url,
-  zlib, streams, http) and web APIs (URL, fetch, AbortController); `scripts/test-jsc.sh --fixtures
-  tests/fixtures` passes 7 of the 49 QuickJS fixtures (typescript, node-path, node-buffer,
-  cli-eval, errors-uncaught, errors-rejection, ts-stack-trace). The gap is the polyfill surface, not the
-  engine: bunwasm-runtime's JS polyfills are mostly engine-agnostic (see below).
-- `err.stack` read by user code keeps JSC's format (only printed errors are converted); the fork
-  doesn't honour `Error.prepareStackTrace` without Bun's global object.
-- Module-level `import.meta` of modules the bundler inlined refers to the entry.
+- `err.stack` read by user code keeps JSC's `name@file:line:col` format (printed errors are
+  converted); the fork doesn't honour `Error.prepareStackTrace` without Bun's global object.
+- Map/Set iterator entries aren't shown by `console.log` (QuickJS has a helper for that), and
+  `process.memoryUsage()` reports linear-memory size for every field.
+- The nextTick queue runs between microtask drains, not between individual promise jobs
+  (JSC drains its queue in one call).
 - VM teardown aborts in `AtomStringImpl::remove`; the binary never destroys its VM.

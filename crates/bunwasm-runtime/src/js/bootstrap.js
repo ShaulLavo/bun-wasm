@@ -717,7 +717,24 @@
   defineGlobal("console", internal.require("console"));
   defineGlobal("Bun", internal.require("bun"));
   defineLazyGlobal("Buffer", () => internal.require("buffer").Buffer);
-  if (typeof globalThis.Intl === "undefined") defineLazyGlobal("Intl", () => internal.require("intl"));
+  if (typeof globalThis.Intl === "undefined") {
+    // QuickJS has no Intl: a small en-US one (intl.js), which the engine's
+    // own toLocaleString methods then defer to.
+    defineLazyGlobal("Intl", () => internal.require("intl"));
+    defineHidden(Number.prototype, {
+      toLocaleString(locales, options) {
+        return new globalThis.Intl.NumberFormat(locales, options).format(Number(this));
+      },
+    });
+    defineHidden(Date.prototype, {
+      toLocaleDateString(locales, options) {
+        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ year: "numeric", month: "numeric", day: "numeric" }, options)).format(this);
+      },
+      toLocaleTimeString(locales, options) {
+        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ hour: "numeric", minute: "2-digit", second: "2-digit" }, options)).format(this);
+      },
+    });
+  }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
   internal.require("builtins");
 
