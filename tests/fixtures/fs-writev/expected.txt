@@ -1,0 +1,6 @@
+4 0
+3 2
+Axyz!
+3 true
+123z!
+invalid vectors rejected
