@@ -572,12 +572,54 @@ and independent verification finishes.
 
 ## Next opendir rerun
 
-The 2026-10-16 Next rerun used the same recorded Next 15.5.6, React 19.1.1 and React DOM 19.1.1 fixture on all three engines. The directory API change did not change Next's first blocker. The Web Streams and import integration still stop the app earlier in this checkout.
+The review rerun on 2026-10-16 uses main through `12307c3`, the pending Web Streams
+and WebCrypto branches, and the directory fixes. The semantic import rewrite is
+already on main. All three integration binaries were rebuilt for each side.
+The before side substitutes main's filesystem factory; the after side exposes the
+new directory API. Both sides use the same Next 15.5.6, React 19.1.1 and React DOM
+19.1.1 fixture and offline registry snapshot.
 
-| Engine | Before | After | First blocker after |
-| --- | --- | --- | --- |
-| QuickJS | install pass; dev failed at `LinkError: Unsupported WebAssembly export table`; build failed without a diagnostic; start blocked | install pass; dev failed at the same export-table error; build failed without a diagnostic; start blocked | `server: LinkError: Unsupported WebAssembly export table` |
-| JSC | install pass; dev and build failed at `ReferenceError: TextEncoderStream is not defined`; start blocked | same result | `server: ReferenceError: TextEncoderStream is not defined` |
-| Browser | install pass; dev and build failed without a diagnostic; start blocked | dev failed without a diagnostic; build failed with `SyntaxError: Unexpected token '.'`; start blocked | `server: No diagnostic before exit or deadline` |
+| Engine | Before | After |
+| --- | --- | --- |
+| QuickJS | install passes; dev and build fail with `LinkError: Unsupported WebAssembly export table`; start blocked | same result |
+| JSC | install passes; dev and build fail with `LinkError: Unsupported WebAssembly export table`; start blocked | same result |
+| Browser | install passes; dev fails without a diagnostic; build fails with `TypeError: _promises.default.opendir is not a function`; start blocked | install passes; dev fails without a diagnostic; build reaches production compilation and fails with `Error: Child process IPC is not supported in bun-wasm`; start blocked |
 
-The before and after result files are retained in `/work/reports/bun-wasm-next-opendir-2026-10-16/resume/next-before/` and `next-after/`. Both runs completed 12 stages with 3 install passes and 6 command failures. No stage timed out. The app row remains category `d` because the next blocker is outside the directory API.
+Each side records 12 stages, with three installation passes, six command failures
+and three blocked starts. No stage times out. The raw build logs contain the errors
+above even where the automatic classifier reports no diagnostic.
+
+Reproduce the row after building the local integration:
+
+```sh
+scripts/app-matrix.sh --apps=next --hosts=native --engines=quickjs,jsc,browser \
+  --launcher="$CARGO_TARGET_DIR/release/bun-wasm" --timeout=60 \
+  --output=/work/reports/bun-wasm-next-opendir-replay
+```
+
+The dev command is `bun run node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port <free-port>`.
+The build command is `bun run node_modules/next/dist/bin/next build`.
+QuickJS and JSC reject the llhttp wasm table export at
+`crates/bunwasm-runtime/src/js/webassembly.js:136`; the Next caller is
+`node_modules/next/dist/compiled/@edge-runtime/primitives/load.js:5630`.
+Browser build reaches `ChildProcess.send` at `crates/bunwasm-runtime/src/js/spawn.js:411`.
+Both require broader runtime work and are recorded in
+[compatibility follow-ups](../../plans/compatibility-followups.md#next-after-directory-handles).
+Browser dev still exits without a useful diagnostic, so no source location is established.
+
+The directory review regressions fail with the reviewed factory on every engine
+and pass with the correction. All 139 fixtures pass on each engine, the web gate
+passes, and all six HMR runs pass. Nine independent WASI host observations verify
+GC descriptor release before exit and cleanup after natural and explicit exit,
+including a retained wasm instance. Node 26.7.0 passes all four contract controls.
+The upstream directory file remains at 21 pass and two fail per engine. Its two
+failures expect synchronous throws from closed no-argument promise calls; Node
+rejects those promises instead.
+
+Fresh logs, source hashes, the integration-only standalone-example linker recipe,
+and the before/after result files are in
+`/work/reports/bun-wasm-rv28-final-20261016/`. The integration was pinned to
+`43d10f4e84997a51d07f8892ad72e739c2548fc3`; the only measurement-side filesystem
+change is recorded in `integration-before-fs.sha256`. Both runs report cleanup
+complete and zero registry misses or errors. The coordinator removes this review
+evidence after accepting the PR and finishing independent verification.

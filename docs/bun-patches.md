@@ -814,10 +814,10 @@ before JavaScript applies the requested encoding. JavaScript owns the async oper
 queue, callback timing, Dirent construction, iteration and explicit disposal.
 Closing drops the active native cursor and pending traversal paths. `FinalizationRegistry`
 releases abandoned native IDs through an idempotent native release. Its unregister
-token is separate from the owner, because the pinned QuickJS stores tokens strongly. Runtime shutdown
-clears the remaining cursor table after user exit listeners, including when the host
-retains the wasm instance. Native exits also clear the table before skipping engine teardown. The public path representation stays
-separate from the lookup string, so Buffer paths remain Buffers in `Dir.path` and
+token is separate from the owner, because the pinned QuickJS stores tokens strongly.
+Runtime shutdown clears the remaining cursor table after user exit listeners, including when the host
+retains the wasm instance. Native exits also clear the table before skipping engine teardown.
+The public path representation stays separate from the lookup string, so Buffer paths remain Buffers in `Dir.path` and
 `Dirent.parentPath`. The async queue keeps a refill operation active through its callback,
 while an already-buffered read does not block synchronous work. The fixture is original
 test code and runs against Node as a contract control.
@@ -840,6 +840,7 @@ forcing collection. The adapter collects synchronously with the VM's atom table
 installed, then restores the calling thread's table. Event-loop microtask draining
 also dispatches deferred work, which is where JSC schedules registry callbacks.
 Without this dispatch, collected directory owners retain their native cursors.
+
 ## Wasm stack guards
 
 Class **Port**. The upstream files are QuickJS-ng `quickjs/quickjs.c` from
