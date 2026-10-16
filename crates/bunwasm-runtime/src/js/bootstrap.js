@@ -792,6 +792,7 @@
   }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
   internal.require("builtins");
+  internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
 
   return internal;
 })

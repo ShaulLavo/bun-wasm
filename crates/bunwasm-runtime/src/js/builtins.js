@@ -350,57 +350,6 @@
     };
   }
 
-  // --- querystring ----------------------------------------------------------
-
-  function querystringModule() {
-    const escape = (str) => encodeURIComponent(str).replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
-    function unescape(str) {
-      try {
-        return decodeURIComponent(str);
-      } catch {
-        return str;
-      }
-    }
-    function stringifyPrimitive(v) {
-      if (typeof v === "string") return v;
-      if ((typeof v === "number" && isFinite(v)) || typeof v === "bigint" || typeof v === "boolean") return String(v);
-      return "";
-    }
-    function stringify(obj, sep = "&", eq = "=", options = {}) {
-      if (obj === null || typeof obj !== "object") return "";
-      const enc = options.encodeURIComponent || escape;
-      const parts = [];
-      for (const key of Object.keys(obj)) {
-        const value = obj[key];
-        const ks = enc(stringifyPrimitive(key)) + eq;
-        if (Array.isArray(value)) {
-          for (const v of value) parts.push(ks + enc(stringifyPrimitive(v)));
-        } else {
-          parts.push(ks + enc(stringifyPrimitive(value)));
-        }
-      }
-      return parts.join(sep);
-    }
-    function parse(str, sep = "&", eq = "=", options = {}) {
-      const out = Object.create(null);
-      if (typeof str !== "string" || str.length === 0) return out;
-      const dec = options.decodeURIComponent || unescape;
-      let pieces = str.split(sep);
-      if (options.maxKeys !== 0) pieces = pieces.slice(0, options.maxKeys || 1000);
-      for (const piece of pieces) {
-        if (!piece) continue;
-        const i = piece.indexOf(eq);
-        const k = dec((i < 0 ? piece : piece.slice(0, i)).replace(/\+/g, " "));
-        const v = i < 0 ? "" : dec(piece.slice(i + eq.length).replace(/\+/g, " "));
-        if (!(k in out)) out[k] = v;
-        else if (Array.isArray(out[k])) out[k].push(v);
-        else out[k] = [out[k], v];
-      }
-      return out;
-    }
-    return { stringify, parse, encode: stringify, decode: parse, escape, unescape };
-  }
-
   // --- async_hooks / diagnostics_channel ------------------------------------
 
   function asyncHooksModule() {
@@ -1068,7 +1017,7 @@
     "node:timers/promises": timersPromises,
     "node:module": moduleModule,
     "node:vm": vmModule,
-    "node:querystring": querystringModule,
+    "node:querystring": () => internal.require("bun_builtins").require("node:querystring"),
     "node:async_hooks": asyncHooksModule,
     "node:diagnostics_channel": diagnosticsChannelModule,
     "node:readline": readlineModule,
@@ -1126,7 +1075,7 @@
     }),
     "node:wasi": () => unsupportedModule("wasi", "nested WASI instances are not supported", ["WASI"]),
     "node:domain": () => unsupportedModule("domain", "domains are deprecated and not implemented", ["create", "createDomain", "Domain"]),
-    "node:punycode": () => ({ toASCII: (s) => native.domainToASCII(s), toUnicode: (s) => s, encode: thrower("punycode.encode", "not implemented"), decode: thrower("punycode.decode", "not implemented") }),
+    "node:punycode": () => internal.require("bun_builtins").require("node:punycode"),
     bun: () => globalThis.Bun,
     "bun:jsc": () => ({
       callerSourceOrigin() {
