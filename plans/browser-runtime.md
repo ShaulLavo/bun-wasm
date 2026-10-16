@@ -37,9 +37,12 @@ than it is today. The process layer loads on the first spawn.
   replaces today's copy-at-spawn and merge-at-exit in both bun-wasm and brush-web.
 - **Storage backends are swappable.** The filesystem service talks to storage through a small
   backend interface (load the tree, read data that isn't in memory, persist a batch, flush). We
-  ship one backend first, the fastest general one the spikes find. Later backends can include
-  IndexedDB without our own memory cache (lower memory, the browser caches for us) and memory-only
-  for throwaway sandboxes (owner, 2026-10-16).
+  ship two from day one: IndexedDB and OPFS. The faster one on the spike numbers is the default
+  (IndexedDB currently leads); the OPFS backend ships regardless. The OPFS backend starts simple,
+  one OPFS file per file, written in parallel with no per-file flush; packing is used only if the
+  simple layout can't be made viable in Firefox or Safari. Later backends can include IndexedDB
+  without our own memory cache (lower memory, the browser caches for us) and memory-only for
+  throwaway sandboxes (owner, 2026-10-16).
 - **Pipes run directly between workers** over shared memory, not through the supervisor.
 - **Not adopted:** `@wasmer/sdk`, a fork of `@bjorn3/browser_wasi_shim`, SLICC code.
 
