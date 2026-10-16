@@ -172,6 +172,7 @@ pub fn table(state: &Rc<State>) -> Table {
     install_process(&mut t, state);
     install_fs(&mut t);
     install_fds(&mut t, state);
+    crate::directory::install(&mut t, state);
     install_modules(&mut t, state);
     let st = state.clone();
     t.add("parseData", move |a| {
