@@ -840,10 +840,11 @@
       for (const [k, v] of pairs) {
         msg.rawHeaders.push(k, v);
         const key = k.toLowerCase();
+        const own = Object.prototype.hasOwnProperty.call(msg.headers, key);
         if (msg.headersDistinct) (msg.headersDistinct[key] = msg.headersDistinct[key] || []).push(v);
         if (key === "set-cookie") (msg.headers[key] = msg.headers[key] || []).push(v);
-        else if (key === "cookie") msg.headers[key] = key in msg.headers ? `${msg.headers[key]}; ${v}` : v;
-        else msg.headers[key] = key in msg.headers ? `${msg.headers[key]}, ${v}` : v;
+        else if (key === "cookie") msg.headers[key] = own ? `${msg.headers[key]}; ${v}` : v;
+        else msg.headers[key] = own ? `${msg.headers[key]}, ${v}` : v;
       }
     }
 
@@ -893,10 +894,10 @@
         return out;
       }
       getHeaderNames() {
-        return Array.from(this._headers.keys());
+        return Object.keys(Object.fromEntries(this._headers));
       }
       getRawHeaderNames() {
-        return Array.from(this._headers.values(), ([name]) => name);
+        return Object.keys(Object.fromEntries(this._headers)).map(key => this._headers.get(key)[0]);
       }
       hasHeader(name) {
         return this._headers.has(String(name).toLowerCase());
@@ -1217,7 +1218,7 @@
         super();
         this._options = options;
         this._chunks = [];
-        this._headers = {};
+        this._headers = Object.create(null);
         this._trailers = [];
         this.headersSent = false;
         this._sent = false;
@@ -1227,7 +1228,15 @@
         }
         this.method = validateMethod(options.method || "GET").toUpperCase();
         this.path = validatePath(options.path || "/");
-        validateHeaderValue("Host", options.hostname || options.host || "localhost");
+        const host = options.hostname || options.host || "localhost";
+        validateHeaderValue("Host", host);
+        this.host = host;
+        if (!this.hasHeader("host") && options.setHost !== false && options.setDefaultHeaders !== false) {
+          const defaultPort = protocol === "https:" || options.protocol === "https:" ? 443 : 80;
+          const port = options.port || defaultPort;
+          const hostname = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+          this.setHeader("Host", Number(port) === defaultPort ? hostname : `${hostname}:${port}`);
+        }
         if (callback) this.once("response", callback);
         if (this.getHeader("expect")) internal.nextTick(() => this.flushHeaders());
       }
@@ -1236,21 +1245,22 @@
         validateHeaderName(name);
         validateHeaderValue(name, value);
         const key = this._headerKey(name);
-        if (key && key !== name) this._headers = Object.fromEntries(Object.entries(this._headers).map(([entry, stored]) => entry === key ? [name, value] : [entry, stored]));
+        if (key && key !== name) this._headers = Object.assign(Object.create(null), Object.fromEntries(Object.entries(this._headers).map(([entry, stored]) => entry === key ? [name, value] : [entry, stored])));
         else this._headers[name] = value;
         return this;
       }
       _headerKey(name) {
         return Object.keys(this._headers).find(key => key.toLowerCase() === String(name).toLowerCase());
       }
-      getHeader(name) { return this._headers[this._headerKey(name)]; }
+      getHeader(name) { const key = this._headerKey(name); return key === undefined ? undefined : this._headers[key]; }
       hasHeader(name) { return this._headerKey(name) !== undefined; }
       getHeaderNames() { return Object.keys(this._headers).map(name => name.toLowerCase()); }
       getRawHeaderNames() { return Object.keys(this._headers); }
       getHeaders() { return Object.assign(Object.create(null), Object.fromEntries(Object.entries(this._headers).map(([key, value]) => [key.toLowerCase(), value]))); }
       removeHeader(name) {
         if (this.headersSent) throw Object.assign(new Error("Cannot remove headers after they are sent to the client"), { code: "ERR_HTTP_HEADERS_SENT" });
-        delete this._headers[this._headerKey(name)];
+        const key = this._headerKey(name);
+        if (key !== undefined) delete this._headers[key];
       }
       appendHeader(name, value) {
         const key = this._headerKey(name);
@@ -1446,8 +1456,7 @@
         if (options.timeout) socket.setTimeout(options.timeout, timeout);
         this.emit("socket", socket);
         if (this._httpState.state !== "pending") return;
-        const headers = Object.assign({}, this._headers);
-        if (!this.hasHeader("host")) headers.Host = Number(targetPort) === defaultPort ? host : `${host}:${targetPort}`;
+        const headers = Object.assign(Object.create(null), this._headers);
         if (!this.hasHeader("connection")) headers.Connection = "keep-alive";
         if (!this.hasHeader("content-length") && !this.hasHeader("transfer-encoding")) {
           if (!this._requestEnded || this._trailers.length) headers["Transfer-Encoding"] = "chunked";

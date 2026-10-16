@@ -42,7 +42,7 @@
   function outgoingHeaders(headers: Iterable<readonly [string, unknown]>, unique: readonly string[] = []): [string, string][] {
     const names = new Set(unique.map(name => name.toLowerCase()));
     const pairs: [string, string][] = [];
-    for (const [name, value] of headers) {
+    for (const [name, value] of Object.entries(Object.fromEntries(headers))) {
       const values: readonly unknown[] = Array.isArray(value) ? value : [value];
       if (name.toLowerCase() === "cookie" || names.has(name.toLowerCase())) {
         pairs.push([name, values.map(String).join("; ")]);
