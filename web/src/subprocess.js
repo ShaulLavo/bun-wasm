@@ -10,7 +10,6 @@ const decode = new NativeDecoder();
 const AGAIN = -2;
 const BADF = -3;
 const PIPE_SIZE = 1 << 20;
-const SNAPSHOT_SIZE = 8 << 20;
 const FIRST_HANDLE = 0x60000000;
 export const MAX_CHILDREN = 4;
 
@@ -145,17 +144,9 @@ export function childTransport(transport) {
     stdin: new SharedPipe(transport.pipes[0], transport.budget),
     stdout: new SharedPipe(transport.pipes[1], transport.budget),
     stderr: new SharedPipe(transport.pipes[2], transport.budget),
-    finish(code, snapshot) {
+    finish(code) {
       const cells = new Int32Array(transport.control, 0, 4);
       if (Atomics.load(cells, 0)) return;
-      let result = snapshot ? encode.encode(snapshot) : new Uint8Array();
-      if (result.length > SNAPSHOT_SIZE) {
-        result = new Uint8Array();
-        code = 1;
-        new SharedPipe(transport.pipes[2], transport.budget).writeAll(encode.encode("bun-wasm: child filesystem changes exceed 8 MiB\n"));
-      }
-      new Uint8Array(transport.control, 16).set(result);
-      Atomics.store(cells, 2, result.length);
       Atomics.store(cells, 1, code);
       for (const [fd, pipe] of transport.pipes.entries()) {
         if (fd === 0 && transport.inheritedStdin) continue;
@@ -233,7 +224,7 @@ export class SubprocessHost {
     const buffers = modes.map(() => new SharedArrayBuffer(16 + PIPE_SIZE));
     const inheritedStdin = modes[0] === "inherit" && Boolean(this.options.stdin);
     if (inheritedStdin) buffers[0] = this.options.stdin;
-    const transport = { budget: this.budget, slot, token, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16 + SNAPSHOT_SIZE) };
+    const transport = { budget: this.budget, slot, token, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16) };
     const id = this.nextHandle++;
     const pipes = transport.pipes.map((buffer) => new SharedPipe(buffer, this.budget));
     const handles = pipes.map((pipe, fd) => {
@@ -297,8 +288,6 @@ export class SubprocessHost {
   reap(child, cells) {
     child.ended = true;
     this.releaseSlot(child.transport.slot, child.transport.token);
-    const size = Atomics.load(cells, 2);
-    if (size && this.options.sync) this.options.sync(decode.decode(new Uint8Array(child.transport.control, 16, size).slice()));
     child.worker?.terminate();
   }
   release(id) {

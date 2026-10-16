@@ -10,9 +10,10 @@ import { EditorView, keymap } from "@codemirror/view";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
-import { MemFS, decode } from "../../web/src/fs";
+import { decode } from "../../web/src/fs";
 import type { NetHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
+import { SharedFilesystem } from "../../web/src/shared-fs";
 import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
 import { enableTerminalCopy } from "../../web/src/terminal-copy";
 import { linkLocalUrls } from "../../web/src/terminal-links";
@@ -81,8 +82,8 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 
 // ---------- filesystem ----------
 
-const fs = new MemFS();
-fs.mkdirp("/tmp");
+const fs = new SharedFilesystem();
+await fs.mkdirp("/tmp");
 const rel = (path: string) => path.slice(APP.length + 1);
 const abs = (relPath: string) => `${APP}/${relPath}`;
 
@@ -127,8 +128,8 @@ async function loadTemplate(): Promise<void> {
   const files = templateFiles(await response.text());
   if (!files) throw new Error(`${templateFile}: invalid project files`);
   measureStartup("template", started);
-  for (const [path, text] of Object.entries(files)) fs.writeFile(abs(path), text);
-  for (const [path, text] of Object.entries(edits)) fs.writeFile(abs(path), text);
+  for (const [path, text] of Object.entries(files)) await fs.writeFile(abs(path), text);
+  for (const [path, text] of Object.entries(edits)) await fs.writeFile(abs(path), text);
 }
 
 // ---------- terminal ----------
@@ -163,12 +164,15 @@ const DEPS_PATH = "/.bunwasm/deps-cache";
 interface Server {
   port: number;
   helper: NetHelper;
+  updates: Promise<void>;
 }
 
 let run: Run | null = null;
 let server: Server | null = null;
-/** Saved while the dev server was starting (after its filesystem snapshot): sent once it listens. */
-const unsent = new Map<string, string>();
+let serverRevision = 0;
+let editRevision = 0;
+/** Saved while the dev server was starting (before it listens): sent once it listens. */
+const unsent = new Map<string, { text: string; revision: number }>();
 
 function setServerState(state: "starting" | "up" | "down", text: string): void {
   serverDot.dataset.state = state;
@@ -179,11 +183,15 @@ function setServerState(state: "starting" | "up" | "down", text: string): void {
 
 async function startDevServer(): Promise<void> {
   stopDevServer();
+  const revision = serverRevision;
   if (!wasm) return;
+  await editor.flushAll();
+  if (revision !== serverRevision) return;
   const visibleStart = firstStart ? 0 : performance.now();
   firstStart = false;
   setStatus("waiting for module service worker…");
   const scoped = await moduleScope;
+  if (revision !== serverRevision) return;
   unsent.clear();
   for (const phase of ["deps-cached", "bundling-react", "bundled-react"]) {
     performance.clearMarks(`bunwasm:${phase}`);
@@ -192,8 +200,12 @@ async function startDevServer(): Promise<void> {
   const changedDeps = Object.keys(edits).some((path) => path === "package.json" || path.startsWith("node_modules/"));
   depsKey = changedDeps ? null : depsCacheKey(engine, wasm.build, templateFile);
   const cached = depsKey ? await readDeps(depsKey) : null;
-  fs.remove(DEPS_PATH);
-  if (cached) fs.writeFile(DEPS_PATH, cached);
+  if (revision !== serverRevision) return;
+  await fs.remove(DEPS_PATH);
+  if (revision !== serverRevision) return;
+  if (cached) await fs.writeFile(DEPS_PATH, cached);
+  await fs.flush();
+  if (revision !== serverRevision) return;
   setStatus("starting worker…");
   setServerState("starting", "starting dev server…");
   term.write(`\x1b[2m$\x1b[0m bun ./index.html \x1b[2m(${ENGINES[engine].name})\x1b[0m\r\n`);
@@ -212,19 +224,19 @@ async function startDevServer(): Promise<void> {
   };
   const started = performance.now();
   const output = new StartupOutput((text) => term.write(text), startupRecord);
-  const current = startRun({ engine, module: wasm.module, args: ["./index.html"], env, root: fs.root, moduleScope: scoped }, {
+  const current = startRun({ engine, module: wasm.module, args: ["./index.html"], env, filesystem: fs, moduleScope: scoped }, {
     phase: (name) => {
       if (name === "worker-start") setStatus("starting dev server…");
     },
     stdout: (data) => output.write(data),
     stderr: (data) => output.write(data),
     listening: (port, helper) => {
-      previews.register(port, helper);
       if (run !== current) return;
-      server = { port, helper };
+      previews.register(port, helper);
+      server = { port, helper, updates: Promise.resolve() };
       measureStartup("dev-server", started);
-      void showPreview(port, visibleStart);
-      for (const [path, text] of unsent) void sendUpdate(path, text);
+      void showPreview(server, visibleStart).catch(reportError);
+      for (const [path, update] of unsent) void sendUpdate(path, update.text, update.revision);
       unsent.clear();
     },
     stopped: (port, helper) => {
@@ -277,7 +289,7 @@ async function saveDeps(target: Server, key: string): Promise<void> {
   try {
     const result = await guestBytes(target, "/_bun/deps-cache");
     if (result.status !== 200 || server !== target || decode(result.bytes.subarray(0, 8)) !== "BUNDEPS1") return;
-    fs.writeFile(DEPS_PATH, result.bytes);
+    await fs.writeFile(DEPS_PATH, result.bytes);
     await writeDeps(key, result.bytes);
   } catch {
     // Restart can close the guest while the dependency cache is being saved.
@@ -285,14 +297,17 @@ async function saveDeps(target: Server, key: string): Promise<void> {
 }
 
 function stopDevServer(): void {
+  serverRevision++;
   const current = run;
   run = null;
   server = null;
   current?.kill();
 }
 
-async function showPreview(port: number, visibleStart: number): Promise<void> {
+async function showPreview(target: Server, visibleStart: number): Promise<void> {
   const state = await previews.ready;
+  if (server !== target) return;
+  const { port } = target;
   if (state !== "ready") {
     setServerState("down", `previews need a service worker (${state} here)`);
     return;
@@ -305,30 +320,43 @@ async function showPreview(port: number, visibleStart: number): Promise<void> {
   setStatus("loading preview…");
   const previewStarted = performance.now();
   previewFrame.addEventListener("load", () => {
+    if (server !== target) return;
     measureStartup("preview", previewStarted);
-    if (server && depsKey) void saveDeps(server, depsKey);
+    if (depsKey) void saveDeps(target, depsKey);
     setStatus(`dev server ready in ${((performance.now() - visibleStart) / 1000).toFixed(1)} s · ${ENGINES[engine].name} · ${mb(wasm?.size ?? 0)}`, "ok");
   }, { once: true });
   previewFrame.src = url;
 }
 
-async function sendUpdate(path: string, text: string): Promise<void> {
+async function sendUpdate(path: string, text: string, revision: number): Promise<void> {
   const target = server;
   if (!target) return;
+  // Keep HMR notifications in save order too, not just the filesystem writes.
+  const update = target.updates.then(async () => {
+    if (server === target) await target.helper.changeFile(abs(path), text);
+  });
+  target.updates = update.catch(() => {});
   try {
-    await target.helper.changeFile(abs(path), text);
-    if (server === target) setSaveState("saved", "ok");
+    await update;
+    if (server === target && revision === editRevision) setSaveState("saved", "ok");
   } catch (error) {
-    setSaveState(`not sent: ${error instanceof Error ? error.message : String(error)}`, "error");
+    if (server === target && revision === editRevision) {
+      setSaveState(`not sent: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
   }
 }
 
-function save(path: string, text: string): void {
-  fs.writeFile(abs(path), text);
+async function save(path: string, text: string, revision: number): Promise<void> {
   rememberEdit(path, text);
-  if (server) void sendUpdate(path, text);
-  else if (run) unsent.set(path, text);
-  else setSaveState("saved", "ok");
+  await fs.writeFile(abs(path), text);
+  if (server) await sendUpdate(path, text, revision);
+  else if (run) unsent.set(path, { text, revision });
+  else if (revision === editRevision) setSaveState("saved", "ok");
+}
+
+function reportError(error: unknown): void {
+  setStatus(String(error), "error");
+  term.write(`\x1b[31m${String(error)}\x1b[0m\r\n`);
 }
 
 // ---------- editor ----------
@@ -342,6 +370,8 @@ function language(path: string): Extension {
 class Editor {
   private states = new Map<string, EditorState>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private revisions = new Map<string, number>();
+  private openRevision = 0;
   private view: EditorView;
   path = "";
 
@@ -357,17 +387,19 @@ class Editor {
       oneDark,
       EditorView.lineWrapping,
       EditorState.readOnly.of(readOnly),
-      keymap.of([{ key: "Mod-s", preventDefault: true, run: () => (this.flush(path), true) }]),
+      keymap.of([{ key: "Mod-s", preventDefault: true, run: () => (this.flushInBackground(path), true) }]),
       EditorView.updateListener.of((u) => {
         if (u.docChanged && !readOnly) this.schedule(path);
       }),
     ];
   }
 
-  private stateFor(path: string): EditorState {
+  private async stateFor(path: string): Promise<EditorState> {
     let state = this.states.get(path);
     if (!state) {
-      const text = decode(fs.readFile(abs(path)) ?? new Uint8Array());
+      const text = decode(await fs.readFile(abs(path)) ?? new Uint8Array());
+      state = this.states.get(path);
+      if (state) return state;
       state = EditorState.create({ doc: text, extensions: this.extensions(path) });
       this.states.set(path, state);
     }
@@ -381,24 +413,45 @@ class Editor {
   /** Debounced save: typing a word is one update, not one per key. */
   private schedule(path: string): void {
     clearTimeout(this.timers.get(path));
+    this.revisions.set(path, ++editRevision);
+    rememberEdit(path, this.text(path));
     setSaveState("editing…");
     this.timers.set(
       path,
-      setTimeout(() => this.flush(path), SAVE_DELAY_MS),
+      setTimeout(() => this.flushInBackground(path), SAVE_DELAY_MS),
     );
   }
 
-  flush(path: string): void {
-    clearTimeout(this.timers.get(path));
-    this.timers.delete(path);
-    save(path, this.text(path));
+  private flushInBackground(path: string): void {
+    // flush reports failures in the save indicator; event handlers have no promise consumer.
+    void this.flush(path).catch(() => {});
   }
 
-  open(path: string): void {
+  async flush(path: string): Promise<void> {
+    clearTimeout(this.timers.get(path));
+    this.timers.delete(path);
+    const revision = this.revisions.get(path) ?? editRevision;
+    try {
+      await save(path, this.text(path), revision);
+    } catch (error) {
+      if (revision === editRevision) setSaveState(`not saved: ${String(error)}`, "error");
+      throw error;
+    }
+  }
+
+  async flushAll(): Promise<void> {
+    await Promise.all(Array.from(this.timers.keys(), (path) => this.flush(path)));
+    await fs.flush();
+  }
+
+  async open(path: string): Promise<void> {
+    const revision = ++this.openRevision;
     if (path === this.path) return;
+    await this.stateFor(path);
+    if (revision !== this.openRevision) return;
     if (this.path) this.states.set(this.path, this.view.state);
     this.path = path;
-    this.view.setState(this.stateFor(path));
+    this.view.setState(this.states.get(path)!);
     fileName.textContent = path;
     fileSelect.value = path;
     tree.select(path);
@@ -421,10 +474,13 @@ class Tree {
   /** Folders that are closed; node_modules starts closed. */
   private closed = new Set<string>(["node_modules"]);
   private current = "";
+  private renderRevision = 0;
 
-  render(): void {
+  async render(): Promise<void> {
+    const revision = ++this.renderRevision;
     const root: Folder = { folders: new Map(), files: [] };
-    const paths = fs.listFiles(APP).map(rel).filter((p) => !p.split("/").some((part) => part.startsWith(".")));
+    const paths = (await fs.listFiles(APP)).map(rel).filter((p) => !p.split("/").some((part) => part.startsWith(".")));
+    if (revision !== this.renderRevision) return;
     for (const path of paths) {
       const parts = path.split("/");
       let folder = root;
@@ -456,7 +512,7 @@ class Tree {
       button.onclick = () => {
         if (open) this.closed.add(path);
         else this.closed.delete(path);
-        this.render();
+        void this.render().catch(reportError);
       };
       li.append(button);
       if (open) {
@@ -473,7 +529,7 @@ class Tree {
       const button = this.button(path.slice(prefix.length), depth, "", "file");
       button.dataset.path = path;
       if (path === this.current) button.setAttribute("aria-current", "true");
-      button.onclick = () => editor.open(path);
+      button.onclick = () => void editor.open(path).catch(reportError);
       li.append(button);
       out.push(li);
     }
@@ -501,11 +557,11 @@ class Tree {
 
 const tree = new Tree();
 const editor = new Editor($<HTMLDivElement>("#editor"));
-fileSelect.addEventListener("change", () => editor.open(fileSelect.value));
+fileSelect.addEventListener("change", () => void editor.open(fileSelect.value).catch(reportError));
 
 restartButton.addEventListener("click", () => {
   term.write("\r\n");
-  void startDevServer();
+  void startDevServer().catch(reportError);
 });
 
 // Keep the app inside the visible area when the iOS keyboard opens.
@@ -527,23 +583,26 @@ async function boot(): Promise<void> {
   if (!globalThis.crossOriginIsolated) {
     setStatus("this page is not cross-origin isolated: the dev server can't serve previews", "error");
   }
-  const template = loadTemplate();
-  try {
-    wasm = await loadWasm(wasmUrl, (text) => setStatus(text));
-  } catch (err) {
-    const missing = err instanceof WasmMissing;
-    setStatus(missing ? `${ENGINES[engine].wasm} is not in this build` : `could not load bun.wasm: ${String(err)}`, "error");
-    setServerState("down", "no engine");
-  }
-  await template;
-  tree.render();
-  editor.open(fs.lookup(abs(START_FILE)) ? START_FILE : (fs.listFiles(APP).map(rel)[0] ?? START_FILE));
+  await Promise.all([
+    loadTemplate(),
+    (async () => {
+      try {
+        wasm = await loadWasm(wasmUrl, (text) => setStatus(text));
+      } catch (err) {
+        const missing = err instanceof WasmMissing;
+        setStatus(missing ? `${ENGINES[engine].wasm} is not in this build` : `could not load bun.wasm: ${String(err)}`, "error");
+        setServerState("down", "no engine");
+      }
+    })(),
+  ]);
+  await tree.render();
+  await editor.open(await fs.lookup(abs(START_FILE)) ? START_FILE : ((await fs.listFiles(APP)).map(rel)[0] ?? START_FILE));
   if (wasm) {
     setStatus(`starting the dev server on ${ENGINES[engine].name}…`);
     await startDevServer();
   }
 }
 
-void boot();
+void boot().catch(reportError);
 
 Object.assign(globalThis, { sandbox: { fs, editor, term, restart: startDevServer, server: () => server, engine, template } });

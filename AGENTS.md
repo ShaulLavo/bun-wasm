@@ -30,6 +30,8 @@ The machine has ~9 GB free RAM: use `cargo build -j 12` or less for big builds.
 
 ## Rules
 
+- New code is TypeScript. Don't hand-write JavaScript or check in compiled JavaScript unless something forces it (owner, 2026-10-16).
+
 - Every new or changed upstream patch, copied file, or adapted implementation gets a classified
   overview row and section in `docs/bun-patches.md` in the same PR. This covers Bun, Node, WebKit,
   and other upstreams, including source outside vendor directories. Record the upstream path and

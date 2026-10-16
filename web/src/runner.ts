@@ -2,7 +2,7 @@
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
 // and the sandbox (../sandbox/).
 
-import type { DirNode } from "./fs";
+import type { SharedFilesystem } from "./shared-fs";
 import { NetHelper } from "./net/helper";
 import { createRing } from "./net/ring";
 import { activated } from "./preview";
@@ -140,8 +140,8 @@ export interface RunOptions {
   /** Arguments after `bun`. */
   args: string[];
   env: Record<string, string>;
-  /** The filesystem the run starts from (copied into the worker). */
-  root: DirNode;
+  /** Shared service owned by the page, also used by editor and shell. */
+  filesystem: SharedFilesystem;
   /** From registerModuleScope(): run the worker under ./__bunwasm/. */
   moduleScope: boolean;
   trace?: boolean;
@@ -158,15 +158,13 @@ export interface RunHooks {
 
 export interface RunResult {
   code: number;
-  /** The filesystem when the program exited; null when it was killed or the worker failed. */
-  root: DirNode | null;
   /** Set when bun.wasm crashed or the worker failed to start. */
   error?: string;
 }
 
 export interface Run {
   readonly done: Promise<RunResult>;
-  /** Terminates the worker (exit code 130); filesystem changes from the run are dropped. */
+  /** Terminates the worker (exit code 130); completed filesystem writes remain visible. */
   kill(): void;
 }
 
@@ -192,7 +190,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     module: options.module,
     args: ["bun", ...options.args],
     env: options.env,
-    root: options.root,
+    filesystem: options.filesystem.fork(),
     trace: options.trace ?? false,
     net: ring,
     moduleCache,
@@ -200,7 +198,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     spawnBroker: true,
   };
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
-  const subprocess = new SubprocessBroker(workerUrl);
+  const subprocess = new SubprocessBroker(workerUrl, options.filesystem);
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
   let settle: (result: RunResult) => void = () => {};
@@ -209,6 +207,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const finish = (result: RunResult) => {
     if (finished) return;
     finished = true;
+    options.filesystem.revoke(request.filesystem);
     worker.terminate();
     subprocess.dispose();
     helper?.dispose();
@@ -237,13 +236,13 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       return;
     }
     // Terminals want CRLF between the error's stack lines.
-    if (msg.type === "error") finish({ code: 134, root: msg.root, error: `bun.wasm crashed: ${msg.message}`.replace(/\r?\n/g, "\r\n") });
-    else finish({ code: msg.code, root: msg.root });
+    if (msg.type === "error") finish({ code: 134, error: `bun.wasm crashed: ${msg.message}`.replace(/\r?\n/g, "\r\n") });
+    else finish({ code: msg.code });
   };
   worker.onerror = (event) => {
     event.preventDefault();
-    finish({ code: 1, root: null, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
+    finish({ code: 1, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
-  worker.postMessage(request);
-  return { done, kill: () => finish({ code: 130, root: null }) };
+  worker.postMessage(request, [request.filesystem.port]);
+  return { done, kill: () => finish({ code: 130 }) };
 }

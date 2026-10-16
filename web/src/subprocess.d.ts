@@ -34,7 +34,7 @@ export function childTransport(transport: ChildTransport): {
   stdin: SharedPipe;
   stdout: SharedPipe;
   stderr: SharedPipe;
-  finish(code: number, snapshot?: string): void;
+  finish(code: number): void;
 };
 export class SubprocessHost {
   constructor(options: {
@@ -44,7 +44,6 @@ export class SubprocessHost {
     stdin?: SharedArrayBuffer;
     launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): { terminate(): unknown };
     output(fd: number, bytes: Uint8Array): void;
-    sync?(snapshot: string): void;
   });
   budget: SharedArrayBuffer;
   attach(memory: WebAssembly.Memory): void;

@@ -1,8 +1,6 @@
 import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { MemFS } from "../src/fs";
 import { SharedPipe, SubprocessHost, childTransport, createProcessBudget, type ChildTransport } from "../src/subprocess.js";
-import { filesystemChanges, mergeFilesystemChanges } from "../src/subprocess-fs";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -21,26 +19,6 @@ test("shared child pipes preserve bytes across wrap, capacity and EOF", () => {
   pipe.close();
   expect(pipe.read()).toBe(0);
   expect(pipe.write(encoder.encode("closed"))).toBe(-1);
-});
-
-test("child filesystem deltas merge created, changed and deleted paths", () => {
-  const parent = new MemFS();
-  parent.writeFile("/same", "initial");
-  parent.writeFile("/delete", "initial");
-  parent.writeFile("/changed", "initial");
-  const before = structuredClone(parent.root);
-  const child = new MemFS(structuredClone(before));
-  child.writeFile("/changed", "child");
-  child.writeFile("/new/deep/file", "new");
-  child.remove("/delete");
-  parent.writeFile("/same", "parent update");
-  parent.writeFile("/parent-only", "parent");
-  mergeFilesystemChanges(parent, filesystemChanges(before, child.root));
-  expect(decoder.decode(parent.readFile("/same"))).toBe("parent update");
-  expect(decoder.decode(parent.readFile("/changed"))).toBe("child");
-  expect(decoder.decode(parent.readFile("/new/deep/file"))).toBe("new");
-  expect(decoder.decode(parent.readFile("/parent-only"))).toBe("parent");
-  expect(parent.lookup("/delete")).toBeUndefined();
 });
 
 test.skipIf(!existsSync(new URL("../../dist/bun-browser.wasm", import.meta.url)))("fresh wasm subprocess workers support pipes, exit, kill and bounds", () => {
@@ -114,46 +92,4 @@ test("late completion cannot release a reused child slot or its descendants", ()
     stale.host.dispose();
     root.host.dispose();
   }
-});
-
-for (const replacement of [false, true]) {
-  test(`child ${replacement ? "replacement" : "removal"} releases lookup-only handles and preserves open descriptions`, () => {
-    const parent = new MemFS();
-    parent.writeFile("/unopened", "unopened"); parent.writeFile("/opened", "original");
-    const root = parent.preopen("/");
-    const lookup = (name: string) => {
-      const path = parent.resolve(root, name);
-      if (typeof path === "number" || path.node === undefined) throw new Error("Missing fixture");
-      return path.node;
-    };
-    const unopened = lookup("unopened"); const opened = lookup("opened");
-    parent.retain(opened);
-    const before = structuredClone(parent.root);
-    const child = new MemFS(structuredClone(before));
-    for (const path of ["/unopened", "/opened"]) {
-      if (replacement) child.writeFile(path, "replacement");
-      else child.remove(path);
-    }
-    mergeFilesystemChanges(parent, filesystemChanges(before, child.root));
-    expect(() => parent.stat(unopened)).toThrow("unknown filesystem handle");
-    const bytes = new Uint8Array(8);
-    expect(parent.read(opened, [bytes], 0)).toBe(8);
-    expect(decoder.decode(bytes)).toBe("original");
-    parent.release(opened);
-    expect(() => parent.stat(opened)).toThrow("unknown filesystem handle");
-    if (replacement) expect(decoder.decode(parent.readFile("/opened"))).toBe("replacement");
-    else expect(parent.listFiles()).toEqual([]);
-  });
-}
-
-test('merged directory removal does not permit creation through a retained descendant', () => {
-  const parent = new MemFS(); parent.mkdirp('/removed/descendant');
-  const directory = parent.preopen('/removed/descendant'); parent.retain(directory);
-  const before = structuredClone(parent.root); const child = new MemFS(structuredClone(before));
-  child.remove('/removed');
-  mergeFilesystemChanges(parent, filesystemChanges(before, child.root));
-  const path = parent.resolve(directory, 'new');
-  if (typeof path === 'number') throw new Error('Expected a resolved capability');
-  expect(parent.create(path, 'file')).toEqual({ error: 44 });
-  parent.release(directory);
 });

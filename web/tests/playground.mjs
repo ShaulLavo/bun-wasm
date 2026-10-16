@@ -14,7 +14,7 @@ export const playwright = await import(playwrightPath);
 
 /** Children, browsers and a scratch directory, all removed by `cleanup` (also on SIGINT/SIGTERM). */
 export function session(prefix) {
-  const scratch = mkdtempSync(`/work/tmp/${prefix}`);
+  const scratch = mkdtempSync(join(process.env.BUN_WASM_TEST_TMP ?? "/work/tmp", prefix));
   const children = [];
   const browsers = [];
   let cleaned = false;
@@ -49,7 +49,7 @@ export function session(prefix) {
 
   /** web/serve.ts on a free port; returns the page URL (http://127.0.0.1:<port>/). */
   async function serve() {
-    const [, url] = await start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { PORT: "0" });
+    const [, url] = await start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { PORT: process.env.BUN_WASM_TEST_PORT ?? "0" });
     return url;
   }
 
@@ -158,14 +158,13 @@ export async function clickRun(page, path, ms = 60000) {
   return page.evaluate(
     async ([p, timeout]) => {
       const { shell, editor } = globalThis.playground;
-      editor.open(p);
+      await editor.open(p);
       const button = document.querySelector("#run");
       const t0 = performance.now();
       button.click();
-      // runCurrent() marks the shell busy synchronously after saving; wait for it to go idle.
-      while (!shell.running && performance.now() - t0 < 1000) await new Promise((r) => setTimeout(r, 0));
-      while (shell.running && performance.now() - t0 < timeout) await new Promise((r) => setTimeout(r, 1));
-      return { ms: performance.now() - t0, code: shell.running ? null : shell.lastExit };
+      // Saving is asynchronous; the disabled button also covers the save-to-submit gap.
+      while ((button.disabled || shell.running) && performance.now() - t0 < timeout) await new Promise((r) => setTimeout(r, 1));
+      return { ms: performance.now() - t0, code: button.disabled || shell.running ? null : shell.lastExit };
     },
     [path, ms],
   );

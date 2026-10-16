@@ -66,7 +66,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/stack_trace.js`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
 
-| [`runtime/core/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, memory, path, descriptor and filesystem-boundary adapters extracted into a reusable package. |
+| [`runtime/core/`, `runtime/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, memory, path, descriptor and filesystem-boundary adapters extracted into a reusable package. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
@@ -83,15 +83,18 @@ Each row has one class. A file with independent changes has separate rows.
 
 ## Browser runtime core
 
-Class **Host feature**, **original adapters** in `runtime/core/`, `web/src/fs.ts`, and the
-`wasiPipe` adapter in `web/src/subprocess.js`, and snapshot merges in `web/src/subprocess-fs.ts`.
+Class **Host feature**, **original adapters** in `runtime/core/`, `web/src/fs.ts`, `runtime/fs/`, and the `wasiPipe` adapter in `web/src/subprocess.js`.
 The extraction starts from bun-wasm's own
 `web/src/{wasi.ts,memory-views.js,fs.ts}` at `8716f92`; there is no copied Bun, Node, WebKit,
 brush-web, or browser_wasi_shim implementation in this layer. The preview1 adapter now uses
 opaque filesystem handles keyed by object identity (not serialized inode metadata), reference-counted
-descriptions and descriptor readiness. Snapshot removal/replacement delegates cleanup to MemFS,
-preserving retained descriptions without pinning detached lookup-only nodes. Path walking,
-geometric file growth and snapshot compaction remain local MemFS implementation details. Bun's
+descriptions and descriptor readiness. The filesystem worker and shared-memory protocol are original TypeScript adapters. Their
+memory backend moves the local MemFS implementation from `web/src/fs.ts` at `53a22c6`;
+there is no copied upstream implementation. The OPFS spike informed the scheduling choice,
+not the implementation. One worker allocates inodes, owns open identities and services all
+guests. Ancestor revocation cancels requests and releases each guest's references; bounded
+read/stat caches use a shared mutation epoch. Copy-at-spawn and merge-at-exit are removed.
+Path walking and geometric file growth remain local MemFS details. Bun's
 reserved socket slot bridge stays configured by `web/`, not imported into the generic core.
 Unbundled Node host adapters import the extracted JavaScript memory helper by repository-relative
 path so headless CLI workflows remain dependency-free.

@@ -1,8 +1,8 @@
 # @bun-wasm/runtime
 
-Browser runtime layers, consumed as a local TypeScript package. The `./core` export is available
-now. Filesystem, network, process and terminal implementations get their own `./fs`, `./net`,
-`./proc` and `./term` entries as those plan steps land; core imports none of them.
+Browser runtime layers, consumed as a local TypeScript package. `./core` and `./fs` are available
+now. Network, process and terminal implementations get their own `./net`, `./proc` and `./term`
+entries as those plan steps land; core imports none of them.
 
 ```ts
 import { Wasi } from "@bun-wasm/runtime/core";
@@ -16,18 +16,55 @@ const status = wasi.start(instance);
 wasi.descriptors.dispose();
 ```
 
-`fs` implements `FileSystem`; today's MemFS implementation lives in `web/src/fs.ts`. Its handles
+`FilesystemClient` from `./fs` implements `FileSystem`; the direct memory backend lives in
+`runtime/fs/memory.ts` and is also exported as `./fs/memory`. Its handles
 are filesystem-owned identities, not paths, reported inode numbers, or concrete tree nodes. A handle
 used by an open description must remain valid after rename or unlink. The host calls `retain`/`release` once per
 open description, not per duplicate; a filesystem worker can use those calls to reclaim detached
 files after their final open description closes. `resolve` walks the real tree relative to
 a directory capability and returns a handle or positive WASI errno. Other path operations work
-on that result, with no asynchronous interleaving between resolution and mutation. Reads and
-writes use iovec views directly and return byte counts or negative WASI errno, like streams; failures
+on that result, revalidating it against concurrent path changes. Reads and
+writes return byte counts or negative WASI errno, like streams; failures
 do not advance the shared cursor. Resize and timestamp updates return zero or positive WASI errno.
 Path operations use positive errno (creation wraps errors to distinguish them from handles).
-`readdir` produces one entry list per call. Future worker-backed
-clients can implement this synchronous interface without changing preview1.
+`readdir` produces one entry list per call. The blocking worker adapter implements this interface
+with `Atomics.wait`, without changing preview1.
+
+## Shared filesystem service
+
+One filesystem worker runs `installFilesystemWorker(self)` and owns a `MemoryBackend`. Its
+serialized `execute` boundary accepts asynchronous backends, but this step has no persistence.
+The page, editor and every guest share that tree; completed writes are visible before exit.
+
+Ports schedule requests; each request owns a SharedArrayBuffer with a 32-byte completion header,
+JSON operation/arguments and optional binary input. Results overwrite the data region. Large
+results are read in 64 KiB pieces, not placed in a fixed-size process snapshot. A completion owns
+its buffer until `release()`; buffers and revocation words are never recycled between guests.
+
+```ts
+const request = client.submit("read", [handle, 4096, 0]); // does not block
+client.readiness(request.id); // { kind: 3, id, ready } for a future process poller
+try {
+  const bytes = await request.value();
+} finally {
+  request.release();
+}
+```
+
+`ready`, `epoch`, `wait()`, `value()`, `cancel()` and `release()` are exposed on the completion.
+The connection's shared `signal` changes on completion/cancellation so a future poller can
+recheck readiness. No `runtime_proc` imports are implemented here. Read, stat and resolved-path
+caches are bounded and validated by the shared mutation epoch; writes always complete at the
+service before returning. Preopens and open descriptions retain handles; transient path pins
+are bounded and evicting them invalidates cached paths.
+
+Connections carry their own revocation word and every ancestor's word. The page revokes a killed
+guest, sweeps the service and terminates it; no service operation waits for a guest acknowledgment.
+When a blocked guest spawns a child, it creates only a `FilesystemIdentity`. The runnable page
+uses `connectFilesystemIdentity` to create the MessageChannel and attach the service endpoint,
+then transfers the client endpoint to the child. Creating a new channel in a blocked guest
+would deadlock Firefox. `createFilesystemConnection`/`client.fork()` are for runnable controllers
+and non-blocking setup, not that guest spawn path.
 
 Every fd belongs to `wasi.descriptors`. A binding holds its own rights and optional preopen name;
 it references an `OpenDescription` holding a file, directory, pipe or terminal resource. `dup`

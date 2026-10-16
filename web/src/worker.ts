@@ -1,15 +1,14 @@
-// One worker per `bun …` command: instantiate bun.wasm fresh, run it, send the filesystem back.
+// One worker per `bun …` command: instantiate bun.wasm fresh, run it, use the shared filesystem service.
 // The "browser" engine (bun-browser.wasm) runs natives and the transpiler in wasm, then hands the
 // program to engine-host.js, which runs it in this worker's own JS engine.
 
 import { startEngineHost } from "./engine-host.js";
-import { type DirNode, MemFS, adoptInodes, compactFs } from "./fs";
+import { FilesystemClient, createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity, type FilesystemConnection } from "@bun-wasm/runtime/fs";
 import { NetHost } from "./net/host";
 import type { NetRequest } from "./net/protocol";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline";
 import { Wasi, WasiExit } from "@bun-wasm/runtime/core";
 import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.js";
-import { filesystemChanges, mergeFilesystemChanges } from "./subprocess-fs";
 
 export type Engine = "quickjs" | "jsc" | "browser";
 
@@ -18,7 +17,7 @@ export interface RunRequest {
   module: WebAssembly.Module;
   args: string[];
   env: Record<string, string>;
-  root: DirNode;
+  filesystem: FilesystemConnection;
   trace: boolean;
   /** The networking ring (net/ring.ts); null when the page is not cross-origin isolated. */
   net: SharedArrayBuffer | null;
@@ -56,14 +55,16 @@ function moduleStore(cacheName: string) {
   };
 }
 
+export type SpawnRequest = Omit<RunRequest, "filesystem"> & { filesystem: FilesystemIdentity };
+
 export type WorkerMessage =
-  | { type: "spawn"; request: RunRequest }
+  | { type: "spawn"; request: SpawnRequest }
   | { type: "phase"; name: string; duration: number }
   | { type: "stdout"; data: Uint8Array }
   | { type: "stderr"; data: Uint8Array }
   | { type: "net"; req: NetRequest }
-  | { type: "exit"; code: number; root: DirNode; sleep: SleepMode }
-  | { type: "error"; message: string; root: DirNode; sleep: SleepMode };
+  | { type: "exit"; code: number; sleep: SleepMode }
+  | { type: "error"; message: string; sleep: SleepMode };
 
 export type SleepMode = "atomics" | "busy-wait";
 
@@ -100,8 +101,7 @@ function describeError(err: unknown): string {
 ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   ctx.postMessage({ type: "phase", name: "worker-start", duration: 0 } satisfies WorkerMessage);
   const req = event.data;
-  const fs = new MemFS(req.root);
-  const initialRoot = req.child ? structuredClone(req.root) : null;
+  const fs = new FilesystemClient(req.filesystem);
   const child = req.child ? childTransport(req.child) : null;
   const post = (type: "stdout" | "stderr", data: Uint8Array) => {
     if (child) child[type].writeAll(data);
@@ -113,21 +113,17 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     token: req.child?.token,
     stdin: req.child?.pipes[0],
     output: (fd, data) => post(fd === 2 ? "stderr" : "stdout", data),
-    sync: (snapshot) => {
-      mergeFilesystemChanges(fs, snapshot);
-      adoptInodes(fs.root);
-    },
     launch: (meta, transport) => {
       const cwd = meta.cwd || req.env.PWD || "/";
       if (fs.lookup(cwd)?.kind !== "dir") throw Object.assign(new Error(`spawn: cwd does not exist: ${cwd}`), { code: "ENOENT" });
       if (!req.spawnBroker) throw Object.assign(new Error("spawn: this worker has no page subprocess broker"), { code: "ENOTSUP" });
-      const request: RunRequest = {
+      const request: SpawnRequest = {
         ...req, args: meta.argv, env: { ...meta.env, PWD: cwd },
-        root: structuredClone(fs.root), child: transport, net: null, moduleCache: null,
+        filesystem: createFilesystemIdentity(fs.connection), child: transport, net: null, moduleCache: null,
       };
       ctx.postMessage({ type: "spawn", request } satisfies WorkerMessage);
       const control = new Int32Array(transport.control, 0, 4);
-      return { terminate: () => { Atomics.store(control, 3, 1); } };
+      return { terminate: () => { revokeFilesystem(request.filesystem); fs.sweep(); Atomics.store(control, 3, 1); } };
     },
   }) : null;
   const wasi = new Wasi({
@@ -148,21 +144,22 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     if (done) return;
     done = true;
     subprocess?.dispose();
-    compactFs(fs.root);
-    if (child && initialRoot) {
+    if (child) {
       if ("error" in result) child.stderr.writeAll(new TextEncoder().encode(`${describeError(result.error)}\n`));
-      child.finish("code" in result ? result.code : 1, filesystemChanges(initialRoot, fs.root));
+      child.finish("code" in result ? result.code : 1);
       wasi.descriptors.dispose();
+      fs.dispose();
       return;
     }
     wasi.descriptors.dispose();
+    fs.dispose();
     if ("code" in result) {
-      ctx.postMessage({ type: "exit", code: result.code, root: fs.root, sleep: sleepMode } satisfies WorkerMessage);
+      ctx.postMessage({ type: "exit", code: result.code, sleep: sleepMode } satisfies WorkerMessage);
       return;
     }
     const err = result.error;
     const message = describeError(err);
-    ctx.postMessage({ type: "error", message, root: fs.root, sleep: sleepMode } satisfies WorkerMessage);
+    ctx.postMessage({ type: "error", message, sleep: sleepMode } satisfies WorkerMessage);
   };
   try {
     const instantiating = perfNow();
