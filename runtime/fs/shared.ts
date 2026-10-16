@@ -240,12 +240,6 @@ export class SharedFilesystemState {
       return { kind: "file", ino: Atomics.load(this.slots, this.at(slot, INO)), size: Atomics.load(this.slots, this.at(slot, FILE_SIZE)), mtime: this.getMtime(slot), capacity: Atomics.load(this.slots, this.at(slot, CAPACITY)) * PAGE };
     } finally { this.unlock(this.at(slot, FILE_LOCK), owner); }
   }
-  /** A single atomic size sample; callers use it only to detect a concurrent truncate. */
-  size(handle: FileHandle): number | undefined {
-    const slot = this.findSlot(handle);
-    if (!slot || Atomics.load(this.slots, this.at(slot, 0)) !== 1) return undefined;
-    return Atomics.load(this.slots, this.at(slot, FILE_SIZE));
-  }
   stat(handle: FileHandle, revoked?: () => boolean, owner = this.lockOwner): FileStat | undefined {
     const slot = this.findSlot(handle);
     if (!slot) return undefined;
@@ -258,6 +252,11 @@ export class SharedFilesystemState {
   }
   private copyInto(slot: number, source: Uint8Array, offset: number): void { let at = offset; for (let sourceAt = 0; sourceAt < source.length;) { const logical = Math.floor(at / PAGE); const page = Atomics.load(this.pages, this.pageAt(slot, logical)) - 1; const inPage = at % PAGE; const count = Math.min(source.length - sourceAt, PAGE - inPage); this.segmentFor(page).set(source.subarray(sourceAt, sourceAt + count), inPage); at += count; sourceAt += count; } }
   read(handle: FileHandle, chunks: readonly Uint8Array[], offset: number, revoked?: () => boolean, owner = this.lockOwner): number { const slot = this.slot(handle); if (Atomics.load(this.slots, this.at(slot, 0)) !== 1) throw new FilesystemError(31); this.lock(this.at(slot, FILE_LOCK), revoked, owner); try { const size = Atomics.load(this.slots, this.at(slot, FILE_SIZE)); let total = 0; for (const chunk of chunks) { let at = 0; while (at < chunk.length && offset + total < size) { const position = offset + total; const page = Atomics.load(this.pages, this.pageAt(slot, Math.floor(position / PAGE))) - 1; const inPage = position % PAGE; const count = Math.min(chunk.length - at, size - position, PAGE - inPage); chunk.set(this.segmentFor(page).subarray(inPage, inPage + count), at); at += count; total += count; } if (at < chunk.length) break; } return total; } finally { this.unlock(this.at(slot, FILE_LOCK), owner); } }
+  /* Direct client paths. A live file's size, timestamp and page entries below its size change only
+   * under its file lock; capacity and the page entries above it change only under the global lock.
+   * Each direct path holds the lock covering every field it touches, so it uses plain Int32 reads
+   * and writes (aligned, never torn) ordered by the lock's acquiring and releasing atomics. Lock
+   * words, the epoch and revocation stay atomic. */
   /** Client read of an open file from its cached slot: one file lock, one revocation check after
    * locking, then a coherent copy straight into the guest iovecs. Every size change holds the
    * same lock, so the copy is the file's content at one instant. */
@@ -266,8 +265,8 @@ export class SharedFilesystemState {
     if (Atomics.compareExchange(slots, lock, 0, owner) !== 0) this.contend(slots, lock, revoked, owner);
     try {
       if (revoked()) throw new FilesystemError(11);
-      if (Atomics.load(slots, base + HANDLE) !== handle + 1) throw new FilesystemError(8);
-      const size = Atomics.load(slots, base + FILE_SIZE);
+      if (slots[base + HANDLE] !== handle + 1) throw new FilesystemError(8);
+      const size = slots[base + FILE_SIZE]!, pages = this.pages, first = slot * MAX_FILE_PAGES;
       let position = offset;
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i]!, length = chunk.length;
@@ -275,7 +274,7 @@ export class SharedFilesystemState {
         while (at < length && position < size) {
           const inPage = position % PAGE;
           const count = Math.min(length - at, size - position, PAGE - inPage);
-          const page = this.segmentFor(Atomics.load(this.pages, slot * MAX_FILE_PAGES + (position - inPage) / PAGE) - 1);
+          const page = this.segmentFor(pages[first + (position - inPage) / PAGE]! - 1);
           copyBytes.call(chunk, count === PAGE ? page : page.subarray(inPage, inPage + count), at);
           at += count; position += count;
         }
@@ -285,13 +284,14 @@ export class SharedFilesystemState {
     } finally { Atomics.compareExchange(slots, lock, owner, 0); }
   }
   private copyChunks(slot: number, chunks: readonly Uint8Array[], offset: number): void {
+    const pages = this.pages, first = slot * MAX_FILE_PAGES;
     let position = offset;
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i]!, length = chunk.length;
       for (let at = 0; at < length;) {
         const inPage = position % PAGE;
         const count = Math.min(length - at, PAGE - inPage);
-        const page = this.segmentFor(Atomics.load(this.pages, slot * MAX_FILE_PAGES + (position - inPage) / PAGE) - 1);
+        const page = this.segmentFor(pages[first + (position - inPage) / PAGE]! - 1);
         // A fixed-length source view never changes length; build sub-views without species lookup.
         page.set(count === length ? chunk : new Uint8Array(chunk.buffer, chunk.byteOffset + at, count), inPage);
         at += count; position += count;
@@ -310,15 +310,17 @@ export class SharedFilesystemState {
       if (Atomics.compareExchange(slots, lock, 0, owner) !== 0) this.contend(slots, lock, revoked, owner);
       try {
         if (revoked()) throw new FilesystemError(11);
-        if (Atomics.load(slots, base + HANDLE) !== handle + 1) throw new FilesystemError(8);
-        const size = Atomics.load(slots, base + FILE_SIZE);
+        if (slots[base + HANDLE] !== handle + 1) throw new FilesystemError(8);
+        const size = slots[base + FILE_SIZE]!;
         const at = offset < 0 ? size : offset;
         if (!total) return at;
         const end = at + total;
-        if (end > Atomics.load(slots, base + CAPACITY) * PAGE) return -end;
+        if (end > slots[base + CAPACITY]! * PAGE) return -end;
         this.copyChunks(slot, chunks, at);
-        if (end > size) Atomics.store(slots, base + FILE_SIZE, end);
-        this.setTimestamp(slot, Date.now());
+        if (end > size) slots[base + FILE_SIZE] = end;
+        const mtime = Date.now();
+        slots[base + MTIME_LOW] = mtime >>> 0;
+        slots[base + MTIME_HIGH] = Math.floor(mtime / 0x100000000) >>> 0;
         return end;
       } finally { Atomics.compareExchange(slots, lock, owner, 0); }
     } finally {
