@@ -16,7 +16,7 @@ for (const [name, Ctor, prefix, suffix] of [
     return name === "generator" ? value.next().value : name === "async generator" ? (await value.next()).value : value;
   }
   await check(name + " comment", async () => (await run(prefix + 'import/* comment */("./value.mjs")')).value === "adjacent");
-  await check(name + " template", async () => (await run(prefix + '`raw import("fake") ${import("./value.mjs").then(m => m.value)}`')).startsWith("raw import"));
+  await check(name + " template", async () => (await run(prefix + '(p => `raw import("fake") ${p[0] = import("./value.mjs")}` && p[0])([])')).value === "adjacent");
 }
 await check("await template", async () => await AsyncFunction('return `${(await import("./value.mjs")).value}`')() === "adjacent");
 for (const [name, fn] of [
