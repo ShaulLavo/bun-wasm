@@ -114,3 +114,14 @@ test("truncated worker framing fails once", () => {
   expect(() => channel.pump(() => {})).toThrow("Incomplete worker message");
   expect(() => channel.pump(() => {})).not.toThrow();
 });
+
+test("closing a failed worker channel discards a partial trailing frame", () => {
+  const factory = channelFactory();
+  const incoming: (Uint8Array | number)[] = [new TextEncoder().encode('{bad}\npartial'), 0];
+  const channel = factory({ native: {
+    hostWrite: () => -2, hostRead: () => incoming.shift() ?? 0, hostClose() {},
+  } }).open(1, 2);
+  expect(() => channel.pump(() => {})).toThrow();
+  channel.close();
+  expect(() => channel.pump(() => {})).not.toThrow();
+});
