@@ -110,3 +110,24 @@ before/after provenance are retained in
 remaining failure after fixing the earlier `_read` error and request completion
 hang. The compatibility track owns the framing follow-up and evidence removal
 after reproduction.
+
+### Browser-host child port release
+
+The Web Streams round-3 full browser gate observed one `self-spawn-network`
+failure after an earlier full run passed that fixture. The child serves a
+response and reports exit 143, but immediate parent rebinding fails with
+`EADDRINUSE`. The failed port was no longer listening when checked after the
+fixture process exited. No stream expectation was changed to hide this result.
+
+Inspect `web/src/subprocess.js`, especially `kill()` and `reap()`. The Node host
+worker's `terminate()` returns a promise, but `kill()` currently publishes child
+completion immediately, before awaiting that promise. Confirm resource release
+before making `child.exited` observable, with matching handling for the browser
+worker implementation. Do not add a delay or retry to the fixture.
+
+Reproduce through the heavy wrapper with `scripts/test.sh --no-build --engine
+browser self-spawn-network`, then the full browser gate. The first observed
+failure is in
+`/work/reports/bun-wasm-streams-round3-fix-2026-10-16/final-gate-browser.log`.
+The isolated retry and full rerun are retained alongside it. This is a
+browser-host subprocess lifecycle follow-up owned by the compatibility track.
