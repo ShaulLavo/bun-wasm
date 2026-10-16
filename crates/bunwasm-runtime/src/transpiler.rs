@@ -92,7 +92,7 @@ pub trait Transpiler {
     /// string (one source: the input) when the transpiler records one. The
     /// runtime uses it to report original positions in stack traces.
     fn transpile_with_map(&self, source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
-        self.transpile(source, path, loader).map(|code| Transpiled { code, mappings: None, imports: Vec::new() })
+        self.transpile(source, path, loader).map(|code| Transpiled { code, ..Default::default() })
     }
 
     /// Semantic imports for the host engine's module URL and dynamic-import hooks.
@@ -191,9 +191,17 @@ pub struct BuildResult {
     pub logs: String,
 }
 
-/// Transpiler output with an optional source map.
+#[derive(Clone, Copy, Debug)]
+pub enum ModuleKind {
+    Script,
+    CommonJs,
+    Esm,
+}
+
+/// Transpiler output with an optional source map and parser classification.
 #[derive(Clone, Debug, Default)]
 pub struct Transpiled {
+    pub module_kind: Option<ModuleKind>,
     pub code: String,
     pub mappings: Option<String>,
     pub imports: Vec<ModuleImport>,

@@ -62,9 +62,8 @@ mod bun_transpiler {
 
     /// Bun's real parser and printer (crates/bunwasm-transpiler).
     ///
-    /// Plain JavaScript skips it: QuickJS runs it as is, and the original
-    /// line numbers then show up in stack traces (the printer reformats code
-    /// and there are no source maps yet).
+    /// Plain JavaScript keeps its original text unless await hooks are needed.
+    /// The same parse supplies its module kind and semantic import locations.
     pub struct BunTranspiler;
 
     impl Transpiler for BunTranspiler {
@@ -85,12 +84,7 @@ mod bun_transpiler {
             let loader = match loader {
                 // The browser engine needs every `await` printed with its
                 // AsyncLocalStorage hooks, plain JavaScript included.
-                Loader::Js if AWAIT_HOOKS && source.contains("await") => BunLoader::Js,
-                Loader::Js => return Ok(Transpiled {
-                    code: source.to_owned(),
-                    mappings: None,
-                    imports: if AWAIT_HOOKS { self.module_imports(source, path)? } else { Vec::new() },
-                }),
+                Loader::Js => BunLoader::Js,
                 Loader::Jsx => BunLoader::Jsx,
                 Loader::Ts => BunLoader::Ts,
                 Loader::Tsx => BunLoader::Tsx,
@@ -101,10 +95,23 @@ mod bun_transpiler {
                 Loader::Jsonc => BunLoader::Jsonc,
                 Loader::Text => BunLoader::Text,
             };
+            let preserve_source = loader == BunLoader::Js && !(AWAIT_HOOKS && source.contains("await"));
             let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
-                bunwasm_transpiler::transpile_with_source_map(source, path, loader)
+                bunwasm_transpiler::transpile_with_source_map(source, path, loader, preserve_source)
             })?;
-            Ok(Transpiled { code: out.code, mappings: Some(out.mappings), imports: runtime_imports(out.imports) })
+            use bunwasm_runtime::transpiler::ModuleKind;
+            use bunwasm_transpiler::ModuleKind as ParsedKind;
+            let module_kind = Some(match out.module_kind {
+                ParsedKind::Script => ModuleKind::Script,
+                ParsedKind::CommonJs => ModuleKind::CommonJs,
+                ParsedKind::Esm => ModuleKind::Esm,
+            });
+            Ok(Transpiled {
+                code: out.code,
+                mappings: if preserve_source { None } else { Some(out.mappings) },
+                imports: runtime_imports(out.imports),
+                module_kind,
+            })
         }
 
         fn module_imports(&self, source: &str, path: &str) -> Result<Vec<bunwasm_runtime::transpiler::ModuleImport>, String> {
@@ -147,7 +154,7 @@ mod bun_transpiler {
                 }
                 None => (code, None),
             };
-            Ok(Transpiled { code, mappings, imports: Vec::new() })
+            Ok(Transpiled { code, mappings, ..Default::default() })
         }
 
         #[cfg(feature = "bun-build")]

@@ -1,0 +1,2 @@
+nested await import.meta is just text
+top-level await

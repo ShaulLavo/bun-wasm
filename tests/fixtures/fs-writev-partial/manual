@@ -1,0 +1,1 @@
+Requires the bounded OS file-size limit installed by tests/test-writev-partial.py.
