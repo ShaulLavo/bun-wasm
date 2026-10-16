@@ -1,0 +1,15 @@
+function comment ok
+function template ok
+async comment ok
+async template ok
+generator comment ok
+generator template ok
+async generator comment ok
+async generator template ok
+await template ok
+shadow local ok
+shadow parameter ok
+shadow with ok
+symbol rejection ok
+one coercion ok
+falsy rejection ok

@@ -1,0 +1,177 @@
+From cd95fa7a13b3f13be73e512b38ec111c1c228084 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Fri, 16 Oct 2026 01:46:27 +0300
+Subject: [PATCH 10/10] wasm: expose semantic dynamic import locations to the
+ host
+
+---
+ src/js_parser/lib.rs                       | 29 +++++++++
+ src/js_parser/parse/parse_import_export.rs |  1 +
+ src/js_printer/lib.rs                      | 75 +++++++++++++++++++++-
+ 3 files changed, 103 insertions(+), 2 deletions(-)
+
+diff --git a/src/js_parser/lib.rs b/src/js_parser/lib.rs
+index fecb03f8..045bf990 100644
+--- a/src/js_parser/lib.rs
++++ b/src/js_parser/lib.rs
+@@ -770,3 +770,32 @@ pub mod renamer {
+     // The remaining renamer types are only consumed by the printer and bundler
+     // — they live in `bun_js_printer`.
+ }
++
++/// bun-wasm: collect dynamic-import keyword locations during a semantic parse.
++/// Property names, literals, and import.meta never enter parse_import_expr's
++/// dynamic-import branch. The guard restores the outer collector on unwind.
++pub fn with_bunwasm_dynamic_imports<T>(f: impl FnOnce() -> T) -> (T, Vec<usize>) {
++    struct Restore(Option<Vec<usize>>);
++    impl Drop for Restore {
++        fn drop(&mut self) {
++            BUNWASM_DYNAMIC_IMPORTS.with(|slot| { slot.replace(self.0.take()); });
++        }
++    }
++    let previous = BUNWASM_DYNAMIC_IMPORTS.with(|slot| slot.replace(Some(Vec::new())));
++    let _restore = Restore(previous);
++    let result = f();
++    let imports = BUNWASM_DYNAMIC_IMPORTS.with(|slot| slot.take().unwrap_or_default());
++    (result, imports)
++}
++
++thread_local! {
++    static BUNWASM_DYNAMIC_IMPORTS: core::cell::RefCell<Option<Vec<usize>>> = const { core::cell::RefCell::new(None) };
++}
++
++fn bunwasm_dynamic_import(loc: bun_ast::Loc) {
++    BUNWASM_DYNAMIC_IMPORTS.with_borrow_mut(|slot| {
++        if let Some(imports) = slot {
++            imports.push(loc.start as usize);
++        }
++    });
++}
+diff --git a/src/js_parser/parse/parse_import_export.rs b/src/js_parser/parse/parse_import_export.rs
+index f862d5ad..b37952e9 100644
+--- a/src/js_parser/parse/parse_import_export.rs
++++ b/src/js_parser/parse/parse_import_export.rs
+@@ -44,6 +44,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+ 
+         p.lexer.preserve_all_comments_before = true;
+         p.lexer.expect(T::TOpenParen)?;
++        crate::bunwasm_dynamic_import(loc);
+ 
+         // const comments = try p.lexer.comments_to_preserve_before.toOwnedSlice();
+         p.lexer.comments_to_preserve_before.clear();
+diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
+index 41580732..015fbba1 100644
+--- a/src/js_printer/lib.rs
++++ b/src/js_printer/lib.rs
+@@ -3021,7 +3021,7 @@ pub(crate) mod __gated_printer {
+ 
+             // Allow it to fail at runtime, if it should
+             if module_type != bundle_opts::Format::InternalBakeDev {
+-                self.print(b"import(");
++                self.print_dynamic_import();
+                 self.print_import_record_path(record);
+             } else {
+                 self.print_symbol(self.options.hmr_ref);
+@@ -3648,7 +3648,7 @@ pub(crate) mod __gated_printer {
+                             self.print_symbol(self.options.hmr_ref);
+                             self.print(b".dynamicImport(");
+                         } else {
+-                            self.print(b"import(");
++                            self.print_dynamic_import();
+                         }
+                         // TODO: leading_interior_comments
+                         self.print_expr(e.expr, Level::Comma, ExprFlag::none());
+@@ -6554,15 +6554,32 @@ pub(crate) mod __gated_printer {
+             Ok(())
+         }
+ 
++        fn print_dynamic_import(&mut self) {
++            super::BUNWASM_IMPORT_REFERRER.with_borrow(|from| {
++                if let Some(from) = from {
++                    self.print(b"globalThis.__bunwasm_dynamicImport(");
++                    self.print_string_literal_utf8(from, false);
++                    self.print(b")(");
++                } else {
++                    super::bunwasm_import(self.writer.written() as usize, self.writer.written() as usize + 6, None);
++                    self.print(b"import(");
++                }
++            });
++        }
++
+         pub(crate) fn print_import_record_path(&mut self, import_record: &ImportRecord) {
+             if IS_JSON {
+                 unreachable!();
+             }
+ 
++            let start = self.writer.written() as usize;
+             let quote = best_quote_char_for_string(import_record.path.text, false);
+             self.print(quote);
+             self.print_string_characters_utf8(import_record.path.text, quote);
+             self.print(quote);
++            if import_record.kind == ImportKind::Stmt {
++                super::bunwasm_import(start, self.writer.written() as usize, Some(import_record.path.text));
++            }
+         }
+ 
+         #[inline]
+@@ -7646,6 +7663,60 @@ pub type BufferPrinter = Writer<BufferWriter>;
+ // Format / GenerateSourceMap
+ // ───────────────────────────────────────────────────────────────────────────
+ 
++/// bun-wasm: emitted UTF-8 ranges for the host's module linking.
++#[derive(Debug)]
++pub struct BunwasmImport {
++    pub start: usize,
++    pub end: usize,
++    pub specifier: Option<String>,
++}
++
++/// Collect from the existing print pass, after all transforms and formatting.
++pub fn with_bunwasm_imports<T>(f: impl FnOnce() -> T) -> (T, Vec<BunwasmImport>) {
++    struct Restore(Option<Vec<BunwasmImport>>);
++    impl Drop for Restore {
++        fn drop(&mut self) {
++            BUNWASM_IMPORTS.with(|slot| { slot.replace(self.0.take()); });
++        }
++    }
++    let previous = BUNWASM_IMPORTS.with(|slot| slot.replace(Some(Vec::new())));
++    let _restore = Restore(previous);
++    let result = f();
++    let imports = BUNWASM_IMPORTS.with(|slot| slot.take().unwrap_or_default());
++    (result, imports)
++}
++
++/// bun-wasm: `require(esm)` prints a single module with all imports external.
++/// Rewrite its dynamic calls directly, without scanning the bundled output.
++pub fn with_bunwasm_import_referrer<T>(from: &str, f: impl FnOnce() -> T) -> T {
++    struct Restore(Option<Vec<u8>>);
++    impl Drop for Restore {
++        fn drop(&mut self) {
++            BUNWASM_IMPORT_REFERRER.with(|slot| { slot.replace(self.0.take()); });
++        }
++    }
++    let previous = BUNWASM_IMPORT_REFERRER.with(|slot| slot.replace(Some(from.as_bytes().to_vec())));
++    let _restore = Restore(previous);
++    f()
++}
++
++thread_local! {
++    static BUNWASM_IMPORT_REFERRER: core::cell::RefCell<Option<Vec<u8>>> = const { core::cell::RefCell::new(None) };
++    static BUNWASM_IMPORTS: core::cell::RefCell<Option<Vec<BunwasmImport>>> = const { core::cell::RefCell::new(None) };
++}
++
++fn bunwasm_import(start: usize, end: usize, specifier: Option<&[u8]>) {
++    BUNWASM_IMPORTS.with_borrow_mut(|slot| {
++        if let Some(imports) = slot {
++            imports.push(BunwasmImport {
++                start,
++                end,
++                specifier: specifier.map(|s| String::from_utf8_lossy(s).into_owned()),
++            });
++        }
++    });
++}
++
+ /// bun-wasm: print every `await x` as
+ /// `__bunwasm_resume(__bunwasm_capture(), await x)` and give `for await`
+ /// loops the same hooks, so a host JS engine without AsyncContext can carry
