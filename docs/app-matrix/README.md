@@ -271,3 +271,12 @@ The before artifacts embed the original main JavaScript through the build-time
 override directory. Before and after use the same vendor checkout and launcher;
 their hashes are recorded by both runners. The fixture and registry cache are
 unchanged between app runs, with no missing replay objects.
+
+The final rebased build passes all 108 local fixtures on QuickJS, JSC, and the
+browser engine. The web checks, site build, and all six Chromium/WebKit HMR
+runs pass. The final upstream console and Vitest reruns retain the counts and
+first blockers above. The local fixtures also check FORCE_COLOR against
+explicit color modes, preserve stderr trace messages, and exercise asynchronous
+write errors without leaking stdio error listeners. Native Bun 1.4.2 drops a
+Console trace's message; the Node-contract fixture is marked manual, and a
+minimal Bun/Node comparison is recorded in the owner's upstream bug report.
