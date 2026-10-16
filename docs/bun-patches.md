@@ -806,5 +806,10 @@ Rust owns open `std::fs::ReadDir` cursors and recursive traversal. Each native r
 returns at most `bufferSize` entries. Raw filename bytes cross the engine boundary
 before JavaScript applies the requested encoding. JavaScript owns the async operation
 queue, callback timing, Dirent construction, iteration and explicit disposal.
-Closing drops the active native cursor and pending traversal paths. The fixture
-is original test code and runs against Node as a contract control.
+Closing drops the active native cursor and pending traversal paths. `FinalizationRegistry`
+releases abandoned native IDs, and the process exit hook clears the remaining cursor table
+when an engine instance outlives guest execution. The public path representation stays
+separate from the lookup string, so Buffer paths remain Buffers in `Dir.path` and
+`Dirent.parentPath`. The async queue keeps a refill operation active through its callback,
+while an already-buffered read does not block synchronous work. The fixture is original
+test code and runs against Node as a contract control.
