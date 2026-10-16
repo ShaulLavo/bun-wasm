@@ -72,6 +72,7 @@
     const Ctor = info.name === "TypeError" ? TypeError : Error;
     const err = new Ctor(info.message);
     if (info.code) err.code = info.code;
+    if (info.syscall) err.syscall = info.syscall;
     if (info.name && info.name !== "TypeError" && info.name !== "Error") err.name = info.name;
     return err;
   }
@@ -305,18 +306,21 @@
       this.reading = false;
       this.writer = null;
     }
+    get bufferedAmount() { return this.queue.reduce((size, item) => size + item.bytes.length, 0); }
     startReading() {
       if (this.reading || this.closed) return;
       this.reading = true;
       this.reader = addWaiter({
         step: () => this.pumpRead(),
         fail: (err) => this.fail(err),
+        ref: this.referenced !== false,
       });
     }
     pumpRead() {
       if (this.closed) return true;
       let progressed = false;
       for (;;) {
+        if (this.canRead && !this.canRead()) return progressed ? "progress" : false;
         const chunk = native.hostRead(this.handle);
         if (chunk === AGAIN) return progressed ? "progress" : false;
         if (typeof chunk === "number") {
@@ -333,14 +337,18 @@
         if (this.closed) return true;
       }
     }
-    write(bytes) {
-      if (this.closed || this.closing) return;
-      if (bytes.length > 0) this.queue.push(bytes);
+    write(bytes, callback) {
+      if (this.closed || this.closing) {
+        if (callback) internal.nextTick(() => callback(this._writeError || Object.assign(new Error("Connection is closed"), { code: "ERR_STREAM_DESTROYED" })));
+        return;
+      }
+      this.queue.push({ bytes, callback });
       this.flush();
     }
     flush() {
       while (this.queue.length > 0) {
-        const chunk = this.queue[0];
+        const item = this.queue[0];
+        const chunk = item.bytes;
         const n = native.hostWrite(this.handle, chunk);
         if (n === AGAIN) {
           this.waitWritable();
@@ -350,44 +358,65 @@
           this.fail(hostError(this.handle, "write failed"));
           return false;
         }
-        if (n < chunk.length) this.queue[0] = chunk.subarray(n);
-        else this.queue.shift();
+        if (n < chunk.length) item.bytes = chunk.subarray(n);
+        else {
+          this.queue.shift();
+          if (item.callback) internal.nextTick(item.callback);
+        }
+      }
+      if (this._shutdown && !this.writeEnded) {
+        this.writeEnded = true;
+        const result = native.hostShutdown(this.handle);
+        if (result < 0) { this.fail(hostError(this.handle, "shutdown failed")); return false; }
+        if (this._shutdownCallback) internal.nextTick(this._shutdownCallback);
       }
       if (this.closing) this.destroy();
       return true;
     }
     waitWritable() {
       if (this.writer) return;
-      this.writer = addWaiter({
-        step: () => {
-          if (this.closed) return true;
-          const done = this.flush();
-          if (done || this.closed) {
-            this.writer = null;
-            if (!this.closed && this.onDrain) this.onDrain();
-            return true;
-          }
-          return false;
-        },
-      });
+      this.writer = addWaiter({ ref: this.referenced !== false, step: () => this.pumpWrite() });
+    }
+    pumpWrite() {
+      if (this.closed) return true;
+      const done = this.flush();
+      if (!done && !this.closed) return false;
+      this.writer = null;
+      if (!this.closed && this.onDrain) this.onDrain();
+      return true;
+    }
+    ref(value) {
+      this.referenced = value;
+      if (this.reader) this.reader.ref = value;
+      if (this.writer) this.writer.ref = value;
+    }
+    shutdown(callback) {
+      this._shutdown = true;
+      this._shutdownCallback = callback;
+      this.flush();
     }
     // Close after queued bytes are written.
     end() {
       this.closing = true;
       if (this.queue.length === 0) this.destroy();
     }
-    destroy() {
+    destroy(err) {
       if (this.closed) return;
       this.closed = true;
+      this._writeError = err || Object.assign(new Error("Connection is closed"), { code: "ERR_STREAM_DESTROYED" });
       this.reading = false;
       if (this.reader) waiters.delete(this.reader);
       if (this.writer) waiters.delete(this.writer);
+      this.reader = this.writer = null;
+      for (const item of this.queue.splice(0)) {
+        if (item.callback) internal.nextTick(() => item.callback(this._writeError));
+      }
       native.hostClose(this.handle);
       if (this.onClose) this.onClose();
     }
     fail(err) {
       try { if (this.onError) this.onError(err); }
-      finally { this.destroy(); }
+      finally { this.destroy(err); }
     }
     peer() {
       const text = native.hostPeerAddr(this.handle);
@@ -739,6 +768,7 @@
     if (typeof callback === "function" && !running) internal.nextTick(() => callback(Object.assign(new Error("Server is not running."), { code: "ERR_SERVER_NOT_RUNNING" })));
     if (server.listening) {
       waiters.delete(server._accepting);
+      waiters.delete(server._starting);
       native.hostClose(server._listener);
       server.listening = false;
       server._closing = true;
@@ -770,6 +800,7 @@
     const { Buffer } = internal.require("buffer");
 
     class IncomingMessage extends Readable {
+      _read() {}
       constructor() {
         super();
         this.headers = {};
@@ -785,7 +816,6 @@
         this.socket = null;
         this.trailers = {};
       }
-      _read() {}
       setTimeout(ms, cb) {
         if (cb) this.once("timeout", cb);
         return this;
@@ -928,28 +958,46 @@
         return this;
       }
       _onConnection(conn) {
+        const { Socket } = internal.builtin("node:net");
+        const socket = new Socket();
+        socket._conn = conn;
+        socket._phase = "open";
+        socket._updatePeer();
+        socket.encrypted = protocol === "https:";
+        let writable = socket.writable;
+        Object.defineProperty(socket, "writable", {
+          configurable: true, enumerable: true,
+          get() { return writable && !this._conn.closed && !this._conn.closing; },
+          set(value) { writable = value; },
+        });
+        conn.onClose = () => socket.destroy();
         trackServerConnection(this, conn);
-        const peer = conn.peer();
-        const socket = {
-          get writable() { return !conn.closed && !conn.closing; },
-          remoteAddress: peer.address, remotePort: peer.port, remoteFamily: peer.family, encrypted: protocol === "https:",
-          destroy: () => conn.destroy(), setTimeout() {}, setNoDelay() {}, setKeepAlive() {}, on() {}, once() {},
-        };
         this.emit("connection", socket);
-        serveHttp(conn, (request, c, keepAlive) => new Promise((resolve) => {
-          const req = new IncomingMessage();
-          req.method = request.method;
-          req.url = request.target;
-          req.httpVersion = request.version.slice(5);
-          req.socket = req.connection = socket;
-          setHeaderPairs(req, request.headers);
-          const res = new ServerResponse(c, req, keepAlive, resolve);
+        serveHttp(conn, (request, c, keepAlive) => this._request(request, c, keepAlive, socket));
+      }
+      _request(request, conn, keepAlive, socket) {
+        const req = new IncomingMessage();
+        req.method = request.method;
+        req.url = request.target;
+        req.httpVersion = request.version.slice(5);
+        req.socket = req.connection = socket;
+        setHeaderPairs(req, request.headers);
+        if (header(request.headers, "upgrade")) {
+          if (!this.listenerCount("upgrade")) { conn.destroy(); return false; }
+          conn.upgraded = { activate: head => {
+            socket._attach(conn);
+            this.emit("upgrade", req, socket, Buffer.from(head));
+          } };
+          return UPGRADED;
+        }
+        return new Promise(resolve => {
+          const res = new ServerResponse(conn, req, keepAlive, resolve);
           res.socket = res.connection = socket;
           this.emit("request", req, res);
           if (request.body.length) req.push(Buffer.from(request.body));
           req.push(null);
           req.complete = true;
-        }));
+        });
       }
       address() {
         if (!this.listening) return null;
@@ -984,8 +1032,8 @@
     class ClientRequest extends Writable {
       constructor(options, callback) {
         super({ autoDestroy: false });
-        this._abortController = new AbortController();
         this._options = options;
+        this._abortController = new AbortController();
         this._chunks = [];
         this._headers = Object.assign({}, options.headers);
         this.method = (options.method || "GET").toUpperCase();
@@ -1009,9 +1057,7 @@
         this._send().catch(error => { if (!this.destroyed) this.destroy(error); });
         callback();
       }
-      abort() {
-        this.destroy();
-      }
+      abort() { this.destroy(); }
       _destroy(error, callback) {
         this._aborted = true;
         this._abortController.abort(error);
@@ -1025,7 +1071,81 @@
       setNoDelay() {}
       setSocketKeepAlive() {}
       flushHeaders() {}
+      _cancelUpgrade() {
+        if (this._upgrade.state !== "pending") return;
+        this._upgrade.state = "aborted";
+        this._upgrade.cleanup();
+      }
+      _failUpgrade(err) {
+        const handshake = this._upgrade;
+        if (handshake.state !== "pending") return;
+        handshake.state = "failed";
+        handshake.cleanup();
+        this.socket.destroy();
+        this.emit("error", err);
+      }
+      _receiveUpgrade(chunk) {
+        const handshake = this._upgrade;
+        if (handshake.state !== "pending") return;
+        const count = Math.min(chunk.length, handshake.limit + 4 - handshake.buffer.length);
+        const buffer = internal.concatBytes([handshake.buffer, chunk.subarray(0, count)]);
+        const end = indexOfCrlfCrlf(buffer, 0);
+        if (end < 0 && buffer.length <= handshake.limit) { handshake.buffer = buffer; return; }
+        if (end < 0 || end + 4 > handshake.limit) {
+          this._failUpgrade(Object.assign(new Error("Parse Error: Header overflow"), { code: "HPE_HEADER_OVERFLOW" }));
+          return;
+        }
+        const lines = latin1(buffer.subarray(0, end)).split("\r\n");
+        const status = /^HTTP\/1\.[01] (\d{3})(?: (.*))?$/.exec(lines.shift());
+        if (!status) { this._failUpgrade(new Error("Invalid HTTP response")); return; }
+        const msg = new IncomingMessage();
+        msg.statusCode = Number(status[1]);
+        msg.statusMessage = status[2] || "";
+        msg.socket = this.socket;
+        setHeaderPairs(msg, lines.map(line => {
+          const colon = line.indexOf(":");
+          return [line.slice(0, colon), line.slice(colon + 1).trim()];
+        }));
+        const head = Buffer.from(internal.concatBytes([buffer.subarray(end + 4), chunk.subarray(count)]));
+        handshake.state = "complete";
+        handshake.cleanup();
+        if (msg.statusCode === 101) this.emit("upgrade", msg, this.socket, head);
+        else { this.emit("response", msg); this.socket.destroy(); }
+      }
+      _sendUpgrade() {
+        if (this._aborted) return;
+        const options = this._options;
+        const limit = options.maxHeaderSize || internal.builtin("node:http").maxHeaderSize;
+        if (!Number.isInteger(limit) || limit < 0) throw new RangeError("Invalid maxHeaderSize");
+        const net = internal.builtin("node:net");
+        const socket = options.createConnection ? options.createConnection(options) : net.connect({ host: options.hostname || options.host || "localhost", port: options.port || 80 });
+        this.socket = this.connection = socket;
+        const receive = chunk => this._receiveUpgrade(chunk);
+        const fail = err => this._failUpgrade(err);
+        const eof = () => fail(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
+        const timeout = () => this.emit("timeout");
+        this._upgrade = { state: "pending", buffer: new Uint8Array(0), limit, cleanup: () => {
+          socket.removeListener("data", receive);
+          socket.removeListener("error", fail);
+          socket.removeListener("end", eof);
+          socket.removeListener("close", eof);
+          if (options.timeout) socket.setTimeout(0, timeout);
+          this._upgrade.buffer = null;
+        } };
+        socket.on("error", fail);
+        socket.on("end", eof);
+        socket.on("close", eof);
+        socket.on("data", receive);
+        if (options.timeout) socket.setTimeout(options.timeout, timeout);
+        this.emit("socket", socket);
+        if (this._upgrade.state !== "pending") return;
+        const headers = Object.assign({}, this._headers);
+        if (!Object.keys(headers).some(key => key.toLowerCase() === "host")) headers.Host = `${options.hostname || options.host || "localhost"}:${options.port || 80}`;
+        const lines = [`${this.method} ${this.path} HTTP/1.1`].concat(Object.keys(headers).map(key => `${key}: ${headers[key]}`), ["", ""]);
+        socket.write(lines.join("\r\n"));
+      }
       async _send() {
+        if (Object.keys(this._headers).some(key => key.toLowerCase() === "upgrade")) return this._sendUpgrade();
         const o = this._options;
         const url = o.href || `${o.protocol || protocol}//${o.hostname || o.host || "localhost"}${o.port ? ":" + o.port : ""}${this.path}`;
         const body = this._chunks.length ? internal.concatBytes(this._chunks) : undefined;
@@ -1100,5 +1220,5 @@
   function bunTcp() { return internal.require("bun_tcp")({ Connection, listenOrThrow, acceptLoop, waiters }); }
 
   const WebSocket = internal.require("websocket").clientClass(Connection);
-  return { fetch, serve, nodeHttp, nodeNet, caps, WebSocket };
+  return { fetch, serve, nodeHttp, nodeNet, bunTcp, caps, WebSocket };
 })

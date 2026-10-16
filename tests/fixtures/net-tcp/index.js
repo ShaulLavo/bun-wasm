@@ -86,4 +86,18 @@ webReader.releaseLock();
 await new Promise(resolve => webServer.close(resolve));
 console.log("socket Readable.toWeb ok");
 
+let peerClosed;
+const peerDone = new Promise(resolve => { peerClosed = resolve; });
+const cancelServer = net.createServer(socket => { socket.on("close", peerClosed); socket.resume(); });
+cancelServer.listen(0, "127.0.0.1");
+await once(cancelServer, "listening");
+const cancelSocket = net.connect({ port: cancelServer.address().port, host: "127.0.0.1" });
+await once(cancelSocket, "connect");
+await Readable.toWeb(cancelSocket).cancel("finished with socket");
+assert.equal(cancelSocket.destroyed, true);
+assert.equal(cancelSocket._conn.closed, true);
+await peerDone;
+await new Promise(resolve => cancelServer.close(resolve));
+console.log("socket Readable.toWeb cancel ok");
+
 console.log("tcp helpers, queued writes, half-close, counters, refused connection ok");

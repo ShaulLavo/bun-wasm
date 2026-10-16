@@ -5,43 +5,22 @@
     const { Duplex } = internal.builtin("node:stream");
     const EventEmitter = internal.require("events");
     const { Buffer } = internal.require("buffer");
-    const { StringDecoder } = internal.require("string_decoder");
     const { _normalizeArgs, port, error } = internal.require("net_address");
 
     class Socket extends Duplex {
       constructor(options = {}) {
-        super(options);
-        this.removeAllListeners("newListener");
+        super(Object.assign({ allowHalfOpen: false, highWaterMark: 65536 }, options));
         this._conn = null;
         this._phase = "idle";
         this._referenced = true;
-        this._writes = [];
-        this._decoder = null;
-        this._paused = false;
-        this._pipes = new Set();
-        this._awaitDrain = new Set();
-        this._highWaterMark = options.highWaterMark ?? 65536;
-        this.allowHalfOpen = Boolean(options.allowHalfOpen);
-        this.readable = options.readable !== false;
-        this.writable = options.writable !== false;
-        this.readableEnded = false;
-        this.writableEnded = false;
-        this.writableFinished = false;
+        this._readReady = true;
+        this._pendingWrite = null;
+        this._pendingFinal = null;
+        this._ended = false;
         this.bytesRead = 0;
         this.bytesWritten = 0;
-        this.writableLength = 0;
-        this.writableNeedDrain = false;
-        this.destroyed = false;
-        const socket = this;
-        this._readableState = { get endEmitted() { return socket.readableEnded; } };
-        this._writableState = { get length() { return socket.writableLength; }, get finished() { return socket.writableFinished; }, get needDrain() { return socket.writableNeedDrain; }, errorEmitted: false };
-        this.on("newListener", event => {
-          if (event === "data" && !this._paused) internal.nextTick(() => this._resumeIfUnpaused());
-        });
-        if (options.encoding) this.setEncoding(options.encoding);
-        if (options.signal) this._useSignal(options.signal);
+        this.once("finish", () => this._drainEmptyEof());
       }
-      _resumeIfUnpaused() { if (!this._paused) this.resume(); }
       get connecting() { return this._phase === "connecting"; }
       get pending() { return this._phase === "idle" || this.connecting; }
       get readyState() {
@@ -50,9 +29,8 @@
         if (this.readable && this.writable) return "open";
         return this.readable ? "readOnly" : this.writable ? "writeOnly" : "closed";
       }
-      get readableLength() { return this._buffer.reduce((n, chunk) => n + chunk.length, 0); }
-      get readableHighWaterMark() { return this._highWaterMark; }
-      get writableHighWaterMark() { return this._highWaterMark; }
+      // Transport bytes are canceled synchronously; core write callbacks drain later.
+      get writableLength() { return this.destroyed ? 0 : super.writableLength; }
       get bufferSize() { return this.writableLength; }
       get localPort() { return this.address()?.port; }
       get localAddress() { return this.address()?.address; }
@@ -66,7 +44,7 @@
         this._conn = conn;
         this._phase = "open";
         this._updatePeer();
-        conn.canRead = () => this.readable && (this._flowing || this.readableLength < this._highWaterMark);
+        conn.canRead = () => this.readable && this._readReady;
         conn.onData = chunk => this._receive(chunk);
         conn.onEnd = () => this._receiveEnd();
         conn.onError = err => this.destroy(err);
@@ -77,13 +55,12 @@
         this._touch();
       }
       _receiveEnd() {
-        if (this._decoder) {
-          const tail = this._decoder.end();
-          if (tail) this._buffer.push(tail);
-        }
         this._ended = true;
-        this.emit("readable");
-        this._flush();
+        this.push(null);
+        this._drainEmptyEof();
+      }
+      _drainEmptyEof() {
+        if (this._ended && this.writableFinished && this.readableLength === 0) this.read(0);
       }
       _updatePeer() {
         const peer = this._conn.peer();
@@ -98,20 +75,21 @@
           internal.nextTick(() => this.destroy(error(Error, "EALREADY", "Socket is already connecting")));
           return this;
         }
-        if (this._phase === "open") { this._conn.onClose = null; this._conn.destroy(); this._buffer = []; }
+        if (this._phase === "open") { this._conn.onClose = null; this._conn.destroy(); }
         if (options.path) throw error(Error, "ENOTSUP", "Unix sockets are not supported in bun-wasm");
         if (options.port === undefined) throw error(TypeError, "ERR_MISSING_ARGS", "The port or path argument is required");
         const targetPort = port(options.port);
         if (callback) this.once("connect", callback);
-        if (this.destroyed) {
-          this.destroyed = this.readableEnded = this.writableEnded = this.writableFinished = this._ended = this._endEmitted = false;
-          this.readable = this.writable = true;
-          this._buffer = [];
-        }
+        if (this.destroyed) this._undestroy();
+        this._readReady = true;
+        this._ended = false;
         if (options.allowHalfOpen !== undefined) this.allowHalfOpen = Boolean(options.allowHalfOpen);
         if (options.signal) this._useSignal(options.signal);
         this._phase = "connecting";
-        if (options.highWaterMark !== undefined) this._highWaterMark = options.highWaterMark;
+        if (options.highWaterMark !== undefined) {
+          this._readableState.highWaterMark = options.highWaterMark;
+          this._writableState.highWaterMark = options.highWaterMark;
+        }
         if (options.lookup && typeof options.host === "string" && !internal.require("net_address").isIP(options.host)) {
           options.lookup(options.host, { family: options.family || 0, all: options.autoSelectFamily !== false },
             (err, addresses, family) => this._lookupResult(options, targetPort, err, addresses, family));
@@ -164,192 +142,61 @@
         this._connecting = null;
         this._attempt = null;
         this._attach(conn);
-        while (this._writes.length && !this.destroyed) this._send(this._writes.shift());
+        const writing = this._pendingWrite;
+        this._pendingWrite = null;
+        if (writing) this._send(writing);
         if (this.destroyed) return true;
         this.emit("connect");
         if (this.destroyed) return true;
         this.emit("ready");
-        if (this.writableEnded) this._finishWrite();
+        const final = this._pendingFinal;
+        this._pendingFinal = null;
+        if (final) this._conn.shutdown(final);
         return true;
       }
       _receive(chunk) {
         this.bytesRead += chunk.length;
         this._touch();
-        const value = this._decoder ? this._decoder.write(Buffer.from(chunk)) : Buffer.from(chunk);
-        if (value.length) this._buffer.push(value);
-        this.emit("readable");
-        this._flush();
+        this._readReady = this.push(Buffer.from(chunk));
       }
-      _flush() {
-        while (this._flowing && this._buffer.length && !this.destroyed) this.emit("data", this._buffer.shift());
-        if (this._ended && !this._buffer.length && !this.readableEnded && !this.destroyed) this._finishRead();
-      }
-      _finishRead() {
-        this.readableEnded = true;
-        this.readable = false;
-        this.emit("end");
-        if (!this.allowHalfOpen && !this.writableEnded) this.end();
-        if (this.writableFinished) this.destroy();
-      }
-      read(size) {
-        if (size === 0) return null;
-        if (size > this._highWaterMark) {
-          this._highWaterMark = size;
-          if (native.wake) native.wake(0);
-        }
-        const available = this.readableLength;
-        if (!available || (size > available && !this._ended)) { this._flush(); return null; }
-        let remaining = size > 0 ? Math.min(size, available) : this._buffer[0].length;
-        const parts = [];
-        while (remaining > 0) {
-          const chunk = this._buffer.shift();
-          const count = Math.min(remaining, chunk.length);
-          parts.push(chunk.slice(0, count));
-          if (count < chunk.length) this._buffer.unshift(chunk.slice(count));
-          remaining -= count;
-        }
-        const result = this._decoder ? parts.join("") : Buffer.concat(parts);
-        internal.nextTick(() => this._flush());
+      _read() {
+        this._readReady = true;
         if (native.wake) native.wake(0);
-        return result;
       }
-      pipe(destination, options = {}) {
-        const receive = chunk => {
-          if (destination.write(chunk) || !this._pipes.has(pipe)) return;
-          this._awaitDrain.add(pipe);
-          this.pause();
-        };
-        const drain = () => {
-          if (!this._awaitDrain.delete(pipe)) return;
-          internal.nextTick(() => {
-            if (!this._awaitDrain.size && this._pipes.size && !this.destroyed && this.listenerCount("data")) this.resume();
-          });
-        };
-        const cleanup = () => {
-          if (!this._pipes.delete(pipe)) return;
-          this.removeListener("data", receive);
-          this.removeListener("end", end);
-          this.removeListener("close", cleanup);
-          this.removeListener("error", sourceError);
-          destination.removeListener("drain", drain);
-          destination.removeListener("close", cleanup);
-          destination.removeListener("finish", cleanup);
-          destination.removeListener("error", destinationError);
-          drain();
-        };
-        const sourceError = err => {
-          cleanup();
-          if (this.listenerCount("error") === 0) throw err;
-        };
-        const destinationError = err => {
-          cleanup();
-          if (destination.listenerCount("error") === 0) throw err;
-        };
-        const end = () => {
-          cleanup();
-          if (options.end !== false && destination !== globalThis.process.stdout && destination !== globalThis.process.stderr) destination.end();
-        };
-        const pipe = { destination, cleanup };
-        this._pipes.add(pipe);
-        this.on("data", receive);
-        this.once("end", end);
-        this.once("close", cleanup);
-        this.once("error", sourceError);
-        destination.on("drain", drain);
-        destination.once("close", cleanup);
-        destination.once("finish", cleanup);
-        destination.once("error", destinationError);
-        destination.emit("pipe", this);
-        return destination;
-      }
-      unpipe(destination) {
-        for (const pipe of Array.from(this._pipes)) {
-          if (destination && destination !== pipe.destination) continue;
-          pipe.cleanup();
-          pipe.destination.emit("unpipe", this);
-        }
-        if (!this._pipes.size) this.pause();
-        return this;
-      }
-      pause() { this._paused = true; this._flowing = false; return this; }
-      resume() { this._paused = false; this._flowing = true; this._flush(); if (native.wake) native.wake(0); return this; }
-      isPaused() { return this._paused; }
-      cork() { return this; }
-      uncork() { return this; }
-      unshift(chunk) { this._buffer.unshift(chunk); return true; }
-      setEncoding(encoding) {
-        this._decoder = new StringDecoder(encoding);
-        this._buffer = this._buffer.map(chunk => typeof chunk === "string" ? chunk : this._decoder.write(chunk)).filter(chunk => chunk.length);
-        return this;
-      }
-      write(data, encoding, callback) {
-        if (typeof encoding === "function") callback = encoding;
-        if (this.destroyed || this.writableEnded) {
-          const err = error(Error, "ERR_STREAM_WRITE_AFTER_END", "write after end");
-          internal.nextTick(() => { if (callback) callback(err); this.destroy(err); });
-          return false;
-        }
-        if (typeof data !== "string" && !(data instanceof Uint8Array)) throw error(TypeError, "ERR_INVALID_ARG_TYPE", "chunk must be a string or Uint8Array");
-        const bytes = typeof data === "string" ? Buffer.from(data, typeof encoding === "string" ? encoding : "utf8") : Buffer.from(data);
-        const item = { bytes, callback };
+      _write(chunk, encoding, callback) {
+        const bytes = Buffer.from(chunk);
         this.bytesWritten += bytes.length;
-        this.writableLength += bytes.length;
-        const accepted = this.writableLength < this._highWaterMark;
-        if (!accepted) this.writableNeedDrain = true;
+        const item = { bytes, callback };
         if (this._phase === "open") this._send(item);
-        else this._writes.push(item);
-        return accepted;
+        else this._pendingWrite = item;
       }
       _send(item) {
         this._touch();
-        this._conn.write(item.bytes, err => {
-          if (!this.destroyed) this.writableLength -= item.bytes.length;
-          if (item.callback) item.callback(err);
-          if (this.writableLength === 0 && this.writableNeedDrain && !this.destroyed) { this.writableNeedDrain = false; this.emit("drain"); }
-        });
+        this._conn.write(item.bytes, item.callback);
       }
-      end(data, encoding, callback) {
-        if (typeof data === "function") { callback = data; data = undefined; }
-        if (typeof encoding === "function") callback = encoding;
-        if (callback) this.once("finish", callback);
-        if (this.writableEnded) return this;
-        if (data !== undefined && data !== null) this.write(data, encoding);
-        this.writableEnded = true;
-        if (this._phase === "open") this._finishWrite();
-        return this;
+      _final(callback) {
+        if (this._phase === "open") this._conn.shutdown(callback);
+        else this._pendingFinal = callback;
       }
-      _finishWrite() {
-        this._conn.shutdown(() => {
-          if (this.destroyed || this.writableFinished) return;
-          this.writableFinished = true;
-          this.writable = false;
-          this.emit("finish");
-          if (this.readableEnded) this.destroy();
-        });
-      }
-      destroy(err) {
-        if (this.destroyed) return this;
+      _destroy(err, callback) {
         const attempt = this.connecting ? this._attempt : null;
         const writeError = err || error(Error, this.pending ? "ERR_SOCKET_CLOSED_BEFORE_CONNECTION" : "ERR_STREAM_DESTROYED", this.pending ? "Socket closed before the connection was established" : "Cannot call write after a stream was destroyed");
-        this.destroyed = true;
         this._phase = "closed";
         this._attempt = null;
         if (attempt) this.emit("connectionAttemptFailed", attempt.address, attempt.port, attempt.family, err || error(Error, "ECANCELED", "Connection attempt canceled"));
-        this.readable = this.writable = false;
         clearTimeout(this._timeoutTimer);
         if (this._connecting) waiters.delete(this._connecting);
         this._connecting = null;
-        this.writableNeedDrain = false;
-        this.writableLength = 0;
-        for (const item of this._writes.splice(0)) {
-          if (item.callback) internal.nextTick(() => item.callback(writeError));
-        }
+        const writing = this._pendingWrite;
+        const final = this._pendingFinal;
+        this._pendingWrite = this._pendingFinal = null;
+        if (writing) internal.nextTick(() => writing.callback(writeError));
+        if (final) internal.nextTick(() => final(writeError));
         if (this._conn) this._conn.destroy(writeError);
-        internal.nextTick(() => { if (err) this.emit("error", err); this.emit("close", Boolean(err)); });
-        return this;
+        callback(err);
       }
       [Symbol.asyncDispose]() {
-        if (this.destroyed) return Promise.resolve();
+        if (this.closed) return Promise.resolve();
         return new Promise(resolve => { this.once("close", resolve); this.destroy(); });
       }
       destroySoon() { this.end(); this.once("finish", () => this.destroy()); return this; }

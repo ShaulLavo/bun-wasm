@@ -1,2 +1,3 @@
-tcp helpers, queued writes, half-close, counters, refused connection ok
 socket Readable.toWeb ok
+socket Readable.toWeb cancel ok
+tcp helpers, queued writes, half-close, counters, refused connection ok

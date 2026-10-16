@@ -1016,3 +1016,23 @@ CI runs the direct native-browser proof so Node-host symbols cannot mask a gap.
 
 The copied Node stream licenses retain their text with whitespace-only normalization
 of blank EOF lines and one mixed space/tab indent.
+
+
+### TCP streams after the portable-core merge
+
+Class **Host feature**, original adapters. `node_net.js` retains the TCP transport,
+lookup, address, timeout and server behavior from main PR14. Socket now uses the
+portable Duplex's actual readable/writable states and `_read`, `_write`, `_final`
+and `_destroy` hooks. Its old public write/end/destroy, byte queues and synthetic
+state records are removed. Connection callbacks drive stream callbacks and
+`push`; the native read waiter pauses when `push` reaches the high-water mark.
+This is original API glue, not copied upstream stream logic.
+
+`net.js` retains PR14's Connection shutdown/ref/write callbacks and complete HTTP
+upgrade handling. The Streams byte-body producer and HTTP request hooks are
+applied to that implementation. Socket and upgrade cleanup run from the real
+ClientRequest `_destroy` hook. The host engine releases both native stream
+observers and directory cursors at exit. The suite runner retains explicit plain
+script selection and opt-in Node assertion scripts without counting registered
+Node tests as assertion scripts. The merged TCP fixture exercises successful
+Readable.toWeb reads and cancellation of a connected socket.
