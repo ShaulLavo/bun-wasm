@@ -108,9 +108,9 @@ async function messages() {
   const sender = new BroadcastChannel("test");
   const receiver = new BroadcastChannel("test");
   const isolated = new BroadcastChannel("other");
-  assert.throws(() => receiveMessageOnPort(receiver), { code: "ERR_INVALID_ARG_TYPE" });
-  assert.throws(() => receiveMessageOnPort(sender), { code: "ERR_INVALID_ARG_TYPE" });
-  assert.throws(() => receiveMessageOnPort(isolated), { code: "ERR_INVALID_ARG_TYPE" });
+  assert.equal(receiveMessageOnPort(receiver), undefined);
+  assert.equal(receiveMessageOnPort(sender), undefined);
+  assert.equal(receiveMessageOnPort(isolated), undefined);
   await new Promise<void>((resolve) => {
     receiver.onmessage = (event) => { assert.deepEqual(event.data, { value: 3 }); resolve(); };
     sender.postMessage({ value: 3 });

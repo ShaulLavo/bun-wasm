@@ -15,11 +15,14 @@ without emitting its event. Node event methods reuse the runtime's EventEmitter.
 Closing a port cancels future delivery tasks and drops its pending queue.
 A delivery batch already executing finishes before the close event, as in Node.
 The close task disconnects the pair and emits `close` on both ends exactly once.
-Messages already sent to the open peer drain before its close notification.
+Messages already sent to the open peer stay queued even if it has not started.
+Synchronous receives or later delivery drain that queue before the peer closes.
+A pending peer close schedules no polling tasks. Explicitly closing the peer
+discards its queue.
 The peer can still post a synchronously received message before disentangling.
-`receiveMessageOnPort` accepts only MessagePort and rejects BroadcastChannel with
-`ERR_INVALID_ARG_TYPE`. Node 26.7.0 accepts BroadcastChannel here, so this rejection
-is a deliberate restriction requested for this adapter. Reference
+`receiveMessageOnPort` accepts both MessagePort and BroadcastChannel. For a
+BroadcastChannel it returns `undefined` without consuming queued messages, matching
+native Bun 1.4.2. Node 26.7.0 instead returns the queued broadcast message. Reference
 counts keep a listening port or open broadcast channel alive until it is closed or
 unreferenced. Broadcast channels communicate among instances in one guest.
 
@@ -55,7 +58,9 @@ Node events, web handlers, broadcast delivery, references, closing, and the
 deadline of an unreferenced timer while a port keeps the guest alive. Its output
 matches the adapter's contract. The separate `worker-threads-close` and
 `worker-threads-close-queued` fixtures also pass unchanged on Node 26.7.0.
-`worker-threads-receive` covers the deliberate BroadcastChannel restriction.
+`worker-threads-receive` pins native Bun’s BroadcastChannel behavior.
+`worker-threads-peer-close` also passes on Node 26.7.0 and covers an unstarted
+peer’s retained queue, synchronous draining, later delivery, and explicit closure.
 
 ## Node parallel-file measurement
 

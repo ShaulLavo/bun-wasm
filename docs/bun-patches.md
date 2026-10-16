@@ -1097,7 +1097,9 @@ guest-worker work. No vendor patch is needed for this adapter.
 
 The PR #31 review correction cancels future delivery tasks when a receiver closes,
 drops its pending messages, and asynchronously disentangles the pair and notifies its
-peer. Already-sent messages to an open peer drain before that peer closes.
-`receiveMessageOnPort` rejects BroadcastChannel with `ERR_INVALID_ARG_TYPE`, as
-requested for this adapter. Node 26.7.0 accepts BroadcastChannel, so this guard is
-an intentional difference rather than a claim of parity with that Node version.
+peer. Already-sent messages stay queued for an unstarted peer until synchronous
+receive or later delivery drains them, or the peer closes itself. The null peer
+link records a pending remote close. Queue consumers complete it without polling.
+`receiveMessageOnPort` accepts BroadcastChannel and returns `undefined` without
+consuming its messages, matching native Bun 1.4.2. Node 26.7.0 accepts the same
+argument but returns a queued message. No upstream implementation was copied.

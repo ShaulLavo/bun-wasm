@@ -79,7 +79,9 @@
 
     static receive(port: MessagePort) {
       if (!port.#queue.length) return undefined;
-      return { message: port.#queue.shift() };
+      const message = port.#queue.shift();
+      port.#closeWhenDrained();
+      return { message };
     }
 
     static isClosed(port: MessagePort) { return port.#closed; }
@@ -136,6 +138,7 @@
         this.dispatchEvent(messageEvent(queue.shift()));
       }
       this.#schedule();
+      this.#closeWhenDrained();
     }
 
     start() { this.#started = true; this.#schedule(); }
@@ -176,11 +179,7 @@
     }
 
     #closeWhenDrained() {
-      if (this.#closed) return;
-      if (this.#started && this.#queue.length) {
-        setImmediate(() => this.#closeWhenDrained());
-        return;
-      }
+      if (this.#closed || this.#other || this.#queue.length) return;
       this.close();
     }
 
@@ -287,6 +286,7 @@
 
   function receiveMessageOnPort(port: unknown) {
     if (port instanceof MessagePort) return MessagePort.receive(port);
+    if (port instanceof BroadcastChannel) return undefined;
     throw invalidPort();
   }
 
