@@ -127,7 +127,7 @@
     }
 
     function createHmac(algorithm, key) {
-      const keyBytes = key instanceof CryptoKey ? internal.crypto.decode(internal.crypto.record(key).key.k) : typeof key === "string" ? Buffer.from(key) : internal.toUint8(key && key.export ? key.export() : key).slice();
+      const keyBytes = internal.crypto.isKey(key) ? internal.crypto.decode(internal.crypto.record(key).key.k) : typeof key === "string" ? Buffer.from(key) : internal.toUint8(key && key.export ? key.export() : key).slice();
       try {
         return new Hash(algorithm, keyBytes);
       } catch {

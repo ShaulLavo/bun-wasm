@@ -208,3 +208,8 @@ assert.throws(
   { code: "ERR_OUT_OF_RANGE" },
 );
 console.log("node exponent validation ok");
+
+assert.equal(types.isKeyObject(Object.create(KeyObject.prototype)), false);
+assert.equal(types.isCryptoKey(Object.create(CryptoKey.prototype)), false);
+assert(types.isCryptoKey(webSecret));
+console.log("node opaque key brands ok");

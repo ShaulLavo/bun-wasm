@@ -3,6 +3,7 @@
   return (Buffer, inputBytes, timingSafeEqual) => {
     const c = internal.crypto;
     const records = new WeakMap();
+    internal.nodeCryptoIsKeyObject = (value) => records.has(value);
     const constants = {
       RSA_PKCS1_PADDING: 1,
       RSA_NO_PADDING: 3,
@@ -194,7 +195,7 @@
         !(input instanceof KeyObject) &&
         !ArrayBuffer.isView(input) &&
         !(input instanceof ArrayBuffer) &&
-        !(input instanceof CryptoKey)
+        !c.isKey(input)
       ) {
         return { ...input };
       }
@@ -203,7 +204,7 @@
     function importAsymmetric(input, wantPrivate) {
       const options = parseInput(input),
         key = options.key;
-      if (key instanceof KeyObject || key instanceof CryptoKey) {
+      if (key instanceof KeyObject || c.isKey(key)) {
         const r = key instanceof KeyObject ? nodeRecord(key) : c.record(key);
         if (r.type === "secret" || (wantPrivate && r.type !== "private"))
           throw error("Invalid key object type");
