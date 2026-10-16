@@ -1,0 +1,5 @@
+streams, identity, detached methods
+independent state and indentation
+color mode and inspection options
+constructor validation and write errors
+table, trace, timers
