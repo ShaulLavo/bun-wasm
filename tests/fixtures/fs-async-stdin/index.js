@@ -10,7 +10,7 @@ const child = spawn(process.execPath, ['-e', `
     assert.equal(storage.getStore(), 'stdin', 'stdin async context');
     console.log(count, buffer.toString());
   }));
-`]);
+`], { stdio: ['pipe', 'pipe', 'inherit'] });
 let output = '';
 let replied = false;
 child.stdout.on('data', bytes => {

@@ -1061,8 +1061,8 @@ version = "0.0.15"
 dependencies = [
  "anyhow",
  "async-trait",
- "bytes",
  "brotli-decompressor",
+ "bytes",
  "flate2",
  "hyper",
  "reqwest",
