@@ -30,6 +30,7 @@ async function until(check) {
 }
 async function cleanup() {
   for (const object of resources.splice(0).reverse()) {
+    if (typeof object === "function") { await object(); continue; }
     if (object instanceof net.Socket) {
       object.destroy();
       if (object._conn && !object._conn.closed) object._conn.destroy();
@@ -38,11 +39,12 @@ async function cleanup() {
   await delay(10);
 }
 async function pipe() {
-  let sink;
-  const receiver = await listen(socket => { sink = own(socket); socket.pause(); });
-  const destination = connect(receiver, { highWaterMark: 1024 });
+  const control = path => fetch(process.env.TEST_SERVER + path).then(response => response.text());
+  const { port } = JSON.parse(await control("/tcp-sink"));
+  own(() => control("/tcp-sink/close"));
+  const destination = own(net.connect({ host: "127.0.0.1", port, highWaterMark: 1024 }));
   await event(destination, "connect");
-  const sender = await listen(socket => { own(socket); socket.end(Buffer.alloc(8 * 1024 * 1024, 120)); });
+  const sender = await listen(socket => { own(socket); socket.end(Buffer.alloc(16 * 1024 * 1024, 120)); });
   const source = connect(sender, { highWaterMark: 65536 });
   let chunks = 0;
   let falseWrites = 0;
@@ -60,18 +62,19 @@ async function pipe() {
     chunks++;
     paused = paused && source.isPaused();
   });
-  await until(() => chunks > 0);
+  await until(() => destination._conn.bufferedAmount > 0);
   await delay(40);
   assert.equal(paused, true, "pipe pauses immediately on false write");
   assert.ok(falseWrites > 0);
   assert.ok(maximum <= 65536);
+  assert.ok(chunks > 0);
+  assert.ok(destination._conn.bufferedAmount > 0, "slow native peer blocks the host write");
   const read = source.bytesRead;
-  if (destination.writableLength > 0) {
-    await delay(30);
-    assert.ok(source.bytesRead - read <= 65536, "source stops reading while destination is blocked");
-  }
+  await delay(30);
+  assert.ok(source.bytesRead - read <= 65536, "source stops reading while destination is blocked");
+  assert.ok(source.readableLength <= 65536, "paused source queue is bounded");
   const finished = event(destination, "finish");
-  sink.resume();
+  await control("/tcp-sink/resume");
   await finished;
   await delay(10);
   assert.equal(source.listenerCount("data"), 1, "pipe removes its forwarding listener");
