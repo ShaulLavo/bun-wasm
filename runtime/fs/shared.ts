@@ -42,6 +42,7 @@ export class SharedFilesystemState {
   readonly segments: SharedArrayBuffer[];
   readonly pendingSegments: SharedSegment[] = [];
   private readonly firstBytes: Uint8Array;
+  private readonly pageViews: (Uint8Array | undefined)[] = [];
   private serviceMutation = false;
   onContention?: () => void;
   constructor(readonly buffer: SharedArrayBuffer = SharedFilesystemState.createBuffer(), maxBytes = DEFAULT_SHARED_MAX_BYTES, readonly lockOwner = SERVICE_OWNER, segments: readonly SharedArrayBuffer[] = []) {
@@ -65,11 +66,17 @@ export class SharedFilesystemState {
   }
   takeNewSegments(): SharedSegment[] { const out = this.pendingSegments.slice(); this.pendingSegments.length = 0; return out; }
   private segmentFor(page: number): Uint8Array {
+    const cached = this.pageViews[page];
+    if (cached) return cached;
     const segment = Math.floor(page / SEGMENT_PAGES);
     const local = page % SEGMENT_PAGES;
     const buffer = this.segments[segment];
     if (!buffer) throw new MissingSegmentError("shared filesystem segment has not reached this guest");
-    return segment === 0 ? this.firstBytes.subarray(local * PAGE, (local + 1) * PAGE) : new Uint8Array(buffer, local * PAGE, PAGE);
+    // Fixed page views remain valid when a growable segment grows. Physical pages may be
+    // recycled between files, but their backing buffer and byte offset never change.
+    const bytes = segment === 0 ? this.firstBytes.subarray(local * PAGE, (local + 1) * PAGE) : new Uint8Array(buffer, local * PAGE, PAGE);
+    this.pageViews[page] = bytes;
+    return bytes;
   }
   private findSlot(handle: FileHandle, create = false): number {
     if (!Number.isInteger(handle) || handle < 0 || handle >= 0x7ffffffe) return 0;
@@ -212,6 +219,12 @@ export class SharedFilesystemState {
       return { kind: "file", ino: Atomics.load(this.slots, this.at(slot, INO)), size: Atomics.load(this.slots, this.at(slot, FILE_SIZE)), mtime: this.getMtime(slot), capacity: Atomics.load(this.slots, this.at(slot, CAPACITY)) * PAGE };
     } finally { this.unlock(this.at(slot, FILE_LOCK), owner); }
   }
+  /** A single atomic size sample; callers use it only to detect a concurrent truncate. */
+  size(handle: FileHandle): number | undefined {
+    const slot = this.findSlot(handle);
+    if (!slot || Atomics.load(this.slots, this.at(slot, 0)) !== 1) return undefined;
+    return Atomics.load(this.slots, this.at(slot, FILE_SIZE));
+  }
   stat(handle: FileHandle, revoked?: () => boolean, owner = this.lockOwner): FileStat | undefined {
     const slot = this.findSlot(handle);
     if (!slot) return undefined;
@@ -224,8 +237,51 @@ export class SharedFilesystemState {
   }
   private copyInto(slot: number, source: Uint8Array, offset: number): void { let at = offset; for (let sourceAt = 0; sourceAt < source.length;) { const logical = Math.floor(at / PAGE); const page = Atomics.load(this.pages, this.pageAt(slot, logical)) - 1; const inPage = at % PAGE; const count = Math.min(source.length - sourceAt, PAGE - inPage); this.segmentFor(page).set(source.subarray(sourceAt, sourceAt + count), inPage); at += count; sourceAt += count; } }
   read(handle: FileHandle, chunks: readonly Uint8Array[], offset: number, revoked?: () => boolean, owner = this.lockOwner): number { const slot = this.slot(handle); if (Atomics.load(this.slots, this.at(slot, 0)) !== 1) throw new FilesystemError(31); this.lock(this.at(slot, FILE_LOCK), revoked, owner); try { const size = Atomics.load(this.slots, this.at(slot, FILE_SIZE)); let total = 0; for (const chunk of chunks) { let at = 0; while (at < chunk.length && offset + total < size) { const position = offset + total; const page = Atomics.load(this.pages, this.pageAt(slot, Math.floor(position / PAGE))) - 1; const inPage = position % PAGE; const count = Math.min(chunk.length - at, size - position, PAGE - inPage); chunk.set(this.segmentFor(page).subarray(inPage, inPage + count), at); at += count; total += count; } if (at < chunk.length) break; } return total; } finally { this.unlock(this.at(slot, FILE_LOCK), owner); } }
-  write(handle: FileHandle, chunks: readonly Uint8Array[], offset: number, revoked?: () => boolean, owner = this.lockOwner): number { const slot = this.slot(handle); if (Atomics.load(this.slots, this.at(slot, 0)) !== 1) throw new FilesystemError(31); const total = chunks.reduce((size, chunk) => size + chunk.length, 0); if (!total) return 0; this.lock(this.at(slot, FILE_LOCK), revoked, owner); try { if (revoked?.()) throw new FilesystemError(11); const end = offset + total; if (end > Atomics.load(this.slots, this.at(slot, CAPACITY)) * PAGE) throw new RangeError("file needs growth"); let at = offset; for (const chunk of chunks) { this.copyInto(slot, chunk, at); at += chunk.length; } if (end > Atomics.load(this.slots, this.at(slot, FILE_SIZE))) Atomics.store(this.slots, this.at(slot, FILE_SIZE), end); this.setTimestamp(slot, Date.now()); return total; } finally { this.unlock(this.at(slot, FILE_LOCK), owner); } }
-  append(handle: FileHandle, chunks: readonly Uint8Array[], revoked?: () => boolean, owner = this.lockOwner): { written: number; offset: number } { const slot = this.slot(handle); if (Atomics.load(this.slots, this.at(slot, 0)) !== 1) throw new FilesystemError(31); this.lock(this.at(slot, FILE_LOCK), revoked, owner); try { const offset = Atomics.load(this.slots, this.at(slot, FILE_SIZE)); const total = chunks.reduce((size, chunk) => size + chunk.length, 0); if (!total) return { written: 0, offset }; if (offset + total > Atomics.load(this.slots, this.at(slot, CAPACITY)) * PAGE) throw new RangeError("file needs growth"); let at = offset; for (const chunk of chunks) { this.copyInto(slot, chunk, at); at += chunk.length; } Atomics.store(this.slots, this.at(slot, FILE_SIZE), at); this.setTimestamp(slot, Date.now()); return { written: total, offset: at }; } finally { this.unlock(this.at(slot, FILE_LOCK), owner); } }
+  /** Caller owns the global mutation lock. Undefined asks for service growth after unlock. */
+  tryWrite(handle: FileHandle, chunks: readonly Uint8Array[], offset: number, total: number, revoked?: () => boolean, owner = this.lockOwner): number | undefined {
+    const slot = this.slot(handle);
+    if (Atomics.load(this.slots, this.at(slot, 0)) !== 1) throw new FilesystemError(31);
+    if (!total) return 0;
+    this.lock(this.at(slot, FILE_LOCK), revoked, owner);
+    try {
+      if (revoked?.()) throw new FilesystemError(11);
+      const end = offset + total;
+      if (end > Atomics.load(this.slots, this.at(slot, CAPACITY)) * PAGE) return undefined;
+      let at = offset;
+      for (const chunk of chunks) { this.copyInto(slot, chunk, at); at += chunk.length; }
+      if (end > Atomics.load(this.slots, this.at(slot, FILE_SIZE))) Atomics.store(this.slots, this.at(slot, FILE_SIZE), end);
+      this.setTimestamp(slot, Date.now());
+      return total;
+    } finally { this.unlock(this.at(slot, FILE_LOCK), owner); }
+  }
+  write(handle: FileHandle, chunks: readonly Uint8Array[], offset: number, revoked?: () => boolean, owner = this.lockOwner): number {
+    const total = chunks.reduce((size, chunk) => size + chunk.length, 0);
+    const written = this.tryWrite(handle, chunks, offset, total, revoked, owner);
+    if (written === undefined) throw new RangeError("file needs growth");
+    return written;
+  }
+  /** Caller owns the global mutation lock. A number asks for service growth after unlock. */
+  tryAppend(handle: FileHandle, chunks: readonly Uint8Array[], total: number, revoked?: () => boolean, owner = this.lockOwner): { written: number; offset: number } | number {
+    const slot = this.slot(handle);
+    if (Atomics.load(this.slots, this.at(slot, 0)) !== 1) throw new FilesystemError(31);
+    this.lock(this.at(slot, FILE_LOCK), revoked, owner);
+    try {
+      const offset = Atomics.load(this.slots, this.at(slot, FILE_SIZE));
+      if (!total) return { written: 0, offset };
+      if (offset + total > Atomics.load(this.slots, this.at(slot, CAPACITY)) * PAGE) return offset + total;
+      let at = offset;
+      for (const chunk of chunks) { this.copyInto(slot, chunk, at); at += chunk.length; }
+      Atomics.store(this.slots, this.at(slot, FILE_SIZE), at);
+      this.setTimestamp(slot, Date.now());
+      return { written: total, offset: at };
+    } finally { this.unlock(this.at(slot, FILE_LOCK), owner); }
+  }
+  append(handle: FileHandle, chunks: readonly Uint8Array[], revoked?: () => boolean, owner = this.lockOwner): { written: number; offset: number } {
+    const total = chunks.reduce((size, chunk) => size + chunk.length, 0);
+    const result = this.tryAppend(handle, chunks, total, revoked, owner);
+    if (typeof result === "number") throw new RangeError("file needs growth");
+    return result;
+  }
   growLocked(handle: FileHandle, size: number): void { this.allocate(this.slot(handle), Math.ceil(size / PAGE)); }
   grow(handle: FileHandle, size: number): void { this.globalLock(); try { this.growLocked(handle, size); } finally { this.globalUnlock(); } }
   resize(handle: FileHandle, size: number, truncate: boolean, revoked?: () => boolean, owner = this.lockOwner): number { const slot = this.slot(handle); if (Atomics.load(this.slots, this.at(slot, 0)) !== 1) throw new FilesystemError(31); this.lock(this.at(slot, FILE_LOCK), revoked, owner); try { const old = Atomics.load(this.slots, this.at(slot, FILE_SIZE)); if (size > Atomics.load(this.slots, this.at(slot, CAPACITY)) * PAGE) throw new RangeError("file needs growth"); if (truncate && size < old) { let position = size; while (position < old) { const page = Atomics.load(this.pages, this.pageAt(slot, Math.floor(position / PAGE))) - 1; const count = Math.min(old - position, PAGE - position % PAGE); this.segmentFor(page).fill(0, position % PAGE, position % PAGE + count); position += count; } } Atomics.store(this.slots, this.at(slot, FILE_SIZE), truncate ? size : Math.max(old, size)); if (truncate) this.setTimestamp(slot, Date.now()); return 0; } finally { this.unlock(this.at(slot, FILE_LOCK), owner); } }

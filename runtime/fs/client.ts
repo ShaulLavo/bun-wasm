@@ -112,6 +112,9 @@ export class FilesystemClient implements FileSystem {
   private revoked: () => boolean;
   readonly shared: SharedFilesystemState;
   private watchingRevocation = false;
+  // One ordinary (nonshared) <=PAGE staging buffer. A read leases it through guest copying,
+  // so reentrant reads cannot overwrite bytes the outer operation has not committed yet.
+  private readScratch?: { bytes: Uint8Array; chunks: [Uint8Array] };
   constructor(readonly connection: FilesystemConnection) {
     this.capabilities = new Int32Array(connection.capabilities);
     this.epoch = new Int32Array(connection.epoch);
@@ -177,7 +180,7 @@ export class FilesystemClient implements FileSystem {
     // The disposing agent is quiescent: no synchronous file operation can be active here.
     reapFilesystem(this.connection);
     for (const completion of this.completions.values()) completion.cancel();
-    this.completions.clear(); this.reads.clear(); this.stats.clear(); this.paths.clear(); this.readdirs.clear(); this.openHandles.clear(); this.capabilityEntries.clear();
+    this.completions.clear(); this.reads.clear(); this.stats.clear(); this.paths.clear(); this.readdirs.clear(); this.openHandles.clear(); this.capabilityEntries.clear(); this.readScratch = undefined;
     this.sweep(); this.connection.port.close();
   }
   private version(): number {
@@ -268,15 +271,34 @@ export class FilesystemClient implements FileSystem {
     if (this.openHandles.has(handle) && this.shared.hasFile(handle)) {
       try {
         const epoch = this.version();
-        const beforeSize = this.shared.info(handle, this.revoked)?.size;
-        const copies = chunks.map(chunk => new Uint8Array(chunk.length));
-        const count = this.shared.read(handle, copies, offset, this.revoked, this.connection.owner);
-        // The file lock makes the copied bytes a coherent snapshot. A same-file truncate that
-        // raced the snapshot is the one case where the old cache contract must retry/EOF; a
-        // mutation of another file must not turn this successful read into a spurious EOF.
-        if (this.version() !== epoch && (this.shared.info(handle, this.revoked)?.size ?? 0) < (beforeSize ?? 0) && (this.shared.info(handle, this.revoked)?.size ?? 0) <= offset) return 0;
-        let copied = 0; for (let i = 0; i < chunks.length; i++) { const amount = Math.min(chunks[i]!.length, count - copied); if (amount > 0) chunks[i]!.set(copies[i]!.subarray(0, amount)); copied += amount; }
-        return count;
+        const beforeSize = this.shared.size(handle);
+        const requested = chunks.reduce((size, chunk) => size + chunk.length, 0);
+        let scratch = requested <= PAGE ? this.readScratch : undefined;
+        if (scratch) this.readScratch = undefined;
+        if (!scratch || scratch.bytes.length !== requested) {
+          const bytes = new Uint8Array(requested);
+          scratch = { bytes, chunks: [bytes] };
+        }
+        try {
+          const count = this.shared.read(handle, scratch.chunks, offset, this.revoked, this.connection.owner);
+          // The locked copy is coherent. Reject only a concurrent same-file truncate to/below
+          // offset; unrelated mutations and appends must not invent EOF. Keep guest bytes
+          // untouched until both the epoch/revocation and truncate gates have accepted it.
+          if (this.version() !== epoch) {
+            const afterSize = this.shared.size(handle) ?? 0;
+            if (afterSize < (beforeSize ?? 0) && afterSize <= offset) return 0;
+          }
+          let copied = 0;
+          for (const chunk of chunks) {
+            const amount = Math.min(chunk.length, count - copied);
+            if (amount <= 0) break;
+            chunk.set(copied === 0 && amount === scratch.bytes.length ? scratch.bytes : scratch.bytes.subarray(copied, copied + amount));
+            copied += amount;
+          }
+          return count;
+        } finally {
+          if (requested <= PAGE && !this.revoked()) this.readScratch = scratch;
+        }
       }
       catch (error) {
         if (error instanceof MissingSegmentError) {
@@ -323,14 +345,10 @@ export class FilesystemClient implements FileSystem {
         if (!total) return 0;
         const revoked = this.revoked;
         for (;;) {
-          const written = this.shared.mutate(this.epoch, revoked, () => {
-            const info = this.shared.info(handle, this.revoked);
-            if (!info) throw new FilesystemError(8);
-            // A service truncate may reclaim pages after grow replies. Check again while
-            // holding the mutation lock, and never ask the service to grow under that lock.
-            if (offset + total > info.capacity) return undefined;
-            return this.shared.write(handle, chunks, offset, revoked, this.connection.owner);
-          }, this.connection.owner);
+          // The fused operation rechecks capacity and copies under the same file lock.
+          // A truncate can reclaim pages between retries, so grow only after both locks exit.
+          const written = this.shared.mutate(this.epoch, revoked,
+            () => this.shared.tryWrite(handle, chunks, offset, total, revoked, this.connection.owner), this.connection.owner);
           if (written !== undefined) return written;
           this.call("grow", [handle, offset + total]);
         }
@@ -358,12 +376,8 @@ export class FilesystemClient implements FileSystem {
       this.version();
       const revoked = this.revoked;
       for (;;) {
-        const result = this.shared.mutate(this.epoch, revoked, () => {
-          const info = this.shared.info(handle, this.revoked);
-          if (!info) throw new FilesystemError(8);
-          if (info.size + total > info.capacity) return info.size + total;
-          return this.shared.append(handle, chunks, revoked, this.connection.owner);
-        }, this.connection.owner);
+        const result = this.shared.mutate(this.epoch, revoked,
+          () => this.shared.tryAppend(handle, chunks, total, revoked, this.connection.owner), this.connection.owner);
         if (typeof result !== "number") return result;
         this.call("grow", [handle, result]);
       }
