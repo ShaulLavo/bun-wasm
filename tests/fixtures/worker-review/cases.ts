@@ -9,8 +9,8 @@ export interface WorkerReviewCase {
 
 const start = `const { Worker, MessageChannel } = require('node:worker_threads');
 const assert = require('node:assert/strict');`;
-const memory = `const module = new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0,5,3,1,0,1,7,10,1,6,109,101,109,111,114,121,2,0]));
-const memory = new WebAssembly.Instance(module).exports.memory;`;
+const memory = `const wasmModule = new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0,5,3,1,0,1,7,10,1,6,109,101,109,111,114,121,2,0]));
+const memory = new WebAssembly.Instance(wasmModule).exports.memory;`;
 
 const unhandled: WorkerReviewCase[] = [
   {

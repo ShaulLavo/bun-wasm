@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { workerReviewCases } from "./fixtures/worker-review/cases.ts";
 
@@ -13,11 +13,16 @@ const launcher = resolve(process.env.CARGO_TARGET_DIR || "/work/tmp/bun-wasm-tar
 const selected = workerReviewCases.filter(test => !option("--case") || test.name.includes(option("--case")));
 const results = [];
 let active: ReturnType<typeof spawn> | undefined;
+let scratch: string | undefined;
+process.on("exit", () => { if (scratch) rmSync(scratch, { recursive: true, force: true }); });
 process.on("SIGTERM", () => { active?.kill("SIGKILL"); process.exit(143); });
 process.on("SIGINT", () => { active?.kill("SIGKILL"); process.exit(130); });
+if (host === "node-control") scratch = mkdtempSync("/work/tmp/bun-wasm-worker-review-");
 
 for (const test of selected) {
-  const command = host === "node-control" ? [process.execPath, "-e", test.code]
+  const control = scratch ? `${scratch}/${test.name}.cjs` : "";
+  if (control) writeFileSync(control, test.code);
+  const command = host === "node-control" ? [process.execPath, control]
     : host === "node" ? [process.execPath, "--no-warnings", `${root}/web/scripts/node-host.mjs`, "--wasm", artifact, "--net", "--", "-e", test.code]
     : [launcher, "--wasm", artifact, "-e", test.code];
   const result = await new Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string; timeout: boolean }>(resolve => {
