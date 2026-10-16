@@ -47,7 +47,8 @@ component validation, PKCS#1 parsing, signing, verification and OAEP operations.
 EVP operations provide Bun's RSA behavior without the documented RUSTSEC-2023-0071 issue in
 the RustCrypto RSA crate. That crate is not a dependency.
 
-The C adapter owns BoringSSL objects only during a call. Rust owns the request dispatch,
+The shared `bunwasm-crypto-sys` crate owns BoringSSL linkage for the runtime and the
+standalone parser/glue targets. Its C adapter owns BoringSSL objects only during a call. Rust owns the request dispatch,
 key-format conversion and results. The JS adapter supplies WebCrypto's argument and policy
 checks. Bun's corresponding generated builtins require JSC-native bindings, so they cannot
 provide this engine-independent implementation yet.

@@ -14,6 +14,7 @@ engine-jsc = ["dep:bunwasm-jsc"]
 engine-host = []
 
 [dependencies]
+bunwasm-crypto-sys = { path = "../bunwasm-crypto-sys" }
 bun_glob = { path = "../../vendor/bun/src/glob" }
 bun_semver = { path = "../../vendor/bun/src/semver" }
 bunwasm-semver = { path = "../bunwasm-semver" }
@@ -56,6 +57,3 @@ signature = "2"
 [dev-dependencies]
 bunwasm-glue = { path = "../bunwasm-glue" }
 bunwasm-posix = { path = "../bunwasm-posix" }
-
-[build-dependencies]
-cc = "1"
