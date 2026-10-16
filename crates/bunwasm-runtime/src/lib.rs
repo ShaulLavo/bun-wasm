@@ -15,6 +15,7 @@ use std::io::{self, BufWriter, Write};
 use std::rc::Rc;
 use std::time::Instant;
 
+mod directory;
 mod encoding;
 mod glob;
 pub mod engine;

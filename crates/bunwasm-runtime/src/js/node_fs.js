@@ -138,6 +138,133 @@
     }
   }
 
+  function directoryOptions(options) {
+    if (options == null) options = {};
+    if (typeof options === "string") options = { encoding: options };
+    if (typeof options !== "object") throw invalidArg("options", "of type object", options);
+    const encoding = options.encoding == null ? "utf8" : options.encoding;
+    if (encoding !== "buffer" && !Buffer.isEncoding(encoding)) {
+      throw Object.assign(new TypeError(`The argument 'encoding' is invalid. Received ${String(encoding)}`), { code: "ERR_INVALID_ARG_VALUE" });
+    }
+    const bufferSize = options.bufferSize === undefined ? 32 : options.bufferSize;
+    if (typeof bufferSize !== "number") throw invalidArg("options.bufferSize", "of type number", bufferSize);
+    if (!Number.isInteger(bufferSize) || bufferSize < 1 || bufferSize > 4294967295) {
+      throw Object.assign(new RangeError(`The value of "options.bufferSize" is out of range. Received ${bufferSize}`), { code: "ERR_OUT_OF_RANGE" });
+    }
+    return { encoding, bufferSize, recursive: Boolean(options.recursive) };
+  }
+
+  function directoryClosed() {
+    return Object.assign(new Error("Directory handle was closed"), { code: "ERR_DIR_CLOSED" });
+  }
+
+  class Dir {
+    #handle;
+    #path;
+    #options;
+    #entries = [];
+    #index = 0;
+    #operations = [];
+
+    constructor(handle, path, options) {
+      this.#handle = handle;
+      this.#path = path;
+      this.#options = options;
+    }
+    get path() {
+      if (!(#path in this)) throw Object.assign(new TypeError('Value of "this" must be of type Dir'), { code: "ERR_INVALID_THIS" });
+      return this.#path;
+    }
+    #checkOpen() {
+      if (this.#handle === null) throw directoryClosed();
+    }
+    #checkSync() {
+      this.#checkOpen();
+      if (this.#operations.length !== 0) {
+        throw Object.assign(new Error("Cannot do synchronous work on directory handle with concurrent asynchronous operations"), { code: "ERR_DIR_CONCURRENT_OPERATION" });
+      }
+    }
+    #readEntry() {
+      this.#checkOpen();
+      if (this.#index === this.#entries.length) {
+        this.#entries = native.readDir(this.#handle, this.#options.bufferSize);
+        this.#index = 0;
+      }
+      if (this.#entries.length === 0) return null;
+      const [bytes, kind, parentPath] = this.#entries[this.#index++];
+      const buffer = asBuffer(bytes);
+      const name = this.#options.encoding === "buffer" ? buffer : buffer.toString(this.#options.encoding);
+      return new Dirent(name, kind, parentPath);
+    }
+    #closeHandle() {
+      this.#checkOpen();
+      native.closeDir(this.#handle);
+      this.#handle = null;
+      this.#entries = [];
+    }
+    #enqueue(operation, callback) {
+      if (callback !== undefined && typeof callback !== "function") throw invalidArg("callback", "of type function", callback);
+      if (callback === undefined) return new Promise((resolve, reject) => this.#enqueue(operation, (error, result) => error ? reject(error) : resolve(result)));
+      this.#operations.push({ operation, callback });
+      if (this.#operations.length === 1) later(() => this.#drain());
+    }
+    #drain() {
+      const { operation, callback } = this.#operations[0];
+      let result, error = null;
+      try { result = operation === "read" ? this.#readEntry() : this.#closeHandle(); }
+      catch (err) { error = err; }
+      this.#operations.shift();
+      if (this.#operations.length !== 0) later(() => this.#drain());
+      if (operation === "close") callback(error);
+      else callback(error, result);
+    }
+    readSync() {
+      this.#checkSync();
+      return this.#readEntry();
+    }
+    read(callback) {
+      return this.#enqueue("read", callback);
+    }
+    closeSync() {
+      this.#checkSync();
+      this.#closeHandle();
+    }
+    close(callback) {
+      return this.#enqueue("close", callback);
+    }
+    [Symbol.dispose]() {
+      if (this.#handle !== null) this.closeSync();
+    }
+    async [Symbol.asyncDispose]() {
+      if (this.#handle !== null) await this.close();
+    }
+    async *[Symbol.asyncIterator]() {
+      try {
+        let entry;
+        while ((entry = await this.read()) !== null) yield entry;
+      } finally {
+        if (this.#handle !== null) await this.close();
+      }
+    }
+  }
+
+  function opendirSync(path, options) {
+    const given = toPath(path);
+    const config = directoryOptions(options);
+    return new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, config);
+  }
+
+  function opendir(path, options, callback) {
+    if (typeof options === "function") { callback = options; options = undefined; }
+    if (typeof callback !== "function") throw invalidArg("callback", "of type function", callback);
+    const given = toPath(path);
+    const config = directoryOptions(options);
+    let result, error = null;
+    try { result = new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, config); }
+    catch (err) { error = err; }
+    later(() => callback(error, result));
+  }
+
   // --- sync API ---------------------------------------------------------------
 
   function readFileSync(path, options) {
@@ -437,7 +564,7 @@
   const sync = {
     readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, mkdirSync, readdirSync,
     rmSync, rmdirSync, unlinkSync, renameSync, copyFileSync, cpSync, realpathSync, accessSync, mkdtempSync,
-    openSync, closeSync, readSync, writeSync, writevSync, globSync,
+    openSync, closeSync, readSync, writeSync, writevSync, globSync, opendirSync,
     fstatSync: (fd) => new Stats(native.fstat(fd)),
     ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
     truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
@@ -489,6 +616,7 @@
     later(() => callback(result));
   };
   callbackApi.glob = glob;
+  callbackApi.opendir = opendir;
   callbackApi.writev = writev;
   callbackApi.read = callbackify("read", readSync, (cb, err, n, args) => cb(err, n, args[1]));
   callbackApi.write = callbackify("write", writeSync, (cb, err, n, args) => cb(err, n, args[1]));
@@ -651,6 +779,7 @@
     constants,
     Stats,
     Dirent,
+    Dir,
     createReadStream,
     createWriteStream,
     watch: watchUnsupported,

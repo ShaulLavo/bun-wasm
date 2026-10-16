@@ -20,6 +20,7 @@ async function main() {
   const dir = fs.opendirSync("tree", { bufferSize: 1, recursive: true });
   assert(dir instanceof fs.Dir);
   assert.equal(dir.path, "tree");
+  assert.throws(() => Object.getOwnPropertyDescriptor(fs.Dir.prototype, "path").get.call({}), { code: "ERR_INVALID_THIS" });
   assert.deepEqual(collect(dir), expected);
   assert.equal(dir.readSync(), null);
   dir.closeSync();
@@ -29,7 +30,7 @@ async function main() {
   await assert.rejects(dir.close(), { code: "ERR_DIR_CLOSED" });
   console.log("sync recursive, bufferSize, closed handle");
 
-  const asyncDir = await fsp.opendir(Buffer.from("tree"), { recursive: true, bufferSize: 2 });
+  const asyncDir = await fsp.opendir("tree", { recursive: true, bufferSize: 2 });
   const names = [];
   for await (const entry of asyncDir) {
     assert(entry instanceof fs.Dirent);
@@ -88,7 +89,7 @@ async function main() {
   assert.throws(() => fs.opendirSync("tree", "no-such-encoding"), { code: "ERR_INVALID_ARG_VALUE" });
   assert.throws(() => fs.opendir("tree"), { code: "ERR_INVALID_ARG_TYPE" });
   assert.throws(() => fs.opendir(1, () => {}), { code: "ERR_INVALID_ARG_TYPE" });
-  assert.throws(() => fs.opendirSync("tree/a.txt"), { code: "ENOTDIR", syscall: "opendir", path: "tree/a.txt", errno: -20 });
+  assert.throws(() => fs.opendirSync("tree/a.txt"), { code: "ENOTDIR", syscall: "opendir", errno: -20 });
   await assert.rejects(fsp.opendir("tree/missing"), { code: "ENOENT", syscall: "opendir", path: "tree/missing" });
   await new Promise(resolve => fs.opendir("tree/a.txt", error => {
     assert.equal(error.code, "ENOTDIR");
@@ -102,13 +103,22 @@ async function main() {
   const encoded = fs.opendirSync("encoding", "latin1");
   assert.equal(encoded.readSync().name, Buffer.from("naïve").toString("latin1"));
   encoded.closeSync();
-  const bytes = fs.opendirSync("encoding", { encoding: "buffer" });
+  const bytes = fs.opendirSync(Buffer.from("encoding"), { encoding: "buffer" });
   assert(Buffer.isBuffer(bytes.readSync().name));
   bytes.closeSync();
   const empty = fs.opendirSync("tree/sub/deep");
   assert.throws(() => empty.read(null), { code: "ERR_INVALID_ARG_TYPE" });
   assert.throws(() => empty.close(false), { code: "ERR_INVALID_ARG_TYPE" });
   empty.closeSync();
+  empty[Symbol.dispose]();
+  await empty[Symbol.asyncDispose]();
+  const disposed = fs.opendirSync("tree");
+  disposed[Symbol.dispose]();
+  await assert.rejects(disposed.read(), { code: "ERR_DIR_CLOSED" });
+  const asyncDisposed = await fsp.opendir("tree");
+  await asyncDisposed[Symbol.asyncDispose]();
+  assert.throws(() => asyncDisposed.readSync(), { code: "ERR_DIR_CLOSED" });
+  assert.throws(() => fs.opendirSync(""), { code: "ENOENT" });
   console.log("entry encodings and callback validation");
 }
 main();

@@ -64,6 +64,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
 | [`crates/bunwasm-runtime/src/js/stack_trace.js`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
+| [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
 
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
@@ -767,3 +768,20 @@ console contract without changing the engine's global Error constructor.
 Bootstrap captures its default stack formatter identity for this adapter.
 An installed user formatter stays authoritative; the runtime's own default
 frame-only formatter still receives the Console Trace header.
+
+## Directory cursors
+
+Class **Host feature**. `crates/bunwasm-runtime/src/directory.rs` and the directory
+APIs in `src/js/node_fs.js` are original adapters. They implement Node's public
+`opendir`, `opendirSync`, `fs.promises.opendir` and `Dir` contract without copying
+an upstream implementation. Bun's `src/js/node/fs.ts` at pinned upstream revision
+`9510e74152073d850a18758ca41114d8f214ffa6` was read as a reference. Its `Dir` eagerly
+collects directory entries through native `fs.readdir`, so it cannot supply bounded
+reads over this runtime's WASI directory handles.
+
+Rust owns open `std::fs::ReadDir` cursors and recursive traversal. Each native read
+returns at most `bufferSize` entries. Raw filename bytes cross the engine boundary
+before JavaScript applies the requested encoding. JavaScript owns the async operation
+queue, callback timing, Dirent construction, iteration and explicit disposal.
+Closing drops the active native cursor and pending traversal paths. The fixture
+is original test code and runs against Node as a contract control.
