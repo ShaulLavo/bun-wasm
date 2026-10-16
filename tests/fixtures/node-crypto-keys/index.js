@@ -1,3 +1,4 @@
+import encryptedVectors from "./encrypted-vectors.json";
 import assert from "node:assert/strict";
 import { types } from "node:util";
 import {
@@ -318,3 +319,21 @@ for (const [type, options] of [
   }
 }
 console.log("node encrypted key formats ok");
+
+for (const v of encryptedVectors.vectors) {
+  const key = createPrivateKey({
+    key: Buffer.from(v.key, "base64url"),
+    format: v.format,
+    type: v.type,
+    passphrase: encryptedVectors.passphrase,
+  });
+  const pub = createPublicKey({
+    key: Buffer.from(v.publicKey, "base64url"),
+    format: "der",
+    type: "spki",
+  });
+  const data = Buffer.from(encryptedVectors.data, "base64url");
+  assert(verify("sha256", data, pub, Buffer.from(v.signature, "base64url")));
+  assert(verify("sha256", data, pub, sign("sha256", data, key)));
+}
+console.log("native encrypted vectors", encryptedVectors.vectors.length);
