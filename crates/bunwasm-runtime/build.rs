@@ -36,4 +36,3 @@ fn main() {
     println!("cargo:rustc-env=BUNWASM_BUN_VERSION={version}");
     println!("cargo:rustc-env=BUNWASM_BUN_REVISION={revision}");
 }
-
