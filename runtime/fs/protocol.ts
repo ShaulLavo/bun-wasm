@@ -5,11 +5,11 @@ const NativeMessageChannel = globalThis.MessageChannel;
 export const DEFAULT_SHARED_MAX_BYTES = 1024 * 1024 * 1024;
 export const SHARED_SEGMENT_BYTES = 16 * 1024 * 1024;
 export const MAX_SHARED_SEGMENTS = DEFAULT_SHARED_MAX_BYTES / SHARED_SEGMENT_BYTES;
-export interface GrowableSharedSegment extends SharedArrayBuffer {
+export type GrowableSharedSegment = SharedArrayBuffer & {
   readonly growable: boolean;
   readonly maxByteLength: number;
   grow(byteLength: number): void;
-}
+};
 export function createSharedSegment(): GrowableSharedSegment {
   // The runtime supports growable SABs; ES2022's library declarations do not yet expose them.
   const Constructor = SharedArrayBuffer as unknown as new (bytes: number, options: { maxByteLength: number }) => GrowableSharedSegment;
