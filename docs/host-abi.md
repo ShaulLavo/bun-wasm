@@ -143,6 +143,14 @@ already decoded from `content-encoding` (gzip/br/deflate) by the host, like
 browsers do. For a connection handle: bytes from the peer. Returns `n > 0`
 bytes, `0` at end of stream, `AGAIN`, or `ERROR`.
 
+Handle `0` reads the current guest's stdin without blocking. It uses the same
+return values. A host that does not expose stdin through this interface returns
+`UNSUPPORTED`; ordinary WASI stdin remains available. The native launcher polls
+its stdin stream, and browser and Node workers expose their shared subprocess
+stdin pipe. Callback `fs.read(0, ...)` registers an I/O waiter for these reads.
+Synchronous reads still use WASI. They do not prefetch stdin bytes, so synchronous
+and callback reads share the same position.
+
 ### `write(handle, buf_ptr, len) -> n`
 
 Connection handles only. Queues up to `len` bytes; returns how many were

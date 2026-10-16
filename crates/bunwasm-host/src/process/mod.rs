@@ -7,8 +7,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
 
 use serde::Deserialize;
+use tokio::io::{AsyncRead, ReadBuf};
 use wasmtime_wasi::cli::{StdinStream, StdoutStream};
 
 use crate::net::{AGAIN, BADF, ErrorInfo, Notify};
@@ -64,6 +67,7 @@ struct PipeHandle {
 pub struct Processes {
     runtime: Arc<Runtime>,
     stdio: Stdio,
+    stdin: Pin<Box<dyn AsyncRead + Send + Sync>>,
     notify: Arc<Notify>,
     next: i32,
     children: HashMap<i32, Child>,
@@ -78,6 +82,7 @@ impl Processes {
     pub fn new(runtime: Arc<Runtime>, stdio: Stdio, notify: Arc<Notify>) -> Self {
         Self {
             runtime,
+            stdin: Box::into_pin(stdio.stdin.async_stream()),
             stdio,
             notify,
             next: FIRST_HANDLE,
@@ -298,7 +303,17 @@ impl Processes {
         crate::net::Output::Bytes(info.to_json())
     }
 
-    pub fn read(&self, id: i32, buf: &mut [u8]) -> i32 {
+    pub fn read(&mut self, id: i32, buf: &mut [u8]) -> i32 {
+        if id == 0 {
+            let waker = Waker::from(self.notify.clone());
+            let mut context = Context::from_waker(&waker);
+            let mut buffer = ReadBuf::new(buf);
+            return match self.stdin.as_mut().poll_read(&mut context, &mut buffer) {
+                Poll::Ready(Ok(())) => buffer.filled().len() as i32,
+                Poll::Ready(Err(_)) => -1,
+                Poll::Pending => AGAIN,
+            };
+        }
         match self.pipes.get(&id) {
             Some(p) if !p.write => p.pipe.read(buf),
             _ => BADF,

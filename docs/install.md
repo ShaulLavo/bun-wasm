@@ -193,7 +193,8 @@ The unchanged `esbuild-wasm` Node API starts its JavaScript CLI through
 `child_process.spawn("node", ...)`. Node commands use a fresh bun-wasm guest,
 with the same engine, filesystem, and environment. Go's published `wasm_exec.js`
 then runs `esbuild.wasm` through the guest WebAssembly API. The native launcher
-and browser subprocess host supply pipes. Plain wasmtime without a subprocess
+and browser subprocess host supply pipes. Callback stdin reads yield to the
+event loop while waiting for service packets. Plain wasmtime without a subprocess
 host cannot use this API.
 
 `MATRIX_CACHE=/path/to/mirror bun tests/esbuild/run.mjs` replays esbuild 0.25.12.

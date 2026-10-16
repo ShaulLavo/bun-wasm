@@ -313,15 +313,20 @@
     native.close(fd);
   }
 
-  function readSync(fd, buffer, offsetOrOptions, length, position) {
+  function readOptions(buffer, offsetOrOptions, length, position) {
     let offset = offsetOrOptions;
     if (offsetOrOptions !== null && typeof offsetOrOptions === "object") {
       ({ offset = 0, length = buffer.byteLength - offset, position = null } = offsetOrOptions);
     }
     offset = offset || 0;
     if (length === undefined) length = buffer.byteLength - offset;
-    const chunk = native.read(fd, length, position === null || position === undefined ? -1 : Number(position));
-    internal.toUint8(buffer).set(chunk, offset);
+    return { offset, length, position };
+  }
+
+  function readSync(fd, buffer, offsetOrOptions, length, position) {
+    const options = readOptions(buffer, offsetOrOptions, length, position);
+    const chunk = native.read(fd, options.length, options.position === null || options.position === undefined ? -1 : Number(options.position));
+    internal.toUint8(buffer).set(chunk, options.offset);
     return chunk.length;
   }
 
@@ -490,7 +495,29 @@
   };
   callbackApi.glob = glob;
   callbackApi.writev = writev;
-  callbackApi.read = callbackify("read", readSync, (cb, err, n, args) => cb(err, n, args[1]));
+  const readCallback = callbackify("read", readSync, (cb, err, n, args) => cb(err, n, args[1]));
+  callbackApi.read = function (...args) {
+    if (args[0] !== 0 || !native.hostCaps.read) return readCallback(...args);
+    const callback = args.pop();
+    if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
+    const [fd, buffer, offsetOrOptions, length, position] = args;
+    const options = readOptions(buffer, offsetOrOptions, length, position);
+    if (options.length === 0) return later(() => callback(null, 0, buffer));
+    const step = () => {
+      const chunk = native.hostRead(0, options.length);
+      if (chunk === -2) return false;
+      if (chunk === -4) {
+        readCallback(fd, buffer, offsetOrOptions, length, position, callback);
+        return true;
+      }
+      if (typeof chunk === "number" && chunk < 0) throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO", syscall: "read", errno: -5 });
+      if (chunk !== 0) internal.toUint8(buffer).set(chunk, options.offset);
+      later(() => callback(null, chunk === 0 ? 0 : chunk.length, buffer));
+      return true;
+    };
+    internal.require("net");
+    internal.addIoWaiter({ step, fail: error => later(() => callback(error, 0, buffer)) });
+  };
   callbackApi.write = callbackify("write", writeSync, (cb, err, n, args) => cb(err, n, args[1]));
 
   // --- promises ---------------------------------------------------------------
