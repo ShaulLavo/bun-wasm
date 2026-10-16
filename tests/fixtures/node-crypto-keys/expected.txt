@@ -8,3 +8,4 @@ node JWK metadata ok
 node digest validation ok
 node exponent validation ok
 node opaque key brands ok
+node key equality ok

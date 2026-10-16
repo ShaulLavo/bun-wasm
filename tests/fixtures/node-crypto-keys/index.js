@@ -213,3 +213,28 @@ assert.equal(types.isKeyObject(Object.create(KeyObject.prototype)), false);
 assert.equal(types.isCryptoKey(Object.create(CryptoKey.prototype)), false);
 assert(types.isCryptoKey(webSecret));
 console.log("node opaque key brands ok");
+
+const rsaEquality = generateKeyPairSync("rsa", {
+  modulusLength: 1024,
+}).privateKey;
+const equalityJwk = rsaEquality.export({ format: "jwk" });
+const readInteger = (value) =>
+  BigInt("0x" + Buffer.from(value, "base64url").toString("hex"));
+const p = readInteger(equalityJwk.p),
+  q = readInteger(equalityJwk.q),
+  qi = readInteger(equalityJwk.qi);
+let coefficient = (q - (((q * qi - 1n) / p) % q)).toString(16);
+if (coefficient.length % 2) coefficient = "0" + coefficient;
+const reordered = createPrivateKey({
+  key: {
+    ...equalityJwk,
+    p: equalityJwk.q,
+    q: equalityJwk.p,
+    dp: equalityJwk.dq,
+    dq: equalityJwk.dp,
+    qi: Buffer.from(coefficient, "hex").toString("base64url"),
+  },
+  format: "jwk",
+});
+assert(rsaEquality.equals(reordered));
+console.log("node key equality ok");

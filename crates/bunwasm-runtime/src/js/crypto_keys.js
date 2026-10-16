@@ -56,6 +56,11 @@
       records.set(key, { ...r, algorithm });
       return key;
     }
+    function equalityBytes(key) {
+      const r = nodeRecord(key);
+      if (r.type === "secret") return Buffer.from(c.decode(r.key.k));
+      return createPublicKey(key).export({ format: "der", type: "spki" });
+    }
     class KeyObject {
       constructor() {
         throw new TypeError("Illegal constructor");
@@ -142,8 +147,8 @@
         const r = nodeRecord(this),
           b = nodeRecord(other);
         if (r.type !== b.type) return false;
-        const aBytes = Buffer.from(JSON.stringify(r.key)),
-          bBytes = Buffer.from(JSON.stringify(b.key));
+        const aBytes = equalityBytes(this),
+          bBytes = equalityBytes(other);
         return (
           aBytes.length === bBytes.length && timingSafeEqual(aBytes, bBytes)
         );

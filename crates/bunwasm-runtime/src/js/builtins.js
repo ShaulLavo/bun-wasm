@@ -168,9 +168,7 @@
       if (x.byteLength !== y.byteLength) {
         throw Object.assign(new RangeError("Input buffers must have the same byte length"), { code: "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH" });
       }
-      let diff = 0;
-      for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
-      return diff === 0;
+      return native.timingSafeEqual(x,y);
     }
 
     function randomFillSync(buffer, offset = 0, size) {
