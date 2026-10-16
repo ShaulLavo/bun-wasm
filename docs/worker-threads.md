@@ -59,12 +59,18 @@ deadlines are identical within each comparison.
 | --- | ---: | ---: | ---: | ---: |
 | QuickJS | 0/160 | 61/160 | 0/0 | 0/1 |
 | JSC | 0/160 | 61/160 | 0/0 | 0/1 |
-| Browser | 0/160 | 60/160 | 0/0 | 0/0 |
+| Browser | 0/160 | 59/160 | 0/0 | 0/0 |
 
 These are Node assertion scripts. The suite runner counts a clean script exit as
 a fully passing file and does not count its individual assertions. There are no
 newly failing files that previously passed. Before the change, the common helper
 stopped while importing `worker_threads`; after it, tests reach their own code.
+
+The first post-change browser census passed 60 files. The final artifacts pass
+59 because `test-child-process-can-write-to-stdout.js` observes empty stdout in
+its exit listener. Two of three isolated repetitions on the same final wasm fail
+that assertion, and one passes. Both censuses and all repeats are retained; the
+table uses the final artifact's full-census result.
 
 The newly reached timeout is `test-async-local-storage-http-agent.js`, which needs
 HTTP request streaming. The browser engine instead fails an earlier async-context
