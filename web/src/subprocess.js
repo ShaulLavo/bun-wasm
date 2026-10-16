@@ -1,4 +1,4 @@
-import { memoryViews } from "./memory-views.js";
+import { memoryViews } from "@bun-wasm/runtime/core/memory-views";
 
 // Shared transport for browser and Node workers. No native executables are launched.
 const NativeEncoder = TextEncoder;
@@ -31,6 +31,13 @@ export class SharedPipe {
     this.cells = new Int32Array(buffer, 0, 4);
     this.bytes = new Uint8Array(buffer, 16);
     this.budget = budget;
+  }
+  readiness() {
+    const closed = Atomics.load(this.cells, 2) !== 0;
+    const read = Atomics.load(this.cells, 0) >>> 0;
+    const written = Atomics.load(this.cells, 1) >>> 0;
+    const nbytes = (written - read) >>> 0;
+    return { readable: nbytes > 0 || closed, writable: !closed && nbytes < PIPE_SIZE, hangup: closed, nbytes };
   }
   read(cap = 65536) {
     if (cap === 0) return 0;
@@ -90,6 +97,47 @@ export class SharedPipe {
     Atomics.notify(this.cells, 3);
     wake(this.budget);
   }
+}
+
+/** Original adapter from the existing Bun pipe transport to runtime descriptors. */
+export function wasiPipe(pipe, mode) {
+  return {
+    kind: "pipe",
+    read(chunks) {
+      if (mode !== "read") return -8;
+      const size = chunks.reduce((n, chunk) => n + chunk.length, 0);
+      if (size === 0) return 0;
+      const value = pipe.readBlocking(size);
+      if (typeof value === "number") return value;
+      let at = 0;
+      for (const chunk of chunks) {
+        const count = Math.min(chunk.length, value.length - at);
+        chunk.set(value.subarray(at, at + count));
+        at += count;
+      }
+      return at;
+    },
+    write(chunks) {
+      if (mode !== "write") return -8;
+      let written = 0;
+      for (const chunk of chunks) {
+        let at = 0;
+        while (at < chunk.length) {
+          const seen = Atomics.load(pipe.cells, 3);
+          const n = pipe.write(chunk.subarray(at));
+          if (n === AGAIN) Atomics.wait(pipe.cells, 3, seen, 100);
+          else if (n < 0) return written || -64;
+          else { at += n; written += n; }
+        }
+      }
+      return written;
+    },
+    readiness() {
+      const state = pipe.readiness();
+      return { ...state, readable: mode === "read" && state.readable, writable: mode === "write" && state.writable };
+    },
+    // ChildTransport.finish owns closure until the process layer gains inherited endpoint refs.
+  };
 }
 
 export function childTransport(transport) {

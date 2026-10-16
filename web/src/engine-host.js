@@ -1,4 +1,4 @@
-import { memoryViews } from "./memory-views.js";
+import { memoryViews } from "@bun-wasm/runtime/core/memory-views";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for

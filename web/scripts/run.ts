@@ -9,8 +9,8 @@ import { HOME, examples } from "../src/examples";
 import { MemFS } from "../src/fs";
 import { NetHost } from "../src/net/host";
 import { createRing } from "../src/net/ring";
-import { installHostSlots, installHostSlotsViaImport } from "../src/net/trampoline";
-import { Wasi } from "../src/wasi";
+import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "../src/net/trampoline";
+import { Wasi } from "@bun-wasm/runtime/core";
 
 const [wasmPath, ...args] = process.argv.slice(2);
 if (!wasmPath) {
@@ -28,6 +28,7 @@ function testEnv(): Record<string, string> {
 const cell = new Int32Array(new SharedArrayBuffer(4));
 const module = new WebAssembly.Module(readFileSync(wasmPath));
 const wasi = new Wasi({
+  hostCallFd: HOST_CALL_FD,
   args: ["bun", ...args],
   // TEST_* variables pass through (TEST_SERVER for the network fixtures).
   env: { HOME, PWD: HOME, USER: "user", TERM: "xterm-256color", TMPDIR: "/tmp", ...testEnv() },

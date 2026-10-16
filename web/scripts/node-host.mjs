@@ -19,7 +19,7 @@ import { WASI } from "node:wasi";
 import { fileURLToPath } from "node:url";
 import { Worker, workerData } from "node:worker_threads";
 import { installCliFetch } from "./node-install-net.mjs";
-import { memoryViews } from "../src/memory-views.js";
+import { memoryViews } from "@bun-wasm/runtime/core/memory-views";
 import { SubprocessHost, childTransport } from "../src/subprocess.js";
 
 // The runtime replaces globalThis.process with its own; keep Node's.
