@@ -122,6 +122,10 @@ pub fn module_imports(source: &str, path: &str) -> Result<Vec<ModuleImport>, Str
     if !source.contains("import") && !source.contains("from") {
         return Ok(Vec::new());
     }
+    with_state(|state| scan_imports(state, source, path))
+}
+
+fn scan_imports(state: &State, source: &str, path: &str) -> Result<Vec<ModuleImport>, String> {
     let arena = Arena::new();
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&arena);
     let _ast_scope = ast_alloc.enter();
@@ -129,13 +133,11 @@ pub fn module_imports(source: &str, path: &str) -> Result<Vec<ModuleImport>, Str
     let mut log = bun_ast::Log::init();
     let mut scanned = bun_js_parser::ScanPassResult::init();
     let (result, dynamic) = bun_js_parser::with_bunwasm_dynamic_imports(|| {
-        with_state(|state| {
-            let mut options = bun_js_parser::ParserOptions::init(state.transpiler.options.jsx.clone(), BunLoader::Js);
-            options.features.commonjs_at_runtime = true;
-            let mut parser = bun_js_parser::Parser::init(options, &mut log, &src, &state.transpiler.options.define, &arena)
-                .map_err(|e| format!("failed to scan {path}: {e:?}"))?;
-            parser.scan_imports(&mut scanned).map_err(|e| format!("failed to scan {path}: {e:?}"))
-        })
+        let mut options = bun_js_parser::ParserOptions::init(state.transpiler.options.jsx.clone(), BunLoader::Js);
+        options.features.commonjs_at_runtime = true;
+        let mut parser = bun_js_parser::Parser::init(options, &mut log, &src, &state.transpiler.options.define, &arena)
+            .map_err(|e| format!("failed to scan {path}: {e:?}"))?;
+        parser.scan_imports(&mut scanned).map_err(|e| format!("failed to scan {path}: {e:?}"))
     });
     result?;
     if log.errors > 0 {
