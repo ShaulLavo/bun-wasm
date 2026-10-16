@@ -1106,3 +1106,5 @@ HTTPS requests continue to use the host's TLS fetch transport. The raw socket
 ABI has no TLS capability, so HTTPS upgrades without a caller-supplied connection
 fail with `ERR_TLS_NOT_SUPPORTED` instead of opening a plaintext connection.
 The caller-supplied connection path retains caller ownership of TLS setup.
+
+[The HTTP compatibility report](http-compatibility.md) records the controls and measurements.

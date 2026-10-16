@@ -229,3 +229,38 @@ The six Vite dev rows on QuickJS and JSC have empty logs and no captured exit
 code. Add exit/deadline provenance to the server measurement before assigning
 those rows a cause. Preserve the passing Vite production-build controls while
 investigating each failure.
+
+## Browser memory-growth gate after the shared filesystem merge
+
+Status: Approved. The coordinator's Web Crypto follow-up is investigating the same gate failure.
+
+On main `c7f08312` with the HTTP lane applied, `scripts/test.sh` passes 153 fixtures
+on every engine. `scripts/test-web.sh` reaches `web/tests/browser-memory.mjs:65`,
+then Chromium's first guest run times out after 120 seconds. The assertion reports
+`^C` and `null !== 0`. An isolated rerun of the same browser-memory command fails
+the same way, so this is two failures in two attempts on the HTTP lane. The wave
+log also records it while landing Web Crypto on main after the filesystem merge.
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+export PLAYWRIGHT=/home/shaul/.local/share/mise/installs/npm-playwright/1.63.0/node_modules/.mise/playwright@1.63.0/node_modules/playwright/index.mjs
+bash /work/tmp/wave-heavy/run.sh --class browser "browser memory gate" -- \
+  env PATH="$PATH" PLAYWRIGHT="$PLAYWRIGHT" node web/tests/browser-memory.mjs
+```
+
+The guest is `tests/fixtures/memory-grow/index.js`, which writes and reads a 48 MiB
+file after allocating its buffer. `runtime/fs/shared.ts:8` limits a file to 256
+pages and `runtime/fs/protocol.ts` defines 64 KiB pages, giving a 16 MiB per-file
+limit. `runtime/README.md` and `docs/install.md` document that limit and EFBIG.
+Investigate the failure/error completion around shared growth and reconcile the
+browser growth control with the documented file cap. Keep coverage that forces
+wasm memory growth and then verifies host I/O.
+
+The memory guest imports only `node:fs`; it does not exercise HTTP. Chromium's
+memory-view control itself passes before the guest timeout. No HTTP or filesystem
+workaround was added for this failure. An unchanged main-artifact control has not
+been run by this lane. Raw logs are retained at
+`/work/reports/bun-wasm-http-20261016/after-web-tests.log` and
+`/work/reports/bun-wasm-http-20261016/memory-recheck.log`. The coordinator owns
+follow-up and evidence cleanup after the gate is fixed.
