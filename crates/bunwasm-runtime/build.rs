@@ -1,42 +1,17 @@
-//! Embeds src/js/*.js as `POLYFILLS` and records the Bun version/revision
+//! Embeds src/js/*.{js,ts} as JavaScript `POLYFILLS` and records the Bun version/revision
 //! of the vendored sources.
 
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+#[path = "build/polyfills.rs"]
+mod polyfills;
+
 fn main() {
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let out = std::env::var("OUT_DIR").unwrap();
-    let js_dir = Path::new(&manifest).join("src/js");
-    println!("cargo:rerun-if-changed={}", js_dir.display());
-
-    let mut names: Vec<String> = fs::read_dir(&js_dir)
-        .map(|dir| {
-            dir.filter_map(|e| e.ok())
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|n| n.ends_with(".js"))
-                .collect()
-        })
-        .unwrap_or_default();
-    names.sort();
-    // Development aid: files in $BUNWASM_JS_OVERRIDE_DIR replace same-named
-    // polyfills (handy to test a module without touching the tree).
-    println!("cargo:rerun-if-env-changed=BUNWASM_JS_OVERRIDE_DIR");
-    let override_dir = std::env::var_os("BUNWASM_JS_OVERRIDE_DIR").map(std::path::PathBuf::from);
-    let mut table = String::from("pub static POLYFILLS: &[(&str, &str)] = &[\n");
-    for name in &names {
-        let path = override_dir
-            .as_ref()
-            .map(|dir| dir.join(name))
-            .filter(|p| p.exists())
-            .unwrap_or_else(|| js_dir.join(name));
-        println!("cargo:rerun-if-changed={}", path.display());
-        let stem = name.trim_end_matches(".js");
-        table.push_str(&format!("    ({stem:?}, include_str!({:?})),\n", path.display().to_string()));
-    }
-    table.push_str("];\n");
-    fs::write(Path::new(&out).join("polyfills.rs"), table).unwrap();
+    polyfills::embed(Path::new(&manifest), Path::new(&out));
 
     let bun_dir = Path::new(&manifest).join("../../vendor/bun");
     let package_json = bun_dir.join("package.json");

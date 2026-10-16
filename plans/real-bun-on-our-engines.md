@@ -175,3 +175,49 @@ There are no missing Streams globals, registry misses or registry errors.
 The [app-matrix record](../docs/app-matrix/README.md#web-streams-round-3-replay-with-semantic-imports)
 links the exact artifacts and all 12 stage outcomes. PR #24's later WASI-host
 merge has separate verification before this lane's delivery.
+## TypeScript follow-up
+
+Status: Approved. Execute after remaining runtime PRs #12, #14, #16, #18, #19 and #20 merge.
+
+Convert the remaining runtime JavaScript to TypeScript in small module groups. Prefer replacing
+our implementations with Bun's own builtin modules where available. Extend `src/js/runtime.d.ts`
+with each native or engine contract used, keep strict checking enabled, and compare all three
+engines before and after each group. Regenerate copied/generated files from their generators
+rather than changing their output by hand. Reconcile this list with the merged tree first.
+
+Remaining files at this change:
+
+- `crates/bunwasm-runtime/src/js/array_buffer_sink.js`
+- `crates/bunwasm-runtime/src/js/assert.js`
+- `crates/bunwasm-runtime/src/js/bootstrap.js`
+- `crates/bunwasm-runtime/src/js/buffer.js`
+- `crates/bunwasm-runtime/src/js/builtins.js`
+- `crates/bunwasm-runtime/src/js/bun.js`
+- `crates/bunwasm-runtime/src/js/bun_builtins.js`
+- `crates/bunwasm-runtime/src/js/bun_console_constructor.js`
+- `crates/bunwasm-runtime/src/js/bun_sqlite.js`
+- `crates/bunwasm-runtime/src/js/bun_test.js`
+- `crates/bunwasm-runtime/src/js/console.js`
+- `crates/bunwasm-runtime/src/js/console_constructor.js`
+- `crates/bunwasm-runtime/src/js/cookie.js`
+- `crates/bunwasm-runtime/src/js/events.js`
+- `crates/bunwasm-runtime/src/js/formats.js`
+- `crates/bunwasm-runtime/src/js/function.js`
+- `crates/bunwasm-runtime/src/js/html_server.js`
+- `crates/bunwasm-runtime/src/js/inspect.js`
+- `crates/bunwasm-runtime/src/js/intl.js`
+- `crates/bunwasm-runtime/src/js/jsonl.js`
+- `crates/bunwasm-runtime/src/js/net.js`
+- `crates/bunwasm-runtime/src/js/node_fs.js`
+- `crates/bunwasm-runtime/src/js/node_url.js`
+- `crates/bunwasm-runtime/src/js/path.js`
+- `crates/bunwasm-runtime/src/js/process.js`
+- `crates/bunwasm-runtime/src/js/spawn.js`
+- `crates/bunwasm-runtime/src/js/stack_trace.js`
+- `crates/bunwasm-runtime/src/js/string_decoder.js`
+- `crates/bunwasm-runtime/src/js/structured_clone.js`
+- `crates/bunwasm-runtime/src/js/temporal.js`
+- `crates/bunwasm-runtime/src/js/util.js`
+- `crates/bunwasm-runtime/src/js/web.js`
+- `crates/bunwasm-runtime/src/js/webassembly.js`
+- `crates/bunwasm-runtime/src/js/websocket.js`
