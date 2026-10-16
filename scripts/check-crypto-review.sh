@@ -7,16 +7,17 @@ report=${1:?report directory required}
 mkdir -p "$report"
 scratch=$(mktemp -d /work/tmp/bun-wasm-crypto-review-units-XXXXXX)
 trap 'rm -rf "$scratch"' EXIT INT TERM
-fixtures=(crypto-vectors crypto-hmac-required-hash crypto-hmac-derived-hash crypto-sha1-jwk crypto-p384-sha1 crypto-native-provider crypto-native-lifetime)
+fixtures=(crypto-vectors crypto-native-aes192 crypto-hmac-required-hash crypto-hmac-derived-hash crypto-sha1-jwk crypto-p384-sha1 crypto-native-provider crypto-native-lifetime)
 if [[ ${2:-} == --node ]]; then fixtures+=(crypto-keyobject-derivation crypto-rsa-padding crypto-native-node-interop node-crypto-keys); fi
 failed=0
-for engine in quickjs jsc browser browser-fallback; do
+for engine in quickjs jsc browser browser-fallback browser-aes192-gap; do
  for fixture in "${fixtures[@]}"; do
   work="$scratch/$engine-$fixture"
   cp -r "$root/tests/fixtures/$fixture" "$work"
   case $engine in
    quickjs) command=(wasmtime run --dir "$work::/" "$root/dist/bun.wasm" run /index.js);;
    jsc) command=(wasmtime run --dir "$work::/" "$root/dist/bun-jsc.wasm" run /index.js);;
+   browser-aes192-gap) command=(node --no-warnings --import "$root/web/tests/crypto-aes192-gap.mjs" "$root/web/scripts/node-host.mjs" --wasm "$root/dist/bun-browser.wasm" --dir "$work::/" -- run /index.js);;
    browser-fallback) command=(node --no-warnings --import "$root/web/tests/crypto-no-provider.mjs" "$root/web/scripts/node-host.mjs" --wasm "$root/dist/bun-browser.wasm" --dir "$work::/" -- run /index.js);;
    browser) command=(node --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$root/dist/bun-browser.wasm" --dir "$work::/" -- run /index.js);;
   esac

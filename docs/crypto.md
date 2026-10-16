@@ -1,10 +1,13 @@
 # Crypto APIs
 
 The browser engine uses the host's native SubtleCrypto provider when it is available.
+A valid-key capability probe identifies native AES-192 gaps. Only those operations use the
+shared RustCrypto backend; native-supported algorithms and key operations stay native.
 The host captures that provider and its CryptoKey constructors before installing runtime
 globals. Keys created before bootstrap remain usable. The host tracks native crypto
 promises so pending operations keep the runtime alive and unhandled rejections remain fatal.
-It preserves the native DOMException constructor so native errors retain their global brand. In an insecure context without
+It preserves the native DOMException constructor so native errors retain their global brand.
+The existing 2 GiB input bound also applies before native copies. In an insecure context without
 SubtleCrypto, the browser engine uses the wasm provider shared with QuickJS and wasm JSC.
 The WASI host also captures its entropy function before globals change.
 

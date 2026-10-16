@@ -16,6 +16,7 @@ function encode(value) {
 const put = value => new Uint8Array(memory.buffer).set(encode(value));
 const source = `(function(native) {
   return {
+    crypto: {makeKey:()=>Object.create({}),encode:()=>"",isKey:()=>false},
     runMain() {
       if (globalThis.__rejectNativeCrypto) {
         native.subtleCrypto.generateKey({name:"HMAC", length:128}, true, ["sign"]);
