@@ -69,11 +69,31 @@ engine, based on main `9c1e1709`. The offline app matrix passes all 24
 install/start stages for Express 5.1.0, Koa 3.0.1, Hono 4.10.2 and Fastify 5.6.1.
 HMR passes all six Chromium/WebKit and engine combinations.
 
+The PR #35 review revision measures eighteen upstream files per engine, adding
+the method, path, Agent, flushHeaders and content-length references. Before and
+after results are identical on QuickJS, JSC and browser: 0/18 fully passing,
+3 observed tests passing, 11 failing, 2 skipped, one error, and no file timeouts.
+The Node assertion scripts stop in the shared harness at unsupported
+`worker_threads`. The five new original fixtures exercise the review findings
+directly without changing that harness. The rebuilt framework matrix again
+passes all 24 install/start stages.
+The revision's sandbox HMR gate passes all six Chromium/WebKit and engine runs.
+All three rebuilt engines pass the full 159-fixture suite. The review regressions
+report `0 passed, 5 failed` per engine on the original artifacts, then
+`5 passed, 0 failed` per rebuilt engine. All five also pass unchanged on Node.
+The retained WASMs contain the current HTTP JavaScript and erased TypeScript
+factories; `source-check.log` and `artifacts.json` record the checks and hashes.
+
 The web gate currently stops at the separately tracked browser memory-growth
 failure after the shared filesystem merge. The HTTP lane reproduced that timeout
 in the full gate, an isolated rerun, and a control using unchanged main guest
 artifacts. All other requested gates pass. The owning follow-up is recorded in
 `plans/compatibility-followups.md`; no HTTP workaround is applied.
+
+The first PR #35 web run also timed out waiting for an HTML HMR edit. A fresh
+web build and full rerun passed all configured `browser-net.mjs` cases with the
+same guest artifacts. No HTTP source change occurred between attempts. The
+intermittent observation is recorded in the same follow-up plan.
 
 ## Reproduce
 
@@ -110,3 +130,5 @@ Raw before/after records, native controls, the frozen source hashes, commands an
 cleanup checks are retained in `/work/reports/bun-wasm-http-20261016/` for the
 coordinator. The coordinator owns removal after accepting the PR's independent
 review and rebuilt artifacts.
+PR #35 revision evidence and rebuilt artifact copies are retained separately in
+`/work/reports/bun-wasm-http-pr35/` under the same cleanup ownership.

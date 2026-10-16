@@ -232,6 +232,26 @@ investigating each failure.
 
 ## Browser memory-growth gate after the shared filesystem merge
 
+### Intermittent HTML HMR gate observation, PR #35
+
+The first review gate run timed out at `web/tests/browser-net.mjs:259` while
+waiting for the edited HTML fixture's preview and iframe to update on
+Chromium/browser. Initial bundling and both HMR socket connections succeeded.
+The full web gate was rebuilt and rerun with the same guest WASMs and no HTTP
+source change. All four configured Chromium/WebKit and browser/QuickJS HTML HMR
+cases then passed. This is one timeout and one passing attempt, with no confirmed
+cause. The separate sandbox HMR gate passed all six engine/browser combinations.
+
+Reproduce from a built checkout with `source env.sh && scripts/test-web.sh`, or
+`cd web && bun run build && node tests/browser-net.mjs`, through the heavy wrapper.
+The failure and successful rerun are retained in
+`/work/reports/bun-wasm-http-pr35/web.log` and `web-recheck.log`. Inspect the
+`checkHtmlEntry` change notification and the polling/rebuild path in
+`crates/bunwasm-runtime/src/js/html_server.js:125` if it recurs. The coordinator
+owns this observation and its evidence cleanup with the HTTP review.
+
+### Memory-growth failure
+
 Status: Approved. The coordinator's Web Crypto follow-up is investigating the same gate failure.
 
 On main `c7f08312` with the HTTP lane applied, `scripts/test.sh` passes 153 fixtures
