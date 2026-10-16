@@ -31,17 +31,22 @@ pub fn embed(manifest: &Path, out: &Path) {
             .unwrap_or_else(|| js_dir.join(name));
         println!("cargo:rerun-if-changed={}", path.display());
         let stem = Path::new(name).file_stem().unwrap().to_str().unwrap();
-        assert!(stems.insert(stem), "duplicate runtime module {stem} (.js and .ts)");
+        assert!(
+            stems.insert(stem),
+            "duplicate runtime module {stem} (.js and .ts)"
+        );
         let path = if name.ends_with(".ts") {
             transpile(&path, out, stem, &transpiler)
         } else {
             path
         };
-        table.push_str(&format!("    ({stem:?}, include_str!({:?})),\n", path.display().to_string()));
+        table.push_str(&format!(
+            "    ({stem:?}, include_str!({:?})),\n",
+            path.display().to_string()
+        ));
     }
     table.push_str("];\n");
     fs::write(out.join("polyfills.rs"), table).unwrap();
-
 }
 
 fn transpile(source: &Path, out: &Path, stem: &str, script: &Path) -> PathBuf {
@@ -54,6 +59,11 @@ fn transpile(source: &Path, out: &Path, stem: &str, script: &Path) -> PathBuf {
         .arg(&destination)
         .output()
         .expect("runtime TypeScript requires Bun on PATH (source env.sh)");
-    assert!(output.status.success(), "transpile {}: {}", source.display(), String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "transpile {}: {}",
+        source.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
     destination
 }
