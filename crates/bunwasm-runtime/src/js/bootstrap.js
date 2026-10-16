@@ -805,6 +805,7 @@
   if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
+  internal.require("function");
 
   return internal;
 })

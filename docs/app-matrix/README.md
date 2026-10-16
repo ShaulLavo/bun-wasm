@@ -77,6 +77,60 @@ The native run's main blockers were Rollup's native binary refusing the wasm32 p
 
 The raw records and logs are in `/work/reports/bun-wasm-app-matrix-2026-10-15/native/` and `/work/reports/bun-wasm-app-matrix-2026-10-15/playground-light/`. The committed reproducer is [the app matrix runner](../../scripts/app-matrix.sh); each row links to its fixture registry.
 
+## Generated CLI import rerun
+
+Prettier 3.6.2 now completes its normal CLI check after a fresh install of the
+published package. All six install and check stages pass on the native host,
+and all six pass in the playground. No package source or fixture was changed.
+
+| Host | Engine | Before check | After check |
+| --- | --- | --- | --- |
+| Native | QuickJS | Fail, legacy-cli.mjs resolved from `<input>` | Pass |
+| Native | JSC | Pass | Pass |
+| Native | Browser | Fail, legacy-cli.mjs resolved from engine host | Pass |
+| Playground | QuickJS | Fail, legacy-cli.mjs resolved from `<input>` | Pass |
+| Playground | JSC | Pass | Pass |
+| Playground | Browser | Fail, missing CLI success output | Pass |
+
+The CLI creates its dynamic importer with the Function constructor. QuickJS
+and the browser host lost the creating module's location at that boundary.
+Generated functions now use the shared runtime resolver with the creating
+module's origin. Native constructors validate the original syntax, then Bun's
+parser locates import expressions without changing methods named import. JSC retains its
+native constructors. The host adapter retains the creating module's source path
+in generated bodies, including bodies without imports, so its constructor proxy
+does not hide available caller metadata. The selection also exposed a QuickJS data conversion bug.
+A buffer type probe left a pending exception for ordinary arrays and objects;
+the bridge now checks buffer class tags before calling the throwing getter.
+
+All 117 fixtures pass on every engine in the current-main rerun. Both targeted
+upstream import files pass. The [review rerun](#generated-function-import-review-rerun)
+records the complete before/after regression, app and upstream results.
+
+```sh
+source env.sh
+bash /work/tmp/wave-heavy/run.sh --class build "Prettier native" -- \
+  env PATH="$PATH" scripts/app-matrix.sh --apps=prettier \
+  --engines=quickjs,jsc,browser --hosts=native \
+  --output=/work/reports/bun-wasm-app-matrix/prettier-native
+bash /work/tmp/wave-heavy/run.sh --class browser "Prettier playground" -- \
+  env PATH="$PATH" scripts/app-matrix.sh --apps=prettier \
+  --engines=quickjs,jsc,browser --hosts=playground \
+  --output=/work/reports/bun-wasm-app-matrix/prettier-playground
+bash /work/tmp/wave-heavy/run.sh --class light "CLI module suite" -- \
+  env PATH="$PATH" scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 \
+  --output=/work/reports/bun-wasm-app-matrix/cli-suite.json \
+  js/node/module/node-module-module.test.js \
+  js/bun/resolve/concurrent-dynamic-import.test.ts \
+  js/bun/resolve/dynamic-import-evaluation-error-gc.test.ts
+```
+
+Repeat the suite command with JSC and browser engines, using separate output
+paths. Evidence is retained in `/work/reports/bun-wasm-app-blockers-2026-10-16/`,
+including `before-native/`, `after-cli-origin-native/`,
+`after-cli-origin-playground/` and `cli-suite-final-*.json`. The playground
+baseline is the original `playground-light/` census under the 2026-10-15 report.
+
 ## Next fixes
 
 These priorities count app projects, not individual command rows.
@@ -84,7 +138,7 @@ These priorities count app projects, not individual command rows.
 1. Fix the browser module linker recognizing `import` methods as dynamic-import calls, and implement Bun's `ws` builtin for Vite. The [Rollup rerun](#rollup-distribution-rerun-2026-10-16) records the remaining diagnostics for the six affected projects.
 2. Complete Web Streams and replace ambiguous dynamic-import scanning for Next.js. Its earlier CommonJS, vectored-write, and legacy Stream-constructor boundaries are fixed; dev/build/start are still failing or blocked.
 3. Fix QuickJS and JSC stack call-site access for Express and Koa. This unblocks two server projects on two engines.
-4. Add the missing CLI module resolution used by Prettier in QuickJS and the browser engine.
+4. Completed. Prettier passes on all three engines in the [generated CLI rerun](#generated-cli-import-rerun).
 5. Make Prisma's native-engine limitation explicit in the app fixture and add a WASM engine policy if the upstream package provides one.
 
 
@@ -343,3 +397,55 @@ Reproduce with `scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser
 registry verification are retained in
 `/work/reports/bun-wasm-streams-review2-2026-10-16/next-after/` until the
 coordinator completes review and the WebAssembly follow-up reproduces the gap.
+
+## Generated-function import review rerun
+
+The adapter now uses Bun's full parser to locate genuine import keywords in
+original constructor arguments, then converts their byte positions to UTF-16
+indices. Native constructor validation runs before rewriting. Templates,
+comments, import-named methods and the original argument text stay intact.
+A function literal accesses an intrinsic-prototype helper without looking up a
+user identifier, so local or parameter bindings named globalThis and with scopes
+cannot capture it. Specifier conversion runs once inside an async helper and
+rejects Symbols with TypeError while preserving falsy rejection reasons.
+
+The failing-first review fixture runs from a nested creating module. It covers
+comment and template imports across Function, AsyncFunction, GeneratorFunction
+and AsyncGeneratorFunction, awaited templates, three shadowing forms, Symbol
+rejection, one coercion and falsy thrown values.
+
+| Engine | Reviewed regression cases | Revised cases |
+| --- | --- | --- |
+| QuickJS | 2/15 | 15/15 |
+| JSC | 15/15 | 15/15 |
+| Browser engine | 2/15 | 15/15 |
+
+After normal merges of main through 84db5fe, all 117 fixtures pass on every
+engine. The complete web gate and all six built-site HMR runs pass. The unchanged
+published Prettier 3.6.2 fixture passes fresh installation and its normal CLI check
+on native and playground hosts, with no registry misses.
+
+| Engine | Reviewed app stages, both hosts | Current-main stages |
+| --- | --- | --- |
+| QuickJS | 4/4 | 4/4 |
+| JSC | 4/4 | 4/4 |
+| Browser engine | 4/4 | 4/4 |
+
+Both targeted dynamic-import upstream files pass on every engine, retaining 2/3
+fully passing files in the three-file selection. The broad concurrent Node
+module file does not complete and retains unsupported module API cases.
+
+| Engine | Reviewed observed pass/fail/skip | Current observed pass/fail/skip | File timeouts, before/after |
+| --- | --- | --- | --- |
+| QuickJS | 5/18/1 | 5/18/1 | 1/1 |
+| JSC | 5/17/1 | 5/18/1 | 0/0 |
+| Browser engine | 2/13/1 | 2/13/1 | 0/1 |
+
+The current JSC run additionally observed `module.Module works` before aborting;
+that failure is also present in the reviewed QuickJS control. The browser run
+has the same observed counts but reaches the wall timeout in the broad file.
+These incomplete-file counts are recorded separately from the passing import
+files. Commands and per-file results are in
+`/work/reports/bun-wasm-app-reviews-2026-10-16/main84/`.
+The coordinator removes retained review artifacts after both app-blocker PRs merge
+and independent verification finishes.

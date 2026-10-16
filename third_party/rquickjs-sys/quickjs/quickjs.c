@@ -59353,6 +59353,11 @@ bool JS_IsArrayBuffer(JSValueConst obj) {
     return JS_GetClassID(obj) == JS_CLASS_ARRAY_BUFFER;
 }
 
+bool JS_bunwasm_IsArrayBufferLike(JSValueConst obj) {
+    JSClassID id = JS_GetClassID(obj);
+    return id == JS_CLASS_ARRAY_BUFFER || id == JS_CLASS_SHARED_ARRAY_BUFFER;
+}
+
 /* create a new ArrayBuffer of length 'len' and copy 'buf' to it */
 JSValue JS_NewArrayBufferCopy(JSContext *ctx, const uint8_t *buf, size_t len)
 {
