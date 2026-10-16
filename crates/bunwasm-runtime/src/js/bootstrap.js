@@ -89,7 +89,7 @@
     }
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
-    if (line !== null && file) {
+    if (line !== null && file && !internal.mappedCallSites?.has(site)) {
       const mapped = native.mapPosition(file, line, col);
       if (mapped) [line, col] = mapped;
       if (isV8) col = pastNew(file, line, col);
@@ -130,6 +130,9 @@
     return site.isConstructor() && isErrorConstructor(site.getFunction());
   }
 
+  internal.formatCallSite = formatCallSite;
+  internal.mappedCallSites = new WeakSet();
+
   // --- small path helpers (the full node:path lives in path.js) ------------
 
   function dirname(path) {
@@ -162,6 +165,7 @@
     }
   }
   internal.defineHidden = defineHidden;
+  internal.require("stack_trace");
 
   function defineGlobal(name, value) {
     Object.defineProperty(globalThis, name, {
@@ -805,6 +809,7 @@
   if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
+  internal.require("function");
 
   return internal;
 })

@@ -571,6 +571,16 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         Ok(modules::BUN_BUILTIN_ERROR_CODES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
     });
     let st = state.clone();
+    t.add("functionImports", move |a| {
+        let args = a.array(0).ok_or_else(|| NativeError::type_error("expected function arguments"))?;
+        let strings = args.iter().map(|value| match value {
+            Val::Str(s) => Ok(s.clone()),
+            _ => Err(NativeError::type_error("expected source string")),
+        }).collect::<Result<Vec<_>, _>>()?;
+        let offsets = st.transpiler.function_imports(&strings, a.str(1)?).map_err(NativeError::syntax_error)?;
+        Ok(Val::Array(offsets.into_iter().map(|items| Val::Array(items.into_iter().map(|i| (i as u32).into()).collect())).collect()))
+    });
+    let st = state.clone();
     t.add("resolve", move |a| {
         let spec = a.str(0)?;
         let kind = if a.bool(2) { Kind::Require } else { Kind::Import };
