@@ -80,6 +80,16 @@ async function main() {
   assert.notEqual((await first).name, (await second).name);
   await closed;
   await assert.rejects(queued.read(), { code: "ERR_DIR_CLOSED" });
+  const buffered = fs.opendirSync("tree");
+  buffered.readSync();
+  const bufferedRead = buffered.read();
+  assert(buffered.readSync() instanceof fs.Dirent);
+  buffered.closeSync();
+  assert(await bufferedRead instanceof fs.Dirent);
+  const closing = fs.opendirSync("tree");
+  const closePromise = closing.close();
+  assert.throws(() => closing.readSync(), { code: "ERR_DIR_CLOSED" });
+  await closePromise;
   console.log("queued reads and close, sync operations reject concurrency");
 
   for (const options of [{ bufferSize: 0 }, { bufferSize: -1 }, { bufferSize: 1.5 }, { bufferSize: Infinity }]) {

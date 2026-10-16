@@ -205,14 +205,22 @@
     #enqueue(operation, callback) {
       if (callback !== undefined && typeof callback !== "function") throw invalidArg("callback", "of type function", callback);
       if (callback === undefined) return new Promise((resolve, reject) => this.#enqueue(operation, (error, result) => error ? reject(error) : resolve(result)));
+      const buffered = operation === "read" && this.#index < this.#entries.length;
+      if (this.#operations.length === 0 && (buffered || operation === "close")) {
+        const { error, result } = this.#run(operation);
+        later(() => operation === "close" ? callback(error) : callback(error, result));
+        return;
+      }
       this.#operations.push({ operation, callback });
       if (this.#operations.length === 1) later(() => this.#drain());
     }
+    #run(operation) {
+      try { return { error: null, result: operation === "read" ? this.#readEntry() : this.#closeHandle() }; }
+      catch (error) { return { error, result: undefined }; }
+    }
     #drain() {
       const { operation, callback } = this.#operations[0];
-      let result, error = null;
-      try { result = operation === "read" ? this.#readEntry() : this.#closeHandle(); }
-      catch (err) { error = err; }
+      const { error, result } = this.#run(operation);
       this.#operations.shift();
       if (this.#operations.length !== 0) later(() => this.#drain());
       if (operation === "close") callback(error);
