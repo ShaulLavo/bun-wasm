@@ -37,3 +37,12 @@ try {
 }
 assert.equal(typeof new Error('default').stack, 'string');
 console.log('formatter restored');
+
+const generatedSites = Function('capture', 'return capture()')(capture);
+for (const frame of generatedSites) {
+  if (!frame.isEval()) continue;
+  const origin = frame.getEvalOrigin();
+  assert.notEqual(origin, '<input>');
+  assert.notEqual(origin, '<eval>');
+}
+console.log('eval origin metadata');
