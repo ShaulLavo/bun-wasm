@@ -29,7 +29,8 @@ const UNLINKED = 7;
 const FILE_LOCK = 8;
 const HANDLE = 9;
 
-// The intrinsic copy: guest iovecs may be subclasses, and no guest code may run under a file lock.
+// The intrinsic copy, so a guest iovec subclass's set() cannot reenter under a file lock. WASI
+// iovecs are plain views; a subclass's overridden length/buffer/byteOffset getters still run there.
 const copyBytes = Uint8Array.prototype.set;
 
 export class MissingSegmentError extends Error {}
