@@ -1,0 +1,2 @@
+closed receivers drop queued Node and web messages
+an active delivery batch finishes before its close event
