@@ -85,6 +85,7 @@ const special = new Console({ stdout: specialOut.stream, stderr: specialErr.stre
 special.table([{ a: 1 }]);
 assert.match(specialOut.text(), /\(index\)/);
 special.trace("trace message");
+assert.match(specialErr.text(), /Trace: trace message/);
 assert.match(specialErr.text(), /index.js/);
 special.time("clock");
 special.timeLog("clock", "extra");
