@@ -14,5 +14,5 @@ if (before) {
   const key = await crypto.subtle.generateKey({name:"HMAC", hash:"SHA-256"}, false, ["sign", "verify"]);
   const bytes = new Uint8Array([1,2,3]);
   assert(await crypto.subtle.verify("HMAC", key, await crypto.subtle.sign("HMAC", key, bytes), bytes));
-  console.log("wasm provider without host SubtleCrypto");
+  console.log("crypto provider signing works");
 }
