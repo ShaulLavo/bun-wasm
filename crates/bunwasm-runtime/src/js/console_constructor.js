@@ -14,7 +14,7 @@
   function captureStackTrace(target, skip) {
     const nativeCapture = typeof nativeCaptureStackTrace === "function";
     if (nativeCapture) apply(nativeCaptureStackTrace, Error, [target, skip]);
-    if (nativeCapture && typeof target.stack !== "string") return;
+    if (nativeCapture && (typeof target.stack !== "string" || typeof Error.prepareStackTrace === "function")) return;
     const stack = nativeCapture ? target.stack : String(new Error().stack || "");
     const header = target.name + (target.message ? ": " + target.message : "");
     if (stack === header || stack.startsWith(header + "\n")) return;
