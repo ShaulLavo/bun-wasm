@@ -6,9 +6,7 @@ for (const value of [[undefined], [null, undefined, "x"], [], null]) {
 }
 assert.throws(() => http.validateHeaderValue("X", undefined), { code: "ERR_HTTP_INVALID_HEADER_VALUE" });
 for (const value of [Symbol("x"), [Symbol("x")]]) {
-  assert.throws(() => http.validateHeaderValue("X", value), {
-    name: "TypeError", message: "Cannot convert a Symbol value to a string",
-  });
+  assert.throws(() => http.validateHeaderValue("X", value), { name: "TypeError" });
 }
 const server = http.createServer((req, res) => {
   assert.deepEqual(req.headersDistinct.x, ["undefined", "null", "x"]);

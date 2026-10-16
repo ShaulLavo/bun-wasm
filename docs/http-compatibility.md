@@ -43,6 +43,7 @@ errors, EOF or timeout. Agent destruction closes both active and idle sockets.
 The adapter does not yet schedule requests against `maxSockets` or
 `maxTotalSockets`. Fixed response lengths must fit a safe JavaScript integer;
 native Node's uint64 parser also accepts larger lengths that this decoder rejects.
+Symbol coercion throws a native `TypeError`; its wording depends on the engine.
 
 ## Measurements
 
