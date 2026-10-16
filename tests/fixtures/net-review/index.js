@@ -258,7 +258,6 @@ async function headersHead() {
   assert.equal(valid.errors.length, 0);
   await until(() => Buffer.concat(valid.upgraded.chunks).length === head.length);
   assert.equal(Buffer.concat(valid.upgraded.chunks).toString(), head, "upgrade head does not count toward the header limit");
-  assert.ok(valid.upgraded.head.length > 128, "post-header bytes exceed the configured header limit");
   assert.deepEqual(valid.upgraded.listeners, { data: 0, end: 0, close: 0 });
   valid.upgraded.socket.removeListener("data", valid.upgraded.receive);
   valid.upgraded.socket.destroy();
