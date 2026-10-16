@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { browserBuildConfig } from "../../scripts/browser-build";
 import { filesystemBaselinePlugin } from "./filesystem-bench-baseline";
 
 test("a baseline reexport resolves its own runtime, never the head consumer package", async () => {
-  const root = await mkdtemp("/work/tmp/bun-wasm-baseline-resolution-");
+  const root = await mkdtemp(resolve(import.meta.dir, "../node_modules/.baseline-resolution-"));
   try {
     const baseline = join(root, "baseline"), head = join(root, "head/web");
     const main = join(head, "main.ts");
