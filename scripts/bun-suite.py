@@ -41,6 +41,7 @@ def arguments():
     parser.add_argument("--dependencies", type=Path, help="additional installed suite node_modules directory")
     parser.add_argument("--resume", action="store_true", help="reuse finished files with identical provenance")
     parser.add_argument("--rerun", action="store_true", help="with --resume, replace results for the selected files")
+    parser.add_argument("--node-parallel", action="store_true", help="include Node test-*.js assertion scripts; report script exits separately from test counts")
     parser.add_argument("--limit", type=int, help="run first N matching files")
     opts = parser.parse_args()
     if opts.jobs < 1 or opts.timeout <= 0 or opts.test_timeout < 1:
@@ -70,7 +71,7 @@ def git(suite, *args):
 
 def discover(opts):
     paths = git(opts.suite, "ls-files", "test").splitlines()
-    paths = [path[5:] for path in paths if TEST_NAME.search(Path(path).name)]
+    paths = [path[5:] for path in paths if TEST_NAME.search(Path(path).name) or (opts.node_parallel and path.startswith("test/js/node/test/parallel/test-") and Path(path).suffix in {".js", ".mjs", ".cjs"})]
     paths = [path for path in paths if any(fnmatch.fnmatchcase(path, glob) or path.startswith(glob.rstrip("/") + "/") for glob in opts.glob)]
     return sorted(paths)[:opts.limit]
 
@@ -133,7 +134,7 @@ def provenance(opts, wasm):
             "host_sources": {path: digest(ROOT / path) for path in ["web/src/engine-host.js", "web/src/memory-views.js", "web/scripts/node-net.mjs", "web/src/subprocess.js", "web/src/subprocess-fs.ts", "web/src/fs.ts", "web/src/wasi.ts"]} if opts.engine == "browser" else {},
             "dependencies": dependency_digest(opts.suite / "node_modules"),
             "test_dependencies": dependency_digest(opts.dependencies or opts.suite / "test/node_modules"),
-            "network": opts.network, "timeout_seconds": opts.timeout, "test_timeout_ms": opts.test_timeout}
+            "node_parallel": opts.node_parallel, "network": opts.network, "timeout_seconds": opts.timeout, "test_timeout_ms": opts.test_timeout}
 
 
 def stop_process(proc):
@@ -232,7 +233,8 @@ def invoke(opts, wasm, work, preloads, path):
             text += "\n[output truncated]\n" + output.read().decode("utf-8", errors="replace")
     result = parse_output(text)
     result.update(file=path, exit=proc.returncode, duration_seconds=round(time.monotonic() - started, 3), timed_out=timed_out, output_bytes=size, interrupted=STOP.is_set())
-    result["fully_passing"] = proc.returncode == 0 and result["complete"] and result["counts"]["fail"] == 0 and result["counts"]["errors"] == 0 and result["counts"]["pass"] > 0
+    result["assertion_script"] = opts.node_parallel and path.startswith("js/node/test/parallel/") and sum(result["counts"].values()) == 0
+    result["fully_passing"] = proc.returncode == 0 and result["complete"] and result["counts"]["fail"] == 0 and result["counts"]["errors"] == 0 and (result["counts"]["pass"] > 0 or result["assertion_script"])
     return result
 
 
