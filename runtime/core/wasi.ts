@@ -279,9 +279,12 @@ export class Wasi {
     view.setBigUint64(ptr + 56, times, true);
   }
 
-  private writeOut(file: Extract<Resource, { kind: "file" }>, chunks: Uint8Array[], at: number | null): number {
-    if (chunks.every(chunk => chunk.length === 0)) return 0;
+  private writeOut(file: Extract<Resource, { kind: "file" }>, iovs: number, count: number, at: number | null): number {
+    if (count === 0) return 0;
+    // Append metadata can reenter and grow memory; build guest ranges only after it returns.
     const pos = at ?? (file.append ? this.opts.fs.stat(file.handle).size : file.offset);
+    const chunks = this.iovecs(iovs, count);
+    if (chunks.every(chunk => chunk.length === 0)) return 0;
     const written = this.opts.fs.write(file.handle, chunks, pos);
     if (written >= 0 && at === null) file.offset = pos + written;
     return written;
@@ -414,7 +417,7 @@ export class Wasi {
         if ((entry.rightsBase & (RIGHT_FD_WRITE | RIGHT_FD_SEEK)) !== (RIGHT_FD_WRITE | RIGHT_FD_SEEK)) return ENOTCAPABLE;
         if (entry.resource.kind === "directory") return EISDIR;
         if (entry.resource.kind !== "file") return ESPIPE;
-        const written = this.writeOut(entry.resource, this.iovecs(iovs, count), Number(offset));
+        const written = this.writeOut(entry.resource, iovs, count, Number(offset));
         if (written < 0) return -written;
         this.view().setUint32(nwrittenPtr, written, true);
         return SUCCESS;
@@ -500,8 +503,7 @@ export class Wasi {
         if (!entry) return EBADF;
         if ((entry.rightsBase & RIGHT_FD_WRITE) !== RIGHT_FD_WRITE) return ENOTCAPABLE;
         if (entry.resource.kind === "directory") return EISDIR;
-        const chunks = this.iovecs(iovs, count);
-        const written = entry.resource.kind === "file" ? this.writeOut(entry.resource, chunks, null) : entry.resource.write(chunks);
+        const written = entry.resource.kind === "file" ? this.writeOut(entry.resource, iovs, count, null) : entry.resource.write(this.iovecs(iovs, count));
         if (written < 0) return -written;
         this.view().setUint32(nwrittenPtr, written, true);
         return SUCCESS;
@@ -602,8 +604,10 @@ export class Wasi {
       },
 
       poll_oneoff: (inPtr: number, outPtr: number, nsubs: number, neventsPtr: number) => {
-        if (nsubs === 0) return EINVAL;
+        nsubs >>>= 0;
+        inPtr >>>= 0;
         const view = this.view();
+        if (nsubs === 0 || nsubs * 48 > view.byteLength - inPtr) return EINVAL;
         type Event = { userdata: bigint; type: number; error: number; nbytes: bigint; flags: number };
         const ready: Event[] = [];
         const clocks: { userdata: bigint; deadline: bigint; clock: number }[] = [];

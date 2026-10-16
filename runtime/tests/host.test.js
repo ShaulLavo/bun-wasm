@@ -145,3 +145,18 @@ test('filesystem timestamp errors propagate for descriptor and path operations',
   expect(h.calls.path_filestat_set_times(3, 0, 256, 4, 0n, 1n, 4)).toBe(69);
   h.wasi.descriptors.dispose();
 });
+
+test('append writes reacquire guest iovecs after filesystem stat reentry', () => {
+  const fs = new MemFS(); fs.writeFile('/file', 'abc');
+  const h = host(fs, {}, true); const fd = h.open('file');
+  expect(h.calls.fd_fdstat_set_flags(fd, 1)).toBe(0);
+  h.bytes[512] = 33;
+  h.view.setUint32(0, 512, true); h.view.setUint32(4, 1, true);
+  const stat = fs.stat.bind(fs);
+  fs.stat = handle => { const result = stat(handle); h.memory.grow(1); return result; };
+  expect(h.calls.fd_write(fd, 0, 1, 1024)).toBe(0);
+  expect(new DataView(h.memory.buffer).getUint32(1024, true)).toBe(1);
+  expect(new TextDecoder().decode(fs.readFile('/file'))).toBe('abc!');
+  expect(h.wasi.descriptors.get(fd).resource.offset).toBe(4);
+  h.wasi.descriptors.dispose();
+});

@@ -52,7 +52,9 @@ the host uses that memory even when the guest does not re-export it. Bun's socke
 configures `hostCallFd` and `hostCall` from `web/`; no Bun networking code is pulled into core.
 
 Plain Node consumers that only need the JavaScript memory helper use
-`@bun-wasm/runtime/core/memory-views`, without loading the TypeScript WASI adapter.
+`@bun-wasm/runtime/core/memory-views`, without loading the TypeScript WASI adapter. The repository's
+unbundled headless hosts import that JavaScript source relatively, so native CLI tests do not require
+installing playground dependencies.
 
 Run `bun install`, `bun test`, and `bun run check` in this directory. The web/sandbox builds
 consume the public entry, so their split output also exercises the package boundary.

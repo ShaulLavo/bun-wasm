@@ -44,3 +44,15 @@ test('invalid subscription types yield EINVAL and expired clocks accompany ready
   expect(poll(2)).toBe(0);
   expect(view.getUint32(2048, true)).toBe(2);
 });
+
+test('poll rejects unsigned oversized counts and invalid subscription spans before sleeping', () => {
+  let waits = 0;
+  const { h, poll } = host(() => { waits++; throw new Error('invalid poll attempted to sleep'); });
+  expect(poll(-1)).toBe(28);
+  expect(poll(0xffffffff)).toBe(28);
+  expect(poll(0)).toBe(28);
+  expect(poll(1366)).toBe(28); // 48-byte subscriptions do not fit in one memory page.
+  expect(h.functions().poll_oneoff(65520, 1024, 1, 2048)).toBe(28);
+  expect(h.functions().poll_oneoff(-1, 1024, 1, 2048)).toBe(28);
+  expect(waits).toBe(0);
+});

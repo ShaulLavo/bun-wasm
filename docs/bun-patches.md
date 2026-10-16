@@ -93,6 +93,8 @@ descriptions and descriptor readiness. Snapshot removal/replacement delegates cl
 preserving retained descriptions without pinning detached lookup-only nodes. Path walking,
 geometric file growth and snapshot compaction remain local MemFS implementation details. Bun's
 reserved socket slot bridge stays configured by `web/`, not imported into the generic core.
+Unbundled Node host adapters import the extracted JavaScript memory helper by repository-relative
+path so headless CLI workflows remain dependency-free.
 
 ## Portable semver host functions
 

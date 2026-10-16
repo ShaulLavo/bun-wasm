@@ -1,4 +1,4 @@
-import { memoryViews } from "@bun-wasm/runtime/core/memory-views";
+import { memoryViews } from "../../runtime/core/memory-views.js";
 
 // Shared transport for browser and Node workers. No native executables are launched.
 const NativeEncoder = TextEncoder;
