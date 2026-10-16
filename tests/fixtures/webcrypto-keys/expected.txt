@@ -1,0 +1,16 @@
+sign HMAC ok
+sign ECDSA P-256
+sign ECDSA P-384
+sign Ed25519 ok
+sign RSASSA-PKCS1-v1_5 ok
+sign RSA-PSS ok
+cipher AES-GCM
+cipher AES-CBC
+cipher AES-CTR
+cipher RSA-OAEP
+derive PBKDF2
+derive HKDF
+agree ECDH P-256
+agree ECDH P-384
+agree X25519 ok
+validation ok
