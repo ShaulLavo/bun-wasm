@@ -30,6 +30,7 @@ mod resolve;
 mod semver;
 mod sourcemap;
 mod sqlite;
+mod wasm;
 pub mod transpiler;
 
 #[cfg(feature = "engine-quickjs")]
@@ -81,6 +82,10 @@ pub(crate) struct State {
     main_arg: RefCell<String>,
     /// Transpiled sources by path, with their module format.
     sources: RefCell<HashMap<String, (Rc<str>, modules::Format)>>,
+    #[cfg(feature = "engine-host")]
+    source_imports: RefCell<HashMap<String, Rc<[transpiler::ModuleImport]>>>,
+    #[cfg(feature = "engine-host")]
+    cjs_sources: RefCell<HashMap<String, transpiler::Transpiled>>,
     /// Stack-position fixups for files whose evaluated code differs from the
     /// file on disk (transpiled code, injected ESM prologue).
     positions: RefCell<HashMap<String, modules::PositionMap>>,
@@ -100,6 +105,10 @@ impl State {
             main: RefCell::new(String::new()),
             main_arg: RefCell::new(String::new()),
             sources: RefCell::new(HashMap::new()),
+            #[cfg(feature = "engine-host")]
+            source_imports: RefCell::new(HashMap::new()),
+            #[cfg(feature = "engine-host")]
+            cjs_sources: RefCell::new(HashMap::new()),
             positions: RefCell::new(HashMap::new()),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
             tick_pending: Cell::new(false),

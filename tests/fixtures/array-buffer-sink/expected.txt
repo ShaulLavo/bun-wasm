@@ -1,0 +1,23 @@
+callable constructor
+utf8 count
+view count
+normal flush
+owned bytes
+write after end
+stream flush
+typed end
+empty options preserve modes
+watermark resets modes
+invalid input
+invalid input
+invalid input
+invalid input
+closed write
+closed flush
+closed end
+closed start
+close is idempotent
+reentrant highWaterMark
+reentrant asUint8Array
+reentrant stream
+host GC ignores guest wrapper

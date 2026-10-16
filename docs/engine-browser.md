@@ -34,7 +34,7 @@ The QuickJS and JSC engines implement the `Engine` trait (`crates/bunwasm-runtim
 - **Data natives** (`natives.rs`, a `Table` of `DataFn`s taking and returning `Val`) need no engine. The wasm exports them by index.
 - **Value natives** take or return live JS values: functions, promises, module namespaces. On the other engines they are `ValueFn<E>`. Here `engine-host.js` implements them in JS (see `valueNatives()`).
 
-Feature `engine-host` (crate `bunwasm-runtime`, forwarded by `bunwasm-cli`) compiles `src/engine_host.rs` instead of the QuickJS/JSC engines. `run()` builds the runtime `State` as usual: entry, argv, environment, transpiler. It then fills a native `Table` and returns instead of running an event loop, and `main` returns from `_start` without calling `proc_exit`. The host checks `bunwasm_ready()` to tell "ready for the host engine" from an early exit, such as `bun --version` or a usage error.
+Feature `engine-host` (crate `bunwasm-runtime`, forwarded by `bunwasm-cli` together with its required `bun-transpiler` feature) compiles `src/engine_host.rs` instead of the QuickJS/JSC engines. `run()` builds the runtime `State` as usual: entry, argv, environment, transpiler. It then fills a native `Table` and returns instead of running an event loop, and `main` returns from `_start` without calling `proc_exit`. The host checks `bunwasm_ready()` to tell "ready for the host engine" from an early exit, such as `bun --version` or a usage error.
 
 ### Exports
 
@@ -96,7 +96,7 @@ The host engine owns the microtask queue and the worker's task loop, so the runt
 
 Every user module is a real host ES module, so bindings are live, top-level await works, and `import.meta` is native:
 
-1. `ensureModule(key)` asks the wasm for `hostModuleSource(key)`. That is the transpiled code plus a list of import spans found by a small Rust lexer (`scan_imports`). The lexer skips strings, templates, comments and regex literals, and it handles `import … from`, `export … from`, bare `import "x"` and `import(...)`. Each static specifier is resolved in Rust, with Bun's resolver semantics.
+1. `ensureModule(key)` asks the wasm for `hostModuleSource(key)`. That is the transpiled code plus cached semantic import spans. Bun's existing print pass records emitted string ranges and dynamic-import keywords for transformed code. Unchanged JavaScript reuses the AST and original dynamic-import locations from the parse already required to classify module syntax, and skips printing. For `.mjs` and `.cjs`, the extension already decides the format, so Bun's scan-only parser supplies imports instead. An absence check for `import` and `from` skips scanning when no import or re-export is possible. Eval sources use Bun's scan-only parser once, with a cheap absence check for both `import` and `from`. Imports inside template substitutions use the same semantic hooks. Property names, strings, comments, regex literals, and template text remain untouched. Each static specifier is resolved in Rust, with Bun's resolver semantics.
 2. `linkEsm` replaces each static specifier span with the URL of the dependency, created recursively. Replacement runs on UTF-8 bytes from the end. Each dynamic `import(` becomes `globalThis.__bunwasm_dynamicImport(<referrer>)(`, which resolves at call time, creates the module URL and is tracked by the loop.
 3. The code is stored under a named URL that the host's module loader serves (`o.modules`), and the URL → path table is recorded. Because a module's URL is known before its source exists, imports can form cycles and link natively, with live bindings and hoisted functions callable before their module has evaluated, as in Bun (fixture `esm-cycle`):
    - **Playground:** the service worker (`web/src/sw.ts`) has a second scope, `./__bunwasm/`. Bun workers start from `./__bunwasm/worker.js`, so the service worker controls them. The worker puts each module into a per-run Cache Storage cache, and the service worker serves `./__bunwasm/m/<run>/<key>` from it. The page deletes the cache when the run ends.
@@ -167,6 +167,10 @@ The host engine exposes neither, so the browser engine reconstructs both:
 - with `--net` (fixtures marked `host`): real sockets and an HTTP client (`node-net.mjs`); otherwise Node's `fetch` as the host fetch.
 
 Node is the closest headless stand-in for a worker: it has V8, ES modules from `data:` URLs, `MessageChannel`, `fetch` and `process` events. Bun can't host it, because its `Bun` global is not configurable and the polyfills must replace it.
+
+`scripts/test-host-profile.sh` builds the exact `--no-default-features --features engine-host,bun-build` profile and runs eval plus TypeScript static and dynamic imports. Run it through the build slot wrapper.
+
+`scripts/bench-module-preparation.mjs <wasm>` measures the actual `hostModuleSource` ABI on 242 KB plain JS, JS with await, and TypeScript inputs. It reports medians across 15 fresh paths and 31 cached preparations per input. Run it through the light slot wrapper on before/after artifacts. It owns and removes its temporary fixtures. These are module-preparation timings in Node, not browser startup timings.
 
 The browser side is covered by `scripts/test-web.sh`, which includes `web/tests/browser-engine.mjs` in Chromium and WebKit, and by `web/tests/bench-engines.mjs` for timings.
 

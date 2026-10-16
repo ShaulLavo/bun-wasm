@@ -1,0 +1,12 @@
+PASS memory aliases
+PASS JS zero growth
+PASS wasm constant zero growth
+PASS wasm dynamic zero growth
+PASS positive and failed growth
+PASS i32 coercion
+PASS i64 coercion
+PASS float coercion
+PASS grow validation
+PASS coercion exception identity
+PASS global coercion
+PASS import result coercion and recovery

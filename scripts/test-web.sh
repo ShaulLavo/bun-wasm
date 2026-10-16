@@ -11,6 +11,10 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 browser=1
 [[ "${1:-}" == "--no-browser" ]] && browser=0
 
+for test_file in "$root"/web/tests/*.mjs; do
+  node --check "$test_file"
+done
+
 cd "$root/web"
 bun run check
 bun test tests/

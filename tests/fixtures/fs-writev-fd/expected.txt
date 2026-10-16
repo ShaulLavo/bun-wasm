@@ -1,0 +1,1 @@
+noninteger and invalid descriptors rejected without writes

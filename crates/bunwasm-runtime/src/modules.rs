@@ -25,6 +25,12 @@ pub fn bun_builtin_source(id: usize) -> Option<&'static str> {
 /// Bun's transpiler emits CommonJS modules already wrapped in this function
 /// expression (that is how it reports a file is CommonJS).
 pub const CJS_WRAPPER_PREFIX: &str = "(function(exports, require, module, __filename, __dirname) {";
+const CJS_META_WRAPPER_PREFIX: &str = "(function(exports, require, module, __filename, __dirname, $Bun_import_meta) {";
+
+fn is_cjs_wrapper(code: &str) -> bool {
+    code.starts_with(CJS_WRAPPER_PREFIX) || code.starts_with(CJS_META_WRAPPER_PREFIX)
+}
+
 
 /// How positions in the code the engine evaluated map to the file on disk.
 #[derive(Default)]
@@ -246,7 +252,9 @@ impl State {
                     .transpiler
                     .transpile_with_map(&raw, path, loader)
                     .map_err(|msg| build_error(&msg, &raw))?;
-                let format = self.detect_format(path, &out.code);
+                let format = self.detect_format(path, &out.code, out.module_kind);
+                #[cfg(feature = "engine-host")]
+                self.source_imports.borrow_mut().insert(path.to_owned(), out.imports.into());
                 if let Some(mappings) = out.mappings.filter(|m| !m.is_empty()) {
                     let mut positions = self.positions.borrow_mut();
                     let entry = positions.entry(path.to_owned()).or_default();
@@ -261,8 +269,8 @@ impl State {
         Ok(entry)
     }
 
-    fn detect_format(&self, path: &str, code: &str) -> Format {
-        if code.starts_with(CJS_WRAPPER_PREFIX) {
+    fn detect_format(&self, path: &str, code: &str, parsed_kind: Option<crate::transpiler::ModuleKind>) -> Format {
+        if is_cjs_wrapper(code) {
             return Format::Cjs;
         }
         if path.ends_with(".mjs") || path.ends_with(".mts") {
@@ -271,8 +279,12 @@ impl State {
         if path.ends_with(".cjs") || path.ends_with(".cts") {
             return Format::Cjs;
         }
-        if has_esm_syntax(code) || has_top_level_await(code) {
-            return Format::Esm;
+        use crate::transpiler::ModuleKind;
+        match parsed_kind {
+            Some(ModuleKind::CommonJs) => return Format::Cjs,
+            Some(ModuleKind::Esm) => return Format::Esm,
+            None if has_esm_syntax(code) || has_top_level_await(code) => return Format::Esm,
+            _ => {}
         }
         // `"type": "module"` makes even syntax-free files ESM.
         match self.resolver.package_type_is_module(path) {
@@ -306,16 +318,31 @@ impl State {
     /// recorded unless the file already has one (when it is also imported as
     /// a real ES module, that copy's positions win).
     #[cfg(feature = "engine-host")]
-    pub fn esm_as_cjs(&self, path: &str) -> Result<String, NativeError> {
+    pub fn esm_as_cjs(&self, path: &str) -> Result<crate::transpiler::Transpiled, NativeError> {
+        if let Some(hit) = self.cjs_sources.borrow().get(path) {
+            return Ok(hit.clone());
+        }
         let out = self.transpiler.esm_to_cjs(path).map_err(|msg| build_error(&msg, ""))?;
-        if let Some(mappings) = out.mappings.filter(|m| !m.is_empty()) {
+        if let Some(mappings) = out.mappings.as_ref().filter(|m| !m.is_empty()) {
             let mut positions = self.positions.borrow_mut();
             if !positions.contains_key(path) {
                 let original = std::fs::read_to_string(path).ok().map(|s| Rc::from(s.as_str()));
                 positions.insert(path.to_owned(), PositionMap { map: Some(crate::sourcemap::SourceMap::parse(&mappings)), original, ..Default::default() });
             }
         }
-        Ok(out.code)
+        self.cjs_sources.borrow_mut().insert(path.to_owned(), out.clone());
+        Ok(out)
+    }
+
+    #[cfg(feature = "engine-host")]
+    pub fn host_imports(&self, path: &str, code: &str) -> Result<Rc<[crate::transpiler::ModuleImport]>, NativeError> {
+        if let Some(imports) = self.source_imports.borrow().get(path) {
+            return Ok(imports.clone());
+        }
+        // Eval sources bypass file transpilation. Scan them once, then cache.
+        let imports: Rc<[_]> = self.transpiler.module_imports(code, path).map_err(NativeError::syntax_error)?.into();
+        self.source_imports.borrow_mut().insert(path.to_owned(), imports.clone());
+        Ok(imports)
     }
 
     /// Remember that `len` characters were injected before line 1 of `path`.
@@ -333,7 +360,7 @@ impl State {
 /// "default"), so the file's own lines and columns are unchanged; code Bun's
 /// transpiler already wrapped keeps the printed code's lines.
 pub fn cjs_wrapper(code: &str) -> (String, i32) {
-    if code.starts_with(CJS_WRAPPER_PREFIX) {
+    if is_cjs_wrapper(code) {
         return (code.to_owned(), 1);
     }
     // Named so engines whose stack frames carry only a name (JSC) can tell
