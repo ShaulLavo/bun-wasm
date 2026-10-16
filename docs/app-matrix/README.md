@@ -318,3 +318,28 @@ explicit color modes, preserve stderr trace messages, and exercise asynchronous
 write errors without leaking stdio error listeners. Native Bun 1.4.2 drops a
 Console trace's message; the Node-contract fixture is marked manual, and a
 minimal Bun/Node comparison is recorded in the owner's upstream bug report.
+
+## Next after the Web Streams review fixes
+
+The combined branch includes main through PR #17 and the Web Streams lifecycle
+fixes. Its 2026-10-16 offline native replay retains 3 passing installs, 6 failed
+commands and 3 blocked starts. Registry replay has zero misses and errors.
+
+| Engine | Dev | Build | Start |
+| --- | --- | --- | --- |
+| QuickJS | `LinkError: Unsupported WebAssembly export table` | Exit 1 without a diagnostic | Blocked by build |
+| JSC | `LinkError: Unsupported WebAssembly export table` | Exit 1 without a diagnostic | Blocked by build |
+| Browser | Exits without an HTTP response or diagnostic | `SyntaxError: Unexpected token '.'` | Blocked by build |
+
+The embedded-engine dev error occurs while instantiating undici's llhttp module
+in `next/dist/compiled/@edge-runtime/primitives/load.js:5630`. The shared
+WebAssembly adapter rejects table exports in
+`crates/bunwasm-runtime/src/js/webassembly.js:136`. The older missing-WebAssembly
+observations above are historical. This replay does not establish a passing Next
+application or explain the silent build exits.
+
+Reproduce with `scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser
+--hosts=native --timeout=90 --output=<fresh-directory>`. Logs, matrix rows and
+registry verification are retained in
+`/work/reports/bun-wasm-streams-review2-2026-10-16/next-after/` until the
+coordinator completes review and the WebAssembly follow-up reproduces the gap.

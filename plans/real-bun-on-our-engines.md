@@ -63,3 +63,22 @@ rewrite failure distinct. Raw logs and provenance are in
 `next-quickjs-dev.log`, `next-quickjs-build.log`, `next-jsc-dev.log` and
 `next-jsc-build.log`. The coordinator owns preserving the evidence until the
 follow-up has reproduced it. See `docs/app-matrix/README.md` for the replay command.
+
+### Current combined replay
+
+The Web Streams second-review replay includes main through PR #17. QuickJS and
+JSC dev both reach `WebAssembly.instantiate` in
+`next/dist/compiled/@edge-runtime/primitives/load.js:5630` and fail with
+`LinkError: Unsupported WebAssembly export table`. The cause is the explicit
+non-memory export rejection in
+`crates/bunwasm-runtime/src/js/webassembly.js:136`; no missing Streams global is
+reported. The WebAssembly follow-up should support llhttp's exported table
+without removing or rewriting exports in the package fixture.
+
+Both embedded-engine builds exit 1 without a diagnostic. Browser dev exits
+without an HTTP response or diagnostic, and browser build retains
+`SyntaxError: Unexpected token '.'`. These remain separate observations, not
+proof of the same cause. All three installs pass and all production starts are
+blocked by failed builds. Reproduce with the command above and a fresh output
+directory. Exact rows, complete command output and the zero-miss offline registry
+check are in `/work/reports/bun-wasm-streams-review2-2026-10-16/next-after/`.
