@@ -275,6 +275,16 @@ fn generate(a: &J) -> Result<J> {
     }
 }
 
+fn ec_material(jwk: &J) -> J {
+    let mut key = serde_json::Map::new();
+    for name in ["kty", "crv", "x", "y", "d"] {
+        if let Some(value) = jwk.get(name) {
+            key.insert(name.to_owned(), value.clone());
+        }
+    }
+    J::Object(key)
+}
+
 fn ec_import(a: &J, format: &str, b: &[u8]) -> Result<J> {
     macro_rules! curve {
         ($c:ident) => {
@@ -289,7 +299,7 @@ fn ec_import(a: &J, format: &str, b: &[u8]) -> Result<J> {
                     &data($c::PublicKey::from_sec1_bytes(b))?.to_jwk_string(),
                 ))?),
                 "jwk" => {
-                    let j: J = data(serde_json::from_slice(b))?;
+                    let j = ec_material(&data(serde_json::from_slice(b))?);
                     if j["d"].is_string() {
                         return Ok(data(serde_json::from_str(
                             &data($c::SecretKey::from_jwk_str(&j.to_string()))?.to_jwk_string(),
