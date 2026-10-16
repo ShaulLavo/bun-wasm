@@ -71,6 +71,8 @@ for (const failed of [false, true]) {
   const closed = new Promise(resolve => node.once("close", resolve));
   node.destroy(reason);
   await settle(closed);
-  assert.deepEqual(cancelled, [reason]);
+  assert.equal(cancelled.length, 1);
+  if (failed) assert.equal(cancelled[0], reason);
+  else assert.equal(cancelled[0] == null, true);
   console.log("destroy readable " + failed);
 }
