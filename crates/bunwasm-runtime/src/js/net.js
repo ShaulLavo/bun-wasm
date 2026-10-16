@@ -1390,8 +1390,20 @@
       _consumeResponse(chunk) {
         const exchange = this._httpState;
         if (!exchange || exchange.state !== "response") return;
-        try { this._deliverResponse(exchange.decoder.push(chunk)); }
+        try {
+          const decoded = exchange.decoder.push(chunk);
+          if (decoded.remainder.length) this._retireResponse(decoded.remainder);
+          this._deliverResponse(decoded.output);
+        }
         catch (err) { this._failHttp(err); }
+      }
+      _retireResponse(remainder) {
+        const msg = this._httpState.message;
+        msg.complete = true;
+        const persistent = internal.require("http_agent").responseKeepsAlive(msg.httpVersion, msg.headers.connection);
+        const error = internal.require("http_body").unexpectedResponseError(remainder, persistent);
+        this.socket.destroy();
+        if (error) this.emit("error", error);
       }
       _deliverResponse(output) {
         const msg = this._httpState.message;
@@ -1408,6 +1420,7 @@
         if (!exchange || exchange.state !== "response") return;
         exchange.state = "complete";
         exchange.message.complete = true;
+        this.agent?._pool.complete(this.socket);
         exchange.cleanup();
         const socket = this.socket;
         const agent = this.agent;

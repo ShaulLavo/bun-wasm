@@ -45,6 +45,23 @@ The adapter does not yet schedule requests against `maxSockets` or
 native Node's uint64 parser also accepts larger lengths that this decoder rejects.
 Symbol coercion throws a native `TypeError`; its wording depends on the engine.
 
+Round 2 adds `net-http-response-remainder` and
+`net-http-empty-transfer-encoding`. The remainder control covers fixed, chunked,
+HEAD, 204 and 304 responses, same-write and split-write suffixes, paused response
+consumption, idle data, and an unsolicited complete response. It preserves the
+first body/end, checks parser errors for invalid suffixes and verifies that the
+next request uses a fresh socket. Explicit close and HTTP/1.0 controls check
+`HPE_CLOSED_CONNECTION`. Empty transfer-encoding controls split the header across
+writes and check GET/HEAD, 100/101/200/204/304 and repeated fields. They require one
+`HPE_INVALID_TRANSFER_ENCODING` with no response, information or upgrade dispatch.
+All controls run unchanged on Node v26.7.0.
+
+The decoder exposes its unconsumed remainder explicitly. Any remainder retires
+the connection synchronously, including a recognized next-response prefix. An
+incomplete recognized prefix is also retired rather than held for another
+request. The Agent guards the draining interval before stream consumption as
+well as the idle interval after release.
+
 ## Measurements
 
 | Engine | Fully passing upstream files, before → after | Observed passes, before → after | File timeouts, before → after |
@@ -84,11 +101,13 @@ report `0 passed, 5 failed` per engine on the original artifacts, then
 The retained WASMs contain the current HTTP JavaScript and erased TypeScript
 factories; `source-check.log` and `artifacts.json` record the checks and hashes.
 
-The web gate currently stops at the separately tracked browser memory-growth
+The earlier web gate stopped at the separately tracked browser memory-growth
 failure after the shared filesystem merge. The HTTP lane reproduced that timeout
 in the full gate, an isolated rerun, and a control using unchanged main guest
-artifacts. All other requested gates pass. The owning follow-up is recorded in
-`plans/compatibility-followups.md`; no HTTP workaround is applied.
+artifacts. PR #36 fixes that failure and is merged into the round-2 branch.
+The full web gate runs without an exemption in this round. The historical
+follow-up is recorded in `plans/compatibility-followups.md`; no HTTP workaround
+was applied.
 
 The first PR #35 web run also timed out waiting for an HTML HMR edit. A fresh
 web build and full rerun passed all configured `browser-net.mjs` cases with the

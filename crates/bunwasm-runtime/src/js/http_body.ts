@@ -3,32 +3,40 @@
   type Framing = { kind: "none" } | { kind: "fixed"; length: number } | { kind: "chunked" } | { kind: "eof" };
   type Phase = { kind: "fixed"; remaining: number } | { kind: "size" } | { kind: "data"; remaining: number } | { kind: "crlf" } | { kind: "trailers" } | { kind: "eof" } | { kind: "done" };
   type Output = { kind: "data"; bytes: Uint8Array } | { kind: "trailers"; pairs: Pair[] } | { kind: "end" };
+  type Decoded = { output: Output[]; remainder: Uint8Array };
   const fail = () => Object.assign(new Error("Parse Error: Invalid chunked response"), { code: "HPE_INVALID_CHUNK_SIZE" });
   function parseError(code: string, reason: string): Error {
     return Object.assign(new Error(`Parse Error: ${reason}`), { code, reason });
   }
   function responseFraming(rawHeaders: readonly string[], method: string, status: number): Framing {
     let length: number | undefined;
-    const codings: string[] = [];
+    let finalCoding: string | undefined;
     for (let i = 0; i < rawHeaders.length; i += 2) {
       const name = rawHeaders[i].toLowerCase();
       const value = rawHeaders[i + 1];
       if (name === "content-length") {
         if (length !== undefined) throw parseError("HPE_UNEXPECTED_CONTENT_LENGTH", "Duplicate Content-Length");
-        if (codings.length) throw parseError("HPE_INVALID_CONTENT_LENGTH", "Content-Length can't be present with Transfer-Encoding");
+        if (finalCoding !== undefined) throw parseError("HPE_INVALID_CONTENT_LENGTH", "Content-Length can't be present with Transfer-Encoding");
         if (!/^[0-9]+$/.test(value)) throw parseError("HPE_INVALID_CONTENT_LENGTH", value ? "Invalid character in Content-Length" : "Empty Content-Length");
         if (!Number.isSafeInteger(Number(value))) throw parseError("HPE_INVALID_CONTENT_LENGTH", "Content-Length overflow");
         length = Number(value);
       }
       if (name !== "transfer-encoding") continue;
       if (length !== undefined) throw parseError("HPE_INVALID_TRANSFER_ENCODING", "Transfer-Encoding can't be present with Content-Length");
-      codings.push(...value.toLowerCase().split(",").map(coding => coding.trim()));
+      if (!value.trim()) throw parseError("HPE_INVALID_TRANSFER_ENCODING", "Empty Transfer-Encoding");
+      finalCoding = value.slice(value.lastIndexOf(",") + 1).trim().toLowerCase();
     }
     if (method === "HEAD" || status < 200 || status === 204 || status === 304) return { kind: "none" };
-    if (codings.length) return { kind: codings[codings.length - 1] === "chunked" ? "chunked" : "eof" };
+    if (finalCoding !== undefined) return { kind: finalCoding === "chunked" ? "chunked" : "eof" };
     return length === undefined ? { kind: "eof" } : { kind: "fixed", length };
   }
   const text = (bytes: Uint8Array) => Array.from(bytes, byte => String.fromCharCode(byte)).join("");
+  function unexpectedResponseError(bytes: Uint8Array, persistent: boolean): Error | undefined {
+    if (!persistent) return parseError("HPE_CLOSED_CONNECTION", "Data after `Connection: close`");
+    const prefix = text(bytes.subarray(0, 5));
+    const recognized = ["HTTP/", "RTSP/", "ICE/"].some(expected => expected.startsWith(prefix) || prefix.startsWith(expected));
+    return recognized ? undefined : parseError("HPE_INVALID_CONSTANT", "Expected HTTP/, RTSP/ or ICE/");
+  }
   function lineEnd(bytes: Uint8Array): number {
     for (let i = 0; i + 1 < bytes.length; i++) if (bytes[i] === 13 && bytes[i + 1] === 10) return i;
     return -1;
@@ -44,14 +52,16 @@
       else if (framing.kind === "eof") this.phase = { kind: "eof" };
       else this.phase = { kind: "fixed", remaining: 0 };
     }
-    push(bytes: Uint8Array): Output[] {
+    push(bytes: Uint8Array): Decoded {
       const buffer = new Uint8Array(this.buffer.length + bytes.length);
       buffer.set(this.buffer);
       buffer.set(bytes, this.buffer.length);
       this.buffer = buffer;
       const output: Output[] = [];
       while (this.step(output)) {}
-      return output;
+      const remainder = this.phase.kind === "done" ? this.buffer : new Uint8Array(0);
+      if (remainder.length) this.buffer = new Uint8Array(0);
+      return { output, remainder };
     }
     end(): Output[] {
       if (this.phase.kind === "done") return [];
@@ -121,5 +131,5 @@
       return true;
     }
   }
-  return { BodyDecoder, responseFraming };
+  return { BodyDecoder, responseFraming, unexpectedResponseError };
 })

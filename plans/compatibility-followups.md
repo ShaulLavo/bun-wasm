@@ -252,7 +252,10 @@ owns this observation and its evidence cleanup with the HTTP review.
 
 ### Memory-growth failure
 
-Status: Approved. The coordinator's Web Crypto follow-up is investigating the same gate failure.
+Status: Resolved by PR #36, merged as `73ae8124`. It fixes shared large-file storage
+and browser shell shutdown. The round-2 HTTP branch includes that main commit and
+runs the complete web gate without the prior memory exemption. The evidence
+below records the original failure.
 
 On main `c7f08312` with the HTTP lane applied, `scripts/test.sh` passes 153 fixtures
 on every engine. `scripts/test-web.sh` reaches `web/tests/browser-memory.mjs:65`,

@@ -12,7 +12,7 @@
     setKeepAlive(enable: boolean, delay: number): unknown;
   }
   type Options = { keepAlive?: boolean; keepAliveMsecs?: number; maxFreeSockets?: number; timeout?: number };
-  type Owned = { key: string; state: "active" | "idle"; cleanup: () => void };
+  type Owned = { key: string; state: "active" | "draining" | "idle"; cleanup: () => void };
   class SocketPool {
     readonly sockets: Record<string, Socket[]> = Object.create(null);
     readonly freeSockets: Record<string, Socket[]> = Object.create(null);
@@ -38,7 +38,10 @@
     }
     track(key: string, socket: Socket): void {
       const close = () => this.forget(socket);
-      const guard = () => { if (this.owned.get(socket)?.state === "idle") socket.destroy(); };
+      const guard = () => {
+        const entry = this.owned.get(socket);
+        if (entry && entry.state !== "active") socket.destroy();
+      };
       socket.on("close", close);
       socket.on("error", guard);
       socket.on("end", guard);
@@ -49,6 +52,10 @@
         for (const event of ["error", "end", "data", "timeout"]) socket.removeListener(event, guard);
       } });
       this.addTo(this.sockets, key, socket);
+    }
+    complete(socket: Socket): void {
+      const entry = this.owned.get(socket);
+      if (entry) entry.state = "draining";
     }
     release(socket: Socket, reusable: boolean): void {
       const entry = this.owned.get(socket);

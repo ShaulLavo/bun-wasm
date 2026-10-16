@@ -1122,6 +1122,16 @@ and closes sockets on timeout, remote close or Agent destruction. Requests witho
 an Agent advertise close. GET, HEAD, DELETE, OPTIONS, TRACE and CONNECT do not get
 automatic body framing, including when headers flush before `end()`.
 
+Round 2 uses Node's `test/parallel/test-http-extra-response.js` at the same
+upstream revision as a behavioral reference. The decoder returns consumed output
+and unconsumed remainder separately. A remainder retires the connection before
+pool release, preserves the first response body/end, and reports invalid prefixes
+with `HPE_INVALID_CONSTANT`. Bytes after a nonpersistent response produce
+`HPE_CLOSED_CONNECTION`. A completed response enters a draining state so incoming
+data cannot disappear between parser removal and stream consumption. Empty or
+whitespace-only transfer-encoding fields produce `HPE_INVALID_TRANSFER_ENCODING`
+before informational, upgrade or bodyless-response dispatch.
+
 HTTPS requests continue to use the host's TLS fetch transport. The raw socket
 ABI has no TLS capability, so HTTPS upgrades without a caller-supplied connection
 fail with `ERR_TLS_NOT_SUPPORTED` instead of opening a plaintext connection.
