@@ -16,10 +16,16 @@ interface Session {
 export class FilesystemService {
   private sessions = new Set<Session>();
   private queue = Promise.resolve();
+  private sweeping = false;
   constructor(private backend: FilesystemBackend) {}
   connect(connection: FilesystemConnection): void {
+    if (this.backend instanceof MemoryBackend) {
+      this.backend.attachShared(connection.shared, connection.maxBytes);
+      this.backend.shared.onContention = () => this.sweep();
+    }
     const session: Session = { connection, handles: new Set(), preopens: new Set(), transient: new Map(), references: new Map(), responses: new Map(), pending: new Map() };
     this.sessions.add(session);
+    for (const segment of this.backend.sharedSegments?.() ?? []) connection.port.postMessage({ segment: segment.buffer, index: segment.index });
     connection.port.onmessage = ({ data }: MessageEvent<RequestMessage>) => {
       if ("connect" in data) {
         if (!isRevoked(connection)) this.connect(data.connect);
@@ -51,8 +57,9 @@ export class FilesystemService {
     // Eviction changes capability validity, even for a read-only resolve. Invalidate client path
     // caches before releasing the pin; an enclosing mutation already owns the odd epoch.
     const epoch = new Int32Array(session.connection.epoch);
-    const invalidate = !(Atomics.load(epoch, 0) & 1);
-    if (invalidate) Atomics.add(epoch, 0, 1);
+    const shared = this.backend instanceof MemoryBackend ? this.backend.shared : undefined;
+    const invalidate = !shared?.ownsServiceMutation;
+    if (invalidate) { if (shared) shared.beginServiceMutation(epoch); else Atomics.add(epoch, 0, 1); }
     try {
       while (session.transient.size > TRANSIENT_HANDLES) {
         const oldest = session.transient.keys().next().value!;
@@ -60,7 +67,7 @@ export class FilesystemService {
         session.handles.delete(oldest);
         this.backend.release(oldest);
       }
-    } finally { if (invalidate) Atomics.add(epoch, 0, 1); }
+    } finally { if (invalidate) { if (shared) shared.endServiceMutation(epoch); else Atomics.add(epoch, 0, 1); } }
   }
   private check(session: Session, handle: number | undefined): void {
     if (handle === undefined) return;
@@ -76,7 +83,7 @@ export class FilesystemService {
       if (b + c >= response.length) session.responses.delete(a);
       return part;
     }
-    if (["retain", "release", "stat", "read", "write", "append", "resize", "setMtime", "readdir", "resolve"].includes(operation)) this.check(session, a);
+    if (["retain", "release", "stat", "read", "write", "append", "grow", "resize", "setMtime", "readdir", "resolve"].includes(operation)) this.check(session, a);
     if (["create", "link", "removePath", "rename"].includes(operation)) {
       this.check(session, a.parent); this.check(session, a.node);
       if (operation === "link" || operation === "rename") { this.check(session, b.parent); this.check(session, b.node); }
@@ -120,8 +127,13 @@ export class FilesystemService {
       const dataLength = cells[2]!;
       const { operation, args } = unpack(bytes.subarray(0, inputLength));
       mutation = mutations.has(operation);
-      if (mutation) Atomics.add(epoch, 0, 1); // odd: invalidate caches before touching bytes
+      if (mutation) {
+        if (this.backend instanceof MemoryBackend) this.backend.shared.beginServiceMutation(epoch);
+        else Atomics.add(epoch, 0, 1);
+      }
       const value = await this.execute(session, id, operation, args, bytes.subarray(inputLength, inputLength + dataLength));
+      const segments = this.backend.takeSharedSegments?.() ?? [];
+      for (const segment of segments) for (const peer of this.sessions) peer.connection.port.postMessage({ segment: segment.buffer, index: segment.index });
       const binary = value instanceof Uint8Array;
       const result = binary ? value : pack(value);
       cells[2] = result.length;
@@ -134,7 +146,14 @@ export class FilesystemService {
       cells[3] = errno(error);
       state = cells[3] === 11 ? State.Cancelled : State.Failed;
     } finally {
-      if (mutation) Atomics.add(epoch, 0, 1);
+      // Allocation may complete before cancellation/failure. Publish every allocated segment,
+      // indexed so a newly connected peer can receive both its snapshot and this broadcast.
+      for (const segment of this.backend.takeSharedSegments?.() ?? []) for (const peer of this.sessions)
+        peer.connection.port.postMessage({ segment: segment.buffer, index: segment.index });
+      if (mutation) {
+        if (this.backend instanceof MemoryBackend) this.backend.shared.endServiceMutation(epoch);
+        else Atomics.add(epoch, 0, 1);
+      }
       cells[5] = Atomics.load(epoch, 0);
       if (isRevoked(session.connection) || Atomics.load(cells, 6)) {
         session.responses.delete(id);
@@ -149,9 +168,22 @@ export class FilesystemService {
     }
   }
   sweep(): void {
-    for (const session of this.sessions) if (isRevoked(session.connection)) this.close(session);
+    if (this.sweeping) return;
+    this.sweeping = true;
+    try {
+      // Recover all proven-dead lock owners before any close can need the allocator lock.
+      for (const session of this.sessions) if (Atomics.load(new Int32Array(session.connection.revocations[0]!), 0) === 2)
+        this.backend.revokeOwner?.(session.connection.owner, new Int32Array(session.connection.epoch));
+      for (const session of this.sessions) if (isRevoked(session.connection)) this.close(session);
+    } finally { this.sweeping = false; }
   }
   private close(session: Session): void {
+    const ownRevocation = Atomics.load(new Int32Array(session.connection.revocations[0]!), 0);
+    const active = this.backend instanceof MemoryBackend && this.backend.shared.ownerActive(session.connection.owner);
+    // Cancellation is not proof of death. Keep pins/pages until the one operation already
+    // past its revocation check exits, or its controller confirms that the worker stopped.
+    if (active && ownRevocation !== 2) return;
+    if (ownRevocation === 2) this.backend.revokeOwner?.(session.connection.owner, new Int32Array(session.connection.epoch));
     for (const [id, buffer] of session.pending) {
       const cells = new Int32Array(buffer, 0, HEADER / 4);
       Atomics.store(cells, 6, 1);
@@ -168,12 +200,16 @@ export class FilesystemService {
   }
   resources() {
     // retained counts actual backend pins, including transient path capabilities, not just opens.
-    return {
+    const result: Record<string, number> = {
       clients: this.sessions.size,
       retained: Array.from(this.sessions, session => session.handles.size).reduce((a, b) => a + b, 0),
       transient: Array.from(this.sessions, session => session.transient.size).reduce((a, b) => a + b, 0),
       responses: Array.from(this.sessions, session => session.responses.size).reduce((a, b) => a + b, 0),
     };
+    // Keep the original small shape for callers comparing resource snapshots while exposing pool
+    // accounting to diagnostics and persistence.
+    for (const [key, value] of Object.entries(this.backend.resources?.() ?? {})) Object.defineProperty(result, key, { value, enumerable: false, configurable: true });
+    return result;
   }
   dispose(): void { for (const session of this.sessions) this.close(session); }
 }

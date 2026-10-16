@@ -13,6 +13,35 @@ self.onmessage = event => {
     finally { host.wasi.descriptors.dispose(); fs.dispose(); }
     return;
   }
+  if (scenario === "killwrite" || scenario === "epochwrite") {
+    const opened = host.open("shared");
+    if (opened.error) throw new Error(`open failed: ${opened.error}`);
+    host.iovecs([new Uint8Array([90])]);
+    const original = fs.shared.write.bind(fs.shared);
+    fs.shared.write = (handle, _chunks, offset, revoked, owner) => {
+      class ParkedBytes extends Uint8Array {
+        subarray(start?: number, end?: number): Uint8Array {
+          self.postMessage({ writing: true, owner: Atomics.load(fs.shared.cells, 1) });
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, scenario === "epochwrite" ? 80 : undefined);
+          return super.subarray(start, end);
+        }
+      }
+      return original(handle, [new ParkedBytes([90])], offset, revoked, owner);
+    };
+    host.calls.fd_write!(opened.fd, 0, 1, 1024);
+    if (scenario === "epochwrite") { host.wasi.descriptors.dispose(); fs.dispose(); return; }
+    throw new Error("parked writer unexpectedly returned");
+  }
+  if (scenario === "enospc") {
+    try {
+      const opened = host.open("shared");
+      if (opened.error) throw new Error(`open failed: ${opened.error}`);
+      host.iovecs([new Uint8Array(PAGE + 20).fill(90)]);
+      const error = host.calls.fd_write!(opened.fd, 0, 1, 1024);
+      self.postMessage({ error, errors: host.errors });
+    } finally { host.wasi.descriptors.dispose(); fs.dispose(); }
+    return;
+  }
   const opened = host.open("shared", 0, 1);
   if (opened.error) throw new Error(`open failed: ${opened.error}`);
   const chunks = [new Uint8Array(PAGE + 7).fill(byte), new Uint8Array(13).fill(byte)];

@@ -15,7 +15,7 @@ async function guest(connection: ReturnType<SharedFilesystem["fork"]>, action: s
       worker.onerror = event => reject(new Error(event.message));
       worker.postMessage({ connection, action }, [connection.port]);
     });
-  } finally { fs.revoke(connection); worker.terminate(); }
+  } finally { worker.terminate(); fs.revoke(connection); }
 }
 try {
   await fs.writeFile("/shared", "before");

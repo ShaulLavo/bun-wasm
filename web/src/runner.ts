@@ -207,9 +207,9 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const finish = (result: RunResult) => {
     if (finished) return;
     finished = true;
-    options.filesystem.revoke(request.filesystem);
     worker.terminate();
     subprocess.dispose();
+    options.filesystem.revoke(request.filesystem);
     helper?.dispose();
     if (moduleCache) void caches.delete(moduleCache);
     settle(result);

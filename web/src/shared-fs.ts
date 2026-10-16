@@ -1,4 +1,4 @@
-import { FilesystemClient, createFilesystemConnection, connectFilesystemIdentity, revokeFilesystem, type FilesystemIdentity, type FilesystemConnection } from "@bun-wasm/runtime/fs";
+import { FilesystemClient, createFilesystemConnection, connectFilesystemIdentity, reapFilesystem, type FilesystemIdentity, type FilesystemConnection } from "@bun-wasm/runtime/fs";
 
 export interface Entry { kind: "file" | "dir"; ino: number; mtime: number; children: Map<string, Entry>; }
 /** Page-side API: never blocks the UI thread and owns no tree. Editor/shell saves are ordinary
@@ -41,7 +41,7 @@ export class SharedFilesystem {
     this.client.connection.port.postMessage({ connect: connection.server }, [connection.server.port]);
     return connection.client;
   }
-  revoke(connection: FilesystemIdentity): void { revokeFilesystem(connection); this.client.sweep(); }
+  revoke(connection: FilesystemIdentity): void { reapFilesystem(connection); this.client.sweep(); }
   private mutate(operation: string, args: unknown[], bytes?: Uint8Array): Promise<any> {
     const result = this.writes.then(() => { this.assertLive(); return this.client.asyncCall(operation, args, bytes); });
     // Keep ordering after an error, while returning the failure to the caller that owns it.

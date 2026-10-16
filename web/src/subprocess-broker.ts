@@ -46,8 +46,8 @@ export class SubprocessBroker {
       if (!request.child) continue;
       const control = new Int32Array(request.child.control, 0, 4);
       if (!Atomics.load(control, 0) && !Atomics.load(control, 3) && active(request.child)) continue;
-      this.filesystem.revoke(request.filesystem);
       worker.terminate();
+      this.filesystem.revoke(request.filesystem);
       if (request.moduleCache) void caches.delete(request.moduleCache);
       this.children.delete(worker);
     }
@@ -67,8 +67,8 @@ export class SubprocessBroker {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     for (const [worker, request] of this.children) {
-      this.filesystem.revoke(request.filesystem);
       worker.terminate();
+      this.filesystem.revoke(request.filesystem);
       if (request.moduleCache) void caches.delete(request.moduleCache);
     }
     this.children.clear();

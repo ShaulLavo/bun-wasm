@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { MemFS } from "../fs/memory";
-import { FilesystemClient, FilesystemService, MemoryBackend, createFilesystemConnection } from "../fs";
+import { FilesystemClient, FilesystemService, MemoryBackend, createFilesystemConnection, createFilesystemIdentity, connectFilesystemIdentity, revokeFilesystem, reapFilesystem } from "../fs";
 import { PAGE } from "../fs/protocol";
 import { atomicHost } from "./fixtures/wasi-atomic-host";
 
@@ -228,4 +228,74 @@ test("two real WASI workers append multi-page iovecs in one service operation pe
   expect(bytes.subarray(0, 4)).toEqual(encode("seed"));
   expect(bytes.subarray(4, 4 + size)).toEqual(new Uint8Array(size).fill(results[0]!.byte));
   expect(bytes.subarray(4 + size)).toEqual(new Uint8Array(size).fill(results[1]!.byte));
+});
+
+
+test("a WASI fd_write returns ENOSPC when the configured shared pool is full", async () => {
+  const backend = new MemoryBackend();
+  const service = new FilesystemService(backend);
+  const connection = connectFilesystemIdentity(createFilesystemIdentity(undefined, PAGE * 256));
+  service.connect(connection.server);
+  const client = new FilesystemClient(connection.client);
+  cleanups.push(() => { client.dispose(); service.dispose(); });
+  await client.asyncCall("writeFile", ["/full"], new Uint8Array(PAGE * 255));
+  await client.asyncCall("writeFile", ["/shared"], new Uint8Array());
+  const worker = new Worker(new URL("./fixtures/filesystem-atomic-guest.ts", import.meta.url).href);
+  cleanups.push(() => worker.terminate());
+  const result = new Promise<{ error: number; errors: string[] }>((resolve, reject) => {
+    worker.onmessage = ({ data }) => resolve(data);
+    worker.onerror = reject;
+  });
+  const guest = client.fork();
+  worker.postMessage({ connection: guest, scenario: "enospc", byte: 0 }, [guest.port]);
+  expect(await result).toEqual({ error: 51, errors: [] });
+  expect(await client.asyncCall("readFile", ["/shared"])).toEqual(new Uint8Array());
+});
+
+
+test("killing a direct writer recovers its global and file locks and leaves siblings writable", async () => {
+  const { client, service } = fixture();
+  await client.asyncCall("writeFile", ["/shared"], encode("seed"));
+  const worker = new Worker(new URL("./fixtures/filesystem-atomic-guest.ts", import.meta.url).href);
+  cleanups.push(() => worker.terminate());
+  const parked = new Promise<{ writing: boolean; owner: number }>((resolve, reject) => {
+    worker.onmessage = ({ data }) => resolve(data);
+    worker.onerror = reject;
+  });
+  const guest = client.fork();
+  worker.postMessage({ connection: guest, scenario: "killwrite", byte: 0 }, [guest.port]);
+  const observed = await parked;
+  // Fail before requesting service I/O if the owner tag is wrong: the old bug would spin
+  // the service forever while trying to acquire the abandoned global lock.
+  worker.terminate();
+  reapFilesystem(guest);
+  service.sweep();
+  expect(observed).toEqual({ writing: true, owner: guest.owner });
+  expect(Atomics.load(new Int32Array(client.connection.epoch), 0) & 1).toBe(0);
+  await client.asyncCall("writeFile", ["/shared"], encode("live"));
+  expect(await client.asyncCall("readFile", ["/shared"])).toEqual(encode("live"));
+});
+
+
+test("service mutations cannot publish an even epoch during a direct write", async () => {
+  let epoch!: Int32Array;
+  class InspectingBackend extends MemoryBackend {
+    execute(operation: string, args: any[], data: Uint8Array): unknown {
+      if (operation === "mkdirp" && args[0] === "/inspect") return Atomics.load(epoch, 0);
+      return super.execute(operation, args, data);
+    }
+  }
+  const { client } = fixture(new InspectingBackend());
+  epoch = new Int32Array(client.connection.epoch);
+  await client.asyncCall("writeFile", ["/shared"], encode("seed"));
+  const worker = new Worker(new URL("./fixtures/filesystem-atomic-guest.ts", import.meta.url).href);
+  cleanups.push(() => worker.terminate());
+  const parked = new Promise<void>((resolve, reject) => {
+    worker.onmessage = () => resolve(); worker.onerror = reject;
+  });
+  const guest = client.fork();
+  worker.postMessage({ connection: guest, scenario: "epochwrite", byte: 0 }, [guest.port]);
+  await parked;
+  const insideService = await client.asyncCall("mkdirp", ["/inspect"]);
+  expect(insideService & 1).toBe(1);
 });

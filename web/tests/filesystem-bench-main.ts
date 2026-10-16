@@ -10,7 +10,7 @@ async function run(arm: string, name: string, smoke: boolean) {
       worker.onerror = event => reject(new Error(event.message));
       worker.postMessage({ arm, name, n: smoke ? 50 : name === "fd_readdir" ? 100 : name === "path_open" ? 4096 : 50000, connection }, connection ? [connection.port] : []);
     });
-  } finally { if (connection) fs.revoke(connection); worker.terminate(); }
+  } finally { if (connection) worker.terminate(); fs.revoke(connection); }
 }
 Object.assign(globalThis, {
   async filesystemBench(round: number, smoke = false) {

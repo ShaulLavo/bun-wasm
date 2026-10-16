@@ -57,9 +57,18 @@ try {
 `ready`, `epoch`, `wait()`, `value()`, `cancel()` and `release()` are exposed on the completion.
 The connection's shared `signal` changes on completion/cancellation so a future poller can
 recheck readiness. No `runtime_proc` imports are implemented here. Read, stat and resolved-path
-caches are bounded and validated by the shared mutation epoch; writes always complete at the
-service before returning. Preopens and open descriptions retain handles; transient path pins
+caches are bounded and validated by the shared mutation epoch. Retained open files read and
+write shared pages directly when capacity is already allocated; neither operation needs a port
+round trip. Namespace edits, appends and growth are serialized by the service. Preopens and open descriptions retain handles; transient path pins
 are bounded and evicting them invalidates cached paths.
+
+The service owns the page allocator and grows capacity geometrically in 64 KiB pages, across
+16 MiB SharedArrayBuffer segments. `createFilesystemIdentity(undefined, maxBytes)` configures
+the pool cap (1 GiB by default, rounded to whole segments); an individual file supports 256 pages
+(16 MiB). A full pool reports WASI ENOSPC; exceeding the per-file limit reports EFBIG. Segment
+messages attach new pages to runnable guests; a blocked guest missing a segment uses the
+service until its port can deliver it. `resources()` reports allocated data bytes, used/free bytes
+and registered identities. Segments are retained for page reuse until the filesystem is disposed.
 
 Connections carry their own revocation word and every ancestor's word, plus a shared ancestry
 wake signal. Blocking waits recheck revocation after a signal change; asynchronous values use

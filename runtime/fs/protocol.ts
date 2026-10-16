@@ -2,6 +2,7 @@
 // state live in the SAB. The service never waits on a guest, including a terminated one.
 // Guest browser-engine polyfills replace MessageChannel; transport endpoints must stay native.
 const NativeMessageChannel = globalThis.MessageChannel;
+export const DEFAULT_SHARED_MAX_BYTES = 1024 * 1024 * 1024;
 export const HEADER = 32;
 export const PAGE = 64 * 1024;
 export const enum State { Pending, Complete, Cancelled, Failed, Overflow }
@@ -14,17 +15,26 @@ export interface FilesystemConnection {
   signal: SharedArrayBuffer;
   /** This connection's revocation word, then its ancestors. Never reused. */
   revocations: SharedArrayBuffer[];
+  shared: SharedArrayBuffer;
+  /** Nonzero lock owner token; service clears it when this identity is revoked. */
+  owner: number;
+  maxBytes: number;
 }
 export type FilesystemIdentity = Omit<FilesystemConnection, "port">;
 /** Guests can allocate a child identity while blocked; its controller creates the ports.
  * Firefox does not activate guest-created channels until that guest returns to its event loop.
  */
-export function createFilesystemIdentity(parent?: FilesystemIdentity): FilesystemIdentity {
+export function createFilesystemIdentity(parent?: FilesystemIdentity, maxBytes = DEFAULT_SHARED_MAX_BYTES): FilesystemIdentity {
+  const shared = parent?.shared ?? new SharedArrayBuffer(24 * 1024 * 1024);
+  const owner = Atomics.add(new Int32Array(shared), 5, 1) + 1;
   return {
     epoch: parent?.epoch ?? new SharedArrayBuffer(4),
     // Every descendant waits here too, so root revocation can wake blocked guests after a crash.
     signal: parent?.signal ?? new SharedArrayBuffer(4),
     revocations: [new SharedArrayBuffer(4)].concat(parent?.revocations ?? []),
+    shared,
+    owner,
+    maxBytes: parent?.maxBytes ?? maxBytes,
   };
 }
 export function connectFilesystemIdentity(identity: FilesystemIdentity) {
@@ -38,7 +48,12 @@ export function isRevoked(connection: FilesystemIdentity): boolean {
   return connection.revocations.some(buffer => Atomics.load(new Int32Array(buffer), 0) !== 0);
 }
 export function revokeFilesystem(connection: FilesystemIdentity): void {
-  Atomics.store(new Int32Array(connection.revocations[0]!), 0, 1);
+  Atomics.compareExchange(new Int32Array(connection.revocations[0]!), 0, 0, 1);
+  wake(connection);
+}
+/** Call only after the guest has stopped, or from its own quiescent dispose path. */
+export function reapFilesystem(connection: FilesystemIdentity): void {
+  Atomics.store(new Int32Array(connection.revocations[0]!), 0, 2);
   wake(connection);
 }
 export function wake(connection: FilesystemIdentity): void {

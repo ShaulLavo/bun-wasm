@@ -3,7 +3,7 @@
 import { strict as assert } from "node:assert";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import { chromium, firefox, type Browser } from "playwright";
+import { chromium, firefox, webkit, type Browser } from "playwright";
 import { browserBuildConfig } from "../../scripts/browser-build";
 let scratch: string | undefined, server: ReturnType<typeof Bun.serve> | undefined, browser: Browser | undefined, launch: Promise<Browser> | undefined;
 let cleanupPromise: Promise<void> | undefined;
@@ -35,8 +35,8 @@ try {
     return new Response(Bun.file(file), { headers: { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" } });
   } });
   let rows: any[] = [];
-  for (const name of process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "firefox"]) {
-    const type = { chromium, firefox }[name];
+  for (const name of process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "firefox", "webkit"]) {
+    const type = { chromium, firefox, webkit }[name];
     assert.ok(type, `unknown browser ${name}`);
     launch = type.launch({ headless: true, downloadsPath: join(scratch, "downloads"), tracesDir: join(scratch, "traces") });
     browser = await launch;

@@ -104,7 +104,13 @@ result handles are pinned together before eviction, and rejected cache reads do 
 buffers. Shared ancestor wakeups also cancel blocked and asynchronous guests if the filesystem
 worker fails. The sandbox's original network adapters send notification-only file-change events
 after a shared-FS save, rather than replaying its old bytes. Copy-at-spawn and merge-at-exit are removed.
-Path walking and geometric file growth remain local MemFS details. Bun's
+The original `runtime/fs/shared.ts` adapter adds shared file metadata, per-inode locks and
+service-owned 64 KiB page tables across 16 MiB SAB segments. Retained file reads and in-capacity
+writes stay in the guest; namespace edits, atomic appends and geometric capacity growth stay
+at the backend boundary. The default configurable storage cap is 1 GiB; pool exhaustion uses
+WASI ENOSPC and the per-file page-table limit uses EFBIG. Owner-tagged locks let revocation
+reclaim abandoned guest locks without changing allocator state. This is original bun-wasm code,
+not an adapted upstream allocator or filesystem. Path walking remains a local MemFS detail. Bun's
 reserved socket slot bridge stays configured by `web/`, not imported into the generic core.
 Unbundled Node host adapters import the extracted JavaScript memory helper by repository-relative
 path so headless CLI workflows remain dependency-free.

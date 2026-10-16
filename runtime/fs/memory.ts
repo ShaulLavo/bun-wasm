@@ -78,7 +78,7 @@ export class MemFS implements FileSystem {
     return handle;
   }
   retain(handle: FileHandle): void {
-    this.node(handle);
+    this.nodeForHandle(handle);
     this.references.set(handle, (this.references.get(handle) ?? 0) + 1);
   }
   release(handle: FileHandle): void {
@@ -95,13 +95,15 @@ export class MemFS implements FileSystem {
       for (const child of node.children.values()) this.forget(child);
     }
   }
-  private node(handle: FileHandle): Node {
+  nodeForHandle(handle: FileHandle): Node {
     const node = this.handles.get(handle);
     if (!node) throw new Error(`unknown filesystem handle ${handle}`);
     return node;
   }
+  handleForNode(node: Node): FileHandle { return this.handle(node); }
+
   private directory(handle: FileHandle): DirNode {
-    const node = this.node(handle);
+    const node = this.nodeForHandle(handle);
     if (node.kind !== "dir") throw new Error("not a directory handle");
     return node;
   }
@@ -170,11 +172,11 @@ export class MemFS implements FileSystem {
     return { parent: parent ? this.handle(parent) : undefined, name, node: this.handle(node), trailingSlash, terminalDot };
   }
   stat(handle: FileHandle): FileStat {
-    const node = this.node(handle);
+    const node = this.nodeForHandle(handle);
     return { kind: node.kind === "dir" ? "directory" : "file", ino: node.ino, size: node.kind === "file" ? node.data.length : 0, mtime: node.mtime };
   }
   read(handle: FileHandle, chunks: readonly Uint8Array[], offset: number): number {
-    const node = this.node(handle) as FileNode;
+    const node = this.nodeForHandle(handle) as FileNode;
     let pos = offset;
     for (const chunk of chunks) {
       const n = Math.max(0, Math.min(chunk.length, node.data.length - pos));
@@ -185,7 +187,7 @@ export class MemFS implements FileSystem {
     return pos - offset;
   }
   write(handle: FileHandle, chunks: readonly Uint8Array[], offset: number): number {
-    const node = this.node(handle) as FileNode;
+    const node = this.nodeForHandle(handle) as FileNode;
     if (chunks.every(chunk => chunk.length === 0)) return 0;
     let pos = offset;
     for (const chunk of chunks) {
@@ -197,18 +199,18 @@ export class MemFS implements FileSystem {
     return pos - offset;
   }
   append(handle: FileHandle, chunks: readonly Uint8Array[]): { written: number; offset: number } | number {
-    const offset = (this.node(handle) as FileNode).data.length;
+    const offset = (this.nodeForHandle(handle) as FileNode).data.length;
     const written = this.write(handle, chunks, offset);
     return written < 0 ? written : { written, offset: offset + written };
   }
   resize(handle: FileHandle, size: number, truncate: boolean): number {
-    const node = this.node(handle) as FileNode;
+    const node = this.nodeForHandle(handle) as FileNode;
     if (truncate && size < node.data.length) node.data = node.data.slice(0, size);
     else ensureSize(node, size);
     if (truncate) node.mtime = Date.now();
     return 0;
   }
-  setMtime(handle: FileHandle, mtime: number): number { this.node(handle).mtime = mtime; return 0; }
+  setMtime(handle: FileHandle, mtime: number): number { this.nodeForHandle(handle).mtime = mtime; return 0; }
   readdir(handle: FileHandle): DirectoryEntry[] {
     const node = this.directory(handle);
     const parent = this.directoryParents.get(node) ?? node;
@@ -236,24 +238,27 @@ export class MemFS implements FileSystem {
   }
   link(from: ResolvedPath, to: ResolvedPath): number {
     if (from.node === undefined) return 44;
-    const node = this.node(from.node);
+    const node = this.nodeForHandle(from.node);
     if (node.kind === "dir") return 63;
     if (to.node !== undefined) return 20;
     if (to.trailingSlash) return 54;
     const parent = this.parentOf(to);
     if (typeof parent === "number") return parent;
     parent.children.set(to.name, node);
+    parent.mtime = Date.now();
     return 0;
   }
   removePath(path: ResolvedPath, directory: boolean): number {
     if (directory && path.terminalDot) return 28;
     if (path.node === undefined) return 44;
-    const node = this.node(path.node);
+    const node = this.nodeForHandle(path.node);
     if (directory && node.kind !== "dir") return 54;
     if (!directory && node.kind === "dir") return 31;
     if (node.kind === "dir" && node.children.size > 0) return 55;
     if (path.parent === undefined) return 63;
-    this.directory(path.parent).children.delete(path.name);
+    const parent = this.directory(path.parent);
+    parent.children.delete(path.name);
+    parent.mtime = Date.now();
     this.forget(node);
     if (node.kind === "dir") this.removedDirectories.add(node);
     return 0;
@@ -261,8 +266,8 @@ export class MemFS implements FileSystem {
   rename(from: ResolvedPath, to: ResolvedPath): number {
     if (from.terminalDot || to.terminalDot) return 28;
     if (from.node === undefined) return 44;
-    const node = this.node(from.node);
-    const target = to.node === undefined ? undefined : this.node(to.node);
+    const node = this.nodeForHandle(from.node);
+    const target = to.node === undefined ? undefined : this.nodeForHandle(to.node);
     if (node === target) return 0;
     if (to.trailingSlash && node.kind !== "dir") return 54;
     if (node.kind === "dir" && to.parent !== undefined && this.containsDirectory(node, this.directory(to.parent))) return 28;
@@ -272,7 +277,9 @@ export class MemFS implements FileSystem {
     const parent = this.parentOf(to);
     if (typeof parent === "number") return parent;
     if (from.parent === undefined) return 63;
-    this.directory(from.parent).children.delete(from.name);
+    const sourceParent = this.directory(from.parent);
+    sourceParent.children.delete(from.name);
+    sourceParent.mtime = Date.now();
     parent.children.set(to.name, node);
     if (node.kind === "dir") this.directoryParents.set(node, parent);
     if (target) this.forget(target);
@@ -283,6 +290,11 @@ export class MemFS implements FileSystem {
 
   constructor(public root: DirNode = newDir()) {
     adoptInodes(root);
+  }
+
+  hasNode(target: Node): boolean {
+    const walk = (node: Node): boolean => node === target || node.kind === "dir" && Array.from(node.children.values()).some(child => walk(child));
+    return walk(this.root);
   }
 
   lookup(path: string): Node | undefined {
