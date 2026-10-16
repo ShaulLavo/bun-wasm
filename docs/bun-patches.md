@@ -14,6 +14,7 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
 | [0003](#0003-transpiler-dependencies) | Port | Supply WASI wakers, CPU features, crash, and resolver implementations. |
@@ -33,6 +34,10 @@ Each row has one class. A file with independent changes has separate rows.
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, inspection helpers](#quickjs) | Host feature | Inspect keys and iterator entries without consuming them. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, async context](#quickjs) | Host feature | Capture and restore async context in promise reactions. |
 | [`third_party/rquickjs-sys/build.rs`](#quickjs) | Host feature | Rebuild when the locally patched C sources or binding header change. |
+| [`third_party/rquickjs-sys/quickjs/quickjs.c`, WASI stack checks](#wasm-stack-guards) | Port | Restore the stack checks on WASI and reserve shadow stack for host frames, so recursion throws before the host wasm stack runs out. |
+| [`third_party/rquickjs-sys/quickjs/libregexp.c`, WASI stack reservation](#wasm-stack-guards) | Port | Reserve shadow stack per regexp group nesting level, so the parser's stack check trips before the host wasm stack runs out. |
+| [`jsc/webkit-wasi.patch`, `StackBounds.cpp` budget](#wasm-stack-guards) | Port | Bound JSC's native recursion to a host-configurable budget below the host wasm stack. |
+| [Console recursion fixture](#wasm-stack-guards) | Port | Adapt Bun's console-constructor stack exhaustion control to a standalone fixture. |
 | [`jsc/build-icu.sh`, makefile rewrite](#icu) | Port | Select a usable cross-build makefile without native assembly output. |
 | [`jsc/build-icu.sh`, filtered ICU data](#icu) | Port | Reduce the embedded locale data to fit the wasm memory budget. |
 | [`scripts/sync-bun.sh`, generated linker config](#nested-bun-dependencies) | Port | Remove Bun configure's generated host linker override. |
@@ -71,7 +76,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
-| [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
+| [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.ts`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
 | [`patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch`](#generated-function-parser-locations) | Port | Bun parser and printer import metadata, reused unchanged from the semantic-import lane. |
 | [`crates/bunwasm-runtime/src/engine_quickjs.rs`, data conversion; `host.rs`, native-test import gate](#quickjs-data-conversion) | Host feature | Original adapter checks buffer tags before calling a throwing getter. |
@@ -729,7 +734,7 @@ The numbered JavaScript files in `crates/bunwasm-runtime/generated/builtins/` re
 
 ## Builtin loader adapter
 
-Class **Host feature**. `scripts/generate-bun-builtins.mjs`, its shell runner, the selection manifest, and `crates/bunwasm-runtime/src/js/bun_builtins.js` are original adapters. `src/js/bun_builtin_globals.js` is the original bootstrap capture of intrinsic constructors, before application code can replace public globals. They call Bun's codegen and consume its generated module protocol. They do not copy the codegen implementation. Rust source lookup and Engine natives are original bun-wasm glue. The loader uses lazy factories, isolated caches, explicit unsupported errors, and the existing builtin implementations for dependencies not switched yet. [bun-builtins.md](bun-builtins.md) records its limits and hook status.
+Class **Host feature**. `scripts/generate-bun-builtins.mjs`, its shell runner, the selection manifest, and `crates/bunwasm-runtime/src/js/bun_builtins.js` are original adapters. `src/js/bun_builtin_globals.ts` is the original bootstrap capture of intrinsic constructors, before application code can replace public globals. They call Bun's codegen and consume its generated module protocol. They do not copy the codegen implementation. Rust source lookup and Engine natives are original bun-wasm glue. The loader uses lazy factories, isolated caches, explicit unsupported errors, and the existing builtin implementations for dependencies not switched yet. [bun-builtins.md](bun-builtins.md) records its limits and hook status.
 
 ## Generated-function parser locations
 
@@ -798,3 +803,54 @@ console contract without changing the engine's global Error constructor.
 Bootstrap captures its default stack formatter identity for this adapter.
 An installed user formatter stays authoritative; the runtime's own default
 frame-only formatter still receives the Console Trace header.
+
+## Wasm stack guards
+
+Class **Port**. The upstream files are QuickJS-ng `quickjs/quickjs.c` from
+rquickjs-sys 0.13.0, and Bun's WebKit `Source/WTF/wtf/StackBounds.cpp` at
+`3d3257150c40a1aabdc5f8b48d5b33d0413674cb`.
+
+QuickJS disables its stack limit on WASI in both `JS_NewRuntime2` and
+`update_stack_limit`. Remove those exceptions so the existing guards in the
+interpreter, property accessors, JSON serializer, and parser work on the C
+shadow stack. A wasm host keeps call frames outside linear memory, so those
+guards see only part of each recursion level. The `js_reserve_wasm_frame`
+macro, compiled only for WASI, reserves a constant number of shadow-stack bytes
+in the recursive functions whose host frames are larger than their shadow
+frames: the JSON serializer, parser and reviver, `Array.prototype.flat`, Proxy
+traps (through `get_proxy_method`, renamed `get_proxy_method1` behind a
+macro), bound and async calls, `ToPrimitive`, `JS_Call`, `JS_CallFree`, and
+the expression, unary and statement parsers, and `re_parse_disjunction` in
+`libregexp.c` through the same macro there. Sizes are measured per path; no
+upstream algorithm or error changes. Our Rust engine adapter requests the
+measured stack budget. It is original adapter code and retains no upstream
+implementation.
+
+The WebKit WASI port bounds the C shadow stack to a native recursion budget
+below the host wasm call-stack limit, read from `BUN_WASM_STACK_KIB` when set,
+while retaining JSC's exception reserve. Its separate C-loop JavaScript frame
+reservation keeps its existing capacity. This extends the platform hunk in
+`jsc/webkit-wasi.patch`; it changes no upstream JavaScript algorithms. The
+browser worker's choice of budget in `web/src/worker.ts` is original code.
+[Stack limits](stack-limits.md) records the measurements and reproducer.
+
+`tests/fixtures/stack-overflow-console/index.js` adapts the script in Bun's
+`test/js/node/console/console-constructor-exception.test.ts` at upstream
+`9510e74152073d850a18758ca41114d8f214ffa6`. Class **Port**. The local fixture
+runs directly on all engines, verifies the caught error type, and prints a
+fixed recovery marker instead of spawning a child test process.
+
+## Runtime TypeScript
+
+Class **Host feature**. `scripts/transpile-runtime.ts`, the runtime embedding build step,
+`src/js/runtime.d.ts`, the typecheck configuration and build regression tests are original
+bun-wasm adapters. They call the host Node.js `node:module.stripTypeScriptTypes` API in whitespace-preserving
+strip mode. No Node implementation is copied. No upstream implementation
+is copied or changed. `src/js/glob.ts` and `src/js/bun_builtin_globals.ts` are the existing
+original adapters renamed from JavaScript with type annotations. Glob option assembly returns a tuple derived from the positional native contract. The builtin loader adapter
+section above records their original role; neither file is an upstream fork.
+
+The host stripper blanks erasable TypeScript during Cargo's build, preserving JavaScript
+constructor calls, class fields and source coordinates. The loader still
+looks up the same extension-free names. Existing `.js` sources remain raw. No TypeScript parser
+or typecheck is added to the wasm runtime.
