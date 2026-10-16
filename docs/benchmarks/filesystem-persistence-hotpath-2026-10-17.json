@@ -1,6 +1,6 @@
 {
   "status": "final",
-  "method": "Controlled paired hotpath diagnostic on the same quiet AC-powered Mac, frozen origin/main baseline and persistence head, existing seven alternating rounds per engine, first warmup discarded, median of six. No Rust/WASM builds, performance threshold, or selective rerun.",
+  "method": "Same-host frozen-revision hotpath diagnostic on a quiet AC-powered Mac. Baseline revision ran before persistence revision; each revision used seven alternating direct-MemFS/shared-path rounds, first warmup discarded, median of six. Top-level summary compares the shared-path medians across revisions. No Rust/WASM builds, performance threshold, or selective rerun.",
   "provenance": {
     "baseline": "73ae8124bdcb7ea8a843cb865a56174465be587a4",
     "head": "591e1582108a800319bda220af56247abd5c39dc"
@@ -4878,107 +4878,107 @@
     {
       "browser": "chromium",
       "syscall": "fd_write",
-      "mainNs": 198.60000133514404,
+      "mainNs": 346.9499969482422,
       "headNs": 359.7499990463257,
-      "ratio": 1.8114299930906632
+      "ratio": 1.0368929304241874
     },
     {
       "browser": "chromium",
       "syscall": "fd_read",
-      "mainNs": 181.04999542236328,
+      "mainNs": 280.3499984741211,
       "headNs": 306.79999828338623,
-      "ratio": 1.6945595473099377
+      "ratio": 1.0943463526064785
     },
     {
       "browser": "chromium",
       "syscall": "path_open",
-      "mainNs": 759.888207539916,
+      "mainNs": 1004.0283668786287,
       "headNs": 1059.5697676762938,
-      "ratio": 1.3943758531357864
+      "ratio": 1.055318557353449
     },
     {
       "browser": "chromium",
       "syscall": "fd_readdir",
-      "mainNs": 352074.99980926514,
+      "mainNs": 353849.9975204468,
       "headNs": 359424.9987602234,
-      "ratio": 1.0208762307887242
+      "ratio": 1.0157552671438255
     },
     {
       "browser": "chromium",
       "syscall": "path_filestat_get",
-      "mainNs": 505.9500026702881,
+      "mainNs": 556.25,
       "headNs": 568.2999992370605,
-      "ratio": 1.1232335136628193
+      "ratio": 1.021662919976738
     },
     {
       "browser": "firefox",
       "syscall": "fd_write",
-      "mainNs": 209.40000000000003,
+      "mainNs": 337.6000000000001,
       "headNs": 350.4000000000001,
-      "ratio": 1.6733524355300862
+      "ratio": 1.037914691943128
     },
     {
       "browser": "firefox",
       "syscall": "fd_read",
-      "mainNs": 257.19999999999993,
+      "mainNs": 311.2,
       "headNs": 318.79999999999984,
-      "ratio": 1.2395023328149297
+      "ratio": 1.0244215938303338
     },
     {
       "browser": "firefox",
       "syscall": "path_open",
-      "mainNs": 969.2382812500013,
+      "mainNs": 1203.613281249993,
       "headNs": 1196.2890624999964,
-      "ratio": 1.2342569269521357
+      "ratio": 0.993914807302234
     },
     {
       "browser": "firefox",
       "syscall": "fd_readdir",
-      "mainNs": 164500.00000000003,
+      "mainNs": 178900.00000000012,
       "headNs": 178200,
-      "ratio": 1.0832826747720363
+      "ratio": 0.9960871995528222
     },
     {
       "browser": "firefox",
       "syscall": "path_filestat_get",
-      "mainNs": 459.99999999999994,
+      "mainNs": 426.5999999999999,
       "headNs": 426.99999999999994,
-      "ratio": 0.9282608695652174
+      "ratio": 1.0009376465072668
     },
     {
       "browser": "webkit",
       "syscall": "fd_write",
-      "mainNs": 171.8,
+      "mainNs": 257.5999999999999,
       "headNs": 261.0000000000001,
-      "ratio": 1.5192083818393487
+      "ratio": 1.013198757763976
     },
     {
       "browser": "webkit",
       "syscall": "fd_read",
-      "mainNs": 167.40000000000003,
+      "mainNs": 226,
       "headNs": 230.80000000000007,
-      "ratio": 1.3787335722819596
+      "ratio": 1.0212389380530977
     },
     {
       "browser": "webkit",
       "syscall": "path_open",
-      "mainNs": 959.4726562500005,
+      "mainNs": 1062.0117187500014,
       "headNs": 1086.425781249999,
-      "ratio": 1.1323155216284972
+      "ratio": 1.0229885057471242
     },
     {
       "browser": "webkit",
       "syscall": "fd_readdir",
-      "mainNs": 111200.00000000001,
+      "mainNs": 111199.99999999997,
       "headNs": 117500,
-      "ratio": 1.0566546762589926
+      "ratio": 1.056654676258993
     },
     {
       "browser": "webkit",
       "syscall": "path_filestat_get",
-      "mainNs": 656.4,
+      "mainNs": 632.4000000000001,
       "headNs": 648,
-      "ratio": 0.9872029250457038
+      "ratio": 1.0246679316888043
     }
   ],
   "qualification": "The historical initial PC report is retained below for context only. Its normalized direct-arm ratios were contaminated by the old baseline resolver and must not support a performance conclusion. This final pair uses the fixed baseline resolver and frozen commits.",
@@ -9977,5 +9977,6 @@
     "sourceRemoved": true,
     "lockReleased": true,
     "taskChildrenStopped": true
-  }
+  },
+  "summaryComparison": "Persistence shared path divided by baseline-main shared path. Within each nested report, mainNs means direct MemFS and headNs means that revision's shared path; those within-report ratios are not persistence overhead."
 }
