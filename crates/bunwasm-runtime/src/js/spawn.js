@@ -13,7 +13,7 @@
   function hostError(handle) {
     let info;
     try { info = JSON.parse(native.hostError(handle)); } catch { info = {}; }
-    return Object.assign(new Error(info.message || "Child process failed"), { code: info.code || "EIO" });
+    return Object.assign(new Error(info.message || "Child process failed"), info, { code: info.code || "EIO" });
   }
 
   function signalNumber(signal = "SIGTERM") {
@@ -133,7 +133,7 @@
     }
     return {
       write(chunk) {
-        if (closed || closing) throw Object.assign(new Error("write after end"), { code: "EPIPE" });
+        if (closed || closing) throw Object.assign(new Error("write after end"), { code: "EPIPE", errno: -32, syscall: "write" });
         const data = bytes(chunk);
         if (data.length) queue.push(data.slice());
         flush();

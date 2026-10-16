@@ -16,6 +16,7 @@ Each row has one class. A file with independent changes has separate rows.
 | --- | --- | --- |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
+| [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
 | [0003](#0003-transpiler-dependencies) | Port | Supply WASI wakers, CPU features, crash, and resolver implementations. |
@@ -83,6 +84,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.ts`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
 | [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets and write-side shutdown over the existing host ABI. |
+| [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
+| [`scripts/generate-ws.sh` and builtin resolution](#portable-ws-builtin) | Host feature | Original module wrapper supplies Bun's builtin ws import on every engine. |
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
 | [`patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch`](#generated-function-parser-locations) | Port | Bun parser and printer import metadata, reused unchanged from the semantic-import lane. |
 | [`crates/bunwasm-runtime/src/engine_quickjs.rs`, data conversion; `host.rs`, native-test import gate](#quickjs-data-conversion) | Host feature | Original adapter checks buffer tags before calling a throwing getter. |
@@ -90,6 +93,67 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-imports) | Host feature | Original generated-function adapter with module-relative dynamic imports. |
 | [`src/js/bun_console_constructor.js`](#bun-console-constructor) | Port | Generate Bun's Console constructor with lexical engine-independent hooks. |
 | [`scripts/generate-bun-console.mjs`, `src/js/console_constructor.js`, global Console wiring](#bun-console-constructor) | Host feature | Original generation and runtime adapters expose the shared constructor and its streams. |
+
+## Standard output errors
+
+Class **Host feature**, **original adapters** in `crates/bunwasm-runtime/src/lib.rs`,
+`src/natives.rs`, `src/js/{process,spawn,web}.js`, `web/scripts/node-host.mjs`,
+`web/scripts/node-stdio.ts`, `web/src/{subprocess.js,worker.ts}`, and
+`crates/bunwasm-host/src/process/{mod,pipe,stdio}.rs`, and its original `net/error.rs` error record.
+No Bun or Node implementation is copied or adapted for this change.
+Rust output natives return write errors with Node-style `EPIPE`, errno `-32`, and
+syscall `write`. The synchronous process writers emit their stream's `error` event.
+Failed writes in one batch share the first error object and one stream error event.
+All pending write callbacks receive that error on the next tick. The event runs
+after ticks scheduled by those callbacks. During failure and callbacks, `writable`
+is false; it resets to true before their ticks and the event. `destroyed` stays false,
+matching Node v26.7.0's standard-stream reset. A later failure starts a new batch.
+An unhandled error ends the guest with status 1. A listener can handle the error.
+The Node WASI adapter waits only for temporary `EAGAIN` backpressure and returns
+WASI `PIPE` for closed output. Worker child adapters preserve the same error and
+close inherited output transports when their downstream reader disappears.
+The minimal readable stream invokes its underlying cancellation callback so
+canceling a subprocess reader actually closes its pipe.
+Native child pipes attach the OS `EPIPE` number to their error. Wasmtime 39.0.2
+translates an `ErrorKind::BrokenPipe` without an OS errno to generic WASI `IO`.
+Child exit closes its owned stdin reader. Native and worker stdin write errors
+retain `code`, `errno`, and `syscall` through the public Bun and Node writers.
+Worker hosts retain each pipe's error until the handle is closed, so unrelated
+network errors cannot replace it on either the engine or WASI-slot bridge.
+The native cancellation wrapper delegates the underlying WASI output stream
+instead of wrapping inherited stdio in Wasmtime's asynchronous output queue.
+That queue becomes permanently closed after EPIPE and returns generic EIO on
+later writes. Direct delegation preserves EPIPE for later batches and retains
+cancellation while waiting for child-pipe capacity. No Wasmtime code is copied.
+
+The browser's top-level stdout and stderr write to a terminal through messages,
+so they have no OS reader that can close. Browser child pipes do have readers;
+the real-browser subprocess check cancels those readers on all three engines.
+The regression fixtures and Python OS-pipe driver are original test code.
+The driver checks QuickJS and JSC under both the native launcher and Node's
+worker host, plus the host engine under Node.
+## Portable ws builtin
+
+`crates/bunwasm-runtime/src/js/ws_builtin.js` is generated from `index.js` and
+`lib/*.js` in the published websockets/ws release `v8.18.3`. Its npm tarball
+integrity is
+`sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg==`,
+pinned in `docs/bun-test-suite/dependencies/bun.lock`. The original MIT license
+is embedded in the generated source and retained in `third_party/ws/LICENSE`.
+
+`scripts/generate-ws.sh` uses native Bun to bundle those CommonJS files without
+changing their implementation. Its original wrapper preserves strict mode,
+maps Node imports to the runtime builtin registry, and returns module.exports.
+Optional native addons remain external and unavailable. The library's existing
+JavaScript implementations handle their absence. The Rust resolver recognizes
+`ws` as a Bun builtin; no project dependency is injected.
+
+Bun's own `src/js/thirdparty/ws.js` at
+`ddab8382bdf6b02f22653758d901fb83ceb85aa8` requires the private C++ WebSocket
+constructor and private HTTP upgrade hooks. Those bindings are not available
+on our engines. The portable upstream implementation uses the existing
+node:net and node:http adapters instead. It adds no host networking path.
+See [the ws builtin](ws-builtin.md) for generation and verification.
 
 ## TCP and IP helpers
 

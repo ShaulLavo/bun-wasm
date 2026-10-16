@@ -37,7 +37,7 @@ pub const NODE_BUILTINS: &[&str] = &[
     "util/types", "v8", "vm", "wasi", "worker_threads", "zlib",
 ];
 
-const BUN_BUILTINS: &[&str] = &["bun", "bun:jsc", "bun:test", "bun:sqlite", "bun:ffi", "bun:wrap", "bun:internal-for-testing"];
+const BUN_BUILTINS: &[&str] = &["bun", "bun:jsc", "bun:test", "bun:sqlite", "bun:ffi", "bun:wrap", "bun:internal-for-testing", "ws"];
 
 /// Extensions probed for extensionless specifiers, in Bun's order.
 const EXTENSIONS: &[&str] = &[".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts", ".json"];

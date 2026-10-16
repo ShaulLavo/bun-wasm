@@ -188,6 +188,7 @@ impl Processes {
         let (stdout_id, stdout) = self.output(&request.stdout, 1)?;
         let (stderr_id, stderr) = self.output(&request.stderr, 2)?;
         let pipes = [stdin_id, stdout_id, stderr_id];
+        let input = self.pipes.get(&stdin_id).map(|handle| handle.pipe.clone());
         let outputs: Vec<Pipe> = pipes[1..]
             .iter()
             .filter_map(|id| self.pipes.get(id).map(|p| p.pipe.clone()))
@@ -220,6 +221,9 @@ impl Processes {
                         1
                     })
                 };
+                if let Some(pipe) = input {
+                    pipe.close_reader();
+                }
                 for pipe in outputs {
                     pipe.close_writer();
                 }
@@ -294,8 +298,9 @@ impl Processes {
     }
 
     pub fn error(&self, id: i32) -> crate::net::Output {
-        let info = if self.pipes.contains_key(&id) {
-            error("Child process pipe is closed", "EPIPE")
+        let info = if let Some(pipe) = self.pipes.get(&id) {
+            let info = error("Child process pipe is closed", "EPIPE");
+            if pipe.write { info.with_errno(-32).with_syscall("write") } else { info }
         } else if self.children.contains_key(&id) {
             error("Child process is no longer running", "ESRCH")
         } else {
