@@ -1,0 +1,26 @@
+{
+  "constructor": {
+    "line": 24,
+    "columns": [
+      36,
+      40,
+      49
+    ]
+  },
+  "match": {
+    "line": 29,
+    "columns": [
+      36,
+      40,
+      49
+    ]
+  },
+  "scan": {
+    "line": 9,
+    "columns": [
+      52,
+      56,
+      65
+    ]
+  }
+}

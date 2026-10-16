@@ -2,15 +2,24 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$root/env.sh"
-scratch="$(mktemp -d /work/tmp/bun-wasm-builtins-test-XXXXXX)"
-trap 'rm -rf "$scratch"' EXIT INT TERM
+if [[ $# == 2 && $1 == --prepare-only ]]; then
+  scratch="$2"
+  mkdir -p "$scratch"
+elif [[ $# == 0 ]]; then
+  scratch="$(mktemp -d /work/tmp/bun-wasm-builtins-test-XXXXXX)"
+  trap 'rm -rf "$scratch"' EXIT INT TERM
+else
+  echo "Usage: $0 [--prepare-only <directory>]" >&2
+  exit 1
+fi
 cp "$root/tests/builtins/loader.js" "$scratch/loader.js"
 cp "$root/tests/builtins/intrinsic-globals.js" "$scratch/intrinsic-globals.js"
 printf 'import "./loader.js";\nimport "./intrinsic-globals.js";\n' > "$scratch/index.js"
 cp "$root/crates/bunwasm-runtime/src/js/bun_builtins.js" "$scratch/runtime.js"
-cp "$root/crates/bunwasm-runtime/src/js/bun_builtin_globals.js" "$scratch/globals.js"
+node "$root/scripts/transpile-runtime.ts" "$root/crates/bunwasm-runtime/src/js/bun_builtin_globals.ts" "$scratch/globals.js"
 cp "$root/crates/bunwasm-runtime/generated/builtins/"*.js "$scratch/"
 cp "$root/crates/bunwasm-runtime/generated/builtins/catalog.json" "$scratch/catalog.json"
+if [[ $# == 2 ]]; then exit 0; fi
 for engine in quickjs jsc browser; do
   case "$engine" in
     quickjs) wasm="$root/dist/bun.wasm" ;;

@@ -26,9 +26,14 @@ JSC internals. The engine sits behind the runtime crate so it can be swapped lat
 `source env.sh` before anything. Toolchains live on /work:
 rustup/cargo in /work/cache/{rustup,cargo}; wasi-sdk, wasmtime, binaryen, wasm-tools, cmake,
 ninja in /work/cache/wasm-tools. Cargo target dir: /work/tmp/bun-wasm-target.
+Node.js 24+ strips runtime TypeScript on the host without printing or downlevelling code.
 The machine has ~9 GB free RAM: use `cargo build -j 12` or less for big builds.
 
 ## Rules
+
+- New JavaScript in the runtime and hosts is TypeScript. Rust for native work (fs, sockets,
+  crypto, compression, parsing). Prefer Bun's own src/js modules through the builtin loader over
+  writing our own.
 
 - Every new or changed upstream patch, copied file, or adapted implementation gets a classified
   overview row and section in `docs/bun-patches.md` in the same PR. This covers Bun, Node, WebKit,
