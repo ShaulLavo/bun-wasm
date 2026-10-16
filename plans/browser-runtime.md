@@ -143,8 +143,9 @@ sections 7 and 8) maps its `ProcessHost` trait onto this layer. The process laye
 A new `runtime/` directory in bun-wasm: a TypeScript package (`@bun-wasm/runtime`) with one entry
 per layer (`core`, `fs`, `net`, `proc`, `term`) so a bundler includes only what a page imports,
 and `proc` loaded on the first spawn. A guest's `spawn` import can't await an `import()`, so the
-guest worker keeps a stub of about 1 KiB: it reserves a pid, takes the inherited descriptor
-references and returns at once, and the supervisor loads proc and starts the process
+guest worker keeps a stub of about 1 KiB gzipped, including identity and atomic terminal-result
+primitives: it reserves a pid, takes the inherited descriptor references and returns at once,
+and the supervisor loads proc and starts the process
 asynchronously. A start failure shows up through `wait` (127 for a missing program, 126 for one
 that can't run) and as a child-exit event in `poll`. A synchronous caller such as Bun's
 `spawnSync` polls afterwards; the shell never blocks on a first spawn. The builds (`web/build.ts`,

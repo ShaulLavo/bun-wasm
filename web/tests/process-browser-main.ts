@@ -172,10 +172,21 @@ try {
       equal(descendant.transport.jobId, foreground.transport.jobId, "descendant inherits foreground job");
       truth(background.transport.jobId !== foreground.transport.jobId, "background has independent job");
       truth(descendant.transport.pid !== descendant.transport.jobId, "job identity is not child pid");
+      // Register controller observations before completion can reap the orphan's record.
+      // The foreground guest loses its child-control capability when its own process exits.
+      const jobExits = Promise.all([s.broker.wait(foreground.transport.pid), s.broker.wait(descendant.transport.pid)]);
       await s.broker.killJob(foreground.transport.jobId, 2);
-      await Promise.all([exit(foreground, 130), exit(descendant, 130)]);
+      for (const result of await jobExits) {
+        equal(result.kind, "signaled", "foreground job member has a signal outcome");
+        equal(result.code, 2, "foreground job member records INT");
+        equal(result.status, 130, "controller observes foreground job member status");
+      }
+      await exit(foreground, 130);
+      equal(descendant.host.wait(descendant.handle), -1, "exited parent cannot wait through its revoked guest capability");
+      const supervisor = await s.broker.ready();
+      await until(() => supervisor.get(descendant.transport.pid) === undefined, "completed foreground descendant record reaped");
       equal(background.host.wait(background.handle), -2, "Ctrl+C leaves unrelated background child alive");
-      foreground.host.close(foreground.handle); descendant.host.close(descendant.handle);
+      foreground.host.close(foreground.handle);
       const next = s.spawn("tiny", { job: 0 }); await exit(next, 0);
       equal(background.host.wait(background.handle), -2, "background survives subsequent command completion");
       await s.broker.killJob(background.transport.jobId, 15); await exit(background, 143);
