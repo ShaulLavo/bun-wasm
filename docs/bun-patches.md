@@ -66,7 +66,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
 
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
-| [esbuild distribution and Node subprocess adapter](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution and let its guest service read stdin without blocking callbacks. |
+| [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and synchronize stdin and idle filesystem changes. |
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
@@ -781,8 +781,8 @@ The original stdin adapters in `crates/bunwasm-runtime/src/js/node_fs.js`,
 its slot and notification hooks,
 and `web/src/subprocess.js` let callback reads wait through the host I/O loop.
 The original browser filesystem adapters in `web/src/subprocess-fs.ts`,
-`web/src/subprocess.js`, and `web/src/worker.ts` exchange changes at stdin,
-stdout, and exit boundaries. Each child has separate incoming and outgoing
+`web/src/subprocess.js`, and `web/src/worker.ts` exchange changes through the
+host I/O pump as well as stdin, stdout, and exit boundaries. Each child has separate incoming and outgoing
 mailboxes and a baseline; native hosts use their shared physical filesystem.
 The synchronous path reads the WASI descriptor without Rust stdin prefetching.
 The native WASI and host interfaces share a buffer, including bytes read ahead.
@@ -795,3 +795,10 @@ files `lib/main.js`, `bin/esbuild`, `wasm_exec_node.js`, `wasm_exec.js`, and
 `lib/npm/node-platform.ts`, `npm/esbuild-wasm/bin/esbuild`, and the Go compiler runtime.
 The package owns that Go runtime revision. Our test fixtures and subprocess
 changes are original adapters, separate from those upstream files.
+
+The original builtin registry in `crates/bunwasm-runtime/src/js/builtins.js`
+rejects loading `worker_threads` because the guest engines cannot create Node
+workers. Packages can detect its absence with their ordinary `require` guard.
+The official esbuild package then uses its synchronous subprocess backend for
+`buildSync`, `transformSync`, `formatMessagesSync`, and `analyzeMetafileSync`.
+No package-specific environment override is installed.

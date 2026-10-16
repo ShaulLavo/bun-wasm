@@ -230,3 +230,8 @@ recorded-registry check above. The full upstream baseline is unchanged.
 [Framework results](app-matrix/esbuild-results.md) record the subsequent Vite,
 Astro, and SvelteKit blockers. TCP and ws review heads changed after that pinned
 integration measurement; the report does not claim to measure those later heads.
+
+The esbuild package checks cover synchronous APIs and watch edits without an
+explicit rebuild request on every engine, including Chromium and WebKit pages.
+See [the package-check instructions](../tests/esbuild/README.md) for offline
+mirror requirements and the retained official package recording.
