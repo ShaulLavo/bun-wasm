@@ -182,10 +182,10 @@ fn run(options: Options) -> Result<i32> {
         .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
     running.store(false, Ordering::Relaxed);
     let _ = ticker.join();
-    result
+    result.map(process::FinalOutcome::code)
 }
 
-fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<(String, String)>, stdio: process::Stdio, cancel: Arc<process::Cancellation>) -> Result<i32> {
+fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<(String, String)>, stdio: process::Stdio, cancel: Arc<process::Cancellation>) -> Result<process::FinalOutcome> {
     if !env.iter().any(|(k, _)| k == "BUN_WASM_STACK_KIB") {
         env.push(("BUN_WASM_STACK_KIB".into(), GUEST_STACK_KIB.into()));
     }
@@ -213,7 +213,7 @@ fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<
     store.set_epoch_deadline(1);
     let interruption = cancel.clone();
     store.epoch_deadline_callback(move |_| {
-        if interruption.signal.load(Ordering::SeqCst) != 0 { bail!("child killed"); }
+        interruption.check()?;
         Ok(UpdateDeadline::Continue(1))
     });
     let mut linker: Linker<Host> = Linker::new(&runtime.engine);
@@ -225,20 +225,73 @@ fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<
 
     let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
     let result = start.call(&mut store, ());
-    let signal = cancel.signal.load(Ordering::SeqCst);
-    if signal != 0 { return Ok(128 + signal); }
-    store.data_mut().net.flush_closed(std::time::Duration::from_secs(2));
+    let outcome = select_instance_outcome(result, &cancel);
+    if matches!(outcome, process::FinalOutcome::Exit(_)) {
+        store.data_mut().net.flush_closed(std::time::Duration::from_secs(2));
+    }
+    Ok(outcome)
+}
+
+fn select_instance_outcome(result: Result<()>, cancel: &process::Cancellation) -> process::FinalOutcome {
+    use process::FinalOutcome;
     match result {
-        Ok(()) => Ok(0),
+        Ok(()) => cancel.select(FinalOutcome::Exit(0)),
         Err(error) => match error.downcast_ref::<I32Exit>() {
-            Some(exit) => Ok(exit.0),
+            Some(exit) => cancel.select(FinalOutcome::Exit(exit.0)),
             None => {
-                // A trap (unreachable, out of bounds, stack overflow, ...):
-                // report it like a native abort (SIGABRT).
-                eprintln!("bun-wasm: bun.wasm trapped: {error:?}");
-                Ok(134)
+                // Preserve the ordinary trap status unless KILL or an interruption
+                // observed by epoch, poll, or stdio already selected signal death.
+                let outcome = cancel.select(FinalOutcome::Exit(134));
+                if matches!(outcome, FinalOutcome::Exit(_)) {
+                    eprintln!("bun-wasm: bun.wasm trapped: {error:?}");
+                }
+                outcome
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use process::{Cancellation, FinalOutcome};
+
+    #[test]
+    fn explicit_exit_143_is_not_a_requested_term() {
+        let cancel = Cancellation::default();
+        assert!(cancel.kill(15));
+        assert_eq!(select_instance_outcome(Err(I32Exit(143).into()), &cancel), FinalOutcome::Exit(143));
+        assert!(!cancel.kill(9));
+    }
+
+    #[test]
+    fn observed_term_survives_guest_error_conversion() {
+        let cancel = Cancellation::default();
+        assert!(cancel.kill(15));
+        assert!(cancel.check().is_err());
+        assert_eq!(select_instance_outcome(Err(I32Exit(1).into()), &cancel), FinalOutcome::Signal(15));
+    }
+
+    #[test]
+    fn accepted_kill_wins_before_an_explicit_exit() {
+        let cancel = Cancellation::default();
+        assert!(cancel.kill(9));
+        assert_eq!(select_instance_outcome(Err(I32Exit(143).into()), &cancel), FinalOutcome::Signal(9));
+    }
+
+    #[test]
+    fn pending_term_does_not_relabel_an_unrelated_trap() {
+        let cancel = Cancellation::default();
+        assert!(cancel.kill(15));
+        assert_eq!(select_instance_outcome(Err(anyhow::anyhow!("unreachable")), &cancel), FinalOutcome::Exit(134));
+    }
+
+    #[test]
+    fn selected_success_rejects_late_kill() {
+        let cancel = Cancellation::default();
+        assert_eq!(select_instance_outcome(Ok(()), &cancel), FinalOutcome::Exit(0));
+        assert!(!cancel.kill(9));
+        assert_eq!(cancel.select(FinalOutcome::Signal(9)), FinalOutcome::Exit(0));
     }
 }
 

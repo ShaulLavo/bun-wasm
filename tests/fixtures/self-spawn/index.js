@@ -2,6 +2,10 @@ import { spawn, spawnSync, exec, execSync, execFile, execFileSync, fork } from "
 import { promisify } from "node:util";
 import { readFileSync, mkdirSync } from "node:fs";
 
+// The harness deliberately names its adapter; native TERM is a default action, Node TERM is cooperative.
+const nodeHost = process.env.BUNWASM_TEST_HOST === "node";
+const stopSignal = nodeHost ? "SIGKILL" : "SIGTERM";
+const stopStatus = nodeHost ? 137 : 143;
 const command = [process.execPath, "-e"];
 const sync = Bun.spawnSync(command.concat(["console.log(process.env.CHILD_VALUE); console.error('error'); process.exit(7)"]), {
   env: { CHILD_VALUE: "child-env" },
@@ -31,9 +35,12 @@ console.log("execFile sync", execFileSync(process.execPath, ["-e", "console.log(
 console.log("exec", (await promisify(exec)("bun -e 'console.log(44)'" )).stdout.trim());
 console.log("execFile", (await promisify(execFile)("bun", ["-e", "console.log(45)"])).stdout.trim());
 const sleeper = Bun.spawn(command.concat(["setInterval(() => {}, 1000)"]), { stdout: "pipe", stderr: "pipe" });
-sleeper.kill("SIGTERM");
-console.log("kill", await sleeper.exited, sleeper.signalCode);
-console.log("unsupported", Bun.spawnSync(["not-a-bun-command"]).error.code);
+sleeper.kill(stopSignal);
+console.log("kill", await sleeper.exited === stopStatus, sleeper.signalCode === stopSignal);
+const unsupported = Bun.spawnSync(["not-a-bun-command"]);
+console.log("unsupported", nodeHost
+  ? unsupported.exitCode === 127 && unsupported.error === undefined && unsupported.signalCode === null
+  : unsupported.error?.code === "ENOENT");
 const forked = fork("./fork-child.js", ["fork-arg"], { silent: true });
 let forkText = "";
 forked.stdout.on("data", (chunk) => { forkText += chunk; });
@@ -42,6 +49,6 @@ console.log("fork", forkText.trim(), forked.exitCode);
 try { forked.send("hello"); } catch (error) { console.log("ipc", error.code); }
 for (const execute of [execSync, execFileSync]) {
   try { execute("not-a-bun-command"); } catch (error) {
-    console.log("exec error", error.code, error.error !== error && typeof JSON.stringify(error) === "string");
+    console.log("exec error", error.code === (nodeHost ? 127 : "ENOENT"), error.error !== error && typeof JSON.stringify(error) === "string");
   }
 }

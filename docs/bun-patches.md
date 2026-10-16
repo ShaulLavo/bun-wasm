@@ -75,7 +75,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, `web/src/engine-host.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
 
 | [`runtime/core/`, `runtime/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, memory, path, descriptor and filesystem-boundary adapters extracted into a reusable package. |
-| [`runtime/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original lazy process supervisor, generic executable registry, job control and explicit signal-action adapters. |
+| [`runtime/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry, job control, explicit signal actions and immutable final-kind query. |
 | [`runtime/fs/`, filesystem quiescence](#filesystem-quiescence) | Host feature | Original shared admission and revocation fence lets controllers stop workers only after direct filesystem operations finish. |
 | [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
@@ -100,7 +100,8 @@ Each row has one class. A file with independent changes has separate rows.
 
 Class **Host feature**, **original adapters** in `runtime/proc/`,
 `web/src/{subprocess,subprocess-broker,worker,runner,shared-fs}.ts`,
-`web/scripts/node-spawn.ts`, `crates/bunwasm-host/src/process/mod.rs`, and
+`web/scripts/node-spawn.ts`, `crates/bunwasm-host/src/{main,slots}.rs`,
+`crates/bunwasm-host/src/process/{mod,stdio}.rs`, and
 `crates/bunwasm-runtime/src/js/spawn.js`. These implement this project's process contract;
 no Bun, Node, WebKit or other upstream implementation is copied or adapted in this change.
 The process slots retain Bun host ABI version 1, slots 12–15 (`docs/host-abi.md`).
@@ -116,7 +117,13 @@ Catchable signals publish an interrupt without revoking capabilities; the guest 
 reports a default action, or handles the signal and keeps its own status. SIGKILL immediately
 records 137 and revokes before physical termination. A shared atomic terminal-result primitive
 arbitrates guest completion, startup failures and SIGKILL, preserving the winning status and
-whether it came from an ordinary exit or a signal. Filesystem revocation no longer claims
+whether it came from an ordinary exit or a signal. The native Wasmtime adapter also
+retains an immutable typed outcome: catchable signals select signal death only at an
+observing checkpoint, while SIGKILL selects immediately. The original slot-14 metadata
+selector `CHILD_FINAL_SIGNAL = 3` exposes the completed signal kind on every host without
+changing slots 12–15 or pipe selectors 0–2. The shared Bun facade reads that selected kind
+rather than guessing from status 143 or a prior kill request. These are original host
+protocol extensions, not copied upstream implementations. Filesystem revocation no longer claims
 that `Worker.terminate()` proves death: an original admission/critical-section guard in
 `runtime/fs/{protocol,client,shared,service}.ts` proves host operations quiescent before lock
 reaping and physical termination; an ordinary guest exit acknowledgement also proves quiescence.

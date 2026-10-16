@@ -7,10 +7,17 @@ const closedOutput = readFileSync(new URL("../../tests/fixtures/pipe-closed-chil
 const orderedOutput = readFileSync(new URL("../../tests/fixtures/pipe-write-order/index.ts", import.meta.url), "utf8");
 const orderedChild = readFileSync(new URL("../../tests/fixtures/pipe-write-order/child.ts", import.meta.url), "utf8");
 const stdinRace = readFileSync(new URL("../../tests/fixtures/pipe-stdin-race/index.ts", import.meta.url), "utf8");
+const executableAliases = ["bun", "/bun", "/usr/local/bin/bun", "node", "/node", "/usr/local/bin/node"];
 const apiProgram = `
 import { spawnSync, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 const cmd = code => [process.execPath, "-e", code];
+for (const alias of ${JSON.stringify(executableAliases)}) {
+  const child = Bun.spawnSync([alias, "-e", "console.log('alias-ready')"]);
+  console.log("api alias", alias, child.exitCode, JSON.stringify(child.signalCode), JSON.stringify(child.error ?? null), child.stdout.toString().trim());
+}
+const missing = Bun.spawnSync(["bun-wasm-command-does-not-exist"]);
+console.log("api unknown", missing.exitCode, JSON.stringify(missing.signalCode), JSON.stringify(missing.error ?? null), missing.success);
 const sync = Bun.spawnSync(cmd("console.log(process.env.VALUE); console.error('err')"), { env: { VALUE: "fresh" } });
 console.log("api sync", sync.exitCode, sync.stdout.toString().trim(), sync.stderr.toString().trim());
 const input = Bun.spawn(cmd("console.log((await Bun.stdin.text()).length)"), { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
@@ -38,9 +45,31 @@ if (cycle.exitCode !== 0) console.error("api cycle error", cycle.stderr.toString
 console.log("api exec", execSync("bun -e 'console.log(42)'", { encoding: "utf8" }).trim());
 const timeout = spawnSync("bun", ["-e", "while(true){}"], { timeout: 100, killSignal: "SIGKILL" });
 console.log("api timeout", timeout.signal, timeout.error.code);
+for (const code of [23, 143]) {
+  // Wait for a live guest blocked on stdin, request TERM, then let it choose its own exit.
+  const child = Bun.spawn(cmd('console.log("term-ready"); await Bun.stdin.text(); process.exit(' + code + ')'), { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const reader = child.stdout.getReader();
+  const first = await reader.read();
+  if (first.done || new TextDecoder().decode(first.value).trim() !== "term-ready") throw new Error("TERM child was not ready");
+  reader.releaseLock();
+  child.kill("SIGTERM");
+  child.stdin.end();
+  const exited = await child.exited;
+  await new Response(child.stdout).text();
+  console.log("api term", code, exited, child.exitCode, JSON.stringify(child.signalCode), child.killed);
+  // No signal listener: a finite awaited child completes after the synchronous timeout request.
+  const timed = Bun.spawnSync(cmd("await Bun.sleep(250); process.exit(" + code + ")"), { timeout: 1, killSignal: "SIGTERM" });
+  console.log("api term timeout", code, timed.exitCode, JSON.stringify(timed.signalCode), timed.exitedDueToTimeout, timed.success, JSON.stringify(timed.error ?? null));
+}
 console.log("api cwd", Bun.spawnSync(cmd("0"), { cwd: "/missing-child-cwd" }).error.code);
 `;
-const apiExpected = ["api nodefsstdin 0 stdin", "api sync 0 fresh err", "api input 0 1200000", "api files 0 child shared", "api nested 0 0 99", "api exec 42", "api cycle 0 ab", "api timeout SIGKILL ETIMEDOUT", "api cwd ENOENT", "api live child", "api ack 0"];
+const apiExpected = [
+  "api nodefsstdin 0 stdin", "api sync 0 fresh err", "api input 0 1200000", "api files 0 child shared",
+  "api nested 0 0 99", "api exec 42", "api cycle 0 ab", "api timeout SIGKILL ETIMEDOUT", "api cwd ENOENT",
+  "api live child", "api ack 0", "api unknown 127 null null false",
+  "api term 23 23 23 null true", "api term 143 143 143 null true",
+  "api term timeout 23 23 null true false null", "api term timeout 143 143 null true false null",
+].concat(executableAliases.map(alias => `api alias ${alias} 0 null null alias-ready`));
 process.env.BUN_WASM_TEST_PORT ??= "4183";
 const s = session("bun-wasm-self-spawn-browser-");
 const deadline = setTimeout(() => { console.error("subprocess browser gate timed out"); void s.cleanup().finally(() => process.exit(1)); }, 240_000);

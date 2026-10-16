@@ -1,11 +1,13 @@
 large output 0 1200000 1200000
 large input 0 1200000
-cpu timeout null SIGTERM ETIMEDOUT
+cpu timeout null true ETIMEDOUT
 blocked input kill 137 SIGKILL
 missing cwd ENOENT
 nested 0 0 99
-clock timeout true SIGTERM
+clock timeout true true true
 child limit EAGAIN
-children stopped 143,143,143,143
+children stopped true true
 inherit 0 42
 late kill 0 null
+own exit 23 null
+own exit 143 null

@@ -47,6 +47,8 @@ export interface SubprocessOptions {
   output(fd: number, bytes: Uint8Array): void | boolean;
 }
 export const MAX_CHILDREN: number;
+/** Slot 14 selector: completed ordinary exit = 0, selected signal = signal number, pending = -2. */
+export const CHILD_FINAL_SIGNAL = 3;
 export function createProcessBudget(): SharedArrayBuffer;
 export class SharedPipe {
   constructor(buffer?: SharedArrayBuffer, budget?: SharedArrayBuffer);

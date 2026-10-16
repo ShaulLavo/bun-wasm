@@ -91,7 +91,7 @@ reads as `UNSUPPORTED`. The playground and sandbox use this by default (`web/src
 | 11   | `peer_addr`  | `(handle, buf_ptr, buf_cap) -> len`                              |
 | 12   | `spawn`      | `(meta_ptr, meta_len) -> child`                                  |
 | 13   | `child_wait` | `(child) -> exit_code`                                          |
-| 14   | `child_pipe` | `(child, fd) -> pipe`                                            |
+| 14   | `child_pipe` | `(child, selector) -> pipe_or_final_signal`                       |
 | 15   | `child_kill` | `(child, signal) -> i32`                                         |
 | 16   | `shutdown` | `(connection) -> i32`                                            |
 | 17   | `local_addr` | `(handle, buf_ptr, buf_cap) -> len`                              |
@@ -232,6 +232,18 @@ closing an output read end discards remaining output and makes child writes fail
 Reads return `AGAIN` until bytes or EOF arrive. Pipe buffers are bounded to 1 MiB
 on the native launcher and apply backpressure.
 
+Slot 14 also reserves the named selector `CHILD_FINAL_SIGNAL = 3`:
+`child_pipe(child, 3)` returns `AGAIN` until completion is published, then 0 for
+an ordinary exit or the signal number for a selected signal death. An unknown
+child or another selector returns `BADF`. This is a metadata query, not a pipe
+handle, and does not allocate or close a descriptor. Slots 12–15 retain their
+numbers and integer signatures; selectors 0–2 retain their existing meaning.
+The guest reads the final signal after `child_wait` completes and before closing
+the child. Both queries remain repeatable. Status 143 alone never implies SIGTERM:
+ordinary `process.exit(143)` reports `exitCode: 143, signalCode: null`, whereas
+selected SIGTERM reports `exitCode: null, signalCode: "SIGTERM"`. Signal requests
+and timeout flags do not classify the final outcome.
+
 `child_wait` is nonblocking and repeatable: `AGAIN` while running, then the exit
 code. Waiting does not close the child or its pipes. Drain and close the pipes,
 then `close(child)` to release the handle. Closing a running child kills it.
@@ -254,6 +266,14 @@ CPU-bound children; cancellation also wakes blocked WASI stdio and host polling.
 Parent teardown kills and joins its remaining children, including descendants.
 Handles are virtual identifiers, not host process IDs. Guest timer waits and
 `Bun.sleepSync` use host polling so cancellation also interrupts long sleeps.
+A native catchable request selects signal death only when an epoch, poll, or stdio
+checkpoint observes it; an unobserved request cannot relabel an ordinary exit.
+SIGKILL selects signal 9 immediately if no outcome has already won. Selection is
+immutable and precedes pipe closure and completion publication. A signal request
+against a selected but not yet observed native child is a successful no-op, even
+while publication is pending. Once a successful wait or final-signal query observes
+completion, further native signal requests return `BADF`; the completion metadata
+remains available for repeatable queries until `close(child)`.
 
 Browser and Node hosts implement the same process slots. The browser uses a page
 broker to start child workers while their parent is blocked in `spawnSync`. The broker lazily

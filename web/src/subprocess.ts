@@ -66,6 +66,8 @@ const PIPE_SIZE = 1 << 20;
 const FIRST_PROCESS = 0x60000000;
 const FIRST_HANDLE = 0x70000000;
 export const MAX_CHILDREN = 4;
+// Slot 14 keeps fd 0..2 for pipes; selector 3 queries the immutable final signal kind.
+export const CHILD_FINAL_SIGNAL = 3;
 
 export function createProcessBudget() {
   return new SharedArrayBuffer(8 + MAX_CHILDREN * 4);
@@ -365,8 +367,15 @@ export class SubprocessHost {
     this.notify();
   }
   pipe(id: number, fd: number) {
+    if (fd === CHILD_FINAL_SIGNAL && !this.parentActive(new Int32Array(this.budget))) return this.fail("child outcome: process is no longer active", "ESRCH");
     const child = this.children.get(id);
-    return child && fd >= 0 && fd <= 2 ? (child.handles[fd] ?? BADF) : BADF;
+    if (!child) return BADF;
+    if (fd === CHILD_FINAL_SIGNAL) {
+      if (!Atomics.load(new Int32Array(child.transport.control), 0)) return AGAIN;
+      const result = readOutcome(outcomeWord(child.transport.outcome))!;
+      return result.kind === "signaled" ? result.code : 0;
+    }
+    return fd >= 0 && fd <= 2 ? (child.handles[fd] ?? BADF) : BADF;
   }
   read(handle: number, cap = 65536) {
     if (handle === 0) {

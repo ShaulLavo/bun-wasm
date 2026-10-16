@@ -98,7 +98,7 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
     vec![
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, timeout: i32| -> Result<i32> {
             let host = caller.data_mut();
-            if host.cancel.signal.load(std::sync::atomic::Ordering::SeqCst) != 0 { bail!("child killed"); }
+            host.cancel.check()?;
             let woke = host.net.poll(if timeout < 0 { 25 } else { timeout.min(25) });
             if timeout != 0 || woke != 0 {
                 trace(host, format_args!("poll({timeout}) -> {woke}"));

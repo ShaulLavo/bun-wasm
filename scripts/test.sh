@@ -201,11 +201,11 @@ for name in "${names[@]}"; do
     gc_flags=()
     [[ ! -f "$src/expose-gc" ]] || gc_flags=(--expose-gc)
     (cd "$work" && timeout 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" "${net_flag[@]}" --dir "$work::/" \
-      --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env "TEST_SERVER=${TEST_SERVER:-}" -- \
+      --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   elif [[ $is_host == 1 ]]; then
     (cd "$work" && BUN_WASM="$wasm" timeout 60 "$launcher" --dir "$work::/" --env PWD=/ --env HOME=/ \
-      --env BUNWASM_TEST=1 --env "TEST_SERVER=$TEST_SERVER" \
+      --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=$TEST_SERVER" \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   else
     (cd "$work" && timeout 60 wasmtime run --dir "$work::/" --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 \

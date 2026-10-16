@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { SubprocessHost, childTransport, type ChildTransport } from "../src/subprocess.ts";
+import { CHILD_FINAL_SIGNAL, SubprocessHost, childTransport, type ChildTransport } from "../src/subprocess.ts";
 import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
 
 function fixture() {
@@ -303,5 +303,43 @@ test("Bun process id exhaustion cannot overlap pipe handles or leak a capacity s
     expect(host.spawn(command())).toBe(-1);
     expect(launched).toHaveLength(0);
     expect(Array.from(new Int32Array(host.budget).subarray(2))).toEqual([0, 0, 0, 0]);
+  } finally { host.dispose(); }
+});
+
+for (const [code, signal] of [[143, undefined], [143, 15], [137, undefined], [137, 9]] as const) {
+  test(`slot14 final signal distinguishes own exit ${code} from signal ${signal ?? "none"}`, () => {
+    const { host, launched } = fixture();
+    try {
+      const pid = host.spawn(command());
+      const transport = launched[0]!;
+      const pipe = host.pipe(pid, 1);
+      expect(pipe).toBeGreaterThan(0);
+      expect(host.pipe(pid, CHILD_FINAL_SIGNAL)).toBe(-2);
+      claimOutcome(outcomeWord(transport.outcome), signal === undefined
+        ? { kind: "exited", code }
+        : { kind: "signaled", code: signal });
+      // A selected result is not a completed result until descriptors have been closed.
+      expect(host.pipe(pid, CHILD_FINAL_SIGNAL)).toBe(-2);
+      childTransport(transport).finish(code, signal);
+      expect(host.wait(pid)).toBe(code);
+      expect(host.pipe(pid, CHILD_FINAL_SIGNAL)).toBe(signal ?? 0);
+      expect(host.slots().child_pipe!(pid, CHILD_FINAL_SIGNAL)).toBe(signal ?? 0);
+      expect(host.engineNet().natives!.hostChildPipe!(pid, CHILD_FINAL_SIGNAL)).toBe(signal ?? 0);
+      expect(host.pipe(pid, 1)).toBe(pipe);
+      expect(host.pipe(pid, 4)).toBe(-3);
+      expect(host.pipe(pid + 1, CHILD_FINAL_SIGNAL)).toBe(-3);
+    } finally { host.dispose(); }
+  });
+}
+
+test("a detached root cannot query child terminal metadata", () => {
+  const { host, launched } = fixture();
+  const pid = host.spawn(command());
+  try {
+    childTransport(launched[0]!).finish(143);
+    host.detach();
+    expect(host.pipe(pid, CHILD_FINAL_SIGNAL)).toBe(-1);
+    expect(JSON.parse(host.lastError!).code).toBe("ESRCH");
+    expect(readOutcome(outcomeWord(launched[0]!.outcome))).toEqual({ kind: "exited", code: 143, status: 143 });
   } finally { host.dispose(); }
 });

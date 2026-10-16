@@ -2,10 +2,10 @@ mod pipe;
 mod stdio;
 mod stdin;
 
-pub use stdio::{Cancellation, Stdio};
+pub use stdio::{Cancellation, FinalOutcome, Stdio};
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::task::{Context, Waker};
@@ -18,6 +18,8 @@ use pipe::Pipe;
 use stdin::SharedInput;
 
 pub const FIRST_HANDLE: i32 = 0x4000_0000;
+/// Metadata selector on the existing child_pipe slot; fd 0..=2 remain pipes.
+pub const CHILD_FINAL_SIGNAL: i32 = 3;
 const MAX_CHILDREN: usize = 4;
 const BUN_EXECUTABLE_ALIASES: [&str; 6] = [
     "bun",
@@ -62,7 +64,8 @@ pub struct Request {
 
 struct Child {
     cancel: Arc<Cancellation>,
-    result: Arc<Mutex<Option<i32>>>,
+    result: Arc<Mutex<Option<FinalOutcome>>>,
+    reaped: AtomicBool,
     thread: Option<JoinHandle<()>>,
     pipes: [i32; 3],
 }
@@ -213,29 +216,23 @@ impl Processes {
             .name("bun-wasm-child".into())
             .stack_size(crate::THREAD_STACK)
             .spawn(move || {
-                let code = crate::run_instance(
+                let outcome = crate::run_instance(
                     runtime.clone(),
                     request.argv,
                     request.env.into_iter().collect(),
                     Stdio { stdin, stdout, stderr },
                     cancellation.clone(),
-                );
-                let signal = cancellation.signal.load(Ordering::SeqCst);
-                let code = if signal != 0 {
-                    128 + signal
-                } else {
-                    code.unwrap_or_else(|e| {
-                        eprintln!("bun-wasm child: {e:#}");
-                        1
-                    })
-                };
+                ).unwrap_or_else(|e| {
+                    eprintln!("bun-wasm child: {e:#}");
+                    cancellation.select(FinalOutcome::Exit(1))
+                });
                 if let Some(pipe) = input {
                     pipe.close_reader();
                 }
                 for pipe in outputs {
                     pipe.close_writer();
                 }
-                *completed.lock().unwrap() = Some(code);
+                *completed.lock().unwrap() = Some(outcome);
                 runtime.active.fetch_sub(1, Ordering::SeqCst);
                 notify.bump();
             });
@@ -252,6 +249,7 @@ impl Processes {
             Child {
                 cancel,
                 result,
+                reaped: AtomicBool::new(false),
                 thread: Some(thread),
                 pipes,
             },
@@ -271,21 +269,28 @@ impl Processes {
         let Some(child) = self.children.get_mut(&id) else {
             return BADF;
         };
-        let Some(code) = *child.result.lock().unwrap() else {
+        let Some(outcome) = *child.result.lock().unwrap() else {
             return AGAIN;
         };
         if let Some(thread) = child.thread.take() {
             let _ = thread.join();
         }
-        code
+        child.reaped.store(true, Ordering::SeqCst);
+        outcome.code()
     }
 
-    pub fn child_pipe(&self, id: i32, fd: i32) -> i32 {
-        self.children
-            .get(&id)
-            .and_then(|c| c.pipes.get(fd as usize))
-            .copied()
-            .unwrap_or(BADF)
+    pub fn child_pipe(&self, id: i32, selector: i32) -> i32 {
+        let Some(child) = self.children.get(&id) else {
+            return BADF;
+        };
+        if selector == CHILD_FINAL_SIGNAL {
+            let Some(outcome) = *child.result.lock().unwrap() else {
+                return AGAIN;
+            };
+            child.reaped.store(true, Ordering::SeqCst);
+            return outcome.signal();
+        }
+        child.pipes.get(selector as usize).copied().unwrap_or(BADF)
     }
 
     pub fn kill(&mut self, id: i32, signal: i32) -> i32 {
@@ -295,12 +300,12 @@ impl Processes {
         let Some(child) = self.children.get(&id) else {
             return BADF;
         };
-        if child.result.lock().unwrap().is_some() {
+        if child.reaped.load(Ordering::SeqCst) {
             return BADF;
         }
-        if signal != 0 {
-            child.cancel.kill(signal);
-        }
+        // A selected child is a zombie until its final result is consumed.
+        // A late request succeeds without changing that immutable winner.
+        child.cancel.kill(signal);
         self.notify.bump();
         0
     }
@@ -433,6 +438,75 @@ mod tests {
         assert_eq!(processes.wait(child), 0, "{command}");
         assert_eq!(processes.close(child), 0, "{command}");
         assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn final_signal_selector_waits_for_publication_and_preserves_pipe_selectors() {
+        let mut processes = processes();
+        let (stdin_id, input) = processes.pipe(true);
+        let (stdout_id, output) = processes.pipe(false);
+        let pipes = [stdin_id, stdout_id, 0];
+        let cancel = Arc::new(Cancellation::default());
+        let result = Arc::new(Mutex::new(None));
+        let id = processes.next();
+        processes.children.insert(id, Child {
+            cancel: cancel.clone(), result: result.clone(), reaped: AtomicBool::new(false), thread: None, pipes,
+        });
+        for (fd, pipe) in pipes.into_iter().enumerate() {
+            assert_eq!(processes.child_pipe(id, fd as i32), pipe);
+        }
+        assert_eq!(processes.child_pipe(id, -1), BADF);
+        assert_eq!(processes.child_pipe(id, 4), BADF);
+        assert_eq!(processes.child_pipe(id + 1, CHILD_FINAL_SIGNAL), BADF);
+        assert_eq!(processes.kill(id + 1, 15), BADF);
+        assert_eq!(processes.wait(id), AGAIN);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
+
+        assert!(cancel.kill(15));
+        let outcome = cancel.select(FinalOutcome::Exit(143));
+        for signal in [15, 9] {
+            assert_eq!(processes.kill(id, signal), 0);
+            for _ in 0..3 {
+                assert_eq!(processes.wait(id), AGAIN);
+                assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
+            }
+            assert_eq!(cancel.select(FinalOutcome::Signal(signal)), outcome);
+        }
+        input.close_reader();
+        output.close_writer();
+        *result.lock().unwrap() = Some(outcome);
+        assert_eq!(processes.kill(id, 15), 0);
+        assert_eq!(processes.kill(id, 9), 0);
+        assert_eq!(cancel.select(FinalOutcome::Signal(9)), outcome);
+        assert_eq!(processes.write(stdin_id, b"late"), -1);
+        assert_eq!(processes.read(stdout_id, &mut [0]), 0);
+        assert_eq!(processes.wait(id), 143);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 0);
+        assert_eq!(processes.kill(id, 15), BADF);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 0);
+        assert_eq!(processes.close(id), 0);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), BADF);
+    }
+
+    #[test]
+    fn final_signal_selector_reports_observed_term_not_numeric_exit_status() {
+        let mut processes = processes();
+        let cancel = Arc::new(Cancellation::default());
+        let result = Arc::new(Mutex::new(None));
+        let id = processes.next();
+        processes.children.insert(id, Child {
+            cancel: cancel.clone(), result: result.clone(), reaped: AtomicBool::new(false), thread: None, pipes: [0; 3],
+        });
+        assert_eq!(processes.kill(id, 15), 0);
+        assert!(cancel.check().is_err());
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
+        *result.lock().unwrap() = Some(cancel.select(FinalOutcome::Exit(1)));
+        assert_eq!(processes.kill(id, 9), 0);
+        // Reading published final metadata also reaps, without changing the result.
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 15);
+        assert_eq!(processes.kill(id, 9), BADF);
+        assert_eq!(processes.wait(id), 143);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 15);
     }
 
     #[test]
