@@ -143,6 +143,9 @@ geometric file growth and snapshot compaction remain local MemFS implementation 
 reserved socket slot bridge stays configured by `web/`, not imported into the generic core.
 Unbundled Node host adapters import the extracted JavaScript memory helper by repository-relative
 path so headless CLI workflows remain dependency-free.
+The original browser-build adapter resolves declared exports through the consuming app.
+It returns equivalent public installed-package paths so encoded isolated-cache directory
+names do not trigger Bun's double-dot plugin-path rejection. No upstream code is copied.
 
 ## Portable semver host functions
 

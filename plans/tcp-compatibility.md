@@ -88,6 +88,26 @@ isolated host ports while keeping external preview URLs correct. First force
 a collision in an isolated fixture, then verify both helpers and their teardown.
 Do not stop another session or mask the diagnostic in fixture expectations.
 
+## Same-size HMR update timeout
+
+Status: Approved for bounded reproduction if the timeout recurs.
+
+The main-integration gate at code commit 20f9684 timed out once in
+`web/tests/browser-net.mjs:259` after replacing the HTML app text with an
+identically sized string. Both HMR sockets connected, but neither preview
+observed the update within 15 seconds. No source or artifact change was made;
+the next complete web run passed that check on all six browser/engine pairs.
+The failed and passing runs are retained in
+`/work/reports/bun-wasm-tcp-main-2026-10-16/tcp-{6,7}/web.log`.
+
+Reproduce after building the web assets with `ENGINES=browser node
+web/tests/browser-net.mjs chromium` from the repository root, through the
+browser heavy slot. Keep repeats bounded to five and retain WebSocket frame
+and file-change observations if it fails. Inspect the same-size edit in
+`checkHtmlEntry`, the helper's changeFile ring delivery and the worker's file
+update callback. No cause is established; preserve the 15-second assertion
+and the file-size control rather than increasing the timeout.
+
 ## Framework commands after ws import
 
 The complete [offline replay](../docs/app-matrix/ws-results.md) uses integration
