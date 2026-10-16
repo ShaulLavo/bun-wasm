@@ -73,6 +73,7 @@
     return out;
   }
   function use(key,a,usage) {
+    if (!allowed[a.name].includes(usage)) fail('NotSupportedError','Algorithm does not support this operation');
     const r = record(key);
     if (r.algorithm.name!==a.name || !r.usages.includes(usage)) fail('InvalidAccessError','Key does not support this operation');
     return r;
@@ -132,6 +133,9 @@
     for (const field of ['k','n','e','d','p','q','dp','dq','qi','x','y']) {
       if (k[field]!==undefined && (typeof k[field]!=='string' || !/^[A-Za-z0-9_-]*$/.test(k[field]) || k[field].length%4===1)) fail('DataError','Invalid JWK octets');
     }
+    const fields = kty==='oct' ? ['k'] : kty==='RSA' ? ['n','e'].concat(k.d!==undefined?['d','p','q','dp','dq','qi']:[]) : (kty==='EC'?['x','y']:['x']).concat(k.d!==undefined?['d']:[]);
+    if (fields.some(field => typeof k[field]!=='string')) fail('DataError','Missing JWK key material');
+    if (k.oth!==undefined) fail('NotSupportedError','Multi-prime RSA keys are not supported');
     if (k.kty!==kty || (kty==='EC' && k.crv!==a.namedCurve)) fail('DataError','JWK key type or curve does not match');
     if (k.ext!==undefined && !k.ext && extractable) fail('DataError','JWK key is not extractable');
     if (k.key_ops!==undefined && (!Array.isArray(k.key_ops) || new Set(k.key_ops).size!==k.key_ops.length || usages.some(u => !k.key_ops.includes(u)))) fail('DataError','Invalid JWK key_ops');
