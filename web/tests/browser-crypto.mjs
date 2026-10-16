@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {cpSync, readFileSync, writeFileSync} from "node:fs";
+import {cpSync, readdirSync, readFileSync, writeFileSync} from "node:fs";
 import {join} from "node:path";
 import {playwright, session, ready, run, writeFile} from "./playground.mjs";
 import {firstVisit} from "./first-visit.mjs";
@@ -27,6 +27,16 @@ try {
       assert.equal(result.code, 0, result.output);
       assert.match(result.output, /native provider and CryptoKeys preserved/);
       console.log(`PASS ${name} original SubtleCrypto and native CryptoKeys`);
+      for (const fixture of ["crypto-vectors", "crypto-hmac-required-hash", "crypto-sha1-jwk", "crypto-p384-sha1"]) {
+        const folder = new URL(`../../tests/fixtures/${fixture}/`, import.meta.url);
+        for (const file of readdirSync(folder).filter(file => /\.(js|json)$/.test(file)))
+          await writeFile(page, `/home/user/${fixture}/${file}`, readFileSync(new URL(file, folder), "utf8"));
+        const result = await run(page, `bun run ${fixture}/index.js`);
+        assert.equal(result.code, 0, result.output);
+        const expected = readFileSync(new URL("expected.txt", folder), "utf8").trim().split("\n");
+        for (const line of expected) assert(result.output.includes(line), result.output);
+        console.log(`PASS ${name} ${fixture}`);
+      }
     } finally {
       await visit.close();
       await browser.close();
