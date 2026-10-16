@@ -31,6 +31,7 @@ mod resolve;
 mod semver;
 mod sourcemap;
 mod sqlite;
+mod wasm;
 pub mod transpiler;
 
 #[cfg(feature = "engine-quickjs")]

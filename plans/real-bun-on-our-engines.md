@@ -40,6 +40,10 @@ with its reason, and the app matrix lists only failures with the same causes.
 
 ## Compatibility follow-up after Web Streams
 
+The following missing-global observations predate PR #8, which adds a limited
+WebAssembly API. Preserve them as historical evidence. The Next lane owns rerunning
+the combined branch to identify the remaining llhttp requirements.
+
 Next 15.5.6 now loads past `TextEncoderStream` on QuickJS and JSC when the Streams
 change is combined with PR #9. Its bundled undici requires a WebAssembly llhttp
 parser, but the embedded engines have no `WebAssembly` global. The failure is in
