@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { browserBuildConfig } from "../../scripts/browser-build";
 
 test("shared sources build through the consumer export when its package cache contains dots", async () => {
-  const scratch = mkdtempSync("/work/tmp/bun-wasm-runtime-build-");
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-runtime-build-"));
   try {
     const consumer = join(scratch, "consumer");
     const cached = join(scratch, "cache", "runtime..copy");
