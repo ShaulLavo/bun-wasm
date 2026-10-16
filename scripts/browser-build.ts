@@ -5,8 +5,6 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
   const main = entrypoints[0];
   if (!main) throw new Error("Browser build needs the consuming application's main entry");
   const consumer = dirname(main);
-  const runtimeCore = Bun.resolveSync("@bun-wasm/runtime/core", consumer);
-  const runtimeMemoryViews = Bun.resolveSync("@bun-wasm/runtime/core/memory-views", consumer);
   return {
     entrypoints, outdir, target: "browser", format: "esm",
     splitting: options.splitting ?? true,
@@ -17,8 +15,8 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
       setup(build) {
         // Shared web sources belong to the app being built. A sandbox-only install
         // supplies this dependency; Bun's package resolver still enforces exports.
-        build.onResolve({ filter: /^@bun-wasm\/runtime\/core(?:\/memory-views)?$/ }, ({ path }) => ({
-          path: path.endsWith("/memory-views") ? runtimeMemoryViews : runtimeCore,
+        build.onResolve({ filter: /^@bun-wasm\/runtime(?:\/|$)/ }, ({ path }) => ({
+          path: Bun.resolveSync(path, consumer),
         }));
       },
     }],
