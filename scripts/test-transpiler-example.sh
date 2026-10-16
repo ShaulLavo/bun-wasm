@@ -5,6 +5,7 @@ source "$root/env.sh"
 cd "$root"
 scratch="$(mktemp -d /work/tmp/bun-wasm-transpiler-example-XXXXXX)"
 trap 'rm -rf "$scratch"' EXIT
+trap 'exit 130' INT TERM
 cargo build -j "${JOBS:-8}" --release --target wasm32-wasip1 -p bunwasm-transpiler --examples
 example="$CARGO_TARGET_DIR/wasm32-wasip1/release/examples/transpile.wasm"
 printf 'const answer: number = 42;\nconsole.log(answer);\n' > "$scratch/input.ts"
