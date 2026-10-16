@@ -157,13 +157,22 @@ def loopback_command(command):
     return ["unshare", "--user", "--map-root-user", "--net", "sh", "-c", 'ip link set lo up && exec "$@"', "bun-suite"] + command
 
 
+def is_assertion_script(opts, source, path):
+    if not opts.node_parallel or not path.startswith("js/node/test/parallel/"):
+        return False
+    text = source.read_text()
+    return not re.search(r"(?:require\(\s*['\"]node:test['\"]|from\s*['\"]node:test['\"])", text)
+
+
 def command(opts, wasm, work, preloads, path):
     dirs = ["--dir", f"{work}/bun::/bun", "--dir", f"{work}/tmp::/tmp"]
     env = {"PWD": "/bun/test", "HOME": "/tmp", "TMPDIR": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin", "CI": "1", "AGENT": "0", "NO_COLOR": "1", "BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING": "1", "BUNWASM_TEST": "1"}
     flags = [part for key, value in env.items() for part in ["--env", f"{key}={value}"]]
-    tests = ["test", "--timeout", str(opts.test_timeout)]
-    tests += [part for preload in preloads for part in ["--preload", "/bun/test/" + preload.removeprefix("./")]]
-    tests += ["/bun/test/" + path]
+    assertion_script = is_assertion_script(opts, work / "bun/test" / path, path)
+    tests = ["run", "/bun/test/" + path] if assertion_script else ["test", "--timeout", str(opts.test_timeout)]
+    if not assertion_script:
+        tests += [part for preload in preloads for part in ["--preload", "/bun/test/" + preload.removeprefix("./")]]
+        tests += ["/bun/test/" + path]
     if opts.engine == "browser":
         return ["node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm), "--net"] + dirs + flags + ["--"] + tests
     return [str(opts.launcher), "--wasm", str(wasm)] + dirs + flags + tests
@@ -238,8 +247,11 @@ def invoke(opts, wasm, work, preloads, path):
         log.write_text(text)
     result = parse_output(text)
     result.update(file=path, exit=proc.returncode, duration_seconds=round(time.monotonic() - started, 3), timed_out=timed_out, output_bytes=size, interrupted=STOP.is_set())
-    result["assertion_script"] = opts.node_parallel and path.startswith("js/node/test/parallel/") and sum(result["counts"].values()) == 0
-    result["fully_passing"] = proc.returncode == 0 and result["complete"] and result["counts"]["fail"] == 0 and result["counts"]["errors"] == 0 and (result["counts"]["pass"] > 0 or result["assertion_script"])
+    result["assertion_script"] = is_assertion_script(opts, work / "bun/test" / path, path)
+    result["skipped_script"] = result["assertion_script"] and bool(re.search(r"^1\.\.0 # Skipped:", text, re.M))
+    if result["skipped_script"]:
+        result["counts"]["skip"] += 1
+    result["fully_passing"] = proc.returncode == 0 and (result["complete"] or result["assertion_script"]) and not result["skipped_script"] and result["counts"]["fail"] == 0 and result["counts"]["errors"] == 0 and (result["counts"]["pass"] > 0 or result["assertion_script"])
     return result
 
 
