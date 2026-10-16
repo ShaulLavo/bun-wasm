@@ -21,6 +21,10 @@
         this.bytesWritten = 0;
         this.once("finish", () => this._drainEmptyEof());
       }
+      emit(event, ...args) {
+        if (event === "close" && args.length === 0) return super.emit(event, Boolean(this._closeHadError));
+        return super.emit(event, ...args);
+      }
       get connecting() { return this._phase === "connecting"; }
       get pending() { return this._phase === "idle" || this.connecting; }
       get readyState() {
@@ -179,6 +183,7 @@
         else this._pendingFinal = callback;
       }
       _destroy(err, callback) {
+        this._closeHadError = Boolean(err);
         const attempt = this.connecting ? this._attempt : null;
         const writeError = err || error(Error, this.pending ? "ERR_SOCKET_CLOSED_BEFORE_CONNECTION" : "ERR_STREAM_DESTROYED", this.pending ? "Socket closed before the connection was established" : "Cannot call write after a stream was destroyed");
         this._phase = "closed";
