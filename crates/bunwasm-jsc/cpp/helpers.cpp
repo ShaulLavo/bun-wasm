@@ -321,7 +321,7 @@ void bunjsc_detach_buffer(JSContextRef ctx, JSValueRef value)
 {
     JSGlobalObject* global = toJS(ctx);
     JSLockHolder lock(global->vm());
-    auto* buffer = jsCast<JSArrayBuffer*>(toJS(global, value));
+    auto* buffer = dynamicDowncast<JSArrayBuffer>(toJS(global, value));
     buffer->impl()->detach(global->vm());
 }
 

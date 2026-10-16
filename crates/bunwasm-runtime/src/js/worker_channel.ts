@@ -51,7 +51,7 @@
         if (ended && incoming.length) fail("Incomplete worker message");
         return flush() || progress;
       },
-      close() { native.hostClose(input); native.hostClose(output); ended = true; outgoing.length = 0; },
+      close() { native.hostClose(input); native.hostClose(output); ended = true; incoming = ""; outgoing.length = 0; },
       get pending() { return outgoing.length > 0; },
       get ended() { return ended; },
     };
