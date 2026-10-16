@@ -580,6 +580,10 @@ builtin module registry. The ordinary polyfill loader compiles the generated
 function on first access to `console.Console`. The global singleton keeps its
 Bun formatter; new instances use Bun's Node Console and existing Node inspector.
 `src/js/console.js` adds the lazy constructor and the global stdio properties.
+The original `src/js/bun.js` adapter now derives `Bun.enableANSIColors` from
+FORCE_COLOR, NO_COLOR, and stderr's TTY state. Bun's Console reads this flag
+when automatic color mode encounters FORCE_COLOR; the old constant false
+prevented forced colors on every engine.
 
 The generated constructor also embeds Bun's
 `src/js/internal/util/debuglog.ts` time formatter, with its default export
