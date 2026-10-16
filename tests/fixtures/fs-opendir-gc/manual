@@ -1,0 +1,1 @@
+Node --expose-gc supplies the contract control. Each wasm engine uses Bun.gc and native cursor counts. No manual cleanup masks collection failure. Shutdown descriptor cleanup is checked by tests/test-directory-descriptors.ts.

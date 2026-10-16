@@ -1115,6 +1115,7 @@
     "bun:internal-for-testing": () => ({
       isASANEnabled: () => false,
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
+      directoryCount: () => native.directoryCount(),
     }),
     "bun:test": () => internal.require("bun_test").exports,
     "bun:sqlite": () => internal.require("bun_sqlite"),
