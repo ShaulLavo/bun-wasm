@@ -11,6 +11,7 @@ serde_json = "1"
 bun_alloc = { path = "../../vendor/bun/src/bun_alloc" }
 bun_ast = { path = "../../vendor/bun/src/ast" }
 bun_bundler = { path = "../../vendor/bun/src/bundler" }
+bun_js_parser = { path = "../../vendor/bun/src/js_parser" }
 bun_js_printer = { path = "../../vendor/bun/src/js_printer" }
 bun_options_types = { path = "../../vendor/bun/src/options_types" }
 bun_sourcemap = { path = "../../vendor/bun/src/sourcemap" }

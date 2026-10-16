@@ -1,0 +1,4 @@
+capture lazy ok
+capture late formatter ok
+capture throwing formatter ok
+formatter consultation ok
