@@ -621,7 +621,7 @@
     };
   }
 
-  // --- stream           -----------------------------------------------------
+  // --- portable Node streams -----------------------------------------------------
 
   function streamModule() {
     const bundle = internal.require("node_stream_core");
@@ -716,20 +716,6 @@
 
   // --- net / http helpers that work without sockets -------------------------
 
-  function isIPv4(s) {
-    return /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(String(s));
-  }
-  function isIPv6(s) {
-    const str = String(s);
-    if (!str.includes(":")) return false;
-    try {
-      return new URL(`http://[${str}]/`).hostname.length > 2;
-    } catch {
-      return false;
-    }
-  }
-  const isIP = (s) => (isIPv4(s) ? 4 : isIPv6(s) ? 6 : 0);
-
   const STATUS_CODES = {
     100: "Continue", 101: "Switching Protocols", 102: "Processing", 103: "Early Hints", 200: "OK", 201: "Created",
     202: "Accepted", 203: "Non-Authoritative Information", 204: "No Content", 205: "Reset Content", 206: "Partial Content",
@@ -774,20 +760,6 @@
 
   // --- registry -------------------------------------------------------------
 
-  let autoSelectFamily = true;
-  let autoSelectFamilyAttemptTimeout = 250;
-  const netDefaults = {
-    getDefaultAutoSelectFamily: () => autoSelectFamily,
-    setDefaultAutoSelectFamily(value) {
-      if (typeof value !== "boolean") throw Object.assign(new TypeError("value must be a boolean"), { code: "ERR_INVALID_ARG_TYPE" });
-      autoSelectFamily = value;
-    },
-    getDefaultAutoSelectFamilyAttemptTimeout: () => autoSelectFamilyAttemptTimeout,
-    setDefaultAutoSelectFamilyAttemptTimeout(value) {
-      if (!Number.isInteger(value) || value < 1) throw Object.assign(new RangeError("value must be a positive integer"), { code: "ERR_OUT_OF_RANGE" });
-      autoSelectFamilyAttemptTimeout = Math.max(10, value);
-    },
-  };
   const entries = {
     "node:assert": lazy("assert"),
     "node:assert/strict": lazy("assert", (a) => a.strict),
@@ -909,6 +881,7 @@
     "bun:internal-for-testing": () => ({
       isASANEnabled: () => false,
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
+      directoryCount: () => native.directoryCount(),
     }),
     "node:test": () => internal.require("node_test"),
     "bun:test": () => internal.require("bun_test").exports,
