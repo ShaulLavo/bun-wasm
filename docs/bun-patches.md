@@ -106,7 +106,7 @@ frames through our existing inspector before invoking a custom capture formatter
 Native Error constructors and ordinary stack formatting stay in place.
 Receiver and method metadata unavailable from these engines returns undefined or
 null; eval-origin metadata is unavailable and returns undefined. Engine placeholders such
-as <input> are not reported as source origins.
+as `<input>` are not reported as source origins.
 The regression fixture uses the public capture API without copying a package.
 
 ## HTTP socket state

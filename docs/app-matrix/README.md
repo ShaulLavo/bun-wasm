@@ -104,9 +104,10 @@ HTTP. The mirror now routes that URL to its offline cache, as it already does fo
 HTTPS npm URLs. Package sources and matrix fixtures are unchanged. The registry
 regression checks alternate origins and credentials as well as the historical URL.
 
-All 92 fixtures pass on each engine. The structured-stack and HTTP socket
+All 100 fixtures pass on each engine with the current caller-origin changes integrated. The structured-stack and HTTP socket
 regressions fail on the preserved baseline for their intended causes and pass
-after the fix. The bounded upstream selection remains at 0 of 3 fully passing
+after the fix. The eval-origin regression also rejects synthetic engine filenames
+as source metadata; unavailable origins return undefined. The bounded upstream selection remains at 0 of 3 fully passing
 files, 0 observed passes and 0 timeouts on each engine, before and after. The capture test still lacks `nativeFrameForTesting`; the other files reach an
 unconnected Socket.write and existing formatter failures.
 
@@ -127,7 +128,7 @@ bash /work/tmp/wave-heavy/run.sh --class light "stack suite" -- \
 Repeat the suite command with `--engine jsc` and `--engine browser`, using separate
 output paths. Raw before/after records, artifact hashes and fixture logs are in
 `/work/reports/bun-wasm-app-blockers-2026-10-16/`, including
-`before-native/`, `before-koa-native/` and `after-server-main-native/`.
+`before-native/`, `before-koa-native/` and `after-server-current-native/`.
 
 ## Next fixes
 
