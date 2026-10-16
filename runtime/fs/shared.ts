@@ -244,17 +244,16 @@ export class SharedFilesystemState {
       }
     };
     try {
-      this.reservePageTables(slot, target);
       take(target - current);
       if (allocated.length !== target - current && target !== needed) {
         rollback();
-        this.reservePageTables(slot, needed);
         take(needed - current);
       }
       if (allocated.length !== needed - current && allocated.length !== target - current)
         throw new FilesystemError(51, "shared filesystem storage exhausted");
       // Finish potentially throwing initialization before publishing any page-table entries.
       for (const physical of allocated) this.segmentFor(physical).fill(0);
+      this.reservePageTables(slot, current + allocated.length);
       for (let i = 0; i < allocated.length; i++) Atomics.store(this.pages, this.pageAt(slot, current + i), allocated[i]! + 1);
       Atomics.store(this.slots, this.at(slot, CAPACITY), current + allocated.length);
       Atomics.add(this.cells, USED_PAGES, allocated.length);
