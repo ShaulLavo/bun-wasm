@@ -33,4 +33,12 @@ check("capture throwing formatter", () => {
   Error.prepareStackTrace = () => false;
   assert(holder.stack === false && holder.stack === false);
 });
-Error.prepareStackTrace = saved;
+check("formatter consultation", () => {
+  let consulted = 0;
+  Object.defineProperty(Error, "prepareStackTrace", { configurable: true, get() { consulted++; return () => 0; } });
+  const holder = {};
+  Error.captureStackTrace(holder);
+  assert(consulted === 0);
+  assert(holder.stack === 0 && holder.stack === 0 && consulted === 1);
+});
+Object.defineProperty(Error, "prepareStackTrace", { value: saved, writable: true, configurable: true });
