@@ -28,6 +28,10 @@ async function main() {
   assert.throws(() => dir.closeSync(), { code: "ERR_DIR_CLOSED" });
   await assert.rejects(dir.read(), { code: "ERR_DIR_CLOSED" });
   await assert.rejects(dir.close(), { code: "ERR_DIR_CLOSED" });
+  let closedCallbackCalled = false;
+  assert.throws(() => dir.read(() => { closedCallbackCalled = true; }), { code: "ERR_DIR_CLOSED" });
+  assert.throws(() => dir.read(undefined), { code: "ERR_DIR_CLOSED" });
+  assert.equal(closedCallbackCalled, false);
   console.log("sync recursive, bufferSize, closed handle");
 
   const asyncDir = await fsp.opendir("tree", { recursive: true, bufferSize: 2 });
@@ -96,6 +100,15 @@ async function main() {
   await closePromise;
   console.log("queued reads and close, sync operations reject concurrency");
 
+  const refill = fs.opendirSync("tree", { bufferSize: 1 });
+  await new Promise((resolve, reject) => refill.read((error) => {
+    if (error) return reject(error);
+    assert.throws(() => refill.readSync(), { code: "ERR_DIR_CONCURRENT_OPERATION" });
+    assert.throws(() => refill.closeSync(), { code: "ERR_DIR_CONCURRENT_OPERATION" });
+    resolve();
+  }));
+  refill.closeSync();
+
   for (const options of [{ bufferSize: 0 }, { bufferSize: -1 }, { bufferSize: 1.5 }, { bufferSize: Infinity }]) {
     assert.throws(() => fs.opendirSync("tree", options), { code: "ERR_OUT_OF_RANGE" });
   }
@@ -117,9 +130,27 @@ async function main() {
   const encoded = fs.opendirSync("encoding", "latin1");
   assert.equal(encoded.readSync().name, Buffer.from("naïve").toString("latin1"));
   encoded.closeSync();
-  const bytes = fs.opendirSync(Buffer.from("encoding"), { encoding: "buffer" });
-  assert(Buffer.isBuffer(bytes.readSync().name));
+  const bufferPath = Buffer.from("encoding");
+  const bytes = fs.opendirSync(bufferPath, { encoding: "buffer" });
+  assert(Buffer.isBuffer(bytes.path));
+  assert.deepEqual(bytes.path, bufferPath);
+  const byteEntry = bytes.readSync();
+  assert(Buffer.isBuffer(byteEntry.name));
+  assert(Buffer.isBuffer(byteEntry.parentPath));
+  assert.deepEqual(byteEntry.parentPath, bufferPath);
   bytes.closeSync();
+  await new Promise((resolve, reject) => fs.opendir(bufferPath, { encoding: "buffer" }, (error, callbackDir) => {
+    if (error) return reject(error);
+    assert(Buffer.isBuffer(callbackDir.path));
+    const entry = callbackDir.readSync();
+    assert(Buffer.isBuffer(entry.parentPath));
+    callbackDir.closeSync();
+    resolve();
+  }));
+  const promiseDir = await fsp.opendir(bufferPath, { encoding: "buffer" });
+  assert(Buffer.isBuffer(promiseDir.path));
+  assert(Buffer.isBuffer((await promiseDir.read()).parentPath));
+  await promiseDir.close();
   const empty = fs.opendirSync("tree/sub/deep");
   assert.throws(() => empty.read(null), { code: "ERR_INVALID_ARG_TYPE" });
   assert.throws(() => empty.close(false), { code: "ERR_INVALID_ARG_TYPE" });
@@ -133,6 +164,19 @@ async function main() {
   await asyncDisposed[Symbol.asyncDispose]();
   assert.throws(() => asyncDisposed.readSync(), { code: "ERR_DIR_CLOSED" });
   assert.throws(() => fs.opendirSync(""), { code: "ENOENT" });
+  let testing;
+  try { testing = require("bun:internal-for-testing"); } catch {}
+  if (testing) {
+    const baseline = testing.directoryCount();
+    let abandoned = Array.from({ length: 20 }, () => fs.opendirSync("tree"));
+    assert.equal(testing.directoryCount(), baseline + abandoned.length);
+    abandoned = null;
+    for (let i = 0; i < 8 && testing.directoryCount() !== baseline; i++) {
+      Bun.gc(true);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(testing.directoryCount(), baseline);
+  }
   console.log("entry encodings and callback validation");
 }
 main();
