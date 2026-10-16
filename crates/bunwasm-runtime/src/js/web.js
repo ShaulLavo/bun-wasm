@@ -768,7 +768,7 @@
     return new ReadableStream({
       type: "bytes",
       start(controller) {
-        if (bytes.length > 0) controller.enqueue(bytes.slice());
+        if (bytes.length > 0) controller.enqueue(new Uint8Array(bytes));
         controller.close();
       },
     });
@@ -884,7 +884,7 @@
       return { bytes: native.utf8Encode(body.toString()), type: "application/x-www-form-urlencoded;charset=UTF-8" };
     }
     if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
-    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return { bytes: toUint8(body).slice(), type: null };
+    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return { bytes: new Uint8Array(toUint8(body)), type: null };
     if (body instanceof ReadableStream) return { stream: body, bytes: null, type: null };
     return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
   }

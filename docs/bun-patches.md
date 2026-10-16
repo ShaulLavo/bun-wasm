@@ -500,7 +500,11 @@ characters and fatal-error state across chunks. Text encoding carries a trailing
 high surrogate into the next chunk before converting to Unicode scalar values.
 
 The changes in `web.js` select constructors before creating fetch/Blob body
-producers, expose byte readers, and tee streamed bodies when cloning. `net.js`
+producers, expose byte readers, and tee streamed bodies when cloning. BufferSource
+extraction snapshots visible bytes into an ordinary Uint8Array, and byte-stream
+enqueue allocates another ordinary Uint8Array so transfer never detaches caller
+storage or the bytes retained by an existing clone. Neither boundary calls a
+polymorphic slice method. `net.js`
 marks network body streams as byte streams. `builtins.js` exports the complete
 `node:stream/web` module and connects Node readable and writable streams
 to the selected Web Streams constructors. These are original host adapters.
