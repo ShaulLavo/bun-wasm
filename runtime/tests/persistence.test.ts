@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { PersistentBackend } from "../fs/persistent";
+import { validatePersistedIndex } from "../fs/storage";
 import { FilesystemService, FilesystemClient, createFilesystemConnection, createFilesystemIdentity, connectFilesystemIdentity } from "../fs";
 
 const cleanup: (() => void)[] = [];
@@ -364,5 +365,92 @@ test("retry after a failed unlink checkpoint respects a later relink", async () 
   await backend.flush();
   const second = await fixture(store);
   expect(decode(await second.client.asyncCall("readFile", ["/b"]))).toBe("kept");
+  client.release(a.node);
+});
+
+test("dirty detached bytes survive relink and last close before durability", async () => {
+  const store = new Store();
+  const first = await fixture(store);
+  await first.client.asyncCall("writeFile", ["/a"], encode("OLD"));
+  await first.client.asyncCall("flush");
+  const { client } = await fixture(store);
+  const root = await client.asyncCall("preopen", ["/"]);
+  const a = await client.asyncCall("resolve", [root, "a"]);
+  client.retain(a.node);
+  await client.asyncCall("read", [a.node, 3, 0]);
+  await client.asyncCall("removePath", [a, false]);
+  expect(client.write(a.node, [encode("NEW")], 0)).toBe(3);
+  const b = await client.asyncCall("resolve", [root, "b"]);
+  expect(await client.asyncCall("link", [{ node: a.node, name: "" }, b])).toBe(0);
+  client.release(a.node);
+  expect(decode(await client.asyncCall("readFile", ["/b"]))).toBe("NEW");
+  await client.asyncCall("flush");
+  const reloaded = await fixture(store);
+  expect(decode(await reloaded.client.asyncCall("readFile", ["/b"]))).toBe("NEW");
+});
+
+for (const fail of [false, true]) test(`cold relink restores its durable payload after deletion${fail ? " and a failed retry" : ""}`, async () => {
+  const store = new Store();
+  const first = await fixture(store);
+  await first.client.asyncCall("writeFile", ["/a"], encode("OLD"));
+  await first.client.asyncCall("flush");
+  const { client, backend } = await fixture(store);
+  const root = await client.asyncCall("preopen", ["/"]);
+  const a = await client.asyncCall("resolve", [root, "a"]);
+  client.retain(a.node);
+  await client.asyncCall("removePath", [a, false]);
+  await client.asyncCall("flush");
+  const b = await client.asyncCall("resolve", [root, "b"]);
+  expect(await client.asyncCall("link", [{ node: a.node, name: "" }, b])).toBe(0);
+  if (fail) {
+    store.fail = true;
+    await expect(backend.flush()).rejects.toThrow("storage failed");
+    store.fail = false;
+  }
+  await backend.flush();
+  expect(() => validatePersistedIndex(store.index)).not.toThrow();
+  expect(store.reads).toBe(0);
+  expect(decode(await client.asyncCall("readFile", ["/b"]))).toBe("OLD");
+  await client.asyncCall("writeFile", ["/b"], encode("NEW"));
+  await client.asyncCall("flush");
+  const revision = backend.shared.revision(a.node)!;
+  expect(backend.shared.unload(a.node, revision)).toBe(true);
+  expect(decode(await client.asyncCall("readFile", ["/b"]))).toBe("NEW");
+  client.release(a.node);
+  const reloaded = await fixture(store);
+  expect(decode(await reloaded.client.asyncCall("readFile", ["/b"]))).toBe("NEW");
+});
+
+test("a queued deletion checkpoint pins a later cold reattachment until its upsert commits", async () => {
+  class CollectingStore extends Store {
+    async persist(batch: any) {
+      await super.persist(batch);
+      const keep = new Set<string>((this.index.nodes as any[]).flatMap(node => node.data ? [node.data] : []).concat(batch.retainedData ?? []));
+      for (const key of this.payloads.keys()) if (!keep.has(key)) this.payloads.delete(key);
+    }
+  }
+  const store = new CollectingStore();
+  const first = await fixture(store);
+  await first.client.asyncCall("writeFile", ["/a"], encode("OLD"));
+  await first.client.asyncCall("flush");
+  const { client, backend } = await fixture(store);
+  const root = await client.asyncCall("preopen", ["/"]);
+  const a = await client.asyncCall("resolve", [root, "a"]);
+  client.retain(a.node);
+  let release!: () => void;
+  store.gate = new Promise<void>(done => { release = done; });
+  cleanup.push(release);
+  await client.asyncCall("writeFile", ["/unrelated"], encode("other"));
+  const older = backend.flush();
+  await new Promise(done => setTimeout(done, 5));
+  await client.asyncCall("removePath", [a, false]);
+  const removal = backend.flush();
+  const b = await client.asyncCall("resolve", [root, "b"]);
+  expect(await client.asyncCall("link", [{ node: a.node, name: "" }, b])).toBe(0);
+  const relink = backend.flush();
+  release(); store.gate = undefined;
+  await Promise.all([older, removal, relink]);
+  validatePersistedIndex(store.index);
+  expect(decode(await client.asyncCall("readFile", ["/b"]))).toBe("OLD");
   client.release(a.node);
 });

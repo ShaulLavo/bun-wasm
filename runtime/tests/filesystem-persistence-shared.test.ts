@@ -262,6 +262,23 @@ test("metadata-only registration preserves stat without allocating or exposing z
   expect(state.snapshot(0)!.data).toEqual(new Uint8Array([65, 66, 67, 68]));
 });
 
+test("relinking an open unlinked file preserves its dirty bytes after the last release", () => {
+  const state = fixture();
+  const slot = state.fileSlot(0);
+  state.retain(0);
+  state.unlink(0);
+  state.write(0, [new Uint8Array([78, 69, 87])], 0);
+  const revision = state.revision(0)!;
+  state.relink(0);
+  expect(state.isUnlinked(0)).toBe(false);
+  expect(state.revision(0)).toBe(revision);
+  state.release(0);
+  expect(state.fileSlot(0)).toBe(slot);
+  expect(state.snapshot(0)!.data).toEqual(new Uint8Array([78, 69, 87, 68]));
+  expect(state.resources()).toMatchObject({ usedBytes: PAGE, files: 1 });
+  expect(state.evict(0, revision)).toBe(true);
+});
+
 test("clean pinned payloads can unload and hydrate without changing their cached slot", () => {
   const state = fixture();
   const slot = state.fileSlot(0);

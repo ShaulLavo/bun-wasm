@@ -99,7 +99,12 @@ export class MemoryBackend implements FilesystemBackend {
         if (typeof result === "number") this.sync(result);
         return result;
       }
-      case "link": this.path(a); this.path(b); return this.fs.link(a, b);
+      case "link": {
+        this.path(a); this.path(b);
+        const result = this.fs.link(a, b);
+        if (!result && a.node !== undefined) this.shared.relink(a.node);
+        return result;
+      }
       case "removePath": {
         this.path(a); const handle = a.node;
         const removed = handle === undefined ? undefined : this.fs.nodeForHandle(handle);

@@ -73,6 +73,13 @@ export class PersistentBackend extends MemoryBackend {
     else this.links.delete(node.ino);
     if (delta === 1 && previous === 0) {
       this.nodes.set(node.ino, node); this.detached.delete(node);
+      const key = this.detachedKeys.get(node.ino);
+      if (key) {
+        // The namespace entry is new, but this payload is already durable. Restore its
+        // rollback baseline too, so a failed reattachment checkpoint can retry cold.
+        this.keys.set(node.ino, key); this.committedKeys.set(node.ino, key);
+        this.detachedKeys.delete(node.ino);
+      }
       this.removed.delete(node.ino); this.dirty.add(node);
       if (node.kind === "dir") for (const child of node.children.values()) this.changeLinks(child, 1);
     } else if (delta === -1 && count === 0) {
@@ -230,7 +237,12 @@ export class PersistentBackend extends MemoryBackend {
     const commit = this.tail.then(async () => {
       if (epoch !== this.checkpointEpoch) throw new Error("filesystem checkpoint invalidated by a failed commit");
       batch.generation = this.generation + 1;
-      batch.retainedData = this.retainedData();
+      // A later request may have reattached an inode removed by this older checkpoint.
+      // Its next upsert still needs the durable payload even though it is no longer detached.
+      batch.retainedData = this.retainedData().concat(removes.flatMap(ino => {
+        const key = this.committedKeys.get(ino);
+        return this.nodes.has(ino) && key ? [key] : [];
+      }));
       await this.storage.persist(batch);
       await this.storage.flush();
       this.generation = batch.generation;
@@ -238,10 +250,11 @@ export class PersistentBackend extends MemoryBackend {
       this.pruneDetached();
       const retained = new Set(this.retainedData());
       for (const ino of removes) {
+        if (this.nodes.has(ino)) continue; // A later link still owns this durable baseline.
         const key = this.committedKeys.get(ino);
         if (key && retained.has(key)) this.detachedKeys.set(ino, key);
         this.committedKeys.delete(ino);
-        if (!this.nodes.has(ino)) this.keys.delete(ino);
+        this.keys.delete(ino);
       }
     }).finally(() => { this.pendingCheckpoints--; });
     this.lastCommit = commit;

@@ -610,6 +610,12 @@ export class SharedFilesystemState {
     Atomics.store(this.slots, this.at(slot, UNLINKED), 1);
     if (Atomics.load(this.slots, this.at(slot, REFS)) === 0) this.free(handle);
   }
+  /** Service namespace mutation owns the global lock, as for unlink. Relinking does not
+   * change the persisted payload or its revision; it cancels last-close reclamation. */
+  relink(handle: FileHandle): void {
+    const slot = this.findSlot(handle);
+    if (slot) Atomics.store(this.slots, this.at(slot, UNLINKED), 0);
+  }
   /** Both global and file locks are held. */
   private freePagesLocked(slot: number): void {
     const count = Atomics.load(this.slots, this.at(slot, CAPACITY));
