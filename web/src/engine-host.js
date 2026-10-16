@@ -22,6 +22,10 @@ import { memoryViews } from "./memory-views.js";
 const nativeSubtleCrypto = globalThis.crypto?.subtle;
 const NativeCryptoKey = globalThis.CryptoKey;
 const NativeSubtleCrypto = globalThis.SubtleCrypto;
+const nativeSubtleOperations = nativeSubtleCrypto && Object.fromEntries(
+  ["digest", "generateKey", "importKey", "exportKey", "sign", "verify", "encrypt", "decrypt", "deriveBits", "deriveKey", "wrapKey", "unwrapKey"]
+    .map(name => [name, nativeSubtleCrypto[name]]),
+);
 const NativeTextEncoder = globalThis.TextEncoder;
 const NativeTextDecoder = globalThis.TextDecoder;
 const NativeBlob = globalThis.Blob;
@@ -369,11 +373,25 @@ class EngineHost {
       net.onNews(() => this.schedule(0));
     }
     native.engine = "host";
+    this.installSubtleCrypto();
     native.subtleCrypto = nativeSubtleCrypto;
     native.CryptoKey = NativeCryptoKey;
     native.SubtleCrypto = NativeSubtleCrypto;
     Object.assign(native, this.valueNatives());
     return native;
+  }
+
+  installSubtleCrypto() {
+    if (!nativeSubtleCrypto) return;
+    const host = this;
+    for (const [name, operation] of Object.entries(nativeSubtleOperations)) {
+      const wrapper = { [name](...args) {
+        // Tracking observes rejection; the returned promise must still report an unhandled rejection.
+        return host.track(Reflect.apply(operation, this, args)).then(value => value);
+      } }[name];
+      Object.defineProperty(wrapper, "length", { value: operation.length });
+      Object.defineProperty(nativeSubtleCrypto, name, { value: wrapper, writable: true, configurable: true });
+    }
   }
 
   valueNatives() {

@@ -1,4 +1,5 @@
 import {startEngineHost} from "../src/engine-host.js";
+globalThis.__rejectNativeCrypto = process.env.NATIVE_CRYPTO_REJECT === "1";
 const memory = new WebAssembly.Memory({initial:1, maximum:2});
 const u32 = n => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b; };
 function encode(value) {
@@ -16,13 +17,17 @@ const put = value => new Uint8Array(memory.buffer).set(encode(value));
 const source = `(function(native) {
   return {
     runMain() {
+      if (globalThis.__rejectNativeCrypto) {
+        native.subtleCrypto.generateKey({name:"HMAC", length:128}, true, ["sign"]);
+        return Promise.resolve();
+      }
       native.subtleCrypto.importKey("raw", new Uint8Array([1,2,3]), "PBKDF2", false, ["deriveBits"])
         .then(key => native.subtleCrypto.deriveBits({name:"PBKDF2", hash:"SHA-256", salt:new Uint8Array([4,5]), iterations:5000000}, key, 128))
         .then(() => { globalThis.__cryptoSettled = true; });
       return Promise.resolve();
     },
     runTimers: () => -1, ioPending: () => 0, emitBeforeExit: () => false,
-    beforeExit: () => 0, handleRejection: error => { throw error; }, handleUncaught: error => { throw error; }
+    beforeExit: () => 0, handleRejection: error => { console.error("native rejection", error.name); return false; }, handleUncaught: error => { throw error; }
   };
 })`;
 await startEngineHost({instance:{exports:{
@@ -30,6 +35,7 @@ await startEngineHost({instance:{exports:{
   bunwasm_describe() {put({natives:["polyfillSource", "flushOutput", "writeStderr"], constants:{hostCaps:{}}, entry:{kind:"run", main:"/main.js"}});},
   bunwasm_call(index) {put(index === 0 ? source : undefined); return 0;},
 }}, onExit(code) {
+  if (globalThis.__rejectNativeCrypto) process.exit(code);
   if (code !== 0 || globalThis.__cryptoSettled !== true) {
     console.error("host exited before native SubtleCrypto settled");
     process.exit(1);
