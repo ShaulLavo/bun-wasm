@@ -964,12 +964,6 @@
         socket._phase = "open";
         socket._updatePeer();
         socket.encrypted = protocol === "https:";
-        let writable = socket.writable;
-        Object.defineProperty(socket, "writable", {
-          configurable: true, enumerable: true,
-          get() { return writable && !this._conn.closed && !this._conn.closing; },
-          set(value) { writable = value; },
-        });
         conn.onClose = () => socket.destroy();
         trackServerConnection(this, conn);
         this.emit("connection", socket);
