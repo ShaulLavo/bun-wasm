@@ -959,7 +959,7 @@
         let writable = socket.writable;
         Object.defineProperty(socket, "writable", {
           configurable: true, enumerable: true,
-          get() { return writable && !conn.closed && !conn.closing; },
+          get() { return writable && !this._conn.closed && !this._conn.closing; },
           set(value) { writable = value; },
         });
         conn.onClose = () => socket.destroy();
