@@ -3,7 +3,8 @@
 The browser engine uses the host's native SubtleCrypto provider when it is available.
 The host captures that provider and its CryptoKey constructors before installing runtime
 globals. Keys created before bootstrap remain usable. The host tracks native crypto
-promises so pending operations keep the runtime alive and unhandled rejections remain fatal. In an insecure context without
+promises so pending operations keep the runtime alive and unhandled rejections remain fatal.
+It preserves the native DOMException constructor so native errors retain their global brand. In an insecure context without
 SubtleCrypto, the browser engine uses the wasm provider shared with QuickJS and wasm JSC.
 The WASI host also captures its entropy function before globals change.
 

@@ -14,13 +14,13 @@
     QuotaExceededError: 22, TimeoutError: 23, InvalidNodeTypeError: 24, DataCloneError: 25,
   };
 
-  class DOMException extends Error {
+  const DOMException = native.DOMException || class DOMException extends Error {
     constructor(message = "", name = "Error") {
       super(message);
       Object.defineProperty(this, "name", { value: String(name), configurable: true, writable: true });
       Object.defineProperty(this, "code", { value: DOM_CODES[name] || 0, configurable: true, writable: true });
     }
-  }
+  };
   internal.DOMException = DOMException;
 
   // --- encoding ---------------------------------------------------------------
