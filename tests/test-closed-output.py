@@ -14,10 +14,12 @@ FIXTURE = ROOT / "tests/fixtures/pipe-closed-output"
 parser = argparse.ArgumentParser()
 parser.add_argument("--engine", choices=["quickjs", "jsc", "browser"], required=True)
 parser.add_argument("--wasm", type=Path, required=True)
-parser.add_argument("--host", choices=["native", "node"])
+parser.add_argument("--host", choices=["native", "node", "node-control"])
 parser.add_argument("--large-only", action="store_true")
 parser.add_argument("--batch-only", action="store_true")
 args = parser.parse_args()
+if args.host == "node-control" and not args.batch_only:
+    parser.error("--host node-control requires --batch-only")
 host = args.host or ("node" if args.engine == "browser" else "native")
 
 
@@ -29,6 +31,8 @@ signal.signal(signal.SIGTERM, terminate)
 
 
 def command(directory: Path, script: str) -> list[str]:
+    if host == "node-control":
+        return ["node", str(directory / script)]
     if host == "node":
         return [
             "node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"),
@@ -136,12 +140,19 @@ with tempfile.TemporaryDirectory(prefix="bun-wasm-closed-output-", dir="/work/tm
     work = Path(directory)
     for name in ("index.js", "large.js", "batch.ts"):
         (work / name).write_bytes((FIXTURE / name).read_bytes())
+    batch_failures = 0
     for fd in (1, 2):
         if not args.large_only:
-            check_batch(work, fd)
+            try:
+                check_batch(work, fd)
+            except (AssertionError, ValueError, subprocess.TimeoutExpired) as error:
+                batch_failures += 1
+                print(f"FAIL pipe-closed-output {args.engine}/{host}: {error}")
         if args.batch_only:
             continue
         cases = () if args.large_only else (("stream", False), ("stream", True), ("console", False), ("fs", False), ("writev", False))
         for method, handled in cases:
             check_closed(work, fd, method, handled)
         check_large(work, fd)
+    if batch_failures:
+        raise SystemExit(1)
