@@ -22,6 +22,9 @@ function directStates(node) {
 const transformed = ts.transform(tree, [context => {
   const f = context.factory;
   function visit(node) {
+    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "TypeError" && node.arguments?.some(argument => ts.isStringLiteral(argument) && /locked|already has a writer/i.test(argument.text))) {
+      return f.createCallExpression(f.createIdentifier("__bunNodeInvalidState"), undefined, Array.from(node.arguments));
+    }
     if (!ts.isFunctionLike(node) || !node.body || !ts.isBlock(node.body)) return ts.visitEachChild(node, visit, context);
     const original = node.getText(tree);
     const states = directStates(node);
@@ -47,7 +50,10 @@ const transformed = ts.transform(tree, [context => {
 if (Object.values(counts).some(count => count !== 1)) throw new Error(`Stream completion algorithms changed: ${JSON.stringify(counts)}`);
 const body = ts.createPrinter({ removeComments: true }).printFile(transformed.transformed[0]);
 transformed.dispose();
-const hooks = `const __bunNodeStreamRecords = new WeakMap();
+const hooks = `function __bunNodeInvalidState(message) {
+  return Object.assign(new TypeError(message), { code: "ERR_INVALID_STATE" });
+}
+const __bunNodeStreamRecords = new WeakMap();
 function __bunNodeStreamInit(stream) {
   let resolve, reject;
   const promise = new Promise((a, b) => { resolve = a; reject = b; });
