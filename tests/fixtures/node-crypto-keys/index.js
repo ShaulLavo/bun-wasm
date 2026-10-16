@@ -238,3 +238,32 @@ const reordered = createPrivateKey({
 });
 assert(rsaEquality.equals(reordered));
 console.log("node key equality ok");
+const x = generateKeyPairSync("x25519");
+const peer = await crypto.subtle.generateKey("X25519", true, ["deriveBits"]);
+const xPrivate = createPrivateKey({
+  key: x.privateKey.export({ format: "der", type: "pkcs8" }),
+  format: "der",
+  type: "pkcs8",
+}).toCryptoKey("X25519", false, ["deriveBits"]);
+const xPublic = createPublicKey({
+  key: x.publicKey.export({ format: "der", type: "spki" }),
+  format: "der",
+  type: "spki",
+}).toCryptoKey("X25519", true, []);
+assert.deepEqual(
+  new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: "X25519", public: peer.publicKey },
+      xPrivate,
+      256,
+    ),
+  ),
+  new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: "X25519", public: xPublic },
+      peer.privateKey,
+      256,
+    ),
+  ),
+);
+console.log("node X25519 interop ok");
