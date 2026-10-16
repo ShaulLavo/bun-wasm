@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import {createSecretKey, KeyObject, hkdfSync, pbkdf2Sync} from "node:crypto";
 const bytes = Buffer.from("keyobject derivation material");
 const salt = Buffer.from("salt"), info = Buffer.from("info");
-for (const name of ["HKDF", "PBKDF2"]) {
+let failed = 0;
+async function conversion(name) {
   const original = createSecretKey(bytes);
   const key = original.toCryptoKey(name, false, ["deriveBits", "deriveKey"]);
   assert.equal(key.type, "secret");
@@ -19,3 +20,8 @@ for (const name of ["HKDF", "PBKDF2"]) {
   assert.throws(() => original.toCryptoKey(name, false, ["sign"]), {name:"SyntaxError"});
   console.log(name, expected.toString("hex"));
 }
+for (const name of ["HKDF", "PBKDF2"]) {
+  try { await conversion(name); }
+  catch (error) { failed++; console.log(name, "FAIL", error.name); }
+}
+assert.equal(failed, 0);
