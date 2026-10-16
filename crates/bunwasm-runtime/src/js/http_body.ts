@@ -4,6 +4,30 @@
   type Phase = { kind: "fixed"; remaining: number } | { kind: "size" } | { kind: "data"; remaining: number } | { kind: "crlf" } | { kind: "trailers" } | { kind: "eof" } | { kind: "done" };
   type Output = { kind: "data"; bytes: Uint8Array } | { kind: "trailers"; pairs: Pair[] } | { kind: "end" };
   const fail = () => Object.assign(new Error("Parse Error: Invalid chunked response"), { code: "HPE_INVALID_CHUNK_SIZE" });
+  function parseError(code: string, reason: string): Error {
+    return Object.assign(new Error(`Parse Error: ${reason}`), { code, reason });
+  }
+  function responseFraming(rawHeaders: readonly string[], method: string, status: number): Framing {
+    let length: number | undefined;
+    const codings: string[] = [];
+    for (let i = 0; i < rawHeaders.length; i += 2) {
+      const name = rawHeaders[i].toLowerCase();
+      const value = rawHeaders[i + 1];
+      if (name === "content-length") {
+        if (length !== undefined) throw parseError("HPE_UNEXPECTED_CONTENT_LENGTH", "Duplicate Content-Length");
+        if (codings.length) throw parseError("HPE_INVALID_CONTENT_LENGTH", "Content-Length can't be present with Transfer-Encoding");
+        if (!/^[0-9]+$/.test(value)) throw parseError("HPE_INVALID_CONTENT_LENGTH", value ? "Invalid character in Content-Length" : "Empty Content-Length");
+        if (!Number.isSafeInteger(Number(value))) throw parseError("HPE_INVALID_CONTENT_LENGTH", "Content-Length overflow");
+        length = Number(value);
+      }
+      if (name !== "transfer-encoding") continue;
+      if (length !== undefined) throw parseError("HPE_INVALID_TRANSFER_ENCODING", "Transfer-Encoding can't be present with Content-Length");
+      codings.push(...value.toLowerCase().split(",").map(coding => coding.trim()));
+    }
+    if (method === "HEAD" || status < 200 || status === 204 || status === 304) return { kind: "none" };
+    if (codings.length) return { kind: codings[codings.length - 1] === "chunked" ? "chunked" : "eof" };
+    return length === undefined ? { kind: "eof" } : { kind: "fixed", length };
+  }
   const text = (bytes: Uint8Array) => Array.from(bytes, byte => String.fromCharCode(byte)).join("");
   function lineEnd(bytes: Uint8Array): number {
     for (let i = 0; i + 1 < bytes.length; i++) if (bytes[i] === 13 && bytes[i + 1] === 10) return i;
@@ -14,6 +38,7 @@
     private buffer = new Uint8Array(0);
     private trailers: Pair[] = [];
     constructor(framing: Framing) {
+      if (framing.kind === "fixed" && (!Number.isSafeInteger(framing.length) || framing.length < 0)) throw parseError("HPE_INVALID_CONTENT_LENGTH", "Invalid Content-Length");
       if (framing.kind === "fixed") this.phase = { kind: "fixed", remaining: framing.length };
       else if (framing.kind === "chunked") this.phase = { kind: "size" };
       else if (framing.kind === "eof") this.phase = { kind: "eof" };
@@ -96,5 +121,5 @@
       return true;
     }
   }
-  return { BodyDecoder };
+  return { BodyDecoder, responseFraming };
 })

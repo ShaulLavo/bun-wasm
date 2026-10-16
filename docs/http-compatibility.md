@@ -18,11 +18,31 @@ browser engine. No upstream test or framework source is changed.
 | Status and events | Custom status messages, 100 Continue before the request body, finish/close order |
 | Upgrade client | TLS rejection, method/path/header validation, ordered body writes, non-101 body/EOF, unhandled 101 cleanup |
 | Upgrade server | Parsed request body, `complete`, request EOF and buffered socket head |
+| Value coercion | Top-level undefined rejection, array serialization, Symbol errors |
+| Validation order | Path before method before headers, including error messages |
+| Malformed response framing | Split negative/nondecimal/duplicate lengths and TE+CL, parser errors before response |
+| Agent reuse | Fixed/chunked/HEAD/204/304 reuse, HTTP/1.0, close/EOF, idle guards, timeout, destruction |
+| Request framing defaults | GET/HEAD/DELETE/OPTIONS/TRACE/CONNECT raw bodies; POST/PUT/PATCH/PROPFIND length/chunk defaults |
 
 `tests/fixtures/net-http-parity` covers the response paths.
 `tests/fixtures/net-http-upgrade-regressions` checks seven client cases for the five reported
 bugs and the incoming upgrade body. Its TLS assertion is specific to the
 bun-wasm host; native Node supplies the other protocol controls.
+
+PR #35 adds five review regressions under `tests/fixtures/net-http-`, with suffixes
+`value-coercion`, `validation-order`, `response-framing`, `agent-reuse`, and
+`get-framing`. These run unchanged on Node v26.7.0 and each guest engine.
+Malformed response cases arrive in separate socket writes. They assert one parser
+error, no `response` event, and bounded completion. Transfer codings such as
+`xchunked` and `chunked, gzip` use EOF framing; only a final `chunked` is decoded.
+
+The socket pool releases a connection after the response stream ends. Idle sockets
+are unreferenced, keep no request parser listeners, and close on unsolicited data,
+errors, EOF or timeout. Agent destruction closes both active and idle sockets.
+`agent: false` and Agents without keep-alive advertise `Connection: close`.
+The adapter does not yet schedule requests against `maxSockets` or
+`maxTotalSockets`. Fixed response lengths must fit a safe JavaScript integer;
+native Node's uint64 parser also accepts larger lengths that this decoder rejects.
 
 ## Measurements
 

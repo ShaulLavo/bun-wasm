@@ -1223,11 +1223,11 @@
         this.headersSent = false;
         this._sent = false;
         this._requestEnded = false;
+        this.path = validatePath(options.path || "/");
+        this.method = validateMethod(options.method || "GET").toUpperCase();
         for (const [name, value] of Object.entries(options.headers || {})) {
           this.setHeader(name, value);
         }
-        this.method = validateMethod(options.method || "GET").toUpperCase();
-        this.path = validatePath(options.path || "/");
         const host = options.hostname || options.host || "localhost";
         validateHeaderValue("Host", host);
         this.host = host;
@@ -1363,6 +1363,9 @@
           return [line.slice(0, colon), line.slice(colon + 1).trim()];
         }));
         const head = Buffer.from(internal.concatBytes([buffer.subarray(end + 4), chunk.subarray(count)]));
+        let framing;
+        try { framing = internal.require("http_body").responseFraming(msg.rawHeaders, this.method, msg.statusCode); }
+        catch (error) { this._failHttp(error); return; }
         if (msg.statusCode < 200 && msg.statusCode !== 101) {
           exchange.buffer = new Uint8Array(0);
           if (msg.statusCode === 100) this.emit("continue");
@@ -1373,21 +1376,16 @@
         if (msg.statusCode === 101) {
           exchange.state = "complete";
           exchange.cleanup();
+          this.agent?._pool.forget(this.socket);
           if (!this.emit("upgrade", msg, this.socket, head)) this.socket.destroy();
           return;
         }
         exchange.state = "response";
         exchange.message = msg;
-        exchange.decoder = new (internal.require("http_body").BodyDecoder)(this._responseMode(msg));
+        exchange.framing = framing;
+        exchange.decoder = new (internal.require("http_body").BodyDecoder)(framing);
         this.emit("response", msg);
         this._consumeResponse(head);
-      }
-      _responseMode(msg) {
-        if (this.method === "HEAD" || msg.statusCode === 204 || msg.statusCode === 304) return { kind: "none" };
-        const transferEncoding = String(msg.headers["transfer-encoding"] || "").toLowerCase();
-        if (transferEncoding.includes("chunked")) return { kind: "chunked" };
-        if (msg.headers["content-length"] !== undefined) return { kind: "fixed", length: Number(msg.headers["content-length"]) };
-        return { kind: "eof" };
       }
       _consumeResponse(chunk) {
         const exchange = this._httpState;
@@ -1410,9 +1408,15 @@
         if (!exchange || exchange.state !== "response") return;
         exchange.state = "complete";
         exchange.message.complete = true;
-        exchange.message.push(null);
         exchange.cleanup();
-        this.socket.destroy();
+        const socket = this.socket;
+        const agent = this.agent;
+        const reusable = this._requestEnded && this._outKeepAlive && exchange.framing.kind !== "eof" && internal.require("http_agent").responseKeepsAlive(exchange.message.httpVersion, exchange.message.headers.connection);
+        exchange.message.once("end", () => internal.nextTick(() => {
+          if (agent) agent._pool.release(socket, reusable);
+          else socket.destroy();
+        }));
+        exchange.message.push(null);
       }
       _sendHttp() {
         if (this._aborted || this._sent) return;
@@ -1431,7 +1435,12 @@
         const defaultPort = secure ? 443 : 80;
         const host = options.hostname || options.host || "localhost";
         const targetPort = options.port || defaultPort;
-        const socket = options.createConnection ? options.createConnection(Object.assign({}, options, { host, port: targetPort })) : net.connect({ host, port: targetPort });
+        this.agent = options.agent === false || options.createConnection ? null : options.agent || globalAgent;
+        const key = this.agent?.getName(Object.assign({}, options, { host, port: targetPort }));
+        const reused = this.agent?._pool.take(key);
+        const socket = reused || (options.createConnection ? options.createConnection(Object.assign({}, options, { host, port: targetPort })) : net.connect({ host, port: targetPort }));
+        this.reusedSocket = Boolean(reused);
+        if (this.agent && !reused) this.agent._pool.track(key, socket);
         this.socket = this.connection = socket;
         const receive = chunk => this._receiveHttp(chunk);
         const fail = err => this._failHttp(err);
@@ -1457,10 +1466,13 @@
         this.emit("socket", socket);
         if (this._httpState.state !== "pending") return;
         const headers = Object.assign(Object.create(null), this._headers);
-        if (!this.hasHeader("connection")) headers.Connection = "keep-alive";
-        if (!this.hasHeader("content-length") && !this.hasHeader("transfer-encoding")) {
+        if (!this.hasHeader("connection")) headers.Connection = this.agent?.keepAlive ? "keep-alive" : "close";
+        const connection = Object.keys(headers).find(key => key.toLowerCase() === "connection");
+        this._outKeepAlive = !String(headers[connection]).toLowerCase().split(",").some(value => value.trim() === "close");
+        const bodyMethod = !["GET", "HEAD", "DELETE", "OPTIONS", "TRACE", "CONNECT"].includes(this.method);
+        if (bodyMethod && !this.hasHeader("content-length") && !this.hasHeader("transfer-encoding")) {
           if (!this._requestEnded || this._trailers.length) headers["Transfer-Encoding"] = "chunked";
-          else if (this._chunks.length || this.method === "POST" || this.method === "PUT") headers["Content-Length"] = String(this._chunks.reduce((length, chunk) => length + chunk.length, 0));
+          else headers["Content-Length"] = String(this._chunks.reduce((length, chunk) => length + chunk.length, 0));
         }
         this._outChunked = Object.keys(headers).some(key => key.toLowerCase() === "transfer-encoding" && String(headers[key]).toLowerCase().includes("chunked"));
         const lines = [`${this.method} ${this.path} HTTP/1.1`];
@@ -1538,9 +1550,16 @@
       constructor(options) {
         super();
         this.options = options || {};
+        this.keepAlive = Boolean(this.options.keepAlive);
+        this._pool = new (internal.require("http_agent").SocketPool)(this.options);
+        this.sockets = this._pool.sockets;
+        this.freeSockets = this._pool.freeSockets;
       }
-      destroy() {}
+      get totalSocketCount() { return this._pool.size; }
+      getName(options) { return `${options.host || "localhost"}:${options.port || 80}:${options.localAddress || ""}${options.family ? ":" + options.family : ""}`; }
+      destroy() { this._pool.destroy(); }
     }
+    const globalAgent = new Agent({ keepAlive: true, timeout: 5000 });
     return {
       createServer: (options, handler) => new Server(options, handler),
       Server,
@@ -1550,7 +1569,7 @@
       request,
       get,
       Agent,
-      globalAgent: new Agent(),
+      globalAgent,
     };
   }
 

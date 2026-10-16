@@ -11,11 +11,8 @@
   }
 
   function validateHeaderValue(name: unknown, value: unknown): void {
-    const values: readonly unknown[] = Array.isArray(value) ? value : [value];
-    for (const item of values) {
-      if (item === undefined) throw error("ERR_HTTP_INVALID_HEADER_VALUE", `Invalid value "undefined" for header "${String(name)}"`);
-      if (invalidValue.test(String(item))) throw error("ERR_INVALID_CHAR", `Invalid character in header content ["${String(name)}"]`);
-    }
+    if (value === undefined) throw error("ERR_HTTP_INVALID_HEADER_VALUE", `Invalid value "undefined" for header "${String(name)}"`);
+    if (invalidValue.test(`${value}`)) throw error("ERR_INVALID_CHAR", `Invalid character in header content ["${String(name)}"]`);
   }
 
   function validateMethod(method: unknown): string {

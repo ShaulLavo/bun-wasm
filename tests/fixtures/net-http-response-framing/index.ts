@@ -15,10 +15,10 @@ const malformed = [
   ["Transfer-Encoding: chunked\r\nContent-Length: 1", "HPE_INVALID_CONTENT_LENGTH"],
   ["Content-Length: 1\r\nTransfer-Encoding: chunked", "HPE_INVALID_TRANSFER_ENCODING"],
 ];
-async function exchange(headers: string, expectedError: string | null, expectedBody = "", method = "GET") {
+async function exchange(headers: string, expectedError: string | null, expectedBody = "", method = "GET", status = 200) {
   const sockets = new Set<net.Socket>();
   const wireBody = headers === "Content-Length: 01" ? "1" : "1\r\na\r\n0\r\n\r\n";
-  const wire = `HTTP/1.1 200 OK\r\nConnection: close\r\n${headers}\r\n\r\n${wireBody}`;
+  const wire = `HTTP/1.1 ${status} OK\r\nConnection: close\r\n${headers}\r\n\r\n${wireBody}`;
   const split = wire.indexOf(headers) + Math.max(1, Math.floor(headers.length / 2));
   const server = net.createServer(socket => {
     sockets.add(socket);
@@ -64,6 +64,7 @@ async function exchange(headers: string, expectedError: string | null, expectedB
 }
 for (const [headers, error] of malformed) await exchange(headers, error);
 await exchange(malformed[9][0], malformed[9][1], "", "HEAD");
+for (const status of [100, 101, 204, 304]) await exchange(malformed[9][0], malformed[9][1], "", "GET", status);
 for (const encoding of ["xchunked", "chunked, gzip", "gzip"]) {
   await exchange(`Transfer-Encoding: ${encoding}`, null, "1\r\na\r\n0\r\n\r\n");
 }
