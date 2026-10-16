@@ -19,6 +19,7 @@ export function createProcessBudget() {
 }
 
 function wake(budget) {
+  if (budget === undefined) return;
   const cells = new Int32Array(budget);
   Atomics.add(cells, 1, 1);
   Atomics.notify(cells, 1);
@@ -32,6 +33,7 @@ export class SharedPipe {
     this.budget = budget;
   }
   read(cap = 65536) {
+    if (cap === 0) return 0;
     const read = Atomics.load(this.cells, 0) >>> 0;
     // Observing EOF must also observe every write published before close().
     const closed = Atomics.load(this.cells, 2);
