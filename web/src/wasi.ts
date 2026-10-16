@@ -127,6 +127,7 @@ export class Wasi {
   private readStdin(iovecs: Uint8Array[]): number {
     if (!this.opts.stdin) return 0;
     const size = iovecs.reduce((n, chunk) => n + chunk.length, 0);
+    if (size === 0) return 0;
     const bytes = this.opts.stdin(size);
     if (typeof bytes === "number") return 0;
     let at = 0;
@@ -240,7 +241,16 @@ export class Wasi {
     const dir = this.fds.get(dirfd);
     if (!dir) return EBADF;
     if (dir.type !== "dir") return ENOTDIR;
-    return normalize(this.str(ptr, len), dir.path);
+    const path = this.str(ptr, len);
+    if (path.startsWith("/")) return EPERM;
+    const parts: string[] = [];
+    for (const part of path.split("/")) {
+      if (part === "" || part === ".") continue;
+      if (part === ".." && parts.length === 0) return EPERM;
+      if (part === "..") parts.pop();
+      else parts.push(part);
+    }
+    return normalize(parts.join("/"), dir.path);
   }
 
   private parentOf(path: string): DirNode | number {
@@ -264,6 +274,7 @@ export class Wasi {
   }
 
   private writeOut(fd: Fd & { type: "file" }, chunks: Uint8Array[], at: number | null): number {
+    if (chunks.every((chunk) => chunk.length === 0)) return 0;
     let pos = at ?? (fd.append ? fd.node.data.length : fd.pos);
     let written = 0;
     for (const chunk of chunks) {
@@ -449,6 +460,7 @@ export class Wasi {
       fd_renumber: (from: number, to: number) => {
         const entry = this.fds.get(from);
         if (!entry || !this.fds.has(to)) return EBADF;
+        if (from === to) return SUCCESS;
         this.fds.set(to, entry);
         this.fds.delete(from);
         return SUCCESS;
