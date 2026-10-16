@@ -19,8 +19,12 @@ The synchronous fixture uses the default environment without an
 `ESBUILD_WORKER_THREADS` override. It checks all four synchronous APIs and the
 package's errors for invalid syntax and synchronous plugins. The watch fixture
 waits for its initial `onEnd`, edits the input, and waits for another `onEnd`
-and updated output. It sends no rebuild request and always disposes the context
-and stops esbuild.
+and updated output. After initial replies settle, it holds child stdin writes
+until the service emits its first rebuild notification. This prevents an
+incidental protocol reply from publishing the edit. Queued replies resume after
+that notification and before cleanup. The fixture sends no rebuild request and
+always disposes the context and stops esbuild. The same pause passes against the
+published package under native Node.
 
 Both runners use the app-matrix registry in offline replay mode. A mirror must
 contain these two records, in addition to any existing esbuild metadata:
