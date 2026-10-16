@@ -113,13 +113,17 @@ export class FilesystemSection {
 export async function waitForFilesystemQuiescence(connection: FilesystemIdentity): Promise<void> {
   revokeFilesystem(connection);
   const cells = new Int32Array(connection.sections);
+  const revocation = new Int32Array(connection.revocations[0]!);
   const asyncAtomics = Atomics as typeof Atomics & {
     waitAsync(array: Int32Array, index: number, value: number): { async: boolean; value: string | Promise<string> };
   };
   for (;;) {
     const observed = Atomics.load(cells, 0);
-    if (!observed) return;
+    if (!observed || Atomics.load(revocation, 0) === 2) return;
     const waiting = asyncAtomics.waitAsync(cells, 0, observed);
+    // A proven-dead reap may have notified between the check and registration without
+    // changing an abandoned count. Recheck after registration and release that waiter too.
+    if (Atomics.load(revocation, 0) === 2) { Atomics.notify(cells, 0); return; }
     if (waiting.async) await waiting.value;
   }
 }
@@ -127,6 +131,7 @@ export async function waitForFilesystemQuiescence(connection: FilesystemIdentity
  * quiescent dispose path. A stopped worker can leave an unfinished section and abandoned locks. */
 export function reapFilesystem(connection: FilesystemIdentity): void {
   Atomics.store(new Int32Array(connection.revocations[0]!), 0, 2);
+  Atomics.notify(new Int32Array(connection.sections), 0);
   wake(connection);
 }
 export function wake(connection: FilesystemIdentity): void {

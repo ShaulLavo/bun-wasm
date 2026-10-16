@@ -175,6 +175,35 @@ test("a revoked live worker finishes its held write before quiescence, without a
   } finally { cleanup(); workerCleanups.delete(cleanup); }
 });
 
+for (const timing of ["pending", "before-registration"] as const) test(`a proven-dead reap settles a quiescence waiter (${timing})`, async () => {
+  const identity = createFilesystemIdentity();
+  const cells = new Int32Array(identity.sections);
+  // Model a worker proven stopped after abandoning an admitted section. No live operation
+  // will decrement this count. Ordinary revocation alone must never be treated as this proof.
+  Atomics.store(cells, 0, 1);
+  const asyncAtomics = Atomics as typeof Atomics & {
+    waitAsync(array: Int32Array, index: number, value: number): { async: boolean; value: string | Promise<string> };
+  };
+  const waitAsync = asyncAtomics.waitAsync;
+  let reaped = false;
+  if (timing === "before-registration") asyncAtomics.waitAsync = (array, index, value) => {
+    if (!reaped && array.buffer === identity.sections) { reaped = true; reapFilesystem(identity); }
+    return waitAsync(array, index, value);
+  };
+  let settled = false;
+  const waiting = waitForFilesystemQuiescence(identity).then(() => { settled = true; });
+  try {
+    if (timing === "pending") reapFilesystem(identity);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(settled).toBe(true);
+    expect(Atomics.load(cells, 0)).toBe(1); // Reaping must not reset a late aborting entrant's count.
+  } finally {
+    asyncAtomics.waitAsync = waitAsync;
+    Atomics.store(cells, 0, 0); Atomics.notify(cells, 0);
+    await waiting;
+  }
+});
+
 test("nested sections and concurrent identity users do not announce quiescence prematurely", async () => {
   const identity = createFilesystemIdentity();
   const first = new FilesystemSection(identity);
