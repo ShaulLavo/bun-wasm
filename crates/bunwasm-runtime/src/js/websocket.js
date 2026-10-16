@@ -190,7 +190,7 @@
       this.hooks.close?.(info);
     }
     get bufferedAmount() {
-      return this.conn.queue.reduce((n, bytes) => n + bytes.length, 0);
+      return this.conn.bufferedAmount;
     }
   }
 

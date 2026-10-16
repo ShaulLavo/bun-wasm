@@ -61,7 +61,7 @@ failed=0
 # Both ways of installing the host functions: table slots (default) and calls through the WASI
 # import (SLOTS=imports, the playground's ?slots=imports).
 for slots in table imports; do
-  for fixture in net-fetch net-serve net-node-http; do
+  for fixture in net-fetch net-serve net-node-http net-tcp net-bun-tcp net-http-upgrade; do
     dir="$root/tests/fixtures/$fixture"
     if SLOTS=$slots timeout 60 bun scripts/run.ts "$root/dist/bun.wasm" -e "$(cat "$dir/index.js")" >"$scratch/$fixture.out" 2>&1 &&
       diff -u "$dir/expected.txt" "$scratch/$fixture.out" >"$scratch/$fixture.diff"; then
