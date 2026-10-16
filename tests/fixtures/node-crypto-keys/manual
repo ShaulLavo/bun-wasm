@@ -1,0 +1,1 @@
+Expected Node behavior. Native Bun 1.4.2 incorrectly returns a private KeyObject from createPublicKey with encrypted PKCS#8 DER. Recorded in /work/reports/upstream-bugs/README.md.
