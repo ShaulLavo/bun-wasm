@@ -559,4 +559,4 @@ The 2026-10-16 Next rerun used the same recorded Next 15.5.6, React 19.1.1 and R
 | JSC | install pass; dev and build failed at `ReferenceError: TextEncoderStream is not defined`; start blocked | same result | `server: ReferenceError: TextEncoderStream is not defined` |
 | Browser | install pass; dev and build failed without a diagnostic; start blocked | dev failed without a diagnostic; build failed with `SyntaxError: Unexpected token '.'`; start blocked | `server: No diagnostic before exit or deadline` |
 
-The before and after result files are retained in `/work/reports/bun-wasm-next-opendir-2026-10-16/resume/next-before/` and `next-after/`. Both runs completed 13 stages with 3 install passes and 6 command failures. No stage timed out. The app row remains category `d` because the next blocker is outside the directory API.
+The before and after result files are retained in `/work/reports/bun-wasm-next-opendir-2026-10-16/resume/next-before/` and `next-after/`. Both runs completed 12 stages with 3 install passes and 6 command failures. No stage timed out. The app row remains category `d` because the next blocker is outside the directory API.
