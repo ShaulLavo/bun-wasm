@@ -180,8 +180,8 @@
       return buffer;
     }
 
-    const unsupportedCrypto = ["createCipheriv", "createDecipheriv", "createSign", "createVerify", "generateKeyPair", "generateKeyPairSync", "createECDH", "createDiffieHellman", "pbkdf2", "pbkdf2Sync", "scrypt", "scryptSync", "publicEncrypt", "privateDecrypt", "sign", "verify", "createPublicKey", "createPrivateKey", "hkdf", "hkdfSync"];
-    return unsupportedModule("crypto", "only hashes, HMAC and random numbers are implemented", unsupportedCrypto, {
+    const unsupportedCrypto = ["createCipheriv", "createDecipheriv", "createECDH", "createDiffieHellman", "scrypt", "scryptSync", "publicEncrypt", "privateDecrypt"];
+    return unsupportedModule("crypto", "this Node crypto operation is not implemented", unsupportedCrypto, {
       createHash,
       createHmac,
       KeyObject,
