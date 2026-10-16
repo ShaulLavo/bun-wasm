@@ -20,7 +20,17 @@ beforeAll(() => {
   mkdirSync(source, { recursive: true });
   mkdirSync(out);
   symlinkSync(join(root, "scripts"), join(scratch, "scripts"));
-  const compile = Bun.spawnSync(["rustc", join(root, "crates/bunwasm-runtime/build.rs"), "-o", builder]);
+  const harness = join(scratch, "embed.rs");
+  writeFileSync(harness, `
+#[path = ${JSON.stringify(join(root, "crates/bunwasm-runtime/build/polyfills.rs"))}]
+mod polyfills;
+fn main() {
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let out = std::env::var("OUT_DIR").unwrap();
+    polyfills::embed(std::path::Path::new(&manifest), std::path::Path::new(&out));
+}
+`);
+  const compile = Bun.spawnSync(["rustc", harness, "-o", builder]);
   expect(compile.exitCode).toBe(0);
 });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
