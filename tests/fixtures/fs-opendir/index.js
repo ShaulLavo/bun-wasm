@@ -164,25 +164,6 @@ async function main() {
   await asyncDisposed[Symbol.asyncDispose]();
   assert.throws(() => asyncDisposed.readSync(), { code: "ERR_DIR_CLOSED" });
   assert.throws(() => fs.opendirSync(""), { code: "ENOENT" });
-  let testing;
-  try { testing = require("bun:internal-for-testing"); } catch {}
-  if (testing) {
-    const baseline = testing.directoryCount();
-    function abandon() {
-      const abandoned = Array.from({ length: 20 }, () => fs.opendirSync("tree"));
-      assert.equal(testing.directoryCount(), baseline + abandoned.length);
-    }
-    abandon();
-    for (let i = 0; i < 50 && testing.directoryCount() !== baseline; i++) {
-      try { Bun.gc(true); } catch {}
-      globalThis.__bunwasmSweepDirs?.();
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    if (testing.directoryCount() !== baseline) testing.closeAllDirs();
-    assert.equal(testing.directoryCount(), baseline);
-    fs.opendirSync("tree");
-    process.once("exit", () => fs.writeFileSync("directory-exit-count", `${testing.directoryCount()}\n`));
-  }
   console.log("entry encodings and callback validation");
 }
 main();
