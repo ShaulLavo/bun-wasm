@@ -518,6 +518,10 @@ write errors without leaking stdio error listeners. Native Bun 1.4.2 drops a
 Console trace's message; the Node-contract fixture is marked manual, and a
 minimal Bun/Node comparison is recorded in the owner's upstream bug report.
 
+The [esbuild follow-up measurement](esbuild-results.md) records the five requested
+framework projects after selecting the official wasm distribution, including
+passing production builds and the exact next blockers.
+
 ## Generated-function import review rerun
 
 The adapter now uses Bun's full parser to locate genuine import keywords in

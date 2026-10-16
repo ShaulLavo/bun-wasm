@@ -130,7 +130,7 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, handle: i32, buf: i32, cap: i32| {
             with_memory(&mut caller, |memory, host| {
                 let buf = range(memory, buf, cap)?;
-                let n = if handle >= crate::process::FIRST_HANDLE { host.processes.read(handle, &mut memory[buf]) } else { host.net.read(handle, &mut memory[buf]) };
+                let n = if handle == 0 || handle >= crate::process::FIRST_HANDLE { host.processes.read(handle, &mut memory[buf]) } else { host.net.read(handle, &mut memory[buf]) };
                 if n != crate::net::AGAIN {
                     trace(host, format_args!("read({handle}, {cap}) -> {n}"));
                 }
