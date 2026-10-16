@@ -123,6 +123,15 @@ null; eval-origin metadata is unavailable and returns undefined. Engine placehol
 as `<input>` are not reported as source origins.
 The regression fixture uses the public capture API without copying a package.
 
+Successful stack values are memoized in an original WeakMap adapter, independently
+of the holder's descriptor. Mutable holders may receive a data property;
+frozen and sealed holders keep their accessor. Capture rejects non-extensible
+or non-configurable targets before native capture mutates them, matching the
+Node/V8 public contract. A single formatting guard covers all errors: reentrant
+reads memoize the default stack, successful outer formatters may replace that
+value, and throwing formatters clear the guard in finally. These are original
+adapters derived from behavior probes, with no Node/V8 implementation copied.
+
 ## HTTP socket state
 
 The HTTP server socket facade in `crates/bunwasm-runtime/src/js/net.js` is an
