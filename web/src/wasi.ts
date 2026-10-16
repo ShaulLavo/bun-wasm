@@ -584,7 +584,7 @@ export class Wasi {
       fd_seek: (fd: number, offset: bigint, whence: number, newOffsetPtr: number) => {
         const entry = this.fds.get(fd);
         if (!entry) return EBADF;
-        const right = offset === 0n && whence === 1 ? RIGHT_FD_TELL : RIGHT_FD_SEEK;
+        const right = offset === 0n && whence === 1 ? RIGHT_FD_TELL | RIGHT_FD_SEEK : RIGHT_FD_SEEK;
         if (!(entry.rightsBase & right)) return ENOTCAPABLE;
         if (entry.type === "stdio") return ESPIPE;
         if (entry.type === "dir") return EISDIR;

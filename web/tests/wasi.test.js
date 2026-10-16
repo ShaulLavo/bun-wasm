@@ -421,3 +421,13 @@ for (const root of [false, true]) {
     expect(h.calls.fd_readdir(fd, 2048, 128, 0n, 1024)).toBe(0);
   });
 }
+
+
+test("FD_SEEK alone still permits CUR-zero queries", () => {
+  const h = host();
+  const file = openRights(h, "inside", SEEK);
+  expect(file.result).toBe(0);
+  expect(h.calls.fd_seek(file.fd, 1n, 0, 1024)).toBe(0);
+  expect(h.calls.fd_seek(file.fd, 0n, 1, 1024)).toBe(0);
+  expect(h.view.getBigUint64(1024, true)).toBe(1n);
+});
