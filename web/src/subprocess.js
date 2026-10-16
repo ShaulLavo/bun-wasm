@@ -19,6 +19,7 @@ export function createProcessBudget() {
 }
 
 function wake(budget) {
+  if (budget === undefined) return;
   const cells = new Int32Array(budget);
   Atomics.add(cells, 1, 1);
   Atomics.notify(cells, 1);
