@@ -22,28 +22,35 @@ bun run build >/dev/null
 
 scratch="$(mktemp -d /work/tmp/bun-wasm-web-net-XXXXXX)"
 isolated_scratch="$(mktemp -d /work/tmp/bun-wasm-web-isolated-XXXXXX)"
-isolated_links=()
+isolated_backups=()
 server_pid=""
 cleanup() {
   if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; fi
-  for link in "${isolated_links[@]}"; do rm -f "$link"; done
+  for app in "${isolated_backups[@]}"; do
+    backup="$isolated_scratch/$app.bunfig.toml"
+    if [[ -f "$backup" ]]; then
+      cp "$backup" "$root/$app/bunfig.toml"
+    else
+      rm -f "$root/$app/bunfig.toml"
+    fi
+  done
   rm -rf "$scratch" "$isolated_scratch"
 }
 trap cleanup EXIT
 
 printf '[install]\nlinker = "isolated"\n' >"$isolated_scratch/bunfig.toml"
 for app in web sandbox site; do
-  link="$root/$app/bunfig.toml"
-  if [[ -e "$link" || -L "$link" ]]; then
-    echo "cannot install temporary bunfig.toml at $link" >&2
-    exit 1
+  config="$root/$app/bunfig.toml"
+  if [[ -e "$config" || -L "$config" ]]; then
+    cp "$config" "$isolated_scratch/$app.bunfig.toml"
   fi
-  ln -s "$isolated_scratch/bunfig.toml" "$link"
-  isolated_links+=("$link")
+  isolated_backups+=("$app")
+  cp "$isolated_scratch/bunfig.toml" "$config"
 done
 for app in web sandbox site; do
   (cd "$root/$app" && bun install --frozen-lockfile && bun run build >/dev/null)
 done
+(cd "$root/web" && bun test tests/build-splitting.test.ts)
 
 bun "$root/tests/servers/http.ts" >"$scratch/port" &
 server_pid=$!
