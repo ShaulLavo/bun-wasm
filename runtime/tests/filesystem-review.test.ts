@@ -141,3 +141,37 @@ test("revoking a live in-flight writer keeps its locks and pages until it exits"
     expect(backend.shared.resources().usedBytes).toBe(0);
   } finally { client.dispose(); service.dispose(); }
 });
+
+test("zero-byte positioned writes do not grow or timestamp a file", () => {
+  const state = new SharedFilesystemState();
+  state.register(0, { kind: "file", ino: 1, size: 1, mtime: 1 }, new Uint8Array([65]));
+  expect(state.write(0, [empty], 4096)).toBe(0);
+  expect(state.stat(0)).toMatchObject({ size: 1, mtime: 1 });
+  expect(state.append(0, [empty])).toEqual({ written: 0, offset: 1 });
+  expect(state.stat(0)).toMatchObject({ size: 1, mtime: 1 });
+});
+
+test("a successful truncate returns trailing capacity for another file", () => {
+  const backend = new MemoryBackend();
+  backend.attachShared(SharedFilesystemState.createBuffer(), PAGE * 256);
+  backend.execute("writeFile", ["/full"], new Uint8Array(PAGE * 256));
+  const root = backend.execute("preopen", ["/"], empty) as number;
+  const path = backend.execute("resolve", [root, "full"], empty) as { node: number };
+  backend.execute("resize", [path.node, 0, true], empty);
+  expect(backend.shared.resources().usedBytes).toBe(0);
+  backend.execute("writeFile", ["/new"], new Uint8Array([65]));
+  expect(backend.shared.resources().usedBytes).toBe(PAGE);
+});
+
+test("a failed SAB allocation rolls back all uncommitted page owners", () => {
+  const state = new SharedFilesystemState(undefined, PAGE * 512);
+  state.register(0, { kind: "file", ino: 1, size: PAGE * 255, mtime: 1 });
+  const allocator = state as unknown as { ensureSegment(index: number): void };
+  const original = allocator.ensureSegment.bind(state);
+  allocator.ensureSegment = index => { if (index === 1) throw new RangeError("injected SAB allocation failure"); original(index); };
+  expect(() => state.register(1, { kind: "file", ino: 2, size: PAGE * 2, mtime: 1 })).toThrow();
+  expect(Array.from(state.owners).filter(owner => owner !== 0).length).toBe(255);
+  allocator.ensureSegment = original;
+  state.register(2, { kind: "file", ino: 3, size: PAGE, mtime: 1 });
+  expect(state.resources().usedBytes).toBe(PAGE * 256);
+});

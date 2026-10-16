@@ -81,10 +81,10 @@ export class MemoryBackend implements FilesystemBackend {
       case "resolve": this.check(a, "directory"); return this.fs.resolve(a, b);
       case "stat": this.check(a); return this.shared.stat(a)!;
       case "read": { this.check(a, "file"); const bytes = new Uint8Array(b); const count = this.shared.read(a, [bytes], c); return bytes.subarray(0, count); }
-      case "write": this.check(a, "file"); return this.shared.mutate(undefined, undefined, () => { this.shared.growLocked(a, b + data.length); const result = this.shared.write(a, [data], b); this.fs.setMtime(a, Date.now()); return result; });
-      case "append": { this.check(a, "file"); return this.shared.mutate(undefined, undefined, () => { const info = this.shared.info(a)!; this.shared.growLocked(a, info.size + data.length); const result = this.shared.append(a, [data]); this.fs.setMtime(a, Date.now()); return result; }); }
+      case "write": this.check(a, "file"); if (!data.length) return 0; return this.shared.mutate(undefined, undefined, () => { this.shared.growLocked(a, b + data.length); const result = this.shared.write(a, [data], b); this.fs.setMtime(a, Date.now()); return result; });
+      case "append": { this.check(a, "file"); if (!data.length) return { written: 0, offset: this.shared.info(a)!.size }; return this.shared.mutate(undefined, undefined, () => { const info = this.shared.info(a)!; this.shared.growLocked(a, info.size + data.length); const result = this.shared.append(a, [data]); this.fs.setMtime(a, Date.now()); return result; }); }
       case "grow": this.check(a, "file"); this.shared.grow(a, b); return;
-      case "resize": this.check(a, "file"); return this.shared.mutate(undefined, undefined, () => { this.shared.growLocked(a, b); return this.shared.resize(a, b, c); });
+      case "resize": this.check(a, "file"); return this.shared.mutate(undefined, undefined, () => { this.shared.growLocked(a, b); const result = this.shared.resize(a, b, c); if (c) this.shared.reclaimLocked(a); return result; });
       case "setMtime": this.check(a); this.fs.setMtime(a, b); return this.shared.mutate(undefined, undefined, () => this.shared.setMtime(a, b));
       case "readdir": this.check(a, "directory"); return this.fs.readdir(a);
       case "create": {
@@ -129,8 +129,9 @@ export class MemoryBackend implements FilesystemBackend {
       case "writeFile": {
         const existing = this.existing(a);
         if (existing) {
+          if (b && !data.length) return;
           if (b) this.shared.mutate(undefined, undefined, () => { const info = this.shared.info(existing.handle)!; this.shared.growLocked(existing.handle, info.size + data.length); this.shared.append(existing.handle, [data]); this.fs.setMtime(existing.handle, Date.now()); });
-          else this.shared.mutate(undefined, undefined, () => { this.shared.growLocked(existing.handle, data.length); this.shared.resize(existing.handle, 0, true); this.shared.write(existing.handle, [data], 0); this.fs.setMtime(existing.handle, Date.now()); });
+          else this.shared.mutate(undefined, undefined, () => { this.shared.growLocked(existing.handle, data.length); this.shared.resize(existing.handle, 0, true); this.shared.write(existing.handle, [data], 0); this.shared.reclaimLocked(existing.handle); this.fs.setMtime(existing.handle, Date.now()); });
           return;
         }
         this.fs.writeFile(a, data.slice(), false);
