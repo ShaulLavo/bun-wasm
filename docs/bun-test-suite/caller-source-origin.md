@@ -78,3 +78,18 @@ Native Bun 1.4.2 falls back to the invocation module for the cross-module Functi
 constructor control. This manual fixture follows the stricter requested contract and
 accepts only the creation module or `null`. Review evidence is retained in
 `/work/tmp/bun-wasm-track4-review/` until coordinator acceptance.
+
+## Tagged eval regressions
+
+`caller-source-origin-source-url` covers file and HTTPS sourceURLs, legacy directives,
+sourceMappingURLs without a sourceURL and both directive orders. Tagged eval functions
+created in a helper and invoked elsewhere must report the sourceURL or `null`.
+A sourceMappingURL alone must not become the source origin. Native Bun reports the
+creation module for tagged eval, so this fixture follows the stricter requested contract.
+
+The published `68bf5bb` artifacts fail five sourceURL cases on the browser host. QuickJS
+and wasm JSC already pass with `null`. The formatter now marks eval frames when resolving
+host display names, preserving their sourceURL instead of hiding them as host code.
+Registered CommonJS and module URLs still resolve through the module map. Chromium and
+WebKit run the same regression in the web gate. Review evidence is retained at
+`/work/tmp/bun-wasm-track4-review2/` until coordinator acceptance.

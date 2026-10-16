@@ -81,7 +81,7 @@
   function formatCallSite(site) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
     const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
-    const file = internal.displayName ? internal.displayName(rawFile) : rawFile;
+    const file = internal.displayName ? internal.displayName(rawFile, typeof site.isEval === "function" && site.isEval()) : rawFile;
     const name = site.getFunctionName();
     // A syntax error's location: no function, just file:line:col.
     if (!isV8 && site.getFunction() === undefined && !name && file) {
