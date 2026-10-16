@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::engine::{Args, DataFn, NativeError, NativeResult, Record, Val};
 use crate::resolve::{self, Kind, Resolved};
+use crate::modules;
 use crate::State;
 
 /// Natives by name, plus constant properties of the `native` object.
@@ -549,7 +550,24 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     });
 }
 
+fn builtin_index(args: Args<'_>) -> Result<usize, NativeError> {
+    match args.get(0) {
+        Val::Num(n) if *n >= 0.0 && n.fract() == 0.0 && *n <= u32::MAX as f64 => Ok(*n as usize),
+        _ => Err(NativeError::type_error("expected a builtin registry index")),
+    }
+}
+
 fn install_modules(t: &mut Table, state: &Rc<State>) {
+    t.add("bunBuiltinNames", |_| {
+        Ok(Val::Array(modules::BUN_BUILTIN_NAMES.iter().map(|name| Val::from(*name)).collect()))
+    });
+    t.add("bunBuiltinSource", |a| Ok(modules::bun_builtin_source(builtin_index(a)?).map(Val::from).into()));
+    t.add("bunBuiltinHookName", |a| {
+        Ok(modules::BUN_BUILTIN_HOOK_NAMES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
+    });
+    t.add("bunBuiltinErrorCode", |a| {
+        Ok(modules::BUN_BUILTIN_ERROR_CODES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
+    });
     let st = state.clone();
     t.add("resolve", move |a| {
         let spec = a.str(0)?;
@@ -828,4 +846,35 @@ fn platform_info() -> Val {
         .set("revision", crate::BUN_REVISION)
         .set("arch", if cfg!(target_arch = "wasm32") { "wasm32" } else { std::env::consts::ARCH })
         .into()
+}
+
+#[cfg(test)]
+mod builtin_tests {
+    use super::*;
+    use crate::transpiler::PassthroughTranspiler;
+
+    fn call(table: &Table, name: &str, args: &[Val]) -> NativeResult {
+        let (_, function) = table.functions.iter().find(|(key, _)| *key == name).expect("shared data native");
+        function(Args(args))
+    }
+
+    #[test]
+    fn generated_builtins_use_shared_data_natives() {
+        bunwasm_glue::init();
+        #[cfg(target_os = "wasi")]
+        bunwasm_posix::init();
+        let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
+        let table = table(&state);
+        let Val::Array(names) = call(&table, "bunBuiltinNames", &[]).unwrap() else { panic!("module names must be data") };
+        let id = names.iter().position(|name| *name == Val::from("internal:freelist")).unwrap();
+        let Val::Str(source) = call(&table, "bunBuiltinSource", &[Val::Num(id as f64)]).unwrap() else { panic!("factory must be source text") };
+        assert!(source.contains("class FreeList"));
+        assert_eq!(call(&table, "bunBuiltinSource", &[Val::Num(u32::MAX as f64)]).unwrap(), Val::Undefined);
+        assert!(matches!(call(&table, "bunBuiltinHookName", &[Val::Num(0.0)]).unwrap(), Val::Str(_)));
+        let error_id = modules::BUN_BUILTIN_ERROR_CODES.iter().position(|code| *code == "ERR_INVALID_URI").unwrap();
+        assert_eq!(call(&table, "bunBuiltinErrorCode", &[Val::Num(error_id as f64)]).unwrap(), Val::from("ERR_INVALID_URI"));
+        for invalid in [Val::Num(-1.0), Val::Num(0.5), Val::Num(f64::INFINITY), Val::Bool(true), Val::from("22")] {
+            assert_eq!(call(&table, "bunBuiltinSource", &[invalid]).unwrap_err().kind, crate::engine::ErrorKind::TypeError);
+        }
+    }
 }

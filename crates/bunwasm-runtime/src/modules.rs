@@ -15,6 +15,12 @@ use crate::transpiler::Loader as SourceLoader;
 use crate::State;
 
 include!(concat!(env!("OUT_DIR"), "/polyfills.rs"));
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/generated/builtins/registry.rs"));
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/generated/builtins/bindings.rs"));
+
+pub fn bun_builtin_source(id: usize) -> Option<&'static str> {
+    BUN_BUILTINS.iter().find(|(index, _)| *index == id).map(|(_, source)| *source)
+}
 
 /// Bun's transpiler emits CommonJS modules already wrapped in this function
 /// expression (that is how it reports a file is CommonJS).
