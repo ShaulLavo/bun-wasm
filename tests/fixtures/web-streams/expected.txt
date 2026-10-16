@@ -1,0 +1,17 @@
+globals
+encode/decode
+tee/pipe/iterate
+byob
+abort
+compression
+node interop
+encoding boundaries
+body interop
+node cancellation
+writable fromWeb
+backpressure
+incremental compression/cancel
+iterator cancellation
+writable errors
+node readable mode
+node pending write error

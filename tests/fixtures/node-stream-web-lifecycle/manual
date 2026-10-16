@@ -1,0 +1,1 @@
+Node 26.7.0 contract. Bun 1.4.2 finished(WebWritable) reports an error before its asynchronous abort settles. Keep the Node expectation; the retained native repro is in the round-3 report.
