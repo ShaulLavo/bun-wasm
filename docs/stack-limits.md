@@ -54,7 +54,7 @@ byte were 1.9 for plain calls, 2.4 for getters, 13 for `JSON.stringify`, 11 for
 the parser would leave about 300 plain calls. Instead, `js_reserve_wasm_frame` in
 `quickjs.c` makes recursive C paths that keep few locals in memory reserve shadow
 bytes for their host frames. The serializer, JSON parser and reviver, the parser's
-expression and statement levels, `Array.prototype.flat`, Proxy traps, bound
+expression and statement levels, the regexp parser (`libregexp.c`), `Array.prototype.flat`, Proxy traps, bound
 functions, async resumption, `ToPrimitive` and C-to-JavaScript calls reserve. After
 that every measured path spends at most 1.9 host bytes per shadow byte (0.8 to 1.9). The
 reservation is a constant-size `alloca` whose pointer escapes. It is freed when the
@@ -80,7 +80,7 @@ Reproduce, then size each reservation so host/shadow stays at or below 1.9:
 | Unary chain | 176 | — | `js_parse_unary` 80 | 100 | 1.76 |
 | Conditional chain | 208 | — | expression-parser frames | 166 | 1.25 |
 | `if` chain | 352 | — | `js_parse_statement_or_decl` 96 | 199 | 1.77 |
-| Regexp groups | 288 | 178 | none | 180 | 1.60 |
+| Regexp groups | 288 | 178 | `re_parse_disjunction` 160 (in `libregexp.c`) | 344 | 0.84 |
 | Proxy chain | 304 | 97 | `get_proxy_method` 240 | 376 | 0.81 |
 | Bound chain | 656 | 258 | `js_call_bound_function` 80 | 442 | 1.48 |
 | Nested arrays to string | 2,048 | 745 | `JS_ToPrimitiveFree` 192, `JS_CallFree` 64 | 1,162 | 1.76 |
@@ -205,7 +205,7 @@ the same on every host with that budget:
 | `**` chain | trap 2,912 | 1,560 | 365 | 43,629 |
 | Conditional operator chain | trap 2,288 | 936 | 219 | 26,177 |
 | `if` chain | trap 1,457 | 781 | 183 | 21,815 |
-| Regexp groups (SyntaxError) | trap 1,536 | 864 | 212 | 23,811 |
+| Regexp groups (SyntaxError) | trap 1,536 | 452 | 110 | 12,472 |
 | Proxy chain without traps | trap 1,700 | 414 | 102 | 11,389 |
 | Bound function chain | trap 645 | 352 | 86 | completes at 2,000 |
 | Nested arrays to string | trap 222 | 134 | 32 | 3,740 |

@@ -93,7 +93,7 @@ function sleep(ms: number): void {
 // (docs/stack-limits.md). V8 is the engine whose stack traces have "    at " frames.
 const smallStackKib: Partial<Record<Engine, string>> | null = /\n\s+at /.test(new Error().stack ?? "")
   ? null
-  : { quickjs: "40", jsc: "224" };
+  : { quickjs: "32", jsc: "192" };
 
 function guestEnv(req: RunRequest): Record<string, string> {
   const kib = smallStackKib?.[req.engine];
