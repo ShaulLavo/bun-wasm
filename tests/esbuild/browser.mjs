@@ -31,8 +31,8 @@ async function check(browserName, engine, url) {
     await command(page, 'bun install');
     assert.match(await command(page, 'bun run check.cjs'), /esbuild transform, build, context rebuild, plugins passed/);
     assert.match(await command(page, 'bun run node_modules/esbuild/bin/esbuild --version'), /0\.25\.12/);
-    await command(page, 'bun run node_modules/esbuild/bin/esbuild /entry.ts --bundle --outfile=/cli.js');
-    assert.match(await command(page, 'cat /cli.js'), /43/);
+    await command(page, 'bun run node_modules/esbuild/bin/esbuild entry.ts --bundle --outfile=cli.js');
+    assert.match(await command(page, 'cat cli.js'), /43/);
     assert.deepEqual(external, []);
     console.log(`PASS ${browserName}/${engine} official esbuild API and CLI`);
   } finally { await browser.close(); }

@@ -130,6 +130,7 @@ export class SubprocessHost {
     this.notify = () => {};
     this.memory = null;
     this.stdin = options.stdin ? new SharedPipe(options.stdin, this.budget) : null;
+    this.stdinWaiting = false;
   }
   attach(memory) { this.memory = memoryViews(memory); }
   fail(message, code) {
@@ -217,7 +218,12 @@ export class SubprocessHost {
     return child && fd >= 0 && fd <= 2 ? child.handles[fd] : BADF;
   }
   read(handle, cap) {
-    if (handle === 0) return this.stdin ? this.stdin.read(cap) : -4;
+    if (handle === 0) {
+      const value = this.stdin ? this.stdin.read(cap) : -4;
+      this.stdinWaiting = value === AGAIN;
+      if (this.stdinWaiting) this.watch();
+      return value;
+    }
     const h = this.handles.get(handle);
     return h && h.fd !== 0 ? h.pipe.read(cap) : BADF;
   }
@@ -297,10 +303,11 @@ export class SubprocessHost {
       this.timer = null;
       this.poll();
       this.notify();
-      if (Array.from(this.children.values()).some((child) => !child.ended)) this.watch();
+      if (this.stdinWaiting || Array.from(this.children.values()).some((child) => !child.ended)) this.watch();
     }, 4);
   }
   dispose() {
+    this.stdinWaiting = false;
     if (this.timer !== null) nativeClearTimeout(this.timer);
     this.timer = null;
     for (const id of this.children.keys()) {
