@@ -670,6 +670,10 @@ The original stdin adapters in `crates/bunwasm-runtime/src/js/node_fs.js`,
 `crates/bunwasm-host/src/process/mod.rs`, `process/stdin.rs`, `process/stdio.rs`,
 its slot and notification hooks,
 and `web/src/subprocess.js` let callback reads wait through the host I/O loop.
+The original browser filesystem adapters in `web/src/subprocess-fs.ts`,
+`web/src/subprocess.js`, and `web/src/worker.ts` exchange changes at stdin,
+stdout, and exit boundaries. Each child has separate incoming and outgoing
+mailboxes and a baseline; native hosts use their shared physical filesystem.
 The synchronous path reads the WASI descriptor without Rust stdin prefetching.
 The native WASI and host interfaces share a buffer, including bytes read ahead.
 This prevents Go's service loop from blocking JavaScript callbacks and preserves

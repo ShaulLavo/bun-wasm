@@ -9,7 +9,7 @@ import type { NetRequest } from "./net/protocol";
 import { installHostSlots, installHostSlotsViaImport } from "./net/trampoline";
 import { Wasi, WasiExit, compactFs } from "./wasi";
 import { SubprocessHost, childTransport, type ChildTransport } from "./subprocess.js";
-import { filesystemChanges, mergeFilesystemChanges } from "./subprocess-fs";
+import { filesystemSync } from "./subprocess-fs";
 
 export type Engine = "quickjs" | "jsc" | "browser";
 
@@ -103,9 +103,16 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   const fs = new MemFS(req.root);
   const initialRoot = req.child ? structuredClone(req.root) : null;
   const child = req.child ? childTransport(req.child) : null;
+  const childFiles = initialRoot ? filesystemSync(fs, initialRoot) : null;
+  const syncStdin = () => {
+    const snapshot = child?.receiveFilesystem();
+    if (snapshot) childFiles?.merge(snapshot);
+  };
   const post = (type: "stdout" | "stderr", data: Uint8Array) => {
-    if (child) child[type].writeAll(data);
-    else ctx.postMessage({ type, data }, [data.buffer]);
+    if (!child) { ctx.postMessage({ type, data }, [data.buffer]); return; }
+    const snapshot = childFiles?.capture();
+    if (snapshot && child.sendFilesystem(snapshot)) childFiles?.commit(snapshot);
+    child[type].writeAll(data);
   };
   const subprocess = ctx.crossOriginIsolated && typeof SharedArrayBuffer === "function" ? new SubprocessHost({
     budget: req.child?.budget,
@@ -113,7 +120,8 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     token: req.child?.token,
     stdin: req.child?.pipes[0],
     output: (fd, data) => post(fd === 2 ? "stderr" : "stdout", data),
-    sync: (snapshot) => mergeFilesystemChanges(fs, snapshot),
+    filesystem: () => filesystemSync(fs),
+    syncStdin,
     launch: (meta, transport) => {
       const cwd = meta.cwd || req.env.PWD || "/";
       if (fs.lookup(cwd)?.kind !== "dir") throw Object.assign(new Error(`spawn: cwd does not exist: ${cwd}`), { code: "ENOENT" });
@@ -132,7 +140,11 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     env: req.env,
     fs,
     preopens: { "/": "/" },
-    stdin: child ? (cap) => child.stdin.readBlocking(cap) : undefined,
+    stdin: child ? (cap) => {
+      const data = child.stdin.readBlocking(cap);
+      syncStdin();
+      return data;
+    } : undefined,
     stdout: (data) => post("stdout", data),
     stderr: (data) => post("stderr", data),
     sleep,
@@ -147,7 +159,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     compactFs(fs.root);
     if (child && initialRoot) {
       if ("error" in result) child.stderr.writeAll(new TextEncoder().encode(`${describeError(result.error)}\n`));
-      child.finish("code" in result ? result.code : 1, filesystemChanges(initialRoot, fs.root));
+      child.finish("code" in result ? result.code : 1, childFiles?.capture());
       return;
     }
     if ("code" in result) {

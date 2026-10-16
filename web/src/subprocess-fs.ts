@@ -1,10 +1,11 @@
-import { type DirNode, type Node, MemFS, basename, dirname } from "./fs";
+import { type DirNode, type Node, MemFS, adoptInodes, basename, dirname } from "./fs";
 
 type Change = { path: string; node: Node | null };
 
 function sameFile(before: Node | undefined, after: Node): boolean {
   if (before?.kind !== "file" || after.kind !== "file") return false;
-  return before.data.length === after.data.length && before.data.every((byte, i) => byte === after.data[i]);
+  return before.ino === after.ino && before.mtime === after.mtime
+    && before.data.length === after.data.length && before.data.every((byte, i) => byte === after.data[i]);
 }
 
 function changes(before: DirNode, after: DirNode, path: string, out: Change[]): void {
@@ -40,6 +41,26 @@ export function mergeFilesystemChanges(fs: MemFS, snapshot: string): void {
     const parent = fs.lookup(dirname(path));
     if (parent?.kind !== "dir") continue;
     if (node === null) parent.children.delete(basename(path));
-    else parent.children.set(basename(path), node);
+    else {
+      const current = parent.children.get(basename(path));
+      if (current?.kind === "file" && node.kind === "file" && current.ino === node.ino) Object.assign(current, node);
+      else parent.children.set(basename(path), node);
+    }
   }
+  adoptInodes(fs.root);
+}
+
+export function filesystemSync(fs: MemFS, initialRoot: DirNode = structuredClone(fs.root)) {
+  const baseline = new MemFS(initialRoot);
+  return {
+    capture() {
+      const snapshot = filesystemChanges(baseline.root, fs.root);
+      return snapshot === "[]" ? "" : snapshot;
+    },
+    commit: (snapshot: string) => mergeFilesystemChanges(baseline, snapshot),
+    merge(snapshot: string) {
+      mergeFilesystemChanges(fs, snapshot);
+      mergeFilesystemChanges(baseline, snapshot);
+    },
+  };
 }

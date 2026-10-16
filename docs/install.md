@@ -194,7 +194,10 @@ The unchanged `esbuild-wasm` Node API starts its JavaScript CLI through
 with the same engine, filesystem, and environment. Go's published `wasm_exec.js`
 then runs `esbuild.wasm` through the guest WebAssembly API. The native launcher
 and browser subprocess host supply pipes. Callback stdin reads yield to the
-event loop while waiting for service packets. Plain wasmtime without a subprocess
+event loop while waiting for service packets. Browser workers exchange file
+changes before stdin requests and stdout responses, so a running context sees
+parent edits and its output is visible before the service exits. Each file-change
+message is limited to 8 MiB. Plain wasmtime without a subprocess
 host cannot use this API.
 
 `MATRIX_CACHE=/path/to/mirror bun tests/esbuild/run.mjs` replays esbuild 0.25.12.

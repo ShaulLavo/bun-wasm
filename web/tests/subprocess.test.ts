@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { MemFS } from "../src/fs";
 import { SharedPipe, SubprocessHost, childTransport, createProcessBudget, type ChildTransport } from "../src/subprocess.js";
-import { filesystemChanges, mergeFilesystemChanges } from "../src/subprocess-fs";
+import { filesystemChanges, filesystemSync, mergeFilesystemChanges } from "../src/subprocess-fs";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -158,4 +158,59 @@ test("stdin wakes host-engine waiters without spawning another child", async () 
     });
     expect(net.natives.hostRead(0, 4)).toEqual(encoder.encode("ping"));
   } finally { pipe.close(); host.dispose(); }
+});
+
+test("live child filesystem changes precede stdin and stdout without waiting for exit", () => {
+  const parent = new MemFS();
+  parent.writeFile("/seed", "before");
+  const launched: { transport: ChildTransport; fs: MemFS }[] = [];
+  const host = new SubprocessHost({
+    filesystem: () => filesystemSync(parent), output() {},
+    launch(_meta, transport) {
+      launched.push({ transport, fs: new MemFS(structuredClone(parent.root)) });
+      return { terminate() {} };
+    },
+  });
+  try {
+    const id = host.spawn(childCommand);
+    const info = launched[0];
+    const child = childTransport(info.transport);
+    const files = filesystemSync(info.fs);
+    parent.writeFile("/entry.ts", "export default 42");
+    host.write(host.pipe(id, 0), encoder.encode("build"));
+    parent.writeFile("/next.ts", "next");
+    expect(host.write(host.pipe(id, 0), encoder.encode("queued"))).toBe(-2);
+    expect(child.stdin.read()).toEqual(encoder.encode("build"));
+    const incoming = child.receiveFilesystem();
+    if (!incoming) throw new Error("parent changes were not published");
+    files.merge(incoming);
+    expect(decoder.decode(info.fs.readFile("/entry.ts"))).toBe("export default 42");
+    expect(host.write(host.pipe(id, 0), encoder.encode("queued"))).toBe(6);
+    child.stdin.read();
+    const queued = child.receiveFilesystem();
+    if (!queued) throw new Error("queued changes were not published");
+    files.merge(queued);
+    expect(decoder.decode(info.fs.readFile("/next.ts"))).toBe("next");
+    info.fs.writeFile("/out.js", "answer=42");
+    const outgoing = files.capture();
+    expect(child.sendFilesystem(outgoing)).toBe(true);
+    files.commit(outgoing);
+    child.stdout.write(encoder.encode("built"));
+    expect(host.read(host.pipe(id, 1))).toEqual(encoder.encode("built"));
+    expect(decoder.decode(parent.readFile("/out.js"))).toBe("answer=42");
+    expect(host.wait(id)).toBe(-2);
+    expect(files.capture()).toBe("");
+    parent.writeFile("/entry.ts", "export default 43");
+    parent.remove("/seed");
+    host.write(host.pipe(id, 0), encoder.encode("rebuild"));
+    child.stdin.read();
+    const updated = child.receiveFilesystem();
+    if (!updated) throw new Error("parent edits were not published");
+    files.merge(updated);
+    expect(decoder.decode(info.fs.readFile("/entry.ts"))).toBe("export default 43");
+    expect(info.fs.lookup("/seed")).toBeUndefined();
+    expect(files.capture()).toBe("");
+    child.finish(0, files.capture());
+    expect(host.wait(id)).toBe(0);
+  } finally { host.dispose(); }
 });
