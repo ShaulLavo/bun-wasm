@@ -91,7 +91,10 @@ export class MemFS implements FileSystem {
   private forget(node: Node): void {
     const handle = this.nodeHandles.get(node);
     if (handle !== undefined && !this.references.has(handle)) this.handles.delete(handle);
-    if (node.kind === "dir") for (const child of node.children.values()) this.forget(child);
+    if (node.kind === "dir") {
+      this.removedDirectories.add(node);
+      for (const child of node.children.values()) this.forget(child);
+    }
   }
   private node(handle: FileHandle): Node {
     const node = this.handles.get(handle);
@@ -194,13 +197,14 @@ export class MemFS implements FileSystem {
     node.mtime = Date.now();
     return pos - offset;
   }
-  resize(handle: FileHandle, size: number, truncate: boolean): void {
+  resize(handle: FileHandle, size: number, truncate: boolean): number {
     const node = this.node(handle) as FileNode;
     if (truncate && size < node.data.length) node.data = node.data.slice(0, size);
     else ensureSize(node, size);
     if (truncate) node.mtime = Date.now();
+    return 0;
   }
-  setMtime(handle: FileHandle, mtime: number): void { this.node(handle).mtime = mtime; }
+  setMtime(handle: FileHandle, mtime: number): number { this.node(handle).mtime = mtime; return 0; }
   readdir(handle: FileHandle): DirectoryEntry[] {
     const node = this.directory(handle);
     const parent = this.directoryParents.get(node) ?? node;
@@ -327,6 +331,18 @@ export class MemFS implements FileSystem {
   readFile(path: string): Uint8Array | undefined {
     const node = this.lookup(path);
     return node?.kind === "file" ? node.data : undefined;
+  }
+
+  /** Install a snapshot node while keeping detached open descriptions alive. */
+  replace(path: string, node: Node): boolean {
+    const parent = this.lookup(dirname(path));
+    if (parent?.kind !== "dir") return false;
+    const name = basename(path);
+    const previous = parent.children.get(name);
+    if (previous && previous !== node) this.forget(previous);
+    parent.children.set(name, node);
+    if (node.kind === "dir") this.directoryParents.set(node, parent);
+    return true;
   }
 
   remove(path: string): boolean {

@@ -1,12 +1,25 @@
-import { relative, join } from "node:path";
+import { dirname, relative, join } from "node:path";
 
-/** Shared page/worker build settings for both applications and the bundle-size gate. */
+/** Shared page/worker build settings. The consuming app's main entry must be first. */
 export function browserBuildConfig(entrypoints: string[], outdir: string, options: { splitting?: boolean } = {}): Parameters<typeof Bun.build>[0] {
+  const main = entrypoints[0];
+  if (!main) throw new Error("Browser build needs the consuming application's main entry");
+  const consumer = dirname(main);
   return {
     entrypoints, outdir, target: "browser", format: "esm",
     splitting: options.splitting ?? true,
     minify: true, sourcemap: "linked", metafile: true,
     naming: { entry: "[name].[ext]", chunk: "chunks/[name]-[hash].[ext]", asset: "[name]-[hash].[ext]" },
+    plugins: [{
+      name: "consumer-runtime-package",
+      setup(build) {
+        // Shared web sources belong to the app being built. A sandbox-only install
+        // supplies this dependency; Bun's package resolver still enforces exports.
+        build.onResolve({ filter: /^@bun-wasm\/runtime(?:\/|$)/ }, ({ path }) => ({
+          path: Bun.resolveSync(path, consumer),
+        }));
+      },
+    }],
   };
 }
 

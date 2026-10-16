@@ -283,14 +283,14 @@ export class Wasi {
     if (chunks.every(chunk => chunk.length === 0)) return 0;
     const pos = at ?? (file.append ? this.opts.fs.stat(file.handle).size : file.offset);
     const written = this.opts.fs.write(file.handle, chunks, pos);
-    if (at === null) file.offset = pos + written;
+    if (written >= 0 && at === null) file.offset = pos + written;
     return written;
   }
 
   private readIn(file: Extract<Resource, { kind: "file" }>, chunks: Uint8Array[], at: number | null): number {
     const pos = at ?? file.offset;
     const read = this.opts.fs.read(file.handle, chunks, pos);
-    if (at === null) file.offset = pos + read;
+    if (read >= 0 && at === null) file.offset = pos + read;
     return read;
   }
 
@@ -337,8 +337,7 @@ export class Wasi {
         if (!entry) return EBADF;
         if ((entry.rightsBase & RIGHT_FD_ALLOCATE) !== RIGHT_FD_ALLOCATE) return ENOTCAPABLE;
         if (entry.resource.kind !== "file") return EINVAL;
-        this.opts.fs.resize(entry.resource.handle, Number(offset + len), false);
-        return SUCCESS;
+        return this.opts.fs.resize(entry.resource.handle, Number(offset + len), false);
       },
       fd_close: (fd: number) => (this.descriptors.close(fd) ? SUCCESS : EBADF),
       fd_datasync: (fd: number) => {
@@ -389,14 +388,13 @@ export class Wasi {
         if (!entry) return EBADF;
         if ((entry.rightsBase & RIGHT_FD_FILESTAT_SET_SIZE) !== RIGHT_FD_FILESTAT_SET_SIZE) return ENOTCAPABLE;
         if (entry.resource.kind !== "file") return EINVAL;
-        this.opts.fs.resize(entry.resource.handle, Number(size), true);
-        return SUCCESS;
+        return this.opts.fs.resize(entry.resource.handle, Number(size), true);
       },
       fd_filestat_set_times: (fd: number, _atim: bigint, mtim: bigint, flags: number) => {
         const entry = this.descriptors.get(fd);
         if (!entry) return EBADF;
         if ((entry.rightsBase & RIGHT_FD_FILESTAT_SET_TIMES) !== RIGHT_FD_FILESTAT_SET_TIMES) return ENOTCAPABLE;
-        if ((entry.resource.kind === "file" || entry.resource.kind === "directory") && (flags & 12)) this.opts.fs.setMtime(entry.resource.handle, flags & 8 ? Date.now() : Number(mtim / 1_000_000n));
+        if ((entry.resource.kind === "file" || entry.resource.kind === "directory") && (flags & 12)) return this.opts.fs.setMtime(entry.resource.handle, flags & 8 ? Date.now() : Number(mtim / 1_000_000n));
         return SUCCESS;
       },
       fd_pread: (fd: number, iovs: number, count: number, offset: bigint, nreadPtr: number) => {
@@ -406,6 +404,7 @@ export class Wasi {
         if (entry.resource.kind === "directory") return EISDIR;
         if (entry.resource.kind !== "file") return ESPIPE;
         const read = this.readIn(entry.resource, this.iovecs(iovs, count), Number(offset));
+        if (read < 0) return -read;
         this.view().setUint32(nreadPtr, read, true);
         return SUCCESS;
       },
@@ -416,6 +415,7 @@ export class Wasi {
         if (entry.resource.kind === "directory") return EISDIR;
         if (entry.resource.kind !== "file") return ESPIPE;
         const written = this.writeOut(entry.resource, this.iovecs(iovs, count), Number(offset));
+        if (written < 0) return -written;
         this.view().setUint32(nwrittenPtr, written, true);
         return SUCCESS;
       },
@@ -527,7 +527,7 @@ export class Wasi {
         if (typeof path === "number") return path;
         const node = path.node;
         if (node === undefined) return ENOENT;
-        if (fst & 12) this.opts.fs.setMtime(node, fst & 8 ? Date.now() : Number(mtim / 1_000_000n));
+        if (fst & 12) return this.opts.fs.setMtime(node, fst & 8 ? Date.now() : Number(mtim / 1_000_000n));
         return SUCCESS;
       },
       path_link: (oldFd: number, _flags: number, oldPtr: number, oldLen: number, newFd: number, newPtr: number, newLen: number) => {
@@ -568,7 +568,10 @@ export class Wasi {
         const kind = this.opts.fs.stat(node).kind;
         if (oflags & O_DIRECTORY && kind !== "directory") return ENOTDIR;
         if (kind === "directory" && oflags & O_TRUNC) return EISDIR;
-        if (kind === "file" && oflags & O_TRUNC) this.opts.fs.resize(node, 0, true);
+        if (kind === "file" && oflags & O_TRUNC) {
+          const error = this.opts.fs.resize(node, 0, true);
+          if (error) return error;
+        }
         const resource: Resource = kind === "directory" ? { kind, handle: node } : { kind, handle: node, offset: 0, append: (fdflags & FDFLAG_APPEND) !== 0 };
         const newFd = this.openFile(resource, rightsBase, rightsInheriting);
         this.view().setUint32(fdOut, newFd, true);

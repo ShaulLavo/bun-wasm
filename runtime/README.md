@@ -17,13 +17,16 @@ wasi.descriptors.dispose();
 ```
 
 `fs` implements `FileSystem`; today's MemFS implementation lives in `web/src/fs.ts`. Its handles
-are filesystem-owned identities, not paths or concrete tree nodes. A handle used by an open
-description must remain valid after rename or unlink. The host calls `retain`/`release` once per
+are filesystem-owned identities, not paths, reported inode numbers, or concrete tree nodes. A handle
+used by an open description must remain valid after rename or unlink. The host calls `retain`/`release` once per
 open description, not per duplicate; a filesystem worker can use those calls to reclaim detached
 files after their final open description closes. `resolve` walks the real tree relative to
 a directory capability and returns a handle or positive WASI errno. Other path operations work
 on that result, with no asynchronous interleaving between resolution and mutation. Reads and
-writes use iovec views directly. `readdir` produces one entry list per call. Future worker-backed
+writes use iovec views directly and return byte counts or negative WASI errno, like streams; failures
+do not advance the shared cursor. Resize and timestamp updates return zero or positive WASI errno.
+Path operations use positive errno (creation wraps errors to distinguish them from handles).
+`readdir` produces one entry list per call. Future worker-backed
 clients can implement this synchronous interface without changing preview1.
 
 Every fd belongs to `wasi.descriptors`. A binding holds its own rights and optional preopen name;

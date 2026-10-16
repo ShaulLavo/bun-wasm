@@ -19,7 +19,8 @@ export interface ResolvedPath {
   terminalDot: boolean;
 }
 /** Synchronous preview1 boundary; a worker-backed client can implement the same operations.
- * Errors are positive WASI errno values. No tree nodes or file buffers cross this interface.
+ * Path/status operations use positive WASI errno; I/O uses byte counts or negative errno.
+ * No tree nodes or owned file buffers cross this interface.
  */
 export interface FileSystem {
   preopen(path: string): FileHandle;
@@ -28,10 +29,14 @@ export interface FileSystem {
   release(handle: FileHandle): void;
   resolve(directory: FileHandle, path: string): ResolvedPath | number;
   stat(handle: FileHandle): FileStat;
+  /** Bytes transferred, or negative WASI errno; errors must not advance the open offset. */
   read(handle: FileHandle, chunks: readonly Uint8Array[], offset: number): number;
+  /** Bytes transferred, or negative WASI errno; partial success returns its byte count. */
   write(handle: FileHandle, chunks: readonly Uint8Array[], offset: number): number;
-  resize(handle: FileHandle, size: number, truncate: boolean): void;
-  setMtime(handle: FileHandle, mtime: number): void;
+  /** Zero on success, positive WASI errno on failure. */
+  resize(handle: FileHandle, size: number, truncate: boolean): number;
+  /** Zero on success, positive WASI errno on failure. */
+  setMtime(handle: FileHandle, mtime: number): number;
   readdir(handle: FileHandle): DirectoryEntry[];
   create(path: ResolvedPath, kind: "file" | "directory"): FileHandle | { error: number };
   link(from: ResolvedPath, to: ResolvedPath): number;

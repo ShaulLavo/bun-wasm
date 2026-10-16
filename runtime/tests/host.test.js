@@ -109,3 +109,39 @@ for (const operation of ['read', 'write']) {
     h.wasi.descriptors.dispose();
   });
 }
+
+for (const operation of ['read', 'write']) for (const positioned of [false, true]) {
+  test(`filesystem ${operation} errno preserves cursor and output count (positioned=${positioned})`, () => {
+    const fs = new MemFS(); fs.writeFile('/file', 'abc');
+    const h = host(fs); const fd = h.open('file');
+    h.wasi.descriptors.get(fd).resource.offset = 2;
+    fs[operation] = () => -51;
+    h.view.setUint32(0, 512, true); h.view.setUint32(4, 3, true); h.view.setUint32(1024, 1234, true);
+    const call = `fd_${positioned ? 'p' : ''}${operation}`;
+    expect(positioned ? h.calls[call](fd, 0, 1, 0n, 1024) : h.calls[call](fd, 0, 1, 1024)).toBe(51);
+    expect(h.wasi.descriptors.get(fd).resource.offset).toBe(2);
+    expect(h.view.getUint32(1024, true)).toBe(1234);
+    h.wasi.descriptors.dispose();
+  });
+}
+
+test('filesystem resize errors propagate through allocation, resize and path truncation', () => {
+  const fs = new MemFS(); fs.writeFile('/file', 'abc');
+  const h = host(fs); const fd = h.open('file');
+  fs.resize = () => 51;
+  expect(h.calls.fd_allocate(fd, 0n, 10n)).toBe(51);
+  expect(h.calls.fd_filestat_set_size(fd, 10n)).toBe(51);
+  expect(h.calls.path_open(3, 0, 256, 4, 8, ALL, ALL, 0, 1024)).toBe(51);
+  expect(h.wasi.descriptors.get(fd + 1)).toBeUndefined();
+  expect(new TextDecoder().decode(fs.readFile('/file'))).toBe('abc');
+  h.wasi.descriptors.dispose();
+});
+
+test('filesystem timestamp errors propagate for descriptor and path operations', () => {
+  const fs = new MemFS(); fs.writeFile('/file', 'abc');
+  const h = host(fs); const fd = h.open('file');
+  fs.setMtime = () => 69;
+  expect(h.calls.fd_filestat_set_times(fd, 0n, 1n, 4)).toBe(69);
+  expect(h.calls.path_filestat_set_times(3, 0, 256, 4, 0n, 1n, 4)).toBe(69);
+  h.wasi.descriptors.dispose();
+});
