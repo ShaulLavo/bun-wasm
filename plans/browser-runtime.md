@@ -87,7 +87,9 @@ playground and brush-web onto it.
 7. Ctrl+C stops the foreground job and its descendants, including CPU-bound workers, wakes blocked
    I/O, and returns Brush to the prompt with status 130.
 8. Bun previews keep working, routed through the network service.
-9. Bun light's download size and startup time do not regress.
+9. Bun light stays near its budget: runtime JS about 100 KiB minified / 35 KiB gzipped, the
+   process layer loaded only on first spawn, and no slower startup. The budget is a guide, not a
+   hard gate (owner, 2026-10-16): modest overshoot is fine when it buys something.
 10. Verified on Chromium, Firefox and real Safari (owner's Mac); iOS Safari where storage allows.
 
 ## References
