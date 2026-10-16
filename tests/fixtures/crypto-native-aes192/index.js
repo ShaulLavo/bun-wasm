@@ -35,3 +35,9 @@ const base = await s.importKey("raw",data,"PBKDF2",false,["deriveKey"]);
 const derived = await s.deriveKey({name:"PBKDF2",hash:"SHA-256",iterations:7,salt:data},base,{name:"AES-GCM",length:192},true,["encrypt"]);
 assert.equal(Buffer.from(await s.exportKey("raw",derived)).toString("hex"),"790bd2058ae9c386a10789520038e1a0ce8e65de42c1d28b");
 console.log("AES 192 deriveKey-only base usage");
+
+const kw = await s.generateKey({name:"AES-KW",length:128},false,["wrapKey","unwrapKey"]);
+const wrappedJwk = await s.wrapKey("jwk",secret,kw,{name:"AES-KW"});
+const plainJwk = await s.unwrapKey("jwk",wrappedJwk,kw,{name:"AES-KW"},{name:"HMAC",hash:"SHA-256"},true,["sign"]);
+equal(await s.exportKey("raw",plainJwk),secretBytes);
+console.log("native AES-KW JWK alignment gap");

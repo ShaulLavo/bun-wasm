@@ -3,3 +3,4 @@ AES-CBC 192 native/fallback and mixed wrapping
 AES-CTR 192 native/fallback and mixed wrapping
 AES-KW 192 native/fallback and mixed wrapping
 AES 192 deriveKey-only base usage
+native AES-KW JWK alignment gap
