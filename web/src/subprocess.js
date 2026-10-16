@@ -10,7 +10,6 @@ const decode = new NativeDecoder();
 const AGAIN = -2;
 const BADF = -3;
 const PIPE_SIZE = 1 << 20;
-const SNAPSHOT_SIZE = 8 << 20;
 const FIRST_HANDLE = 0x60000000;
 export const MAX_CHILDREN = 4;
 
@@ -99,42 +98,8 @@ export class SharedPipe {
   }
 }
 
-class FilesystemMailbox {
-  constructor(buffer, transport) {
-    this.state = new Int32Array(buffer, 0, 1);
-    this.bytes = new Uint8Array(buffer, 4);
-    this.control = new Int32Array(transport.control, 0, 4);
-    this.budget = transport.budget;
-  }
-  send(snapshot, wait = true) {
-    if (!snapshot || snapshot === "[]") return true;
-    const bytes = encode.encode(snapshot);
-    if (bytes.length > this.bytes.length) throw Object.assign(new Error("Child filesystem changes exceed 8 MiB"), { code: "E2BIG" });
-    for (;;) {
-      const size = Atomics.load(this.state, 0);
-      if (!size) break;
-      if (!wait) return false;
-      if (Atomics.load(this.control, 0) || Atomics.load(this.control, 3)) return false;
-      Atomics.wait(this.state, 0, size, 100);
-    }
-    if (Atomics.load(this.control, 0) || Atomics.load(this.control, 3)) return false;
-    this.bytes.set(bytes);
-    Atomics.store(this.state, 0, bytes.length);
-    wake(this.budget);
-    return true;
-  }
-  receive() {
-    const size = Atomics.load(this.state, 0);
-    if (!size) return null;
-    const snapshot = decode.decode(this.bytes.slice(0, size));
-    Atomics.store(this.state, 0, 0);
-    Atomics.notify(this.state, 0);
-    return snapshot;
-  }
-}
-
 /** Original adapter from the existing Bun pipe transport to runtime descriptors. */
-export function wasiPipe(pipe, mode, hooks = {}) {
+export function wasiPipe(pipe, mode) {
   return {
     kind: "pipe",
     read(chunks) {
@@ -142,7 +107,6 @@ export function wasiPipe(pipe, mode, hooks = {}) {
       const size = chunks.reduce((n, chunk) => n + chunk.length, 0);
       if (size === 0) return 0;
       const value = pipe.readBlocking(size);
-      hooks.afterRead?.();
       if (typeof value === "number") return value;
       let at = 0;
       for (const chunk of chunks) {
@@ -154,7 +118,6 @@ export function wasiPipe(pipe, mode, hooks = {}) {
     },
     write(chunks) {
       if (mode !== "write") return -8;
-      if (chunks.some(chunk => chunk.length > 0)) hooks.beforeWrite?.();
       let written = 0;
       for (const chunk of chunks) {
         let at = 0;
@@ -177,25 +140,13 @@ export function wasiPipe(pipe, mode, hooks = {}) {
 }
 
 export function childTransport(transport) {
-  const incoming = transport.filesystem ? new FilesystemMailbox(transport.filesystem.toChild, transport) : null;
-  const outgoing = transport.filesystem ? new FilesystemMailbox(transport.filesystem.toParent, transport) : null;
   return {
     stdin: new SharedPipe(transport.pipes[0], transport.budget),
     stdout: new SharedPipe(transport.pipes[1], transport.budget),
     stderr: new SharedPipe(transport.pipes[2], transport.budget),
-    receiveFilesystem: () => incoming?.receive() ?? null,
-    sendFilesystem: (snapshot) => outgoing?.send(snapshot) ?? true,
-    finish(code, snapshot) {
+    finish(code) {
       const cells = new Int32Array(transport.control, 0, 4);
       if (Atomics.load(cells, 0)) return;
-      let result = snapshot ? encode.encode(snapshot) : new Uint8Array();
-      if (result.length > SNAPSHOT_SIZE) {
-        result = new Uint8Array();
-        code = 1;
-        new SharedPipe(transport.pipes[2], transport.budget).writeAll(encode.encode("bun-wasm: child filesystem changes exceed 8 MiB\n"));
-      }
-      new Uint8Array(transport.control, 16).set(result);
-      Atomics.store(cells, 2, result.length);
       Atomics.store(cells, 1, code);
       for (const [fd, pipe] of transport.pipes.entries()) {
         if (fd === 0 && transport.inheritedStdin) continue;
@@ -276,9 +227,7 @@ export class SubprocessHost {
     const buffers = modes.map(() => new SharedArrayBuffer(16 + PIPE_SIZE));
     const inheritedStdin = modes[0] === "inherit" && Boolean(this.options.stdin);
     if (inheritedStdin) buffers[0] = this.options.stdin;
-    const filesystem = this.options.filesystem?.() ?? null;
-    const transport = { budget: this.budget, slot, token, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16 + SNAPSHOT_SIZE),
-      filesystem: filesystem ? { toChild: new SharedArrayBuffer(4 + SNAPSHOT_SIZE), toParent: new SharedArrayBuffer(4 + SNAPSHOT_SIZE) } : null };
+    const transport = { budget: this.budget, slot, token, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16) };
     const id = this.nextHandle++;
     const pipes = transport.pipes.map((buffer) => new SharedPipe(buffer, this.budget));
     const handles = pipes.map((pipe, fd) => {
@@ -287,9 +236,7 @@ export class SubprocessHost {
       this.handles.set(handle, { pipe, fd, child: id });
       return handle;
     });
-    const child = { transport, pipes, handles, modes, worker: null, ended: false, filesystem,
-      outgoing: filesystem ? new FilesystemMailbox(transport.filesystem.toChild, transport) : null,
-      incoming: filesystem ? new FilesystemMailbox(transport.filesystem.toParent, transport) : null };
+    const child = { transport, pipes, handles, modes, worker: null, ended: false };
     this.children.set(id, child);
     if (modes[0] !== "pipe" && !inheritedStdin) pipes[0].close();
     try { child.worker = this.options.launch(meta, transport, (error) => this.workerError(id, error)); }
@@ -315,25 +262,16 @@ export class SubprocessHost {
   read(handle, cap) {
     if (handle === 0) {
       const value = this.stdin ? this.stdin.read(cap) : -4;
-      this.options.syncFilesystem?.();
       this.stdinWaiting = value === AGAIN;
       if (this.stdinWaiting) this.watch();
       return value;
     }
     const h = this.handles.get(handle);
-    if (!h || h.fd === 0) return BADF;
-    const value = h.pipe.read(cap);
-    this.synchronize(this.children.get(h.child));
-    return value;
+    return h && h.fd !== 0 ? h.pipe.read(cap) : BADF;
   }
   write(handle, bytes) {
     const h = this.handles.get(handle);
     if (!h || h.fd !== 0) return BADF;
-    const child = this.children.get(h.child);
-    if (!this.publishFilesystem(child)) {
-      const control = new Int32Array(child.transport.control, 0, 4);
-      return Atomics.load(control, 0) || Atomics.load(control, 3) ? this.closedPipe(handle) : AGAIN;
-    }
     const result = h.pipe.write(bytes);
     return result === -1 ? this.closedPipe(handle) : result;
   }
@@ -359,32 +297,14 @@ export class SubprocessHost {
     if (!child) return BADF;
     this.drainInherited(child);
     const cells = new Int32Array(child.transport.control, 0, 4);
-    const done = Atomics.load(cells, 0);
-    this.synchronize(child);
-    if (!done) {
-      this.publishFilesystem(child);
-      return AGAIN;
-    }
+    if (!Atomics.load(cells, 0)) return AGAIN;
     if (!child.ended) this.reap(child, cells);
     return Atomics.load(cells, 1);
   }
   reap(child, cells) {
     child.ended = true;
     this.releaseSlot(child.transport.slot, child.transport.token);
-    const size = Atomics.load(cells, 2);
-    if (size && child.filesystem) child.filesystem.merge(decode.decode(new Uint8Array(child.transport.control, 16, size).slice()));
     child.worker?.terminate();
-  }
-  publishFilesystem(child) {
-    const snapshot = child.filesystem?.capture();
-    if (!snapshot) return true;
-    if (!child.outgoing.send(snapshot, false)) return false;
-    child.filesystem.commit(snapshot);
-    return true;
-  }
-  synchronize(child) {
-    const snapshot = child?.incoming?.receive();
-    if (snapshot) child.filesystem.merge(snapshot);
   }
   release(id) {
     const child = this.children.get(id);
@@ -414,7 +334,6 @@ export class SubprocessHost {
   drainPipe(child, fd) {
     for (;;) {
       const bytes = child.pipes[fd].read();
-      this.synchronize(child);
       if (typeof bytes === "number") return;
       if (child.modes[fd] !== "inherit" || this.options.output(fd, bytes) !== false) continue;
       child.pipes[fd].close();
@@ -422,7 +341,6 @@ export class SubprocessHost {
     }
   }
   poll(timeout = 0) {
-    this.options.syncFilesystem?.();
     for (const id of this.children.keys()) this.wait(id);
     if (!timeout) return 0;
     const cells = new Int32Array(this.budget);
