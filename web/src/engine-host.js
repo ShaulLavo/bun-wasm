@@ -20,6 +20,7 @@ import { memoryViews } from "./memory-views.js";
 
 // The host's own versions of what the polyfills replace on globalThis.
 const nativeSubtleCrypto = globalThis.crypto?.subtle;
+const NativeDOMException = globalThis.DOMException;
 const NativeCryptoKey = globalThis.CryptoKey;
 const NativeSubtleCrypto = globalThis.SubtleCrypto;
 const nativeSubtleOperations = nativeSubtleCrypto && Object.fromEntries(
@@ -375,6 +376,7 @@ class EngineHost {
     native.engine = "host";
     this.installSubtleCrypto();
     native.subtleCrypto = nativeSubtleCrypto;
+    native.DOMException = NativeDOMException;
     native.CryptoKey = NativeCryptoKey;
     native.SubtleCrypto = NativeSubtleCrypto;
     Object.assign(native, this.valueNatives());

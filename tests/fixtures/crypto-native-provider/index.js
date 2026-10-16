@@ -16,3 +16,8 @@ if (before) {
   assert(await crypto.subtle.verify("HMAC", key, await crypto.subtle.sign("HMAC", key, bytes), bytes));
   console.log("crypto provider signing works");
 }
+let rejection;
+try { await crypto.subtle.importKey("raw",new Uint8Array(1),"AES-GCM",false,["encrypt"]); }
+catch (error) { rejection = error; }
+assert(rejection instanceof DOMException);
+assert.equal(rejection.name,"DataError");
