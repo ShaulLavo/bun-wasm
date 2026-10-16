@@ -38,6 +38,7 @@ export interface SubprocessOptions {
   slot?: number;
   token?: number;
   stdin?: SharedArrayBuffer;
+  onChildClose?(pid: number): void;
   launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): ChildWorker;
   /** Return false when the inherited reader has closed. */
   output(fd: number, bytes: Uint8Array): void | boolean;
@@ -56,6 +57,7 @@ export class SharedPipe {
   readiness(): Readiness;
 }
 export function wasiPipe(pipe: SharedPipe, mode: "read" | "write"): Stream;
+export function releaseProcessSlot(transport: Pick<ChildTransport, "budget" | "slot" | "token">): void;
 export function childTransport(transport: ChildTransport): {
   stdin: SharedPipe;
   stdout: SharedPipe;

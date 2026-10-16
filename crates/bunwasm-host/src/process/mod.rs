@@ -19,6 +19,14 @@ use stdin::SharedInput;
 
 pub const FIRST_HANDLE: i32 = 0x4000_0000;
 const MAX_CHILDREN: usize = 4;
+const BUN_EXECUTABLE_ALIASES: [&str; 6] = [
+    "bun",
+    "/bun",
+    "node",
+    "/node",
+    "/usr/local/bin/bun",
+    "/usr/local/bin/node",
+];
 
 pub struct Runtime {
     pub engine: wasmtime::Engine,
@@ -144,7 +152,7 @@ impl Processes {
     pub fn spawn(&mut self, meta: &[u8]) -> Result<i32, ErrorInfo> {
         let request: Request = serde_json::from_slice(meta).map_err(|e| error(e.to_string(), "EINVAL"))?;
         let command = request.argv.first().map(String::as_str).unwrap_or("");
-        if !matches!(command, "bun" | "/bun") {
+        if !BUN_EXECUTABLE_ALIASES.contains(&command) {
             return Err(error(
                 format!("spawn {command} ENOENT: only bun is supported in bun-wasm"),
                 "ENOENT",
@@ -369,5 +377,108 @@ impl Drop for Processes {
                 let _ = thread.join();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn processes() -> Processes {
+        let mut config = wasmtime::Config::new();
+        config.epoch_interruption(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        // Original no-op guest: (module (func (export "_start"))).
+        let module = wasmtime::Module::new(
+            &engine,
+            b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\x03\x02\x01\0\x07\x0a\x01\x06_start\0\0\x0a\x04\x01\x02\0\x0b",
+        )
+        .unwrap();
+        let runtime = Runtime::new(
+            engine,
+            module,
+            vec![(
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+                "/".into(),
+            )],
+        );
+        Processes::new(runtime, Stdio::inherited(), crate::net::Net::new().notify())
+    }
+
+    fn request(argv: &[&str]) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "argv": argv,
+            "cwd": "/",
+            "env": {},
+            "stdin": "ignore",
+            "stdout": "ignore",
+            "stderr": "ignore",
+        }))
+        .unwrap()
+    }
+
+    fn assert_spawn_succeeds(processes: &mut Processes, command: &str) {
+        let child = processes
+            .spawn(&request(&[command, "child.js"]))
+            .unwrap_or_else(|error| panic!("{command}: {error:?}"));
+        processes
+            .children
+            .get_mut(&child)
+            .unwrap()
+            .thread
+            .take()
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(processes.wait(child), 0, "{command}");
+        assert_eq!(processes.close(child), 0, "{command}");
+        assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn spawn_accepts_registered_bun_and_node_aliases() {
+        let mut processes = processes();
+        for command in [
+            "bun",
+            "/bun",
+            "node",
+            "/node",
+            "/usr/local/bin/bun",
+            "/usr/local/bin/node",
+        ] {
+            assert_spawn_succeeds(&mut processes, command);
+        }
+    }
+
+    #[test]
+    fn spawn_accepts_default_fork_exec_path() {
+        let mut processes = processes();
+        assert_spawn_succeeds(&mut processes, "/usr/local/bin/bun");
+    }
+
+    #[test]
+    fn spawn_rejects_unregistered_commands() {
+        let mut processes = processes();
+        for command in [
+            "",
+            "sh",
+            "bunx",
+            "nodejs",
+            "./bun",
+            "/tmp/bun",
+            "/tmp/node",
+            "/usr/bin/bun",
+            "/usr/bin/node",
+            "/usr/local/bin/bun-other",
+            "/usr/local/bin/node/child",
+        ] {
+            let error = processes.spawn(&request(&[command])).unwrap_err();
+            assert_eq!(error.code.as_deref(), Some("ENOENT"), "{command}");
+        }
+        let error = processes.spawn(&request(&[])).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("ENOENT"));
+        assert!(processes.children.is_empty());
+        assert!(processes.pipes.is_empty());
+        assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
     }
 }

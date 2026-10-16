@@ -101,8 +101,8 @@ role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `1
 - `src/wasi.ts`: a WASI preview1 implementation over it. Any import it does not implement gets an
   ENOSYS stub that prints `[wasi] unimplemented import …` once.
 - `src/worker.ts`: each `bun …` command starts a fresh worker, instantiates the precompiled module,
-  streams `fd_write` on fds 1/2 back as it happens, and returns the filesystem when the program
-  exits. Ctrl-C terminates the worker (exit 130, filesystem changes from that run are dropped).
+  streams `fd_write` on fds 1/2 back as it happens, and uses the live filesystem service.
+  Ctrl-C requests SIGINT; a second stop request sends SIGKILL. Completed writes remain visible.
 - `src/shell.ts`: line editing, history, Tab completion, `;`/`&&`, `>`/`>>`, and the builtins
   `ls cat echo cd pwd mkdir rm mv touch edit clear history help`.
 - `src/runner.ts`: loading an engine's wasm and starting one `bun …` run in a worker with its
@@ -118,10 +118,11 @@ When the page is cross-origin isolated, the subprocess ABI reserves a pid immedi
 page broker lazily loads `runtime/proc` to start one worker per process. A synchronous wasm call
 cannot block that startup. The executable registry maps a name to a compiled module and guest
 adapter; modules are shared between fresh workers, never retained guest instances. `bun`, `/bun`,
-`node` and `/usr/local/bin/bun` select Bun light. `bun-quickjs`, `bun-jsc` and `bun-browser` select
+`node`, `/node`, `/usr/local/bin/bun` and `/usr/local/bin/node` select Bun light. `bun-quickjs`, `bun-jsc` and `bun-browser` select
 an engine explicitly instead of inheriting the parent's engine. Other registered preview1
 programs use the same service; missing programs exit 127 and unrunnable programs exit 126.
-The host never starts a native executable. The headless Node adapter maintains its explicit
+The module service-worker scope is prepared for every parent engine, so Bun light children can
+load cyclic modules even when their parent uses QuickJS or JSC. The host never starts a native executable. The headless Node adapter maintains its explicit
 Bun alias registry and real filesystem preopens.
 
 Each process has separate argv, environment, cwd and stdio. Bun's existing bounded 1 MiB pipe
@@ -138,8 +139,10 @@ consuming output to release transport buffers.
 
 All browser processes connect to one live filesystem worker. Completed writes are immediately
 visible to the editor and other processes; there is no copy-at-spawn or merge-at-exit. Each
-process has its own revocable identity. Calling `terminate()` is not proof of death; only a
-quiescent guest acknowledgement allows the filesystem to reap an active lock owner. Killed
+process has its own revocable identity. Calling `terminate()` is not proof of death. The controller
+revokes first, then waits for the filesystem's shared critical-section admission fence before
+reaping locks and requesting termination; an ordinary guest exit acknowledgement also proves
+quiescence. Killed
 process buffers are never reused for another process. Node workers use their real preopens.
 
 Browser children do not share the parent's networking ring. The browser engine

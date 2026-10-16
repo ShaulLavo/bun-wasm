@@ -62,14 +62,14 @@ test("SIGKILL revokes before termination and wins over a late success", () => {
   } finally { host.dispose(); }
 });
 
-test("catchable signals notify the guest without destroying descriptors or overriding its exit", () => {
+test.each([2, 13, 15])("catchable signal %i notifies without destroying descriptors or overriding the guest exit", (signal) => {
   const { host, launched, events } = fixture();
   try {
     const pid = host.spawn(command());
-    expect(host.kill(pid, 15)).toBe(0);
+    expect(host.kill(pid, signal)).toBe(0);
     expect(events).toEqual([]);
     expect(host.wait(pid)).toBe(-2);
-    expect(Atomics.exchange(new Int32Array(launched[0]!.interrupt), 0, 0)).toBe(15);
+    expect(Atomics.exchange(new Int32Array(launched[0]!.interrupt), 0, 0)).toBe(signal);
     childTransport(launched[0]!).finish(23);
     expect(host.wait(pid)).toBe(23);
   } finally { host.dispose(); }
@@ -121,5 +121,71 @@ test("a previously recorded SIGKILL cannot be replaced by a catchable signal", (
     host.kill(pid, 15);
     expect(Atomics.load(new Int32Array(launched[0]!.requestedSignal), 0)).toBe(9);
     expect(host.wait(pid)).toBe(137);
+  } finally { host.dispose(); }
+});
+
+for (const bridge of ["engine", "slots"]) test(`network handle 2 cannot close a running child on the ${bridge} bridge`, () => {
+  const { host, launched, events } = fixture();
+  const networkClosed: number[] = [];
+  try {
+    const pid = host.spawn(command());
+    expect(launched[0]?.pid).toBe(pid);
+    const close = (id: number) => { networkClosed.push(id); return 0; };
+    if (bridge === "engine") {
+      const net = host.engineNet({ natives: { hostClose: close }, caps: {}, onNews() {} });
+      expect(net.natives.hostClose(2)).toBe(0);
+    } else expect(host.slots({ close }).close?.(2)).toBe(0);
+    expect(networkClosed).toEqual([2]);
+    expect(host.wait(pid)).toBe(-2);
+    expect(events).toEqual([]);
+  } finally { host.dispose(); }
+});
+
+test("orphan background completion releases capacity after its parent detaches", () => {
+  const { host, launched } = fixture();
+  const detached: SubprocessHost[] = [];
+  try {
+    for (let iteration = 0; iteration < 8; iteration++) {
+      const parentPid = host.spawn(command());
+      expect(parentPid).toBeGreaterThan(1);
+      const parent = launched.at(-1)!;
+      let orphan: ChildTransport | undefined;
+      const nested = new SubprocessHost({
+        budget: parent.budget, identity: parent.identity, pid: parent.pid, jobId: parent.jobId,
+        slot: parent.slot, token: parent.token, output() {},
+        launch(_meta, transport) { orphan = transport; return { terminate() {} }; },
+      });
+      detached.push(nested);
+      expect(nested.spawn(JSON.stringify({ argv: ["fixture"], job: -1 }))).toBeGreaterThan(1);
+      nested.detach();
+      childTransport(parent).finish(0);
+      expect(host.wait(parentPid)).toBe(0);
+      host.close(parentPid);
+      // Only the supervisor sees this finish: the dead parent can never run wait/reap.
+      childTransport(orphan!).finish(0);
+    }
+  } finally { for (const nested of detached) nested.dispose(); host.dispose(); }
+});
+
+test("closing a child reports its real PID once for supervisor metadata cleanup", () => {
+  const closed: number[] = [];
+  const host = new SubprocessHost({ output() {}, onChildClose: pid => closed.push(pid), launch() { return { terminate() {} }; } });
+  try {
+    const pid = host.spawn(command());
+    expect(pid).toBeGreaterThan(0x60000000);
+    host.close(pid);
+    expect(closed).toEqual([pid]);
+    expect(host.close(pid)).toBe(-3);
+    expect(closed).toEqual([pid]);
+  } finally { host.dispose(); }
+});
+
+test("Bun process id exhaustion cannot overlap pipe handles or leak a capacity slot", () => {
+  const { host, launched } = fixture();
+  try {
+    host.identities.observePid(0x6fffffff);
+    expect(host.spawn(command())).toBe(-1);
+    expect(launched).toHaveLength(0);
+    expect(Array.from(new Int32Array(host.budget).subarray(2))).toEqual([0, 0, 0, 0]);
   } finally { host.dispose(); }
 });

@@ -29,7 +29,7 @@ function scope(entries: Record<string, ExecutableRegistration>, options?: Constr
     const host = new SubprocessHost({
       budget: parent?.transport.budget, identity: parent?.transport.identity,
       pid: parent?.transport.pid, jobId: parent?.transport.jobId, slot: parent?.transport.slot, token: parent?.transport.token,
-      output() {},
+      output() {}, onChildClose: pid => broker.close(parent?.transport.pid ?? 1, pid),
       launch(meta, transport) {
         const filesystem = createFilesystemIdentity(parent?.filesystem ?? fs.client.connection);
         const child: Child = { host, handle: transport.pid, transport, filesystem, stdout: "", stderr: "" };
@@ -48,7 +48,7 @@ function scope(entries: Record<string, ExecutableRegistration>, options?: Constr
     truth(handle > 0, `spawn must return a pid immediately: ${handle}`);
     const child = children.get(handle); truth(child, "launch must retain child transport before spawn returns"); return child;
   }
-  return { broker, children, spawn, dispose() { broker.dispose(); for (const host of hosts.toReversed()) host.dispose(); } };
+  return { broker, children, spawn, dispose() { broker.dispose(); for (const host of hosts.reverse()) host.dispose(); } };
 }
 function drain(child: Child) {
   for (const fd of [1, 2]) for (;;) {
@@ -91,6 +91,16 @@ try {
       } finally { s.dispose(); }
     });
   }
+  await test("handled-EPIPE-keeps-own-exit-42-not-SIGPIPE-141", async () => {
+    const s = scope({ epipe: { module: module("epipe"), adapter: "preview1" } });
+    try {
+      const child = s.spawn("epipe");
+      // Close before async activation, guaranteeing the guest's ordinary fd_write sees EPIPE.
+      equal(child.host.close(child.host.pipe(child.handle, 1)), 0, "close reader");
+      const recorded = s.broker.wait(child.transport.pid); await exit(child, 42);
+      equal((await recorded).kind, "exited", "handled EPIPE is not default SIGPIPE"); equal(child.stderr, "", "handled EPIPE stderr");
+    } finally { s.dispose(); }
+  });
   await test("handled-INT-keeps-own-exit-zero", async () => {
     const s = scope({ handled: { module: module("handled"), adapter: "preview1" } });
     try {
@@ -111,8 +121,11 @@ try {
     const s = scope({ handler: { module: module("handling"), adapter: "preview1" } });
     try {
       const child = s.spawn("handler"); await ready(child);
-      await s.broker.kill(child.transport.pid, 2);
+      equal(child.host.kill(child.handle, 2), 0, "guest SubprocessHost.kill publishes the shared request");
       await until(() => { drain(child); return child.stdout.includes("handling\n"); }, "signal handler output");
+      // The broker watcher must observe, not redeliver, the same shared pending signal.
+      for (let tick = 0; tick < 5; tick++) await pause();
+      drain(child); equal(child.stdout.split("handling\n").length - 1, 1, "one INT request is delivered exactly once");
       equal(child.host.wait(child.handle), -2, "catchable INT must not force termination");
       equal(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "handled INT must not revoke");
       const recorded = s.broker.wait(child.transport.pid); await s.broker.kill(child.transport.pid, 9); await exit(child, 137);
@@ -179,8 +192,36 @@ try {
       }
     } finally { s.dispose(); }
   });
+  const query = new URLSearchParams(location.search);
+  if (query.has("artifact")) {
+    await test("actual-Bun-unawaited-child-survives-parent-and-releases-capacity-eight-times", async () => {
+      const response = await fetch("/bun.wasm"); if (!response.ok) throw new Error(`existing bun.wasm: HTTP ${response.status}`);
+      const compiled = await WebAssembly.compileStreaming(response);
+      const s = scope({ bun: { module: compiled, adapter: "bun", engine: "quickjs" } });
+      try {
+        for (let iteration = 0; iteration < 8; iteration++) {
+          const permit = `/orphan-permit-${iteration}`, marker = `/orphan-done-${iteration}`;
+          const childCode = `const fs=require('node:fs'); while(!fs.existsSync(${JSON.stringify(permit)})) await Bun.sleep(2); fs.writeFileSync(${JSON.stringify(marker)},'done');`;
+          const parentCode = `Bun.spawn(['bun','-e',${JSON.stringify(childCode)}],{stdin:'ignore',stdout:'ignore',stderr:'ignore'}).unref(); console.log('parent');`;
+          const parent = s.spawn("bun", { argv: ["bun", "-e", parentCode] });
+          await exit(parent, 0); equal(parent.stdout, "parent\n", "real guest parent exited without waiting for child");
+          const slots = new Int32Array(parent.transport.budget).subarray(2);
+          truth(slots.some(word => word !== 0), "unawaited child still owns capacity after its parent exits");
+          equal(await fs.readFile(marker), undefined, "orphan has not been allowed to finish before parent exit");
+          await fs.writeFile(permit, "go");
+          const end = performance.now() + 10_000;
+          while (decoder.decode(await fs.readFile(marker)) !== "done") { if (performance.now() > end) throw new Error(`orphan ${iteration} lost filesystem access after parent exit`); await pause(); }
+          await until(() => slots.every(word => word === 0), "orphan completion releases capacity without a living parent waiter");
+          parent.host.close(parent.handle);
+          const supervisor = await s.broker.activate();
+          await until(() => Array.from(supervisor.table.values()).length === 1, "closed parent and completed orphan release process metadata");
+          equal(supervisor.get(parent.transport.pid), undefined, "closed parent record reaped");
+        }
+      } finally { s.dispose(); }
+    });
+  }
   let benchmark: Awaited<ReturnType<typeof measureProcessStarts>> | undefined;
-  if (new URLSearchParams(location.search).has("benchmark")) {
+  if (query.has("benchmark")) {
     benchmark = await measureProcessStarts(async (compiled, started) => {
       const s = scope({ bun: { module: compiled, adapter: "bun", engine: "quickjs" } });
       try {

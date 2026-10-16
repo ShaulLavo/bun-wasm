@@ -86,8 +86,8 @@ async function loadWasm(): Promise<void> {
   }
 }
 
-// The browser engine's modules are served under ./__bunwasm/ (runner.ts), so imports can form cycles.
-const moduleScope: Promise<boolean> = engine === "browser" ? registerModuleScope() : Promise.resolve(false);
+// Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
+const moduleScope: Promise<boolean> = registerModuleScope();
 
 let current: Run | null = null;
 

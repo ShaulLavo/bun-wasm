@@ -408,3 +408,29 @@ test("a guest-side SIGKILL recorded before a delayed broker notification wins an
   context.exit(0);
   expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: 9, status: 137 });
 });
+
+test("observing an already delivered signal records it without publishing a second interrupt", async () => {
+  const { supervisor, root, contexts } = fixture();
+  const pid = supervisor.spawn(root, request());
+  await supervisor.start(pid);
+  const context = contexts.get(pid)!;
+  for (let request = 0; request < 2; request++) {
+    Atomics.store(context.requestedSignal, 0, Signal.SIGINT);
+    Atomics.store(context.interrupt, 0, Signal.SIGINT);
+    expect(Atomics.exchange(context.interrupt, 0, 0)).toBe(Signal.SIGINT);
+    supervisor.observeSignal(pid, Signal.SIGINT);
+    expect(supervisor.get(pid)!.signal).toBe(Signal.SIGINT);
+    expect(Atomics.load(context.interrupt, 0)).toBe(0);
+  }
+  context.exit(0);
+  expect(supervisor.wait(root, pid)!.status).toBe(0);
+});
+
+test("observing an already published SIGKILL still revokes and completes the process", async () => {
+  const { supervisor, root, contexts } = fixture();
+  const pid = supervisor.spawn(root, request());
+  await supervisor.start(pid);
+  Atomics.store(contexts.get(pid)!.requestedSignal, 0, Signal.SIGKILL);
+  supervisor.observeSignal(pid, Signal.SIGKILL);
+  expect(supervisor.wait(root, pid)!.status).toBe(137);
+});

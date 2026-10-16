@@ -134,6 +134,15 @@ export class ProcessSupervisor {
     this.recordSignal(record, sig);
     if (record.signal === Signal.SIGKILL) this.finish(pid, { kind: "signaled", code: Signal.SIGKILL });
   }
+  /** Observe a request already published by a synchronous guest stub. Never redeliver a
+   * catchable interrupt the guest may have consumed before this host notification arrived.
+   */
+  observeSignal(pid: number, signal: number): void {
+    const sig = checkedSignal(signal), record = this.table.require(pid);
+    if (record.result) return;
+    if (record.signal !== Signal.SIGKILL) record.signal = sig;
+    if (record.signal === Signal.SIGKILL) this.finish(pid, { kind: "signaled", code: Signal.SIGKILL });
+  }
   private recordSignal(record: ProcessRecord, signal: number): void {
     if (record.result) return;
     if (record.signal !== Signal.SIGKILL) record.signal = signal;

@@ -164,8 +164,8 @@ export interface RunResult {
 
 export interface Run {
   readonly done: Promise<RunResult>;
-  /** Signal the foreground job with SIGINT; a second call force-kills it with SIGKILL. */
-  kill(): void;
+  /** Signal the foreground job with SIGINT; a second call or explicit 9 force-kills it. */
+  kill(signal?: 2 | 9): void;
 }
 
 /** `?slots=table|off` on the page: how the wasm engines get networking (see RunRequest.slots). */
@@ -198,7 +198,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     spawnBroker: true,
     pid: 1,
     jobId: 1,
-    interrupt: new SharedArrayBuffer(4),
+    interrupt: globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : undefined,
   };
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
   const subprocess = new SubprocessBroker(workerUrl, options.filesystem);
@@ -214,7 +214,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
     return module;
   };
-  for (const name of ["bun", "/bun", "node", "/usr/local/bin/bun"]) subprocess.register(name, { module: moduleFor("browser"), adapter: "bun", engine: "browser" });
+  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, { module: moduleFor("browser"), adapter: "bun", engine: "browser" });
   for (const engine of ["quickjs", "jsc", "browser"] as const) subprocess.register(`bun-${engine}`, { module: moduleFor(engine), adapter: "bun", engine });
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
@@ -224,9 +224,13 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const finish = (result: RunResult, acknowledged = false) => {
     if (finished) return;
     finished = true;
-    if (acknowledged) options.filesystem.reap(request.filesystem);
-    else options.filesystem.revoke(request.filesystem);
-    worker.terminate();
+    if (acknowledged) {
+      options.filesystem.reap(request.filesystem);
+      worker.terminate();
+    } else {
+      // Logical exit/revocation is immediate; physical termination must not strand a host lock.
+      void options.filesystem.quiesce(request.filesystem).then(() => worker.terminate());
+    }
     subprocess.rootExit(result.code);
     helper?.dispose();
     if (moduleCache) void caches.delete(moduleCache);
@@ -237,6 +241,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     const msg = event.data;
     if (msg.type === "spawn") {
       subprocess.spawn(msg.request);
+      return;
+    }
+    if (msg.type === "child-close") {
+      subprocess.close(msg.parentPid, msg.pid);
       return;
     }
     if (msg.type === "phase") {
@@ -263,11 +271,13 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   };
   worker.postMessage(request, [request.filesystem.port]);
   let interrupted = false;
-  return { done, kill: () => {
+  return { done, kill: (requestedSignal?: 2 | 9) => {
     if (finished) return;
-    const signal = interrupted ? 9 : 2;
+    const signal = requestedSignal ?? (interrupted ? 9 : 2);
     interrupted = true;
-    Atomics.store(new Int32Array(request.interrupt!), 0, signal);
+    // Without isolation there is no shared interrupt channel or subprocess service.
+    if (!request.interrupt) { finish({ code: 128 + signal }); return; }
+    Atomics.store(new Int32Array(request.interrupt), 0, signal);
     void subprocess.killJob(1, signal);
     if (signal === 9) finish({ code: 137 });
   } };

@@ -259,8 +259,10 @@ Browser and Node hosts implement the same process slots. The browser uses a page
 broker to start child workers while their parent is blocked in `spawnSync`. The broker lazily
 activates the generic process service on first spawn and shares compiled modules across workers.
 Processes register independent identities with the live filesystem service; no snapshots or
-merge-at-exit are used. Revocation is immediate at logical death, but lock reaping requires the
-guest's quiescent exit acknowledgement, not merely a call to `Worker.terminate()`.
+merge-at-exit are used. Revocation is immediate at logical death. Before lock reaping and physical
+termination, a shared critical-section admission fence proves host filesystem operations quiescent;
+an ordinary guest exit acknowledgement also provides that proof. Merely calling
+`Worker.terminate()` does not.
 Node workers share their real preopens. See
 [the browser host notes](../web/README.md#bun-subprocess-workers) for networking and isolation.
 

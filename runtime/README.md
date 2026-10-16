@@ -50,16 +50,18 @@ shared memory so a blocked guest can reserve its pid before the page imports the
 Missing executables exit 127, and loader/adapter startup failures exit 126.
 
 `kill` publishes SIGINT, SIGTERM or SIGPIPE in the per-process interrupt word without tearing
-down a signal handler. Checkpoints consume it with `Atomics.exchange`. A guest's ordinary `exit`
+down a signal handler. `observeSignal` records a request already published by a guest without
+publishing it a second time. Checkpoints consume it with `Atomics.exchange`. A guest's ordinary `exit`
 retains its code; `defaultSignal` explicitly requests the default signaled outcome. The preview1
 worker exposes `runtime_proc.interrupted()` and `runtime_proc.default_signal(sig)` for these two
-paths. SIGKILL instead records 137, revokes descriptors and terminates immediately. Late worker
+paths. SIGKILL instead records 137 and revokes descriptors immediately, then requests termination. Late worker
 messages cannot change that outcome. There are no escalation timers. `killJob` addresses the job
 namespace, including descendants in that job but not unrelated background jobs.
 
 Revocation hooks connect logical process death to host capabilities. Filesystem revocation is
-not proof of physical teardown: only a quiescent guest exit acknowledgement permits reaping an
-active filesystem lock owner. Each process has fresh interrupt/revocation/transport buffers;
+not proof of physical teardown: an exit acknowledgement or the filesystem's admission fence
+must prove host critical sections quiescent before reaping and physical termination.
+Each process has fresh interrupt/revocation/transport buffers;
 killed buffers are never assigned to another process. The browser keeps pooling disabled:
 measurements must justify enabling it per browser before adding idle workers.
 
@@ -116,8 +118,11 @@ for page reuse until the filesystem is disposed.
 Connections carry their own revocation word and every ancestor's word, plus a shared ancestry
 wake signal. Blocking waits recheck revocation after a signal change; asynchronous values use
 one `Atomics.waitAsync` watcher per active client alongside ordinary port notifications. The page
-revokes a killed guest, sweeps the service and terminates it; no service operation waits for a
-guest acknowledgment. A filesystem-worker error revokes the root and wakes all descendants,
+revokes a killed guest immediately. A per-connection critical-section count is incremented before
+checking revocation and acquiring locks, then cleared on exit. `waitForFilesystemQuiescence`
+revokes admissions and asynchronously waits for that count to reach zero before lock reaping and
+physical worker termination; it does not wait for guest WASM to exit or assume termination proves
+death. A filesystem-worker error revokes the root and wakes all descendants,
 so an absent completion message cannot strand a guest or page startup.
 When a blocked guest spawns a child, it creates only a `FilesystemIdentity`. The runnable page
 uses `connectFilesystemIdentity` to create the MessageChannel and attach the service endpoint,

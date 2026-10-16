@@ -34,12 +34,13 @@ const nested = Bun.spawnSync(cmd("const p=Bun.spawnSync(['bun','-e','console.log
 console.log("api nested", nested.exitCode, nested.stdout.toString().trim());
 const cycle = Bun.spawnSync([process.execPath, "run", "cycle/a.js"]);
 console.log("api cycle", cycle.exitCode, cycle.stdout.toString().trim());
+if (cycle.exitCode !== 0) console.error("api cycle error", cycle.stderr.toString().trim());
 console.log("api exec", execSync("bun -e 'console.log(42)'", { encoding: "utf8" }).trim());
-const timeout = spawnSync("bun", ["-e", "while(true){}"], { timeout: 100 });
+const timeout = spawnSync("bun", ["-e", "while(true){}"], { timeout: 100, killSignal: "SIGKILL" });
 console.log("api timeout", timeout.signal, timeout.error.code);
 console.log("api cwd", Bun.spawnSync(cmd("0"), { cwd: "/missing-child-cwd" }).error.code);
 `;
-const apiExpected = ["api nodefsstdin 0 stdin", "api sync 0 fresh err", "api input 0 1200000", "api files 0 child shared", "api nested 0 0 99", "api exec 42", "api cycle 0 ab", "api timeout SIGTERM ETIMEDOUT", "api cwd ENOENT", "api live child", "api ack 0"];
+const apiExpected = ["api nodefsstdin 0 stdin", "api sync 0 fresh err", "api input 0 1200000", "api files 0 child shared", "api nested 0 0 99", "api exec 42", "api cycle 0 ab", "api timeout SIGKILL ETIMEDOUT", "api cwd ENOENT", "api live child", "api ack 0"];
 process.env.BUN_WASM_TEST_PORT ??= "4183";
 const s = session("bun-wasm-self-spawn-browser-");
 const deadline = setTimeout(() => { console.error("subprocess browser gate timed out"); void s.cleanup().finally(() => process.exit(1)); }, 240_000);

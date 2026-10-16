@@ -84,6 +84,7 @@ class DefaultSignal extends Error {
 
 export type WorkerMessage =
   | { type: "spawn"; request: SpawnRequest }
+  | { type: "child-close"; pid: number; parentPid: number }
   | { type: "phase"; name: string; duration: number }
   | { type: "stdout"; data: Uint8Array }
   | { type: "stderr"; data: Uint8Array }
@@ -154,6 +155,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     slot: req.child?.slot,
     token: req.child?.token,
     stdin: req.child?.pipes[0],
+    onChildClose: pid => ctx.postMessage({ type: "child-close", pid, parentPid: req.child?.pid ?? req.pid ?? 1 } satisfies WorkerMessage),
     output: (fd, data) => post(fd === 2 ? "stderr" : "stdout", data),
     launch: (meta, transport) => {
       const cwd = meta.cwd || req.env.PWD || "/";

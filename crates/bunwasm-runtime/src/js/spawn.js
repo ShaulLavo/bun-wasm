@@ -1,4 +1,4 @@
-// Self-spawning uses fresh wasm instances supplied by the host, never OS commands.
+// Guest processes resolve through the host executable registry, never arbitrary OS commands.
 (function (internal) {
   "use strict";
   const native = internal.native;

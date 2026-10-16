@@ -1,4 +1,4 @@
-import { FilesystemClient, createFilesystemConnection, connectFilesystemIdentity, revokeFilesystem, reapFilesystem, type FilesystemIdentity, type FilesystemConnection } from "@bun-wasm/runtime/fs";
+import { FilesystemClient, createFilesystemConnection, connectFilesystemIdentity, revokeFilesystem, reapFilesystem, waitForFilesystemQuiescence, type FilesystemIdentity, type FilesystemConnection } from "@bun-wasm/runtime/fs";
 
 export interface Entry { kind: "file" | "dir"; ino: number; mtime: number; children: Map<string, Entry>; }
 /** Page-side API: never blocks the UI thread and owns no tree. Editor/shell saves are ordinary
@@ -43,8 +43,13 @@ export class SharedFilesystem {
   }
   /** Cancellation is immediate, but terminate() does not establish worker death. */
   revoke(connection: FilesystemIdentity): void { revokeFilesystem(connection); this.client.sweep(); }
-  /** Only the guest's quiescent exit acknowledgement proves its lock owner is dead. */
+  /** A guest exit acknowledgement or the admission fence below proves filesystem quiescence. */
   reap(connection: FilesystemIdentity): void { reapFilesystem(connection); this.client.sweep(); }
+  /** Revoke immediately, then wait for host critical sections before physical termination. */
+  async quiesce(connection: FilesystemIdentity): Promise<void> {
+    await waitForFilesystemQuiescence(connection);
+    this.reap(connection);
+  }
   private mutate(operation: string, args: unknown[], bytes?: Uint8Array): Promise<any> {
     const result = this.writes.then(() => { this.assertLive(); return this.client.asyncCall(operation, args, bytes); });
     // Keep ordering after an error, while returning the failure to the caller that owns it.

@@ -192,8 +192,13 @@ or terminating the worker. A guest may handle the signal, keep running, or exit 
 A guest taking the default action explicitly reports that signal (the preview1 adapter exposes
 `runtime_proc.default_signal(sig)`); the supervisor then records the signaled outcome, revokes
 and terminates. Injected third-party checks take this default action. `SIGKILL` immediately records
-137, revokes and terminates; no late guest message can replace that outcome. Default-action
-statuses are 128 + sig (130, 143, 137, 141), while an EPIPE-handling guest keeps its own exit code.
+137 and revokes immediately; no late guest message can replace that outcome. Physical termination
+waits for host filesystem critical sections, not guest WASM: a per-connection section count is
+published before the revocation check and lock acquisition, and cleared on exit. After revoking,
+the supervisor waits asynchronously for zero, then reaps filesystem locks and terminates. A guest
+entering after revocation must abort before acquiring any lock. This proves quiescence without
+claiming `terminate()` proves death. Default-action statuses are 128 + sig (130, 143, 137, 141),
+while an EPIPE-handling guest keeps its own exit code.
 Ctrl+C signals the foreground job and waits; a second Ctrl+C or explicit kill may escalate to
 `SIGKILL`. The runtime has no signal-escalation timers.
 

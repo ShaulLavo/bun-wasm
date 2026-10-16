@@ -41,6 +41,7 @@ export interface SubprocessOptions {
   slot?: number;
   token?: number;
   stdin?: SharedArrayBuffer;
+  onChildClose?(pid: number): void;
   launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): ChildWorker;
   /** Return false when the inherited reader has closed. */
   output(fd: number, bytes: Uint8Array): void | boolean;
@@ -56,7 +57,10 @@ const decode = new NativeDecoder();
 const AGAIN = -2;
 const BADF = -3;
 const PIPE_SIZE = 1 << 20;
-const FIRST_HANDLE = 0x60000000;
+// Bun's numeric slot ABI shares close/read/write with network handles. Keep actual PIDs and
+// pipe handles in disjoint high ranges; generic runtime_proc identities have no such restriction.
+const FIRST_PROCESS = 0x60000000;
+const FIRST_HANDLE = 0x70000000;
 export const MAX_CHILDREN = 4;
 
 export function createProcessBudget() {
@@ -189,6 +193,14 @@ export function wasiPipe(pipe: SharedPipe, mode: "read" | "write"): Stream {
   };
 }
 
+/** Release active-process capacity independently of the parent's wait/close lifetime. */
+export function releaseProcessSlot(transport: Pick<ChildTransport, "budget" | "slot" | "token">): void {
+  const cells = new Int32Array(transport.budget);
+  const index = transport.slot + 2;
+  const state = Atomics.load(cells, index);
+  if (state > 0 && Math.floor(state / 8) === transport.token) Atomics.compareExchange(cells, index, state, 0);
+}
+
 export function childTransport(transport: ChildTransport) {
   return {
     stdin: new SharedPipe(transport.pipes[0], transport.budget),
@@ -202,6 +214,7 @@ export function childTransport(transport: ChildTransport) {
         if (fd === 0 && transport.inheritedStdin) continue;
         new SharedPipe(pipe, transport.budget).close();
       }
+      releaseProcessSlot(transport);
       Atomics.store(cells, 0, 1);
       Atomics.notify(cells, 0);
       wake(transport.budget);
@@ -238,7 +251,7 @@ export class SubprocessHost {
     this.budget = options.budget || createProcessBudget();
     this.identities = new ProcessIdentityAllocator(options.identity);
     this.identity = this.identities.buffer;
-    this.identities.observePid(options.pid ?? 1);
+    this.identities.observePid(Math.max(FIRST_PROCESS, options.pid ?? 1));
     this.identities.observeJob(options.jobId ?? 1);
     this.children = new Map();
     this.handles = new Map();
@@ -279,11 +292,7 @@ export class SubprocessHost {
     return null;
   }
   releaseSlot(slot: number, token: number) {
-    const cells = new Int32Array(this.budget);
-    const state = Atomics.load(cells, slot + 2);
-    if (state <= 0 || Math.floor(state / 8) !== token) return;
-    if (Atomics.compareExchange(cells, slot + 2, state, -token) !== state) return;
-    Atomics.compareExchange(cells, slot + 2, -token, 0);
+    releaseProcessSlot({ budget: this.budget, slot, token });
   }
   spawn(text: string) {
     let meta: SpawnMeta;
@@ -298,6 +307,7 @@ export class SubprocessHost {
     if (meta.env !== undefined && (!meta.env || typeof meta.env !== "object" || Array.isArray(meta.env) || Object.values(meta.env).some((v) => typeof v !== "string"))) return this.fail("spawn: invalid env", "EINVAL");
     const modes = [meta.stdin || "pipe", meta.stdout || "pipe", meta.stderr || "pipe"];
     if (modes.some((mode) => !["pipe", "inherit", "ignore"].includes(mode))) return this.fail("spawn: invalid stdio", "EINVAL");
+    if (this.nextHandle + modes.filter(mode => mode === "pipe").length > 0x80000000) return this.fail("spawn: pipe handle space exhausted", "EAGAIN");
     const reservation = this.reserve();
     if (!reservation) return this.fail("spawn: at most four bun-wasm child instances may run", "EAGAIN");
     const { slot, token } = reservation;
@@ -404,6 +414,7 @@ export class SubprocessHost {
       this.pipeErrors.delete(handle);
     }
     this.children.delete(id);
+    this.options.onChildClose?.(child.transport.pid);
   }
   kill(id: number, signal = 15) {
     const child = this.children.get(id);
@@ -474,7 +485,7 @@ export class SubprocessHost {
       this.release(id);
     }
   }
-  owns(handle: number) { return handle >= FIRST_HANDLE || this.children.has(handle); }
+  owns(handle: number) { return handle >= FIRST_PROCESS; }
   engineNet(net?: EngineNet): EngineNet {
     const fallback = Object.fromEntries(Object.entries(net?.natives || {}).map(([name, fn]) => [name, (...args: never[]) => {
       if (name !== "hostError") this.lastError = null;

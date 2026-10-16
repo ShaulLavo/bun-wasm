@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import { processFixture, type ProcessFixture } from "./process-fixtures";
 
-test.each(["exit", "default", "handled", "handling", "handled-trap", "unrunnable"] as ProcessFixture[])("original preview1 %s fixture validates without toolchains", mode => {
+test.each(["exit", "default", "handled", "handling", "handled-trap", "unrunnable", "epipe"] as ProcessFixture[])("original preview1 %s fixture validates without toolchains", mode => {
   expect(WebAssembly.validate(processFixture(mode))).toBe(true);
 });
-function instantiate(mode: ProcessFixture, signal = 0) {
+function instantiate(mode: ProcessFixture, signal = 0, writeError = 0) {
   let writes = 0, defaultSignal = 0;
   const instance = new WebAssembly.Instance(new WebAssembly.Module(processFixture(mode)), {
-    wasi_snapshot_preview1: { fd_write: () => { writes++; return 0; } },
+    wasi_snapshot_preview1: { fd_write: () => { writes++; return writeError; }, proc_exit: (code: number) => { throw new Error(`guest exit ${code}`); } },
     runtime_proc: { interrupted: () => signal, default_signal: (value: number) => { defaultSignal = value; } },
   });
   return { start: instance.exports._start as () => void, writes: () => writes, defaultSignal: () => defaultSignal };
@@ -25,6 +25,11 @@ test("guest can consume a handled signal and exit normally without default actio
 test("active handler still takes the explicit default trap for uncatchable KILL", () => {
   const guest = instantiate("handling", 9);
   expect(guest.start).toThrow(WebAssembly.RuntimeError); expect(guest.defaultSignal()).toBe(9);
+});
+test("guest handles an actual EPIPE errno and keeps its own status42", () => {
+  const guest = instantiate("epipe", 0, 64);
+  expect(guest.start).toThrow("guest exit 42"); expect(guest.defaultSignal()).toBe(0);
+  expect(instantiate("epipe").start).toThrow(WebAssembly.RuntimeError);
 });
 test("handled signal followed by unrelated trap is distinguishable from default action", () => {
   const guest = instantiate("handled-trap", 2);

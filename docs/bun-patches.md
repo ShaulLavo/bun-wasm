@@ -98,7 +98,8 @@ Each row has one class. A file with independent changes has separate rows.
 ## Browser process service
 
 Class **Host feature**, **original adapters** in `runtime/proc/`,
-`web/src/{subprocess,subprocess-broker,worker,runner,shared-fs}.ts`, and
+`web/src/{subprocess,subprocess-broker,worker,runner,shared-fs}.ts`,
+`web/scripts/node-spawn.ts`, `crates/bunwasm-host/src/process/mod.rs`, and
 `crates/bunwasm-runtime/src/js/spawn.js`. These implement this project's process contract;
 no Bun, Node, WebKit or other upstream implementation is copied or adapted in this change.
 The process slots retain Bun host ABI version 1, slots 12–15 (`docs/host-abi.md`).
@@ -106,12 +107,17 @@ The generic service shares compiled modules and keeps process ids separate from 
 The browser launcher selects an executable's guest adapter instead of inheriting the
 spawning process's engine. A small reservation/activation bridge is separate from the
 first-spawn-loaded supervisor. The existing Bun pipe transport remains until step 4b.
+The shared guest keeps executable names intact; native and Node host registries explicitly
+recognize `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and `/usr/local/bin/node`
+instead of silently running Bun for an arbitrary executable.
 
 Catchable signals publish an interrupt without revoking capabilities; the guest explicitly
 reports a default action, or handles the signal and keeps its own status. SIGKILL immediately
 records 137 and revokes before physical termination. Filesystem revocation no longer claims
-that `Worker.terminate()` proves death: only the guest's quiescent exit acknowledgement reaps
-its filesystem lock identity. Children use independent process revocation identities while
+that `Worker.terminate()` proves death: an original admission/critical-section guard in
+`runtime/fs/{protocol,client,shared,service}.ts` proves host operations quiescent before lock
+reaping and physical termination; an ordinary guest exit acknowledgement also proves quiescence.
+Children use independent process revocation identities while
 sharing the filesystem service's root revocation word. New browser fixtures and timing
 harnesses are original test programs, not copies of the spike implementations.
 
