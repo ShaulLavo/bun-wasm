@@ -1113,6 +1113,12 @@ revision `9510e74152073d850a18758ca41114d8f214ffa6`. Its module initialization n
 run through the builtin loader with the hooks currently available.
 [Worker threads](worker-threads.md) records supported operations and host limits.
 
+`web/scripts/node-process.ts` is an original adapter that installs the same
+subprocess slots through Node WASI for embedded QuickJS and JSC guests. It
+composes them with the existing CLI fetch slots and shares their wake signal.
+The host slot installer uses the runtime memory helper by a relative source
+path so unbundled Node hosts still load without installed packages.
+
 The original atomic-transfer native checks the complete buffer list before
 detachment. QuickJS uses its public detach operation plus the inspection helper
 above. The JSC adapter adds original `JSArrayBuffer` inspection and detach hooks

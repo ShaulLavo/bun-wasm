@@ -22,6 +22,7 @@ import { installCliFetch } from "./node-install-net.mjs";
 import { memoryViews } from "../../runtime/core/memory-views.js";
 import { SubprocessHost, childTransport, wasiPipe } from "../src/subprocess.js";
 import { forwardOutput, writeStdio } from "./node-stdio.ts";
+import { installNodeProcess } from "./node-process.ts";
 
 // V8's stack limit also bounds wasm frames, and the main thread's (about 984 KB) is small. Every
 // guest, the top-level one included, runs in a Worker whose thread Node creates with this stack,
@@ -168,9 +169,11 @@ async function run() {
   const imports = wasi.getImportObject();
   let instance;
   installStdio(imports, () => instance);
-  if (withNet) cliFetch = installCliFetch(imports, () => instance);
+  if (withNet) cliFetch = installCliFetch(imports, () => instance, new Int32Array(subprocess.budget, 4, 1));
+  const hostCalls = installNodeProcess(imports, () => instance, subprocess, cliFetch?.call);
   instance = await WebAssembly.instantiate(module, imports);
   cliFetch?.install();
+  hostCalls.install();
   const code = wasi.start(instance);
   if (!instance.exports.bunwasm_ready || instance.exports.bunwasm_ready() !== 1) finish(code);
 
