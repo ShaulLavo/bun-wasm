@@ -192,7 +192,7 @@ impl Resolver {
             let mut candidate = source_chain[..level].to_vec();
             candidate.push(name.into());
             let row = &self.locked["packages"][candidate.join("/")];
-            let Some(version) = row[0].as_str().and_then(|v| v.strip_prefix(&format!("{name}@"))) else {
+            let Some(version) = locked_version(row, name) else {
                 continue;
             };
             if matches(version, range) || is_tag(range) {
@@ -291,6 +291,11 @@ impl Resolver {
             .filter(|v| matches(v, range))
             .max_by(|a, b| order(a, b))
             .ok_or_else(|| format!("No version matching \"{range}\" found for specifier \"{name}\""))?;
+        let replacement = platform_package(name, version);
+        if replacement != name {
+            let version = version.clone();
+            return self.package(replacement, &version, chain, optional);
+        }
         let meta = versions[version].clone();
         if !compatible(&meta) {
             return Err(format!("{name}@{version} is not compatible with wasm32-wasip1"));
@@ -326,7 +331,8 @@ impl Resolver {
     }
 
     fn locked_row(&self, row: &Value, name: &str, range: &str, chain: &[String], optional: bool) -> Option<Package> {
-        let version = row[0].as_str()?.strip_prefix(&format!("{name}@"))?;
+        let version = locked_version(row, name)?;
+        let resolved_name = platform_package(name, version);
         let root_tag = chain.len() == 1 && is_tag(range) && declared(&self.locked["workspaces"][""], name, range);
         if !matches(version, range) && !root_tag {
             return None;
@@ -337,8 +343,8 @@ impl Resolver {
                 return None;
             }
             format!(
-                "https://registry.npmjs.org/{name}/-/{}-{version}.tgz",
-                name.rsplit('/').next()?
+                "https://registry.npmjs.org/{resolved_name}/-/{}-{version}.tgz",
+                resolved_name.rsplit('/').next()?
             )
         } else {
             if !source.starts_with(&format!("{}/", self.registry)) {
@@ -350,10 +356,10 @@ impl Resolver {
             return None;
         }
         let mut meta = row[2].clone();
-        meta["name"] = name.into();
+        meta["name"] = resolved_name.into();
         meta["version"] = version.into();
         Some(Package {
-            name: name.into(),
+            name: resolved_name.into(),
             version: version.into(),
             chain: chain.to_vec(),
             source_chain: Some(chain.to_vec()),
@@ -363,6 +369,18 @@ impl Resolver {
             optional,
         })
     }
+}
+
+fn platform_package<'a>(name: &'a str, version: &str) -> &'a str {
+    if name == "rollup" && version.starts_with("4.") {
+        return "@rollup/wasm-node";
+    }
+    name
+}
+
+fn locked_version<'a>(row: &'a Value, name: &str) -> Option<&'a str> {
+    let (resolved_name, version) = row[0].as_str()?.rsplit_once('@')?;
+    (resolved_name == platform_package(name, version)).then_some(version)
 }
 
 fn is_tag(range: &str) -> bool {

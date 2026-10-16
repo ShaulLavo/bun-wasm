@@ -57,10 +57,15 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/bun_test.js`, diff formatting](#bun-test-diff-formatting) | Port | Translate Bun's colorless diff rendering around a local line differ. |
 | [`crates/bunwasm-runtime/src/js/node_url.js`](#node-url-helpers) | Port | Adapt Node URL helpers around the local URL implementation. |
 | [`crates/bunwasm-runtime/src/js/builtins.js`, `crates/bunwasm-runtime/src/js/net.js`, HTTP tables](#http-status-tables) | Port | Retain HTTP status data separately from the original networking adapters. |
+| [`crates/bunwasm-runtime/src/js/{builtins,bootstrap}.js`, `web/src/engine-host.js`, caller origin](#caller-source-origin) | Host feature | Read caller origins through the existing engine stack parser. Original adapter. |
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
 | [`crates/bunwasm-semver/src/lib.rs`](#portable-semver-host-functions) | Port | Compile Bun's semver host functions unchanged against a portable `bun_jsc` subset. |
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
+| [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
+| [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
+| [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
+| [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
 
 ## Portable semver host functions
 
@@ -91,9 +96,68 @@ This replaces our duplicated semver host-function logic, while retaining the exi
 pure Bun semver parser used by package installation. See
 [the backend spike](bun-jsc-backend.md) for the limits of this subset.
 
+## Rollup WebAssembly distribution
+
+`crates/bunwasm-runtime/src/install/resolve.rs` selects the official
+`@rollup/wasm-node` npm distribution for Rollup 4 at the same version. The
+measured package is 4.64.7, including `dist/native.js`,
+`dist/wasm-node/bindings_wasm.js`, and `dist/wasm-node/bindings_wasm_bg.wasm`.
+These upstream files remain unchanged inside installed projects. No Rollup
+implementation is retained in this repository.
+
+`crates/bunwasm-runtime/src/wasm.rs` and `src/js/webassembly.js` are original
+adapters over the public `wasmi` 0.46.0 API and the WebAssembly JavaScript API.
+They do not adapt an upstream implementation. The Wasmi dependency has the
+small port described below. Resumable host traps let JavaScript imports reenter
+wasm without holding a Rust borrow across JavaScript execution. Memory synchronization keeps
+JavaScript views and interpreter memory consistent across those calls.
+`tests/fixtures/webassembly` is original test code; `tests/rollup/run.mjs`
+executes the real published parser and hashes through the recorded registry.
+
+
+## Wasmi memory identity and growth
+
+Class **Port**. `third_party/wasmi` copies the published Wasmi 0.46.0 crate,
+upstream `crates/wasmi` at revision `50ac76771d631f642e8c4c61bf44c99546024461`
+from `wasmi-labs/wasmi`. The MIT and Apache license files come from that revision.
+Cargo uses this local crate through `[patch.crates-io]`; Wasmi Core and its other
+dependencies remain published crates.
+
+Local changes are limited to these files:
+
+- `src/memory/mod.rs` derives equality on store-guarded memory handles and exposes
+  the growth generation. Successful public growth increments that generation.
+- `src/store/inner.rs` owns a generation counter for each allocated memory.
+- `src/store/pruned.rs` increments the counter after successful wasm growth.
+- `src/engine/translator/visit.rs` and `src/engine/executor/instrs/memory.rs`
+  preserve zero-page growth instead of replacing it with a memory-size read.
+- `src/engine/translator/tests/op/memory/memory_grow.rs` updates the corresponding
+  translation expectation to retain the zero-page growth instruction.
+
+The JavaScript API requires a new buffer after every successful unshared growth,
+even when its size stays the same. Tracking growth inside the interpreter covers
+both constant and dynamic wasm instructions, as well as JavaScript calls. Failed
+growth does not increment the counter. Store-guarded handle equality lets aliased
+exports share one JavaScript object without conflating separate empty memories.
+All other retained upstream files are unchanged.
+
+
 ## App compatibility fixtures
 
 `scripts/app-matrix/apps.mjs` contains original minimal projects that use published framework APIs. The dependency versions in that file identify the npm upstream revisions. No template source or upstream implementation is copied or adapted. The runner, registry recorder, network namespace wrapper, shared assertions/classifier, and browser driver are original bun-wasm host adapters. The namespace wrapper uses Linux user/network namespaces without changing any upstream source. Retained diagnostic fixtures under `scripts/app-matrix/review-evidence/` are unmodified logs from the pinned packages in the 2026-10-15 census, including Next 15.5.6, Prisma 6.17.1, Vite 7.1.12 and Rollup 4.64.7; they are regression inputs, not adapted implementations. The browser driver calls the existing playground test helpers. Recorded dependency tarballs remain unmodified in the external cache, verified by SHA-256; registry metadata is rewritten only in loopback responses to point tarballs at that mirror.
+
+## Caller source origin
+
+Class **Host feature**. Original bun-wasm adapter for `bun:jsc.callerSourceOrigin`.
+The contract is defined by `src/jsc/modules/BunJSCModule.h`, `functionCallerSourceOrigin`,
+at Bun revision `4ceda2c2868d3a7703c7737ddd9de7244ec384df`. No upstream implementation is copied.
+The native implementation walks JSC call frames. This adapter uses the existing stack parser
+for QuickJS, JSC and browser engines, then encodes the calling file as a file URL.
+Browser module URL mapping stays in the engine host. Without a caller frame, it returns `null`. Preserve V8 eval creation metadata while formatting call sites. Missing-source user frames remain distinct from native frames. The origin adapter stops at opaque user frames and rejects pseudo filenames such as `<input>` instead of scanning onward to an unrelated module. V8 eval sourceURLs bypass host-frame URL filtering after registered module URLs are resolved. Source-map URLs do not name the calling script. These stack adapters are original implementations.
+WebKit's browser engine omits eval source locations even with `sourceURL` directives.
+CommonJS uses eval in this host, so its caller origin is `null` there. The adapter stops at
+an opaque caller frame instead of reporting a later ES module as the caller. ES modules work
+in WebKit, and CommonJS origins work in QuickJS, wasm JSC and the Node host.
 
 ## Bun patch series
 
@@ -375,7 +439,7 @@ The incremental graph, packed map, and serialized-failure implementations are co
 
 `crates/bunwasm-transpiler/src/lib.rs`, `ChunkCollector` and its `OnSourceMapChunk` implementation. Class **Port**. Upstream `src/runtime/cli/pm_diff_normalize.rs` at the Bun pin.
 
-Retain the small callback that stores the emitted `bun_sourcemap::Chunk` in an `Option`. The local caller converts its buffer into the returned mappings string. This supplies source maps without the native runtime. The surrounding arena lifecycle, public transpile API, diagnostic conversion, and await-hook control are local adapters to Bun's parse/print APIs. They do not copy `src/runtime/api/JSTranspiler.rs` as an implementation.
+Retain the small callback that stores the emitted `bun_sourcemap::Chunk` in an `Option`. The local caller converts its buffer into the returned mappings string. This supplies source maps without the native runtime. The surrounding arena lifecycle, public transpile API, parser module-kind reporting, diagnostic conversion, and await-hook control are local adapters to Bun's parse/print APIs. Module classification uses the pinned parser's export kind, syntax flags and live static import records, rather than searching printed strings. Syntax-free scripts retain package and filename classification, and data loaders report their generated ESM format. `node_fs.js` vectored writes and `natives.rs` counted `write`/`pwrite` calls are original adapters over the host descriptor ABI; no Node implementation is copied. The native vectored operation accumulates complete chunks, returns progress on a short write or a later error, and leaves positioned-write cursors unchanged. Printed CommonJS factories receive Bun's sixth per-module import-meta argument when present; ordinary factories retain five arguments. The parser's real `import.meta` flag takes precedence over `require` and `__dirname` signals when choosing module grammar. They do not copy `src/runtime/api/JSTranspiler.rs` as an implementation.
 
 ### Bun console formatter
 
@@ -500,7 +564,7 @@ Retain HTTP option extraction, IPv6 hostname handling, auth decoding, legacy fie
 
 `crates/bunwasm-runtime/src/js/builtins.js` (`STATUS_CODES`) and `crates/bunwasm-runtime/src/js/net.js` (`STATUS_TEXT`). Class **Port** for packaging shared HTTP data. Comparison source `src/js/internal/http.ts` at the Bun pin.
 
-The builtins module retains the status-code/reason table. The network module keeps a smaller reason-phrase table for response output. These are standard HTTP values rather than a copied server implementation. Networking, streams, request dispatch, and host transport around the tables are original bun-wasm adapters.
+The builtins module retains the status-code/reason table. The network module keeps a smaller reason-phrase table for response output. The callable Node `Stream` constructor and descriptor vectored writes are original adapters, not copied Node implementations. These are standard HTTP values rather than a copied server implementation. Networking, streams, request dispatch, and host transport around the tables are original bun-wasm adapters.
 
 ### Temporal
 
@@ -536,3 +600,13 @@ rg -n -i --max-columns 240 'copyright|license|ported|port of|adapted|copied|deri
 Retained libc and rquickjs-sys files were compared byte-for-byte with the matching published crates in Cargo's registry. The `vendor/bun` working tree must be clean after applying all nine commits. There are no additional unexported Bun source modifications in the audited checkout.
 
 SQLite is supplied by the unmodified `libsqlite3-sys` crate. `.cargo/config.toml` sets its documented compile flags to match Bun where possible and disable unsupported WASI facilities; it does not rewrite the amalgamation. No additional third-party source rewrites were found in crate build scripts. Test fixture npm packages are source inputs for compatibility tests, not runtime forks.
+
+## Bun generated builtins
+
+Class **Port**. Upstream Bun source revision `9510e74152073d850a18758ca41114d8f214ffa6`, generated by `src/codegen/bundle-modules.ts`. The source modules are `src/js/internal/freelist.ts`, `src/js/node/querystring.ts`, and `src/js/node/punycode.ts`. The module-name table comes from the generated internal-module registry and `src/jsc/modules/NativeModuleList.h`. Native-hook identities come from `GeneratedJS2Native.h`. Error-code ordering comes from `src/jsc/bindings/ErrorCode.ts`.
+
+The numbered JavaScript files in `crates/bunwasm-runtime/generated/builtins/` retain Bun's generated implementations. The local generator changes intrinsic identifiers, intrinsic property calls, private property names, and the module export marker. It preserves the module's algorithms. The registry, binding names, and catalog are derived upstream data, rather than handwritten runtime implementations. `scripts/generate-bun-builtins.sh --check` reproduces every generated file. Bun's license is retained alongside the generated sources.
+
+## Builtin loader adapter
+
+Class **Host feature**. `scripts/generate-bun-builtins.mjs`, its shell runner, the selection manifest, and `crates/bunwasm-runtime/src/js/bun_builtins.js` are original adapters. `src/js/bun_builtin_globals.js` is the original bootstrap capture of intrinsic constructors, before application code can replace public globals. They call Bun's codegen and consume its generated module protocol. They do not copy the codegen implementation. Rust source lookup and Engine natives are original bun-wasm glue. The loader uses lazy factories, isolated caches, explicit unsupported errors, and the existing builtin implementations for dependencies not switched yet. [bun-builtins.md](bun-builtins.md) records its limits and hook status.

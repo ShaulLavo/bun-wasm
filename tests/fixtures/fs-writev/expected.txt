@@ -1,0 +1,7 @@
+4 0
+3 2
+xyzD!
+3 true
+123D!
+invalid vectors rejected
+stdio vectors

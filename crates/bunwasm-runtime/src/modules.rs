@@ -15,10 +15,22 @@ use crate::transpiler::Loader as SourceLoader;
 use crate::State;
 
 include!(concat!(env!("OUT_DIR"), "/polyfills.rs"));
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/generated/builtins/registry.rs"));
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/generated/builtins/bindings.rs"));
+
+pub fn bun_builtin_source(id: usize) -> Option<&'static str> {
+    BUN_BUILTINS.iter().find(|(index, _)| *index == id).map(|(_, source)| *source)
+}
 
 /// Bun's transpiler emits CommonJS modules already wrapped in this function
 /// expression (that is how it reports a file is CommonJS).
 pub const CJS_WRAPPER_PREFIX: &str = "(function(exports, require, module, __filename, __dirname) {";
+const CJS_META_WRAPPER_PREFIX: &str = "(function(exports, require, module, __filename, __dirname, $Bun_import_meta) {";
+
+fn is_cjs_wrapper(code: &str) -> bool {
+    code.starts_with(CJS_WRAPPER_PREFIX) || code.starts_with(CJS_META_WRAPPER_PREFIX)
+}
+
 
 /// How positions in the code the engine evaluated map to the file on disk.
 #[derive(Default)]
@@ -240,7 +252,7 @@ impl State {
                     .transpiler
                     .transpile_with_map(&raw, path, loader)
                     .map_err(|msg| build_error(&msg, &raw))?;
-                let format = self.detect_format(path, &out.code);
+                let format = self.detect_format(path, &out.code, out.module_kind);
                 if let Some(mappings) = out.mappings.filter(|m| !m.is_empty()) {
                     let mut positions = self.positions.borrow_mut();
                     let entry = positions.entry(path.to_owned()).or_default();
@@ -255,8 +267,8 @@ impl State {
         Ok(entry)
     }
 
-    fn detect_format(&self, path: &str, code: &str) -> Format {
-        if code.starts_with(CJS_WRAPPER_PREFIX) {
+    fn detect_format(&self, path: &str, code: &str, parsed_kind: Option<crate::transpiler::ModuleKind>) -> Format {
+        if is_cjs_wrapper(code) {
             return Format::Cjs;
         }
         if path.ends_with(".mjs") || path.ends_with(".mts") {
@@ -265,8 +277,12 @@ impl State {
         if path.ends_with(".cjs") || path.ends_with(".cts") {
             return Format::Cjs;
         }
-        if has_esm_syntax(code) || has_top_level_await(code) {
-            return Format::Esm;
+        use crate::transpiler::ModuleKind;
+        match parsed_kind {
+            Some(ModuleKind::CommonJs) => return Format::Cjs,
+            Some(ModuleKind::Esm) => return Format::Esm,
+            None if has_esm_syntax(code) || has_top_level_await(code) => return Format::Esm,
+            _ => {}
         }
         // `"type": "module"` makes even syntax-free files ESM.
         match self.resolver.package_type_is_module(path) {
@@ -327,7 +343,7 @@ impl State {
 /// "default"), so the file's own lines and columns are unchanged; code Bun's
 /// transpiler already wrapped keeps the printed code's lines.
 pub fn cjs_wrapper(code: &str) -> (String, i32) {
-    if code.starts_with(CJS_WRAPPER_PREFIX) {
+    if is_cjs_wrapper(code) {
         return (code.to_owned(), 1);
     }
     // Named so engines whose stack frames carry only a name (JSC) can tell

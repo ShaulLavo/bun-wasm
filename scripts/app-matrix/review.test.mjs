@@ -32,6 +32,11 @@ test("diagnostics ignore code frames and earlier stages", () => {
   expect(failure(stageOutput(log, "bun run index.js"), "start").blocker).toBe("start: ReferenceError: module is not defined");
 });
 
+test("Next rejection prefixes retain their actual diagnostic", () => {
+  expect(failure("Trying to load next-swc for unsupported platforms linux/wasm32\nunhandledRejection SyntaxError: Unexpected token '.'", "build")).toEqual({ category: "d", blocker: "build: SyntaxError: Unexpected token '.'" });
+  expect(failure("unhandledRejection Error: No such module: fs", "build")).toEqual({ category: "c", blocker: "Error: No such module: fs" });
+});
+
 test("measured engine comparison marks only QuickJS failures f", () => {
   const rows = [
     { app: "prettier", host: "playground", stage: "check", engine: "quickjs", status: "fail", category: "c" },
