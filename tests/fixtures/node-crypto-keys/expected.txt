@@ -14,3 +14,4 @@ node secret generation ok
 node encrypted key formats ok
 native encrypted vectors 6
 node RSA-OAEP interop ok
+node key constructor boundaries ok

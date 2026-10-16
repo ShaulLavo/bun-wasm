@@ -348,3 +348,20 @@ assert.deepEqual(
   input,
 );
 console.log("node RSA-OAEP interop ok");
+
+const constructorKeys = generateKeyPairSync("rsa", { modulusLength: 1024 });
+assert.throws(() => createPrivateKey(constructorKeys.privateKey), {
+  code: "ERR_INVALID_ARG_TYPE",
+});
+assert.throws(() => createPublicKey(constructorKeys.publicKey), {
+  code: "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE",
+});
+assert.throws(
+  () =>
+    sign("sha256", input, {
+      key: constructorKeys.privateKey,
+      dsaEncoding: "invalid",
+    }),
+  { code: "ERR_INVALID_ARG_VALUE" },
+);
+console.log("node key constructor boundaries ok");

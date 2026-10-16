@@ -59,7 +59,10 @@
     function equalityBytes(key) {
       const r = nodeRecord(key);
       if (r.type === "secret") return Buffer.from(c.decode(r.key.k));
-      return createPublicKey(key).export({ format: "der", type: "spki" });
+      return importAsymmetric(key, false).export({
+        format: "der",
+        type: "spki",
+      });
     }
     class KeyObject {
       constructor() {
@@ -127,7 +130,12 @@
             typeof options.cipher !== "string" ||
             options.passphrase === undefined
           )
-            throw error("Encryption requires a cipher and passphrase");
+            throw Object.assign(
+              new TypeError(
+                `The property 'options.cipher' is invalid. Received ${String(options.cipher)}`,
+              ),
+              { code: "ERR_INVALID_ARG_VALUE" },
+            );
           const mode =
             format === "der"
               ? type === "pkcs8"
@@ -171,6 +179,13 @@
         return `-----BEGIN ${label}-----\n${encoded}\n-----END ${label}-----\n`;
       }
       equals(other) {
+        if (!records.has(other))
+          throw Object.assign(
+            new TypeError(
+              `The "otherKeyObject" argument must be an instance of KeyObject. Received type ${typeof other} (${String(other)})`,
+            ),
+            { code: "ERR_INVALID_ARG_TYPE" },
+          );
         const r = nodeRecord(this),
           b = nodeRecord(other);
         if (r.type !== b.type) return false;
@@ -371,8 +386,28 @@
       for (const name of ["d", "p", "q", "dp", "dq", "qi"]) delete key[name];
       return make({ ...r, type: "public", key });
     }
-    const createPrivateKey = (input) => importAsymmetric(input, true);
-    const createPublicKey = (input) => importAsymmetric(input, false);
+    function createPrivateKey(input) {
+      const options = parseInput(input);
+      if (options.key instanceof KeyObject || c.isKey(options.key))
+        throw error("The key argument must be encoded key data");
+      return importAsymmetric(options, true);
+    }
+    function createPublicKey(input) {
+      const options = parseInput(input),
+        key = options.key;
+      const type =
+        key instanceof KeyObject
+          ? nodeRecord(key).type
+          : c.isKey(key)
+            ? c.record(key).type
+            : undefined;
+      if (type === "public")
+        throw Object.assign(
+          new TypeError("Invalid key object type public, expected private."),
+          { code: "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE" },
+        );
+      return importAsymmetric(options, false);
+    }
     function generateKeySync(type, options) {
       if (type !== "hmac" && type !== "aes")
         throw Object.assign(new TypeError("Unsupported key type"), {
@@ -482,7 +517,7 @@
     }
     function signVerify(verify, digest, data, input, signature) {
       const options = parseInput(input);
-      const key = verify ? createPublicKey(options) : createPrivateKey(options);
+      const key = importAsymmetric(options, !verify);
       const r = nodeRecord(key),
         a = { ...r.algorithm };
       if (a.name === "X25519") throw error("Key cannot sign");
@@ -498,6 +533,16 @@
             : "RSASSA-PKCS1-v1_5";
         a.saltLength = options.saltLength ?? -2;
       }
+      if (
+        options.dsaEncoding !== undefined &&
+        !["der", "ieee-p1363"].includes(options.dsaEncoding)
+      )
+        throw Object.assign(
+          new TypeError(
+            `The property 'options.dsaEncoding' is invalid. Received '${options.dsaEncoding}'`,
+          ),
+          { code: "ERR_INVALID_ARG_VALUE" },
+        );
       a.der = options.dsaEncoding !== "ieee-p1363";
       const result = c.backend(verify ? "verify" : "sign", a, {
         key: r.key,
@@ -516,9 +561,7 @@
           new Error("Only RSA-OAEP encryption is implemented"),
           { code: "ERR_NOT_SUPPORTED_IN_WASM" },
         );
-      const key = decrypt
-        ? createPrivateKey(options)
-        : createPublicKey(options);
+      const key = importAsymmetric(options, decrypt);
       const r = nodeRecord(key);
       if (r.key.kty !== "RSA") throw error("Expected an RSA key");
       const algorithm = {
