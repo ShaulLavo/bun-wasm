@@ -64,7 +64,7 @@ rewrite failure distinct. Raw logs and provenance are in
 `next-jsc-build.log`. The coordinator owns preserving the evidence until the
 follow-up has reproduced it. See `docs/app-matrix/README.md` for the replay command.
 
-### Current combined replay
+### Second-review combined replay
 
 The Web Streams second-review replay includes main through PR #17. QuickJS and
 JSC dev both reach `WebAssembly.instantiate` in
@@ -163,3 +163,15 @@ repeated for JSC, through the heavy wrapper. Exact per-file results are in
 `/work/reports/bun-wasm-streams-round3-fix-2026-10-16/final-streams-*.json`,
 paired with `streams-before-*.json`. The compatibility track owns this remaining
 Bun-specific work and the evidence until follow-up reproduction.
+
+### Round-3 combined Next replay
+
+With main through PR #13, the Web Streams round-3 replay reaches the same llhttp
+export-table rejection in QuickJS/JSC dev. Their builds and browser dev have no
+useful diagnostic. Browser build now reaches missing
+`crypto.subtle.generateKey`, beyond its former import-method syntax error. The
+crypto lane owns that operation; the WebAssembly lane owns llhttp table support.
+There are no missing Streams globals, registry misses or registry errors.
+The [app-matrix record](../docs/app-matrix/README.md#web-streams-round-3-replay-with-semantic-imports)
+links the exact artifacts and all 12 stage outcomes. PR #24's later WASI-host
+merge has separate verification before this lane's delivery.
