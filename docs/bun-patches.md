@@ -818,7 +818,8 @@ token is separate from the owner, because the pinned QuickJS stores tokens stron
 Runtime shutdown clears the remaining cursor table after user exit listeners, including when the host
 retains the wasm instance. The browser engine also clears it in `EngineHost.exit`
 before notifying the host. This covers `reallyExit`, abort, self-kill and fatal
-errors that bypass exit listeners. The release is idempotent across both paths. Native exits also clear the table before skipping engine teardown.
+errors that bypass exit listeners. The release is idempotent across both paths.
+Native exits also clear the table before skipping engine teardown.
 The public path representation stays separate from the lookup string, so Buffer paths remain Buffers in `Dir.path` and
 `Dirent.parentPath`. The async queue keeps a refill operation active through its callback,
 while an already-buffered read does not block synchronous work. The fixture is original

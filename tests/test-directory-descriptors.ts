@@ -110,7 +110,9 @@ async function observe() {
   if (engine === "browser" && mode !== "gc") {
     globalThis.reopenDirectoryForTest();
     assert.equal(opened, expected + 1);
-    assert(descriptors.slice(0, -1).includes(descriptors.at(-1)), "retained instance reuses a released directory descriptor");
+    const reused = descriptors.at(-1);
+    assert(reused !== undefined);
+    assert(descriptors.slice(0, -1).includes(reused), "retained instance reuses a released directory descriptor");
     assert.equal(globalThis.directoryCountForTest(), 0);
     assert.equal(live.size, 0);
   }
