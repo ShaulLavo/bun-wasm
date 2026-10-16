@@ -83,7 +83,7 @@ export function rewriteMetadata(value, base) {
   for (const [key, child] of Object.entries(value)) {
     if (key !== "tarball") { value[key] = rewriteMetadata(child, base); continue; }
     const url = new URL(child);
-    if (url.origin !== "https://registry.npmjs.org" && url.origin !== base) throw new Error(`Unsupported tarball origin ${url.origin}`);
+    if (url.origin !== "https://registry.npmjs.org" && url.origin !== "http://registry.npmjs.org" && url.origin !== base) throw new Error(`Unsupported tarball origin ${url.origin}`);
     if (url.username || url.password || url.search || url.hash) throw new Error(`Unsupported tarball URL ${child}`);
     value[key] = `${base}${url.pathname}`;
   }

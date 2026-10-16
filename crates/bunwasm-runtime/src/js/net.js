@@ -929,7 +929,11 @@
       _onConnection(conn) {
         trackServerConnection(this, conn);
         const peer = conn.peer();
-        const socket = { remoteAddress: peer.address, remotePort: peer.port, remoteFamily: peer.family, encrypted: protocol === "https:", destroy: () => conn.destroy(), setTimeout() {}, setNoDelay() {}, setKeepAlive() {}, on() {}, once() {} };
+        const socket = {
+          get writable() { return !conn.closed && !conn.closing; },
+          remoteAddress: peer.address, remotePort: peer.port, remoteFamily: peer.family, encrypted: protocol === "https:",
+          destroy: () => conn.destroy(), setTimeout() {}, setNoDelay() {}, setKeepAlive() {}, on() {}, once() {},
+        };
         this.emit("connection", socket);
         serveHttp(conn, (request, c, keepAlive) => new Promise((resolve) => {
           const req = new IncomingMessage();
