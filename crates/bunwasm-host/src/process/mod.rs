@@ -1,5 +1,6 @@
 mod pipe;
 mod stdio;
+mod stdin;
 
 pub use stdio::{Cancellation, Stdio};
 
@@ -7,12 +8,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::task::{Context, Waker};
 
 use serde::Deserialize;
-use wasmtime_wasi::cli::{StdinStream, StdoutStream};
+use wasmtime_wasi::cli::StdoutStream;
 
 use crate::net::{AGAIN, BADF, ErrorInfo, Notify};
 use pipe::Pipe;
+use stdin::SharedInput;
 
 pub const FIRST_HANDLE: i32 = 0x4000_0000;
 const MAX_CHILDREN: usize = 4;
@@ -64,6 +67,7 @@ struct PipeHandle {
 pub struct Processes {
     runtime: Arc<Runtime>,
     stdio: Stdio,
+    stdin: SharedInput,
     notify: Arc<Notify>,
     next: i32,
     children: HashMap<i32, Child>,
@@ -78,6 +82,7 @@ impl Processes {
     pub fn new(runtime: Arc<Runtime>, stdio: Stdio, notify: Arc<Notify>) -> Self {
         Self {
             runtime,
+            stdin: stdio.stdin.clone(),
             stdio,
             notify,
             next: FIRST_HANDLE,
@@ -105,13 +110,13 @@ impl Processes {
         (id, pipe)
     }
 
-    fn stdin(&mut self, mode: &str) -> Result<(i32, Arc<dyn StdinStream + Sync>), ErrorInfo> {
+    fn stdin(&mut self, mode: &str) -> Result<(i32, SharedInput), ErrorInfo> {
         match mode {
             "inherit" => Ok((0, self.stdio.stdin.clone())),
-            "ignore" => Ok((0, Arc::new(wasmtime_wasi::p2::pipe::MemoryInputPipe::new(Vec::new())))),
+            "ignore" => Ok((0, SharedInput::new(Arc::new(wasmtime_wasi::p2::pipe::MemoryInputPipe::new(Vec::new()))))),
             "pipe" => {
                 let (id, pipe) = self.pipe(true);
-                Ok((id, Arc::new(pipe)))
+                Ok((id, SharedInput::new(Arc::new(pipe))))
             }
             _ => Err(error("Unsupported stdin mode in bun-wasm", "EINVAL")),
         }
@@ -197,6 +202,7 @@ impl Processes {
         );
         let thread = std::thread::Builder::new()
             .name("bun-wasm-child".into())
+            .stack_size(crate::THREAD_STACK)
             .spawn(move || {
                 let code = crate::run_instance(
                     runtime.clone(),
@@ -298,7 +304,25 @@ impl Processes {
         crate::net::Output::Bytes(info.to_json())
     }
 
-    pub fn read(&self, id: i32, buf: &mut [u8]) -> i32 {
+    pub fn read(&mut self, id: i32, buf: &mut [u8]) -> i32 {
+        if id == 0 {
+            if buf.is_empty() {
+                return 0;
+            }
+            let waker = Waker::from(self.notify.clone());
+            let mut context = Context::from_waker(&waker);
+            if self.stdin.poll_ready(&mut context).is_pending() {
+                return AGAIN;
+            }
+            return match self.stdin.read(buf.len()) {
+                Ok(bytes) => {
+                    buf[..bytes.len()].copy_from_slice(&bytes);
+                    bytes.len() as i32
+                }
+                Err(wasmtime_wasi::p2::StreamError::Closed) => 0,
+                Err(_) => -1,
+            };
+        }
         match self.pipes.get(&id) {
             Some(p) if !p.write => p.pipe.read(buf),
             _ => BADF,

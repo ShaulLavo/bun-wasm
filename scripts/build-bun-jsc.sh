@@ -17,6 +17,16 @@ export JSC_BUILD_DIR
 # rquickjs-sys isn't built here, but sqlite's cc build uses the same wasi-sdk.
 export WASI_SDK="${WASI_SDK:-$WASI_SDK_PATH}"
 [[ -f "$JSC_OBJ/lib/libJavaScriptCore.a" ]] || "$root/scripts/build-jsc.sh"
+# jsc/webkit-wasi.patch gives WTF's StackBounds a native recursion budget (docs/stack-limits.md).
+# A WTF built before that links fine, but lets getters and Proxy traps exhaust the host's wasm stack.
+if ! LC_ALL=C grep -qa BUN_WASM_STACK_KIB "$JSC_OBJ/lib/libWTF.a"; then
+  echo "error: $JSC_OBJ/lib/libWTF.a was built without the StackBounds budget in jsc/webkit-wasi.patch." >&2
+  echo "Update that one file and rebuild; ninja then recompiles only StackBounds.cpp and relinks:" >&2
+  echo "  git -C $WEBKIT_DIR checkout -- Source/WTF/wtf/StackBounds.cpp" >&2
+  echo "  git -C $WEBKIT_DIR apply --include=Source/WTF/wtf/StackBounds.cpp $JSC_SRC/webkit-wasi.patch" >&2
+  echo "  scripts/build-jsc.sh" >&2
+  exit 1
+fi
 
 PATH="$PATH_NO_BINARYEN" $CAGE cargo build -j "$JOBS" --release --target wasm32-wasip1 -p bunwasm-cli \
   --no-default-features --features engine-jsc,bun-transpiler,bun-build
