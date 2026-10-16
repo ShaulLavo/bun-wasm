@@ -1,0 +1,22 @@
+{
+  "method": "Headless real-browser IndexedDB durability, page termination, exclusive-writer and lazy-data gates. Original spike 3 corpus geometry: 10,000 package-sized files plus three 8 MiB files; synthetic deterministic contents, no upstream code/content. One corpus sample per engine, timings diagnostic not performance thresholds. Browser profiles, workers, server and build scratch owned by this process.",
+  "platform": "linux",
+  "arch": "x64",
+  "browsers": [
+    {
+      "browser": "chromium",
+      "version": "156.0.8078.4",
+      "reload": false,
+      "checks": [],
+      "cleanup": {
+        "contextClosed": true,
+        "databaseNames": [
+          "bunwasm-step3b-chromium-625dbda3-763f-4515-9830-8788adf8832d"
+        ]
+      }
+    }
+  ],
+  "error": "AssertionError [ERR_ASSERTION]: immediate reload after durable flush must preserve bytes, inode, mtime, rename and unlink\n+ actual - expected\n\n+ []\n- [\n-   {\n-     bytes: [\n-       0,\n-       255,\n-       1,\n-       0,\n-       128\n-     ],\n-     metadata: {\n-       ino: 3,\n-       kind: 'file',\n-       mtime: 1792184420473\n-     },\n-     path: '/renamed.bin'\n-   }\n- ]\n\n    at /work/tmp/bun-wasm-step3b-browser-LPg3dL/web/tests/browser-persistence.ts:78:14\n    at processTicksAndRejections (native:7:39)",
+  "baseline": "c7f08312e2243d7e6e6c665aff178930b1285b12",
+  "expectedFailure": "flush finishes but immediate page reload returns an empty tree rather than the renamed binary file with matching inode and mtime"
+}
