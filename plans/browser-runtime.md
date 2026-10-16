@@ -79,6 +79,27 @@ keeps prototype code in `/work/tmp/bun-wasm-spike-*`. No product code changes.
    Map what Brush needs from the runtime: process imports, concurrent pipelines, job control,
    Ctrl+C, terminal modes.
 
+### Process layer requirements from the shell
+
+The own shell (brush-web `plans/004-own-shell.md`, `/work/reports/browser-shell-research/own-shell-spike.md`
+sections 7 and 8) maps its `ProcessHost` trait onto this layer. The process layer provides:
+
+- spawn with argv, env, cwd and arbitrary descriptor bindings (fd 3 and up, not only stdio);
+- several concurrent children per parent;
+- non-blocking reads and writes with readiness and child-exit notification, so a single-threaded
+  async guest parks only when nothing is runnable;
+- bounded pipes: EOF after the last writer closes, EPIPE after the last reader closes, partial
+  writes, zero-length reads and writes;
+- a shared interrupt word the guest can see while its WASM runs;
+- Ctrl+C kills the foreground job and its descendants with confirmed exit, while unrelated
+  background children keep running;
+- a generic executable registry;
+- broken pipe status: a child killed by SIGPIPE reports 141; a guest that handles EPIPE keeps its
+  own status.
+
+The process ABI section of the build plan is written against this list, and the shell lane is
+told when it is settled.
+
 ### 1. Build plan
 
 Written from the spike results, with sizes and estimates per step, before any runtime code. It
