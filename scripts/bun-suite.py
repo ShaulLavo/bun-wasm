@@ -303,7 +303,7 @@ def drain_record(finished, records, checkpoint, selected):
     records[record["file"]] = record
     checkpoint.write(json.dumps(record) + "\n")
     checkpoint.flush()
-    label = "PASS" if record["fully_passing"] else "TIME" if record["timed_out"] else "FAIL"
+    label = "PASS" if record["fully_passing"] else "TIME" if record["timed_out"] else "SKIP" if record.get("skipped_script") else "FAIL"
     print(f"{len(records)}/{len(set(records).union(selected))} {label} {record['file']} {record['counts']}", flush=True)
 
 

@@ -1,0 +1,2 @@
+writable ArrayBuffer
+duplex ArrayBuffer
