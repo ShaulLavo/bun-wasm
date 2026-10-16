@@ -127,7 +127,13 @@ mod bun_transpiler {
                 write: false,
                 ..BuildArgs::default()
             };
-            let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || bunwasm_build::build(&args))
+            let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
+                if AWAIT_HOOKS {
+                    bunwasm_transpiler::with_dynamic_import_referrer(path, || bunwasm_build::build(&args))
+                } else {
+                    bunwasm_build::build(&args)
+                }
+            })
                 .map_err(|log| log.trim_end().to_owned())?;
             let code = out.stdout.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default();
             if code.is_empty() {
@@ -141,8 +147,7 @@ mod bun_transpiler {
                 }
                 None => (code, None),
             };
-            let imports = if AWAIT_HOOKS { self.module_imports(&code, path)? } else { Vec::new() };
-            Ok(Transpiled { code, mappings, imports })
+            Ok(Transpiled { code, mappings, imports: Vec::new() })
         }
 
         #[cfg(feature = "bun-build")]

@@ -187,6 +187,11 @@ pub fn transpile_with_source_map(source: &str, path: &str, loader: Loader) -> Re
     Ok(Transpiled { code, mappings, imports })
 }
 
+/// Print host `require(esm)` dynamic imports directly in the bundler's pass.
+pub fn with_dynamic_import_referrer<T>(from: &str, f: impl FnOnce() -> T) -> T {
+    bun_js_printer::with_bunwasm_import_referrer(from, f)
+}
+
 /// Runs `f` with Bun's printer emitting the bun-wasm `await` hooks
 /// (`__bunwasm_resume(__bunwasm_capture(), await x)`, see
 /// `bun_js_printer::BUNWASM_AWAIT_HOOKS`) when `on`. For the browser engine,
