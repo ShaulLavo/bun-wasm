@@ -87,6 +87,12 @@ struct Directories {
     cursors: HashMap<i32, Cursor>,
 }
 
+impl Directories {
+    fn close_all(&mut self) {
+        self.cursors.clear();
+    }
+}
+
 fn closed() -> NativeError {
     NativeError::error("Directory handle was closed").prop("code", "ERR_DIR_CLOSED")
 }
@@ -117,12 +123,22 @@ pub(crate) fn install(table: &mut Table) {
         let cursor = state.cursors.get_mut(&args.i32(0)?).ok_or_else(closed)?;
         cursor.read(args.num(1)? as usize)
     });
+    let state = directories.clone();
     table.add("closeDir", move |args| {
-        directories
+        state
             .borrow_mut()
             .cursors
             .remove(&args.i32(0)?)
             .ok_or_else(closed)?;
         Ok(Val::Undefined)
+    });
+    let state = directories.clone();
+    table.add("closeAllDirs", move |_| {
+        state.borrow_mut().close_all();
+        Ok(Val::Undefined)
+    });
+    let state = directories;
+    table.add("directoryCount", move |_| {
+        Ok((state.borrow().cursors.len() as f64).into())
     });
 }

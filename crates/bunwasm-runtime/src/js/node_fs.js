@@ -142,7 +142,7 @@
     if (options == null) options = {};
     if (typeof options === "string") options = { encoding: options };
     if (typeof options !== "object") throw invalidArg("options", "of type object", options);
-    const encoding = options.encoding == null ? "utf8" : options.encoding;
+    const encoding = options.encoding || "utf8";
     if (encoding !== "buffer" && !Buffer.isEncoding(encoding)) {
       throw Object.assign(new TypeError(`The argument 'encoding' is invalid. Received ${String(encoding)}`), { code: "ERR_INVALID_ARG_VALUE" });
     }
@@ -158,18 +158,29 @@
     return Object.assign(new Error("Directory handle was closed"), { code: "ERR_DIR_CLOSED" });
   }
 
+  const directoryCleanup = new FinalizationRegistry((handle) => {
+    try { native.closeDir(handle); } catch {}
+  });
+  globalThis.process?.once?.("exit", () => native.closeAllDirs());
+
   class Dir {
     #handle;
     #path;
+    #publicPath;
+    #token;
     #options;
     #entries = [];
     #index = 0;
     #operations = [];
+    #active = false;
 
-    constructor(handle, path, options) {
+    constructor(handle, path, publicPath, options) {
       this.#handle = handle;
-      this.#path = path;
+      this.#path = publicPath;
+      this.#publicPath = publicPath;
+      this.#token = {};
       this.#options = options;
+      directoryCleanup.register(this, handle, this.#token);
     }
     get path() {
       if (!(#path in this)) throw Object.assign(new TypeError('Value of "this" must be of type Dir'), { code: "ERR_INVALID_THIS" });
@@ -180,7 +191,7 @@
     }
     #checkSync() {
       this.#checkOpen();
-      if (this.#operations.length !== 0) {
+      if (this.#active || this.#operations.length !== 0) {
         throw Object.assign(new Error("Cannot do synchronous work on directory handle with concurrent asynchronous operations"), { code: "ERR_DIR_CONCURRENT_OPERATION" });
       }
     }
@@ -194,12 +205,15 @@
       const [bytes, kind, parentPath] = this.#entries[this.#index++];
       const buffer = asBuffer(bytes);
       const name = this.#options.encoding === "buffer" ? buffer : buffer.toString(this.#options.encoding);
-      return new Dirent(name, kind, parentPath);
+      const parent = this.#publicPath instanceof Uint8Array ? Buffer.from(parentPath) : parentPath;
+      return new Dirent(name, kind, parent);
     }
     #closeHandle() {
       this.#checkOpen();
-      native.closeDir(this.#handle);
+      const handle = this.#handle;
       this.#handle = null;
+      directoryCleanup.unregister(this.#token);
+      native.closeDir(handle);
       this.#entries = [];
     }
     #enqueue(operation, callback) {
@@ -220,17 +234,26 @@
     }
     #drain() {
       const { operation, callback } = this.#operations[0];
+      this.#active = operation === "read" && this.#index === this.#entries.length;
       const { error, result } = this.#run(operation);
       this.#operations.shift();
       if (this.#operations.length !== 0) later(() => this.#drain());
-      if (operation === "close") callback(error);
-      else callback(error, result);
+      try {
+        if (operation === "close") callback(error);
+        else callback(error, result);
+      } finally {
+        this.#active = false;
+      }
     }
     readSync() {
       this.#checkSync();
       return this.#readEntry();
     }
     read(callback) {
+      if (arguments.length > 0) {
+        this.#checkOpen();
+        if (callback === undefined) throw invalidArg("callback", "of type function", callback);
+      }
       return this.#enqueue("read", callback);
     }
     closeSync() {
@@ -260,7 +283,8 @@
     const given = toPath(path);
     if (given === "") throw Object.assign(new Error("ENOENT: no such file or directory, opendir ''"), { code: "ENOENT", errno: -2, syscall: "opendir", path: given });
     const config = directoryOptions(options);
-    return new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, config);
+    const publicPath = path instanceof Uint8Array ? Buffer.from(path) : path;
+    return new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, publicPath, config);
   }
 
   function opendir(path, options, callback) {
@@ -273,7 +297,8 @@
       later(() => callback(Object.assign(new Error("ENOENT: no such file or directory, opendir ''"), { code: "ENOENT", errno: -2, syscall: "opendir", path: given })));
       return;
     }
-    try { result = new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, config); }
+    const publicPath = path instanceof Uint8Array ? Buffer.from(path) : path;
+    try { result = new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, publicPath, config); }
     catch (err) { error = err; }
     later(() => callback(error, result));
   }
