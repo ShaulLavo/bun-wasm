@@ -1092,7 +1092,6 @@ dependencies = [
 name = "bunwasm-glue"
 version = "0.0.18"
 dependencies = [
- "bunwasm-crypto-sys",
  "bstr",
  "bun_ast",
  "bun_core",
@@ -1100,6 +1099,7 @@ dependencies = [
  "bun_js_parser",
  "bun_semver",
  "bun_threading",
+ "bunwasm-crypto-sys",
  "libc",
  "miniz_oxide 0.8.9",
 ]
@@ -1138,19 +1138,18 @@ dependencies = [
 name = "bunwasm-runtime"
 version = "0.0.18"
 dependencies = [
- "bunwasm-crypto-sys",
  "aes",
  "aes-kw",
  "bun_glob",
  "bun_semver",
  "bun_sys",
  "bun_wyhash",
+ "bunwasm-crypto-sys",
  "bunwasm-glue",
  "bunwasm-jsc",
  "bunwasm-posix",
  "bunwasm-semver",
  "cbc",
- "cc",
  "ctr",
  "ed25519-dalek",
  "flate2",
