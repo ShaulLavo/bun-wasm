@@ -1,3 +1,5 @@
+import { oversizedCryptoInput } from "./crypto-inputs.js";
+import { installHostCrypto } from "./crypto-host.js";
 import { memoryViews } from "./memory-views.js";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
@@ -324,6 +326,7 @@ class EngineHost {
       return this.exit(70);
     }
     this.internal = internal;
+    installHostCrypto(nativeSubtleCrypto,NativeCryptoKey,internal.crypto,native);
     // Module URLs show as their paths; frames of this host itself (and the
     // worker bundle it lives in) are internal, like the polyfills.
     internal.displayName = (file, evalFrame = false) => {
@@ -388,8 +391,13 @@ class EngineHost {
     const host = this;
     for (const [name, operation] of Object.entries(nativeSubtleOperations)) {
       const wrapper = { [name](...args) {
+        let result;
+        try {
+          if (oversizedCryptoInput(name,args)) throw new NativeDOMException("Crypto input is too large","OperationError");
+          result = Reflect.apply(operation,this,args);
+        } catch (error) { result = NativePromise.reject(error); }
         // Tracking observes rejection; the returned promise must still report an unhandled rejection.
-        return host.track(Reflect.apply(operation, this, args)).then(value => value);
+        return host.track(result).then(value => value);
       } }[name];
       Object.defineProperty(wrapper, "length", { value: operation.length });
       Object.defineProperty(nativeSubtleCrypto, name, { value: wrapper, writable: true, configurable: true });

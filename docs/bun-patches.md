@@ -70,6 +70,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
+| [`web/src/crypto-host.js`, `crypto-inputs.js`](#native-crypto-capabilities) | Host feature | Preserve native crypto, fill the verified AES-192 gap and enforce the runtime input bound. |
 | [`third_party/licenses/boringssl-LICENSE`](#webcrypto-backend) | Port | Retain BoringSSL license notices with the wasm backend. |
 | [`crates/bunwasm-runtime/src/crypto.rs`, GCM adapter and `third_party/licenses/aes-gcm-MIT`](#webcrypto-backend) | Port | Adapt RustCrypto GCM to WebCrypto nonce and tag lengths. |
 | [`crates/bunwasm-runtime/src/js/crypto_keys.js` and `crypto_host_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
@@ -838,3 +839,13 @@ imports wasm keys into that provider before native operations. Matching native K
 roundtrips retain their native CryptoKey. Secret conversion uses raw material instead of
 JWK; RSA signatures reject unsupported padding before dispatch. No upstream implementation
 was copied or changed for these corrections.
+## Native crypto capabilities
+
+Class **Host feature**. Original host adapters. `web/src/crypto-host.js` probes each native
+AES algorithm with a valid 192-bit key. Only a confirmed unsupported 192-bit operation uses
+the existing RustCrypto backend. Supported native operations retain their provider and keys.
+Mixed wrapping uses an exportable native HMAC key as a raw byte container when a native
+wrapping key must wrap a wasm AES-192 key. The HMAC operation is never used. This preserves
+native wrapping with non-extractable, wrap-only keys. `crypto-inputs.js` preserves the runtime's
+2 GiB input boundary before native copies, including algorithm-dictionary buffer members.
+No upstream cryptographic implementation is copied or changed.
