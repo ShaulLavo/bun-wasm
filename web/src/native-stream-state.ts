@@ -217,6 +217,10 @@ function dictionary(input: unknown, methods: readonly PropertyKey[], group: Grou
     },
   });
 }
+function linkConstructor(Ctor: { prototype: object }, wrapper: Function) {
+  const descriptor = Object.getOwnPropertyDescriptor(Ctor.prototype, "constructor");
+  if (descriptor) Object.defineProperty(Ctor.prototype, "constructor", Object.assign({}, descriptor, { value: wrapper }));
+}
 function construct<T extends typeof ReadableStream | typeof WritableStream | typeof TransformStream>(Ctor: T, kind: Kind, methods: readonly PropertyKey[]): T {
   let wrapper: T;
   wrapper = new Proxy(Ctor, { construct(target, args, newTarget) {
@@ -262,10 +266,24 @@ function nativePipeTo(stream: object, destination: unknown, options: unknown, or
   if (signal === undefined || signal instanceof NativeAbortSignal) return apply(original, stream, [destination, options]);
   if (typeof signal !== "object" || signal === null || typeof Reflect.get(signal, "addEventListener") !== "function") return apply(original, stream, [destination, options]);
   const controller = new NativeAbortController();
+  const removeEventListener = Reflect.get(signal, "removeEventListener");
   const abort = () => controller.abort(Reflect.get(signal, "reason"));
+  let attached = false;
+  const cleanup = () => {
+    if (!attached || typeof removeEventListener !== "function") return;
+    Reflect.apply(removeEventListener, signal, ["abort", abort, { once: true }]);
+    attached = false;
+  };
   if (Reflect.get(signal, "aborted")) abort();
-  else Reflect.apply(Reflect.get(signal, "addEventListener"), signal, ["abort", abort, { once: true }]);
-  return apply(original, stream, [destination, Object.assign({}, options, { signal: controller.signal })]);
+  else {
+    Reflect.apply(Reflect.get(signal, "addEventListener"), signal, ["abort", abort, { once: true }]);
+    attached = true;
+  }
+  let result;
+  try { result = apply(original, stream, [destination, Object.assign({}, options, { signal: controller.signal })]); }
+  catch (error) { cleanup(); throw error; }
+  if (result && typeof result.then === "function") Reflect.apply(result.then, result, [cleanup, cleanup]);
+  return result;
 }
 
 function streamMethods(Ctor: typeof ReadableStream | typeof WritableStream, readable: boolean) {
@@ -322,11 +340,13 @@ export function installNativeStreamState() {
     controllerMethods(Native.ReadableByteStreamController, ["close", "error", "enqueue"]);
     controllerMethods(Native.WritableStreamDefaultController, ["error"]);
     controllerMethods(Native.TransformStreamDefaultController, ["error", "terminate", "enqueue"]);
-    constructors = {
-      ReadableStream: construct(Native.ReadableStream, "readable", ["start", "pull", "cancel"]),
-      WritableStream: construct(Native.WritableStream, "writable", ["start", "write", "close", "abort"]),
-      TransformStream: construct(Native.TransformStream, "transform", ["start", "transform", "flush", "cancel"]),
-    };
+    const readable = construct(Native.ReadableStream, "readable", ["start", "pull", "cancel"]);
+    const writable = construct(Native.WritableStream, "writable", ["start", "write", "close", "abort"]);
+    const transform = construct(Native.TransformStream, "transform", ["start", "transform", "flush", "cancel"]);
+    linkConstructor(Native.ReadableStream, readable);
+    linkConstructor(Native.WritableStream, writable);
+    linkConstructor(Native.TransformStream, transform);
+    constructors = { ReadableStream: readable, WritableStream: writable, TransformStream: transform };
   }
   session = { alive: true, values: new Set(), timers: new Set() };
   const own = session;

@@ -22,6 +22,30 @@ async function test(name, run) {
   } finally { clearTimeout(timer); }
 }
 
+await test("native constructors preserve prototype identity and subclassing", async () => {
+  check(ReadableStream.prototype.constructor === ReadableStream, "readable constructor link");
+  check(WritableStream.prototype.constructor === WritableStream, "writable constructor link");
+  check(TransformStream.prototype.constructor === TransformStream, "transform constructor link");
+  const transform = new TransformStream();
+  check(transform.readable.constructor === ReadableStream, "transform readable constructor link");
+  check(transform.writable.constructor === WritableStream, "transform writable constructor link");
+  class Derived extends ReadableStream {}
+  check(new Derived() instanceof Derived, "readable subclassing");
+});
+await test("guest pipeTo removes its abort listener after completion", async () => {
+  let adds = 0;
+  let removes = 0;
+  const signal = {
+    aborted: false,
+    addEventListener(type, listener) { if (type === "abort") adds++; this.listener = listener; },
+    removeEventListener(type, listener) { if (type === "abort" && this.listener === listener) removes++; },
+  };
+  for (let i = 0; i < 3; i++) {
+    const source = new ReadableStream({ start(controller) { controller.close(); } });
+    await source.pipeTo(new WritableStream(), { signal });
+  }
+  check(adds === 3 && removes === 3, `listener cleanup ${adds}/${removes}`);
+});
 await test("readable finished callback preserves unlocked state", async () => {
   let controller;
   const stream = new ReadableStream({ start(value) { controller = value; } });
