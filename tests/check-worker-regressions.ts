@@ -18,7 +18,7 @@ process.on("SIGINT", () => { active?.kill("SIGKILL"); process.exit(130); });
 
 for (const test of selected) {
   const command = host === "node-control" ? [process.execPath, "-e", test.code]
-    : host === "node" ? [process.execPath, "--no-warnings", `${root}/web/scripts/node-host.mjs`, "--wasm", artifact, "--", "-e", test.code]
+    : host === "node" ? [process.execPath, "--no-warnings", `${root}/web/scripts/node-host.mjs`, "--wasm", artifact, "--net", "--", "-e", test.code]
     : [launcher, "--wasm", artifact, "-e", test.code];
   const result = await new Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string; timeout: boolean }>(resolve => {
     let stdout = ""; let stderr = ""; let timeout = false;
