@@ -51,6 +51,7 @@ for slots in table imports; do
 done
 
 if [[ $browser == 1 ]]; then
+  node "$root/scripts/test-native-stream-interop.mjs" || failed=1
   node tests/browser-install.mjs || failed=1
   node tests/browser-net.mjs || failed=1
   node tests/browser-subprocess.mjs || failed=1

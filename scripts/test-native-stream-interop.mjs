@@ -1,3 +1,4 @@
+import { stripTypeScriptTypes } from "node:module";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,6 +10,7 @@ function inputs() {
   const sources = Object.fromEntries(names.filter(name => existsSync(join(sourceRoot, name + ".js"))).map(name => [name, readFileSync(join(sourceRoot, name + ".js"), "utf8")]));
   const builtins = readFileSync(join(sourceRoot, "builtins.js"), "utf8");
   sources.asyncHooks = builtins.slice(builtins.indexOf("  function asyncHooksModule()"), builtins.indexOf("  function diagnosticsChannelModule()"));
+  sources.hostBridge = stripTypeScriptTypes(readFileSync(join(root, "web/src/native-stream-state.ts"), "utf8"));
   sources.fixture = readFileSync(join(root, "tests/fixtures/node-native-web-streams/index.js"), "utf8");
   return sources;
 }
@@ -26,6 +28,7 @@ for (const name of ["chromium", "webkit"]) {
     page.on("pageerror", error => pageErrors.push(String(error)));
     const result = await page.evaluate(async sources => {
       const native = { ReadableStream, WritableStream, TransformStream };
+      const dispose = sources.hostBridge ? new Function(sources.hostBridge.replace("export function installNativeStreamState", "function installNativeStreamState") + ";return installNativeStreamState();")() : () => {};
       const cache = new Map();
       let frame;
       const proc = { env: {}, nextTick: (fn, ...args) => queueMicrotask(() => fn(...args)), versions: { node: "26.7.0" }, stderr: { write() {} }, emitWarning() {} };
@@ -63,6 +66,7 @@ for (const name of ["chromium", "webkit"]) {
         samePrototype: globalThis[name].prototype === Ctor.prototype,
         nativeInstance: new globalThis[name]() instanceof Ctor,
       }]));
+      dispose();
       return { results: globalThis.__nativeStreamResults ?? [], error, brands };
     }, sources);
     const summary = { browser: name, version: browser.version(), ...result, pageErrors };

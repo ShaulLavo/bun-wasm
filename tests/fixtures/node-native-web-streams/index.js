@@ -280,5 +280,40 @@ await test("frozen native transformer and callback receiver", async () => {
   reader.releaseLock(); writer.releaseLock();
   check(seen === transformer, "transform callback receiver changed");
 });
+await test("native writable finished waits for asynchronous abort", async () => {
+  const original = new Error("asynchronous native abort");
+  let complete;
+  const stream = new WritableStream({ abort() { return new Promise(resolve => { complete = resolve; }); } });
+  const writer = stream.getWriter(); writer.closed.catch(() => {});
+  let settled = false;
+  const done = rejects(finishedPromise(stream), original).then(() => { settled = true; });
+  const aborting = writer.abort(original);
+  await tick(); check(!settled, "finished before native abort settled");
+  complete(); await aborting; await done; writer.releaseLock();
+});
+await test("already aborted signal on native writable", async () => {
+  const signal = new AbortController(); signal.abort("already aborted");
+  const stream = addAbortSignal(signal.signal, new WritableStream());
+  check(!stream.locked, "already aborted registration retained a lock");
+  await rejects(finishedPromise(stream), error => error.code === "ABORT_ERR" && error.cause === "already aborted");
+});
+await test("unlocked writable abort waits for sink completion", async () => {
+  const original = new Error("unlocked abort");
+  let complete;
+  const stream = new WritableStream({ abort() { return new Promise(resolve => { complete = resolve; }); } });
+  const aborting = stream.abort(original);
+  let settled = false;
+  const done = rejects(finishedPromise(stream), original).then(() => { settled = true; });
+  await tick(); check(!settled && !stream.locked, "unlocked abort finished early or retained lock");
+  complete(); await aborting; await done;
+});
+await test("transform readable completion observes writer close", async () => {
+  const stream = new TransformStream();
+  const done = finishedPromise(stream.readable);
+  await tick();
+  const writer = stream.writable.getWriter();
+  await writer.close(); await done; writer.releaseLock();
+  check(!stream.readable.locked, "transform readable observation retained lock");
+});
 globalThis.__nativeStreamResults = results;
 if (results.some(result => !result.pass)) throw new Error("Native stream interop regressions failed");

@@ -13,7 +13,10 @@
   }
 
   function installWebState(Ctor, readable) {
-    if (internal.native.engine === "host") return;
+    if (internal.native.engine === "host") {
+      if (!(closedKey in Ctor.prototype) || !(errorKey in Ctor.prototype)) throw new Error("The host native-stream bridge is missing");
+      return;
+    }
     if (!(closedKey in Ctor.prototype)) throw new Error("The portable Web Stream completion hooks are missing");
     if (!(errorKey in Ctor.prototype)) Object.defineProperty(Ctor.prototype, errorKey, { get() {
       const controller = this._readableStreamController || this._writableStreamController;

@@ -20,3 +20,7 @@ PASS delayed native async iteration after queued close
 PASS frozen readable source and callback receiver
 PASS frozen writable sink and callback receiver
 PASS frozen native transformer and callback receiver
+PASS native writable finished waits for asynchronous abort
+PASS already aborted signal on native writable
+PASS unlocked writable abort waits for sink completion
+PASS transform readable completion observes writer close
