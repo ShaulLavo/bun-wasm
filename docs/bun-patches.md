@@ -560,3 +560,25 @@ The numbered JavaScript files in `crates/bunwasm-runtime/generated/builtins/` re
 ## Builtin loader adapter
 
 Class **Host feature**. `scripts/generate-bun-builtins.mjs`, its shell runner, the selection manifest, and `crates/bunwasm-runtime/src/js/bun_builtins.js` are original adapters. `src/js/bun_builtin_globals.js` is the original bootstrap capture of intrinsic constructors, before application code can replace public globals. They call Bun's codegen and consume its generated module protocol. They do not copy the codegen implementation. Rust source lookup and Engine natives are original bun-wasm glue. The loader uses lazy factories, isolated caches, explicit unsupported errors, and the existing builtin implementations for dependencies not switched yet. [bun-builtins.md](bun-builtins.md) records its limits and hook status.
+
+## Generated-function parser locations
+
+The generated-function adapter now uses original import-keyword byte positions
+from Bun's full parser, then converts them to UTF-16 offsets in each original
+constructor argument. It keeps comments, templates, property names, regex literals
+and caller strings intact. Native constructors validate the original arguments
+before rewriting. A function literal accesses a fixed intrinsic-prototype helper,
+so lexical globalThis bindings and with scopes cannot capture the callback.
+Specifier conversion occurs once inside an async function and rejects Symbols.
+This is original glue, with no package implementation copied.
+
+| File | Classification | Upstream and local changes |
+| --- | --- | --- |
+| patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch | Upstream patch | Reused unchanged from the semantic-import lane, Bun wasm commit cd95fa7a13b3f13be73e512b38ec111c1c228084. Exposes parser keyword positions and printer metadata. |
+| crates/bunwasm-transpiler/src/lib.rs function_imports | Original adapter | Constructs the native function grammar around original argument ranges and translates parser offsets. |
+
+Patch 0010 touches src/js_parser/lib.rs, src/js_parser/parse/parse_import_export.rs
+and src/js_printer/printer.rs. The parser collector records only real import
+expressions and restores its previous thread-local state on unwind. The printer
+metadata is consumed by the semantic-import lane; this adapter consumes only the
+parser collector. The existing shared vendor checkout was read, never edited.

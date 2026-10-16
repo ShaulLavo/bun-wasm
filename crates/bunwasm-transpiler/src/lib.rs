@@ -99,6 +99,39 @@ fn init_state() -> Result<State, String> {
     Ok(State { transpiler, log, _arena: arena })
 }
 
+/// Locate import keywords in original generated-function arguments. The full
+/// function grammar distinguishes import expressions from property names.
+pub fn function_imports(args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, String> {
+    let prefix = match kind {
+        "async" => "async function",
+        "generator" => "function*",
+        "async-generator" => "async function*",
+        _ => "function",
+    };
+    let mut source = format!("({prefix} anonymous(");
+    let mut ranges = Vec::new();
+    for (i, arg) in args.iter().enumerate() {
+        if i == args.len() - 1 {
+            source.push_str("\n){\n");
+        } else if i > 0 {
+            source.push(',');
+        }
+        let start = source.len();
+        source.push_str(arg);
+        ranges.push(start..source.len());
+    }
+    source.push_str("\n})");
+    let (_, offsets) = with_state(|state| {
+        let (result, offsets) = bun_js_parser::with_bunwasm_dynamic_imports(|| run(state, &source, "<Function>", Loader::Js, None));
+        result.map(|code| (code, offsets))
+    })?;
+    Ok(ranges.into_iter().map(|range| {
+        offsets.iter().filter(|offset| range.contains(offset)).map(|offset| {
+            source[range.start..*offset].encode_utf16().count()
+        }).collect()
+    }).collect())
+}
+
 /// Transpile one module to ESM JavaScript. `path` is used for error messages
 /// and the JSX/TS pragma lookups; it is not read from disk.
 pub fn transpile(source: &str, path: &str, loader: Loader) -> Result<String, String> {

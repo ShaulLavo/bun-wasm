@@ -25,7 +25,6 @@ mod engine_natives;
 pub mod host;
 pub mod install;
 mod modules;
-mod module_imports;
 mod natives;
 mod resolve;
 mod semver;
