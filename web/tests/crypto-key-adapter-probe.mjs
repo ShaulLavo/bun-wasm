@@ -80,6 +80,12 @@ await check("native JWK dictionary ignores unrelated getters", async () => {
  const key = await provider.importKey("jwk",jwk,{name:"HMAC",hash:"SHA-256"},false,["sign"]);
  assert.deepEqual(keys.KeyObject.from(key).export(),Buffer.alloc(16,1));
 });
+await check("RSA validates the padding value it uses", () => {
+ let reads = 0;
+ const options = {key:privateKey,get padding(){reads++;return reads === 1 ? 999 : 1;}};
+ assert.throws(() => keys.sign("sha256",data,options),e=>/ERR_OSSL_/.test(e.code));
+ assert.equal(reads,1);
+});
 assert.equal(provider, webcrypto.subtle);
 console.log("failures",failures);
 process.exitCode=failures?1:0;

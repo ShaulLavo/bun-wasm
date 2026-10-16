@@ -26,4 +26,13 @@ for (const padding of [constants.RSA_PKCS1_PADDING, constants.RSA_PKCS1_PSS_PADD
   assert(verify("sha256", bytes, {key:publicKey, padding, saltLength:32}, sig));
   console.log("accepted padding", padding);
 }
+for (const operation of ["sign", "verify"]) {
+  let reads = 0;
+  const options = {key:operation === "sign" ? privateKey : publicKey,get padding(){reads++;return reads === 1 ? 999 : 1;}};
+  try {
+    assert.throws(() => operation === "sign" ? sign("sha256",bytes,options) : verify("sha256",bytes,options,signature),error=>/ERR_OSSL_/.test(error.code));
+    assert.equal(reads,1);
+    console.log("rejected padding getter",operation);
+  } catch (error) {failed++;console.log("padding getter",operation,"FAIL",error.name);}
+}
 assert.equal(failed, 0);

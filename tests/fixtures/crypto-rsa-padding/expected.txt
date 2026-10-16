@@ -12,3 +12,5 @@ rejected padding 999 createSign
 rejected padding 999 createVerify
 accepted padding 1
 accepted padding 6
+rejected padding getter sign
+rejected padding getter verify
