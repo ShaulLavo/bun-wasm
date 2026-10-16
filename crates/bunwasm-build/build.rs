@@ -15,5 +15,8 @@ fn main() {
         println!(
             "cargo:rustc-link-arg-bin=bun-build={sdk}/share/wasi-sysroot/lib/wasm32-wasip1/crt1-command.o"
         );
+        println!(
+            "cargo:rustc-link-arg-examples={sdk}/share/wasi-sysroot/lib/wasm32-wasip1/crt1-command.o"
+        );
     }
 }
