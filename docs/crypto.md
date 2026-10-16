@@ -61,7 +61,7 @@ formats, usage checks, tamper rejection and key wrapping.
 all GCM tag sizes, AES-192, non-96-bit GCM IVs, CTR field wrap and binary OAEP labels.
 `scripts/generate-crypto-vectors.mjs` regenerates those vectors with native Node.
 `scripts/check-crypto-review.sh <report-dir>` replays the SHA-1 JWK, P-384/SHA-1 and
-required-HMAC-hash regressions in every engine and verifies the runtime outputs in both
+required-HMAC-hash generation/derivation regressions in every engine and verifies the runtime outputs in both
 native Node and Bun. The replay also disables host SubtleCrypto to exercise the browser
 engine's wasm fallback. `web/tests/browser-crypto.mjs` saves the provider and a native key
 before boot, then tests provider identity and native key operations in Chromium and WebKit.
