@@ -405,7 +405,8 @@ export class Wasi {
         if ((entry.rightsBase & (RIGHT_FD_READ | RIGHT_FD_SEEK)) !== (RIGHT_FD_READ | RIGHT_FD_SEEK)) return ENOTCAPABLE;
         if (entry.resource.kind === "directory") return EISDIR;
         if (entry.resource.kind !== "file") return ESPIPE;
-        this.view().setUint32(nreadPtr, this.readIn(entry.resource, this.iovecs(iovs, count), Number(offset)), true);
+        const read = this.readIn(entry.resource, this.iovecs(iovs, count), Number(offset));
+        this.view().setUint32(nreadPtr, read, true);
         return SUCCESS;
       },
       fd_pwrite: (fd: number, iovs: number, count: number, offset: bigint, nwrittenPtr: number) => {
@@ -414,7 +415,8 @@ export class Wasi {
         if ((entry.rightsBase & (RIGHT_FD_WRITE | RIGHT_FD_SEEK)) !== (RIGHT_FD_WRITE | RIGHT_FD_SEEK)) return ENOTCAPABLE;
         if (entry.resource.kind === "directory") return EISDIR;
         if (entry.resource.kind !== "file") return ESPIPE;
-        this.view().setUint32(nwrittenPtr, this.writeOut(entry.resource, this.iovecs(iovs, count), Number(offset)), true);
+        const written = this.writeOut(entry.resource, this.iovecs(iovs, count), Number(offset));
+        this.view().setUint32(nwrittenPtr, written, true);
         return SUCCESS;
       },
       fd_prestat_get: (fd: number, ptr: number) => {

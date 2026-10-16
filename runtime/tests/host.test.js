@@ -2,9 +2,10 @@ import { expect, test } from 'bun:test';
 import { Wasi } from '../core/index';
 import { MemFS } from '../../web/src/fs';
 const ALL = (1n << 29n) - 1n;
-function host(fs = new MemFS(), options = {}) {
+function host(fs = new MemFS(), options = {}, fallback = false) {
   const wasi = new Wasi({ args: [], env: {}, fs, preopens: { '/': '/' }, stdout() {}, stderr() {}, sleep() {}, ...options });
   const memory = new WebAssembly.Memory({ initial: 1 });
+  if (fallback) Object.defineProperty(memory, "toResizableBuffer", { value: undefined });
   wasi.start({ exports: { memory, _start() {} } });
   const view = new DataView(memory.buffer);
   const bytes = new Uint8Array(memory.buffer);
@@ -75,3 +76,36 @@ test('filesystem handles live once per open description, not once per duplicate'
   h.wasi.descriptors.dispose();
   expect(releases).toBe(2);
 });
+
+test('opaque handles distinguish separate nodes with the same serialized inode', () => {
+  const fs = new MemFS();
+  fs.writeFile('/first', 'first'); fs.writeFile('/second', 'other');
+  // Worker snapshots can contain independently allocated nodes with colliding inode metadata.
+  fs.lookup('/second').ino = fs.lookup('/first').ino;
+  const h = host(fs);
+  const first = h.open('first');
+  const second = h.open('second');
+  h.view.setUint32(0, 512, true); h.view.setUint32(4, 5, true);
+  expect(h.calls.fd_read(first, 0, 1, 1024)).toBe(0);
+  expect(new TextDecoder().decode(h.bytes.subarray(512, 517))).toBe('first');
+  expect(h.wasi.descriptors.get(first).resource.handle).not.toBe(h.wasi.descriptors.get(second).resource.handle);
+  expect(h.calls.fd_close(second)).toBe(0);
+  h.wasi.descriptors.dispose();
+});
+
+for (const operation of ['read', 'write']) {
+  test(`positioned ${operation} reacquires fallback memory after filesystem reentry`, () => {
+    const fs = new MemFS(); fs.writeFile('/file', 'abc');
+    const h = host(fs, {}, true);
+    const fd = h.open('file');
+    h.bytes.set(new TextEncoder().encode('xyz'), 512);
+    h.view.setUint32(0, 512, true); h.view.setUint32(4, 3, true);
+    const original = fs[operation].bind(fs);
+    fs[operation] = (...args) => { const result = original(...args); h.memory.grow(1); return result; };
+    expect(h.calls[operation === 'read' ? 'fd_pread' : 'fd_pwrite'](fd, 0, 1, 0n, 1024)).toBe(0);
+    expect(new DataView(h.memory.buffer).getUint32(1024, true)).toBe(3);
+    if (operation === 'read') expect(new TextDecoder().decode(new Uint8Array(h.memory.buffer, 512, 3))).toBe('abc');
+    else expect(new TextDecoder().decode(fs.readFile('/file'))).toBe('xyz');
+    h.wasi.descriptors.dispose();
+  });
+}

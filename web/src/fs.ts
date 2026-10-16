@@ -60,14 +60,23 @@ export function decode(data: Uint8Array): string {
 export class MemFS implements FileSystem {
   // Handles belong to this filesystem, not to the WASI adapter. Node identity survives unlink.
   private handles = new Map<FileHandle, Node>();
+  private nodeHandles = new WeakMap<Node, FileHandle>();
+  private nextHandle = 0;
   private references = new Map<FileHandle, number>();
   private directoryParents = new WeakMap<DirNode, DirNode>();
   private removedDirectories = new WeakSet<DirNode>();
   private pathDirs: DirNode[] = [];
 
   private handle(node: Node): FileHandle {
-    this.handles.set(node.ino, node);
-    return node.ino;
+    // Inodes are serialized metadata and may collide across independent worker snapshots.
+    // Capability identity follows the local object, never its reported inode number.
+    let handle = this.nodeHandles.get(node);
+    if (handle === undefined) {
+      handle = this.nextHandle++;
+      this.nodeHandles.set(node, handle);
+    }
+    this.handles.set(handle, node);
+    return handle;
   }
   retain(handle: FileHandle): void {
     this.node(handle);
@@ -80,7 +89,8 @@ export class MemFS implements FileSystem {
     else { this.references.delete(handle); this.handles.delete(handle); }
   }
   private forget(node: Node): void {
-    if (!this.references.has(node.ino)) this.handles.delete(node.ino);
+    const handle = this.nodeHandles.get(node);
+    if (handle !== undefined && !this.references.has(handle)) this.handles.delete(handle);
     if (node.kind === "dir") for (const child of node.children.values()) this.forget(child);
   }
   private node(handle: FileHandle): Node {

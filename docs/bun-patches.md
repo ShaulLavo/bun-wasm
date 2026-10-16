@@ -87,7 +87,8 @@ Class **Host feature**, **original adapters** in `runtime/core/`, `web/src/fs.ts
 `wasiPipe` adapter in `web/src/subprocess.js`. The extraction starts from bun-wasm's own
 `web/src/{wasi.ts,memory-views.js,fs.ts}` at `8716f92`; there is no copied Bun, Node, WebKit,
 brush-web, or browser_wasi_shim implementation in this layer. The preview1 adapter now uses
-opaque filesystem handles, reference-counted descriptions and descriptor readiness. Path walking,
+opaque filesystem handles keyed by object identity (not serialized inode metadata), reference-counted
+descriptions and descriptor readiness. Path walking,
 geometric file growth and snapshot compaction remain local MemFS implementation details. Bun's
 reserved socket slot bridge stays configured by `web/`, not imported into the generic core.
 

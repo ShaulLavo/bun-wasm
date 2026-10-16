@@ -34,6 +34,7 @@ jobs:
         run: |
           bun run test
           bun test ../runtime/tests ../scripts/runtime-size.test.ts
+          PYTHONDONTWRITEBYTECODE=1 python3 ../scripts/test-bun-suite.py ReportTests.test_browser_provenance_hashes_runtime_core
       - name: Type check
         run: |
           bun run check
