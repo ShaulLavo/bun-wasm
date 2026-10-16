@@ -214,3 +214,44 @@ test("live child filesystem changes precede stdin and stdout without waiting for
     expect(host.wait(id)).toBe(0);
   } finally { host.dispose(); }
 });
+
+test("idle host pumps publish edits and apply them without stdin", () => {
+  const parent = new MemFS();
+  parent.writeFile("/entry.ts", "before");
+  let childHost: SubprocessHost | undefined;
+  let childFS: MemFS | undefined;
+  const host = new SubprocessHost({
+    filesystem: () => filesystemSync(parent), output() {},
+    launch(_meta, transport) {
+      childFS = new MemFS(structuredClone(parent.root));
+      const files = filesystemSync(childFS);
+      const child = childTransport(transport);
+      childHost = new SubprocessHost({
+        budget: transport.budget, slot: transport.slot, token: transport.token,
+        stdin: transport.pipes[0], output() {},
+        syncFilesystem() {
+          const snapshot = child.receiveFilesystem();
+          if (snapshot) files.merge(snapshot);
+        },
+        launch() { throw new Error("this child does not spawn"); },
+      });
+      return { terminate() {} };
+    },
+  });
+  try {
+    host.spawn(childCommand);
+    parent.writeFile("/entry.ts", "after");
+    host.poll();
+    childHost?.poll();
+    expect(decoder.decode(childFS?.readFile("/entry.ts"))).toBe("after");
+    parent.writeFile("/entry.ts", "newest");
+    host.poll();
+    parent.writeFile("/next.ts", "queued");
+    host.poll();
+    childHost?.poll();
+    host.poll();
+    childHost?.poll();
+    expect(decoder.decode(childFS?.readFile("/entry.ts"))).toBe("newest");
+    expect(decoder.decode(childFS?.readFile("/next.ts"))).toBe("queued");
+  } finally { childHost?.dispose(); host.dispose(); }
+});
