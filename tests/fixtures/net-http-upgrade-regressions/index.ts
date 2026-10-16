@@ -103,7 +103,30 @@ async function unhandled() {
   assert.equal(request.socket.destroyed, true);
   assert.ok(peer);
 }
-const cases = { validation, tls, body, length: () => response("length"), chunked: () => response("chunked"), eof: () => response("eof"), unhandled };
+async function serverBody() {
+  const server = own(http.createServer());
+  const received = Promise.withResolvers<{ complete: boolean; body: string; head: string }>();
+  server.on("upgrade", (request, socket, head) => {
+    own(socket);
+    let body = "";
+    const complete = request.complete;
+    request.on("data", chunk => { body += chunk.toString(); });
+    request.on("end", () => received.resolve({ complete, body, head: head.toString() }));
+    socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: raw\r\n\r\n");
+  });
+  server.listen(0, "127.0.0.1");
+  await event(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  await new Promise<void>((resolve, reject) => {
+    const request = http.request({ host: "127.0.0.1", port: address.port, method: "POST", headers: Object.assign({ "Content-Length": "7" }, headers) });
+    request.on("error", reject);
+    request.on("upgrade", (_response, socket) => { own(socket).destroy(); resolve(); });
+    request.end("payload");
+  });
+  assert.deepEqual(await received.promise, { complete: true, body: "payload", head: "" });
+}
+const cases = { validation, tls, body, length: () => response("length"), chunked: () => response("chunked"), eof: () => response("eof"), unhandled, serverBody };
 let failures = 0;
 for (const [name, run] of Object.entries(cases)) {
   let timer: ReturnType<typeof setTimeout> | undefined;
