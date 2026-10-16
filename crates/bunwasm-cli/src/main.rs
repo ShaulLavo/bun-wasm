@@ -96,6 +96,17 @@ mod bun_transpiler {
                 Loader::Text => BunLoader::Text,
             };
             let preserve_source = loader == BunLoader::Js && !(AWAIT_HOOKS && source.contains("await"));
+            // These extensions decide the format before parser classification in
+            // State::detect_format, so unchanged JS only needs semantic imports.
+            if preserve_source && (path.ends_with(".mjs") || path.ends_with(".cjs")) {
+                use bunwasm_runtime::transpiler::ModuleKind;
+                return Ok(Transpiled {
+                    code: source.to_owned(),
+                    mappings: None,
+                    imports: if AWAIT_HOOKS { self.module_imports(source, path)? } else { Vec::new() },
+                    module_kind: Some(if path.ends_with(".mjs") { ModuleKind::Esm } else { ModuleKind::CommonJs }),
+                });
+            }
             let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
                 bunwasm_transpiler::transpile_with_source_map(source, path, loader, preserve_source)
             })?;
