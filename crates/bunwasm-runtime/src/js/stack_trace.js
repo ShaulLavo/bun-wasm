@@ -50,7 +50,9 @@
     Object.defineProperty(Error.prototype, "stack", {
       configurable: true,
       get() {
-        const value = format(this, nativeStack.get.call(this));
+        const sites = nativeStack.get.call(this);
+        if (!Array.isArray(sites)) return sites;
+        const value = format(this, sites);
         store(this, value);
         return value;
       },
