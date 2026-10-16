@@ -23,7 +23,7 @@ async function check(mode: string, delivery: string, suffix = "EXTRA") {
       if (!pending.includes("\r\n\r\n")) return;
       pending = "";
       if (++requests !== 1) { socket.write("HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: keep-alive\r\n\r\ny"); return; }
-      if (delivery === "same") { socket.write(wire + suffix); return; }
+      if (delivery === "same" || delivery === "paused") { socket.write(wire + suffix); return; }
       if (delivery === "split") {
         const split = wire.indexOf("\r\n\r\n") + 2;
         socket.write(wire.slice(0, split));
@@ -43,7 +43,7 @@ async function check(mode: string, delivery: string, suffix = "EXTRA") {
       responses++;
       let body = "";
       res.on("data", chunk => body += chunk);
-      if (first && delivery === "unconsumed") { res.pause(); setTimeout(() => res.resume(), 40); }
+      if (first && delivery === "paused") { res.pause(); setTimeout(() => res.resume(), 40); }
       res.on("error", error => { clearTimeout(timer); reject(error); });
       res.on("end", () => { clearTimeout(timer); resolve({ req, body, responses }); });
     });
@@ -63,7 +63,7 @@ async function check(mode: string, delivery: string, suffix = "EXTRA") {
     assert.equal(second.req.reusedSocket, false, `${mode}/${delivery} reused contaminated connection`);
     assert.equal(connections, 2, `${mode}/${delivery}`);
     assert.equal(second.body, "y", `${mode}/${delivery}`);
-    if ((delivery === "same" || delivery === "split") && suffix === "EXTRA") assert.deepEqual(errors, ["HPE_INVALID_CONSTANT"]);
+    if (delivery !== "idle" && suffix === "EXTRA") assert.deepEqual(errors, ["HPE_INVALID_CONSTANT"]);
   } finally {
     agent.destroy();
     for (const socket of sockets) socket.destroy();
@@ -71,7 +71,7 @@ async function check(mode: string, delivery: string, suffix = "EXTRA") {
   }
 }
 for (const mode of ["fixed", "chunked", "HEAD", "204", "304"]) {
-  for (const delivery of ["same", "split", "idle"]) await check(mode, delivery);
+  for (const delivery of ["same", "split", "idle", "paused"]) await check(mode, delivery);
   await check(mode, "same", "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nz");
 }
 console.log("HTTP response remainder closes contaminated sockets without losing body or EOF");
