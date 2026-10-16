@@ -2,9 +2,9 @@
 
 Bun's own Rust toolchain (transpiler, bundler, dev server graph, parsers, semver, glob), built for
 `wasm32-wasip1`, plus a runtime of our own that implements Bun's and Node's APIs on top of it. It
-runs in the browser and under wasmtime. The runtime layer is not Bun's code: Bun's real runtime is
-tied to JavaScriptCore internals, so we reimplement it and measure it against Bun's own test suite
-([docs/bun-test-suite/](docs/bun-test-suite/README.md)).
+runs in the browser and under wasmtime. The runtime uses
+[Bun's generated JavaScript builtins](docs/bun-builtins.md) where they run independently of JavaScriptCore. Rust natives and the remaining JavaScript API implementations
+fill the gaps. We measure compatibility against [Bun's own test suite](docs/bun-test-suite/README.md).
 
 - `bun run`, `bun test`, `bun build`, `Bun.build`, `bun:sqlite`, `fetch`, `Bun.serve`
 - Bun's real transpiler and bundler
