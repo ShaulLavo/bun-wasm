@@ -950,13 +950,18 @@
         return this;
       }
       _onConnection(conn) {
-        const peer = conn.peer();
         const { Socket } = internal.builtin("node:net");
         const socket = new Socket();
         socket._conn = conn;
         socket._phase = "open";
         socket._updatePeer();
         socket.encrypted = protocol === "https:";
+        let writable = socket.writable;
+        Object.defineProperty(socket, "writable", {
+          configurable: true, enumerable: true,
+          get() { return writable && !conn.closed && !conn.closing; },
+          set(value) { writable = value; },
+        });
         conn.onClose = () => socket.destroy();
         trackServerConnection(this, conn);
         this.emit("connection", socket);

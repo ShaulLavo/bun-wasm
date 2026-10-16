@@ -1,0 +1,17 @@
+side effect
+methods 42 43 44 45
+properties 1 2
+literals import(never) true import(never) 46
+regex statement true
+imports 47 47 47 47
+template import value 47
+nested template outer inner 47
+attributes 48 48
+meta /index.mjs true
+cjs 47 47 47
+esm as cjs 47 true
+attribute effects 48 1
+comment import 47
+arrow 47
+escaped 47 UTF-8
+star 47 47

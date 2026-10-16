@@ -75,8 +75,10 @@ type F4 = extern "C" fn(i32, i32, i32, i32) -> i32;
 /// (docs/host-abi.md, "Calling through an import").
 const VIA_IMPORT: u32 = u32::MAX;
 /// The fd a host-call `sock_send` names. No real descriptor gets this number.
+#[cfg(target_arch = "wasm32")]
 const HOST_CALL_FD: i32 = 0x7fff_b0b0;
 
+#[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "wasi_snapshot_preview1")]
 unsafe extern "C" {
     /// WASI's `sock_send(fd, si_data, si_data_len, si_flags, so_datalen)`,
@@ -96,11 +98,16 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
         return None;
     }
     if index == VIA_IMPORT {
-        let packet = [id as i32, args[0], args[1], args[2], args[3]];
-        let mut result: i32 = UNSUPPORTED;
-        // SAFETY: both pointers are valid for the call; the host reads 5 i32s and writes one.
-        let errno = unsafe { wasi_sock_send(HOST_CALL_FD, packet.as_ptr() as i32, 5, 0, addr_of_mut!(result) as i32) };
-        return Some(if errno == 0 { result } else { UNSUPPORTED });
+        #[cfg(target_arch = "wasm32")]
+        {
+            let packet = [id as i32, args[0], args[1], args[2], args[3]];
+            let mut result: i32 = UNSUPPORTED;
+            // SAFETY: both pointers are valid for the call; the host reads 5 i32s and writes one.
+            let errno = unsafe { wasi_sock_send(HOST_CALL_FD, packet.as_ptr() as i32, 5, 0, addr_of_mut!(result) as i32) };
+            return Some(if errno == 0 { result } else { UNSUPPORTED });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        return Some(UNSUPPORTED);
     }
     // On wasm32 a function pointer is a table index, so a slot's index can be
     // called as a function of the documented signature.

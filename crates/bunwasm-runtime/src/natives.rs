@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::os::fd::AsRawFd;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -183,6 +184,7 @@ pub fn table(state: &Rc<State>) -> Table {
     install_url(&mut t);
     install_host(&mut t);
     crate::sqlite::install(&mut t);
+    crate::wasm::install(&mut t);
     t.constants.push(("platformInfo", platform_info()));
     t
 }
@@ -418,6 +420,59 @@ fn symlink(_: &str, _: &str) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
 }
 
+fn write_file_at(file: &mut File, bytes: &[u8], position: Option<u64>) -> io::Result<()> {
+    let Some(position) = position else { return file.write_all(bytes) };
+    let cursor = file.stream_position()?;
+    file.seek(SeekFrom::Start(position))?;
+    let result = file.write_all(bytes);
+    let restored = file.seek(SeekFrom::Start(cursor)).map(|_| ());
+    result.and(restored)
+}
+
+fn writev(state: &State, args: Args<'_>) -> NativeResult {
+    let fd = match args.get(0) {
+        Val::Num(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(i32::MAX) => *n as i32,
+        Val::Num(_) => return Err(NativeError::range_error("fd must be an integer between 0 and 2147483647").prop("code", "ERR_OUT_OF_RANGE")),
+        _ => return Err(NativeError::type_error("fd must be a number").prop("code", "ERR_INVALID_ARG_TYPE")),
+    };
+    let buffers = args.array(1).ok_or_else(|| NativeError::type_error("expected an array of byte buffers"))?;
+    let buffers = buffers.iter().map(|value| match value {
+        Val::Bytes(bytes) => Ok(bytes.as_slice()),
+        _ => Err(NativeError::type_error("expected a byte buffer")),
+    }).collect::<Result<Vec<_>, _>>()?;
+    let files = state.fds.borrow();
+    let descriptor = match fd {
+        1 | 2 => { state.flush(); fd }
+        _ => libc::c_int::try_from(files.files.get(&fd).ok_or_else(|| bad_fd("writev"))?.as_raw_fd())
+            .map_err(|_| bad_fd("writev"))?,
+    };
+    let position = args.opt_num(2).filter(|&n| n >= 0.0).map(|n| n as libc::off_t);
+    let mut written = 0usize;
+    for bytes in buffers {
+        if bytes.is_empty() { continue; }
+        let offset = position.map(|base| base.checked_add(written as libc::off_t).ok_or(io::ErrorKind::InvalidInput))
+            .transpose().map_err(io::Error::from);
+        let count = match offset.and_then(|offset| write_chunk(descriptor, bytes, offset)) {
+            Ok(count) => count,
+            Err(_) if written > 0 => break,
+            Err(error) => return Err(io_error(error, "writev", None)),
+        };
+        written += count;
+        if count < bytes.len() { break; }
+    }
+    Ok(Val::Num(written as f64))
+}
+
+fn write_chunk(fd: libc::c_int, bytes: &[u8], position: Option<libc::off_t>) -> io::Result<usize> {
+    // The argument frame owns these bytes until the synchronous call returns.
+    let written = unsafe { match position {
+        Some(position) => libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position),
+        None => libc::write(fd, bytes.as_ptr().cast(), bytes.len()),
+    } };
+    if written < 0 { return Err(io::Error::last_os_error()); }
+    Ok(written as usize)
+}
+
 fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("open", move |a| {
@@ -472,14 +527,14 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
             _ => {
                 let mut fds = st.fds.borrow_mut();
                 let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("write"))?;
-                if let Some(p) = a.opt_num(2).filter(|p| *p >= 0.0) {
-                    file.seek(SeekFrom::Start(p as u64)).map_err(|e| io_error(e, "write", None))?;
-                }
-                file.write_all(bytes).map_err(|e| io_error(e, "write", None))?;
+                let position = a.opt_num(2).filter(|p| *p >= 0.0).map(|p| p as u64);
+                write_file_at(file, bytes, position).map_err(|e| io_error(e, "write", None))?;
             }
         }
         Ok(Val::Num(bytes.len() as f64))
     });
+    let st = state.clone();
+    t.add("writev", move |a| writev(&st, a));
     let st = state.clone();
     t.add("fstat", move |a| {
         let fds = st.fds.borrow();
@@ -513,6 +568,16 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
     });
     t.add("bunBuiltinErrorCode", |a| {
         Ok(modules::BUN_BUILTIN_ERROR_CODES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
+    });
+    let st = state.clone();
+    t.add("functionImports", move |a| {
+        let args = a.array(0).ok_or_else(|| NativeError::type_error("expected function arguments"))?;
+        let strings = args.iter().map(|value| match value {
+            Val::Str(s) => Ok(s.clone()),
+            _ => Err(NativeError::type_error("expected source string")),
+        }).collect::<Result<Vec<_>, _>>()?;
+        let offsets = st.transpiler.function_imports(&strings, a.str(1)?).map_err(NativeError::syntax_error)?;
+        Ok(Val::Array(offsets.into_iter().map(|items| Val::Array(items.into_iter().map(|i| (i as u32).into()).collect())).collect()))
     });
     let st = state.clone();
     t.add("resolve", move |a| {

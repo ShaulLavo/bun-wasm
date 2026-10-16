@@ -63,12 +63,29 @@ impl fmt::Display for Loader {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ModuleImport {
+    pub start: usize,
+    pub end: usize,
+    pub kind: ModuleImportKind,
+}
+
+#[derive(Clone, Debug)]
+pub enum ModuleImportKind {
+    Static(String),
+    Dynamic,
+}
+
 /// Turns a source file into ESM JavaScript the engine can run.
 ///
 /// `path` is the absolute path of the file (used for error messages and JSX/TS
 /// settings lookups). Errors are returned as a human readable message, which
 /// the runtime throws as a `SyntaxError`-like error in JS.
 pub trait Transpiler {
+    fn function_imports(&self, _args: &[String], _kind: &str) -> Result<Vec<Vec<usize>>, String> {
+        Err("generated imports need Bun's parser".to_owned())
+    }
+
     fn parse_data(&self, _source: &[u8], format: &str) -> Result<String, crate::engine::NativeError> {
         Err(crate::engine::NativeError::error(format!("{format}.parse needs Bun's parser, which this bun.wasm was built without")))
     }
@@ -79,7 +96,12 @@ pub trait Transpiler {
     /// string (one source: the input) when the transpiler records one. The
     /// runtime uses it to report original positions in stack traces.
     fn transpile_with_map(&self, source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
-        self.transpile(source, path, loader).map(|code| Transpiled { code, mappings: None })
+        self.transpile(source, path, loader).map(|code| Transpiled { code, ..Default::default() })
+    }
+
+    /// Semantic imports for the host engine's module URL and dynamic-import hooks.
+    fn module_imports(&self, _source: &str, path: &str) -> Result<Vec<ModuleImport>, String> {
+        Err(format!("host module linking for {path} needs Bun's parser"))
     }
 
     /// The ES module at `path` (read from disk) as CommonJS, for `require()`
@@ -173,11 +195,20 @@ pub struct BuildResult {
     pub logs: String,
 }
 
-/// Transpiler output with an optional source map.
+#[derive(Clone, Copy, Debug)]
+pub enum ModuleKind {
+    Script,
+    CommonJs,
+    Esm,
+}
+
+/// Transpiler output with an optional source map and parser classification.
 #[derive(Clone, Debug, Default)]
 pub struct Transpiled {
+    pub module_kind: Option<ModuleKind>,
     pub code: String,
     pub mappings: Option<String>,
+    pub imports: Vec<ModuleImport>,
 }
 
 /// Stand-in until Bun's real transpiler is wired in: plain JavaScript passes

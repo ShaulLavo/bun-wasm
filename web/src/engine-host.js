@@ -1,4 +1,4 @@
-import { memoryViews } from "./memory-views.js";
+import { memoryViews } from "../../runtime/core/memory-views.js";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -318,10 +318,11 @@ class EngineHost {
     this.internal = internal;
     // Module URLs show as their paths; frames of this host itself (and the
     // worker bundle it lives in) are internal, like the polyfills.
-    internal.displayName = (file) => {
+    internal.displayName = (file, evalFrame = false) => {
       if (typeof file !== "string") return file;
       const path = this.paths.get(file);
       if (path) return path;
+      if (evalFrame) return file;
       return /^(blob:|data:|file:|https?:|node:internal\/)/.test(file) ? `bun-wasm:host` : file;
     };
     this.installGlobals();

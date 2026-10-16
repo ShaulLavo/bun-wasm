@@ -82,6 +82,7 @@ The catalog is the complete hook inventory. The following groups block the next 
 | stream | Blocked | Native streams and dependencies. |
 | timers | Ours | Shared-hook and behavior comparison pending. |
 | readline | Blocked | Stream and terminal dependencies. |
+| console | Bun's constructor | The global singleton remains ours. ConsoleObject.ts is a global-object builtin, outside the module registry. |
 | Remaining public modules | Ours | Not switched by the loader mechanism. |
 
 ## Verification
@@ -207,3 +208,12 @@ These measurements compare the reviewed module artifacts with the fixed artifact
 | browser | 10,203,739 → 10,204,866 | 3,536,518 → 3,537,175 | 71.78 → 72.99 |
 
 Raw logs, samples, and hashes are in `/work/reports/bun-wasm-builtins-review/`. Updated artifacts are in `/work/artifacts/bun-wasm-builtins-review/{mechanism,modules}/dist/`.
+
+## Console constructor
+
+`node scripts/generate-bun-console.mjs --check` checks the generated
+`createConsoleConstructor` from Bun's `src/js/builtins/ConsoleObject.ts`.
+Bun's node:console factory only returns the global console. Its constructor is
+not in the module registry, so the runtime's lazy polyfill loader embeds that
+function separately. The [provenance ledger](bun-patches.md#bun-console-constructor)
+records the lowering and original adapter. All engines share this code.

@@ -20,6 +20,7 @@ use crate::engine::{Engine, ErrorKind, ModuleHost, NativeError, PromiseState, Va
 type V = Value<'static>;
 
 unsafe extern "C" {
+    fn JS_bunwasm_IsArrayBufferLike(value: qjs::JSValue) -> bool;
     /// Added to QuickJS by bun-wasm (third_party/rquickjs-sys): remaining
     /// entries of a Map/Set iterator, without advancing it.
     fn JS_bunwasm_IteratorEntries(ctx: *mut qjs::JSContext, value: qjs::JSValue) -> qjs::JSValue;
@@ -344,6 +345,20 @@ fn wasm_memory_bytes() -> f64 {
     }
 }
 
+fn utf16_string_val(value: &Value<'_>) -> Val {
+    let mut len = 0;
+    // SAFETY: value is a live string in this context; QuickJS owns the returned buffer.
+    let ptr = unsafe { qjs::JS_ToCStringLenUTF16(value.ctx().as_raw().as_ptr(), &mut len, value.as_raw()) };
+    if ptr.is_null() {
+        return Val::Undefined;
+    }
+    // SAFETY: the buffer contains len UTF-16 units and remains alive until FreeCStringUTF16.
+    let text = unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len as usize)) };
+    // SAFETY: ptr is the buffer returned by QuickJS in this context, freed exactly once.
+    unsafe { qjs::JS_FreeCStringUTF16(value.ctx().as_raw().as_ptr(), ptr) };
+    Val::Str(text)
+}
+
 /// JS -> plain data.
 fn to_val(v: &Value<'_>) -> Val {
     if v.is_undefined() {
@@ -359,7 +374,7 @@ fn to_val(v: &Value<'_>) -> Val {
         return Val::Num(n);
     }
     if let Some(s) = v.as_string() {
-        return s.to_string().map(Val::Str).unwrap_or(Val::Undefined);
+        return s.to_string().map(Val::Str).unwrap_or_else(|_| utf16_string_val(v));
     }
     if let Some(b) = v.as_big_int() {
         return b.clone().to_i64().map(Val::BigInt).unwrap_or(Val::Undefined);
@@ -369,7 +384,9 @@ fn to_val(v: &Value<'_>) -> Val {
         // SAFETY: no JS runs while the slice is alive; it is copied at once.
         return Val::Bytes(unsafe { arr.as_bytes() }.unwrap_or(&[]).to_vec());
     }
-    if let Some(buf) = rquickjs::ArrayBuffer::from_object(obj.clone()) {
+    // SAFETY: v is live; the tag query does not call JavaScript or throw.
+    let is_buffer = unsafe { JS_bunwasm_IsArrayBufferLike(v.as_raw()) };
+    if is_buffer && let Some(buf) = rquickjs::ArrayBuffer::from_object(obj.clone()) {
         // SAFETY: as above.
         return Val::Bytes(unsafe { buf.as_bytes() }.unwrap_or(&[]).to_vec());
     }
@@ -444,4 +461,31 @@ impl Loader for QjsLoader {
 fn unerase<'js>(v: V) -> Value<'js> {
     // SAFETY: see `erase`.
     unsafe { std::mem::transmute::<V, Value<'js>>(v) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_arrays_leave_no_exception() {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            let array = ctx.eval::<Value, _>("[1, 2]").unwrap();
+            assert_eq!(to_val(&array), Val::Array(vec![Val::Num(1.0), Val::Num(2.0)]));
+            assert!(!ctx.has_exception(), "array conversion left an exception pending");
+            let object = ctx.eval::<Value, _>("({ answer: 3 })").unwrap();
+            assert_eq!(to_val(&object), Val::Object(vec![("answer".into(), Val::Num(3.0))]));
+            assert!(!ctx.has_exception(), "object conversion left an exception pending");
+            let bytes = ctx.eval::<Value, _>("new Uint8Array([4, 5]).buffer").unwrap();
+            assert_eq!(to_val(&bytes), Val::Bytes(vec![4, 5]));
+            assert!(!ctx.has_exception(), "buffer conversion left an exception pending");
+            if ctx.eval::<bool, _>("typeof SharedArrayBuffer === 'function'").unwrap() {
+                let shared = ctx.eval::<Value, _>("new SharedArrayBuffer(2)").unwrap();
+                assert_eq!(to_val(&shared), Val::Bytes(vec![0, 0]));
+                assert!(!ctx.has_exception(), "shared buffer conversion left an exception pending");
+            }
+        });
+    }
 }

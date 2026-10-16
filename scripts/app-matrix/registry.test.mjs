@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { registry, sha256 } from "./registry.mjs";
+import { registry, sha256, rewriteMetadata } from "./registry.mjs";
 
 test("offline mirror rewrites tarballs, verifies objects, and refuses missing records without fetching", async () => {
   const directory = mkdtempSync("/work/tmp/bun-wasm-app-matrix-registry-test-");
@@ -54,5 +54,13 @@ test("recording uses only the explicit Unix-socket broker", async () => {
     await mirror?.close();
     await broker?.stop(true);
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("historical npm HTTP tarballs stay inside the offline mirror", () => {
+  const value = { dist: { tarball: "http://registry.npmjs.org/keygrip/-/keygrip-1.1.0.tgz" } };
+  expect(rewriteMetadata(value, "http://127.0.0.1:1234").dist.tarball).toBe("http://127.0.0.1:1234/keygrip/-/keygrip-1.1.0.tgz");
+  for (const url of ["http://example.com/pkg.tgz", "http://registry.npmjs.org:1234/pkg.tgz", "http://user@registry.npmjs.org/pkg.tgz"]) {
+    expect(() => rewriteMetadata({ dist: { tarball: url } }, "http://127.0.0.1:1234")).toThrow();
   }
 });

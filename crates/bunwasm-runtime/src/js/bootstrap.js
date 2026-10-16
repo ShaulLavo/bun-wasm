@@ -71,10 +71,17 @@
     return m ? col + m[0].length : col;
   }
 
+  function evalOriginFile(site) {
+    if (typeof site.getEvalOrigin !== "function") return null;
+    const origin = site.getEvalOrigin();
+    const match = typeof origin === "string" && /\(([^()]+):\d+:\d+\)/.exec(origin);
+    return match ? match[1] : null;
+  }
+
   function formatCallSite(site) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
-    const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName();
-    const file = internal.displayName ? internal.displayName(rawFile) : rawFile;
+    const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
+    const file = internal.displayName ? internal.displayName(rawFile, typeof site.isEval === "function" && site.isEval()) : rawFile;
     const name = site.getFunctionName();
     // A syntax error's location: no function, just file:line:col.
     if (!isV8 && site.getFunction() === undefined && !name && file) {
@@ -82,7 +89,7 @@
     }
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
-    if (line !== null && file) {
+    if (line !== null && file && !internal.mappedCallSites?.has(site)) {
       const mapped = native.mapPosition(file, line, col);
       if (mapped) [line, col] = mapped;
       if (isV8) col = pastNew(file, line, col);
@@ -91,7 +98,11 @@
     const topLevel = isV8 ? !name && v8TopLevel(site) : isTopLevel(site.getFunction());
     if ((!name || name === "__bunwasm_cjs__") && file && line !== null && (topLevel || name === "__bunwasm_cjs__")) return `${file}:${line}:${col}`;
     const label = name || "<anonymous>";
-    if (site.isNative() || file === null || file === undefined) return `${label} (native)`;
+    if (site.isNative()) return `${label} (native)`;
+    if (file === null || file === undefined) {
+      const evalFrame = typeof site.isEval === "function" && site.isEval();
+      return `${label} (${evalFrame ? "unknown" : "native"})`;
+    }
     if (line === null) return `${label} (${file})`;
     return `${label} (${file}:${line}:${col})`;
   }
@@ -113,10 +124,14 @@
     for (let i = start; i < callsites.length; i++) out += `    at ${formatCallSite(callsites[i])}\n`;
     return out;
   };
+  internal.defaultPrepareStackTrace = Error.prepareStackTrace;
 
   function isErrorConstructorFrame(site) {
     return site.isConstructor() && isErrorConstructor(site.getFunction());
   }
+
+  internal.formatCallSite = formatCallSite;
+  internal.mappedCallSites = new WeakSet();
 
   // --- small path helpers (the full node:path lives in path.js) ------------
 
@@ -150,6 +165,7 @@
     }
   }
   internal.defineHidden = defineHidden;
+  internal.require("stack_trace");
 
   function defineGlobal(name, value) {
     Object.defineProperty(globalThis, name, {
@@ -521,16 +537,26 @@
       // the module converted to CommonJS by Bun's bundler instead.
       if (native.compileEsmAsCjs) {
         const wrapper = native.compileEsmAsCjs(path);
-        topLevelFunctions.add(wrapper);
-        wrapper.call(mod.exports, mod.exports, makeRequire(path, mod), mod, path, dirname(path));
+        callModuleWrapper(mod, wrapper, path);
         return;
       }
       mod.exports = native.requireEsm(path);
       return;
     }
     const wrapper = native.compileCjs(path);
+    callModuleWrapper(mod, wrapper, path);
+  }
+
+  function callModuleWrapper(mod, wrapper, path) {
     topLevelFunctions.add(wrapper);
-    wrapper.call(mod.exports, mod.exports, makeRequire(path, mod), mod, path, dirname(path));
+    const require = makeRequire(path, mod);
+    if (wrapper.length !== 6) {
+      wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
+      return;
+    }
+    const meta = Object.create(null);
+    internal.initImportMeta(meta, path, mod === mainModule);
+    wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
   }
 
   function resolveFrom(spec, fromPath) {
@@ -780,8 +806,10 @@
     });
   }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
+  if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
+  internal.require("function");
 
   return internal;
 })
