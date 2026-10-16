@@ -139,3 +139,27 @@ with PR 9's runtime fixes included, now reaches the unsupported `crypto.subtle.g
 stub in `crates/bunwasm-runtime/src/js/web.js:1277`. Dev still has no useful diagnostic;
 start is blocked by build. See [the exact command and retained evidence](../docs/app-matrix/README.md#browser-import-parsing-follow-up).
 The crypto algorithm and any later required operations still need a bounded reproduction.
+
+### Bun native-consumer stream state coverage
+
+The Web Streams round-3 run of the original 14 files under `js/web/streams/`
+and `js/node/stream/` retains all four passing files on QuickJS and JSC.
+Observed passes rise from 16 to 21 on each. Loading real Node stream state also
+unblocks collection of `js/node/stream/web-stream-state.test.ts`; it now records
+2 passes and 25 failures before the 15-second file deadline, rather than stopping
+at collection. This is a bounded observation, not a fully passing state test.
+
+That file checks Bun-specific native-consumer locking and inspection across
+`Bun.write`, `Bun.serve`, subprocess stdin, HTMLRewriter and fetch. Examples show
+expected `inspect: 'closed', locked: true` versus `inspect: undefined, locked:
+false`; subprocess stream stdin also throws `Expected an ArrayBuffer or
+ArrayBufferView`. Heap counters remain unavailable, so passing leak assertions
+do not establish leak freedom. Implement the actual native-consumer contracts
+and inspection support without fabricating private states or heap values.
+
+Reproduce with `scripts/bun-suite.sh --engine quickjs --jobs 1 --timeout 15
+--network loopback --output <fresh-results.json> js/web/streams js/node/stream`,
+repeated for JSC, through the heavy wrapper. Exact per-file results are in
+`/work/reports/bun-wasm-streams-round3-fix-2026-10-16/final-streams-*.json`,
+paired with `streams-before-*.json`. The compatibility track owns this remaining
+Bun-specific work and the evidence until follow-up reproduction.
