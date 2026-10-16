@@ -781,6 +781,12 @@
       if (typeof source.start === "function") source.start(controller);
       this._closed = () => closed;
       this._pull = typeof source.pull === "function" ? () => source.pull(controller) : null;
+      this._cancel = reason => {
+        this.#chunks.length = 0;
+        if (closed) return;
+        closed = true;
+        return typeof source.cancel === "function" ? source.cancel(reason) : undefined;
+      };
     }
     get locked() {
       return this.#locked;
@@ -800,9 +806,8 @@
         releaseLock() {
           stream.#locked = false;
         },
-        cancel() {
-          chunks.length = 0;
-          return Promise.resolve();
+        cancel(reason) {
+          return stream.cancel(reason);
         },
         closed: Promise.resolve(),
       };
@@ -815,9 +820,8 @@
         yield value;
       }
     }
-    cancel() {
-      this.#chunks.length = 0;
-      return Promise.resolve();
+    cancel(reason) {
+      return Promise.resolve(this._cancel(reason));
     }
   }
 

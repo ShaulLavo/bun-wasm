@@ -1065,6 +1065,7 @@ dependencies = [
  "bytes",
  "flate2",
  "hyper",
+ "libc",
  "reqwest",
  "rustls",
  "serde",

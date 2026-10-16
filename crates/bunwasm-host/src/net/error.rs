@@ -12,16 +12,23 @@ pub struct ErrorInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub errno: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub syscall: Option<String>,
 }
 
 impl ErrorInfo {
     pub fn new(name: &str, message: impl Into<String>, code: Option<&str>) -> Self {
-        ErrorInfo { name: name.into(), message: message.into(), code: code.map(Into::into), syscall: None }
+        ErrorInfo { name: name.into(), message: message.into(), code: code.map(Into::into), errno: None, syscall: None }
     }
 
     pub fn with_syscall(mut self, syscall: &str) -> Self {
         self.syscall = Some(syscall.into());
+        self
+    }
+
+    pub fn with_errno(mut self, errno: i32) -> Self {
+        self.errno = Some(errno);
         self
     }
 

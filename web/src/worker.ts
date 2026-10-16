@@ -118,8 +118,8 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   const fs = new FilesystemClient(req.filesystem);
   const child = req.child ? childTransport(req.child) : null;
   const post = (type: "stdout" | "stderr", data: Uint8Array) => {
-    if (child) child[type].writeAll(data);
-    else ctx.postMessage({ type, data }, [data.buffer]);
+    if (!child) { ctx.postMessage({ type, data }, [data.buffer]); return true; }
+    return wasiPipe(child[type], "write").write([data]) === data.length;
   };
   const subprocess = ctx.crossOriginIsolated && typeof SharedArrayBuffer === "function" ? new SubprocessHost({
     budget: req.child?.budget,

@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -6,7 +7,7 @@ use std::task::{Context, Poll, Waker};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use wasmtime_wasi::cli::{IsTerminal, StdinStream, StdoutStream};
-use wasmtime_wasi::p2::{InputStream, Pollable, StreamError, StreamResult};
+use wasmtime_wasi::p2::{InputStream, OutputStream, Pollable, StreamError, StreamResult};
 use bytes::Bytes;
 use super::stdin::SharedInput;
 
@@ -84,6 +85,10 @@ struct Writer {
     stream: Pin<Box<dyn AsyncWrite + Send + Sync>>,
     cancel: Arc<Cancellation>,
 }
+struct OutputHandle {
+    stream: Box<dyn OutputStream>,
+    cancel: Arc<Cancellation>,
+}
 
 impl IsTerminal for Input {
     fn is_terminal(&self) -> bool {
@@ -129,11 +134,55 @@ impl InputStream for Input {
 }
 
 impl StdoutStream for Output {
+    fn p2_stream(&self) -> Box<dyn OutputStream> {
+        Box::new(OutputHandle {
+            stream: self.stream.p2_stream(),
+            cancel: self.cancel.clone(),
+        })
+    }
     fn async_stream(&self) -> Box<dyn AsyncWrite + Send + Sync> {
         Box::new(Writer {
             stream: self.stream.async_stream().into(),
             cancel: self.cancel.clone(),
         })
+    }
+}
+
+#[async_trait::async_trait]
+impl Pollable for OutputHandle {
+    async fn ready(&mut self) {
+        let mut ready = std::pin::pin!(self.stream.ready());
+        std::future::poll_fn(|cx| {
+            if self.cancel.poll(cx).is_err() {
+                return Poll::Ready(());
+            }
+            ready.as_mut().poll(cx)
+        }).await;
+    }
+}
+
+#[async_trait::async_trait]
+impl OutputStream for OutputHandle {
+    fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
+        if self.cancel.signal.load(Ordering::SeqCst) != 0 {
+            return Err(StreamError::LastOperationFailed(io::Error::from(io::ErrorKind::Interrupted).into()));
+        }
+        self.stream.write(bytes)
+    }
+    fn flush(&mut self) -> StreamResult<()> {
+        if self.cancel.signal.load(Ordering::SeqCst) != 0 {
+            return Err(StreamError::LastOperationFailed(io::Error::from(io::ErrorKind::Interrupted).into()));
+        }
+        self.stream.flush()
+    }
+    fn check_write(&mut self) -> StreamResult<usize> {
+        if self.cancel.signal.load(Ordering::SeqCst) != 0 {
+            return Err(StreamError::LastOperationFailed(io::Error::from(io::ErrorKind::Interrupted).into()));
+        }
+        self.stream.check_write()
+    }
+    async fn cancel(&mut self) {
+        self.stream.cancel().await;
     }
 }
 impl AsyncRead for Reader {

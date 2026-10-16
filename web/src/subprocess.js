@@ -165,6 +165,7 @@ export class SubprocessHost {
     this.budget = options.budget || createProcessBudget();
     this.children = new Map();
     this.handles = new Map();
+    this.pipeErrors = new Map();
     this.nextHandle = FIRST_HANDLE;
     this.lastError = null;
     this.timer = null;
@@ -270,7 +271,13 @@ export class SubprocessHost {
   }
   write(handle, bytes) {
     const h = this.handles.get(handle);
-    return h && h.fd === 0 ? h.pipe.write(bytes) : BADF;
+    if (!h || h.fd !== 0) return BADF;
+    const result = h.pipe.write(bytes);
+    return result === -1 ? this.closedPipe(handle) : result;
+  }
+  closedPipe(handle) {
+    this.pipeErrors.set(handle, JSON.stringify({ name: "Error", message: "EPIPE: broken pipe, write", code: "EPIPE", errno: -32, syscall: "write" }));
+    return -1;
   }
   close(handle) {
     if (this.children.has(handle)) {
@@ -282,6 +289,7 @@ export class SubprocessHost {
     if (!h) return BADF;
     h.pipe.close();
     this.handles.delete(handle);
+    this.pipeErrors.delete(handle);
     return 0;
   }
   wait(id) {
@@ -301,7 +309,10 @@ export class SubprocessHost {
   release(id) {
     const child = this.children.get(id);
     if (!child) return;
-    for (const handle of child.handles) this.handles.delete(handle);
+    for (const handle of child.handles) {
+      this.handles.delete(handle);
+      this.pipeErrors.delete(handle);
+    }
     this.children.delete(id);
   }
   kill(id, signal = 15) {
@@ -324,7 +335,9 @@ export class SubprocessHost {
     for (;;) {
       const bytes = child.pipes[fd].read();
       if (typeof bytes === "number") return;
-      if (child.modes[fd] === "inherit") this.options.output(fd, bytes);
+      if (child.modes[fd] !== "inherit" || this.options.output(fd, bytes) !== false) continue;
+      child.pipes[fd].close();
+      return;
     }
   }
   poll(timeout = 0) {
@@ -372,7 +385,7 @@ export class SubprocessHost {
         hostRead: route("hostRead", (id, cap) => this.read(id, cap)),
         hostWrite: route("hostWrite", (id, bytes) => this.write(id, bytes)),
         hostClose: route("hostClose", (id) => this.close(id)),
-        hostError: (id) => id === 0 && this.lastError ? this.lastError : (fallback.hostError?.(id) ?? this.lastError ?? BADF),
+        hostError: (id) => this.pipeErrors.get(id) ?? (id === 0 && this.lastError ? this.lastError : (fallback.hostError?.(id) ?? this.lastError ?? BADF)),
       },
       caps: { ...net?.caps, spawn: true, child_wait: true, child_pipe: true, child_kill: true, read: true, write: true, close: true, error: true },
       onNews: (cb) => { this.notify = cb; net?.onNews(cb); },
@@ -390,8 +403,8 @@ export class SubprocessHost {
       bytes(ptr, value.length).set(value);
       return value.length;
     };
-    const error = (ptr, cap) => {
-      const value = encode.encode(this.lastError || '{"message":"no error"}');
+    const error = (id, ptr, cap) => {
+      const value = encode.encode(this.pipeErrors.get(id) ?? this.lastError ?? '{"message":"no error"}');
       if (value.length <= cap) bytes(ptr, value.length).set(value);
       return value.length;
     };
@@ -404,7 +417,7 @@ export class SubprocessHost {
       read: (id, ptr, cap) => id === 0 || this.owns(id) ? read(id, ptr, cap) : (net.read?.(id, ptr, cap) ?? BADF),
       write: (id, ptr, len) => this.owns(id) ? this.write(id, bytes(ptr, len)) : (net.write?.(id, ptr, len) ?? BADF),
       close: (id) => this.owns(id) ? this.close(id) : (net.close?.(id) ?? BADF),
-      error: (id, ptr, cap) => id === 0 && this.lastError ? error(ptr, cap) : (net.error?.(id, ptr, cap) ?? BADF),
+      error: (id, ptr, cap) => this.pipeErrors.has(id) || id === 0 && this.lastError ? error(id, ptr, cap) : (net.error?.(id, ptr, cap) ?? BADF),
       poll: (timeout) => { const news = net.poll?.(0) || 0; return this.poll(news ? 0 : timeout) || news; },
     };
   }
