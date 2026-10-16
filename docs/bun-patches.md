@@ -1100,3 +1100,10 @@ observers and directory cursors at exit. The suite runner retains explicit plain
 script selection and opt-in Node assertion scripts without counting registered
 Node tests as assertion scripts. The merged TCP fixture exercises successful
 Readable.toWeb reads and cancellation of a connected socket.
+
+The original Node-host TCP adapter in `web/scripts/node-net.mjs` now limits each
+write to the remaining one-MiB host queue capacity and returns the short byte
+count. Checking the queue only before accepting an entire large write allowed
+the first write to bypass the limit. The bounded host test fails with that
+implementation and passes with capacity-aware writes, including full-queue,
+zero-length and owned-copy cases. No upstream implementation is copied.
