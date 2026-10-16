@@ -546,6 +546,7 @@
     }
   }
   internal.crypto = {
+    isKey: (value) => material.has(value),
     record,
     makeKey,
     generate,
