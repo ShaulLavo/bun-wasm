@@ -1,0 +1,2 @@
+-e
+const a = { import(x) { return x } }; console.log(a.import(42)); console.log(`path ${(await import(`node:${"path"}`)).join("a", "b")}`); console.log(import.meta.main);
