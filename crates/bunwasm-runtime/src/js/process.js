@@ -71,7 +71,13 @@
       rows: Number(env.LINES) || 24,
       write(chunk, encoding, callback) {
         if (typeof encoding === "function") callback = encoding;
-        write(typeof chunk === "string" ? chunk : internal.toUint8(chunk));
+        try {
+          write(typeof chunk === "string" ? chunk : internal.toUint8(chunk));
+        } catch (error) {
+          if (typeof callback === "function") internal.nextTick(callback, error);
+          stream.emit("error", error);
+          return false;
+        }
         if (typeof callback === "function") internal.nextTick(callback, null);
         return true;
       },

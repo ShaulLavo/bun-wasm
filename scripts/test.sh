@@ -142,7 +142,13 @@ for name in "${names[@]}"; do
     continue
   fi
   if [[ $update == 0 && "$name" == pipe-closed-output ]]; then
-    if python3 "$root/tests/test-closed-output.py" --engine "$engine" --wasm "$wasm"; then
+    pipe_hosts=(node)
+    [[ $engine != browser ]] && pipe_hosts=(native node)
+    pipe_ok=1
+    for pipe_host in "${pipe_hosts[@]}"; do
+      python3 "$root/tests/test-closed-output.py" --engine "$engine" --wasm "$wasm" --host "$pipe_host" || pipe_ok=0
+    done
+    if [[ $pipe_ok == 1 ]]; then
       pass=$((pass + 1))
     else
       fail=$((fail + 1))

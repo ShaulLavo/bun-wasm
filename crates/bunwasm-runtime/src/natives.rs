@@ -38,6 +38,7 @@ impl Table {
 fn errno_info(err: &io::Error) -> (&'static str, i32, &'static str) {
     use io::ErrorKind as K;
     match err.kind() {
+        K::BrokenPipe => ("EPIPE", -32, "broken pipe"),
         K::NotFound => ("ENOENT", -2, "no such file or directory"),
         K::AlreadyExists => ("EEXIST", -17, "file already exists"),
         K::PermissionDenied => ("EACCES", -13, "permission denied"),
@@ -196,12 +197,12 @@ fn ok() -> NativeResult {
 fn install_process(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("writeStdout", move |a| {
-        st.write_stdout(a.bytes(0)?);
+        st.write_stdout(a.bytes(0)?).map_err(|e| io_error(e, "write", None))?;
         ok()
     });
     let st = state.clone();
     t.add("writeStderr", move |a| {
-        st.write_stderr(a.bytes(0)?);
+        st.write_stderr(a.bytes(0)?).map_err(|e| io_error(e, "write", None))?;
         ok()
     });
     let st = state.clone();
@@ -522,8 +523,8 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         let fd = a.i32(0)?;
         let bytes = a.bytes(1)?;
         match fd {
-            1 => st.write_stdout(bytes),
-            2 => st.write_stderr(bytes),
+            1 => st.write_stdout(bytes).map_err(|e| io_error(e, "write", None))?,
+            2 => st.write_stderr(bytes).map_err(|e| io_error(e, "write", None))?,
             _ => {
                 let mut fds = st.fds.borrow_mut();
                 let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("write"))?;

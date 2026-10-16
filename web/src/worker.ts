@@ -118,8 +118,9 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   const initialRoot = req.child ? structuredClone(req.root) : null;
   const child = req.child ? childTransport(req.child) : null;
   const post = (type: "stdout" | "stderr", data: Uint8Array) => {
-    if (child) child[type].writeAll(data);
-    else ctx.postMessage({ type, data }, [data.buffer]);
+    if (child) return wasiPipe(child[type], "write").write([data]) === data.length;
+    ctx.postMessage({ type, data }, [data.buffer]);
+    return true;
   };
   const subprocess = ctx.crossOriginIsolated && typeof SharedArrayBuffer === "function" ? new SubprocessHost({
     budget: req.child?.budget,

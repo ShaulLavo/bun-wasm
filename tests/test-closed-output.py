@@ -2,6 +2,7 @@
 import argparse
 import os
 from pathlib import Path
+import signal
 import subprocess
 import tempfile
 import time
@@ -12,11 +13,21 @@ FIXTURE = ROOT / "tests/fixtures/pipe-closed-output"
 parser = argparse.ArgumentParser()
 parser.add_argument("--engine", choices=["quickjs", "jsc", "browser"], required=True)
 parser.add_argument("--wasm", type=Path, required=True)
+parser.add_argument("--host", choices=["native", "node"])
+parser.add_argument("--large-only", action="store_true")
 args = parser.parse_args()
+host = args.host or ("node" if args.engine == "browser" else "native")
+
+
+def terminate(*_):
+    raise SystemExit(143)
+
+
+signal.signal(signal.SIGTERM, terminate)
 
 
 def command(directory: Path, script: str) -> list[str]:
-    if args.engine == "browser":
+    if host == "node":
         return [
             "node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"),
             "--wasm", str(args.wasm.resolve()), "--dir", f"{directory}::/",
@@ -29,50 +40,71 @@ def command(directory: Path, script: str) -> list[str]:
     ]
 
 
-def closed_pipe(directory: Path) -> int:
+def closed_pipe(directory: Path, fd: int, method: str, handled: bool) -> tuple[int, float]:
+    arguments = [str(fd), method] + (["handled"] if handled else [])
     producer = subprocess.Popen(
-        command(directory, "index.js"), cwd=directory,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        command(directory, "index.js") + arguments, cwd=directory,
+        stdout=subprocess.PIPE if fd == 1 else subprocess.DEVNULL,
+        stderr=subprocess.PIPE if fd == 2 else subprocess.DEVNULL,
     )
-    assert producer.stdout is not None
-    reader = subprocess.Popen(["head", "-c", "1"], stdin=producer.stdout, stdout=subprocess.DEVNULL)
-    producer.stdout.close()
+    pipe = producer.stdout if fd == 1 else producer.stderr
+    assert pipe is not None
+    reader = None
     try:
-        reader.wait(timeout=5)
-        return producer.wait(timeout=5)
+        reader = subprocess.Popen(["head", "-c", "1"], stdin=pipe, stdout=subprocess.PIPE)
+        pipe.close()
+        first, _ = reader.communicate(timeout=30)
+        assert reader.returncode == 0 and first == b"x", "producer did not reach its output loop"
+        started = time.monotonic()
+        return producer.wait(timeout=5), time.monotonic() - started
     except subprocess.TimeoutExpired:
         producer.kill()
         producer.wait()
-        return 124
+        return 124, 5.0
     finally:
-        reader.kill() if reader.poll() is None else None
-        reader.wait()
-        if producer.stderr is not None:
-            producer.stderr.close()
+        pipe.close()
+        if reader is not None and reader.poll() is None:
+            reader.kill()
+        if reader is not None:
+            reader.wait()
+            reader.stdout.close()
+        if producer.poll() is None:
+            producer.kill()
+        producer.wait()
 
 
-def sustained_output(directory: Path) -> tuple[int, int, float]:
+def sustained_output(directory: Path, fd: int) -> tuple[int, int, float]:
     started = time.monotonic()
     result = subprocess.run(
-        command(directory, "large.js"), cwd=directory,
+        command(directory, "large.js") + [str(fd)], cwd=directory,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20,
     )
-    return result.returncode, len(result.stdout), time.monotonic() - started
+    output = result.stdout if fd == 1 else result.stderr
+    assert output == b"x" * (8 * 1024 * 1024), f"fd={fd} exit={result.returncode} received {len(output)} bytes, expected 8388608"
+    return result.returncode, len(output), time.monotonic() - started
+
+
+def check_closed(directory: Path, fd: int, method: str, handled: bool):
+    status, seconds = closed_pipe(directory, fd, method, handled)
+    expected = 42 if handled else 1
+    if status != expected:
+        raise SystemExit(f"FAIL pipe-closed-output {args.engine}/{host}: fd={fd} {method} handled={handled} exit={status}, expected {expected}")
+    print(f"PASS pipe-closed-output {args.engine}/{host}: fd={fd} {method} handled={handled} exit={status} in {seconds:.3f}s")
+
+
+def check_large(directory: Path, fd: int):
+    status, size, seconds = sustained_output(directory, fd)
+    if status != 0:
+        raise SystemExit(f"FAIL pipe-closed-output {args.engine}/{host}: fd={fd} large exit={status}")
+    print(f"PASS pipe-closed-output {args.engine}/{host}: fd={fd} large {size} bytes in {seconds:.3f}s")
 
 
 with tempfile.TemporaryDirectory(prefix="bun-wasm-closed-output-", dir="/work/tmp") as directory:
     work = Path(directory)
     for name in ("index.js", "large.js"):
         (work / name).write_bytes((FIXTURE / name).read_bytes())
-    closed_status = closed_pipe(work)
-    if closed_status != 1:
-        raise SystemExit(f"FAIL pipe-closed-output {args.engine}: closed status {closed_status}, expected 1")
-    large_status, large_bytes, large_seconds = sustained_output(work)
-    if large_status != 0 or large_bytes != 8 * 1024 * 1024:
-        raise SystemExit(
-            f"FAIL pipe-closed-output {args.engine}: large status {large_status}, bytes {large_bytes}"
-        )
-    print(
-        f"PASS pipe-closed-output {args.engine}: closed exit 1, large {large_bytes} bytes "
-        f"in {large_seconds:.3f}s"
-    )
+    for fd in (1, 2):
+        cases = () if args.large_only else (("stream", False), ("stream", True), ("console", False), ("fs", False), ("writev", False))
+        for method, handled in cases:
+            check_closed(work, fd, method, handled)
+        check_large(work, fd)

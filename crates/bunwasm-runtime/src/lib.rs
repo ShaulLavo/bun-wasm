@@ -126,14 +126,14 @@ impl State {
             .unwrap_or_else(|| "/".to_owned())
     }
 
-    pub(crate) fn write_stdout(&self, bytes: &[u8]) {
-        let _ = self.stdout.borrow_mut().write_all(bytes);
+    pub(crate) fn write_stdout(&self, bytes: &[u8]) -> io::Result<()> {
+        self.stdout.borrow_mut().write_all(bytes)
     }
 
-    pub(crate) fn write_stderr(&self, bytes: &[u8]) {
+    pub(crate) fn write_stderr(&self, bytes: &[u8]) -> io::Result<()> {
         // Keep stdout and stderr ordered relative to each other.
         self.flush();
-        let _ = io::stderr().write_all(bytes);
+        io::stderr().write_all(bytes)
     }
 
     pub(crate) fn flush(&self) {
@@ -214,7 +214,7 @@ impl<E: Engine> Core<E> {
                     Val::Str(s) => s,
                     _ => String::from("uncaught error while reporting an error"),
                 };
-                self.state.write_stderr(format!("error: {text}\n").as_bytes());
+                let _ = self.state.write_stderr(format!("error: {text}\n").as_bytes());
             }
         }
         self.state.exit(1)

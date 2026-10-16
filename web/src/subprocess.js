@@ -327,7 +327,9 @@ export class SubprocessHost {
     for (;;) {
       const bytes = child.pipes[fd].read();
       if (typeof bytes === "number") return;
-      if (child.modes[fd] === "inherit") this.options.output(fd, bytes);
+      if (child.modes[fd] !== "inherit" || this.options.output(fd, bytes) !== false) continue;
+      child.pipes[fd].close();
+      return;
     }
   }
   poll(timeout = 0) {

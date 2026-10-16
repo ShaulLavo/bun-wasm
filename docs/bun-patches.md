@@ -15,6 +15,7 @@ Each row has one class. A file with independent changes has separate rows.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
+| [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
 | [0003](#0003-transpiler-dependencies) | Port | Supply WASI wakers, CPU features, crash, and resolver implementations. |
@@ -85,6 +86,31 @@ Each row has one class. A file with independent changes has separate rows.
 
 | [`src/js/bun_console_constructor.js`](#bun-console-constructor) | Port | Generate Bun's Console constructor with lexical engine-independent hooks. |
 | [`scripts/generate-bun-console.mjs`, `src/js/console_constructor.js`, global Console wiring](#bun-console-constructor) | Host feature | Original generation and runtime adapters expose the shared constructor and its streams. |
+
+## Standard output errors
+
+Class **Host feature**, **original adapters** in `crates/bunwasm-runtime/src/lib.rs`,
+`src/natives.rs`, `src/js/{process,web}.js`, `web/scripts/node-host.mjs`,
+`web/scripts/node-stdio.ts`, `web/src/{subprocess.js,worker.ts}`, and
+`crates/bunwasm-host/src/process/pipe.rs`.
+No Bun or Node implementation is copied or adapted for this change.
+Rust output natives return write errors with Node-style `EPIPE`, errno `-32`, and
+syscall `write`. The synchronous process writers emit their stream's `error` event.
+An unhandled error ends the guest with status 1. A listener can handle the error.
+The Node WASI adapter waits only for temporary `EAGAIN` backpressure and returns
+WASI `PIPE` for closed output. Worker child adapters preserve the same error and
+close inherited output transports when their downstream reader disappears.
+The minimal readable stream invokes its underlying cancellation callback so
+canceling a subprocess reader actually closes its pipe.
+Native child pipes attach the OS `EPIPE` number to their error. Wasmtime 39.0.2
+translates an `ErrorKind::BrokenPipe` without an OS errno to generic WASI `IO`.
+
+The browser's top-level stdout and stderr write to a terminal through messages,
+so they have no OS reader that can close. Browser child pipes do have readers;
+the real-browser subprocess check cancels those readers on all three engines.
+The regression fixtures and Python OS-pipe driver are original test code.
+The driver checks QuickJS and JSC under both the native launcher and Node's
+worker host, plus the host engine under Node.
 
 ## Browser runtime core
 
