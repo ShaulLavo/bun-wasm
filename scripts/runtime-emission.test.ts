@@ -79,3 +79,17 @@ test("embedded source positions and fixture locations agree with TypeScript", ()
     expect(locations[key]).toEqual({ line: line + 1, columns: [start + 1, start + 5, start + 14] });
   }
 });
+
+test("builtin helper prepares runnable globals from the TypeScript factory", async () => {
+  const directory = join(source, "builtins");
+  const result = Bun.spawnSync(["bash", join(root, "scripts/test-bun-builtins.sh"), "--prepare-only", directory], {
+    stdout: "pipe", stderr: "pipe",
+  });
+  expect(result.exitCode).toBe(0);
+  const { runInNewContext } = await import("node:vm");
+  const globals = runInNewContext(readFileSync(join(directory, "globals.js"), "utf8"), { Buffer })();
+  expect(Object.isFrozen(globals)).toBe(true);
+  expect(globals.Buffer).toBe(Buffer);
+  expect(globals.Array.isArray([])).toBe(true);
+  expect(JSON.parse(readFileSync(join(directory, "catalog.json"), "utf8"))).toBeDefined();
+});
