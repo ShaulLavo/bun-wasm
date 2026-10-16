@@ -46,7 +46,7 @@ tree; completed writes are visible before exit.
 from guest transport. `PersistentBackend.open(storage)` loads only the index. Payloads enter the
 shared pool on first read or modification; clean idle files can leave it again. The workspace
 may therefore exceed the 1 GiB resident pool, subject to browser storage quota. Dirty data cannot
-be evicted before its checkpoint commits. A file still has the existing 16 MiB per-file limit.
+be evicted before its checkpoint commits. Files may span segments and are limited by the configured shared pool.
 
 Ordinary writes acknowledge shared-memory completion, not durability. Background checkpoints
 collect changed shared slots (including direct guest writes) and changed inode metadata. Each
@@ -112,8 +112,9 @@ The service owns the page allocator and grows capacity geometrically in 64 KiB p
 before execution; only the service grows their backing storage. A synchronous guest therefore
 sees completed growth without returning to its event loop or receiving another port message.
 `createFilesystemIdentity(undefined, maxBytes)` configures
-the pool cap (1 GiB by default, rounded to whole segments); an individual file supports 256 pages
-(16 MiB). A full pool reports WASI ENOSPC; exceeding the per-file limit reports EFBIG.
+the pool cap (1 GiB by default, rounded to whole segments); files can span segments up to the
+shared address space. A full pool reports WASI ENOSPC, while a request beyond the addressable
+maximum reports WASI EFBIG.
 `resources()` reports allocated backing bytes, data-pool and metadata bytes (including private
 capability tables), used/free bytes, the configured cap, and registered identities. Zero-byte
 segment references do not count as allocated backing storage. Grown segments are retained
