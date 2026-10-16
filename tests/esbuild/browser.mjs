@@ -14,6 +14,7 @@ async function command(page, text) {
 }
 async function check(browserName, engine, url) {
   const browser = await task.launch(playwright[browserName]);
+  const failuresBefore = failures.length;
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
@@ -40,7 +41,7 @@ async function check(browserName, engine, url) {
     await command(page, 'bun run node_modules/esbuild/bin/esbuild entry.ts --bundle --outfile=cli.js');
     assert.match(await command(page, 'cat cli.js'), /43/);
     assert.deepEqual(external, []);
-    console.log(`PASS ${browserName}/${engine} official esbuild API and CLI`);
+    if (failures.length === failuresBefore) console.log(`PASS ${browserName}/${engine} official esbuild API and CLI`);
   } finally { await browser.close(); }
 }
 try {

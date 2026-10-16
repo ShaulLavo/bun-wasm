@@ -41,6 +41,7 @@ try {
   writeFileSync(join(scratch, 'package.json'), JSON.stringify({ dependencies: { esbuild: '0.25.12' } }));
   for (const check of checks) copyFileSync(join(import.meta.dirname, check), join(scratch, check));
   for (const engine of (process.env.ENGINES ?? 'quickjs,jsc,browser').split(',')) {
+    const failuresBefore = failures.length;
     rmSync(join(scratch, 'node_modules'), { recursive: true, force: true });
     rmSync(join(scratch, 'bun.lock'), { force: true });
     await run(engine, ['install']);
@@ -60,7 +61,7 @@ try {
     await run(engine, ['install', '--frozen-lockfile']);
     assert.equal(readFileSync(join(scratch, 'bun.lock'), 'utf8'), lock);
     assert.equal(JSON.parse(readFileSync(join(scratch, 'node_modules/esbuild/package.json'), 'utf8')).name, 'esbuild-wasm');
-    console.log(`PASS ${engine} official esbuild transform, build, context, plugins, CLI, frozen reinstall`);
+    if (failures.length === failuresBefore) console.log(`PASS ${engine} official esbuild API, sync, watch, CLI, frozen reinstall`);
   }
   assert.equal(failures.length, 0, failures.map(error => error.message).join('\n'));
   assert.deepEqual(mirror.misses, []);

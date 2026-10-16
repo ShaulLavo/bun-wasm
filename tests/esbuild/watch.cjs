@@ -32,7 +32,7 @@ childProcess.spawn = function (...args) {
 };
 const esbuild = require('esbuild');
 
-async function until(predicate, label, timeout = 15000) {
+async function until(predicate, label, timeout = 30000) {
   const deadline = Date.now() + timeout;
   while (!predicate()) {
     assert.ok(Date.now() < deadline, label);

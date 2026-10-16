@@ -24,7 +24,8 @@ until the service emits its first rebuild notification. This prevents an
 incidental protocol reply from publishing the edit. Queued replies resume after
 that notification and before cleanup. The fixture sends no rebuild request and
 always disposes the context and stops esbuild. The same pause passes against the
-published package under native Node.
+published package under native Node. Initial builds have a 60-second bound and
+edit rebuilds have a 30-second bound for the interpreted wasm engines.
 
 Both runners use the app-matrix registry in offline replay mode. A mirror must
 contain these two records, in addition to any existing esbuild metadata:
