@@ -8,6 +8,8 @@ const root = resolve(import.meta.dirname, '../..');
 const scratch = mkdtempSync('/work/tmp/bun-wasm-esbuild-test-');
 const children = new Set();
 let mirror;
+const checks = (process.env.ESBUILD_CHECKS ?? 'check.cjs,sync.cjs,watch.cjs').split(',');
+const failures = [];
 async function cleanup() {
   const exits = Array.from(children, child => new Promise(resolve => child.once('close', resolve)));
   for (const child of children) process.kill(-child.pid, 'SIGKILL');
@@ -37,7 +39,7 @@ async function run(engine, args) {
 try {
   mirror = await registry({ directory: process.env.MATRIX_CACHE ?? '/work/cache/bun-wasm-app-matrix', record: false });
   writeFileSync(join(scratch, 'package.json'), JSON.stringify({ dependencies: { esbuild: '0.25.12' } }));
-  copyFileSync(join(import.meta.dirname, 'check.cjs'), join(scratch, 'check.cjs'));
+  for (const check of checks) copyFileSync(join(import.meta.dirname, check), join(scratch, check));
   for (const engine of (process.env.ENGINES ?? 'quickjs,jsc,browser').split(',')) {
     rmSync(join(scratch, 'node_modules'), { recursive: true, force: true });
     rmSync(join(scratch, 'bun.lock'), { force: true });
@@ -45,7 +47,11 @@ try {
     const manifest = JSON.parse(readFileSync(join(scratch, 'node_modules/esbuild/package.json'), 'utf8'));
     assert.equal(manifest.name, 'esbuild-wasm');
     assert.equal(manifest.version, '0.25.12');
-    assert.match(await run(engine, ['run', '/check.cjs']), /esbuild API passed/);
+    for (const check of checks) {
+      try { console.log(engine, check, await run(engine, ['run', `/${check}`])); }
+      catch (error) { failures.push(error); console.error(error.message); }
+    }
+    if (!checks.includes('check.cjs')) continue;
     assert.match(await run(engine, ['run', '/node_modules/esbuild/bin/esbuild', '--version']), /0\.25\.12/);
     await run(engine, ['run', '/node_modules/esbuild/bin/esbuild', '/entry.ts', '--bundle', '--outfile=/cli.js']);
     assert.match(readFileSync(join(scratch, 'cli.js'), 'utf8'), /43/);
@@ -56,6 +62,7 @@ try {
     assert.equal(JSON.parse(readFileSync(join(scratch, 'node_modules/esbuild/package.json'), 'utf8')).name, 'esbuild-wasm');
     console.log(`PASS ${engine} official esbuild transform, build, context, plugins, CLI, frozen reinstall`);
   }
+  assert.equal(failures.length, 0, failures.map(error => error.message).join('\n'));
   assert.deepEqual(mirror.misses, []);
   assert.deepEqual(mirror.errors, []);
 } finally { await cleanup(); }

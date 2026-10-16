@@ -5,6 +5,8 @@ import { playwright, ready, run, session, writeFile } from '../../web/tests/play
 
 const task = session('bun-wasm-esbuild-browser-');
 let mirror;
+const checks = (process.env.ESBUILD_CHECKS ?? 'check.cjs,sync.cjs,watch.cjs').split(',');
+const failures = [];
 async function command(page, text) {
   const result = await run(page, text, 120000);
   assert.equal(result.code, 0, `${text} exited ${result.code}\n${result.output}`);
@@ -27,9 +29,13 @@ async function check(browserName, engine, url) {
     assert.match(await ready(page), /ready/);
     await writeFile(page, '/home/user/package.json', JSON.stringify({ dependencies: { esbuild: '0.25.12' } }));
     await writeFile(page, '/home/user/bunfig.toml', `[install]\nregistry = ${JSON.stringify(mirror.base)}\n`);
-    await writeFile(page, '/home/user/check.cjs', readFileSync(new URL('check.cjs', import.meta.url), 'utf8'));
+    for (const check of checks) await writeFile(page, `/home/user/${check}`, readFileSync(new URL(check, import.meta.url), 'utf8'));
     await command(page, 'bun install');
-    assert.match(await command(page, 'bun run check.cjs'), /esbuild API passed/);
+    for (const check of checks) {
+      try { console.log(`${browserName}/${engine} ${check}`, await command(page, `bun run ${check}`)); }
+      catch (error) { failures.push(error); console.error(`${browserName}/${engine}`, error.message); }
+    }
+    if (!checks.includes('check.cjs')) return;
     assert.match(await command(page, 'bun run node_modules/esbuild/bin/esbuild --version'), /0\.25\.12/);
     await command(page, 'bun run node_modules/esbuild/bin/esbuild entry.ts --bundle --outfile=cli.js');
     assert.match(await command(page, 'cat cli.js'), /43/);
@@ -44,6 +50,7 @@ try {
   for (const browser of browsers) {
     for (const engine of (process.env.ENGINES ?? 'quickjs,jsc,browser').split(',')) await check(browser, engine, url);
   }
+  assert.equal(failures.length, 0, failures.map(error => error.message).join('\n'));
   assert.deepEqual(mirror.misses, []);
   assert.deepEqual(mirror.errors, []);
 } finally { await mirror?.close(); await task.cleanup(); }
