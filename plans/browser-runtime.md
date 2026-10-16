@@ -37,10 +37,11 @@ than it is today. The process layer loads on the first spawn.
   replaces today's copy-at-spawn and merge-at-exit in both bun-wasm and brush-web.
 - **Storage backends are swappable.** The filesystem service talks to storage through a small
   backend interface (load the tree, read data that isn't in memory, persist a batch, flush). We
-  ship two from day one: IndexedDB and OPFS. The faster one on the spike numbers is the default
-  (IndexedDB currently leads); the OPFS backend ships regardless. The OPFS backend starts simple,
-  one OPFS file per file, written in parallel with no per-file flush; packing is used only if the
-  simple layout can't be made viable in Firefox or Safari. Later backends can include IndexedDB
+  ship two from day one: IndexedDB, the default (fastest writes on Chromium and Safari, consistent
+  reads), and OPFS. The OPFS backend is simple: one OPFS file per file, no per-file flush, create
+  concurrency tuned per browser, and lazy loading (the index loads in about 20 ms; files are read
+  on first use, since reading every file takes 16-33 s in Firefox). A packed OPFS backend, 15x
+  faster to write in Firefox, can come later (spike 3). Later backends can include IndexedDB
   without our own memory cache (lower memory, the browser caches for us) and memory-only for
   throwaway sandboxes (owner, 2026-10-16).
 - **Killing is not instant, so kills revoke and confirm.** Chromium kept a terminated CPU-bound
