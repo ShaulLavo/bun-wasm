@@ -50,7 +50,7 @@ def main():
     parser.add_argument('--wasm', type=Path, help='module to measure (default: dist/ for the engine)')
     parser.add_argument('--host', choices=['wasmtime', 'launcher', 'node'], default='wasmtime')
     parser.add_argument('--launcher', type=Path, help='bun-wasm launcher binary for --host launcher')
-    parser.add_argument('--stack-kib', type=int, help='host wasm call stack (wasmtime max-wasm-stack, node --stack-size)')
+    parser.add_argument('--stack-kib', type=int, help="host wasm call stack (wasmtime max-wasm-stack, the Node host's Worker stack)")
     parser.add_argument('--budget-kib', type=int, help="QuickJS stack budget passed as BUN_WASM_STACK_KIB")
     parser.add_argument('--max', type=int, default=200000, help='deepest nesting tried')
     parser.add_argument('modes', nargs='*', default=MODES)
@@ -62,8 +62,9 @@ def main():
     if args.host == 'launcher':
         command = [str(args.launcher), '--wasm', wasm, '--dir', preopen] + env + ['run', '/stack-depth.js']
     elif args.host == 'node':
-        flags = [f'--stack-size={args.stack_kib}'] if args.stack_kib else []
-        command = ['node'] + flags + ['--no-warnings', str(ROOT / 'web/scripts/node-host.mjs'), '--wasm', wasm, '--dir', preopen] + env + ['--', 'run', '/stack-depth.js']
+        # The guest runs in node-host.mjs's Worker, whose stack --stack-mb sets.
+        flags = ['--stack-mb', f'{args.stack_kib / 1024:g}'] if args.stack_kib else []
+        command = ['node', '--no-warnings', str(ROOT / 'web/scripts/node-host.mjs')] + flags + ['--wasm', wasm, '--dir', preopen] + env + ['--', 'run', '/stack-depth.js']
     else:
         flags = ['-W', f'max-wasm-stack={args.stack_kib * 1024}'] if args.stack_kib else []
         command = ['wasmtime', 'run'] + flags + env + ['--dir', preopen, wasm, 'run', '/stack-depth.js']

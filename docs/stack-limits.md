@@ -104,7 +104,10 @@ instance, children included, on a thread with a 24 MiB native stack, and passes
 the top-level one too, in a Worker whose thread Node creates with a 32 MB stack
 (`resourceLimits.stackSizeMb`; `--stack-mb` overrides it), and passes 6144 KiB. The
 host stays one process, so killing it ends the guest, and `ulimit -s` does not matter.
-A budget one and a half times as large still catches every path on both hosts.
+The launcher still catches every path with a budget one and a half times as large
+(6144 KiB). On the Node host the stack was shrunk instead: with the 6144 KiB default
+and a 21 MB Worker stack (32/1.5), all 25 paths still threw or completed on QuickJS
+and JSC.
 Browsers cannot raise their stacks; that is the platform limit behind their smaller
 depths.
 
