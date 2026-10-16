@@ -536,15 +536,16 @@
         });
       if (a.name !== "Ed25519") a.hash = { name: hash(digest) };
       if (family(a) === "rsa") {
-        if (options.padding !== undefined &&
-            ![constants.RSA_PKCS1_PADDING, constants.RSA_PKCS1_PSS_PADDING].includes(options.padding))
+        const padding = options.padding;
+        if (padding !== undefined &&
+            ![constants.RSA_PKCS1_PADDING, constants.RSA_PKCS1_PSS_PADDING].includes(padding))
           throw Object.assign(new Error("Illegal or unsupported padding mode"), {
-            code: options.padding === constants.RSA_NO_PADDING
+            code: padding === constants.RSA_NO_PADDING
               ? "ERR_OSSL_EVP_INVALID_PADDING_MODE"
               : "ERR_OSSL_EVP_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE",
           });
         a.name =
-          options.padding === constants.RSA_PKCS1_PSS_PADDING
+          padding === constants.RSA_PKCS1_PSS_PADDING
             ? "RSA-PSS"
             : "RSASSA-PKCS1-v1_5";
         a.saltLength = options.saltLength ?? -2;
