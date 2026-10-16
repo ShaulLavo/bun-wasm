@@ -170,6 +170,8 @@ export class SubprocessHost {
     this.timer = null;
     this.notify = () => {};
     this.memory = null;
+    this.stdin = options.stdin ? new SharedPipe(options.stdin, this.budget) : null;
+    this.stdinWaiting = false;
   }
   attach(memory) { this.memory = memoryViews(memory); }
   fail(message, code) {
@@ -257,6 +259,12 @@ export class SubprocessHost {
     return child && fd >= 0 && fd <= 2 ? child.handles[fd] : BADF;
   }
   read(handle, cap) {
+    if (handle === 0) {
+      const value = this.stdin ? this.stdin.read(cap) : -4;
+      this.stdinWaiting = value === AGAIN;
+      if (this.stdinWaiting) this.watch();
+      return value;
+    }
     const h = this.handles.get(handle);
     return h && h.fd !== 0 ? h.pipe.read(cap) : BADF;
   }
@@ -334,10 +342,11 @@ export class SubprocessHost {
       this.timer = null;
       this.poll();
       this.notify();
-      if (Array.from(this.children.values()).some((child) => !child.ended)) this.watch();
+      if (this.stdinWaiting || Array.from(this.children.values()).some((child) => !child.ended)) this.watch();
     }, 4);
   }
   dispose() {
+    this.stdinWaiting = false;
     if (this.timer !== null) nativeClearTimeout(this.timer);
     this.timer = null;
     for (const id of this.children.keys()) {
@@ -351,7 +360,7 @@ export class SubprocessHost {
       if (name !== "hostError") this.lastError = null;
       return fn(...args);
     }]));
-    const route = (name, operation) => (handle, ...args) => this.owns(handle) ? operation(handle, ...args) : (fallback[name]?.(handle, ...args) ?? BADF);
+    const route = (name, operation) => (handle, ...args) => this.owns(handle) || name === "hostRead" && handle === 0 ? operation(handle, ...args) : (fallback[name]?.(handle, ...args) ?? BADF);
     return {
       natives: {
         ...fallback,
@@ -392,7 +401,7 @@ export class SubprocessHost {
       child_wait: (id) => this.wait(id),
       child_pipe: (id, fd) => this.pipe(id, fd),
       child_kill: (id, signal) => this.kill(id, signal),
-      read: (id, ptr, cap) => this.owns(id) ? read(id, ptr, cap) : (net.read?.(id, ptr, cap) ?? BADF),
+      read: (id, ptr, cap) => id === 0 || this.owns(id) ? read(id, ptr, cap) : (net.read?.(id, ptr, cap) ?? BADF),
       write: (id, ptr, len) => this.owns(id) ? this.write(id, bytes(ptr, len)) : (net.write?.(id, ptr, len) ?? BADF),
       close: (id) => this.owns(id) ? this.close(id) : (net.close?.(id) ?? BADF),
       error: (id, ptr, cap) => id === 0 && this.lastError ? error(ptr, cap) : (net.error?.(id, ptr, cap) ?? BADF),
