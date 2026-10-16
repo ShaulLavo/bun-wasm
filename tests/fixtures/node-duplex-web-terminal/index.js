@@ -8,6 +8,7 @@ for (const state of ["ended", "destroyed", "erroring"]) {
   if (state === "ended") source.end();
   else source.destroy(state === "erroring" ? reason : undefined);
   const pair = Duplex.toWeb(source);
+  if (state === "erroring") source.once("error", error => assert.equal(error, reason));
   assert(pair.readable instanceof ReadableStream);
   assert(pair.writable instanceof WritableStream);
   const writer = pair.writable.getWriter();
