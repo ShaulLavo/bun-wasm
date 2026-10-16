@@ -9,7 +9,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
-import { MemFS, adoptInodes, decode, normalize } from "./fs";
+import { decode, normalize } from "./fs";
+import { SharedFilesystem } from "./shared-fs";
 import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
 import { type Output, Shell } from "./shell";
@@ -51,13 +52,16 @@ const previews = new Previews();
 
 // ---------- filesystem ----------
 
-const fs = new MemFS();
-fs.mkdirp("/tmp");
-for (const [name, source] of Object.entries(examples)) fs.writeFile(`${HOME}/${name}`, source);
+const fs = new SharedFilesystem();
+await fs.mkdirp("/tmp");
+for (const [name, source] of Object.entries(examples)) await fs.writeFile(`${HOME}/${name}`, source);
 
 // ---------- bun.wasm ----------
 
 let wasm: { module: WebAssembly.Module; size: number } | { error: string } | null = null;
+// The final status waits for the page to finish setting up, so "ready" means usable.
+let pageSetUp!: () => void;
+const pageReady = new Promise<void>((resolve) => { pageSetUp = resolve; });
 const wasmReady = loadWasm();
 
 function setStatus(text: string, kind: "" | "ok" | "error" = ""): void {
@@ -69,6 +73,7 @@ async function loadWasm(): Promise<void> {
   try {
     const loaded = await fetchWasm(wasmUrl, (text) => setStatus(text));
     wasm = loaded;
+    await pageReady;
     setStatus(`bun.wasm ready · ${engineName} · ${mb(loaded.size)}`, "ok");
   } catch (err) {
     const missing = err instanceof WasmMissing;
@@ -76,6 +81,7 @@ async function loadWasm(): Promise<void> {
       ? `${wasmUrl} is not in this build. Build it with ${engines[engine].script} (dist/${engines[engine].wasm}), then rebuild web/.`
       : `could not load bun.wasm: ${String(err)}`;
     wasm = { error };
+    await pageReady;
     setStatus(missing ? "bun.wasm missing" : "bun.wasm failed to load", "error");
   }
 }
@@ -84,7 +90,6 @@ async function loadWasm(): Promise<void> {
 const moduleScope: Promise<boolean> = engine === "browser" ? registerModuleScope() : Promise.resolve(false);
 
 let current: Run | null = null;
-const savedDuringRun = new Map<string, string>();
 
 async function runBun(args: string[], cwd: string, io: Output): Promise<number> {
   await wasmReady;
@@ -105,28 +110,26 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
   };
   const scoped = await moduleScope;
   runButton.disabled = true;
-  const run = startRun({ engine, module: wasm.module, args, env, root: fs.root, moduleScope: scoped, trace }, {
-    stdout: (data) => io.out(data),
-    stderr: (data) => io.err(data),
-    listening: (port, helper) => {
-      previews.register(port, helper);
-      void previews.ready.then((state) => io.out(previewLine(port, state)));
-    },
-    stopped: (port, helper) => previews.unregister(port, helper),
-  });
-  current = run;
-  const result = await run.done;
-  current = null;
-  runButton.disabled = false;
-  if (result.root) {
-    fs.root = result.root;
-    adoptInodes(fs.root);
+  try {
+    await fs.flush();
+    const run = startRun({ engine, module: wasm.module, args, env, filesystem: fs, moduleScope: scoped, trace }, {
+      stdout: (data) => io.out(data),
+      stderr: (data) => io.err(data),
+      listening: (port, helper) => {
+        previews.register(port, helper);
+        void previews.ready.then((state) => io.out(previewLine(port, state)));
+      },
+      stopped: (port, helper) => previews.unregister(port, helper),
+    });
+    current = run;
+    const result = await run.done;
+    if (result.error) io.err(`\x1b[31m${result.error}\x1b[0m\r\n`);
+    await editor.syncFromFs();
+    return result.code;
+  } finally {
+    current = null;
+    runButton.disabled = false;
   }
-  if (result.error) io.err(`\x1b[31m${result.error}\x1b[0m\r\n`);
-  for (const [path, text] of savedDuringRun) fs.writeFile(path, text);
-  savedDuringRun.clear();
-  editor.syncFromFs();
-  return result.code;
 }
 
 function previewLine(port: number, state: string): string {
@@ -196,10 +199,13 @@ class Editor {
   private states = new Map<string, EditorState>();
   private saved = new Map<string, string>();
   private view: EditorView;
+  private opened = false;
+  private openRevision = 0;
+  private tabsRevision = 0;
   path = `${HOME}/index.ts`;
 
   constructor(parent: HTMLElement) {
-    this.view = new EditorView({ parent, state: this.stateFor(this.path) });
+    this.view = new EditorView({ parent, state: EditorState.create({ extensions: this.extensions(this.path) }) });
   }
 
   private extensions(path: string): Extension[] {
@@ -211,19 +217,22 @@ class Editor {
       oneDark,
       EditorView.lineWrapping,
       keymap.of([
-        { key: "Mod-s", preventDefault: true, run: () => (this.save(), true) },
-        { key: "Mod-Enter", preventDefault: true, run: () => (void runCurrent(), true) },
+        { key: "Mod-s", preventDefault: true, run: () => (void this.save().catch(reportError), true) },
+        { key: "Mod-Enter", preventDefault: true, run: () => (void runCurrent().catch(reportError), true) },
       ]),
       EditorView.updateListener.of((u) => {
-        if (u.docChanged) this.renderTabs();
+        if (u.docChanged) void this.renderTabs().catch(reportError);
       }),
     ];
   }
 
-  private stateFor(path: string): EditorState {
+  private async stateFor(path: string): Promise<EditorState> {
     let state = this.states.get(path);
     if (!state) {
-      const text = decode(fs.readFile(path) ?? new Uint8Array());
+      const text = decode(await fs.readFile(path) ?? new Uint8Array());
+      // Another open may have populated (and edited) this file while the read was pending.
+      state = this.states.get(path);
+      if (state) return state;
       state = EditorState.create({ doc: text, extensions: this.extensions(path) });
       this.states.set(path, state);
       this.saved.set(path, text);
@@ -236,28 +245,34 @@ class Editor {
     return state !== undefined && state.doc.toString() !== this.saved.get(path);
   }
 
-  open(path: string): void {
-    if (path !== this.path) {
-      this.states.set(this.path, this.view.state);
+  async open(path: string): Promise<void> {
+    const revision = ++this.openRevision;
+    if (path !== this.path || !this.opened) {
+      await this.stateFor(path);
+      if (revision !== this.openRevision) return;
+      // Keep path and view paired until the requested state is ready. Typing and saves
+      // during the read still belong to the file currently on screen.
+      if (this.opened && this.states.has(this.path)) this.states.set(this.path, this.view.state);
       this.path = path;
-      this.view.setState(this.stateFor(path));
+      this.view.setState(this.states.get(path)!);
+      this.opened = true;
     }
-    this.renderTabs();
+    await this.renderTabs();
   }
 
-  save(): void {
+  async save(): Promise<void> {
+    const path = this.path;
     const text = this.view.state.doc.toString();
-    fs.writeFile(this.path, text);
-    if (current) savedDuringRun.set(this.path, text);
-    this.saved.set(this.path, text);
-    this.renderTabs();
+    await fs.writeFile(path, text);
+    this.saved.set(path, text);
+    await this.renderTabs();
   }
 
   /** Pick up files created, changed or deleted by bun.wasm or the shell. Unsaved edits win. */
-  syncFromFs(): void {
+  async syncFromFs(): Promise<void> {
     this.states.set(this.path, this.view.state);
-    for (const [path, state] of this.states) {
-      const data = fs.readFile(path);
+    for (const path of Array.from(this.states.keys())) {
+      const data = await fs.readFile(path);
       if (!data) {
         if (!this.dirty(path)) {
           this.states.delete(path);
@@ -267,23 +282,26 @@ class Editor {
       }
       const text = decode(data);
       if (text === this.saved.get(path) || this.dirty(path)) continue;
+      const state = path === this.path ? this.view.state : this.states.get(path);
+      if (!state) continue;
       this.saved.set(path, text);
       const next = state.update({ changes: { from: 0, to: state.doc.length, insert: text } }).state;
       this.states.set(path, next);
       if (path === this.path) this.view.setState(next);
     }
-    if (!fs.readFile(this.path) && !this.states.has(this.path)) {
-      const first = fs.listFiles(HOME)[0];
-      if (first) {
-        this.path = first;
-        this.view.setState(this.stateFor(first));
-      }
+    const path = this.path;
+    const revision = this.openRevision;
+    if (!await fs.readFile(path) && !this.states.has(path)) {
+      const first = (await fs.listFiles(HOME))[0];
+      if (first && revision === this.openRevision) await this.open(first);
     }
-    this.renderTabs();
+    await this.renderTabs();
   }
 
-  renderTabs(): void {
-    const files = fs.listFiles(HOME);
+  async renderTabs(): Promise<void> {
+    const revision = ++this.tabsRevision;
+    const files = await fs.listFiles(HOME);
+    if (revision !== this.tabsRevision) return;
     for (const path of this.states.keys()) if (!files.includes(path)) files.push(path);
     tabsEl.replaceChildren(
       ...files.map((path) => {
@@ -294,7 +312,7 @@ class Editor {
         tab.setAttribute("aria-selected", String(path === this.path));
         tab.textContent = path.slice(HOME.length + 1) + (this.dirty(path) ? " •" : "");
         tab.title = path;
-        tab.onclick = () => this.open(path);
+        tab.onclick = () => void this.open(path).catch(reportError);
         return tab;
       }),
     );
@@ -308,7 +326,7 @@ class Editor {
       }),
     );
     fileSelect.value = this.path;
-    fileSelect.onchange = () => this.open(fileSelect.value);
+    fileSelect.onchange = () => void this.open(fileSelect.value).catch(reportError);
   }
 
   focus(): void {
@@ -317,26 +335,43 @@ class Editor {
 }
 
 const editor = new Editor($<HTMLDivElement>("#editor"));
-editor.renderTabs();
+await editor.open(editor.path);
+await editor.renderTabs();
 
-async function runCurrent(): Promise<void> {
-  if (shell.running) return;
-  editor.save();
-  const rel = editor.path.startsWith(`${shell.cwd}/`) ? editor.path.slice(shell.cwd.length + 1) : editor.path;
-  const quoted = /\s/.test(rel) ? `'${rel}'` : rel;
-  // Test files run under Bun's test runner, like `bun test <file>` would.
-  const command = /\.(test|spec)\.[cm]?[jt]sx?$/.test(rel) ? "test" : "run";
-  await shell.submit(`bun ${command} ${quoted}`);
+function reportError(error: unknown): void {
+  setStatus(String(error), "error");
+  term.write(`\x1b[31m${String(error)}\x1b[0m\r\n`);
 }
 
-runButton.addEventListener("click", () => void runCurrent());
+let runPending = false;
+async function runCurrent(): Promise<void> {
+  if (shell.running || runPending) return;
+  runPending = true;
+  runButton.disabled = true;
+  try {
+    const path = editor.path;
+    await editor.save();
+    const rel = path.startsWith(`${shell.cwd}/`) ? path.slice(shell.cwd.length + 1) : path;
+    const quoted = `'${rel.replace(/'/g, "'\\''")}'`;
+    // Test files run under Bun's test runner, like `bun test <file>` would.
+    const command = /\.(test|spec)\.[cm]?[jt]sx?$/.test(rel) ? "test" : "run";
+    await shell.submit(`bun ${command} ${quoted}`);
+  } finally {
+    runPending = false;
+    runButton.disabled = shell.running;
+  }
+}
+
+runButton.addEventListener("click", () => void runCurrent().catch(reportError));
 newFileButton.addEventListener("click", () => {
   const name = prompt("New file name (in ~):", "scratch.ts");
   if (!name) return;
   const path = normalize(name, HOME);
-  if (!fs.lookup(path)) fs.writeFile(path, "");
-  editor.open(path);
-  editor.focus();
+  void (async () => {
+    if (!await fs.lookup(path)) await fs.writeFile(path, "");
+    await editor.open(path);
+    editor.focus();
+  })().catch(reportError);
 });
 
 // Keep the app inside the visible area when the iOS keyboard opens.
@@ -358,3 +393,4 @@ shell.start([
 ]);
 
 Object.assign(globalThis, { playground: { fs, shell, term, editor, previews } });
+pageSetUp();
