@@ -16,7 +16,7 @@ if (!directory) {
     const failures: string[] = [];
     const cases = Array.from(engines.keys()).flatMap(name => [[name, "natural"], [name, "explicit"], [name, "gc"]])
       .concat(["reallyExit", "abort", "kill", "uncaught"].map(exit => ["browser", exit]));
-    for (const [name, exit] of cases) {
+    for (const [name, exit] of cases.filter(([name]) => !engine || name === engine)) {
       if (exit === "gc") rmSync(`${scratch}/gc-tree`, { recursive: true, force: true });
       const source = exit === "gc" ? readFileSync(`${root}/tests/fixtures/fs-opendir-gc/index.js`, "utf8") : `const fs = require('node:fs');
           globalThis.heldDirectories = Array.from({length: 10}, () => fs.opendirSync('/retained-tree'));
