@@ -7,13 +7,14 @@ trap 'rm -rf "$scratch"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p "$scratch/node_modules"
-cp -r "$root/docs/bun-test-suite/dependencies/node_modules/ws" "$scratch/node_modules/ws"
+cp -rL "$root/docs/bun-test-suite/dependencies/node_modules/ws" "$scratch/node_modules/ws"
 cp "$root/tests/net-ws.mjs" "$scratch/index.mjs"
 failed=0
+wasm_dir="${1:-$root/dist}"
 for engine in quickjs jsc browser; do
-  wasm="$root/dist/bun.wasm"
-  [[ "$engine" == jsc ]] && wasm="$root/dist/bun-jsc.wasm"
-  [[ "$engine" == browser ]] && wasm="$root/dist/bun-browser.wasm"
+  wasm="$wasm_dir/bun.wasm"
+  [[ "$engine" == jsc ]] && wasm="$wasm_dir/bun-jsc.wasm"
+  [[ "$engine" == browser ]] && wasm="$wasm_dir/bun-browser.wasm"
   args=(--dir "$scratch::/" --env PWD=/ --env WS_NO_BUFFER_UTIL=1 --env WS_NO_UTF_8_VALIDATE=1)
   code=0
   if [[ "$engine" == browser ]]; then

@@ -190,7 +190,6 @@
         if (this.writableFinished) this.destroy();
       }
       read(size) {
-        if (size !== undefined && (!Number.isInteger(size) || size < 0)) throw error(RangeError, "ERR_OUT_OF_RANGE", "Invalid read size");
         if (size === 0) return null;
         if (size > this._highWaterMark) {
           this._highWaterMark = size;
