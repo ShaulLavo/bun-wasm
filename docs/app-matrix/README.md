@@ -97,11 +97,13 @@ and the browser host lost the creating module's location at that boundary.
 Generated functions now use the shared runtime resolver with the creating
 module's origin. Native constructor parsing selects valid import replacements,
 keeps methods named import intact, and preserves syntax errors. JSC retains its
-native constructors. The selection also exposed a QuickJS data conversion bug.
+native constructors. The host adapter retains the creating module's source path
+in generated bodies, including bodies without imports, so its constructor proxy
+does not hide available caller metadata. The selection also exposed a QuickJS data conversion bug.
 A buffer type probe left a pending exception for ordinary arrays and objects;
 the bridge now checks buffer class tags before calling the throwing getter.
 
-All 93 fixtures pass on each engine on the revised caller-origin base. The bounded
+All 99 fixtures pass on each engine on current main plus the revised caller-origin base. The bounded
 upstream selection is unchanged before and after. Two of three files fully pass
 on each engine. QuickJS records 5 observed passes, 18 failures, 1 skip and 1 file
 timeout; JSC records 5 passes, 17 failures, 1 skip and no timeout; the browser
@@ -128,8 +130,8 @@ bash /work/tmp/wave-heavy/run.sh --class light "CLI module suite" -- \
 
 Repeat the suite command with JSC and browser engines, using separate output
 paths. Evidence is retained in `/work/reports/bun-wasm-app-blockers-2026-10-16/`,
-including `before-native/`, `after-cli-resumed-native/`,
-`after-cli-resumed-playground/` and `cli-suite-resumed-*.json`. The playground
+including `before-native/`, `after-cli-origin-native/`,
+`after-cli-origin-playground/` and `cli-suite-final-*.json`. The playground
 baseline is the original `playground-light/` census under the 2026-10-15 report.
 
 ## Next fixes
