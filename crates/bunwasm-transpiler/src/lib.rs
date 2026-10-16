@@ -121,10 +121,12 @@ pub fn function_imports(args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, 
         ranges.push(start..source.len());
     }
     source.push_str("\n})");
-    let (_, offsets) = with_state(|state| {
+    let (_, mut offsets) = with_state(|state| {
         let (result, offsets) = bun_js_parser::with_bunwasm_dynamic_imports(|| run(state, &source, "<Function>", Loader::Js, None));
         result.map(|code| (code, offsets))
     })?;
+    offsets.sort_unstable();
+    offsets.dedup();
     Ok(ranges.into_iter().map(|range| {
         offsets.iter().filter(|offset| range.contains(offset)).map(|offset| {
             source[range.start..*offset].encode_utf16().count()

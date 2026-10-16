@@ -578,7 +578,7 @@ This is original glue, with no package implementation copied.
 | crates/bunwasm-transpiler/src/lib.rs function_imports | Original adapter | Constructs the native function grammar around original argument ranges and translates parser offsets. |
 
 Patch 0010 touches src/js_parser/lib.rs, src/js_parser/parse/parse_import_export.rs
-and src/js_printer/printer.rs. The parser collector records only real import
+and src/js_printer/lib.rs. The parser collector records only real import
 expressions and restores its previous thread-local state on unwind. The printer
 metadata is consumed by the semantic-import lane; this adapter consumes only the
 parser collector. The existing shared vendor checkout was read, never edited.
