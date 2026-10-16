@@ -6,6 +6,7 @@ export function installHostCrypto(provider,Key,c,native) {
   const original = Object.fromEntries(methods.map(name => [name,provider[name]]));
   const host = Object.fromEntries(methods.map(name => [name,original[name].bind(provider)]));
   const capabilities = new Map();
+  let kwJwkCapability;
   const ownKey = key => c.isKey(key) && !c.record(key).nativeKey;
   const dummy = c.makeKey({name:"AES-GCM",length:192},"secret",true,["encrypt"],{kty:"oct",k:c.encode(new Uint8Array(24))});
   Object.setPrototypeOf(Object.getPrototypeOf(dummy),Key.prototype);
@@ -21,6 +22,21 @@ export function installHostCrypto(provider,Key,c,native) {
       ));
     }
     return capabilities.get(name);
+  }
+  function supportsKwJwk() {
+    if (!kwJwkCapability) {
+      kwJwkCapability = Promise.all([
+        host.importKey("raw",new Uint8Array(16),"AES-KW",false,["wrapKey"]),
+        host.importKey("raw",new Uint8Array(16),{name:"HMAC",hash:"SHA-256"},true,["sign"]),
+      ]).then(([wrapping,key]) => host.wrapKey("jwk",key,wrapping,{name:"AES-KW"})).then(
+        () => true,
+        error => {
+          if (["OperationError","DataError","NotSupportedError"].includes(error.name)) return false;
+          throw error;
+        },
+      );
+    }
+    return kwJwkCapability;
   }
   function candidateKey(key) {
     if (!ownKey(key)) return false;
@@ -108,10 +124,11 @@ export function installHostCrypto(provider,Key,c,native) {
       return c.importKey("raw",await host.exportKey("raw",carrier),target,extractable,usages);
     },
     async wrapKey(format,key,wrappingKey,a) {
-      if (!candidateKey(key) && !candidateKey(wrappingKey)) return host.wrapKey(format,key,wrappingKey,a);
+      const kwJwk = format === "jwk" && nameOf(a) === "AES-KW";
+      if (!candidateKey(key) && !candidateKey(wrappingKey) && !kwJwk) return host.wrapKey(format,key,wrappingKey,a);
       format = String(format);a = snapshot(a);
       const ownTarget = await fallbackKey(key), ownWrapping = await fallbackKey(wrappingKey);
-      if (!ownTarget && !ownWrapping) return host.wrapKey(format,key,wrappingKey,a);
+      if (!ownTarget && !ownWrapping && (!kwJwk || await supportsKwJwk())) return host.wrapKey(format,key,wrappingKey,a);
       const bytes = bytesFor(format,await exportKey(format,key),a);
       if (ownWrapping) return c.crypt("encrypt",a,wrappingKey,bytes,"wrapKey");
       const carrier = await host.importKey("raw",bytes,{name:"HMAC",hash:"SHA-256"},true,["sign"]);
