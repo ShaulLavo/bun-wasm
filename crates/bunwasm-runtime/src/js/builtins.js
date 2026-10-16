@@ -1057,6 +1057,7 @@
     "node:worker_threads": thrower("worker_threads", NO_THREADS),
     "node:child_process": () => internal.require("spawn").nodeChildProcess(),
     "node:cluster": () => unsupportedModule("cluster", NO_PROCESSES, ["fork", "setupPrimary", "setupMaster", "disconnect"], { isPrimary: true, isMaster: true, isWorker: false, workers: {} }),
+    "ws": () => internal.require("ws_builtin"),
     "node:net": () => Object.assign(internal.require("net").nodeNet(), internal.require("net_address")),
     "node:tls": () => unsupportedModule("tls", NO_NETWORK, ["connect", "createServer", "createSecureContext", "TLSSocket", "Server", "checkServerIdentity"], { rootCertificates: [], DEFAULT_MIN_VERSION: "TLSv1.2", DEFAULT_MAX_VERSION: "TLSv1.3", DEFAULT_ECDH_CURVE: "auto" }),
     "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
