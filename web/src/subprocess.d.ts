@@ -51,7 +51,8 @@ export class SubprocessHost {
     token?: number;
     stdin?: SharedArrayBuffer;
     launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): { terminate(): unknown };
-    output(fd: number, bytes: Uint8Array): void;
+    /** Return false when the inherited reader has closed. */
+    output(fd: number, bytes: Uint8Array): void | boolean;
     filesystem?(): FilesystemSync;
     syncFilesystem?(): void;
   });

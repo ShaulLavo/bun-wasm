@@ -1,0 +1,6 @@
+closed child stdout false 1
+closed child stdout true 42
+closed child stderr false 1
+closed child stderr true 42
+closed inherited child stdout 42
+closed inherited child stderr 42
