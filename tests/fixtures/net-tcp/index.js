@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import net from "node:net";
-import { Duplex } from "node:stream";
+import { Duplex, Readable } from "node:stream";
 
 assert.equal(typeof net.getDefaultAutoSelectFamilyAttemptTimeout, "function");
 const attemptTimeout = net.getDefaultAutoSelectFamilyAttemptTimeout();
@@ -70,4 +70,20 @@ const error = await new Promise(resolve => refused.once("error", resolve));
 await refusedClosed;
 assert.equal(connected, false);
 assert.equal(error.code, "ECONNREFUSED");
+const webServer = net.createServer(socket => socket.end("web-socket"));
+webServer.listen(0, "127.0.0.1");
+await once(webServer, "listening");
+const webSocket = net.connect({ port: webServer.address().port, host: "127.0.0.1" });
+const webReader = Readable.toWeb(webSocket).getReader();
+const webChunks = [];
+for (;;) {
+  const item = await webReader.read();
+  if (item.done) break;
+  webChunks.push(item.value);
+}
+assert.equal(Buffer.concat(webChunks).toString(), "web-socket");
+webReader.releaseLock();
+await new Promise(resolve => webServer.close(resolve));
+console.log("socket Readable.toWeb ok");
+
 console.log("tcp helpers, queued writes, half-close, counters, refused connection ok");
