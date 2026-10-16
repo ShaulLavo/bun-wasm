@@ -1,1 +1,1 @@
-receiveMessageOnPort accepts only MessagePort
+receiveMessageOnPort accepts BroadcastChannel without consuming its messages

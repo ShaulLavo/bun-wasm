@@ -1,0 +1,3 @@
+unstarted peer retains messages until synchronous draining
+starting a pending peer delivers its queue before closing
+pending peer close does not poll and explicit close discards its queue
