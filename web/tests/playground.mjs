@@ -99,6 +99,9 @@ console.log("port", server.port);
 /** Waits until the page has loaded and compiled its wasm; returns the status line. */
 export async function ready(page, ms = 120000) {
   await page.waitForFunction(() => /ready|missing|failed/.test(document.querySelector("#status")?.textContent ?? ""), null, { timeout: ms });
+  // A final status means the page is usable: its shell, editor and filesystem are published.
+  const published = await page.evaluate(() => Boolean(globalThis.playground));
+  if (!published) throw new Error("page reported a final status before globalThis.playground was ready");
   return page.textContent("#status");
 }
 

@@ -59,6 +59,9 @@ for (const [name, source] of Object.entries(examples)) await fs.writeFile(`${HOM
 // ---------- bun.wasm ----------
 
 let wasm: { module: WebAssembly.Module; size: number } | { error: string } | null = null;
+// The final status waits for the page to finish setting up, so "ready" means usable.
+let pageSetUp!: () => void;
+const pageReady = new Promise<void>((resolve) => { pageSetUp = resolve; });
 const wasmReady = loadWasm();
 
 function setStatus(text: string, kind: "" | "ok" | "error" = ""): void {
@@ -70,6 +73,7 @@ async function loadWasm(): Promise<void> {
   try {
     const loaded = await fetchWasm(wasmUrl, (text) => setStatus(text));
     wasm = loaded;
+    await pageReady;
     setStatus(`bun.wasm ready · ${engineName} · ${mb(loaded.size)}`, "ok");
   } catch (err) {
     const missing = err instanceof WasmMissing;
@@ -77,6 +81,7 @@ async function loadWasm(): Promise<void> {
       ? `${wasmUrl} is not in this build. Build it with ${engines[engine].script} (dist/${engines[engine].wasm}), then rebuild web/.`
       : `could not load bun.wasm: ${String(err)}`;
     wasm = { error };
+    await pageReady;
     setStatus(missing ? "bun.wasm missing" : "bun.wasm failed to load", "error");
   }
 }
@@ -388,3 +393,4 @@ shell.start([
 ]);
 
 Object.assign(globalThis, { playground: { fs, shell, term, editor, previews } });
+pageSetUp();
