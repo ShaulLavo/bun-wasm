@@ -227,7 +227,7 @@ test command still fails, with these first blockers:
 | Browser engine | Import-method linker syntax error | Same linker error, `SyntaxError: Unexpected token '.'` |
 
 QuickJS and JSC now reach the same Vite builtin boundary described in the
-[Rollup rerun](#rollup-distribution-rerun-2026-10-16). Vite's config module
+[Rollup rerun](#rollup-distribution-rerun-2026-10-16). Vite 7.3.7's `dist/node/chunks/config.js:20578`
 selects `import.meta.require("ws").WebSocketServer` when `process.versions.bun`
 is set. This requires the real Bun WebSocket server adapter and is assigned to
 the separate WebSocket track. No package was injected into the app fixture to
