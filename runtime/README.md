@@ -27,6 +27,9 @@ on that result, revalidating it against concurrent path changes. Reads and
 writes return byte counts or negative WASI errno, like streams; failures
 do not advance the shared cursor. Resize and timestamp updates return zero or positive WASI errno.
 Path operations use positive errno (creation wraps errors to distinguish them from handles).
+`append` selects EOF and writes the complete iovec atomically, returning both committed bytes and
+the resulting description offset. `create` carries exclusivity so competing nonexclusive creators
+open the same current entry instead of replacing it or failing spuriously.
 `readdir` produces one entry list per call. The blocking worker adapter implements this interface
 with `Atomics.wait`, without changing preview1.
 
@@ -58,8 +61,12 @@ caches are bounded and validated by the shared mutation epoch; writes always com
 service before returning. Preopens and open descriptions retain handles; transient path pins
 are bounded and evicting them invalidates cached paths.
 
-Connections carry their own revocation word and every ancestor's word. The page revokes a killed
-guest, sweeps the service and terminates it; no service operation waits for a guest acknowledgment.
+Connections carry their own revocation word and every ancestor's word, plus a shared ancestry
+wake signal. Blocking waits recheck revocation after a signal change; asynchronous values use
+one `Atomics.waitAsync` watcher per active client alongside ordinary port notifications. The page
+revokes a killed guest, sweeps the service and terminates it; no service operation waits for a
+guest acknowledgment. A filesystem-worker error revokes the root and wakes all descendants,
+so an absent completion message cannot strand a guest or page startup.
 When a blocked guest spawns a child, it creates only a `FilesystemIdentity`. The runnable page
 uses `connectFilesystemIdentity` to create the MessageChannel and attach the service endpoint,
 then transfers the client endpoint to the child. Creating a new channel in a blocked guest

@@ -404,3 +404,81 @@ test("concurrent async overflow consumers share one transfer instead of draining
   expect(service.resources().responses).toBe(0);
   expect(client.completions.size).toBe(0);
 });
+
+test("resolve protects both returned capabilities from eviction when an old hard link gains a new parent", async () => {
+  const backend = new TrackingBackend();
+  backend.fs.writeFile("/source", "linked");
+  backend.fs.mkdirp("/new-parent");
+  const treeRoot = backend.fs.preopen("/");
+  const from = backend.fs.resolve(treeRoot, "source");
+  const to = backend.fs.resolve(treeRoot, "new-parent/link");
+  if (typeof from === "number" || typeof to === "number") throw new Error("invalid link fixture");
+  expect(backend.fs.link(from, to)).toBe(0);
+  const { client, service } = fixture(backend);
+  const root = await client.asyncCall("preopen", ["/"]);
+  const original = await client.asyncCall("resolve", [root, "source"]);
+  for (let i = 0; i < 255; i++) {
+    await client.asyncCall("writeFile", [`/filler-${i}`], new Uint8Array([i]));
+    await client.asyncCall("resolve", [root, `filler-${i}`]);
+  }
+  expect(service.resources().transient).toBe(256);
+  const linked = await client.asyncCall("resolve", [root, "new-parent/link"]);
+  expect(linked.node).toBe(original.node);
+  expect(text(await client.asyncCall("read", [linked.node, 8, 0]))).toBe("linked");
+  expect((await client.asyncCall("stat", [linked.parent])).kind).toBe("directory");
+  expect(service.resources().transient).toBe(256);
+  expect(service.resources().retained).toBe(backend.pinCount);
+});
+
+test("a cached read rejected by the epoch check does not modify guest bytes beyond the final EOF", async () => {
+  const { client } = fixture();
+  await client.asyncCall("writeFile", ["/cached"], encode("oldbytes"));
+  const worker = guestWorker();
+  const connection = client.fork();
+  let result = nextMessage(worker);
+  worker.postMessage({ scenario: "cache", connection }, [connection.port]);
+  expect((await result).count).toBe(8);
+  result = nextMessage(worker);
+  worker.postMessage({ scenario: "race-truncate" });
+  expect(await result).toEqual({ count: 0, bytes: Array(8).fill(77) });
+});
+
+async function dedicatedService() {
+  const worker = new Worker(new URL("./fixtures/filesystem-service.ts", import.meta.url).href);
+  cleanups.push(() => worker.terminate());
+  const connection = createFilesystemConnection();
+  const client = new FilesystemClient(connection.client);
+  cleanups.push(() => client.dispose());
+  const connected = nextMessage(worker);
+  worker.postMessage({ connect: connection.server }, [connection.server.port]);
+  expect(await connected).toEqual({ connected: true });
+  return { worker, client };
+}
+
+test("root revocation wakes a descendant blocked in wait after the actual filesystem worker dies", async () => {
+  const service = await dedicatedService();
+  const guest = guestWorker();
+  const connection = service.client.fork();
+  const inflight = nextMessage(service.worker);
+  const finished = nextMessage(guest);
+  guest.postMessage({ scenario: "service-crash", connection }, [connection.port]);
+  expect(await inflight).toEqual({ inflight: true });
+  await service.worker.terminate();
+  // The controller knows only the root identity, not the descendant's pending request buffer.
+  service.client.dispose();
+  expect(await finished).toEqual({ errno: 11 });
+});
+
+test("root revocation cancels descendant async values after the filesystem worker dies without a completion message", async () => {
+  const service = await dedicatedService();
+  const child = new FilesystemClient(service.client.fork());
+  cleanups.push(() => child.dispose());
+  const inflight = nextMessage(service.worker);
+  const finished = child.asyncCall("readFile", ["/blocked"]).catch(error => error);
+  expect(await inflight).toEqual({ inflight: true });
+  await service.worker.terminate();
+  service.client.dispose();
+  expect(await finished).toMatchObject({ errno: 11 });
+  expect(child.completions.size).toBe(0);
+  expect(() => child.fork()).toThrow("filesystem errno 11");
+});

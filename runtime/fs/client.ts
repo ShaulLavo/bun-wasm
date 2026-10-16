@@ -1,6 +1,10 @@
 import type { FileSystem, FileHandle, FileStat, DirectoryEntry, ResolvedPath } from "../core";
 import { HEADER, PAGE, State, FilesystemError, createFilesystemConnection, errno, isRevoked, pack, revokeFilesystem, unpack, wake, type FilesystemConnection } from "./protocol";
 
+const asyncAtomics = Atomics as typeof Atomics & {
+  waitAsync(array: Int32Array, index: number, value: number): { async: boolean; value: string | Promise<string> };
+};
+
 export class FilesystemCompletion {
   readonly cells: Int32Array;
   private changed: (() => void)[] = [];
@@ -9,7 +13,7 @@ export class FilesystemCompletion {
   private loading?: Promise<unknown>;
   private consumed = false;
   constructor(readonly id: number, readonly buffer: SharedArrayBuffer, private client: FilesystemClient) { this.cells = new Int32Array(buffer, 0, HEADER / 4); }
-  get ready(): boolean { return Atomics.load(this.cells, 0) !== State.Pending; }
+  get ready(): boolean { return isRevoked(this.client.connection) || Atomics.load(this.cells, 0) !== State.Pending; }
   get epoch(): number { return this.cells[5]!; }
   notify(): void { for (const done of this.changed.splice(0)) done(); }
   cancel(): void {
@@ -28,6 +32,7 @@ export class FilesystemCompletion {
     if (!this.consumed) this.cancel();
     else this.client.connection.port.postMessage({ discard: this.id });
     this.client.completions.delete(this.id);
+    if (!this.client.completions.size) wake(this.client.connection);
   }
   private check(): void {
     if (isRevoked(this.client.connection) || this.cells[6] || this.cells[0] === State.Cancelled) throw new FilesystemError(11);
@@ -35,7 +40,12 @@ export class FilesystemCompletion {
   }
   private decode(bytes: Uint8Array): unknown { return this.cells[4] ? bytes : unpack(bytes); }
   wait(): any {
-    while (!this.ready) Atomics.wait(this.cells, 0, State.Pending);
+    const signal = new Int32Array(this.client.connection.signal);
+    while (!this.ready) {
+      const observed = Atomics.load(signal, 0);
+      this.check();
+      if (!this.ready) Atomics.wait(signal, 0, observed);
+    }
     this.check();
     if (this.consumed) return this.decoded;
     const size = this.cells[2]!;
@@ -51,6 +61,7 @@ export class FilesystemCompletion {
   async value(): Promise<any> {
     if (!this.ready) await new Promise<void>(resolve => {
       this.changed.push(resolve);
+      this.client.watchRevocation();
       // The response may have arrived between the check and registration.
       if (this.ready) this.notify();
     });
@@ -92,11 +103,35 @@ export class FilesystemClient implements FileSystem {
   private reads = new Map<number, { offset: number; bytes: Uint8Array; epoch: number }>();
   private stats = new Map<number, { stat: FileStat; epoch: number }>();
   private paths = new Map<string, { path: ResolvedPath | number; epoch: number }>();
+  private watchingRevocation = false;
   constructor(readonly connection: FilesystemConnection) {
     connection.port.onmessage = ({ data }) => this.completions.get(data.completed)?.notify();
     connection.port.start();
   }
+  /** A single shared-signal waiter handles service death without a port completion message.
+   * Normal replies still use the port; the watcher exits when the last completion is released.
+   */
+  watchRevocation(): void {
+    if (this.watchingRevocation) return;
+    this.watchingRevocation = true;
+    void this.monitorRevocation();
+  }
+  private async monitorRevocation(): Promise<void> {
+    const signal = new Int32Array(this.connection.signal);
+    try {
+      while (this.completions.size) {
+        const observed = Atomics.load(signal, 0);
+        if (isRevoked(this.connection)) {
+          for (const completion of this.completions.values()) completion.cancel();
+          return;
+        }
+        const waiting = asyncAtomics.waitAsync(signal, 0, observed);
+        if (waiting.async) await waiting.value;
+      }
+    } finally { this.watchingRevocation = false; }
+  }
   fork(): FilesystemConnection {
+    if (isRevoked(this.connection)) throw new FilesystemError(11);
     const connection = createFilesystemConnection(this.connection);
     this.connection.port.postMessage({ connect: connection.server }, [connection.server.port]);
     return connection.client;
@@ -185,8 +220,9 @@ export class FilesystemClient implements FileSystem {
           }
           const start = position - cached.offset;
           const count = Math.min(chunk.length - at, cached.bytes.length - start);
-          chunk.set(cached.bytes.subarray(start, start + count), at);
           if (this.version() !== cached.epoch) continue;
+          // A rejected cache entry must not write speculative bytes past the final short read.
+          chunk.set(cached.bytes.subarray(start, start + count), at);
           at += count; total += count;
           if (!count || cached.bytes.length < PAGE && start + count === cached.bytes.length) return total;
         }
@@ -201,6 +237,15 @@ export class FilesystemClient implements FileSystem {
       return total;
     } catch (error) { return total || -errno(error); }
   }
+  append(handle: FileHandle, chunks: readonly Uint8Array[]): { written: number; offset: number } | number {
+    try {
+      const data = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+      let at = 0;
+      for (const chunk of chunks) { data.set(chunk, at); at += chunk.length; }
+      // The entire iovec is one service operation so sibling appends cannot interleave its pages.
+      return this.call("append", [handle], data);
+    } catch (error) { return -errno(error); }
+  }
   resize(handle: FileHandle, size: number, truncate: boolean): number {
     try { return this.call("resize", [handle, size, truncate]); } catch (error) { return errno(error); }
   }
@@ -208,8 +253,8 @@ export class FilesystemClient implements FileSystem {
     try { return this.call("setMtime", [handle, mtime]); } catch (error) { return errno(error); }
   }
   readdir(handle: FileHandle): DirectoryEntry[] { return this.call("readdir", [handle]); }
-  create(path: ResolvedPath, kind: "file" | "directory"): FileHandle | { error: number } {
-    try { return this.call("create", [path, kind]); } catch (error) { return { error: errno(error) }; }
+  create(path: ResolvedPath, kind: "file" | "directory", exclusive = true): FileHandle | { error: number } {
+    try { return this.call("create", [path, kind, exclusive]); } catch (error) { return { error: errno(error) }; }
   }
   link(from: ResolvedPath, to: ResolvedPath): number { try { return this.call("link", [from, to]); } catch (error) { return errno(error); } }
   removePath(path: ResolvedPath, directory: boolean): number { try { return this.call("removePath", [path, directory]); } catch (error) { return errno(error); } }

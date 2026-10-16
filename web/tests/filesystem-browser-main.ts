@@ -37,7 +37,23 @@ try {
   const result = await run.done;
   if (result.error) throw new Error(result.error);
   equal(result.code, 0, "real run worker exit");
-  Object.assign(globalThis, { filesystemResult: { ok: true, checks: 8 } });
+  // Use a genuinely failing worker module, not a synthetic error event. Only worker creation
+  // is routed; the production controller's error handling and SAB cancellation run unchanged.
+  const NativeWorker = globalThis.Worker;
+  let failed: SharedFilesystem | undefined;
+  try {
+    globalThis.Worker = class extends NativeWorker {
+      constructor(_url: string | URL, options?: WorkerOptions) { super("./filesystem-browser-failure.js", options); }
+    };
+    failed = new SharedFilesystem();
+  } finally { globalThis.Worker = NativeWorker; }
+  try {
+    const error = await failed!.mkdirp("/startup").then(() => undefined, error => error);
+    if (!(error instanceof Error)) throw new Error("worker load failure did not reject startup");
+    const flushed = await failed!.flush().then(() => undefined, error => error);
+    if (!(flushed instanceof Error) || !flushed.message.includes("Filesystem worker failed")) throw new Error("worker load failure not surfaced");
+  } finally { failed?.dispose(); }
+  Object.assign(globalThis, { filesystemResult: { ok: true, checks: 9 } });
 } catch (error) {
   Object.assign(globalThis, { filesystemResult: { error: error instanceof Error ? error.stack : String(error) } });
 } finally { fs.dispose(); }

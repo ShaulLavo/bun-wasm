@@ -22,7 +22,8 @@ export type FilesystemIdentity = Omit<FilesystemConnection, "port">;
 export function createFilesystemIdentity(parent?: FilesystemIdentity): FilesystemIdentity {
   return {
     epoch: parent?.epoch ?? new SharedArrayBuffer(4),
-    signal: new SharedArrayBuffer(4),
+    // Every descendant waits here too, so root revocation can wake blocked guests after a crash.
+    signal: parent?.signal ?? new SharedArrayBuffer(4),
     revocations: [new SharedArrayBuffer(4)].concat(parent?.revocations ?? []),
   };
 }

@@ -196,6 +196,11 @@ export class MemFS implements FileSystem {
     node.mtime = Date.now();
     return pos - offset;
   }
+  append(handle: FileHandle, chunks: readonly Uint8Array[]): { written: number; offset: number } | number {
+    const offset = (this.node(handle) as FileNode).data.length;
+    const written = this.write(handle, chunks, offset);
+    return written < 0 ? written : { written, offset: offset + written };
+  }
   resize(handle: FileHandle, size: number, truncate: boolean): number {
     const node = this.node(handle) as FileNode;
     if (truncate && size < node.data.length) node.data = node.data.slice(0, size);
@@ -218,9 +223,11 @@ export class MemFS implements FileSystem {
     const parent = this.directory(path.parent);
     return this.removedDirectories.has(parent) ? 44 : parent;
   }
-  create(path: ResolvedPath, kind: "file" | "directory"): FileHandle | { error: number } {
+  create(path: ResolvedPath, kind: "file" | "directory", exclusive = true): FileHandle | { error: number } {
     const parent = this.parentOf(path);
     if (typeof parent === "number") return { error: parent };
+    const existing = parent.children.get(path.name);
+    if (existing) return !exclusive && kind === "file" ? this.handle(existing) : { error: 20 };
     const node = kind === "file" ? newFile() : newDir();
     parent.children.set(path.name, node);
     parent.mtime = Date.now();

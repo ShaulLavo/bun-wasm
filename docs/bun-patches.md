@@ -93,7 +93,12 @@ memory backend moves the local MemFS implementation from `web/src/fs.ts` at `53a
 there is no copied upstream implementation. The OPFS spike informed the scheduling choice,
 not the implementation. One worker allocates inodes, owns open identities and services all
 guests. Ancestor revocation cancels requests and releases each guest's references; bounded
-read/stat caches use a shared mutation epoch. Copy-at-spawn and merge-at-exit are removed.
+read/stat caches use a shared mutation epoch. Atomic append selects EOF and writes the whole
+request in the service; conditional creation carries the caller's exclusivity intent. Transient
+result handles are pinned together before eviction, and rejected cache reads do not touch guest
+buffers. Shared ancestor wakeups also cancel blocked and asynchronous guests if the filesystem
+worker fails. The sandbox's original network adapters send notification-only file-change events
+after a shared-FS save, rather than replaying its old bytes. Copy-at-spawn and merge-at-exit are removed.
 Path walking and geometric file growth remain local MemFS details. Bun's
 reserved socket slot bridge stays configured by `web/`, not imported into the generic core.
 Unbundled Node host adapters import the extracted JavaScript memory helper by repository-relative

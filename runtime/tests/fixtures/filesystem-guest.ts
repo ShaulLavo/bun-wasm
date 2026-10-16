@@ -16,6 +16,23 @@ self.onmessage = async event => {
     self.postMessage(snapshot(input.offset, input.length));
     return;
   }
+  if ("scenario" in input && input.scenario === "race-truncate") {
+    if (!cached) throw new Error("cache fixture is not initialized");
+    const { fs, handle } = cached;
+    const internal = fs as unknown as { version(): number };
+    const original = internal.version;
+    let versions = 0;
+    internal.version = () => {
+      if (++versions === 2 && fs.resize(handle, 0, true) !== 0) throw new Error("truncate failed");
+      return original.call(fs);
+    };
+    try {
+      const bytes = new Uint8Array(8).fill(77);
+      const count = fs.read(handle, [bytes], 0);
+      self.postMessage({ count, bytes: Array.from(bytes) });
+    } finally { internal.version = original; }
+    return;
+  }
   if ("scenario" in input && input.scenario === "churn") {
     if (!cached) throw new Error("cache fixture is not initialized");
     for (let i = 0; i < 300; i++) cached.fs.call("resolve", [cached.root, `transient-${i}`]);
@@ -23,6 +40,12 @@ self.onmessage = async event => {
     return;
   }
   const fs = new FilesystemClient("scenario" in input ? input.connection : input);
+  if ("scenario" in input && input.scenario === "service-crash") {
+    try { fs.call("readFile", ["/blocked"]); self.postMessage({ unexpectedCompletion: true }); }
+    catch (error) { self.postMessage({ errno: (error as { errno: number }).errno }); }
+    finally { fs.dispose(); }
+    return;
+  }
   if ("scenario" in input && (input.scenario === "cache" || input.scenario === "path-cache")) {
     const root = fs.preopen("/");
     fs.retain(root);

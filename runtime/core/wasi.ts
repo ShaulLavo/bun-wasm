@@ -281,10 +281,15 @@ export class Wasi {
 
   private writeOut(file: Extract<Resource, { kind: "file" }>, iovs: number, count: number, at: number | null): number {
     if (count === 0) return 0;
-    // Append metadata can reenter and grow memory; build guest ranges only after it returns.
-    const pos = at ?? (file.append ? this.opts.fs.stat(file.handle).size : file.offset);
     const chunks = this.iovecs(iovs, count);
     if (chunks.every(chunk => chunk.length === 0)) return 0;
+    if (at === null && file.append) {
+      const result = this.opts.fs.append(file.handle, chunks);
+      if (typeof result === "number") return result;
+      file.offset = result.offset;
+      return result.written;
+    }
+    const pos = at ?? file.offset;
     const written = this.opts.fs.write(file.handle, chunks, pos);
     if (written >= 0 && at === null) file.offset = pos + written;
     return written;
@@ -563,7 +568,7 @@ export class Wasi {
         if (node === undefined) {
           if (!(oflags & O_CREAT) || path.trailingSlash) return ENOENT;
           if (oflags & O_DIRECTORY) return EINVAL;
-          const result = this.opts.fs.create(path, "file");
+          const result = this.opts.fs.create(path, "file", (oflags & O_EXCL) !== 0);
           if (typeof result !== "number") return result.error;
           node = result;
         }

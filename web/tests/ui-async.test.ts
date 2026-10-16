@@ -129,21 +129,21 @@ test("sandbox HMR notifications stay ordered and stale replies do not replace th
   const source = await Bun.file(new URL("../../sandbox/src/main.ts", import.meta.url)).text();
   const code = source.slice(source.indexOf("async function sendUpdate("), source.indexOf("async function save("));
   const first = deferred<void>();
-  const sent: string[] = [];
+  const sent: string[][] = [];
   const statuses: string[] = [];
   const server = {
     updates: Promise.resolve(),
-    helper: { changeFile(_path: string, text: string) { sent.push(text); return text === "older" ? first.promise : Promise.resolve(); } },
+    helper: { notifyFileChanged(...args: string[]) { sent.push(args); return sent.length === 1 ? first.promise : Promise.resolve(); } },
   };
   const sendUpdate = new Function("server", "abs", "setSaveState", `${transpiler.transformSync(`let editRevision = 2; ${code}`)}; return sendUpdate;`)(server, (path: string) => path, (text: string) => statuses.push(text));
-  const older = sendUpdate("file.ts", "older", 1);
-  const newer = sendUpdate("file.ts", "newer", 2);
+  const older = sendUpdate("file.ts", 1);
+  const newer = sendUpdate("file.ts", 2);
   await Promise.resolve();
-  expect(sent).toEqual(["older"]);
+  expect(sent).toEqual([["file.ts"]]);
   expect(statuses).toEqual([]);
   first.resolve();
   await Promise.all([older, newer]);
-  expect(sent).toEqual(["older", "newer"]);
+  expect(sent).toEqual([["file.ts"], ["file.ts"]]);
   expect(statuses).toEqual(["saved"]);
 });
 

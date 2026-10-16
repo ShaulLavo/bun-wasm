@@ -1,7 +1,7 @@
 import { MemoryBackend, type FilesystemBackend } from "./backend";
 import { HEADER, State, FilesystemError, errno, isRevoked, pack, unpack, wake, type FilesystemConnection, type RequestMessage } from "./protocol";
 
-const mutations = new Set(["preopen", "write", "resize", "setMtime", "create", "link", "removePath", "rename", "writeFile", "mkdirp", "remove", "move"]);
+const mutations = new Set(["preopen", "write", "append", "resize", "setMtime", "create", "link", "removePath", "rename", "writeFile", "mkdirp", "remove", "move"]);
 const TRANSIENT_HANDLES = 256;
 interface Session {
   connection: FilesystemConnection;
@@ -45,6 +45,8 @@ export class FilesystemService {
       session.transient.delete(handle);
       session.transient.set(handle, true);
     }
+  }
+  private trim(session: Session): void {
     if (session.transient.size <= TRANSIENT_HANDLES) return;
     // Eviction changes capability validity, even for a read-only resolve. Invalidate client path
     // caches before releasing the pin; an enclosing mutation already owns the odd epoch.
@@ -74,7 +76,7 @@ export class FilesystemService {
       if (b + c >= response.length) session.responses.delete(a);
       return part;
     }
-    if (["retain", "release", "stat", "read", "write", "resize", "setMtime", "readdir", "resolve"].includes(operation)) this.check(session, a);
+    if (["retain", "release", "stat", "read", "write", "append", "resize", "setMtime", "readdir", "resolve"].includes(operation)) this.check(session, a);
     if (["create", "link", "removePath", "rename"].includes(operation)) {
       this.check(session, a.parent); this.check(session, a.node);
       if (operation === "link" || operation === "rename") { this.check(session, b.parent); this.check(session, b.node); }
@@ -100,7 +102,10 @@ export class FilesystemService {
     const pending = session.pending.get(id);
     if (isRevoked(session.connection) || !this.sessions.has(session) || !pending || Atomics.load(new Int32Array(pending, 0, HEADER / 4), 6)) throw new FilesystemError(11);
     if (operation === "preopen" || operation === "create" && typeof result === "number") this.pin(session, result, operation === "preopen");
+    // Touch every returned identity before choosing an eviction victim: a new parent may point
+    // to a hard-linked node that was previously the oldest transient capability.
     if (operation === "resolve" && typeof result !== "number") { this.pin(session, result.parent); this.pin(session, result.node); }
+    this.trim(session);
     return result;
   }
   private async request(session: Session, id: number, buffer: SharedArrayBuffer): Promise<void> {

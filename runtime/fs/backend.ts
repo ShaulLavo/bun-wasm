@@ -39,10 +39,13 @@ export class MemoryBackend implements FilesystemBackend {
         return bytes.subarray(0, count);
       }
       case "write": this.check(a, "file"); return this.fs.write(a, [data], b);
+      case "append": this.check(a, "file"); return this.fs.append(a, [data]);
       case "resize": this.check(a, "file"); return this.fs.resize(a, b, c);
       case "setMtime": this.check(a); return this.fs.setMtime(a, b);
       case "readdir": this.check(a, "directory"); return this.fs.readdir(a);
-      case "create": this.path(a); if (a.node !== undefined) return { error: 20 }; return this.fs.create(a, b);
+      case "create":
+        if (a.parent !== undefined) this.check(a.parent, "directory");
+        return this.fs.create(a, b, c);
       case "link": this.path(a); this.path(b); return this.fs.link(a, b);
       case "removePath": this.path(a); return this.fs.removePath(a, b);
       case "rename": this.path(a); this.path(b); return this.fs.rename(a, b);

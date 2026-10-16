@@ -172,7 +172,7 @@ let server: Server | null = null;
 let serverRevision = 0;
 let editRevision = 0;
 /** Saved while the dev server was starting (before it listens): sent once it listens. */
-const unsent = new Map<string, { text: string; revision: number }>();
+const unsent = new Map<string, number>();
 
 function setServerState(state: "starting" | "up" | "down", text: string): void {
   serverDot.dataset.state = state;
@@ -236,7 +236,7 @@ async function startDevServer(): Promise<void> {
       server = { port, helper, updates: Promise.resolve() };
       measureStartup("dev-server", started);
       void showPreview(server, visibleStart).catch(reportError);
-      for (const [path, update] of unsent) void sendUpdate(path, update.text, update.revision);
+      for (const [path, revision] of unsent) void sendUpdate(path, revision);
       unsent.clear();
     },
     stopped: (port, helper) => {
@@ -328,12 +328,13 @@ async function showPreview(target: Server, visibleStart: number): Promise<void> 
   previewFrame.src = url;
 }
 
-async function sendUpdate(path: string, text: string, revision: number): Promise<void> {
+async function sendUpdate(path: string, revision: number): Promise<void> {
   const target = server;
   if (!target) return;
-  // Keep HMR notifications in save order too, not just the filesystem writes.
+  // The shared filesystem owns the bytes. Only wake HMR; replaying this save's
+  // contents through changeFile could roll back a newer write already committed there.
   const update = target.updates.then(async () => {
-    if (server === target) await target.helper.changeFile(abs(path), text);
+    if (server === target) await target.helper.notifyFileChanged(abs(path));
   });
   target.updates = update.catch(() => {});
   try {
@@ -349,8 +350,8 @@ async function sendUpdate(path: string, text: string, revision: number): Promise
 async function save(path: string, text: string, revision: number): Promise<void> {
   rememberEdit(path, text);
   await fs.writeFile(abs(path), text);
-  if (server) await sendUpdate(path, text, revision);
-  else if (run) unsent.set(path, { text, revision });
+  if (server) await sendUpdate(path, revision);
+  else if (run) unsent.set(path, revision);
   else if (revision === editRevision) setSaveState("saved", "ok");
 }
 
