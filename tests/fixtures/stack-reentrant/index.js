@@ -81,3 +81,19 @@ check("nested read survives formatter throw", () => {
   assert(nested.stack === fallback && calls === 1);
   assert(target.stack === "fresh" && calls === 2);
 });
+
+for (const lock of [Object.freeze, Object.seal]) {
+  check("self read then " + lock.name, () => {
+    let calls = 0;
+    const result = {};
+    Error.prepareStackTrace = error => {
+      assert(++calls < 5, "recursive formatter");
+      assert(typeof error.stack === "string");
+      lock(error);
+      return result;
+    };
+    const target = {};
+    Error.captureStackTrace(target);
+    assert(target.stack === result && target.stack === result && calls === 1);
+  });
+}

@@ -4,3 +4,5 @@ nested capture reentrant ok
 throw clears guard ok
 self read survives formatter throw ok
 nested read survives formatter throw ok
+self read then freeze ok
+self read then seal ok
