@@ -154,3 +154,30 @@ before the disposal call in `crates/bunwasm-runtime/src/js/spawn.js:228` and the
 signal state set by `kill()` at line 223. The child may already have settled;
 that cause remains unconfirmed. No sink code or provenance changed in the repeat.
 Keep this subprocess investigation separate from byte-sink behavior.
+
+## Framework blockers reached after esbuild
+
+The approved compatibility campaign now reaches the failures recorded in
+[the esbuild framework measurement](../docs/app-matrix/esbuild-results.md).
+Replay the exact pinned projects with `scripts/app-matrix.sh`; its command,
+integration revisions, versions, artifact hashes, and log destination are in
+that report. Do not file GitHub issues for these follow-ups.
+
+The JSC React build needs a bounded engine investigation. It transforms 22
+modules before the esbuild child traps in `JSC::JSLock::unlock` through
+`JSObjectSetProperty` and `crates/bunwasm-runtime/src/engine_jsc.rs:232`.
+`vite-react-jsc-build.log` preserves the complete wasm stack and the subsequent
+`[vite:esbuild-transpile] The service was stopped` message. This has one observed
+matrix failure, not a measured recurrence rate. The smaller official esbuild API
+fixture passes on JSC, so a basic missing WebAssembly API is ruled out. Native
+value lifetime, lock accounting, and GC during recursive value conversion remain
+hypotheses; reproduce before changing the bridge.
+
+The other exact first blockers are Astro's unresolved circular `Fragment`
+binding on QuickJS, its missing `node:http2.Http2ServerResponse` export on JSC,
+SvelteKit's unsupported `fs.watch` during dev, silent exit 1 during SvelteKit
+builds on QuickJS and JSC, and the browser engine's unexpected-dot syntax error.
+The six Vite dev rows on QuickJS and JSC have empty logs and no captured exit
+code. Add exit/deadline provenance to the server measurement before assigning
+those rows a cause. Preserve the passing Vite production-build controls while
+investigating each failure.
