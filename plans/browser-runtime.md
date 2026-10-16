@@ -6,7 +6,7 @@ Status: Approved (owner, 2026-10-16)
 
 One reusable runtime for running WASM-compiled native programs in the browser. It grows out of
 bun-wasm's browser host (`web/src`) and serves bun.wasm, the shell and later programs. It
-provides processes, streaming pipes, a live shared filesystem on OPFS, networking and, later,
+provides processes, streaming pipes, a live shared persistent filesystem, networking and, later,
 threads.
 
 It is layered and pay-for-what-you-use. Bun light (`bun-browser.wasm`, user code on the host's JS
@@ -32,7 +32,7 @@ than it is today. The process layer loads on the first spawn.
   matters.
 - **One worker per process.** A supervisor stays responsive while guests block, so spawn, kill
   and Ctrl+C always work, including against CPU-bound guests (`Worker.terminate()`).
-- **One filesystem service on OPFS**, owned by one worker, reached synchronously from guest
+- **One filesystem service**, owned by one worker, reached synchronously from guest
   workers through shared memory. Writes are visible to every process when they complete. This
   replaces today's copy-at-spawn and merge-at-exit in both bun-wasm and brush-web.
 - **Storage backends are swappable.** The filesystem service talks to storage through a small
@@ -51,8 +51,8 @@ than it is today. The process layer loads on the first spawn.
   three such loops running past 5 s in 15 of 15 trials, while loops that call the host stopped at
   once. So a shared interrupt word that guests check is the required stop, not an optimization:
   our own programs (bun.wasm, the shell) check it, and third-party WASM gets interrupt checks
-  injected at loop headers when it is loaded. `terminate()` stays as the backstop. Revocation wakes blocked peers at once (EOF in
-  about 0.06 ms, EPIPE in about 0.3 ms), so pipelines never wait on a dying worker. The supervisor
+  injected at loop headers when it is loaded. `terminate()` stays as the backstop. Revocation
+  wakes blocked peers at once (EOF in about 0.06 ms, EPIPE in about 0.3 ms), so pipelines never wait on a dying worker. The supervisor
   bumps a generation number on the dead process's descriptors so its late writes are ignored; that
   revocation is the correctness boundary. A guest that stops cooperatively acknowledges its exit;
   for an uncooperative kill the browser gives no teardown signal, and silence isn't proof (a guest
@@ -66,7 +66,7 @@ than it is today. The process layer loads on the first spawn.
 | Layer | Contents | Loaded by |
 |---|---|---|
 | core | WASI preview1 host, descriptor table, memory views, clocks, random | everything |
-| fs | OPFS filesystem service and its client | everything that touches files |
+| fs | Filesystem service (memory first, IndexedDB or OPFS backend) and its client | everything that touches files |
 | net | Fetch bridge, virtual TCP namespace shared across processes, preview ingress | programs that use the network |
 | proc | Supervisor, worker pool, process table, pipes, IPC channel, kill and job control | first spawn |
 | threads | `wasi-threads` adapter (later) | threaded programs |
@@ -77,25 +77,25 @@ the install cache, `runner.ts`.
 
 ## Steps
 
-### 0. Spikes (now)
+### 0. Spikes (done, 2026-10-16)
 
-Measure before building. Each spike writes a report to `/work/reports/browser-runtime/spikes/` and
-keeps prototype code in `/work/tmp/bun-wasm-spike-*`. No product code changes.
+Reports in `/work/reports/browser-runtime/spikes/`: `1-size-startup.md`, `2-processes-pipes.md`,
+`3-opfs-fs.md`, `4-wasi-host-shell.md`. What they settled:
 
-1. **Size and startup.** What each layer weighs today (bytes, gzipped), what bun light loads and
-   what it spends its startup time on. Target budgets per layer.
-2. **Processes and pipes.** Spawn latency cold, with one compiled `WebAssembly.Module` shared by
-   every worker, and with a warm worker pool. Pipe throughput and latency worker-to-worker over
-   shared memory against relaying through the supervisor. Killing a CPU-bound worker and waking
-   blocked readers. A Node-style IPC channel's cost.
-3. **OPFS filesystem.** A sync-access-handle pool for a dev workload (a `node_modules` tree of
-   about 10,000 small files): create, open, read, stat, readdir, rename, unlink. Round-trip cost
-   from a blocked guest worker to the filesystem worker. Metadata persistence and recovery.
-   Handle limits. Chromium, Firefox, WebKit, and Safari on the owner's Mac.
-4. **One WASI host and the shell.** Benchmark bun-wasm's `web/src/wasi.ts` against brush-web's
-   `browser_wasi_shim` host on Brush and bun.wasm system-call paths (brush-web plan 001 step 2).
-   Map what Brush needs from the runtime: process imports, concurrent pipelines, job control,
-   Ctrl+C, terminal modes.
+- **Size and startup.** Runtime JS for bun light is about 30-37 KiB gzipped and adds 10-30 ms at
+  startup; the 3.85 MB WASM and the demo UI (89% of the JS) dominate. Proc is imported and
+  constructed on every run today. Per-layer budgets: core 6 KiB, fs 6 KiB, net 14 KiB, proc
+  8 KiB gzipped, zero proc bytes before the first spawn.
+- **Processes and pipes.** Sharing one compiled module cuts bun.wasm spawn from 57-76 ms to
+  23-32 ms; a 1-2 worker idle pool saves a few more ms at 2-3 MiB per worker; a finished bun
+  instance costs 7-27 MiB, so none are kept. bun-wasm's existing `SharedPipe` is as fast as a new
+  ring (3-9 GB/s) and lean on memory; it needs separate reader and writer ends. MessagePort is
+  fine for IPC. Termination findings are in the decisions above.
+- **Filesystem.** Per-file flushing, not files, made OPFS slow. IndexedDB batched writes and
+  packed OPFS work everywhere; simple per-file OPFS works with parallel writes and no per-file
+  flush but is slow in Firefox. Safari allows 253 open sync handles. Two backends from day one.
+- **WASI host.** bun-wasm's host beats brush-web's by 2-9x per call and 4.5-10% on whole
+  programs. It has nine correctness bugs to fix first (list in the spike 4 report).
 
 ### Process layer requirements from the shell
 
@@ -115,18 +115,70 @@ sections 7 and 8) maps its `ProcessHost` trait onto this layer. The process laye
 - broken pipe status: a child killed by SIGPIPE reports 141; a guest that handles EPIPE keeps its
   own status.
 
-The process ABI section of the build plan is written against this list, and the shell lane is
-told when it is settled.
+## Build plan
 
-### 1. Build plan
+### Where it lives
 
-bun-wasm has no CI today (no `.github/workflows`; PRs report no checks). The runtime package's
-first PR adds a GitHub Actions gate that runs its unit tests and headless browser tests on every
-PR, and every later runtime PR must pass it.
+A new `runtime/` directory in bun-wasm: a TypeScript package (`@bun-wasm/runtime`) with one entry
+per layer (`core`, `fs`, `net`, `proc`, `term`) so a bundler includes only what a page imports,
+and `proc` behind a dynamic `import()` made on the first spawn. Bun's adapter and executor stay in
+`web/`. brush-web and the own shell consume the package as a pinned copy, the way brush-web
+vendors `third-party/bun-wasm/` today, until the product repository exists. Every new file that
+adapts upstream code (brush-web's terminal discipline, SQLite's OPFS bridge pattern) gets its row
+in `docs/bun-patches.md`.
 
-Written from the spike results, with sizes and estimates per step, before any runtime code. It
-covers where the package lives, the order of extraction, and the migration of bun-wasm's
-playground and brush-web onto it.
+### Process ABI (for the shell lane)
+
+The service is a TypeScript interface; guests reach it through a WASM import module named
+`runtime_proc`. Bun keeps its slots, adapted onto the same service. All calls are non-blocking
+except `poll`.
+
+| Import | Signature | Meaning |
+|---|---|---|
+| `spawn` | `(desc_ptr, desc_len) -> pid` | `desc` is UTF-8 JSON: `executable`, `argv`, `env`, `cwd`, `job` (`"foreground"`, `"background"` or a job id), and `fds`: a list of `{fd, handle}` binding child descriptor numbers (0, 1, 2 and any higher) to handles the parent owns. Returns a pid or a negative errno. |
+| `pipe` | `(out_ptr) -> errno` | Creates a pipe; writes the read and write handles. |
+| `dup` | `(handle) -> handle` | Another reference to the same endpoint (for `2>&1` and inheritance). |
+| `close` | `(handle) -> errno` | Drops one reference; EOF reaches readers after the last writer reference closes, EPIPE reaches writers after the last reader reference closes. |
+| `read` | `(handle, buf, len) -> n` | `n > 0` bytes, `0` at EOF, `len == 0` returns 0 at once, `-EAGAIN` when empty. |
+| `write` | `(handle, buf, len) -> n` | Accepted bytes (partial writes allowed), `-EAGAIN` when full, `-EPIPE` when no reader. |
+| `wait` | `(pid, status_ptr) -> errno` | `-EAGAIN` while running; otherwise writes `{kind: exited or signaled, code}`. |
+| `kill` | `(pid_or_job, signal) -> errno` | `SIGINT`, `SIGTERM`, `SIGKILL`, `SIGPIPE`. Revokes at once; physical teardown follows. |
+| `poll` | `(subs_ptr, n, timeout_ms, out_ptr) -> n_ready` | Waits until any handle is readable or writable, any listed child exits, the interrupt word is set, or the timeout passes. The only call that blocks. |
+| `interrupted` | `() -> i32` | Reads and clears this process's interrupt word. Guests call it at checkpoints. Because it is a host call, it also lets `terminate()` stop the guest in Safari. |
+
+Exit statuses: `exited(code)`, or `signaled(sig)` reported to shells as 128 + sig (130 for SIGINT,
+141 for SIGPIPE, 143 for SIGTERM, 137 for SIGKILL). A guest that handles EPIPE and exits on its own
+keeps its own code. WASI preview1 programs use the same handles through ordinary fds: a spawned
+child's `fd_read(0)` blocks on its bound pipe, and `poll_oneoff` reports pipe readiness.
+
+Third-party preview1 programs get `interrupted` checks injected at loop headers when loaded
+(step 9); a check that sees the word set traps with exit status 130.
+
+### Steps
+
+Line counts include tests. Each step is one PR with an independent review; nothing merges without
+the CI gate.
+
+| # | Step | Estimate |
+|---|---|---:|
+| 1 | **Fix the WASI host bugs in place** (after PR #21 merges): the nine from spike 4, each with a failing test first, reusing spike 4's fixtures. Add the CI gate (GitHub Actions running `web/tests` and a headless browser smoke). | 600-900 |
+| 2 | **Package skeleton and core.** Create `runtime/`, move `wasi.ts`, `memory-views.js` and path helpers; put the WASI host behind a descriptor interface with file, directory, pipe and terminal kinds, so it no longer holds MemFS nodes; explicit import namespaces instead of ENOSYS stubs; `poll_oneoff` with real per-descriptor readiness. `web/` consumes it with no behaviour change. CI adds a bundle-size check against the budgets. | 1,500-2,200 |
+| 3 | **Filesystem service.** Filesystem worker owning an in-memory tree; synchronous calls from guest workers over SharedArrayBuffer; open-file identity across rename and unlink; background batched persistence; flush on `fsync`; backend interface with IndexedDB (default) and simple OPFS (lazy loading, bounded handle cache, per-browser create concurrency); checksummed metadata written beside the old copy then swapped; Web Locks for one writer tab. Editor writes go through it; delete copy-at-spawn and merge-at-exit. | 3,000-4,500 |
+| 4 | **Process layer.** Supervisor, process table, generic executable registry (module plus guest adapter per entry), shared compiled modules, lazy 1-2 worker pool, pipes built from `SharedPipe` with endpoint reference counts and readiness, interrupt words, kill with revocation and generation numbers, foreground and background jobs, exit statuses, MessagePort IPC for Node `fork()` and Bun `spawn({ipc})`, the `runtime_proc` imports above. Loaded on first spawn. | 2,000-3,000 |
+| 5 | **Terminal.** Terminal descriptor kind with a foreground owner; cooked mode (echo, line editing, Ctrl+D) ported from brush-web; raw mode passes Ctrl+C through as a byte; resize events. | 600-1,000 |
+| 6 | **Network.** One socket namespace shared by all processes (children get networking; loopback works across workers); fetch bridge; bounded connection writes; preview routing split from Bun's module-serving service worker, one registration; the preview client loads only when a preview opens. | 1,000-1,600 |
+| 7 | **Bun onto the runtime.** Bun's slots as an adapter over the services; remove the Bun-only spawn restrictions (`spawn.js:49-65`, `subprocess.js:170-179`) and engine inheritance; playground migrated; demo UI out of the runtime import graph; WebKit engine-cache retention fixed. Bun light must meet the budgets. | 1,000-1,500 |
+| 8 | **The shell on the runtime.** Owned by the shell track: its `ProcessHost` maps onto the process ABI. This track supplies the ABI, a preview1 test fixture, and the milestone's Playwright acceptance tests (`/work/reports/browser-shell-research/pipelines.acceptance.spec.ts`). | shell track |
+| 9 | **Interrupt injection for third-party WASM.** Spike first (a day): rewrite a module at load time to call `interrupted` at loop headers, measuring rewrite time and runtime overhead on a real program; then build it into the loader. | 800-1,500 |
+
+Total for this track: about 10,500-16,200 lines across eight PRs, plus the shell track's own
+work. Steps 2 and 3 can start in parallel once step 1 lands; step 4 depends on 2; 5, 6 and 7
+depend on 4; 9 can run any time after 2.
+
+### Before merging runtime PRs
+
+Pause the compatibility wave while the runtime PRs land in order, then resume it (owner,
+2026-10-16).
 
 ## First milestone acceptance
 
@@ -152,4 +204,5 @@ playground and brush-web onto it.
 
 - `/work/reports/browser-shell-research/browser-runtime.md`: prior art, browser support, coupling
   audit of `web/src`.
-- brush-web `plans/001-brush-dev-shell.md` and `docs/external-commands.md`.
+- brush-web `plans/001-brush-dev-shell.md`, `plans/004-own-shell.md` and `docs/external-commands.md`.
+- Spike reports: `/work/reports/browser-runtime/spikes/`.
