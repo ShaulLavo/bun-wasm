@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { apps } from "./apps.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
 import { failure, compareEngines, stageOutput } from "./classify.mjs";
-import { serverCommand } from "./browser.mjs";
+import { readGuest, serverCommand } from "./browser.mjs";
 
 test("playground server exit zero before HTTP assertion fails", async () => {
   const page = { evaluate: async (fn, text) => {
@@ -14,6 +14,17 @@ test("playground server exit zero before HTTP assertion fails", async () => {
   } };
   const result = await serverCommand({ page, context: { newPage() { throw new Error("Must not assert preview after exit"); } }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run server.ts\nuser@bun:~$" });
   expect(result).toMatchObject({ status: "fail", exit: 0 });
+});
+
+test("readGuest decodes the playground's asynchronous shared filesystem reads", async () => {
+  const files = new Map([["/home/user/dist/out.txt", new TextEncoder().encode("built")]]);
+  const previous = globalThis.playground;
+  globalThis.playground = { fs: { readFile: async path => files.get(path) } };
+  const page = { evaluate: async (fn, arg) => fn(arg) };
+  try {
+    expect(await readGuest(page, "dist/out.txt")).toBe("built");
+    expect(await readGuest(page, "missing.txt")).toBeNull();
+  } finally { globalThis.playground = previous; }
 });
 
 test("no-op launcher fails positive and negative tooling assertions and install", async () => {

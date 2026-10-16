@@ -36,7 +36,7 @@ class ReportTests(unittest.TestCase):
         opts = types.SimpleNamespace(engine="browser", suite=suite.ROOT, dependencies=suite.ROOT / ".unused-provenance-dependencies",
                                      network="host", timeout=1, test_timeout=1)
         sources = suite.provenance(opts, Path(__file__))["host_sources"]
-        for path in ["runtime/core/wasi.ts", "runtime/core/memory-views.js", "runtime/core/descriptors.ts", "runtime/core/filesystem.ts", "runtime/core/path.ts"]:
+        for path in ["runtime/core/wasi.ts", "runtime/core/memory-views.js", "runtime/core/descriptors.ts", "runtime/core/filesystem.ts", "runtime/core/path.ts", "runtime/fs/memory.ts", "runtime/fs/backend.ts", "runtime/fs/client.ts", "runtime/fs/service.ts", "runtime/fs/protocol.ts", "runtime/fs/index.ts"]:
             self.assertEqual(sources[path], suite.digest(suite.ROOT / path))
 
     def test_footer_overrides_compressed_repeated_lines(self):

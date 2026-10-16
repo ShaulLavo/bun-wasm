@@ -2,6 +2,7 @@
 // node sandbox/tests/startup-cache.mjs <url> [--engines browser,quickjs,jsc] [--browsers chromium,webkit]
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { firstVisit } from "../../web/tests/first-visit.mjs";
 import { playwright } from "../../web/tests/playground.mjs";
 
@@ -50,10 +51,10 @@ async function checkRestart(page) {
   assert.ok(entries.includes("bunwasm:deps-cached"), `Restart must restore the dependency bundle: ${JSON.stringify(entries)}`);
   assert.ok(!entries.includes("bunwasm:bundling-react"), "Restart must skip dependency bundling");
   await app.locator("button.counter").click();
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
     const { editor, fs } = globalThis.sandbox;
-    editor.open("src/App.tsx");
-    const source = new TextDecoder().decode(fs.readFile("/home/user/app/src/App.tsx"));
+    await editor.open("src/App.tsx");
+    const source = new TextDecoder().decode(await fs.readFile("/home/user/app/src/App.tsx"));
     editor.setText(source.replace("Hello from bun.wasm", "Cached dependencies with hot reload"));
   });
   await app.locator("h1", { hasText: "Cached dependencies with hot reload" }).waitFor({ timeout: TIMEOUT });
@@ -94,10 +95,10 @@ async function checkCorruption(page) {
 }
 
 async function checkEditedDependencies(page) {
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
     const { editor, fs } = globalThis.sandbox;
-    editor.open("package.json");
-    editor.setText(new TextDecoder().decode(fs.readFile("/home/user/app/package.json")) + "\n");
+    await editor.open("package.json");
+    editor.setText(new TextDecoder().decode(await fs.readFile("/home/user/app/package.json")) + "\n");
   });
   await page.waitForFunction(() => Object.hasOwn(JSON.parse(sessionStorage.getItem("bun-wasm-sandbox:edits:react") ?? "{}"), "package.json"));
   await clearPhases(page);
@@ -113,7 +114,7 @@ async function checkEditedDependencies(page) {
 }
 
 async function check(browserName, engine) {
-  const profile = mkdtempSync("/work/tmp/bun-wasm-startup-cache-");
+  const profile = mkdtempSync(join(process.env.BUN_WASM_TEST_TMP ?? "/work/tmp", "bun-wasm-startup-cache-"));
   let context;
   let visit;
   let closing;

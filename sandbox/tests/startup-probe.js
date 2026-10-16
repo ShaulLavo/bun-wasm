@@ -113,8 +113,8 @@
     if (playgroundStarted || !ui || !document.querySelector("#status")?.textContent?.startsWith("bun.wasm ready")) return;
     playgroundStarted = true;
     try {
-      ui.fs.writeFile("/home/user/ios-first-visit-a.ts", 'import { b } from "./ios-first-visit-b";\nexport function a(): string { return "IOS first visit ok"; }\nconsole.log(b());\n');
-      ui.fs.writeFile("/home/user/ios-first-visit-b.ts", 'import { a } from "./ios-first-visit-a";\nexport function b(): string { return a(); }\nconsole.log("cycle peer:", a());\n');
+      await ui.fs.writeFile("/home/user/ios-first-visit-a.ts", 'import { b } from "./ios-first-visit-b";\nexport function a(): string { return "IOS first visit ok"; }\nconsole.log(b());\n');
+      await ui.fs.writeFile("/home/user/ios-first-visit-b.ts", 'import { a } from "./ios-first-visit-a";\nexport function b(): string { return a(); }\nconsole.log("cycle peer:", a());\n');
       await ui.shell.submit("bun run ios-first-visit-a.ts");
       await new Promise((resolve) => ui.term.write("", resolve));
       stdout = terminalText(ui.term);
