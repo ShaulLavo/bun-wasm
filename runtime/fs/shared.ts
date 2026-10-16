@@ -1,20 +1,25 @@
 import type { FileHandle, FileStat } from "../core";
-import { PAGE, FilesystemError, isRevoked, SHARED_SEGMENT_BYTES, MAX_SHARED_SEGMENTS, DEFAULT_SHARED_MAX_BYTES, createSharedSegment, normalizeSharedMaxBytes, type GrowableSharedSegment } from "./protocol";
+import { PAGE, FilesystemError, isRevoked, SHARED_SEGMENT_BYTES, MAX_SHARED_SEGMENTS, DEFAULT_SHARED_MAX_BYTES, createSharedSegment, normalizeSharedMaxBytes, type FilesystemSection, type GrowableSharedSegment } from "./protocol";
 export { SHARED_SEGMENT_BYTES, DEFAULT_SHARED_MAX_BYTES } from "./protocol";
 
 const MAGIC = 0x42574653;
 const HEADER_WORDS = 16;
 const MAX_FILES = 4096;
-const MAX_FILE_PAGES = 256;
 const SEGMENT_PAGES = 256;
 const SEGMENT_BYTES = SEGMENT_PAGES * PAGE;
 const MAX_SEGMENTS = MAX_SHARED_SEGMENTS;
 const TOTAL_PAGES = SEGMENT_PAGES * MAX_SEGMENTS;
+const MAX_FILE_PAGES = TOTAL_PAGES;
+const TABLE_ENTRIES = 256;
+// A partial table per file plus enough full tables to address every storage page.
+const TABLE_BLOCKS = MAX_FILES + Math.ceil(TOTAL_PAGES / TABLE_ENTRIES);
 const SLOT_WORDS = 12;
 const PAGE_OWNER_OFFSET = HEADER_WORDS;
 const SLOT_OFFSET = PAGE_OWNER_OFFSET + TOTAL_PAGES;
 const PAGE_TABLE_OFFSET = SLOT_OFFSET + MAX_FILES * SLOT_WORDS;
-const DATA_OFFSET = (PAGE_TABLE_OFFSET + MAX_FILES * MAX_FILE_PAGES) * 4;
+const TABLE_OWNER_OFFSET = PAGE_TABLE_OFFSET + MAX_FILES * MAX_SEGMENTS;
+const TABLE_DATA_OFFSET = TABLE_OWNER_OFFSET + TABLE_BLOCKS;
+const DATA_OFFSET = (TABLE_DATA_OFFSET + TABLE_BLOCKS * TABLE_ENTRIES) * 4;
 const BUFFER_SIZE = DATA_OFFSET + SEGMENT_BYTES;
 const GLOBAL_LOCK = 1;
 const SERVICE_OWNER = 0x7fffffff;
@@ -60,13 +65,15 @@ export class SharedFilesystemState {
   readonly owners: Int32Array;
   readonly slots: Int32Array;
   readonly pages: Int32Array;
+  private readonly pageTables: Int32Array;
+  private readonly tableOwners: Int32Array;
   readonly segments: SharedArrayBuffer[];
   readonly pendingSegments: SharedSegment[] = [];
   private readonly firstBytes: Uint8Array;
   private readonly pageViews: (Uint8Array | undefined)[] = [];
   private serviceMutation = false;
   onContention?: () => void;
-  constructor(readonly buffer: SharedArrayBuffer = SharedFilesystemState.createBuffer(), maxBytes = DEFAULT_SHARED_MAX_BYTES, readonly lockOwner = SERVICE_OWNER, segments: readonly SharedArrayBuffer[] = []) {
+  constructor(readonly buffer: SharedArrayBuffer = SharedFilesystemState.createBuffer(), maxBytes = DEFAULT_SHARED_MAX_BYTES, readonly lockOwner = SERVICE_OWNER, segments: readonly SharedArrayBuffer[] = [], private readonly section?: FilesystemSection) {
     this.cells = new Int32Array(buffer, 0, HEADER_WORDS);
     if (Atomics.compareExchange(this.cells, 0, 0, MAGIC) === 0) {
       Atomics.store(this.cells, USED_PAGES, 0);
@@ -74,7 +81,9 @@ export class SharedFilesystemState {
     } else while (Atomics.load(this.cells, 0) !== MAGIC) { /* another connection initializes */ }
     this.owners = new Int32Array(buffer, PAGE_OWNER_OFFSET * 4, TOTAL_PAGES);
     this.slots = new Int32Array(buffer, SLOT_OFFSET * 4, MAX_FILES * SLOT_WORDS);
-    this.pages = new Int32Array(buffer, PAGE_TABLE_OFFSET * 4, MAX_FILES * MAX_FILE_PAGES);
+    this.pageTables = new Int32Array(buffer, PAGE_TABLE_OFFSET * 4, MAX_FILES * MAX_SEGMENTS);
+    this.tableOwners = new Int32Array(buffer, TABLE_OWNER_OFFSET * 4, TABLE_BLOCKS);
+    this.pages = new Int32Array(buffer, TABLE_DATA_OFFSET * 4, TABLE_BLOCKS * TABLE_ENTRIES);
     this.firstBytes = new Uint8Array(buffer, DATA_OFFSET, SEGMENT_BYTES);
     this.segments = [buffer].concat(segments);
   }
@@ -118,7 +127,28 @@ export class SharedFilesystemState {
     return slot;
   }
   private at(slot: number, field: number): number { return slot * SLOT_WORDS + field; }
-  private pageAt(slot: number, logical: number): number { return slot * MAX_FILE_PAGES + logical; }
+  private pageAt(slot: number, logical: number): number {
+    const block = Atomics.load(this.pageTables, slot * MAX_SEGMENTS + Math.floor(logical / TABLE_ENTRIES)) - 1;
+    return block * TABLE_ENTRIES + logical % TABLE_ENTRIES;
+  }
+  private reservePageTables(slot: number, needed: number): void {
+    for (let table = 0; table < Math.ceil(needed / TABLE_ENTRIES); table++) {
+      const index = slot * MAX_SEGMENTS + table;
+      if (Atomics.load(this.pageTables, index)) continue;
+      const block = this.tableOwners.indexOf(0);
+      if (block < 0) throw new FilesystemError(51, "shared filesystem page tables exhausted");
+      Atomics.store(this.tableOwners, block, slot);
+      Atomics.store(this.pageTables, index, block + 1);
+    }
+  }
+  private trimPageTables(slot: number, needed: number): void {
+    for (let table = Math.ceil(needed / TABLE_ENTRIES); table < MAX_SEGMENTS; table++) {
+      const block = Atomics.exchange(this.pageTables, slot * MAX_SEGMENTS + table, 0) - 1;
+      if (block < 0) continue;
+      this.pages.fill(0, block * TABLE_ENTRIES, (block + 1) * TABLE_ENTRIES);
+      Atomics.store(this.tableOwners, block, 0);
+    }
+  }
   /** The slot of a registered regular file, or 0. A live handle keeps its slot until it is freed. */
   fileSlot(handle: FileHandle): number { const slot = this.findSlot(handle); return slot !== 0 && Atomics.load(this.slots, this.at(slot, 0)) === 1 ? slot : 0; }
   hasFile(handle: FileHandle): boolean { const slot = this.findSlot(handle); return slot !== 0 && Atomics.load(this.slots, this.at(slot, 0)) === 1; }
@@ -133,21 +163,33 @@ export class SharedFilesystemState {
     }
   }
   private lock(index: number, revoked?: () => boolean, owner = this.lockOwner): void {
-    if (Atomics.compareExchange(this.slots, index, 0, owner) !== 0) this.contend(this.slots, index, revoked, owner);
-    if (!revoked?.()) return;
-    Atomics.compareExchange(this.slots, index, owner, 0);
-    throw new FilesystemError(11);
+    this.section?.enter();
+    try {
+      if (Atomics.compareExchange(this.slots, index, 0, owner) !== 0) this.contend(this.slots, index, revoked, owner);
+      if (!revoked?.()) return;
+      Atomics.compareExchange(this.slots, index, owner, 0);
+      throw new FilesystemError(11);
+    } catch (error) { this.section?.exit(); throw error; }
   }
-  private unlock(index: number, owner = this.lockOwner): void { Atomics.compareExchange(this.slots, index, owner, 0); }
+  private unlock(index: number, owner = this.lockOwner): void {
+    Atomics.compareExchange(this.slots, index, owner, 0);
+    this.section?.exit();
+  }
   private globalLock(revoked?: () => boolean, owner = this.lockOwner): void {
     if (this.serviceMutation && owner === SERVICE_OWNER) return;
-    if (Atomics.compareExchange(this.cells, GLOBAL_LOCK, 0, owner) !== 0) this.contend(this.cells, GLOBAL_LOCK, revoked, owner);
-    if (!revoked?.()) return;
-    Atomics.compareExchange(this.cells, GLOBAL_LOCK, owner, 0);
-    throw new FilesystemError(11);
+    this.section?.enter();
+    try {
+      if (Atomics.compareExchange(this.cells, GLOBAL_LOCK, 0, owner) !== 0) this.contend(this.cells, GLOBAL_LOCK, revoked, owner);
+      if (!revoked?.()) return;
+      Atomics.compareExchange(this.cells, GLOBAL_LOCK, owner, 0);
+      throw new FilesystemError(11);
+    } catch (error) { this.section?.exit(); throw error; }
   }
   private globalUnlock(owner = this.lockOwner): void {
-    if (!this.serviceMutation) Atomics.compareExchange(this.cells, GLOBAL_LOCK, owner, 0);
+    if (!this.serviceMutation) {
+      Atomics.compareExchange(this.cells, GLOBAL_LOCK, owner, 0);
+      this.section?.exit();
+    }
   }
   beginServiceMutation(epoch: Int32Array): void {
     this.globalLock();
@@ -193,6 +235,7 @@ export class SharedFilesystemState {
         Atomics.store(this.owners, physical, 0);
       }
       allocated.length = 0;
+      this.trimPageTables(slot, current);
     };
     const take = (count: number) => {
       for (let physical = 0; physical < Atomics.load(this.cells, 4) * SEGMENT_PAGES && allocated.length < count; physical++) {
@@ -202,14 +245,19 @@ export class SharedFilesystemState {
     };
     try {
       take(target - current);
-      if (allocated.length !== target - current && target !== needed) { rollback(); take(needed - current); }
+      if (allocated.length !== target - current && target !== needed) {
+        rollback();
+        take(needed - current);
+      }
       if (allocated.length !== needed - current && allocated.length !== target - current)
         throw new FilesystemError(51, "shared filesystem storage exhausted");
       // Finish potentially throwing initialization before publishing any page-table entries.
       for (const physical of allocated) this.segmentFor(physical).fill(0);
+      this.reservePageTables(slot, current + allocated.length);
       for (let i = 0; i < allocated.length; i++) Atomics.store(this.pages, this.pageAt(slot, current + i), allocated[i]! + 1);
       Atomics.store(this.slots, this.at(slot, CAPACITY), current + allocated.length);
       Atomics.add(this.cells, USED_PAGES, allocated.length);
+      this.trimPageTables(slot, current + allocated.length);
     } catch (error) {
       rollback();
       if (error instanceof RangeError) throw new FilesystemError(51, "shared filesystem segment allocation failed");
@@ -263,11 +311,13 @@ export class SharedFilesystemState {
    * same lock, so the copy is the file's content at one instant. */
   directRead(slot: number, handle: FileHandle, chunks: readonly Uint8Array[], offset: number, revoked: () => boolean, owner: number): number {
     const slots = this.slots, base = slot * SLOT_WORDS, lock = base + FILE_LOCK;
-    if (Atomics.compareExchange(slots, lock, 0, owner) !== 0) this.contend(slots, lock, revoked, owner);
+    this.section?.enter();
+    try { if (Atomics.compareExchange(slots, lock, 0, owner) !== 0) this.contend(slots, lock, revoked, owner); }
+    catch (error) { this.section?.exit(); throw error; }
     try {
       if (revoked()) throw new FilesystemError(11);
       if (slots[base + HANDLE] !== handle + 1) throw new FilesystemError(8);
-      const size = slots[base + FILE_SIZE]!, pages = this.pages, first = slot * MAX_FILE_PAGES;
+      const size = slots[base + FILE_SIZE]!, pages = this.pages;
       let position = offset;
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i]!, length = chunk.length;
@@ -275,24 +325,24 @@ export class SharedFilesystemState {
         while (at < length && position < size) {
           const inPage = position % PAGE;
           const count = Math.min(length - at, size - position, PAGE - inPage);
-          const page = this.segmentFor(pages[first + (position - inPage) / PAGE]! - 1);
+          const page = this.segmentFor(pages[this.pageAt(slot, (position - inPage) / PAGE)]! - 1);
           copyBytes.call(chunk, count === PAGE ? page : page.subarray(inPage, inPage + count), at);
           at += count; position += count;
         }
         if (at < length) break;
       }
       return position - offset;
-    } finally { Atomics.compareExchange(slots, lock, owner, 0); }
+    } finally { Atomics.compareExchange(slots, lock, owner, 0); this.section?.exit(); }
   }
   private copyChunks(slot: number, chunks: readonly Uint8Array[], offset: number): void {
-    const pages = this.pages, first = slot * MAX_FILE_PAGES;
+    const pages = this.pages;
     let position = offset;
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i]!, length = chunk.length;
       for (let at = 0; at < length;) {
         const inPage = position % PAGE;
         const count = Math.min(length - at, PAGE - inPage);
-        const page = this.segmentFor(pages[first + (position - inPage) / PAGE]! - 1);
+        const page = this.segmentFor(pages[this.pageAt(slot, (position - inPage) / PAGE)]! - 1);
         // A fixed-length source view never changes length; build sub-views without species lookup.
         page.set(count === length ? chunk : new Uint8Array(chunk.buffer, chunk.byteOffset + at, count), inPage);
         at += count; position += count;
@@ -305,7 +355,9 @@ export class SharedFilesystemState {
    * views; callers reject negative offsets. */
   private direct(slot: number, handle: FileHandle, chunks: readonly Uint8Array[], append: boolean, offset: number, total: number, epoch: Int32Array, revoked: () => boolean, owner: number): number {
     const cells = this.cells, slots = this.slots, base = slot * SLOT_WORDS, lock = base + FILE_LOCK;
-    if (Atomics.compareExchange(cells, GLOBAL_LOCK, 0, owner) !== 0) this.contend(cells, GLOBAL_LOCK, revoked, owner);
+    this.section?.enter();
+    try { if (Atomics.compareExchange(cells, GLOBAL_LOCK, 0, owner) !== 0) this.contend(cells, GLOBAL_LOCK, revoked, owner); }
+    catch (error) { this.section?.exit(); throw error; }
     Atomics.add(epoch, 0, 1);
     try {
       if (Atomics.compareExchange(slots, lock, 0, owner) !== 0) this.contend(slots, lock, revoked, owner);
@@ -327,6 +379,7 @@ export class SharedFilesystemState {
     } finally {
       Atomics.add(epoch, 0, 1);
       Atomics.compareExchange(cells, GLOBAL_LOCK, owner, 0);
+      this.section?.exit();
     }
   }
   directWrite(slot: number, handle: FileHandle, chunks: readonly Uint8Array[], offset: number, total: number, epoch: Int32Array, revoked: () => boolean, owner: number): number | undefined {
@@ -401,13 +454,26 @@ export class SharedFilesystemState {
       }
       Atomics.store(this.slots, this.at(slot, CAPACITY), needed);
       Atomics.sub(this.cells, USED_PAGES, capacity - needed);
+      this.trimPageTables(slot, needed);
     } finally { this.unlock(this.at(slot, FILE_LOCK)); }
   }
   setMtime(handle: FileHandle, mtime: number, revoked?: () => boolean, owner = this.lockOwner): number { const slot = this.slot(handle); this.lock(this.at(slot, FILE_LOCK), revoked, owner); try { this.setTimestamp(slot, mtime); return 0; } finally { this.unlock(this.at(slot, FILE_LOCK), owner); } }
-  retain(handle: FileHandle): void { Atomics.add(this.slots, this.at(this.slot(handle), REFS), 1); }
-  release(handle: FileHandle): void { const slot = this.slot(handle); const refs = Atomics.sub(this.slots, this.at(slot, REFS), 1) - 1; if (refs === 0 && Atomics.load(this.slots, this.at(slot, UNLINKED))) this.free(slot); }
-  unlink(handle: FileHandle): void { const slot = this.findSlot(handle); if (!slot) return; Atomics.store(this.slots, this.at(slot, UNLINKED), 1); if (Atomics.load(this.slots, this.at(slot, REFS)) === 0) this.free(slot); }
-  private free(slot: number): void { this.globalLock(); try { if (!Atomics.load(this.slots, this.at(slot, UNLINKED)) || Atomics.load(this.slots, this.at(slot, REFS))) return; const count = Atomics.load(this.slots, this.at(slot, CAPACITY)); for (let logical = 0; logical < count; logical++) { const owner = Atomics.load(this.pages, this.pageAt(slot, logical)) - 1; if (owner >= 0) { Atomics.store(this.owners, owner, 0); this.segmentFor(owner).fill(0); } Atomics.store(this.pages, this.pageAt(slot, logical), 0); } Atomics.sub(this.cells, USED_PAGES, count); for (let field = 0; field < SLOT_WORDS; field++) Atomics.store(this.slots, this.at(slot, field), 0); Atomics.store(this.slots, this.at(slot, HANDLE), -1); } finally { this.globalUnlock(); } }
+  retain(handle: FileHandle): void {
+    this.section?.enter();
+    try { Atomics.add(this.slots, this.at(this.slot(handle), REFS), 1); }
+    finally { this.section?.exit(); }
+  }
+  release(handle: FileHandle): void {
+    this.section?.enter();
+    try { const slot = this.slot(handle); const refs = Atomics.sub(this.slots, this.at(slot, REFS), 1) - 1; if (refs === 0 && Atomics.load(this.slots, this.at(slot, UNLINKED))) this.free(slot); }
+    finally { this.section?.exit(); }
+  }
+  unlink(handle: FileHandle): void {
+    this.section?.enter();
+    try { const slot = this.findSlot(handle); if (!slot) return; Atomics.store(this.slots, this.at(slot, UNLINKED), 1); if (Atomics.load(this.slots, this.at(slot, REFS)) === 0) this.free(slot); }
+    finally { this.section?.exit(); }
+  }
+  private free(slot: number): void { this.globalLock(); try { if (!Atomics.load(this.slots, this.at(slot, UNLINKED)) || Atomics.load(this.slots, this.at(slot, REFS))) return; const count = Atomics.load(this.slots, this.at(slot, CAPACITY)); for (let logical = 0; logical < count; logical++) { const owner = Atomics.load(this.pages, this.pageAt(slot, logical)) - 1; if (owner >= 0) { Atomics.store(this.owners, owner, 0); this.segmentFor(owner).fill(0); } Atomics.store(this.pages, this.pageAt(slot, logical), 0); } Atomics.sub(this.cells, USED_PAGES, count); this.trimPageTables(slot, 0); for (let field = 0; field < SLOT_WORDS; field++) Atomics.store(this.slots, this.at(slot, field), 0); Atomics.store(this.slots, this.at(slot, HANDLE), -1); } finally { this.globalUnlock(); } }
   ownerActive(owner: number): boolean {
     if (Atomics.load(this.cells, GLOBAL_LOCK) === owner) return true;
     for (let slot = 1; slot < MAX_FILES; slot++) if (Atomics.load(this.slots, this.at(slot, FILE_LOCK)) === owner) return true;
