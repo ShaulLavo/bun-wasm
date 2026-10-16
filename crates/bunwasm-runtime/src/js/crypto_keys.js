@@ -242,30 +242,22 @@
       ];
       for (const a of attempts) {
         try {
-          const privateKey =
-            isPrivateEncoding ||
-            (!jwk && ["pkcs8", "sec1"].includes(format)) ||
-            (jwk && !!key.d);
-          const uses = privateKey ? privateUsages(a) : publicUsages(a);
-          let result;
-          if (format === "pkcs1" || format === "sec1") {
-            const parsed = c.backend("import", a, {
-              format:
-                format === "pkcs1"
-                  ? `pkcs1-${isPrivateEncoding ? "private" : "public"}`
-                  : format,
-              data: c.encode(bytes),
-            }).key;
-            const type = parsed.d ? "private" : "public";
-            result = c.makeKey(
-              c.keyAlgorithm(c.algorithm(a), parsed),
-              type,
-              true,
-              type === "private" ? privateUsages(a) : publicUsages(a),
-              parsed,
-            );
-          } else
-            result = c.importKey(jwk ? "jwk" : format, bytes, a, true, uses);
+          const parsed = c.backend("import", c.algorithm(a), {
+            format: jwk
+              ? "jwk"
+              : format === "pkcs1"
+                ? `pkcs1-${isPrivateEncoding ? "private" : "public"}`
+                : format,
+            data: c.encode(jwk ? Buffer.from(JSON.stringify(key)) : bytes),
+          }).key;
+          const type = parsed.d ? "private" : "public";
+          const result = c.makeKey(
+            c.keyAlgorithm(c.algorithm(a), parsed),
+            type,
+            true,
+            type === "private" ? privateUsages(a) : publicUsages(a),
+            parsed,
+          );
           const r = c.record(result);
           if (wantPrivate && r.type !== "private") continue;
           return wantPrivate ? fromCrypto(result) : publicPart(r);

@@ -172,3 +172,23 @@ for (const algorithm of [
   assert(verify("sha256", input, publicKey, sign("sha256", input, privateKey)));
 }
 console.log("node key purposes ok");
+
+const pssPair = await crypto.subtle.generateKey(
+  {
+    name: "RSA-PSS",
+    modulusLength: 1024,
+    publicExponent: new Uint8Array([1, 0, 1]),
+    hash: "SHA-256",
+  },
+  true,
+  ["sign", "verify"],
+);
+const pssJwk = await crypto.subtle.exportKey("jwk", pssPair.privateKey);
+assert.equal(
+  createPrivateKey({
+    key: { ...pssJwk, ext: false, key_ops: [] },
+    format: "jwk",
+  }).asymmetricKeyType,
+  "rsa",
+);
+console.log("node JWK metadata ok");

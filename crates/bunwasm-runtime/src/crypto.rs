@@ -30,7 +30,12 @@ fn decode(s: &str) -> Vec<u8> {
     crate::encoding::base64_decode(s)
 }
 fn bytes(v: &J, key: &str) -> Result<Vec<u8>> {
-    Ok(decode(text(v, key)?))
+    let encoded = text(v, key)?;
+    let decoded = decode(encoded);
+    if b64(&decoded) != encoded {
+        return Err("DataError");
+    }
+    Ok(decoded)
 }
 fn b64(b: &[u8]) -> String {
     crate::encoding::base64_encode(b, true)
@@ -157,6 +162,9 @@ impl RsaKey {
 fn rsa_format(format: &str, bytes: &[u8]) -> Result<(RsaKey, bool)> {
     if format == "jwk" {
         let k: J = data(serde_json::from_slice(bytes))?;
+        if text(&k, "kty")? != "RSA" {
+            return Err("DataError");
+        }
         let private = k["d"].is_string();
         return Ok((RsaKey::from_jwk(&k)?, private));
     }

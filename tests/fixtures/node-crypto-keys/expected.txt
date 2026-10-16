@@ -4,3 +4,4 @@ node keys ec secp384r1
 node keys ed25519 ok
 node interop ok
 node key purposes ok
+node JWK metadata ok
