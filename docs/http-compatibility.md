@@ -12,7 +12,7 @@ browser engine. No upstream test or framework source is changed.
 | Path | Regression coverage |
 | --- | --- |
 | Header commitment | `headersSent`, late `setHeader` rejection, repeated flushes |
-| Header representation | Original casing and order, arrays, append, raw `writeHead` arrays |
+| Header representation | Casing/order, reserved names, arrays/append, raw `writeHead` arrays |
 | Response framing | Explicit chunked encoding, streaming before EOF, HEAD, 204/304, explicit lengths |
 | Trailers and connections | Request/response raw trailers, same-socket pipelining, connection close |
 | Status and events | Custom status messages, 100 Continue before the request body, finish/close order |
@@ -37,19 +37,21 @@ scripts first load the shared Node harness. The other three are
 `node-http-transfer-encoding.test.ts`, `node-http-upgrade-body.test.ts`, and
 `numeric-header.test.ts` under `test/js/node/http/`.
 
-The retained results identify missing parser and harness APIs, request lifecycle/TLS comparisons and a Bun-specific `rawHeaders` reassignment expectation. Native Node
+The retained results identify missing parser and harness APIs, request lifecycle/TLS
+comparisons and a Bun-specific `rawHeaders` reassignment expectation. Native Node
 keeps its parsed `headers` when that array is replaced, so this change preserves
 Node's behavior. File timeout counts exclude individual tests that reported their
 own shorter timeout and then let the file finish.
 
-The response and upgrade fixtures pass alongside the full 153-fixture suite on
-every engine at the current checkpoint. The offline app matrix passes all 24
+All three HTTP fixtures pass alongside the full 154-fixture suite on every
+engine, based on main `9c1e1709`. The offline app matrix passes all 24
 install/start stages for Express 5.1.0, Koa 3.0.1, Hono 4.10.2 and Fastify 5.6.1.
 HMR passes all six Chromium/WebKit and engine combinations.
 
 The web gate currently stops at the separately tracked browser memory-growth
 failure after the shared filesystem merge. The HTTP lane reproduced that timeout
-in the full gate and an isolated rerun. The owning follow-up is recorded in
+in the full gate, an isolated rerun, and a control using unchanged main guest
+artifacts. All other requested gates pass. The owning follow-up is recorded in
 `plans/compatibility-followups.md`; no HTTP workaround is applied.
 
 ## Reproduce
@@ -65,6 +67,9 @@ scripts/test.sh --engine jsc
 scripts/test.sh --engine browser
 scripts/test-web.sh
 ```
+
+`tests/fixtures/net-http-header-state` additionally checks reserved names, missing
+lookups, the eager Host header and numeric key ordering.
 
 The focused fixtures also support `--no-build` and `--engine`.
 The exact upstream file selection is recorded in each result's `selection` field.

@@ -259,8 +259,13 @@ wasm memory growth and then verifies host I/O.
 
 The memory guest imports only `node:fs`; it does not exercise HTTP. Chromium's
 memory-view control itself passes before the guest timeout. No HTTP or filesystem
-workaround was added for this failure. An unchanged main-artifact control has not
-been run by this lane. Raw logs are retained at
+workaround was added for this failure. An unchanged main-artifact control on main `4098772e` also reproduces the
+timeout. Its binaries were checked against main's original HTTP and builtin
+factory source; hashes are recorded in `main32-control-artifacts.json`. The final
+HTTP run on main `9c1e1709` passes 154 fixtures per engine and reproduces the same
+web-gate timeout. Raw logs
+are retained at
 `/work/reports/bun-wasm-http-20261016/after-web-tests.log` and
-`/work/reports/bun-wasm-http-20261016/memory-recheck.log`. The coordinator owns
+`/work/reports/bun-wasm-http-20261016/memory-recheck.log`, plus
+`main32-memory.log` for the unchanged-main control. The coordinator owns
 follow-up and evidence cleanup after the gate is fixed.
