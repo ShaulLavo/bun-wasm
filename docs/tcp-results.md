@@ -10,7 +10,7 @@ change. All five now finish on every engine.
 
 | Engine | Passing files before | After | Observed tests before | After | Node scripts | File timeouts |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| quickjs | 3 | 9 | 27 | 179 | 0 -> 5 | 0 -> 1 |
+| quickjs | 3 | 9 | 27 | 180 | 0 -> 5 | 0 -> 1 |
 | jsc | 3 | 9 | 28 | 179 | 0 -> 5 | 0 -> 1 |
 | browser | 3 | 9 | 26 | 180 | 0 -> 5 | 1 -> 1 |
 
@@ -27,7 +27,7 @@ upstream source, and dependency hashes match between controls and results.
 Wasm and host hashes are retained in the raw JSON.
 
 Reproduce the selection with the commands in [TCP support](tcp.md). Raw
-`before-final-*.json` and `after-delivery-*.json`, JSONL checkpoints, gate
+`before-final-*.json` and `after-rebase-*.json`, JSONL checkpoints, gate
 logs, and commands remain under `/work/reports/bun-wasm-tcp-2026-10-16/`
 until coordinator review is accepted.
 
@@ -53,7 +53,7 @@ file to investigate one row.
 | `js/node/net/net-mongodb-pattern-leak.test.ts` | 1 | 1 | error: tls.createServer is not supported in bun-wasm: WASI has no network access |
 | `js/node/net/net-syscall-fault.test.ts` | 0 | 1 | SyntaxError: Could not find export 'socketFaultInjection' in module 'bun:internal-for-testing' |
 | `js/node/net/node-net-allowHalfOpen.test.js` | 0 | 3 | error: Executable not found in bun-wasm: null |
-| `js/node/net/node-net-server.test.ts` | 18 | 9 | error: expect(received).toStrictEqual(expected) |
+| `js/node/net/node-net-server.test.ts` | 19 | 8 | error: expect(received).toStrictEqual(expected) |
 | `js/node/net/node-net.test.ts` (file timeout) | 30 | 39 | error: expect(received).toBe(expected) |
 | `js/node/net/server.spec.ts` | 27 | 13 | TypeError: class constructors must be invoked with 'new' |
 | `js/node/net/socket-reconnect-live.test.ts` | 2 | 1 |   ^ this test timed out after 2000ms. |
