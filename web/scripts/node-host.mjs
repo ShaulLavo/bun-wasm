@@ -146,6 +146,7 @@ async function run() {
   const module = workerData?.module || await WebAssembly.compile(readFileSync(wasmPath));
   subprocess = new SubprocessHost({
     budget: workerData?.transport?.budget,
+    workerTransport: workerData?.transport,
     slot: workerData?.transport?.slot,
     token: workerData?.transport?.token,
     stdin: child && (workerData.meta.stdin !== "inherit" || workerData.transport.inheritedStdin) ? workerData.transport.pipes[0] : undefined,
@@ -157,7 +158,7 @@ async function run() {
       validateCwd(meta.cwd);
       const worker = new Worker(new URL(import.meta.url), {
         workerData: { bunwasmChild: true, module, preopens, meta, transport, withNet, stackMb: workerData.stackMb },
-        resourceLimits: { maxOldGenerationSizeMb: 128, stackSizeMb: workerData.stackMb },
+        resourceLimits: { maxOldGenerationSizeMb: 128, ...meta.worker?.resourceLimits, stackSizeMb: Math.max(workerData.stackMb, meta.worker?.resourceLimits?.stackSizeMb || 0) },
       });
       worker.on("error", onError);
       return worker;

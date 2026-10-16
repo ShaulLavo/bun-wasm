@@ -50,13 +50,21 @@ pub struct Request {
     stdin: String,
     stdout: String,
     stderr: String,
+    #[serde(default)]
+    worker: Option<WorkerLimits>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerLimits {
+    pub memory_limit_mb: Option<usize>,
 }
 
 struct Child {
     cancel: Arc<Cancellation>,
     result: Arc<Mutex<Option<i32>>>,
     thread: Option<JoinHandle<()>>,
-    pipes: [i32; 3],
+    pipes: [i32; 5],
 }
 
 struct PipeHandle {
@@ -72,6 +80,7 @@ pub struct Processes {
     next: i32,
     children: HashMap<i32, Child>,
     pipes: HashMap<i32, PipeHandle>,
+    worker_pipes: [i32; 2],
 }
 
 fn error(message: impl Into<String>, code: &str) -> ErrorInfo {
@@ -80,7 +89,8 @@ fn error(message: impl Into<String>, code: &str) -> ErrorInfo {
 
 impl Processes {
     pub fn new(runtime: Arc<Runtime>, stdio: Stdio, notify: Arc<Notify>) -> Self {
-        Self {
+        let worker = stdio.worker.clone();
+        let mut processes = Self {
             runtime,
             stdin: stdio.stdin.clone(),
             stdio,
@@ -88,7 +98,17 @@ impl Processes {
             next: FIRST_HANDLE,
             children: HashMap::new(),
             pipes: HashMap::new(),
+            worker_pipes: [0; 2],
+        };
+        if let Some(pipes) = worker {
+            for (index, pipe) in pipes.into_iter().enumerate() {
+                pipe.observe(&processes.notify);
+                let id = processes.next();
+                processes.pipes.insert(id, PipeHandle { pipe, write: index == 1 });
+                processes.worker_pipes[index] = id;
+            }
         }
+        processes
     }
 
     fn next(&mut self) -> i32 {
@@ -187,7 +207,14 @@ impl Processes {
         let (stdin_id, stdin) = self.stdin(&request.stdin)?;
         let (stdout_id, stdout) = self.output(&request.stdout, 1)?;
         let (stderr_id, stderr) = self.output(&request.stderr, 2)?;
-        let pipes = [stdin_id, stdout_id, stderr_id];
+        let (to_worker, from_worker, worker) = if request.worker.is_some() {
+            let (incoming, input) = self.pipe(true);
+            let (outgoing, output) = self.pipe(false);
+            (incoming, outgoing, Some([input, output]))
+        } else { (0, 0, None) };
+        let memory_limit = request.worker.as_ref().and_then(|limits| limits.memory_limit_mb)
+            .map(|mb| mb.saturating_mul(1 << 20)).unwrap_or(512 << 20);
+        let pipes = [stdin_id, stdout_id, stderr_id, to_worker, from_worker];
         let input = self.pipes.get(&stdin_id).map(|handle| handle.pipe.clone());
         let outputs: Vec<Pipe> = pipes[1..]
             .iter()
@@ -209,7 +236,7 @@ impl Processes {
                     runtime.clone(),
                     request.argv,
                     request.env.into_iter().collect(),
-                    Stdio { stdin, stdout, stderr },
+                    Stdio { stdin, stdout, stderr, worker, memory_limit },
                     cancellation.clone(),
                 );
                 let signal = cancellation.signal.load(Ordering::SeqCst);
@@ -251,7 +278,7 @@ impl Processes {
         Ok(id)
     }
 
-    fn close_pipes(&mut self, pipes: [i32; 3]) {
+    fn close_pipes(&mut self, pipes: [i32; 5]) {
         for id in pipes {
             if id != 0 {
                 self.close(id);
@@ -273,6 +300,7 @@ impl Processes {
     }
 
     pub fn child_pipe(&self, id: i32, fd: i32) -> i32 {
+        if id == 0 && (3..=4).contains(&fd) { return self.worker_pipes[(fd - 3) as usize]; }
         self.children
             .get(&id)
             .and_then(|c| c.pipes.get(fd as usize))

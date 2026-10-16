@@ -1,0 +1,13 @@
+worker guest, data, options, online, stdio
+eval isolation
+data URL and execArgv preload
+large transferred messages cross pipe boundaries
+transferred port and queued messages
+port transferred from worker
+shared environment
+worker process exit is isolated
+worker error and exit
+worker termination
+worker message flood remains interruptible
+nested worker
+worker ref and unref

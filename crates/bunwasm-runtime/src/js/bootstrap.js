@@ -385,6 +385,7 @@
   // drain between callbacks. Returns 0 when something ran, the delay in ms
   // until the next timer, or -1 when nothing keeps the process alive.
   internal.runTimers = function runTimers() {
+    const workerProgress = internal.workerPump && internal.workerPump();
     // Immediates first: like Bun, setImmediate callbacks queued by the
     // main script run before even a due setTimeout(0).
     while (immediates.length > 0) {
@@ -399,7 +400,7 @@
       runOneTimer(now);
       return 0;
     }
-    if (internal.pendingIo > 0) return 0;
+    if (workerProgress || internal.pendingIo > 0) return 0;
     if (refedTimers <= 0 && internal.messagePortRefs <= 0) return -1;
     // Unref'd timers at the front don't keep us alive but still fire if a
     // ref'd one is pending later.
@@ -717,8 +718,11 @@
       process.emit("exit", code);
     } catch (err) {
       // An exception inside an exit handler is itself fatal.
+      if (internal.workerError) internal.workerError(err);
+      process.exitCode = 1;
       printError(err);
     } finally {
+      if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
       native.closeAllDirs();
     }
   }
@@ -747,6 +751,7 @@
       globalThis.process.emit("uncaughtException", err, "uncaughtException");
       return true;
     }
+    if (internal.workerError) internal.workerError(err);
     printFatal(err);
     globalThis.process.exitCode = 1;
     emitExit(1);
@@ -758,6 +763,7 @@
       globalThis.process.emit("unhandledRejection", reason, undefined);
       return true;
     }
+    if (internal.workerError) internal.workerError(reason);
     printFatal(reason);
     // Bun reports exit code 0 to "exit" listeners here (and still exits 1).
     emitExit(0);
@@ -813,6 +819,7 @@
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
   internal.require("function");
+  if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
 
   return internal;
 })

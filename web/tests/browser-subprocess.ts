@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { playwright, session, ready, writeFile, run } from "./playground.mjs";
+import { checkWorkers } from "./browser-workers.ts";
 const closedOutput = readFileSync(new URL("../../tests/fixtures/pipe-closed-child/index.ts", import.meta.url), "utf8");
 const orderedOutput = readFileSync(new URL("../../tests/fixtures/pipe-write-order/index.ts", import.meta.url), "utf8");
 const orderedChild = readFileSync(new URL("../../tests/fixtures/pipe-write-order/child.ts", import.meta.url), "utf8");
@@ -76,6 +77,7 @@ try {
         assert.equal(checked.code, 0, checked.output);
         console.log(`ok ${browserName} ${engine}: ${name}`);
       }
+      await checkWorkers(page, `${browserName} ${engine}`);
     }
     await browser.close();
   }

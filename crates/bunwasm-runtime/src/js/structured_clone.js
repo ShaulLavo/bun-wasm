@@ -209,7 +209,7 @@
     const seen = new Set();
     for (const item of buffers) {
       if (internal.isMarkedAsUntransferable && internal.isMarkedAsUntransferable(item)) throw dataCloneError("Object is not transferable");
-      if (!isArrayBuffer(item)) throw new TypeError("Type error");
+      if (!isArrayBuffer(item) && !(internal.isMessagePort && internal.isMessagePort(item))) throw new TypeError("Type error");
       if (seen.has(item)) throw dataCloneError("Transfer list contains duplicate ArrayBuffer");
       seen.add(item);
     }
@@ -219,6 +219,7 @@
   function structuredClone(value, options) {
     if (arguments.length === 0) throw new TypeError("structuredClone requires 1 argument");
     const buffers = transferList(options);
+    if (internal.clonePorts && buffers.some((item) => internal.isMessagePort(item))) return internal.clonePorts(value, { transfer: buffers });
     const result = new Cloner().clone(value);
     // The clone holds copies; detach the originals when the engine supports it.
     if (typeof ArrayBuffer.prototype.transfer === "function") {

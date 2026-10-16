@@ -75,6 +75,7 @@
       stdin: stdioMode(input, 0, "ignore"),
       stdout: stdioMode(output, 1, "pipe"),
       stderr: stdioMode(error, 2, sync ? "pipe" : "inherit") };
+    if (options._worker) meta.worker = options._worker;
     return { meta, options, input };
   }
 
@@ -249,7 +250,7 @@
       if (!settled) sink.flush();
       let progress = false;
       for (const state of states) if (readPipe(state, state.consume)) progress = true;
-      if (settled && states.every((state) => !state.handle)) { close(); return true; }
+      if (settled && states.every((state) => !state.handle)) { if (!spec.options._worker) close(); return true; }
       return progress ? "progress" : false;
     }
     function fail(error) {
@@ -261,6 +262,7 @@
       close();
       rejectExit(error);
     }
+    Object.defineProperty(child, "_finishWorker", { value: close });
     const waiter = internal.addIoWaiter({ step, fail, ref: true });
     initialInput(spec.input, sink);
     if (spec.options.timeout > 0) timer = setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, spec.options.timeout);

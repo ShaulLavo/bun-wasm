@@ -2,6 +2,7 @@ import type { Stream, Readiness } from "@bun-wasm/runtime/core";
 import type { EngineNet } from "./net/host";
 import type { SlotImpls } from "./net/trampoline";
 export interface SpawnMeta {
+  worker?: { memoryLimitMb?: number; resourceLimits?: { maxOldGenerationSizeMb?: number; maxYoungGenerationSizeMb?: number; codeRangeSizeMb?: number; stackSizeMb?: number } };
   argv: string[];
   cwd: string;
   env: Record<string, string>;
@@ -42,6 +43,7 @@ export class SubprocessHost {
     slot?: number;
     token?: number;
     stdin?: SharedArrayBuffer;
+    workerTransport?: ChildTransport;
     launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): { terminate(): unknown };
     /** Return false when the inherited reader has closed. */
     output(fd: number, bytes: Uint8Array): void | boolean;
