@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { FilesystemClient, createFilesystemConnection } from "../fs";
+import { atomicHost } from "./fixtures/wasi-atomic-host";
+import { fixedWriteSources } from "../fs/shared";
 
 function fixture() {
   const pair = createFilesystemConnection();
@@ -81,4 +83,88 @@ test("reentrant guest copies cannot overwrite another read's leased staging byte
     expect(client.read(0, [first, second], 0)).toBe(4);
     expect(Array.from(first).concat(Array.from(second))).toEqual([65, 66, 67, 68]);
   } finally { cleanup(); }
+});
+
+const emptyLayouts = [
+  { name: "leading", lengths: [0, 2, 2] },
+  { name: "middle", lengths: [2, 0, 2] },
+  { name: "trailing", lengths: [2, 2, 0] },
+  { name: "all-empty", lengths: [0, 0, 0] },
+];
+for (const { name, lengths } of emptyLayouts) {
+  test(`retained read skips ${name} empty iovecs without losing bytes`, () => {
+    const { client, cleanup } = fixture();
+    try {
+      const chunks = lengths.map(length => new Uint8Array(length).fill(99));
+      const expected = name === "all-empty" ? [] : [65, 66, 67, 68];
+      expect(client.read(0, chunks, 0)).toBe(expected.length);
+      expect(chunks.flatMap(chunk => Array.from(chunk))).toEqual(expected);
+    } finally { cleanup(); }
+  });
+  test(`WASI fd_read handles ${name} empty iovecs and advances only by copied bytes`, () => {
+    const { client, cleanup } = fixture();
+    const host = atomicHost(client, {});
+    try {
+      const fd = host.wasi.descriptors.open({ kind: "file", handle: 0, offset: 0, append: false }, (1n << 29n) - 1n, 0n);
+      const chunks = lengths.map(length => new Uint8Array(length).fill(99));
+      const expected = name === "all-empty" ? [] : [65, 66, 67, 68];
+      host.iovecs(chunks);
+      expect(host.calls.fd_read!(fd, 0, chunks.length, 1024)).toBe(0);
+      expect(host.view().getUint32(1024, true)).toBe(expected.length);
+      expect(Array.from(new Uint8Array(host.memory.buffer, 2048, expected.length))).toEqual(expected);
+      expect(host.tell(fd)).toBe(expected.length);
+      expect(host.errors).toEqual([]);
+    } finally { host.wasi.descriptors.dispose(); cleanup(); }
+  });
+}
+
+for (const operation of ["write", "append"] as const) for (const phase of ["before-lock", "during-copy"] as const) {
+  test(`${operation} bounds growable source bytes consistently when growth happens ${phase}`, () => {
+    const { client, cleanup } = fixture();
+    const Constructor = SharedArrayBuffer as unknown as new (length: number, options: { maxByteLength: number }) => SharedArrayBuffer & { grow(length: number): void };
+    // Nonzero source byteOffset must survive conversion to a fixed-length view.
+    const buffer = new Constructor(2, { maxByteLength: 3 });
+    const source = new Uint8Array(buffer, 1);
+    source[0] = 90;
+    const grow = () => { buffer.grow(3); source[1] = 91; };
+    const mutate = client.shared.mutate.bind(client.shared);
+    if (phase === "before-lock") client.shared.mutate = (...args) => {
+      client.shared.mutate = mutate;
+      grow();
+      return mutate(...args);
+    };
+    class GrowingBytes extends Uint8Array {
+      subarray(start?: number, end?: number): Uint8Array {
+        grow();
+        return super.subarray(start, end);
+      }
+    }
+    const chunks = phase === "during-copy" ? [new GrowingBytes([88]), source] : [source];
+    const total = phase === "during-copy" ? 2 : 1;
+    try {
+      if (operation === "append") {
+        expect(client.append(0, chunks)).toEqual({ written: total, offset: 4 + total });
+        const bytes = new Uint8Array(4 + total);
+        expect(client.read(0, [bytes], 0)).toBe(bytes.length);
+        expect(Array.from(bytes)).toEqual([65, 66, 67, 68].concat(phase === "during-copy" ? [88, 90] : [90]));
+      } else {
+        expect(client.write(0, chunks, 4 - total)).toBe(total);
+        const bytes = new Uint8Array(4);
+        expect(client.read(0, [bytes], 0)).toBe(4);
+        expect(Array.from(bytes)).toEqual(phase === "during-copy" ? [65, 66, 88, 90] : [65, 66, 67, 90]);
+        // No unreported source byte may leak into a later extension of the file.
+        expect(client.resize(0, 5, false)).toBe(0);
+        const tail = new Uint8Array(1).fill(99);
+        expect(client.read(0, [tail], 4)).toBe(1);
+        expect(tail[0]).toBe(0);
+      }
+    } finally { cleanup(); }
+  });
+}
+
+test("ordinary and fixed shared write sources keep their original iovec and views", () => {
+  const chunks = [new Uint8Array(2), new Uint8Array(new SharedArrayBuffer(2))];
+  expect(fixedWriteSources(chunks)).toBe(chunks);
+  expect(fixedWriteSources(chunks)[0]).toBe(chunks[0]);
+  expect(fixedWriteSources(chunks)[1]).toBe(chunks[1]);
 });

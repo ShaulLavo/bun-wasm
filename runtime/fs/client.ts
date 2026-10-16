@@ -1,6 +1,6 @@
 import type { FileSystem, FileHandle, FileStat, DirectoryEntry, ResolvedPath } from "../core";
 import { CAPABILITY_HEADER, CAPABILITY_SLOTS, CAPABILITY_WORDS, HEADER, PAGE, TRANSIENT_HANDLES, State, FilesystemError, createFilesystemConnection, errno, isRevoked, pack, reapFilesystem, unpack, wake, type FilesystemConnection } from "./protocol";
-import { MissingSegmentError, SharedFilesystemState, sharedRevoked } from "./shared";
+import { MissingSegmentError, SharedFilesystemState, fixedWriteSources, sharedRevoked } from "./shared";
 
 const asyncAtomics = Atomics as typeof Atomics & {
   waitAsync(array: Int32Array, index: number, value: number): { async: boolean; value: string | Promise<string> };
@@ -290,8 +290,9 @@ export class FilesystemClient implements FileSystem {
           }
           let copied = 0;
           for (const chunk of chunks) {
+            if (copied >= count) break;
             const amount = Math.min(chunk.length, count - copied);
-            if (amount <= 0) break;
+            if (!amount) continue;
             chunk.set(copied === 0 && amount === scratch.bytes.length ? scratch.bytes : scratch.bytes.subarray(copied, copied + amount));
             copied += amount;
           }
@@ -338,6 +339,7 @@ export class FilesystemClient implements FileSystem {
     } catch (error) { return total || -errno(error); }
   }
   write(handle: FileHandle, chunks: readonly Uint8Array[], offset: number): number {
+    chunks = fixedWriteSources(chunks);
     if (this.openHandles.has(handle) && this.shared.hasFile(handle)) {
       const total = chunks.reduce((size, chunk) => size + chunk.length, 0);
       try {
@@ -365,6 +367,7 @@ export class FilesystemClient implements FileSystem {
     catch (error) { return total || -errno(error); }
   }
   append(handle: FileHandle, chunks: readonly Uint8Array[]): { written: number; offset: number } | number {
+    chunks = fixedWriteSources(chunks);
     const total = chunks.reduce((size, chunk) => size + chunk.length, 0);
     const fallback = () => {
       const data = new Uint8Array(total);

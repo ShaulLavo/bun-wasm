@@ -33,6 +33,23 @@ export class MissingSegmentError extends Error {}
 export interface SharedFileInfo extends FileStat { capacity: number; }
 export interface SharedSegment { buffer: SharedArrayBuffer; index: number; }
 
+/** Fix only growable shared sources; ordinary/fixed WASM sources keep their original iovec.
+ * A source can grow while waiting for a lock or copying another iovec. Capacity checks,
+ * byte counts and the copy must all use the same bounds, including a nonzero byteOffset.
+ */
+export function fixedWriteSources(chunks: readonly Uint8Array[]): readonly Uint8Array[] {
+  let fixed: Uint8Array[] | undefined;
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i]!;
+    const buffer = chunk.buffer;
+    if (buffer instanceof SharedArrayBuffer && "growable" in buffer && buffer.growable) {
+      fixed ??= chunks.slice();
+      fixed[i] = new Uint8Array(buffer, chunk.byteOffset, chunk.byteLength);
+    }
+  }
+  return fixed ?? chunks;
+}
+
 /** Shared metadata and a service-grown pool of prepublished growable SAB data segments. */
 export class SharedFilesystemState {
   readonly cells: Int32Array;
@@ -255,6 +272,7 @@ export class SharedFilesystemState {
     } finally { this.unlock(this.at(slot, FILE_LOCK), owner); }
   }
   write(handle: FileHandle, chunks: readonly Uint8Array[], offset: number, revoked?: () => boolean, owner = this.lockOwner): number {
+    chunks = fixedWriteSources(chunks);
     const total = chunks.reduce((size, chunk) => size + chunk.length, 0);
     const written = this.tryWrite(handle, chunks, offset, total, revoked, owner);
     if (written === undefined) throw new RangeError("file needs growth");
@@ -277,6 +295,7 @@ export class SharedFilesystemState {
     } finally { this.unlock(this.at(slot, FILE_LOCK), owner); }
   }
   append(handle: FileHandle, chunks: readonly Uint8Array[], revoked?: () => boolean, owner = this.lockOwner): { written: number; offset: number } {
+    chunks = fixedWriteSources(chunks);
     const total = chunks.reduce((size, chunk) => size + chunk.length, 0);
     const result = this.tryAppend(handle, chunks, total, revoked, owner);
     if (typeof result === "number") throw new RangeError("file needs growth");

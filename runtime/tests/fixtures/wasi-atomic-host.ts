@@ -3,7 +3,7 @@ import { Wasi, type FileSystem } from "../../core";
 const encoder = new TextEncoder();
 const ALL = (1n << 29n) - 1n;
 const signatures: Record<string, string> = {
-  path_open: "iiiiijjii", fd_write: "iiii", fd_pwrite: "iiiji", fd_tell: "ii", fd_fdstat_set_flags: "ii",
+  path_open: "iiiiijjii", fd_read: "iiii", fd_write: "iiii", fd_pwrite: "iiiji", fd_tell: "ii", fd_fdstat_set_flags: "ii",
 };
 function leb(value: number): number[] {
   const bytes: number[] = [];
@@ -23,9 +23,9 @@ const module = new WebAssembly.Module(Uint8Array.from([0, 97, 115, 109, 1, 0, 0,
 )));
 
 /** Use imports(), not private functions(): errno wrapping and memory refresh are part of the test. */
-export function atomicHost(fs: FileSystem) {
+export function atomicHost(fs: FileSystem, preopens: Record<string, string> = { "/": "/" }) {
   const errors: string[] = [];
-  const wasi = new Wasi({ args: [], env: {}, fs, preopens: { "/": "/" }, stdout() {}, stderr(bytes) { errors.push(new TextDecoder().decode(bytes)); }, sleep() {} });
+  const wasi = new Wasi({ args: [], env: {}, fs, preopens, stdout() {}, stderr(bytes) { errors.push(new TextDecoder().decode(bytes)); }, sleep() {} });
   const memory = new WebAssembly.Memory({ initial: 4 });
   Object.defineProperty(memory, "toResizableBuffer", { value: undefined });
   wasi.start({ exports: { memory, _start() {} } } as unknown as WebAssembly.Instance);
