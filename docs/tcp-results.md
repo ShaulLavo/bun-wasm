@@ -57,3 +57,47 @@ file to investigate one row.
 | `js/node/net/node-net.test.ts` (file timeout) | 30 | 39 | error: expect(received).toBe(expected) |
 | `js/node/net/server.spec.ts` | 27 | 13 | TypeError: class constructors must be invoked with 'new' |
 | `js/node/net/socket-reconnect-live.test.ts` | 2 | 1 |   ^ this test timed out after 2000ms. |
+
+## Server-file repeat control
+
+The review comparison has one fewer observed pass in QuickJS and JSC, in
+`js/node/net/node-net-server.test.ts`. Its drop race and half-open child-loop
+cases were rerun three times on both the reviewed and fixed artifacts, with
+the same two-second test budget and a 60-second outer file deadline. The
+results below are observed pass ranges for that file, not additional suite
+passes. Full records retain the failing test names.
+
+quickjs: before 18..18, after 17..18
+
+jsc: before 18..18, after 17..18
+
+Repeat with the focused suite command and this exact file path. Raw pairs
+are retained as `paired-server-*.json` in the review report.
+
+## Review corrections
+
+The final regression fixture runs fourteen checks for the eight review blockers.
+Thirteen checks fail on each reviewed engine; the valid large upgrade head
+control passes. All fourteen pass after the fix on each engine. The actual ws
+8.18.3 package reproduces empty EOF, partial EOF and split header overflow on
+each reviewed artifact and emits error and close after the fix.
+
+| Engine | Files passing before / after | Tests passing before / after | Previously passing files lost |
+| --- | ---: | ---: | ---: |
+| quickjs | 9 / 9 | 179 / 178 | 0 |
+| jsc | 9 / 9 | 180 / 179 | 0 |
+| browser | 9 / 9 | 180 / 180 | 0 |
+
+Each selection contains 28 upstream files, including the five previously
+blocked Node assertion scripts. Passing-file preservation is checked from the
+runner records. These bounded results retain the documented remaining gaps.
+
+The native Node host receive buffer remains outside this correction. The pipe
+regression uses a separately paused native TCP peer and asserts bounded guest
+queues and stopped guest reads. It does not claim the host receive buffer is
+bounded.
+
+Review logs, artifact hashes and commands are retained in
+`/work/reports/bun-wasm-tcp-review-2026-10-16/` until coordinator review is
+accepted. Reproduce with `scripts/test.sh --no-build --engine ENGINE net-review`
+and `scripts/test-net-ws.sh [WASM_DIR]`.
