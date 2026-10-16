@@ -23,7 +23,7 @@ rquickjs = { version = "0.13", default-features = false, features = ["std", "loa
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
 url = "2"
 serde_json = { version = "1", features = ["preserve_order"] }
-sha1 = { version = "0.10", features = ["oid"] }
+sha1 = "0.10"
 sha2 = "0.10"
 md-5 = "0.10"
 hmac = "0.12"
@@ -42,7 +42,6 @@ cbc = { version = "0.1", features = ["alloc", "block-padding"] }
 ctr = "0.9"
 pbkdf2 = "0.12"
 hkdf = "0.12"
-rsa = { version = "0.9", features = ["sha2"] }
 p256 = { version = "0.13", features = ["ecdsa", "ecdh", "jwk"] }
 p384 = { version = "0.13", features = ["ecdsa", "ecdh", "jwk"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8"] }

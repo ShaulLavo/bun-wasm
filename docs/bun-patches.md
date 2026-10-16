@@ -515,8 +515,9 @@ Class **Host feature**. `scripts/generate-bun-builtins.mjs`, its shell runner, t
 `crates/bunwasm-runtime/src/crypto.rs` links RustCrypto primitives and its maintained JWK,
 PKCS#8 and SPKI parsers. Cargo.lock pins the dependency revisions. Bun's BoringSSL pin `41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f` handles RSA signing,
 verification and OAEP encryption and decryption through the original `c/rsa.c` adapter.
-RustCrypto RSA is used for key generation and format parsing, never private-key operations.
-Its documented RUSTSEC-2023-0071 timing issue rules out using it for signing or decryption.
+BoringSSL also owns RSA key generation, component validation and PKCS#1 parsing. The
+RustCrypto RSA dependency is excluded because it documents RUSTSEC-2023-0071. The maintained
+RustCrypto PKCS#8 and SPKI parsers handle the outer key-format envelopes.
 `scripts/sync-crypto.sh` downloads the unmodified source. The build disables assembly,
 threads and socket BIOs on WASI, as in the earlier successful runtime spike.
 
