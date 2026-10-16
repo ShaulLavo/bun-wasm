@@ -18,7 +18,8 @@ test("shared sources build through the consumer export when its package cache co
     const worker = join(shared, "worker.ts");
     writeFileSync(main, 'import { marker } from "@bun-wasm/runtime/core"; console.log(marker);');
     writeFileSync(worker, 'import { marker } from "@bun-wasm/runtime/core/memory-views"; console.log(marker);');
-    const result = await Bun.build(browserBuildConfig([main, worker], join(scratch, "dist")));
+    const result = await Bun.build({ ...browserBuildConfig([main, worker], join(scratch, "dist")), throw: false });
+    if (!result.success) throw new Error(result.logs.map(String).join("\n"));
     expect(result.success).toBe(true);
     const scripts = result.outputs.filter(output => output.path.endsWith(".js"));
     const text = (await Promise.all(scripts.map(output => output.text()))).join("\n");
