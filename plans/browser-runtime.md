@@ -43,6 +43,11 @@ than it is today. The process layer loads on the first spawn.
   simple layout can't be made viable in Firefox or Safari. Later backends can include IndexedDB
   without our own memory cache (lower memory, the browser caches for us) and memory-only for
   throwaway sandboxes (owner, 2026-10-16).
+- **Killing is not instant, so kills revoke and confirm.** Chromium kept a terminated CPU-bound
+  WASM worker running for about 0.4 s, still writing shared memory (spike 2). The supervisor
+  bumps a generation number on the dead process's descriptors so its late writes are ignored, and
+  reports exit only once the worker's heartbeat stops. A dead worker's shared buffers are never
+  reused for a new process until then, because an epoch can't unmap memory from a running worker.
 - **Pipes run directly between workers** over shared memory, not through the supervisor.
 - **Not adopted:** `@wasmer/sdk`, a fork of `@bjorn3/browser_wasi_shim`, SLICC code.
 
