@@ -897,3 +897,41 @@ or typecheck is added to the wasm runtime.
 ### Round-5 native stream reflection and abort cleanup
 
 Class **Host feature**, original bridge refinement. `web/src/native-stream-state.ts` now rewrites each wrapped native stream prototype's `constructor` descriptor to the wrapper, preserving `instance.constructor === GlobalConstructor` and subclassing while retaining native prototypes and brands. Guest abort signals passed to native `pipeTo` are mirrored through a native controller. The guest listener is detached when the native pipe fulfills or rejects and when the native call throws synchronously. The browser fixture counts add/remove operations across repeated successful pipes.
+
+### Native browser stream completion
+
+Class **Host feature**, original bun-wasm implementation. No upstream source was
+copied or adapted for `web/src/native-stream-state.ts`. Chromium and WebKit lack
+Node's private closed-promise and controller-error symbols. The host installs
+those hooks before the runtime bootstrap; Node-host execution retains Node's
+existing hooks and embedded engines retain the reference ponyfill hooks.
+
+Construction proxies delegate to the browser's native ReadableStream,
+WritableStream and TransformStream constructors and capture their controllers.
+Native prototypes, instance brands, byte/BYOB queues and algorithms stay native.
+The global constructor references change. Frozen underlying dictionaries are
+wrapped without mutation, and callbacks retain their original receiver.
+
+Completion comes from actual native reader/writer `closed` promises. Temporary
+probes release locks immediately without reading or writing. Releasing a pending
+closed promise rejects it in place; releasing a terminal promise replaces it.
+That identity change distinguishes terminal observation from release errors.
+Notifications from controllers and underlying callbacks trigger another probe.
+Pending sink abort promises delay completion. Internally acquired native locks,
+such as async iterators and pipeTo, use weak polling with host timers. Session
+exit stops the timers. No private stream state or promise status is invented.
+
+Streams created outside the construction bridge, including saved original
+constructors and opaque native factory outputs, support completion observation.
+Their controllers are unavailable through browser APIs, so the error hook cannot
+provide Node-style error injection for those opaque readables. The bridge raises
+an explicit error rather than treating cancellation as an errored stream.
+
+`scripts/test-native-stream-interop.mjs` executes the exact runtime stream modules
+and this host bridge in Chromium and WebKit. Its minimal process/async-context
+boundary is a direct-module test, not a wasm-build claim. The same fixture also
+runs through the actual built browser engine in `web/tests/browser-engine.mjs`.
+CI runs the direct native-browser proof so Node-host symbols cannot mask a gap.
+
+The copied Node stream licenses retain their text with whitespace-only normalization
+of blank EOF lines and one mixed space/tab indent.

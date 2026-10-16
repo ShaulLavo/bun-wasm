@@ -187,3 +187,24 @@ The six Vite dev rows on QuickJS and JSC have empty logs and no captured exit
 code. Add exit/deadline provenance to the server measurement before assigning
 those rows a cause. Preserve the passing Vite production-build controls while
 investigating each failure.
+
+
+### Node stream adapter census after unavailable worker detection
+
+The PR12 round-5 merge includes main `0cffef1`. All 22 selected Node adapter
+files are currently nonpassing on QuickJS, JSC and Node-host browser. The shared
+upstream harness imports `worker_threads` at `test/js/node/test/common/index.js:34`
+and receives `ERR_NOT_SUPPORTED_IN_WASM`. Main intentionally changed that module
+to reject loading so packages can detect absent worker support. Do not restore
+the earlier fabricated worker constructor to make this harness collect.
+
+Reproduce with `scripts/bun-suite.sh --node-parallel --engine quickjs --jobs 1
+--timeout 15 --network loopback --output <fresh-output.json>
+js/node/test/parallel/test-readable-from-web-enqueue-then-close.js`, repeated for
+JSC and browser. The full fixed selection is
+`docs/bun-test-suite/stream-adapter-files.txt`. Exact outcomes and wasm provenance
+are retained at `/work/reports/bun-wasm-streams-round5-2026-10-16/final-adapter-*.json`.
+All three current full fixture gates pass 152/152. Runtime stream behavior is
+not established by these non-collecting upstream files. The compatibility track
+owns resolving the upstream harness/capability boundary and removes the retained
+evidence after reproduction and independent review.

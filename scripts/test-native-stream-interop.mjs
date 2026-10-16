@@ -16,6 +16,7 @@ function inputs() {
 }
 if (argument("--dump")) { writeFileSync(argument("--dump"), JSON.stringify(inputs())); process.exit(0); }
 const sources = argument("--sources") ? JSON.parse(readFileSync(argument("--sources"), "utf8")) : inputs();
+sources.benchmark = process.argv.includes("--benchmark");
 const location = process.env.PLAYWRIGHT ?? `${process.env.HOME}/.local/share/mise/installs/npm-playwright/1.63.0/node_modules/.mise/playwright@1.63.0/node_modules/playwright/index.mjs`;
 const playwright = await import(pathToFileURL(location).href);
 let failures = 0;
@@ -28,7 +29,18 @@ for (const name of ["chromium", "webkit"]) {
     page.on("pageerror", error => pageErrors.push(String(error)));
     const result = await page.evaluate(async sources => {
       const native = { ReadableStream, WritableStream, TransformStream };
+      async function constructionTime(Ctor) {
+        const count = 10000;
+        const start = performance.now();
+        for (let i = 0; i < count; i++) {
+          const stream = new Ctor({ start(controller) { controller.close(); } });
+          await stream.cancel();
+        }
+        return { count, milliseconds: performance.now() - start };
+      }
+      const nativeConstruction = sources.benchmark ? await constructionTime(native.ReadableStream) : undefined;
       const dispose = sources.hostBridge ? new Function(sources.hostBridge.replace("export function installNativeStreamState", "function installNativeStreamState") + ";return installNativeStreamState();")() : () => {};
+      const bridgeConstruction = sources.benchmark ? await constructionTime(ReadableStream) : undefined;
       const cache = new Map();
       let frame;
       const proc = { env: {}, nextTick: (fn, ...args) => queueMicrotask(() => fn(...args)), versions: { node: "26.7.0" }, stderr: { write() {} }, emitWarning() {} };
@@ -65,9 +77,10 @@ for (const name of ["chromium", "webkit"]) {
         sameConstructor: globalThis[name] === Ctor,
         samePrototype: globalThis[name].prototype === Ctor.prototype,
         nativeInstance: new globalThis[name]() instanceof Ctor,
+        constructorLink: globalThis[name].prototype.constructor === globalThis[name],
       }]));
       dispose();
-      return { results: globalThis.__nativeStreamResults ?? [], error, brands };
+      return { results: globalThis.__nativeStreamResults ?? [], error, brands, construction: sources.benchmark ? { native: nativeConstruction, bridge: bridgeConstruction, timingsAreNoisy: true } : undefined };
     }, sources);
     const summary = { browser: name, version: browser.version(), ...result, pageErrors };
     console.log(JSON.stringify(summary));

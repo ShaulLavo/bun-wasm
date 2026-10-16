@@ -29,8 +29,19 @@ await test("native constructors preserve prototype identity and subclassing", as
   const transform = new TransformStream();
   check(transform.readable.constructor === ReadableStream, "transform readable constructor link");
   check(transform.writable.constructor === WritableStream, "transform writable constructor link");
-  class Derived extends ReadableStream {}
-  check(new Derived() instanceof Derived, "readable subclassing");
+  for (const Ctor of [ReadableStream, WritableStream, TransformStream]) {
+    const instance = new Ctor();
+    check(instance.constructor === Ctor, "instance constructor link");
+    const descriptor = Object.getOwnPropertyDescriptor(Ctor.prototype, "constructor");
+    check(descriptor.writable && descriptor.configurable && !descriptor.enumerable, "constructor descriptor flags");
+    class Derived extends Ctor {}
+    const derived = new Derived();
+    check(derived instanceof Derived && derived instanceof Ctor && derived.constructor === Derived, "stream subclassing");
+    check(Object.getPrototypeOf(Derived) === Ctor, "subclass constructor inheritance");
+  }
+  const response = new Response(new ReadableStream({ start(controller) { controller.close(); } }));
+  check(response.body.constructor === ReadableStream, "response body constructor link");
+  await response.body.cancel();
 });
 await test("guest pipeTo removes its abort listener after completion", async () => {
   let adds = 0;
@@ -45,6 +56,35 @@ await test("guest pipeTo removes its abort listener after completion", async () 
     await source.pipeTo(new WritableStream(), { signal });
   }
   check(adds === 3 && removes === 3, `listener cleanup ${adds}/${removes}`);
+});
+function countingSignal() {
+  const listeners = new Set();
+  return {
+    aborted: false,
+    reason: undefined,
+    adds: 0,
+    removes: 0,
+    listeners,
+    addEventListener(type, listener) { if (type === "abort") { this.adds++; listeners.add(listener); } },
+    removeEventListener(type, listener) { if (type === "abort") { this.removes++; listeners.delete(listener); } },
+  };
+}
+await test("guest pipeTo removes abort listener after stream rejection", async () => {
+  const signal = countingSignal();
+  const original = new Error("pipe read failure");
+  const input = new ReadableStream({ pull() { throw original; } });
+  await rejects(input.pipeTo(new WritableStream(), { signal }), original);
+  check(signal.adds === signal.removes && signal.listeners.size === 0, `rejected pipe listeners ${signal.adds}/${signal.removes}`);
+});
+await test("guest pipeTo removes abort listener after options throw", async () => {
+  const signal = countingSignal();
+  const original = new Error("pipe options failure");
+  const options = { signal, get preventClose() { throw original; } };
+  const input = new ReadableStream();
+  await rejects(Promise.resolve().then(() => input.pipeTo(new WritableStream(), options)), original);
+  check(signal.adds === signal.removes && signal.listeners.size === 0, `throwing pipe listeners ${signal.adds}/${signal.removes}`);
+  check(!input.locked, "throwing pipe retained readable lock");
+  await input.cancel();
 });
 await test("readable finished callback preserves unlocked state", async () => {
   let controller;

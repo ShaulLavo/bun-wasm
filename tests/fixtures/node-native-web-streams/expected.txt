@@ -1,5 +1,7 @@
 PASS native constructors preserve prototype identity and subclassing
 PASS guest pipeTo removes its abort listener after completion
+PASS guest pipeTo removes abort listener after stream rejection
+PASS guest pipeTo removes abort listener after options throw
 PASS readable finished callback preserves unlocked state
 PASS writable finished promise preserves unlocked state
 PASS readable original error
