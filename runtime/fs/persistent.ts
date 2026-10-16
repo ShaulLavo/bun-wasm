@@ -248,7 +248,9 @@ export class PersistentBackend extends MemoryBackend {
     this.tail = commit.catch(() => {
       this.checkpointEpoch++;
       for (const node of changed) if (!this.detached.has(node)) this.dirty.add(node);
-      for (const ino of removes) this.removed.add(ino);
+      // A later request may have linked an open inode back into the namespace while
+      // this commit waited. Retry the current tree, not the failed checkpoint's removals.
+      for (const ino of removes) if (!this.nodes.has(ino)) this.removed.add(ino);
       this.keys = new Map(this.committedKeys);
       this.revisions.clear();
     });

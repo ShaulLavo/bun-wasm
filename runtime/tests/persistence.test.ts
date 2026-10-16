@@ -336,3 +336,33 @@ test("recursive removal empties retained directory capabilities without destroyi
   expect(decode(await second.client.asyncCall("read", [file.node, 20, 0]))).toBe("child");
   second.client.release(file.node);
 });
+
+test("retry after a failed unlink checkpoint respects a later relink", async () => {
+  const store = new Store();
+  const { client, backend } = await fixture(store);
+  await client.asyncCall("writeFile", ["/a"], encode("kept"));
+  await client.asyncCall("flush");
+  const root = await client.asyncCall("preopen", ["/"]);
+  const a = await client.asyncCall("resolve", [root, "a"]);
+  client.retain(a.node);
+  await client.asyncCall("removePath", [a, false]);
+  let release!: () => void;
+  store.gate = new Promise<void>(done => { release = done; });
+  cleanup.push(release);
+  const removal = backend.flush();
+  const removalFailed = removal.then(() => undefined, error => error);
+  await new Promise(done => setTimeout(done, 5));
+  const b = await client.asyncCall("resolve", [root, "b"]);
+  expect(await client.asyncCall("link", [{ node: a.node, name: "", parent: undefined }, b])).toBe(0);
+  const relink = backend.flush();
+  const relinkFailed = relink.then(() => undefined, error => error);
+  store.fail = true; release();
+  const failures = await Promise.all([removalFailed, relinkFailed]);
+  expect(failures[0]?.message).toContain("storage failed");
+  expect(failures[1]?.message).toContain("invalidated");
+  store.gate = undefined; store.fail = false;
+  await backend.flush();
+  const second = await fixture(store);
+  expect(decode(await second.client.asyncCall("readFile", ["/b"]))).toBe("kept");
+  client.release(a.node);
+});
