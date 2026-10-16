@@ -2315,6 +2315,26 @@ static inline bool js_check_stack_overflow(JSRuntime *rt, size_t alloca_size)
     return unlikely(sp < rt->stack_limit);
 }
 
+/* bun-wasm: a wasm host keeps call frames outside linear memory, so the
+   check above only sees the C shadow stack. Recursive C paths that keep
+   few locals in memory reserve shadow bytes for the wasm frames of each
+   level, so one budget bounds the host call stack on every path. The
+   reservation lasts until the calling function returns; the pointer
+   escapes so the compiler keeps all of it. Sizes are measured, see
+   docs/stack-limits.md. */
+#if defined(__wasi__)
+static void *volatile js_wasm_frame_sink;
+#define js_reserve_wasm_frame(size) ((void)(js_wasm_frame_sink = alloca(size)))
+#else
+#define js_reserve_wasm_frame(size) ((void)0)
+#endif
+
+/* bun-wasm: the parser recurses through many small frames, and next_token
+   checks the stack, not the recursive functions. Each function on its
+   recursive cycles reserves for its own frame, so every nesting shape pays
+   per frame it adds. Unary and statement frames are larger. */
+#define js_parse_reserve_wasm_frame() js_reserve_wasm_frame(48)
+
 JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
 {
     JSRuntime *rt;
@@ -2372,9 +2392,6 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     rt->js_class_id_alloc = JS_CLASS_INIT_COUNT;
 
     rt->stack_size = JS_DEFAULT_STACK_SIZE;
-#ifdef __wasi__
-    rt->stack_size = 0;
-#endif
 
     JS_UpdateStackTop(rt);
 
@@ -3129,15 +3146,11 @@ JSRuntime *JS_GetRuntime(JSContext *ctx)
 
 static void update_stack_limit(JSRuntime *rt)
 {
-#if defined(__wasi__)
-    rt->stack_limit = 0; /* no limit */
-#else
     if (rt->stack_size == 0) {
         rt->stack_limit = 0; /* no limit */
     } else {
         rt->stack_limit = rt->stack_top - rt->stack_size;
     }
-#endif
 }
 
 void JS_SetMaxStackSize(JSRuntime *rt, size_t stack_size)
@@ -12150,6 +12163,7 @@ static JSValue JS_ToPrimitiveFree(JSContext *ctx, JSValue val, int hint)
     JSValue method, ret;
     if (JS_VALUE_GET_TAG(val) != JS_TAG_OBJECT)
         return val;
+    js_reserve_wasm_frame(192);
     force_ordinary = hint & HINT_FORCE_ORDINARY;
     hint &= ~HINT_FORCE_ORDINARY;
     if (!force_ordinary) {
@@ -17985,6 +17999,7 @@ static JSValue js_call_bound_function(JSContext *ctx, JSValueConst func_obj,
     p = JS_VALUE_GET_OBJ(func_obj);
     bf = p->u.bound_function;
     arg_count = bf->argc + argc;
+    js_reserve_wasm_frame(80);
     if (js_check_stack_overflow(ctx->rt, sizeof(JSValue) * arg_count))
         return JS_ThrowStackOverflow(ctx);
     arg_buf = alloca(sizeof(JSValue) * arg_count);
@@ -20949,6 +20964,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 JSValue JS_Call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_obj,
                 int argc, JSValueConst *argv)
 {
+    js_reserve_wasm_frame(64);
     return JS_CallInternal(ctx, func_obj, this_obj, JS_UNDEFINED,
                            argc, argv, JS_CALL_FLAG_COPY_ARGV);
 }
@@ -20956,6 +20972,7 @@ JSValue JS_Call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_obj,
 static JSValue JS_CallFree(JSContext *ctx, JSValue func_obj, JSValueConst this_obj,
                            int argc, JSValueConst *argv)
 {
+    js_reserve_wasm_frame(64);
     JSValue res = JS_CallInternal(ctx, func_obj, this_obj, JS_UNDEFINED,
                                   argc, argv, JS_CALL_FLAG_COPY_ARGV);
     JS_FreeValue(ctx, func_obj);
@@ -21213,6 +21230,7 @@ static JSValue async_func_resume(JSContext *ctx, JSAsyncFunctionState *s)
 {
     JSValue func_obj;
 
+    js_reserve_wasm_frame(128);
     if (js_check_stack_overflow(ctx->rt, 0))
         return JS_ThrowStackOverflow(ctx);
 
@@ -24743,6 +24761,7 @@ static __exception int js_parse_template(JSParseState *s, int call, int *argc)
     JSValue raw_array, template_object;
     JSToken cooked;
     int depth, ret;
+    js_parse_reserve_wasm_frame();
 
     raw_array = JS_UNDEFINED; /* avoid warning */
     template_object = JS_UNDEFINED; /* avoid warning */
@@ -25227,6 +25246,7 @@ static __exception int js_parse_object_literal(JSParseState *s)
     const uint8_t *start_ptr;
     int start_line, start_col, prop_type;
     bool has_proto;
+    js_parse_reserve_wasm_frame();
 
     if (next_token(s))
         goto fail;
@@ -26059,6 +26079,7 @@ static __exception int js_parse_array_literal(JSParseState *s)
 {
     uint32_t idx;
     bool need_length;
+    js_parse_reserve_wasm_frame();
 
     if (next_token(s))
         return -1;
@@ -27054,6 +27075,7 @@ static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
     FuncCallType call_type;
     int optional_chaining_label;
     bool accept_lparen = (parse_flags & PF_POSTFIX_CALL) != 0;
+    js_parse_reserve_wasm_frame();
     /* bun-wasm: position reported for calls in stack traces. JSC (and so
        Bun) points at the callee: the identifier, or the property name of a
        method call, or the constructor after `new`. Upstream QuickJS reports
@@ -27821,6 +27843,7 @@ static __exception int js_parse_var(JSParseState *s, int parse_flags, int tok,
 static __exception int js_parse_unary(JSParseState *s, int parse_flags)
 {
     int op;
+    js_reserve_wasm_frame(80);
 
     switch(s->token.val) {
     case '+':
@@ -27949,6 +27972,7 @@ static __exception int js_parse_expr_binary(JSParseState *s, int level,
                                             int parse_flags)
 {
     int op, opcode;
+    js_parse_reserve_wasm_frame();
 
     if (level == 0) {
         return js_parse_unary(s, PF_POW_ALLOWED);
@@ -28113,6 +28137,7 @@ static __exception int js_parse_logical_and_or(JSParseState *s, int op,
                                                int parse_flags)
 {
     int label1;
+    js_parse_reserve_wasm_frame();
 
     if (op == TOK_LAND) {
         if (js_parse_expr_binary(s, 8, parse_flags))
@@ -28153,6 +28178,7 @@ static __exception int js_parse_logical_and_or(JSParseState *s, int op,
 static __exception int js_parse_coalesce_expr(JSParseState *s, int parse_flags)
 {
     int label1;
+    js_parse_reserve_wasm_frame();
 
     if (js_parse_logical_and_or(s, TOK_LOR, parse_flags))
         return -1;
@@ -28181,6 +28207,7 @@ static __exception int js_parse_coalesce_expr(JSParseState *s, int parse_flags)
 static __exception int js_parse_cond_expr(JSParseState *s, int parse_flags)
 {
     int label1, label2;
+    js_parse_reserve_wasm_frame();
 
     if (js_parse_coalesce_expr(s, parse_flags))
         return -1;
@@ -28212,6 +28239,8 @@ static __exception int js_parse_assign_expr2(JSParseState *s, int parse_flags)
     int opcode, op, scope;
     JSAtom name0 = JS_ATOM_NULL;
     JSAtom name;
+
+    js_parse_reserve_wasm_frame();
 
     if (s->token.val == TOK_YIELD) {
         bool is_star = false, is_async;
@@ -28520,6 +28549,7 @@ static __exception int js_parse_assign_expr(JSParseState *s)
 static __exception int js_parse_expr2(JSParseState *s, int parse_flags)
 {
     bool comma = false;
+    js_parse_reserve_wasm_frame();
     for(;;) {
         if (js_parse_assign_expr2(s, parse_flags))
             return -1;
@@ -29383,6 +29413,7 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
     JSAtom label_name;
     int tok;
 
+    js_reserve_wasm_frame(96);
     /* specific label handling */
     /* XXX: support multiple labels on loop statements */
     label_name = JS_ATOM_NULL;
@@ -44564,6 +44595,7 @@ static int64_t JS_FlattenIntoArray(JSContext *ctx, JSValueConst target,
     int64_t sourceIndex, elementLen;
     int present, is_array;
 
+    js_reserve_wasm_frame(64);
     if (js_check_stack_overflow(ctx->rt, 0)) {
         JS_ThrowStackOverflow(ctx);
         return -1;
@@ -51001,6 +51033,7 @@ static JSValue json_parse_value(JSParseState *s, JSONParseRecord *pr)
     JSValue val = JS_NULL;
     int ret;
 
+    js_reserve_wasm_frame(80);
     if (js_check_stack_overflow(ctx->rt, 0)) {
         return JS_ThrowStackOverflow(ctx);
     }
@@ -51226,6 +51259,7 @@ static JSValue internalize_json_property(JSContext *ctx, JSValueConst holder,
     JSAtom prop;
     JSPropertyEnum *atoms = NULL;
 
+    js_reserve_wasm_frame(64);
     if (js_check_stack_overflow(ctx->rt, 0)) {
         return JS_ThrowStackOverflow(ctx);
     }
@@ -51516,6 +51550,7 @@ static int js_json_to_str(JSContext *ctx, JSONStringifyContext *jsc,
     tab = JS_UNDEFINED;
     prop = JS_UNDEFINED;
 
+    js_reserve_wasm_frame(96);
     if (js_check_stack_overflow(ctx->rt, 0)) {
         JS_ThrowStackOverflow(ctx);
         goto exception;
@@ -52062,8 +52097,13 @@ static JSValue JS_ThrowTypeErrorRevokedProxy(JSContext *ctx)
     return JS_ThrowTypeError(ctx, "revoked proxy");
 }
 
-static JSProxyData *get_proxy_method(JSContext *ctx, JSValue *pmethod,
-                                     JSValueConst obj, JSAtom name)
+/* bun-wasm: the reservation belongs to the trap that recurses, not to this
+   helper, which returns first. */
+#define get_proxy_method(ctx, pmethod, obj, name) \
+    (js_reserve_wasm_frame(240), get_proxy_method1(ctx, pmethod, obj, name))
+
+static JSProxyData *get_proxy_method1(JSContext *ctx, JSValue *pmethod,
+                                      JSValueConst obj, JSAtom name)
 {
     JSProxyData *s = JS_GetOpaque(obj, JS_CLASS_PROXY);
     JSValue method;

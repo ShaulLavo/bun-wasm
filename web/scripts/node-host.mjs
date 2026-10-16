@@ -8,7 +8,7 @@
 // --net gives the program fetch, Bun.serve, node:http and node:net on real
 // sockets, like crates/bunwasm-host; without it, network APIs are missing as
 // under plain wasmtime (fetch still works, through Node's fetch).
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, writeSync } from "node:fs";
 import { registerHooks } from "node:module";
 import * as http from "node:http";
 import * as https from "node:https";
@@ -17,10 +17,33 @@ import * as zlib from "node:zlib";
 import { resolve, posix } from "node:path";
 import { WASI } from "node:wasi";
 import { fileURLToPath } from "node:url";
-import { Worker, workerData } from "node:worker_threads";
+import { Worker, isMainThread, workerData } from "node:worker_threads";
 import { installCliFetch } from "./node-install-net.mjs";
 import { memoryViews } from "../../runtime/core/memory-views.js";
 import { SubprocessHost, childTransport } from "../src/subprocess.js";
+
+// V8's stack limit also bounds wasm frames, and the main thread's (about 984 KB) is small. Every
+// guest, the top-level one included, runs in a Worker whose thread Node creates with this stack,
+// so deep guest recursion has room as in the native launcher, whatever `ulimit -s` says. The
+// guest's stack budget fits it (docs/stack-limits.md). `--stack-mb` overrides it for measurements.
+const STACK_MB = 32;
+const GUEST_STACK_KIB = "6144";
+if (isMainThread) {
+  const cli = process.argv.slice(2);
+  const end = cli.indexOf("--");
+  const at = cli.indexOf("--stack-mb");
+  const stackMb = at >= 0 && (end < 0 || at < end) ? Number(cli[at + 1]) : STACK_MB;
+  const guest = new Worker(new URL(import.meta.url), {
+    argv: cli,
+    workerData: { bunwasmMain: true, stackMb },
+    resourceLimits: { stackSizeMb: stackMb },
+  });
+  guest.on("error", (error) => {
+    process.stderr.write(`node-host: ${error.stack || error}\n`);
+    process.exitCode = 1;
+  });
+  guest.on("exit", (code) => process.exit(process.exitCode || code));
+}
 
 // The runtime replaces globalThis.process with its own; keep Node's.
 const nodeProcess = process;
@@ -39,6 +62,7 @@ for (; i < argv.length; i++) {
   }
   if (a === "--wasm") wasmPath = argv[++i];
   else if (a === "--net") withNet = true;
+  else if (a === "--stack-mb") i++;
   else if (a === "--dir") {
     const [hostDir, guest = hostDir] = argv[++i].split("::");
     preopens[guest] = hostDir;
@@ -59,6 +83,7 @@ if (Object.keys(preopens).length === 0) {
   preopens[process.cwd()] = process.cwd();
   env.PWD ??= process.cwd();
 }
+env.BUN_WASM_STACK_KIB ??= GUEST_STACK_KIB;
 
 const child = workerData?.bunwasmChild ? childTransport(workerData.transport) : null;
 let subprocess;
@@ -124,13 +149,13 @@ async function run() {
     stdin: child && (workerData.meta.stdin !== "inherit" || workerData.transport.inheritedStdin) ? workerData.transport.pipes[0] : undefined,
     output: (fd, bytes) => {
       if (child) child[fd === 2 ? "stderr" : "stdout"].writeAll(bytes);
-      else (fd === 2 ? nodeProcess.stderr : nodeProcess.stdout).write(bytes);
+      else writeSync(fd === 2 ? 2 : 1, bytes);
     },
     launch: (meta, transport, onError) => {
       validateCwd(meta.cwd);
       const worker = new Worker(new URL(import.meta.url), {
-        workerData: { bunwasmChild: true, module, preopens, meta, transport, withNet },
-        resourceLimits: { maxOldGenerationSizeMb: 128 },
+        workerData: { bunwasmChild: true, module, preopens, meta, transport, withNet, stackMb: workerData.stackMb },
+        resourceLimits: { maxOldGenerationSizeMb: 128, stackSizeMb: workerData.stackMb },
       });
       worker.on("error", onError);
       return worker;
@@ -176,8 +201,10 @@ async function run() {
     },
   });
 }
-run().catch((error) => {
-  if (child) child.stderr.writeAll(new TextEncoder().encode(`${error.stack || error}\n`));
-  else nodeProcess.stderr.write(`${error.stack || error}\n`);
+// The main thread only hosts the guest's Worker (above).
+if (!isMainThread) run().catch((error) => {
+  const message = new TextEncoder().encode(`${error.stack || error}\n`);
+  if (child) child.stderr.writeAll(message);
+  else writeSync(2, message);
   finish(1);
 });
