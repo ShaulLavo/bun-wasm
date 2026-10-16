@@ -5,7 +5,7 @@ Status: Approved (owner, 2026-10-16)
 ## Goal
 
 One reusable runtime for running WASM-compiled native programs in the browser. It grows out of
-bun-wasm's browser host (`web/src`) and serves bun.wasm, Brush (brush-web) and later programs. It
+bun-wasm's browser host (`web/src`) and serves bun.wasm, the shell and later programs. It
 provides processes, streaming pipes, a live shared filesystem on OPFS, networking and, later,
 threads.
 
@@ -15,10 +15,18 @@ than it is today. The process layer loads on the first spawn.
 
 ## Decisions
 
+- **The shell is our own** (shell track, `/work/reports/browser-shell-research/handoff-shell.md`):
+  a single-threaded async core on Bashkit's parser and interpreter semantics. Brush in brush-web
+  is today's working baseline and the reference for what a shell needs from the runtime; it is
+  not the long-term guest. The shell's next gate, real worker-backed spawn, shared interrupt,
+  inherited descriptors and a background job, runs on this runtime's process layer.
+- **Pipes serve two kinds of reader.** Preview1 programs block in `fd_read`; the async shell and
+  Bun's event loop use non-blocking reads and a readiness wait (`poll`). The same pipe endpoint
+  supports both.
 - **No WASIX.** Programs speak WASI preview1 plus our own extensions: bun-wasm's `bun_wasm` host
   slots (`docs/host-abi.md`) and brush-web's process imports. The services underneath know nothing
   about any guest ABI, so another contract can be added later as an adapter without touching them.
-- **No Unix fork.** Bun, Brush and Node's `child_process` all spawn. Node's `child_process.fork()`
+- **No Unix fork.** Bun, the shell and Node's `child_process` all spawn. Node's `child_process.fork()`
   and Bun's `spawn({ ipc })` are spawn plus a message channel, and we support them that way. A
   program that needs Unix fork (real bash, for example) is out of scope until a specific one
   matters.
@@ -39,7 +47,7 @@ than it is today. The process layer loads on the first spawn.
 | net | Fetch bridge, virtual TCP namespace shared across processes, preview ingress | programs that use the network |
 | proc | Supervisor, worker pool, process table, pipes, IPC channel, kill and job control | first spawn |
 | threads | `wasi-threads` adapter (later) | threaded programs |
-| adapters | Bun slots, Brush process imports, terminal (raw/cooked, resize, EOF) | the program that needs them |
+| adapters | Bun slots, shell process imports, terminal (raw/cooked, resize, EOF) | the program that needs them |
 
 Bun-specific code stays in bun-wasm: `engine-host.js`, module serving in the service worker,
 the install cache, `runner.ts`.
@@ -74,8 +82,8 @@ playground and brush-web onto it.
 
 ## First milestone acceptance
 
-1. Brush and bun.wasm use the same runtime package, filesystem service and process manager.
-2. Executable selection is generic: Brush, bun.wasm and a small preview1 fixture are registered
+1. The shell and bun.wasm use the same runtime package, filesystem service and process manager.
+2. Executable selection is generic: the shell, bun.wasm and a small preview1 fixture are registered
    programs; the process service has no Bun-only assumption.
 3. Pipelines run concurrently: a ticker piped into a filter shows lines before the producer exits;
    a stream larger than 1 MiB completes with bounded memory.
@@ -85,7 +93,7 @@ playground and brush-web onto it.
    exits. Editor changes go through the same filesystem.
 6. Files survive reload, including metadata, rename, and unlink with an open descriptor.
 7. Ctrl+C stops the foreground job and its descendants, including CPU-bound workers, wakes blocked
-   I/O, and returns Brush to the prompt with status 130.
+   I/O, and returns the shell to the prompt with status 130.
 8. Bun previews keep working, routed through the network service.
 9. Bun light stays near its budget: runtime JS about 100 KiB minified / 35 KiB gzipped, the
    process layer loaded only on first spawn, and no slower startup. The budget is a guide, not a
