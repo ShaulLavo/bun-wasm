@@ -627,15 +627,18 @@
     const EventEmitter = internal.require("events");
     // A small subset of Node streams: push/pipe/data/end, write/end/finish
     // and Transform. Backpressure is not modelled.
-    class Stream extends EventEmitter {
-      pipe(dest) {
-        this.on("data", (chunk) => dest.write(chunk));
-        this.on("end", () => {
-          if (dest !== globalThis.process.stdout && dest !== globalThis.process.stderr && dest.end) dest.end();
-        });
-        return dest;
-      }
+    function Stream(options) {
+      EventEmitter.call(this, options);
     }
+    Object.setPrototypeOf(Stream, EventEmitter);
+    Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
+    Stream.prototype.pipe = function pipe(dest) {
+      this.on("data", (chunk) => dest.write(chunk));
+      this.on("end", () => {
+        if (dest !== globalThis.process.stdout && dest !== globalThis.process.stderr && dest.end) dest.end();
+      });
+      return dest;
+    };
     class Readable extends Stream {
       constructor(options = {}) {
         super();

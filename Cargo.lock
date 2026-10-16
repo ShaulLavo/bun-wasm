@@ -1099,6 +1099,7 @@ dependencies = [
  "flate2",
  "getrandom 0.3.4",
  "hmac",
+ "libc",
  "libsqlite3-sys",
  "md-5",
  "miniz_oxide 0.8.9",
