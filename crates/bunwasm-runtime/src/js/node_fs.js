@@ -161,6 +161,21 @@
   const directoryCleanup = new FinalizationRegistry((handle) => {
     try { native.closeDir(handle); } catch {}
   });
+  const directoryRefs = [];
+  function sweepDirectories() {
+    const live = [];
+    for (const record of directoryRefs) {
+      if (record.closed) continue;
+      if (record.ref.deref()) {
+        live.push(record);
+      } else {
+        try { native.closeDir(record.handle); } catch {}
+      }
+    }
+    directoryRefs.length = 0;
+    directoryRefs.push(...live);
+  }
+  globalThis.__bunwasmSweepDirs = sweepDirectories;
   globalThis.process?.once?.("exit", () => native.closeAllDirs());
 
   class Dir {
@@ -178,8 +193,9 @@
       this.#handle = handle;
       this.#path = publicPath;
       this.#publicPath = publicPath;
-      this.#token = {};
+      this.#token = { handle, ref: new WeakRef(this), closed: false };
       this.#options = options;
+      directoryRefs.push(this.#token);
       directoryCleanup.register(this, handle, this.#token);
     }
     get path() {
@@ -212,6 +228,7 @@
       this.#checkOpen();
       const handle = this.#handle;
       this.#handle = null;
+      this.#token.closed = true;
       directoryCleanup.unregister(this.#token);
       native.closeDir(handle);
       this.#entries = [];
