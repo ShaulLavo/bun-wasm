@@ -14,13 +14,28 @@ if (!directory) {
   try {
     mkdirSync(`${scratch}/retained-tree`);
     const failures: string[] = [];
-    for (const [name, exit] of Array.from(engines.keys()).flatMap(name => [[name, "natural"], [name, "explicit"], [name, "gc"]])) {
+    const cases = Array.from(engines.keys()).flatMap(name => [[name, "natural"], [name, "explicit"], [name, "gc"]])
+      .concat(["reallyExit", "abort", "kill", "uncaught"].map(exit => ["browser", exit]));
+    for (const [name, exit] of cases) {
       if (exit === "gc") rmSync(`${scratch}/gc-tree`, { recursive: true, force: true });
       const source = exit === "gc" ? readFileSync(`${root}/tests/fixtures/fs-opendir-gc/index.js`, "utf8") : `const fs = require('node:fs');
           globalThis.heldDirectories = Array.from({length: 10}, () => fs.opendirSync('/retained-tree'));
           process.on('exit', () => { globalThis.lastDirectory = fs.opendirSync('/retained-tree'); });
           ${exit === "explicit" ? "process.exit(0);" : ""}`;
-      writeFileSync(`${scratch}/index.js`, source);
+      const hardExit = new Map([
+        ["reallyExit", "process.reallyExit(0);"],
+        ["abort", "process.abort();"],
+        ["kill", "process.kill(process.pid);"],
+        ["uncaught", "setTimeout(() => { throw new Error('fatal directory test'); }, 0);"],
+      ]).get(exit) || "";
+      writeFileSync(`${scratch}/index.js`, `
+        globalThis.directoryCountForTest = require('bun:internal-for-testing').directoryCount;
+        globalThis.reopenDirectoryForTest = () => {
+          const d = require('node:fs').opendirSync('/retained-tree');
+          d.closeSync();
+        };
+        ${source}
+        ${hardExit}`);
       const result = spawnSync(nodeProcess.execPath, ["--expose-gc", "--no-warnings", import.meta.filename, name, exit, scratch], { encoding: "utf8", timeout: 60000 });
       if (result.status !== 0) failures.push(`${name} ${exit}\n${result.stdout}\n${result.stderr}`);
       nodeProcess.stdout.write(result.stdout);
@@ -41,6 +56,7 @@ async function observe() {
   const imports = wasi.getImportObject();
   const live = new Set<number>();
   let opened = 0;
+  const descriptors: number[] = [];
   let collectedDescriptorsReleased = false;
   const target = mode === "gc" ? "gc-tree" : "retained-tree";
   let instance: WebAssembly.Instance;
@@ -59,7 +75,9 @@ async function observe() {
         assert.equal(live.size, 0, "collection and held-owner close released all twenty-one descriptors before exit");
         collectedDescriptorsReleased = true;
       }
-      live.add(new DataView(memory()).getUint32(out, true));
+      const descriptor = new DataView(memory()).getUint32(out, true);
+      live.add(descriptor);
+      descriptors.push(descriptor);
       opened++;
     }
     return result;
@@ -73,16 +91,28 @@ async function observe() {
   assert(artifact, `unknown engine ${engine}`);
   const module = await WebAssembly.compile(readFileSync(resolve(root, "dist", artifact)));
   instance = await WebAssembly.instantiate(module, imports);
+  const expectedCode = new Map([["abort", 134], ["kill", 143], ["uncaught", 1]]).get(mode) || 0;
   const code = wasi.start(instance);
   if (engine === "browser") {
     await globalThis.fetch("data:,");
-    const exitCode = await startEngineHost({ instance, moduleUrls: "data" });
-    assert.equal(exitCode, 0);
-  } else assert.equal(code, 0);
-  const expected = mode === "gc" ? 22 : 11;
+    let exitSnapshot;
+    const exitCode = await startEngineHost({ instance, moduleUrls: "data", onExit() {
+      exitSnapshot = { cursors: globalThis.directoryCountForTest(), descriptors: live.size };
+    } });
+    assert.equal(exitCode, expectedCode);
+    assert.deepEqual(exitSnapshot, { cursors: 0, descriptors: 0 }, "host exit notification observes no cursors or descriptors");
+  } else assert.equal(code, expectedCode);
+  const expected = mode === "gc" ? 22 : ["natural", "explicit"].includes(mode) ? 11 : 10;
   assert.equal(opened, expected, "guest owners opened real WASI descriptors");
   if (mode === "gc") assert(collectedDescriptorsReleased);
   assert.equal(live.size, 0, "guest exit closes every descriptor while its wasm instance is retained");
   assert(memory().byteLength > 0);
+  if (engine === "browser" && mode !== "gc") {
+    globalThis.reopenDirectoryForTest();
+    assert.equal(opened, expected + 1);
+    assert(descriptors.slice(0, -1).includes(descriptors.at(-1)), "retained instance reuses a released directory descriptor");
+    assert.equal(globalThis.directoryCountForTest(), 0);
+    assert.equal(live.size, 0);
+  }
   nodeProcess.stdout.write(`PASS directory descriptors ${engine} ${mode}: ${opened} opens, ${opened} closes, retained instance\n`);
 }
