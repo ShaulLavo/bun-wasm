@@ -434,3 +434,46 @@ test("observing an already published SIGKILL still revokes and completes the pro
   supervisor.observeSignal(pid, Signal.SIGKILL);
   expect(supervisor.wait(root, pid)!.status).toBe(137);
 });
+
+for (const delivery of ["kill", "killJob", "defaultSignal", "observeSignal"] as const) {
+  test(`${delivery} cannot downgrade a guest SIGKILL published before host observation`, async () => {
+    const { supervisor, root, contexts } = fixture();
+    const pid = supervisor.spawn(root, request());
+    await supervisor.start(pid);
+    const context = contexts.get(pid)!;
+    Atomics.store(context.requestedSignal, 0, Signal.SIGKILL);
+    Atomics.store(context.interrupt, 0, Signal.SIGKILL);
+    if (delivery === "killJob") supervisor.killJob(supervisor.jobOf(pid), Signal.SIGTERM);
+    else supervisor[delivery](pid, Signal.SIGINT);
+    expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: 9, status: 137 });
+    expect(Atomics.load(context.requestedSignal, 0)).toBe(9);
+    expect(Atomics.load(context.interrupt, 0)).toBe(9);
+    context.exit(0);
+    expect(supervisor.wait(root, pid)!.status).toBe(137);
+  });
+}
+
+for (const word of ["requestedSignal", "interrupt"] as const) {
+  test(`SIGKILL winning a ${word} compare-exchange race cannot be overwritten`, async () => {
+    const { supervisor, root, contexts } = fixture();
+    const pid = supervisor.spawn(root, request());
+    await supervisor.start(pid);
+    const context = contexts.get(pid)!;
+    const original = Atomics.compareExchange;
+    let raced = false;
+    Atomics.compareExchange = ((array: Int32Array, index: number, expected: number, replacement: number) => {
+      if (!raced && array === context[word]) {
+        raced = true;
+        Atomics.store(context.requestedSignal, 0, 9);
+        Atomics.store(context.interrupt, 0, 9);
+      }
+      return original(array, index, expected, replacement);
+    }) as typeof Atomics.compareExchange;
+    try { supervisor.kill(pid, Signal.SIGINT); }
+    finally { Atomics.compareExchange = original; }
+    expect(raced).toBe(true);
+    expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: 9, status: 137 });
+    expect(Atomics.load(context.requestedSignal, 0)).toBe(9);
+    expect(Atomics.load(context.interrupt, 0)).toBe(9);
+  });
+}

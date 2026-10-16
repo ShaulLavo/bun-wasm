@@ -19,6 +19,14 @@ function signalWord(source?: Int32Array | SharedArrayBuffer): Int32Array {
   if (!(word.buffer instanceof SharedArrayBuffer) || word.length !== 1) throw new TypeError("signal word must be one shared int32");
   return word;
 }
+// SIGKILL is sticky across page and guest writers, including a write racing our CAS.
+function publishSignal(word: Int32Array, signal: number): number {
+  for (;;) {
+    const previous = Atomics.load(word, 0);
+    if (previous === Signal.SIGKILL) return previous;
+    if (Atomics.compareExchange(word, 0, previous, signal) === previous) return signal;
+  }
+}
 function validFd(fd: number): boolean { return Number.isInteger(fd) && fd >= 0 && fd <= 0xffffffff; }
 function snapshot(spec: SpawnRequest): Readonly<SpawnRequest> {
   // Own all mutable request data before returning to the guest's synchronous spawn call.
@@ -140,14 +148,16 @@ export class ProcessSupervisor {
   observeSignal(pid: number, signal: number): void {
     const sig = checkedSignal(signal), record = this.table.require(pid);
     if (record.result) return;
-    if (record.signal !== Signal.SIGKILL) record.signal = sig;
+    if (record.signal !== Signal.SIGKILL) record.signal = Atomics.load(record.requestedSignal, 0) === Signal.SIGKILL ? Signal.SIGKILL : sig;
     if (record.signal === Signal.SIGKILL) this.finish(pid, { kind: "signaled", code: Signal.SIGKILL });
   }
-  private recordSignal(record: ProcessRecord, signal: number): void {
+  private recordSignal(record: ProcessRecord, signal: number, interrupt = true): void {
     if (record.result) return;
-    if (record.signal !== Signal.SIGKILL) record.signal = signal;
-    Atomics.store(record.requestedSignal, 0, record.signal);
-    Atomics.store(record.interrupt, 0, record.signal);
+    record.signal = publishSignal(record.requestedSignal, record.signal === Signal.SIGKILL ? record.signal : signal);
+    if (!interrupt) return;
+    record.signal = publishSignal(record.interrupt, record.signal);
+    // A guest may publish SIGKILL between our requested-word and interrupt-word CAS.
+    if (record.signal === Signal.SIGKILL) publishSignal(record.requestedSignal, record.signal);
     Atomics.notify(record.interrupt, 0);
   }
   /** Explicit guest default action. A random trap after a handled signal is not a signal exit. */
@@ -155,8 +165,7 @@ export class ProcessSupervisor {
     const record = this.table.get(pid);
     if (!record || record.result) return;
     const sig = checkedSignal(signal ?? (record.signal || Atomics.load(record.requestedSignal, 0)));
-    if (record.signal !== Signal.SIGKILL) record.signal = sig;
-    Atomics.store(record.requestedSignal, 0, record.signal);
+    this.recordSignal(record, sig, false);
     this.finish(pid, { kind: "signaled", code: record.signal });
   }
   killJob(jobId: number, signal: number): void {
@@ -168,9 +177,10 @@ export class ProcessSupervisor {
     // Record every target before callbacks: a dying process cannot spawn through an as-yet
     // unmarked sibling, or replace that sibling's SIGKILL with a handled exit.
     for (const record of targets) this.recordSignal(record, sig);
-    if (sig !== Signal.SIGKILL) return;
     for (const record of targets) {
-      if (this.table.get(record.pid) === record) this.finish(record.pid, { kind: "signaled", code: sig });
+      if (record.signal === Signal.SIGKILL && this.table.get(record.pid) === record) {
+        this.finish(record.pid, { kind: "signaled", code: Signal.SIGKILL });
+      }
     }
   }
   wait(parentPid: number, pid: number): ProcessExit | null { return this.child(parentPid, pid).result; }

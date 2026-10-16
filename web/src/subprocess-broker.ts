@@ -179,7 +179,14 @@ export class SubprocessBroker {
     void this.activation.then(supervisor => {
       const record = supervisor.get(pid);
       if (!record || record.parentPid !== parentPid) return;
-      if (!record.result) supervisor.kill(pid, 9);
+      if (!record.result) {
+        // Completion reaches the parent through shared memory before this page necessarily
+        // receives the worker's exit message. Preserve that acknowledgement's outcome kind.
+        const completed = child && Atomics.load(new Int32Array(child.spawn.child.control), 0);
+        const killed = child && Atomics.load(new Int32Array(child.spawn.child.requestedSignal), 0) === 9;
+        if (completed && !killed) return;
+        supervisor.kill(pid, 9);
+      }
       if (supervisor.get(pid)?.result) supervisor.reap(parentPid, pid);
     }).catch(error => this.report(error));
   }

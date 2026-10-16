@@ -328,3 +328,22 @@ test("a revoked parent cannot close an independent background child's handle whi
     expect(Atomics.load(new Int32Array(state.transports.get(background)!.requestedSignal), 0)).toBe(0);
   } finally { barrier.release(); state.dispose(); }
 });
+
+test("close after guest completion waits for the worker acknowledgement without replacing its exit", async () => {
+  const state = liveFixture();
+  try {
+    const supervisor = await state.started(state.pid);
+    const waiting = state.broker.wait(state.pid);
+    const transport = state.transports.get(state.pid)!;
+    childTransport(transport).finish(23);
+    expect(state.host.wait(state.pid)).toBe(23);
+    state.host.close(state.pid);
+    await Promise.resolve();
+    expect(supervisor.get(state.pid)!.result).toBeNull();
+    expect(Atomics.load(new Int32Array(transport.requestedSignal), 0)).toBe(0);
+    state.workers.get(state.pid)!.exit(23);
+    expect(await waiting).toEqual({ kind: "exited", code: 23, status: 23 });
+    expect(supervisor.get(state.pid)).toBeUndefined();
+    expect(Atomics.load(new Int32Array(transport.control), 1)).toBe(23);
+  } finally { state.dispose(); }
+});
