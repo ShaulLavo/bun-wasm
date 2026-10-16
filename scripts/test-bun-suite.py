@@ -34,7 +34,7 @@ class ReportTests(unittest.TestCase):
 
     def test_browser_provenance_hashes_runtime_core(self):
         opts = types.SimpleNamespace(engine="browser", suite=suite.ROOT, dependencies=suite.ROOT / ".unused-provenance-dependencies",
-                                     network="host", timeout=1, test_timeout=1)
+                                     network="host", timeout=1, test_timeout=1, node_parallel=False)
         sources = suite.provenance(opts, Path(__file__))["host_sources"]
         for path in ["runtime/core/wasi.ts", "runtime/core/memory-views.js", "runtime/core/descriptors.ts", "runtime/core/filesystem.ts", "runtime/core/path.ts"]:
             self.assertEqual(sources[path], suite.digest(suite.ROOT / path))
