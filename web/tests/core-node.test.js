@@ -32,12 +32,12 @@ test('unbundled headless hosts load in a dependency-free source checkout', async
   try {
     for (const path of ['web/package.json', 'runtime/package.json', 'runtime/core/memory-views.js',
       'web/src/crypto-inputs.js', 'web/src/crypto-host.js',
-      'web/scripts/node-host.mjs', 'web/scripts/node-install-net.mjs', 'web/src/subprocess.js', 'web/src/engine-host.js']) {
+      'web/scripts/node-host.mjs', 'web/scripts/node-stdio.ts', 'web/scripts/node-install-net.mjs', 'web/src/subprocess.js', 'web/src/engine-host.js']) {
       const target = join(dir, path);
       await mkdir(dirname(target), { recursive: true });
       await copyFile(new URL(`../../${path}`, import.meta.url), target);
     }
-    const imports = ['web/src/engine-host.js', 'web/src/subprocess.js', 'web/scripts/node-install-net.mjs'];
+    const imports = ['web/src/engine-host.js', 'web/src/subprocess.js', 'web/scripts/node-install-net.mjs', 'web/scripts/node-stdio.ts'];
     const load = spawnSync('node', ['--input-type=module', '-e', `for (const path of ${JSON.stringify(imports)}) await import('./' + path);`], { cwd: dir, encoding: 'utf8' });
     expect(load.stderr).toBe('');
     expect(load.status).toBe(0);

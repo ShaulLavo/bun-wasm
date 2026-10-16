@@ -63,15 +63,35 @@
     const stream = Object.create(EventEmitter.prototype);
     EventEmitter.call(stream);
     const write = fd === 1 ? native.writeStdout : native.writeStderr;
+    let failure = null;
+    function flushFailure() {
+      const { error, callbacks } = failure;
+      for (const callback of callbacks) callback(error);
+      failure = null;
+      stream.writable = true;
+      internal.nextTick(() => stream.emit("error", error));
+    }
     Object.assign(stream, {
       fd,
       writable: true,
+      destroyed: false,
       isTTY: native.isatty(fd),
       columns: Number(env.COLUMNS) || 80,
       rows: Number(env.LINES) || 24,
       write(chunk, encoding, callback) {
         if (typeof encoding === "function") callback = encoding;
-        write(typeof chunk === "string" ? chunk : internal.toUint8(chunk));
+        if (failure) {
+          if (typeof callback === "function") failure.callbacks.push(callback);
+          return false;
+        }
+        try {
+          write(typeof chunk === "string" ? chunk : internal.toUint8(chunk));
+        } catch (error) {
+          failure = { error, callbacks: typeof callback === "function" ? [callback] : [] };
+          stream.writable = false;
+          internal.nextTick(flushFailure);
+          return false;
+        }
         if (typeof callback === "function") internal.nextTick(callback, null);
         return true;
       },
