@@ -142,3 +142,52 @@ These priorities count app projects, not individual command rows.
 
 
 Rank remaining causes by the number of distinct app projects they would unblock, rather than counting install, dev, and build rows as separate apps. An install or module-loading fix exposes the next blocker; it does not promise that the app will then pass.
+
+### Stack review follow-up
+
+The revised capture adapter selects the formatter on the first stack read and
+memoizes successful results, including non-string values. Throwing formatters
+throw at access and can be retried after replacement. JSC CallSite strings keep
+the locations already mapped by the inspector. QuickJS Error construction also
+defers public formatting; ordinary JSC Error construction stays native.
+
+The reviewed artifacts fail lazy capture on QuickJS and JSC, eager construction
+on QuickJS, and the non-idempotent mapped-location regression on JSC. The revised
+artifacts pass all three regression fixtures on every engine. All 104 fixtures
+pass on each engine. The complete web gate and all six site HMR runs pass.
+Express and Koa retain all 12 native install/server passes, with no registry
+misses. There are no playground rows defined for these server fixtures.
+
+| Engine | Reviewed Express/Koa stages | Revised stages |
+| --- | --- | --- |
+| QuickJS | 4/4 | 4/4 |
+| JSC | 4/4 | 4/4 |
+| Browser engine | 4/4 | 4/4 |
+
+Median microseconds per unread construction, measured inside the runtime with
+`scripts/bench/error-construction.js`. Each case warms up 1,000 operations, then
+runs five samples of 10,000 operations with stackTraceLimit 10. Startup is excluded.
+
+| Engine | Operation | Before, µs | After, µs |
+| --- | --- | ---: | ---: |
+| quickjs | new Error default | 10.187 | 1.493 |
+| quickjs | capture default | 10.090 | 2.478 |
+| quickjs | new Error custom | 10.481 | 2.331 |
+| quickjs | capture custom | 10.681 | 2.663 |
+| jsc | new Error default | 0.414 | 0.457 |
+| jsc | capture default | 1.224 | 1.769 |
+| jsc | new Error custom | 0.419 | 0.460 |
+| jsc | capture custom | 27.049 | 1.734 |
+
+Custom formatter counts fall from 50,000 to zero on QuickJS Error/capture and
+JSC capture. JSC Error construction calls none in both versions. Its unchanged
+native construction path measures 0.414 to 0.457 µs, with overlapping sample
+ranges. Default JSC capture pays about 0.545 µs for the lazy accessor required by
+late formatter selection. These are local construction measurements, not an
+application throughput claim.
+
+The same three upstream stack files retain 0/3 fully passing files, five failures,
+one error and zero timeouts on each engine. Evidence, raw benchmark samples,
+artifacts and exact commands are in
+`/work/reports/bun-wasm-app-reviews-2026-10-16/`. The coordinator removes the
+retained review evidence after both app-blocker PRs merge and verification finishes.
