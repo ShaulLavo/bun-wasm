@@ -161,6 +161,24 @@ test("clean persisted contents can exceed the resident pool even with few large 
   }
   expect((await client.asyncCall("readFile", ["/large0"])).length).toBe(bytes.length);
 });
+test("persisted files spanning segments reload lazily beyond the resident pool", async () => {
+  const store = new Store();
+  const first = await fixture(store, 64 * 1024 * 1024);
+  const bytes = new Uint8Array(32 * 1024 * 1024).fill(7);
+  for (let i = 0; i < 3; i++) {
+    await first.client.asyncCall("writeFile", [`/spanning${i}`], bytes);
+    await first.client.asyncCall("flush");
+  }
+  const second = await fixture(store, 64 * 1024 * 1024);
+  expect(store.reads).toBe(0);
+  for (let i = 0; i < 3; i++) {
+    const loaded = await second.client.asyncCall("readFile", [`/spanning${i}`]);
+    expect(loaded.length).toBe(bytes.length);
+    expect(loaded[0]).toBe(7);
+    expect(loaded.at(-1)).toBe(7);
+  }
+  expect(second.backend.shared.resources().usedBytes).toBeLessThanOrEqual(64 * 1024 * 1024);
+});
 test("memory-only worker sync acknowledges success with a zero errno", async () => {
   const { MemoryBackend } = await import("../fs");
   const service = new FilesystemService(new MemoryBackend());
