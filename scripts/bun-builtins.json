@@ -1,0 +1,7 @@
+{
+  "modules": [
+    "internal:freelist",
+    "node:querystring",
+    "node:punycode"
+  ]
+}

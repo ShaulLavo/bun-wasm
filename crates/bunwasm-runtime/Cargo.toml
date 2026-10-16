@@ -34,3 +34,7 @@ libsqlite3-sys = { version = "0.38", features = ["bundled"] }
 tar = { version = "0.4", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 wasmi = { version = "0.46.0", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+bunwasm-glue = { path = "../bunwasm-glue" }
+bunwasm-posix = { path = "../bunwasm-posix" }
