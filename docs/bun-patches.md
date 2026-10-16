@@ -61,6 +61,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
 | [`crates/bunwasm-runtime/src/crypto.rs`, GCM adapter](#webcrypto-backend) | Port | Adapt RustCrypto GCM to WebCrypto nonce and tag lengths. |
+| [`crates/bunwasm-runtime/src/js/crypto_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 
 ## Portable semver host functions
@@ -535,3 +536,13 @@ license is retained in `third_party/licenses/aes-gcm-MIT`. This is a port, not a
 `scripts/generate-crypto-vectors.mjs` and both crypto fixture directories are original test
 adapters. Native Node generates signatures, key formats, ciphertext and derived bytes for
 comparison with wasm. No upstream test implementation is copied.
+
+
+## Node crypto key adapters
+
+`src/js/crypto_keys.js` is an original adapter, not copied Bun or Node code. It shares the
+WebCrypto backend while providing synchronous Node operations, Writable signing objects,
+PEM encoding and WebCrypto key conversions. `src/crypto.rs` adds Node's PKCS#1 and SEC1
+formats through the maintained RustCrypto parsers and converts ECDSA signatures between DER
+and IEEE P1363. Bun's Node crypto builtin requires a native binding, so loading its generated
+JavaScript alone cannot supply this behavior. The new fixture is original test code.

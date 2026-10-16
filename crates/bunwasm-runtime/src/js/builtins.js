@@ -84,32 +84,8 @@
       throw err;
     }
 
-    const secretKeys = new WeakMap();
-    class KeyObject {
-      constructor() {
-        throw new TypeError("Illegal constructor");
-      }
-      get type() { return "secret"; }
-      get symmetricKeySize() { return secretKeys.get(this).length; }
-      export(options) {
-        const bytes = secretKeys.get(this);
-        if (options?.format === "jwk") return { kty: "oct", k: bytes.toString("base64url") };
-        return Buffer.from(bytes);
-      }
-      equals(other) {
-        if (!(other instanceof KeyObject)) throw Object.assign(new TypeError('The "otherKeyObject" argument must be a KeyObject'), { code: "ERR_INVALID_ARG_TYPE" });
-        const left = secretKeys.get(this);
-        const right = secretKeys.get(other);
-        return left.length === right.length && timingSafeEqual(left, right);
-      }
-    }
-
-    function createSecretKey(key, encoding) {
-      const bytes = Buffer.from(inputBytes(key, encoding));
-      const result = Object.create(KeyObject.prototype);
-      secretKeys.set(result, bytes);
-      return result;
-    }
+    const keyApi = internal.require("crypto_keys")(Buffer, inputBytes, timingSafeEqual);
+    const { KeyObject, createSecretKey } = keyApi;
 
     class Hash {
       #algorithm;
@@ -151,7 +127,7 @@
     }
 
     function createHmac(algorithm, key) {
-      const keyBytes = typeof key === "string" ? Buffer.from(key) : internal.toUint8(key && key.export ? key.export() : key).slice();
+      const keyBytes = key instanceof CryptoKey ? internal.crypto.decode(internal.crypto.record(key).key.k) : typeof key === "string" ? Buffer.from(key) : internal.toUint8(key && key.export ? key.export() : key).slice();
       try {
         return new Hash(algorithm, keyBytes);
       } catch {
@@ -228,7 +204,7 @@
       getCurves: () => [],
       webcrypto,
       subtle: webcrypto.subtle,
-      constants: {},
+      ...keyApi,
       Hash,
       Hmac: Hash,
     });

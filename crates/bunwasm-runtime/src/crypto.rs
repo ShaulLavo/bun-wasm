@@ -5,7 +5,9 @@ use aes::cipher::{BlockEncrypt, KeyInit};
 use ed25519_dalek::{Signer, Verifier};
 use pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use rand_core::OsRng;
-use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey};
+use rsa::pkcs1::{
+    DecodeRsaPrivateKey, DecodeRsaPublicKey, EncodeRsaPrivateKey, EncodeRsaPublicKey,
+};
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use serde_json::{Value as J, json};
 use signature::hazmat::{PrehashSigner, PrehashVerifier};
@@ -169,6 +171,9 @@ fn ec_import(a: &J, format: &str, b: &[u8]) -> Result<J> {
     macro_rules! curve {
         ($c:ident) => {
             match format {
+                "sec1" => Ok(data(serde_json::from_str(
+                    &data($c::SecretKey::from_sec1_der(b))?.to_jwk_string(),
+                ))?),
                 "pkcs8" => Ok(data(serde_json::from_str(
                     &data($c::SecretKey::from_pkcs8_der(b))?.to_jwk_string(),
                 ))?),
@@ -205,6 +210,8 @@ fn import(a: &J, format: &str, b: &[u8]) -> Result<J> {
     let k = match name {
         "ECDSA" | "ECDH" => ec_import(a, format, b)?,
         "RSASSA-PKCS1-v1_5" | "RSA-PSS" | "RSA-OAEP" => match format {
+            "pkcs1-private" => rsa_private_jwk(&data(rsa::RsaPrivateKey::from_pkcs1_der(b))?)?,
+            "pkcs1-public" => rsa_jwk(&data(rsa::RsaPublicKey::from_pkcs1_der(b))?),
             "pkcs8" => rsa_private_jwk(&data(rsa::RsaPrivateKey::from_pkcs8_der(b))?)?,
             "spki" => rsa_jwk(&data(rsa::RsaPublicKey::from_public_key_der(b))?),
             "jwk" => {
@@ -300,6 +307,8 @@ fn export(a: &J, format: &str, k: &J) -> Result<J> {
         return okp_export(name, format, k);
     }
     match format {
+        "pkcs1-private" => Ok(output(data(rsa_private(k)?.to_pkcs1_der())?.as_bytes())),
+        "pkcs1-public" => Ok(output(data(rsa_public(k)?.to_pkcs1_der())?.as_bytes())),
         "pkcs8" => Ok(output(data(rsa_private(k)?.to_pkcs8_der())?.as_bytes())),
         "spki" => Ok(output(data(rsa_public(k)?.to_public_key_der())?.as_bytes())),
         _ => Err("NotSupportedError"),
@@ -309,6 +318,10 @@ fn ec_export(a: &J, format: &str, k: &J) -> Result<J> {
     macro_rules! curve {
         ($c:ident) => {
             match format {
+                "sec1" => Ok(output(
+                    data(data($c::SecretKey::from_jwk_str(&k.to_string()))?.to_sec1_der())?
+                        .as_slice(),
+                )),
                 "pkcs8" => Ok(output(
                     data(data($c::SecretKey::from_jwk_str(&k.to_string()))?.to_pkcs8_der())?
                         .as_bytes(),
@@ -409,11 +422,12 @@ fn ec_sign(a: &J, k: &J, input: &[u8], sig: &[u8], verify: bool) -> Result<J> {
         if !verify {
             let key=data($c::ecdsa::SigningKey::from_slice(&bytes(k,"d")?))?;
             let s: $c::ecdsa::Signature=operation(key.sign_prehash(&digest))?;
-            return Ok(output(s.to_bytes()));
+            return Ok(output(if a["der"].as_bool().unwrap_or(false) {s.to_der().as_bytes().to_vec()} else {s.to_bytes().to_vec()}));
         }
         let public=data($c::PublicKey::from_jwk_str(&k.to_string()))?;
         let key=$c::ecdsa::VerifyingKey::from(public);
-        Ok(json!({"verified":$c::ecdsa::Signature::from_slice(sig).is_ok_and(|s| key.verify_prehash(&digest,&s).is_ok())}))
+        let parsed=if a["der"].as_bool().unwrap_or(false) {$c::ecdsa::Signature::from_der(sig)} else {$c::ecdsa::Signature::from_slice(sig)};
+        Ok(json!({"verified":parsed.is_ok_and(|s| key.verify_prehash(&digest,&s).is_ok())}))
     }}; }
     match text(a, "namedCurve")? {
         "P-256" => curve!(p256),
@@ -446,6 +460,7 @@ fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J
     };
     let hash = match text(a, "hash")? {
         "SHA-1" => 1,
+        "SHA-224" => 224,
         "SHA-256" => 256,
         "SHA-384" => 384,
         "SHA-512" => 512,
@@ -453,7 +468,8 @@ fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J
     };
     let pss = text(a, "name")? == "RSA-PSS";
     let salt = if pss {
-        i32::try_from(number(a, "saltLength")?).map_err(|_| "OperationError")?
+        i32::try_from(a["saltLength"].as_i64().ok_or("OperationError")?)
+            .map_err(|_| "OperationError")?
     } else {
         0
     };
