@@ -15,6 +15,7 @@ use std::io::{self, BufWriter, Write};
 use std::rc::Rc;
 use std::time::Instant;
 
+mod directory;
 mod encoding;
 mod glob;
 pub mod engine;
@@ -93,6 +94,7 @@ pub(crate) struct State {
     /// Set when `process.nextTick` queued work.
     tick_pending: Cell<bool>,
     fds: RefCell<natives::FdTable>,
+    directories: Rc<RefCell<directory::Directories>>,
     start: Instant,
     argv: Vec<String>,
 }
@@ -113,6 +115,7 @@ impl State {
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
             tick_pending: Cell::new(false),
             fds: RefCell::new(natives::FdTable::default()),
+            directories: Rc::new(RefCell::new(directory::Directories::default())),
             start: Instant::now(),
             argv,
         }
@@ -141,6 +144,7 @@ impl State {
     }
 
     pub(crate) fn exit(&self, code: i32) -> ! {
+        self.directories.borrow_mut().close_all();
         self.flush();
         // Skip engine teardown: values are still rooted (and JSC's VM
         // teardown aborts); the process is going away anyway.
@@ -348,6 +352,7 @@ fn run_with<E: Engine>(options: Options) -> i32 {
     let core = Rc::new(Core::<E> { state: state.clone(), internal: RefCell::new(None), handoffs: RefCell::new(HashMap::new()) });
     let engine = E::new(core.clone());
     let code = run_in_engine(&engine, &core, &options.entry, &main_path);
+    state.directories.borrow_mut().close_all();
     state.flush();
     // Skip teardown (see State::exit).
     std::mem::forget(engine);
