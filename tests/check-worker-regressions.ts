@@ -23,7 +23,7 @@ for (const test of selected) {
   const result = await new Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string; timeout: boolean }>(resolve => {
     let stdout = ""; let stderr = ""; let timeout = false;
     active = spawn(command[0], command.slice(1), { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
-    const timer = setTimeout(() => { timeout = true; active?.kill("SIGKILL"); }, 90_000);
+    const timer = setTimeout(() => { timeout = true; active?.kill("SIGKILL"); }, test.timeout ?? 90_000);
     active.stdout?.on("data", chunk => { stdout += chunk; });
     active.stderr?.on("data", chunk => { stderr += chunk; });
     active.on("close", (code, signal) => { clearTimeout(timer); active = undefined; resolve({ code, signal, stdout, stderr, timeout }); });
