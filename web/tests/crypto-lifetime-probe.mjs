@@ -33,7 +33,7 @@ const source = `(function(native) {
 })`;
 await startEngineHost({instance:{exports:{
   memory, bunwasm_alloc:() => 32768, bunwasm_result_ptr:() => 0,
-  bunwasm_describe() {put({natives:["polyfillSource", "flushOutput", "writeStderr"], constants:{hostCaps:{}}, entry:{kind:"run", main:"/main.js"}});},
+  bunwasm_describe() {put({natives:["polyfillSource", "flushOutput", "writeStderr", "closeAllDirs"], constants:{hostCaps:{}}, entry:{kind:"run", main:"/main.js"}});},
   bunwasm_call(index) {put(index === 0 ? source : undefined); return 0;},
 }}, onExit(code) {
   if (globalThis.__rejectNativeCrypto) process.exit(code);

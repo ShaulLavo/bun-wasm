@@ -1068,7 +1068,7 @@ archive, libc++ and WASI library search paths. Both the runtime and the WASI par
 support crate depend on it. Removing Bun's crypto placeholders requires this dependency
 wherever parser support is linked, including the standalone transpiler example.
 The archive is linked once through Cargo's `links` identity. The runtime no longer owns
-a second native build. `crates/bunwasm-transpiler/build.rs` supplies the example's WASI
-startup object because the shared environment disables Rust's self-contained C runtime.
+a second native build. `crates/bunwasm-transpiler/build.rs` and `crates/bunwasm-build/build.rs` supply the standalone
+example and bundler WASI startup objects because the shared environment disables Rust's self-contained C runtime.
 No upstream implementation changed. `scripts/test-transpiler-example.sh` and its mandatory
 invocation from `scripts/build.sh` remain unchanged.
