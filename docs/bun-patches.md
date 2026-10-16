@@ -72,7 +72,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
 | [`third_party/licenses/boringssl-LICENSE`](#webcrypto-backend) | Port | Retain BoringSSL license notices with the wasm backend. |
 | [`crates/bunwasm-runtime/src/crypto.rs`, GCM adapter and `third_party/licenses/aes-gcm-MIT`](#webcrypto-backend) | Port | Adapt RustCrypto GCM to WebCrypto nonce and tag lengths. |
-| [`crates/bunwasm-runtime/src/js/crypto_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
+| [`crates/bunwasm-runtime/src/js/crypto_keys.js` and `crypto_host_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters and `web/src/engine-host.js` provider capture](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
 | [`patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch`](#generated-function-parser-locations) | Port | Bun parser and printer import metadata, reused unchanged from the semantic-import lane. |
@@ -829,3 +829,12 @@ SHA-1 JWK identifiers are HS1, RS1 and PS1. HMAC generation validates the requir
 before allocating key material. The ECDSA adapter left-pads short P-384 prehashes with zeros,
 preserving the integer defined by ECDSA while meeting ecdsa 0.16.9's prehash input bound.
 No upstream source was copied or changed for these corrections.
+
+### Node key review corrections
+
+Class **Host feature**. The original `crypto_host_keys.js` adapter retains the browser's
+native provider and connects its asynchronous keys to synchronous Node key records. It
+imports wasm keys into that provider before native operations. Matching native KeyObject
+roundtrips retain their native CryptoKey. Secret conversion uses raw material instead of
+JWK; RSA signatures reject unsupported padding before dispatch. No upstream implementation
+was copied or changed for these corrections.

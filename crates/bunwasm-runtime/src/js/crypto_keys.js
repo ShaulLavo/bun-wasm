@@ -197,13 +197,22 @@
       }
       toCryptoKey(algorithm, extractable, keyUsages) {
         const r = nodeRecord(this);
-        return c.importKey(
-          "jwk",
-          { ...r.key },
+        const converted = c.importKey(
+          r.type === "secret" ? "raw" : "jwk",
+          r.type === "secret" ? c.decode(r.key.k) : { ...r.key },
           algorithm,
           extractable,
           keyUsages,
         );
+        if (!r.nativeKey) return converted;
+        const requested = c.record(converted), original = r.nativeKey;
+        const a = requested.algorithm, b = original.algorithm;
+        const sameAlgorithm = ["name", "namedCurve", "length", "modulusLength"]
+          .every(field => a[field] === b[field]) && a.hash?.name === b.hash?.name;
+        const samePolicy = requested.extractable === original.extractable &&
+          requested.usages.length === original.usages.length &&
+          requested.usages.every(usage => original.usages.includes(usage));
+        return sameAlgorithm && samePolicy ? original : converted;
       }
       get [Symbol.toStringTag]() {
         return "KeyObject";
@@ -527,6 +536,13 @@
         });
       if (a.name !== "Ed25519") a.hash = { name: hash(digest) };
       if (family(a) === "rsa") {
+        if (options.padding !== undefined &&
+            ![constants.RSA_PKCS1_PADDING, constants.RSA_PKCS1_PSS_PADDING].includes(options.padding))
+          throw Object.assign(new Error("Illegal or unsupported padding mode"), {
+            code: options.padding === constants.RSA_NO_PADDING
+              ? "ERR_OSSL_EVP_INVALID_PADDING_MODE"
+              : "ERR_OSSL_EVP_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE",
+          });
         a.name =
           options.padding === constants.RSA_PKCS1_PSS_PADDING
             ? "RSA-PSS"

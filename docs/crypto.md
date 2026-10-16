@@ -122,3 +122,20 @@ An offline Next 15.5.6 browser-engine/native-host replay with PR 13's import tra
 main's Next runtime fixes passes installation. Build advances beyond the missing crypto
 operation and stops at `TypeError: _promises.default.opendir is not a function`. Dev has no
 useful diagnostic; start is blocked by build. The replay is not a passing Next application.
+
+### Host key interop
+
+The browser engine keeps the original native SubtleCrypto object. Its key bridge retains
+private key records at asynchronous creation boundaries for Node's synchronous KeyObject
+operations. Generated non-extractable keys return as non-extractable native keys; the
+private records support the same KeyObject conversion as the wasm provider. Converting a
+native key back with the same algorithm, extractability and usages returns its native key.
+Keys created synchronously by Node APIs enter the native provider when a SubtleCrypto
+operation consumes them. This fills the native provider's inability to import a wasm key
+synchronously. The provider performs the cryptographic operation.
+
+Secret KeyObject conversion imports raw bytes, including HKDF and PBKDF2 material. RSA
+signature padding accepts the default, PKCS#1 v1.5 and PSS modes. Other values throw before
+the backend runs. Native Bun also throws on streamed verification; Node 26 returns false
+there, while its one-shot verification throws. The runtime follows the requested throwing
+behavior on both paths.
