@@ -64,6 +64,14 @@ w.terminate().then(async () => {
   healthy.on('exit', code => { assert.equal(code, 0); console.log('constructor failures reclaimed'); });
 });`,
   }, {
+    name: "clone-atomic-transfer", exit: 0, output: ["clone transfer attached"],
+    code: `${start}
+${memory}
+const a = new ArrayBuffer(4); const b = memory.buffer;
+assert.throws(() => structuredClone({a,b}, {transfer:[a,b]}), {name:'DataCloneError'});
+assert.equal(a.byteLength, 4); assert.equal(b.byteLength, 65536);
+console.log('clone transfer attached');`,
+  }, {
     name: "constructor-rollback", exit: 0, timeout: 10000, output: ["failed constructor reaped"],
     code: `${start}
 ${memory}
