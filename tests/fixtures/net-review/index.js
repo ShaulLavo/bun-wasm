@@ -219,7 +219,13 @@ async function requestUpgrade(response, options = {}) {
   const errors = [];
   let upgraded;
   req.on("error", err => errors.push(err));
-  req.on("upgrade", (message, socket, head) => { upgraded = { message, socket, head }; });
+  req.on("upgrade", (message, socket, head) => {
+    const listeners = { data: socket.listenerCount("data"), end: socket.listenerCount("end"), close: socket.listenerCount("close") };
+    const chunks = [head];
+    const receive = chunk => chunks.push(chunk);
+    upgraded = { message, socket, head, chunks, listeners, receive };
+    socket.on("data", receive);
+  });
   req.end();
   own(req.socket);
   await until(() => errors.length || upgraded);
@@ -250,10 +256,11 @@ async function headersHead() {
   const head = "z".repeat(32 * 1024);
   const valid = await requestUpgrade(["HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: raw\r\n\r\n" + head], { maxHeaderSize: 128, keepOpen: true });
   assert.equal(valid.errors.length, 0);
-  assert.equal(valid.upgraded.head.toString(), head, "upgrade head does not count toward the header limit");
-  assert.equal(valid.req.socket.listenerCount("data"), 0);
-  assert.equal(valid.req.socket.listenerCount("end"), 0);
-  assert.equal(valid.req.socket.listenerCount("close"), 0);
+  await until(() => Buffer.concat(valid.upgraded.chunks).length === head.length);
+  assert.equal(Buffer.concat(valid.upgraded.chunks).toString(), head, "upgrade head does not count toward the header limit");
+  assert.ok(valid.upgraded.head.length > 128, "post-header bytes exceed the configured header limit");
+  assert.deepEqual(valid.upgraded.listeners, { data: 0, end: 0, close: 0 });
+  valid.upgraded.socket.removeListener("data", valid.upgraded.receive);
   valid.upgraded.socket.destroy();
 }
 async function blocklist() {
