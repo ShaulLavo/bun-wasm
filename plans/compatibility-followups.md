@@ -161,6 +161,48 @@ signal state set by `kill()` at line 223. The child may already have settled;
 that cause remains unconfirmed. No sink code or provenance changed in the repeat.
 Keep this subprocess investigation separate from byte-sink behavior.
 
+
+## Next after directory handles
+
+Status: Approved
+
+The controlled main + PR 12 + PR 18 integration at
+`43d10f4e84997a51d07f8892ad72e739c2548fc3` runs the Next row on
+all three freshly built engines. Only the browser engine reaches the missing directory API;
+QuickJS and JSC stop earlier. Adding directory handles moves the browser build
+from `TypeError: _promises.default.opendir is not a function` to
+`Error: Child process IPC is not supported in bun-wasm`, code
+`ERR_NOT_SUPPORTED_IN_WASM`, at `crates/bunwasm-runtime/src/js/spawn.js:411`.
+Implement the actual child IPC transport and lifecycle rather than treating send
+as successful. It spans the subprocess runtime and host workers and is outside
+the directory-handle fix.
+
+QuickJS and JSC dev and build both fail with
+`LinkError: Unsupported WebAssembly export table` at
+`crates/bunwasm-runtime/src/js/webassembly.js:136`. Next invokes it from
+`node_modules/next/dist/compiled/@edge-runtime/primitives/load.js:5630` while
+instantiating llhttp. The wasm bridge identifies table exports but has no public
+table object adapter. Add real table/function-reference support through the wasm
+native boundary and test it on both embedded engines. Do not suppress the export.
+
+Run `scripts/app-matrix.sh --apps=next --hosts=native --engines=quickjs,jsc,browser
+--launcher=<private-target>/release/bun-wasm --timeout=60 --output=<unused-report-dir>`
+after rebuilding the same integration. Dev runs `bun run
+node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port <free-port>`;
+build runs `bun run node_modules/next/dist/bin/next build`. Both before and after
+have three install passes, six failures and three blocked starts, with no
+registry misses or errors. Browser dev exits without a diagnostic; its cause and
+source location remain unconfirmed. Exact logs and artifact hashes are retained
+in `/work/reports/bun-wasm-rv28-final-20261016/next-before/` and `next-after/`.
+
+The pending WebCrypto integration also exposes a standalone-example build gap.
+`scripts/build.sh` reaches `scripts/test-transpiler-example.sh:9`, then the linker
+cannot find `-lc` with WebCrypto's `link-self-contained=no` flags. Restoring Rust's
+libc alone exposes unresolved BoringSSL symbols. The local integration links that
+example with the same SDK libc, C++ runtime and BoringSSL archive as the CLI, and
+its compile/output/source-map check passes. The exact integration-only recipe is
+retained as `integration-example-fix.patch` in the same report. Keep standalone
+examples covered when landing the WebCrypto build configuration.
 ## Framework blockers reached after esbuild
 
 The approved compatibility campaign now reaches the failures recorded in

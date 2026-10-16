@@ -1,0 +1,1 @@
+HTTP upgrade hands a duplex socket and buffered head to its listener

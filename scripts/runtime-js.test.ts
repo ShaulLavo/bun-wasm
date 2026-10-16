@@ -89,3 +89,12 @@ test("embeds the converted runtime factories under their original names", () => 
   expect(new Glob("fixture.ts").match("fixture.ts")).toBe(true);
   expect(Array.from(new Glob("*").scanSync())).toEqual(["fixture.ts"]);
 });
+
+test("embeds the TCP factory chain under the names used by node:net", () => {
+  const result = runBuild(undefined, join(root, "crates/bunwasm-runtime"));
+  expect(result.exitCode).toBe(0);
+  const table = readFileSync(join(out, "polyfills.rs"), "utf8");
+  for (const name of ["net", "net_address", "node_net", "bun_tcp"]) {
+    expect(table).toContain(`("${name}", include_str!(`);
+  }
+});

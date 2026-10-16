@@ -14,6 +14,7 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
@@ -70,22 +71,47 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
 | [`crates/bunwasm-runtime/src/js/stack_trace.js`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
+| [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, `web/src/engine-host.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
 
 | [`runtime/core/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, memory, path, descriptor and filesystem-boundary adapters extracted into a reusable package. |
+| [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
 | [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and synchronize stdin and idle filesystem changes. |
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.ts`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
+| [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
+| [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets and write-side shutdown over the existing host ABI. |
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
 | [`patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch`](#generated-function-parser-locations) | Port | Bun parser and printer import metadata, reused unchanged from the semantic-import lane. |
 | [`crates/bunwasm-runtime/src/engine_quickjs.rs`, data conversion; `host.rs`, native-test import gate](#quickjs-data-conversion) | Host feature | Original adapter checks buffer tags before calling a throwing getter. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, buffer tag predicate](#quickjs-data-conversion) | Host feature | Original nonthrowing class query for ordinary and shared buffers. |
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-imports) | Host feature | Original generated-function adapter with module-relative dynamic imports. |
-
 | [`src/js/bun_console_constructor.js`](#bun-console-constructor) | Port | Generate Bun's Console constructor with lexical engine-independent hooks. |
 | [`scripts/generate-bun-console.mjs`, `src/js/console_constructor.js`, global Console wiring](#bun-console-constructor) | Host feature | Original generation and runtime adapters expose the shared constructor and its streams. |
+
+## TCP and IP helpers
+
+The IP regular expressions in `crates/bunwasm-runtime/src/js/net_address.js` come
+from Bun `src/js/internal/net/isIP.ts` at
+`4ceda2c2868d3a7703c7737ddd9de7244ec384df`. The port removes TypeScript annotations
+and the module export wrapper. The predicates themselves are unchanged.
+
+The other address helpers, `node_net.js`, `bun_tcp.js`, and the changes to
+`net.js`, the Rust host and the browser hosts are original adapters. They share
+one byte transport with fetch, Bun.serve, and WebSockets. The added host slots
+provide write-side shutdown and the local endpoint. HTTP upgrade listeners get
+a real Socket with the bytes received after the request header. The original
+adapters also own pipe backpressure across multiple destinations, cancellation of queued writes, exact-size
+reads, timeout listener cancellation, and bounded HTTP upgrade handshakes.
+No additional upstream implementation was copied for these corrections.
+
+Bun's `src/js/node/net.ts` depends on native Bun sockets, private stream modules,
+and runtime intrinsics. Its BlockList and SocketAddress use native bindings.
+These adapters implement the public contracts over our host handles while those
+bindings remain unavailable. This is not a switch to Bun's full net module.
+The upstream comparisons are recorded in [TCP support](tcp.md).
 
 ## Browser runtime core
 
@@ -101,6 +127,16 @@ geometric file growth and snapshot compaction remain local MemFS implementation 
 reserved socket slot bridge stays configured by `web/`, not imported into the generic core.
 Unbundled Node host adapters import the extracted JavaScript memory helper by repository-relative
 path so headless CLI workflows remain dependency-free.
+The original browser-build adapter resolves declared exports through the consuming app.
+It returns equivalent public installed-package paths so encoded isolated-cache directory
+names do not trigger Bun's double-dot plugin-path rejection. No upstream code is copied.
+
+## Browser package resolution
+
+Class **Host feature** for the original adapter in `scripts/browser-build.ts`. The adapter resolves
+the consuming app's `@bun-wasm/runtime` exports with Bun, then maps the resolved file back through
+the consumer's package path. This keeps the returned path absolute without exposing Bun's isolated
+package-cache spelling to the build plugin. No upstream source is copied.
 
 ## Portable semver host functions
 
@@ -797,6 +833,51 @@ Bootstrap captures its default stack formatter identity for this adapter.
 An installed user formatter stays authoritative; the runtime's own default
 frame-only formatter still receives the Console Trace header.
 
+## Directory cursors
+
+Class **Host feature**. `crates/bunwasm-runtime/src/directory.rs` and the directory
+APIs in `src/js/node_fs.js` and `web/src/engine-host.js` are original adapters. They implement Node's public
+`opendir`, `opendirSync`, `fs.promises.opendir` and `Dir` contract without copying
+an upstream implementation. Bun's `src/js/node/fs.ts` at pinned upstream revision
+`9510e74152073d850a18758ca41114d8f214ffa6` was read as a reference. Its `Dir` eagerly
+collects directory entries through native `fs.readdir`, so it cannot supply bounded
+reads over this runtime's WASI directory handles.
+
+Rust owns open `std::fs::ReadDir` cursors and recursive traversal. Each native read
+returns at most `bufferSize` entries. Raw filename bytes cross the engine boundary
+before JavaScript applies the requested encoding. JavaScript owns the async operation
+queue, callback timing, Dirent construction, iteration and explicit disposal.
+Closing drops the active native cursor and pending traversal paths. `FinalizationRegistry`
+releases abandoned native IDs through an idempotent native release. Its unregister
+token is separate from the owner, because the pinned QuickJS stores tokens strongly.
+Runtime shutdown clears the remaining cursor table after user exit listeners, including when the host
+retains the wasm instance. The browser engine also clears it in `EngineHost.exit`
+before notifying the host. This covers `reallyExit`, abort, self-kill and fatal
+errors that bypass exit listeners. The release is idempotent across both paths.
+Native exits also clear the table before skipping engine teardown.
+The public path representation stays separate from the lookup string, so Buffer paths remain Buffers in `Dir.path` and
+`Dirent.parentPath`. The async queue keeps a refill operation active through its callback,
+while an already-buffered read does not block synchronous work. The fixture is original
+test code and runs against Node as a contract control.
+
+Recursive traversal is breadth-first. Node's order can change with buffer size;
+this adapter does not promise that order. Directory enumeration order is unspecified.
+
+## JSC finalizer dispatch
+
+Class **Host feature**. The additions to `crates/bunwasm-jsc/cpp/helpers.cpp`,
+`src/sys.rs` and `crates/bunwasm-runtime/src/engine_jsc.rs` are original adapters.
+They call WebKit's existing full-collection and deferred-work APIs. No upstream
+implementation is copied or modified. The references are
+`Source/JavaScriptCore/API/JSBase.cpp`, `heap/Heap.cpp`, `runtime/VM.cpp`,
+`runtime/DeferredWorkTimer.h` and `runtime/JSFinalizationRegistry.cpp` in Bun's
+WebKit fork at `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`.
+
+The public `JSGarbageCollect` API reports an abandoned object graph without
+forcing collection. The adapter collects synchronously with the VM's atom table
+installed, then restores the calling thread's table. Event-loop microtask draining
+also dispatches deferred work, which is where JSC schedules registry callbacks.
+Without this dispatch, collected directory owners retain their native cursors.
 ## esbuild WebAssembly distribution
 
 Class **Host feature**. The distribution selector in

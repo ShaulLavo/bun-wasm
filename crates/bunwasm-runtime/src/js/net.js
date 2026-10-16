@@ -1015,6 +1015,8 @@
       _destroy(error, callback) {
         this._aborted = true;
         this._abortController.abort(error);
+        if (this._upgrade) this._cancelUpgrade();
+        if (this.socket) this.socket.destroy();
         callback(error);
       }
       setTimeout() {

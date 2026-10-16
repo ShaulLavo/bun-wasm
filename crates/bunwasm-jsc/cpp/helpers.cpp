@@ -15,6 +15,8 @@
 #include "JSValueRef.h"
 #include "Completion.h"
 #include "ErrorInstance.h"
+#include "DeferredWorkTimer.h"
+#include <wtf/Threading.h>
 #include "Identifier.h"
 #include "InternalFieldTuple.h"
 #include "JSCInlines.h"
@@ -240,9 +242,23 @@ bool bunjsc_drain_microtasks(JSContextRef ctx)
     JSGlobalObject* global = toJS(ctx);
     VM& vm = global->vm();
     JSLockHolder lock(vm);
-    bool pending = !vm.defaultMicrotaskQueue().isEmpty();
+    auto& thread = WTF::Thread::currentSingleton();
+    auto* previousTable = thread.setCurrentAtomStringTable(vm.atomStringTable());
+    bool pending = !vm.defaultMicrotaskQueue().isEmpty() || vm.deferredWorkTimer->hasImminentlyScheduledWork();
     vm.drainMicrotasks();
+    vm.deferredWorkTimer->doWork(vm);
+    thread.setCurrentAtomStringTable(previousTable);
     return pending;
+}
+
+void bunjsc_collect_garbage(JSContextRef ctx)
+{
+    VM& vm = toJS(ctx)->vm();
+    JSLockHolder lock(vm);
+    auto& thread = WTF::Thread::currentSingleton();
+    auto* previousTable = thread.setCurrentAtomStringTable(vm.atomStringTable());
+    vm.heap.collectNow(Sync, CollectionScope::Full);
+    thread.setCurrentAtomStringTable(previousTable);
 }
 
 // -1: not a promise, 0: pending, 1: fulfilled, 2: rejected.

@@ -720,6 +720,8 @@
     } catch (err) {
       // An exception inside an exit handler is itself fatal.
       printError(err);
+    } finally {
+      native.closeAllDirs();
     }
   }
   internal.emitExit = emitExit;

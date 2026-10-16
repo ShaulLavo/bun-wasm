@@ -72,7 +72,7 @@ def git(suite, *args):
 
 def discover(opts):
     paths = git(opts.suite, "ls-files", "test").splitlines()
-    paths = [path[5:] for path in paths if TEST_NAME.search(Path(path).name) or (opts.node_parallel and path.startswith("test/js/node/test/parallel/test-") and Path(path).suffix in {".js", ".mjs", ".cjs"})]
+    paths = [path[5:] for path in paths if TEST_NAME.search(Path(path).name) or (opts.node_parallel and path.startswith("test/js/node/test/parallel/test-") and Path(path).suffix in {".js", ".mjs", ".cjs"}) or (path[5:] in opts.glob and Path(path).suffix in {".js", ".mjs", ".cjs", ".ts"})]
     paths = [path for path in paths if any(fnmatch.fnmatchcase(path, glob) or path.startswith(glob.rstrip("/") + "/") for glob in opts.glob)]
     return sorted(paths)[:opts.limit]
 
@@ -169,8 +169,8 @@ def command(opts, wasm, work, preloads, path):
     env = {"PWD": "/bun/test", "HOME": "/tmp", "TMPDIR": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin", "CI": "1", "AGENT": "0", "NO_COLOR": "1", "BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING": "1", "BUNWASM_TEST": "1"}
     flags = [part for key, value in env.items() for part in ["--env", f"{key}={value}"]]
     assertion_script = is_assertion_script(opts, work / "bun/test" / path, path)
-    tests = ["run", "/bun/test/" + path] if assertion_script else ["test", "--timeout", str(opts.test_timeout)]
-    if not assertion_script:
+    tests = ["run", "/bun/test/" + path] if assertion_script or not TEST_NAME.search(Path(path).name) else ["test", "--timeout", str(opts.test_timeout)]
+    if tests[0] == "test":
         tests += [part for preload in preloads for part in ["--preload", "/bun/test/" + preload.removeprefix("./")]]
         tests += ["/bun/test/" + path]
     if opts.engine == "browser":
@@ -249,8 +249,9 @@ def invoke(opts, wasm, work, preloads, path):
     result.update(file=path, exit=proc.returncode, duration_seconds=round(time.monotonic() - started, 3), timed_out=timed_out, output_bytes=size, interrupted=STOP.is_set())
     result["assertion_script"] = is_assertion_script(opts, work / "bun/test" / path, path)
     result["skipped_script"] = result["assertion_script"] and bool(re.search(r"^1\.\.0 # Skipped:", text, re.M))
-    if result["skipped_script"]:
-        result["counts"]["skip"] += 1
+    result["kind"] = "test" if TEST_NAME.search(Path(path).name) else "script"
+    if result["skipped_script"]: result["counts"]["skip"] += 1
+    if result["kind"] == "script": result["complete"] = not timed_out and not STOP.is_set()
     result["fully_passing"] = proc.returncode == 0 and (result["complete"] or result["assertion_script"]) and not result["skipped_script"] and result["counts"]["fail"] == 0 and result["counts"]["errors"] == 0 and (result["counts"]["pass"] > 0 or result["assertion_script"])
     return result
 
