@@ -574,6 +574,29 @@ files. Commands and per-file results are in
 The coordinator removes retained review artifacts after both app-blocker PRs merge
 and independent verification finishes.
 
+### Web Streams round-3 replay with semantic imports
+
+The round-3 replay includes main's semantic import linking from PR #13. It uses
+runtime artifacts built at `400a264`; the replay revision `fbb9a81` adds only
+follow-up documentation. Next 15.5.6 has 3 passing installs, 6 failed commands
+and 3 blocked starts. The offline registry serves 213 requests with no misses
+or errors, and the runner reports cleanup complete.
+
+QuickJS and JSC dev stop at `LinkError: Unsupported WebAssembly export table`
+while loading llhttp. Their builds exit without a useful diagnostic. Browser
+build advances to `NotSupportedError: crypto.subtle.generateKey is not supported
+in bun-wasm`; browser dev still has no useful diagnostic. These are separate
+observations. No missing Streams global appears and no passing Next app is
+claimed. Main's WASI-host changes from PR #24 are integrated afterward and get
+separate host verification.
+
+Reproduce with `scripts/app-matrix.sh --apps=next
+--engines=quickjs,jsc,browser --hosts=native --timeout=90 --output=<fresh-output>`,
+using the built native launcher and the heavy wrapper. Exact artifacts, all
+stage records, raw output and registry provenance are in
+`/work/reports/bun-wasm-streams-round3-fix-2026-10-16/next-final/`. The coordinator
+owns the retained evidence until independent review and follow-up reproduction.
+
 ## Next opendir rerun
 
 The review rerun on 2026-10-16 uses main through `12307c3`, the pending Web Streams
