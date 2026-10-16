@@ -4,9 +4,10 @@ const esbuild = require('esbuild');
 
 (async () => {
   try {
-    const transformed = await esbuild.transform('export const message: string = "日本語";', { loader: 'ts', format: 'esm', charset: 'utf8' });
+    const transformed = await esbuild.transform('export const message: string = "日本語";', { loader: 'ts', format: 'esm', charset: 'utf8', sourcemap: 'external', sourcefile: 'unicode.ts' });
     assert.match(transformed.code, /日本語/);
     assert.doesNotMatch(transformed.code, /: string/);
+    assert.match(JSON.parse(transformed.map).sourcesContent[0], /日本語/);
     await assert.rejects(esbuild.transform('const =', { loader: 'ts' }), /Transform failed/);
     writeFileSync('/value.ts', 'export const value: number = 42;');
     writeFileSync('/entry.ts', 'import { value } from "./value.ts"; console.log(value);');
@@ -26,7 +27,7 @@ const esbuild = require('esbuild');
       entryPoints: ['virtual:entry'], bundle: true, write: false,
       plugins: [{ name: 'fixture', setup(build) {
         build.onResolve({ filter: /^virtual:/ }, args => ({ path: args.path, namespace: 'fixture' }));
-        build.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: 'export default 123;' }));
+        build.onLoad({ filter: /.*/, namespace: 'fixture' }, async () => ({ contents: 'export default 123;' }));
       } }],
     });
     assert.match(pluginBuild.outputFiles[0].text, /123/);
