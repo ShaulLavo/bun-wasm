@@ -124,7 +124,8 @@ getter forms use the same coordinates. Ordinary JSC Error construction stays nat
 QuickJS's private native formatter collects raw CallSites. Its public formatter is
 selected lazily by the Error prototype accessor or capture accessor. Successful
 results, including non-string values, are memoized; formatter exceptions propagate
-at access and permit a later read to retry. No engine constructor is replaced.
+at access. A holder without a cached reentrant default permits a later read to retry.
+No engine constructor is replaced.
 Receiver and method metadata unavailable from these engines returns undefined or
 null; eval-origin metadata is unavailable and returns undefined. Engine placeholders such
 as `<input>` are not reported as source origins.

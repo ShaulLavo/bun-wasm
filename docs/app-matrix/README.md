@@ -252,6 +252,60 @@ commands are in `/work/reports/bun-wasm-app-reviews-2026-10-16/main84/`.
 The coordinator removes retained review evidence after both app-blocker PRs merge
 and independent verification finishes.
 
+### Frozen and reentrant stack review rerun
+
+Lazy stack reads now cache successful values independently of the holder's
+properties. Frozen and sealed holders retain their accessors. Capture rejects
+non-extensible targets, including those with an existing configurable stack,
+before mutating them. A successful recapture clears the prior cached value.
+
+One formatter guard covers all errors, as V8's guard does. A reentrant read uses
+the default stack and caches it privately until the outer formatter finishes.
+This preserves the outer result even when the formatter freezes or seals its
+holder after a self-read. Exceptions clear the guard. A self-read followed by an
+exception preserves the default cache; an exception without a self-read permits
+a later retry.
+
+Node v26.7.0 passes all 22 behavior controls. The failing-first fixture commits
+precede the implementation fixes. The reviewed binaries are from cd99cba.
+
+| Engine | Frozen/non-extensible cases before | Reentrancy cases before | After |
+| --- | --- | --- | --- |
+| QuickJS | 8/14 | 1/8 | 22/22 |
+| JSC | 5/14 | 2/8 | 22/22 |
+| Browser engine | 14/14 | 8/8 | 22/22 |
+
+After a normal merge of main through 7bb1c12, all 124 fixtures pass on each
+engine. The complete web gate and all six built-site HMR runs pass. The unchanged
+Express/Koa projects pass all 12 fresh-install and server stages, retaining 4/4
+per engine from the reviewed binary. The offline registry has zero misses and
+errors. No app fixture or package implementation was changed.
+
+The same three upstream stack files retain 0/3 fully passing files, five failed
+tests, one error and zero timeouts per engine, matching the reviewed binaries.
+
+Construction controls still make zero public formatter calls in all four cases
+on QuickJS and JSC. The same five-sample, 10,000-operation benchmark gives these
+medians in microseconds per construction. This is one bounded run under shared
+host load; the before artifact predates the merged generated-import changes.
+
+| Engine | Operation | Reviewed binary, µs | Fixed binary, µs |
+| --- | --- | ---: | ---: |
+| quickjs | new Error default | 1.870 | 1.889 |
+| quickjs | capture default | 2.689 | 3.027 |
+| quickjs | new Error custom | 1.689 | 2.260 |
+| quickjs | capture custom | 2.654 | 4.794 |
+| jsc | new Error default | 0.465 | 0.495 |
+| jsc | capture default | 2.804 | 2.159 |
+| jsc | new Error custom | 0.496 | 0.485 |
+| jsc | capture custom | 2.566 | 2.248 |
+
+Artifacts and complete command logs are retained in
+`/work/reports/bun-wasm-stack-round2-2026-10-16/`. Its `dist/` directory contains
+`bun.wasm`, `bun-jsc.wasm` and `bun-browser.wasm`; `launcher` is the matching
+native launcher. The coordinator removes this evidence after PR #11 merges and
+independent verification finishes.
+
 ## Next.js runtime boundaries
 
 A 2026-10-16 offline replay of Next 15.5.6 uses the unchanged published-package fixture. Fresh installs pass on QuickJS, JSC, and the browser-engine native host. Dev/build still fail and production start remains blocked. The counts are unchanged at 3 pass, 6 fail, and 3 blocked; the changes remove earlier runtime boundaries rather than establish app compatibility.
