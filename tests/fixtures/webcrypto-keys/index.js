@@ -262,3 +262,9 @@ assert(
   await s.verify("HMAC", checkHmac, await s.sign("HMAC", hmac, bytes), bytes),
 );
 console.log("key boundaries ok");
+
+assert.doesNotThrow(() => {
+  crypto.subtle = 123;
+});
+assert.equal(crypto.subtle, s);
+console.log("subtle identity ok");

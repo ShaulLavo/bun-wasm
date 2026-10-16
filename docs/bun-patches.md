@@ -57,10 +57,13 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
 | [`crates/bunwasm-semver/src/lib.rs`](#portable-semver-host-functions) | Port | Compile Bun's semver host functions unchanged against a portable `bun_jsc` subset. |
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
+| [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
+| [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
-| [`crates/bunwasm-runtime/src/crypto.rs`, GCM adapter](#webcrypto-backend) | Port | Adapt RustCrypto GCM to WebCrypto nonce and tag lengths. |
+| [`third_party/licenses/boringssl-LICENSE`](#webcrypto-backend) | Port | Retain BoringSSL license notices with the wasm backend. |
+| [`crates/bunwasm-runtime/src/crypto.rs`, GCM adapter and `third_party/licenses/aes-gcm-MIT`](#webcrypto-backend) | Port | Adapt RustCrypto GCM to WebCrypto nonce and tag lengths. |
 | [`crates/bunwasm-runtime/src/js/crypto_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 
@@ -92,6 +95,52 @@ around `Bun.gc`; looking up global `gc` on every call otherwise recurses.
 This replaces our duplicated semver host-function logic, while retaining the existing
 pure Bun semver parser used by package installation. See
 [the backend spike](bun-jsc-backend.md) for the limits of this subset.
+
+## Rollup WebAssembly distribution
+
+`crates/bunwasm-runtime/src/install/resolve.rs` selects the official
+`@rollup/wasm-node` npm distribution for Rollup 4 at the same version. The
+measured package is 4.64.7, including `dist/native.js`,
+`dist/wasm-node/bindings_wasm.js`, and `dist/wasm-node/bindings_wasm_bg.wasm`.
+These upstream files remain unchanged inside installed projects. No Rollup
+implementation is retained in this repository.
+
+`crates/bunwasm-runtime/src/wasm.rs` and `src/js/webassembly.js` are original
+adapters over the public `wasmi` 0.46.0 API and the WebAssembly JavaScript API.
+They do not adapt an upstream implementation. The Wasmi dependency has the
+small port described below. Resumable host traps let JavaScript imports reenter
+wasm without holding a Rust borrow across JavaScript execution. Memory synchronization keeps
+JavaScript views and interpreter memory consistent across those calls.
+`tests/fixtures/webassembly` is original test code; `tests/rollup/run.mjs`
+executes the real published parser and hashes through the recorded registry.
+
+
+## Wasmi memory identity and growth
+
+Class **Port**. `third_party/wasmi` copies the published Wasmi 0.46.0 crate,
+upstream `crates/wasmi` at revision `50ac76771d631f642e8c4c61bf44c99546024461`
+from `wasmi-labs/wasmi`. The MIT and Apache license files come from that revision.
+Cargo uses this local crate through `[patch.crates-io]`; Wasmi Core and its other
+dependencies remain published crates.
+
+Local changes are limited to these files:
+
+- `src/memory/mod.rs` derives equality on store-guarded memory handles and exposes
+  the growth generation. Successful public growth increments that generation.
+- `src/store/inner.rs` owns a generation counter for each allocated memory.
+- `src/store/pruned.rs` increments the counter after successful wasm growth.
+- `src/engine/translator/visit.rs` and `src/engine/executor/instrs/memory.rs`
+  preserve zero-page growth instead of replacing it with a memory-size read.
+- `src/engine/translator/tests/op/memory/memory_grow.rs` updates the corresponding
+  translation expectation to retain the zero-page growth instruction.
+
+The JavaScript API requires a new buffer after every successful unshared growth,
+even when its size stays the same. Tracking growth inside the interpreter covers
+both constant and dynamic wasm instructions, as well as JavaScript calls. Failed
+growth does not increment the counter. Store-guarded handle equality lets aliased
+exports share one JavaScript object without conflating separate empty memories.
+All other retained upstream files are unchanged.
+
 
 ## App compatibility fixtures
 
@@ -377,7 +426,7 @@ The incremental graph, packed map, and serialized-failure implementations are co
 
 `crates/bunwasm-transpiler/src/lib.rs`, `ChunkCollector` and its `OnSourceMapChunk` implementation. Class **Port**. Upstream `src/runtime/cli/pm_diff_normalize.rs` at the Bun pin.
 
-Retain the small callback that stores the emitted `bun_sourcemap::Chunk` in an `Option`. The local caller converts its buffer into the returned mappings string. This supplies source maps without the native runtime. The surrounding arena lifecycle, public transpile API, diagnostic conversion, and await-hook control are local adapters to Bun's parse/print APIs. They do not copy `src/runtime/api/JSTranspiler.rs` as an implementation.
+Retain the small callback that stores the emitted `bun_sourcemap::Chunk` in an `Option`. The local caller converts its buffer into the returned mappings string. This supplies source maps without the native runtime. The surrounding arena lifecycle, public transpile API, parser module-kind reporting, diagnostic conversion, and await-hook control are local adapters to Bun's parse/print APIs. Module classification uses the pinned parser's export kind, syntax flags and live static import records, rather than searching printed strings. Syntax-free scripts retain package and filename classification, and data loaders report their generated ESM format. `node_fs.js` vectored writes and `natives.rs` counted `write`/`pwrite` calls are original adapters over the host descriptor ABI; no Node implementation is copied. The native vectored operation accumulates complete chunks, returns progress on a short write or a later error, and leaves positioned-write cursors unchanged. Printed CommonJS factories receive Bun's sixth per-module import-meta argument when present; ordinary factories retain five arguments. The parser's real `import.meta` flag takes precedence over `require` and `__dirname` signals when choosing module grammar. They do not copy `src/runtime/api/JSTranspiler.rs` as an implementation.
 
 ### Bun console formatter
 
@@ -463,7 +512,7 @@ Retain HTTP option extraction, IPv6 hostname handling, auth decoding, legacy fie
 
 `crates/bunwasm-runtime/src/js/builtins.js` (`STATUS_CODES`) and `crates/bunwasm-runtime/src/js/net.js` (`STATUS_TEXT`). Class **Port** for packaging shared HTTP data. Comparison source `src/js/internal/http.ts` at the Bun pin.
 
-The builtins module retains the status-code/reason table. The network module keeps a smaller reason-phrase table for response output. These are standard HTTP values rather than a copied server implementation. Networking, streams, request dispatch, and host transport around the tables are original bun-wasm adapters.
+The builtins module retains the status-code/reason table. The network module keeps a smaller reason-phrase table for response output. The callable Node `Stream` constructor and descriptor vectored writes are original adapters, not copied Node implementations. These are standard HTTP values rather than a copied server implementation. Networking, streams, request dispatch, and host transport around the tables are original bun-wasm adapters.
 
 ### Temporal
 
@@ -519,7 +568,8 @@ verification and OAEP encryption and decryption through the original `c/rsa.c` a
 BoringSSL also owns RSA key generation, component validation and PKCS#1 parsing. The
 RustCrypto RSA dependency is excluded because it documents RUSTSEC-2023-0071. The maintained
 RustCrypto PKCS#8 and SPKI parsers handle the outer key-format envelopes.
-`scripts/sync-crypto.sh` downloads the unmodified source. The crypto placeholders in `crates/bunwasm-glue/src/extra.rs` are removed so Bun and this
+`scripts/sync-crypto.sh` downloads the unmodified source. `third_party/licenses/boringssl-LICENSE`
+is the unmodified LICENSE from that pin. The crypto placeholders in `crates/bunwasm-glue/src/extra.rs` are removed so Bun and this
 adapter use BoringSSL's real allocator, stack and X.509 interfaces with their correct ABI.
 The three SSL session placeholders remain because TLS sessions are outside this adapter. The build disables assembly,
 threads and socket BIOs on WASI, as in the earlier successful runtime spike.

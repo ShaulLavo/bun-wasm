@@ -53,6 +53,8 @@
   function buffer(data) {
     if (!(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data))
       throw new TypeError("Expected an ArrayBuffer or ArrayBufferView");
+    if (data.byteLength > 0x7fffffff)
+      fail("OperationError", "Crypto input is too large");
     return internal.toUint8(data).slice();
   }
   const encode = (data) => native.base64Encode(buffer(data), true);
@@ -539,10 +541,17 @@
       return "SubtleCrypto";
     }
   }
+  const cryptoObject = globalThis.crypto;
+  const subtleInstance = Object.create(SubtleCrypto.prototype);
   class Crypto {
     constructor() {
       throw new TypeError("Illegal constructor");
     }
+    get subtle() {
+      if (this !== cryptoObject) throw new TypeError("Illegal invocation");
+      return subtleInstance;
+    }
+    set subtle(_value) {}
     get [Symbol.toStringTag]() {
       return "Crypto";
     }
@@ -569,6 +578,5 @@
     Object.setPrototypeOf(globalThis.crypto, Crypto.prototype);
     defineGlobal("CryptoKey", CryptoKey);
     defineGlobal("SubtleCrypto", SubtleCrypto);
-    globalThis.crypto.subtle = Object.create(SubtleCrypto.prototype);
   };
 });

@@ -521,16 +521,26 @@
       // the module converted to CommonJS by Bun's bundler instead.
       if (native.compileEsmAsCjs) {
         const wrapper = native.compileEsmAsCjs(path);
-        topLevelFunctions.add(wrapper);
-        wrapper.call(mod.exports, mod.exports, makeRequire(path, mod), mod, path, dirname(path));
+        callModuleWrapper(mod, wrapper, path);
         return;
       }
       mod.exports = native.requireEsm(path);
       return;
     }
     const wrapper = native.compileCjs(path);
+    callModuleWrapper(mod, wrapper, path);
+  }
+
+  function callModuleWrapper(mod, wrapper, path) {
     topLevelFunctions.add(wrapper);
-    wrapper.call(mod.exports, mod.exports, makeRequire(path, mod), mod, path, dirname(path));
+    const require = makeRequire(path, mod);
+    if (wrapper.length !== 6) {
+      wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
+      return;
+    }
+    const meta = Object.create(null);
+    internal.initImportMeta(meta, path, mod === mainModule);
+    wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
   }
 
   function resolveFrom(spec, fromPath) {
@@ -781,6 +791,7 @@
     });
   }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
+  if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
 

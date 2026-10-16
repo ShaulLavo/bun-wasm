@@ -16,3 +16,4 @@ agree X25519 ok
 validation ok
 wrap AES-KW
 key boundaries ok
+subtle identity ok
