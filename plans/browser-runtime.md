@@ -44,8 +44,12 @@ than it is today. The process layer loads on the first spawn.
   faster to write in Firefox, can come later (spike 3). Later backends can include IndexedDB
   without our own memory cache (lower memory, the browser caches for us) and memory-only for
   throwaway sandboxes (owner, 2026-10-16).
-- **Killing is not instant, so kills revoke and confirm.** Chromium kept a terminated CPU-bound
-  WASM worker running for about 0.4 s, still writing shared memory (spike 2). The supervisor
+- **Killing is not instant, so kills interrupt, revoke and confirm.** Chromium waits 2 s before
+  forcibly stopping a busy worker after `terminate()` (`kForcibleTerminationDelay` in Blink's
+  `worker_thread.cc`; spike 2 saw CPU-bound WASM and JS keep running and writing shared memory).
+  Firefox and WebKit stop within a millisecond. So a shared interrupt word that guests check is
+  the primary stop, and `terminate()` the backstop. Revocation wakes blocked peers at once (EOF in
+  about 0.06 ms, EPIPE in about 0.3 ms), so pipelines never wait on a dying worker. The supervisor
   bumps a generation number on the dead process's descriptors so its late writes are ignored, and
   reports exit only once the worker's heartbeat stops. A dead worker's shared buffers are never
   reused for a new process until then, because an epoch can't unmap memory from a running worker.
