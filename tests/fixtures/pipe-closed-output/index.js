@@ -11,4 +11,4 @@ function write() {
   if (method === "writev") return require("node:fs").writevSync(fd, [Buffer.from(chunk)]);
   return stream.write(chunk);
 }
-for (;;) write();
+for (;;) { write(); await new Promise(setImmediate); }

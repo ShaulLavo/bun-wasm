@@ -10,7 +10,7 @@ for (const fd of [1, 2]) {
       const stream = process.${name};
       ${handled ? 'stream.on("error", error => process.exit(error.code === "EPIPE" && error.errno === -32 ? 42 : 43));' : ""}
       const chunk = "x".repeat(65536);
-      for (;;) stream.write(chunk);
+      for (;;) { stream.write(chunk); await new Promise(setImmediate); }
     `;
     const child = Bun.spawn([process.execPath, "-e", source], { stdout: "pipe", stderr: "pipe", timeout: 5000 });
     const reader = child[name].getReader();
@@ -29,7 +29,7 @@ for (const fd of [1, 2]) {
 for (const fd of [1, 2]) {
   const name = fd === 2 ? "stderr" : "stdout";
   const source = `
-    const source = 'process.${name}.on("error", e => process.exit(e.code === "EPIPE" ? 42 : 43)); for (;;) process.${name}.write("x".repeat(65536));';
+    const source = 'process.${name}.on("error", e => process.exit(e.code === "EPIPE" ? 42 : 43)); for (;;) { process.${name}.write("x".repeat(65536)); await new Promise(setImmediate); }';
     const child = Bun.spawn([process.execPath, "-e", source], { stdout: "inherit", stderr: "inherit" });
     process.exit(await child.exited);
   `;

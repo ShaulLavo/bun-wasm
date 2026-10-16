@@ -7,6 +7,9 @@ import { readFileSync } from "node:fs";
 import { playwright, session, ready, writeFile, run } from "./playground.mjs";
 const source = execFileSync("bun", ["build", fileURLToPath(new URL("../src/subprocess.js", import.meta.url)), "--target=browser"], { encoding: "utf8" });
 const closedOutput = readFileSync(new URL("../../tests/fixtures/pipe-closed-child/index.ts", import.meta.url), "utf8");
+const orderedOutput = readFileSync(new URL("../../tests/fixtures/pipe-write-order/index.ts", import.meta.url), "utf8");
+const orderedChild = readFileSync(new URL("../../tests/fixtures/pipe-write-order/child.ts", import.meta.url), "utf8");
+const stdinRace = readFileSync(new URL("../../tests/fixtures/pipe-stdin-race/index.ts", import.meta.url), "utf8");
 const apiProgram = `
 import { spawnSync, execSync } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
@@ -101,6 +104,13 @@ try {
         assert.ok(closed.output.includes(`closed inherited child ${stream} 42`), closed.output);
       }
       console.log(`ok ${browserName} ${engine}: closed child stdout/stderr reports EPIPE and exits`);
+      await writeFile(page, "/child.ts", orderedChild);
+      for (const [name, source] of [["pipe-write-order.ts", orderedOutput], ["pipe-stdin-race.ts", stdinRace]]) {
+        await writeFile(page, `/home/user/${name}`, source);
+        const checked = await run(page, `bun run ${name}`);
+        assert.equal(checked.code, 0, checked.output);
+        console.log(`ok ${browserName} ${engine}: ${name}`);
+      }
     }
     await browser.close();
   }
