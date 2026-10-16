@@ -107,33 +107,3 @@ and file-change observations if it fails. Inspect the same-size edit in
 `checkHtmlEntry`, the helper's changeFile ring delivery and the worker's file
 update callback. No cause is established; preserve the 15-second assertion
 and the file-size control rather than increasing the timeout.
-
-## Framework commands after ws import
-
-The complete [offline replay](../docs/app-matrix/ws-results.md) uses integration
-`f7659376c594a5f6f6bf7a8035be69a5b23a2281`. Recreate it
-from the TCP/ws branches plus Rollup prerequisite
-`97e67614b2a4cd6eaca6d8ef339ce1af30252802`, then use the exact two replay commands
-in that report. All 18 installs pass, but the 33 complete commands still fail.
-
-Vite vanilla/React/Vue builds on QuickJS and JSC now reach esbuild's native
-binary selector at `node_modules/esbuild/lib/main.js:1651` with
-`Unsupported platform: linux wasm32 LE`. This affects six native build rows.
-SvelteKit's config-bundling stack reaches the same selector without printing
-its message. Establish a bounded esbuild API/official wasm-package control
-before choosing the replacement; no framework source was changed in this run.
-
-Astro's QuickJS log stops at the circular `Fragment` export in
-`node_modules/astro/dist/runtime/server/index.js`. JSC reports the missing
-`Http2ServerResponse` export from `node:http2`. Browser-engine commands retain
-the known method named import rewrite in `engine_host.rs`; the Rollup report
-already has its minimal reproduction. Coordinate that work with the module
-loader lane rather than duplicating its edits.
-
-Vite dev commands have empty native logs. Playground Vite React exits zero
-before any HTTP/DOM assertion. No root cause is established. Trace module
-handoffs and pending entry promises around `run_event_loop` in
-`crates/bunwasm-runtime/src/lib.rs:389`; its no-work branch deliberately allows
-unsettled top-level await to exit quietly. Do not replace that behavior with a
-warning and claim the app is fixed. The raw logs, original result JSON and
-classification-only correction are retained under the report's evidence path.

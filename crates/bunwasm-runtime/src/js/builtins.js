@@ -302,7 +302,7 @@
     Object.assign(Module, {
       builtinModules,
       createRequire,
-      isBuiltin: (name) => typeof name === "string" && (Object.hasOwn(reg, name) || Object.hasOwn(reg, name.startsWith("node:") ? name : "node:" + name)),
+      isBuiltin: (name) => Object.prototype.hasOwnProperty.call(reg, name.startsWith("node:") ? name : "node:" + name) || name === "bun" || name.startsWith("bun:"),
       _cache: internal.moduleCache,
       _extensions: { ".js": () => {}, ".json": () => {}, ".node": () => {} },
       _resolveFilename: (request, parent) => native.resolve(request, (parent && parent.filename) || native.cwd() + "/", true),
@@ -1129,6 +1129,7 @@
     "bun:internal-for-testing": () => ({
       isASANEnabled: () => false,
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
+      directoryCount: () => native.directoryCount(),
     }),
     "bun:test": () => internal.require("bun_test").exports,
     "bun:sqlite": () => internal.require("bun_sqlite"),

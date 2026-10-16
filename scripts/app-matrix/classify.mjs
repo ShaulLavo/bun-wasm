@@ -9,8 +9,7 @@ export function stageOutput(log, command) {
 export function firstError(output) {
   const lines = output.replace(/\x1b\[[0-9;]*m/g, "").split("\n").map(line => line.trim().replace(/^(?:unhandledRejection|uncaughtException)\s+(?=\w*Error:)/, ""));
   const diagnostic = lines.find(line => /^(?:(?:\w*Error|error|panic|fatal|bun-wasm):|memory allocation of \d+ bytes failed|thread '.+' panicked|[^|\n]+error TS\d+:)/i.test(line));
-  const framework = lines.find(line => /^(?:\[[^\]]+\]\s*)?(?:Unsupported (?:platform|architecture)\b|circular import:|Export named .+ not found in module)/i.test(line));
-  return (diagnostic ?? framework ?? "No diagnostic before exit or deadline").slice(0, 500);
+  return (diagnostic ?? "No diagnostic before exit or deadline").slice(0, 500);
 }
 
 export function failure(output, stage) {

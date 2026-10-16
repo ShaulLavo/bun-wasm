@@ -574,11 +574,72 @@ files. Commands and per-file results are in
 The coordinator removes retained review artifacts after both app-blocker PRs merge
 and independent verification finishes.
 
+## Next opendir rerun
 
-## TCP and ws follow-up
+The review rerun on 2026-10-16 uses main through `12307c3`, the pending Web Streams
+and WebCrypto branches, and the directory fixes. The semantic import rewrite is
+already on main. All three integration binaries were rebuilt for each side.
+The before side substitutes main's filesystem factory; the after side exposes the
+new directory API. Both sides use the same Next 15.5.6, React 19.1.1 and React DOM
+19.1.1 fixture and offline registry snapshot.
 
-The [ws replay](ws-results.md) reruns the five projects previously blocked on
-Bun's missing ws builtin, including Vite React in the playground. All 18
-installs pass. The 33 complete commands still fail on later esbuild, module
-linking, HTTP/2 export or silent-exit blockers. The missing ws import is no
-longer the first blocker in any of the 22 affected QuickJS/JSC command rows.
+| Engine | Before | After |
+| --- | --- | --- |
+| QuickJS | install passes; dev and build fail with `LinkError: Unsupported WebAssembly export table`; start blocked | same result |
+| JSC | install passes; dev and build fail with `LinkError: Unsupported WebAssembly export table`; start blocked | same result |
+| Browser | install passes; dev fails without a diagnostic; build fails with `TypeError: _promises.default.opendir is not a function`; start blocked | install passes; dev fails without a diagnostic; build reaches production compilation and fails with `Error: Child process IPC is not supported in bun-wasm`; start blocked |
+
+Each side records 12 stages, with three installation passes, six command failures
+and three blocked starts. No stage times out. The raw build logs contain the errors
+above even where the automatic classifier reports no diagnostic.
+
+Reproduce the row after building the local integration:
+
+```sh
+scripts/app-matrix.sh --apps=next --hosts=native --engines=quickjs,jsc,browser \
+  --launcher="$CARGO_TARGET_DIR/release/bun-wasm" --timeout=60 \
+  --output=/work/reports/bun-wasm-next-opendir-replay
+```
+
+The dev command is `bun run node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port <free-port>`.
+The build command is `bun run node_modules/next/dist/bin/next build`.
+QuickJS and JSC reject the llhttp wasm table export at
+`crates/bunwasm-runtime/src/js/webassembly.js:136`; the Next caller is
+`node_modules/next/dist/compiled/@edge-runtime/primitives/load.js:5630`.
+Browser build reaches `ChildProcess.send` at `crates/bunwasm-runtime/src/js/spawn.js:411`.
+Both require broader runtime work and are recorded in
+[compatibility follow-ups](../../plans/compatibility-followups.md#next-after-directory-handles).
+Browser dev still exits without a useful diagnostic, so no source location is established.
+
+The directory review regressions fail with the reviewed factory on every engine
+and pass with the correction. All 139 fixtures pass on each engine, the web gate
+passes, and all six HMR runs pass. Nine independent WASI host observations verify
+GC descriptor release before exit and cleanup after natural and explicit exit,
+including a retained wasm instance. Node 26.7.0 passes all four contract controls.
+The upstream directory file remains at 21 pass and two fail per engine. Its two
+failures expect synchronous throws from closed no-argument promise calls; Node
+rejects those promises instead.
+
+Fresh logs, source hashes, the integration-only standalone-example linker recipe,
+and the before/after result files are in
+`/work/reports/bun-wasm-rv28-final-20261016/`. The integration was pinned to
+`43d10f4e84997a51d07f8892ad72e739c2548fc3`; the only measurement-side filesystem
+change is recorded in `integration-before-fs.sha256`. Both runs report cleanup
+complete and zero registry misses or errors. The coordinator removes this review
+evidence after accepting the PR and finishing independent verification.
+
+### Directory hard-exit review
+
+The second directory review adds retained-instance checks for browser-host
+`process.reallyExit`, abort and self-kill. With the reviewed host implementation,
+each leaves ten native cursors and ten WASI descriptors open. `EngineHost.exit`
+now releases the table before notifying the host, and all 13 host observations
+pass. After exit, the same retained instance can open and close a directory using
+a released descriptor. Ordinary fatal-error handling remains a control that runs
+its exit listeners; hard exits continue to skip them.
+
+The browser-engine GC observations use Node/V8 with `--expose-gc`. Real browser
+workers have no forced-GC hook. The Chromium/WebKit web and HMR gates are separate
+checks of browser behavior, not evidence of forced collection in those workers.
+The second-review red/green logs are retained in
+`/work/reports/bun-wasm-rv28-round2-20261016/`.

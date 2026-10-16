@@ -500,7 +500,7 @@
   }
 
   function isBuiltinId(id) {
-    return id.startsWith("node:") || id === "bun" || id.startsWith("bun:") || Object.hasOwn(builtinFactories, id);
+    return id.startsWith("node:") || id === "bun" || id.startsWith("bun:");
   }
 
   function loadModule(path, format) {
@@ -717,6 +717,8 @@
     } catch (err) {
       // An exception inside an exit handler is itself fatal.
       printError(err);
+    } finally {
+      native.closeAllDirs();
     }
   }
   internal.emitExit = emitExit;
