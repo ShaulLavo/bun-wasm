@@ -690,9 +690,14 @@ ponyfill supplies those algorithms without translating or copying Bun's bindings
 class **Host feature**, with no copied upstream algorithm. The Node stream core
 and Web bridges are classified separately below.
 They connect encoding streams to `encoding_rs` and compression streams to the
-existing `flate2` Rust backend. Codecs retain incremental state, reject truncated
+existing `flate2` Rust backend and the pinned `brotli` 8.0.4 Rust crate. Codecs retain incremental state, reject truncated
 or trailing input, and release resources on completion, failure, cancellation,
-and collection of abandoned transforms. Text decoding preserves BOM, partial
+and collection of abandoned transforms. Brotli uses the crate's streaming writer
+interfaces, explicit decoder close validation and ordinary owned output buffers;
+partial input and separate trailing chunks remain errors. The codec readable side
+has a bounded 16 KiB byte queue, so a small initial write can finish before its
+consumer starts. BufferSource validation reads intrinsic view slots, rejects
+shared storage, and retains Node's invalid-input error codes. Text decoding preserves BOM, partial
 characters and fatal-error state across chunks. Text encoding carries a trailing
 high surrogate into the next chunk before converting to Unicode scalar values.
 

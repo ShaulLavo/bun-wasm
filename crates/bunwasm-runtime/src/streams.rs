@@ -14,6 +14,8 @@ enum Codec {
     Gzip(GzEncoder<Vec<u8>>),
     Zlib(ZlibEncoder<Vec<u8>>),
     Raw(DeflateEncoder<Vec<u8>>),
+    Brotli(Option<Box<brotli::CompressorWriter<Vec<u8>>>>),
+    Unbrotli(Box<brotli::DecompressorWriter<Vec<u8>>>),
     Gunzip(GzDecoder<Vec<u8>>),
     Inflate { decoder: Decompress, ended: bool },
 }
@@ -25,6 +27,16 @@ impl Codec {
             ("gzip", false) => Ok(Self::Gzip(GzEncoder::new(Vec::new(), level))),
             ("deflate", false) => Ok(Self::Zlib(ZlibEncoder::new(Vec::new(), level))),
             ("deflate-raw", false) => Ok(Self::Raw(DeflateEncoder::new(Vec::new(), level))),
+            ("brotli", false) => Ok(Self::Brotli(Some(Box::new(brotli::CompressorWriter::new(
+                Vec::new(),
+                4096,
+                5,
+                22,
+            ))))),
+            ("brotli", true) => Ok(Self::Unbrotli(Box::new(brotli::DecompressorWriter::new(
+                Vec::new(),
+                4096,
+            )))),
             ("gzip", true) => Ok(Self::Gunzip(GzDecoder::new(Vec::new()))),
             ("deflate" | "deflate-raw", true) => Ok(Self::Inflate {
                 decoder: Decompress::new(format == "deflate"),
@@ -52,6 +64,28 @@ impl Codec {
             Self::Zlib(w) => write_chunk!(w),
             Self::Raw(w) => write_chunk!(w),
             Self::Gunzip(w) => write_chunk!(w),
+            Self::Brotli(writer) => {
+                let stream = writer
+                    .as_mut()
+                    .ok_or_else(|| compression_error("closed codec"))?;
+                stream.write_all(bytes).map_err(compression_error)?;
+                if last {
+                    Ok(writer
+                        .take()
+                        .ok_or_else(|| compression_error("closed codec"))?
+                        .into_inner())
+                } else {
+                    stream.flush().map_err(compression_error)?;
+                    Ok(std::mem::take(stream.get_mut()))
+                }
+            }
+            Self::Unbrotli(writer) => {
+                writer.write_all(bytes).map_err(compression_error)?;
+                if last {
+                    writer.close().map_err(compression_error)?;
+                }
+                Ok(std::mem::take(writer.get_mut()))
+            }
             Self::Inflate { decoder, ended } => inflate_chunk(decoder, ended, bytes, last),
         }
     }
