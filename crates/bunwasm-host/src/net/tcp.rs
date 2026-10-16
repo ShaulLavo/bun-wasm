@@ -440,3 +440,23 @@ fn write_loop(shared: &ConnShared, mut stream: TcpStream) {
     let _ = stream.shutdown(Shutdown::Write);
     shared.update(|s| s.done = true);
 }
+
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+
+    #[test]
+    fn accept_during_listener_close_drains_before_fin() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        client.write_all(b"pending request").unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        let shared = Arc::new(ListenerShared {
+            pending: Mutex::new(VecDeque::new()),
+            closed: AtomicBool::new(true),
+        });
+        accept_loop(listener, shared, Notify::new());
+        assert_eq!(client.read(&mut [0u8; 1]).unwrap(), 0);
+    }
+}
