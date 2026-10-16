@@ -1,0 +1,1 @@
+HTTP header coercion matches Node
