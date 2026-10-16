@@ -79,6 +79,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.ts`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
 | [`web/src/crypto-host.js`, `crypto-inputs.js`](#native-crypto-capabilities) | Host feature | Preserve native crypto, fill the verified AES-192 gap and enforce the runtime input bound. |
+| [`crates/bunwasm-crypto-sys/`, standalone crypto linkage](#standalone-crypto-linkage) | Host feature | Original native archive owner shared by runtime and parser/glue consumers. |
 | [`third_party/licenses/boringssl-LICENSE`](#webcrypto-backend) | Port | Retain BoringSSL license notices with the wasm backend. |
 | [`crates/bunwasm-runtime/src/crypto.rs`, GCM adapter and `third_party/licenses/aes-gcm-MIT`](#webcrypto-backend) | Port | Adapt RustCrypto GCM to WebCrypto nonce and tag lengths. |
 | [`crates/bunwasm-runtime/src/js/crypto_keys.js` and `crypto_host_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
@@ -739,7 +740,7 @@ Class **Host feature**. `scripts/generate-bun-builtins.mjs`, its shell runner, t
 
 `crates/bunwasm-runtime/src/crypto.rs` links RustCrypto primitives and its maintained JWK,
 PKCS#8 and SPKI parsers. Cargo.lock pins the dependency revisions. Bun's BoringSSL pin `41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f` handles RSA signing,
-verification and OAEP encryption and decryption through the original `c/rsa.c` adapter.
+verification and OAEP encryption and decryption through the original `crates/bunwasm-crypto-sys/c/rsa.c` adapter.
 BoringSSL also owns RSA key generation, component validation and PKCS#1 parsing. The
 RustCrypto RSA dependency is excluded because it documents RUSTSEC-2023-0071. The maintained
 RustCrypto PKCS#8 and SPKI parsers handle the outer key-format envelopes.
@@ -975,3 +976,16 @@ The host stripper blanks erasable TypeScript during Cargo's build, preserving Ja
 constructor calls, class fields and source coordinates. The loader still
 looks up the same extension-free names. Existing `.js` sources remain raw. No TypeScript parser
 or typecheck is added to the wasm runtime.
+
+## Standalone crypto linkage
+
+Class **Host feature**. `crates/bunwasm-crypto-sys/` is the original RSA FFI and build
+adapter moved from `crates/bunwasm-runtime/`. It owns the unmodified pinned BoringSSL
+archive, libc++ and WASI library search paths. Both the runtime and the WASI parser
+support crate depend on it. Removing Bun's crypto placeholders requires this dependency
+wherever parser support is linked, including the standalone transpiler example.
+The archive is linked once through Cargo's `links` identity. The runtime no longer owns
+a second native build. `crates/bunwasm-transpiler/build.rs` supplies the example's WASI
+startup object because the shared environment disables Rust's self-contained C runtime.
+No upstream implementation changed. `scripts/test-transpiler-example.sh` and its mandatory
+invocation from `scripts/build.sh` remain unchanged.

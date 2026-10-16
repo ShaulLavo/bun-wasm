@@ -1,0 +1,10 @@
+[package]
+name = "bunwasm-crypto-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+links = "bunwasm_crypto"
+description = "Shared BoringSSL linkage and RSA FFI for the runtime and standalone Bun tools"
+
+[build-dependencies]
+cc = "1"

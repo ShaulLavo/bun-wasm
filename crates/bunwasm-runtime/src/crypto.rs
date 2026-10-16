@@ -1,3 +1,8 @@
+use bunwasm_crypto_sys::bunwasm_key_encoding;
+use bunwasm_crypto_sys::{
+    bunwasm_rsa, bunwasm_rsa_der, bunwasm_rsa_field, bunwasm_rsa_free,
+    bunwasm_rsa_from_jwk, bunwasm_rsa_generate, bunwasm_rsa_parse,
+};
 use aes::cipher::{
     BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher, block_padding::Pkcs7,
 };
@@ -72,28 +77,7 @@ fn dispatch(q: &J) -> Result<J> {
 }
 
 struct RsaKey(*mut std::ffi::c_void);
-unsafe extern "C" {
-    fn bunwasm_rsa_generate(bits: i32, exponent: *const u8, len: usize) -> *mut std::ffi::c_void;
-    fn bunwasm_rsa_free(key: *mut std::ffi::c_void);
-    fn bunwasm_rsa_from_jwk(
-        fields: *const *const u8,
-        lengths: *const usize,
-        private: i32,
-    ) -> *mut std::ffi::c_void;
-    fn bunwasm_rsa_parse(der: *const u8, len: usize, private: i32) -> *mut std::ffi::c_void;
-    fn bunwasm_rsa_field(
-        key: *const std::ffi::c_void,
-        index: i32,
-        out: *mut u8,
-        capacity: usize,
-    ) -> usize;
-    fn bunwasm_rsa_der(
-        key: *const std::ffi::c_void,
-        private: i32,
-        out: *mut u8,
-        capacity: usize,
-    ) -> usize;
-}
+
 impl Drop for RsaKey {
     fn drop(&mut self) {
         unsafe { bunwasm_rsa_free(self.0) }
@@ -558,22 +542,7 @@ fn ec_sign(a: &J, k: &J, input: &[u8], sig: &[u8], verify: bool) -> Result<J> {
         _ => Err("NotSupportedError"),
     }
 }
-unsafe extern "C" {
-    fn bunwasm_rsa(
-        op: i32,
-        der: *const u8,
-        der_len: usize,
-        hash: i32,
-        pss: i32,
-        salt: i32,
-        label: *const u8,
-        label_len: usize,
-        input: *const u8,
-        input_len: usize,
-        output: *mut u8,
-        output_len: *mut usize,
-    ) -> i32;
-}
+
 fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J> {
     let private = op == 0 || op == 3;
     let key = RsaKey::from_jwk(k)?;
@@ -898,18 +867,7 @@ fn kw_crypt(key: &[u8], input: &[u8], encrypt: bool) -> Result<Vec<u8>> {
     }
 }
 
-unsafe extern "C" {
-    fn bunwasm_key_encoding(
-        op: i32,
-        input: *const u8,
-        input_len: usize,
-        password: *const u8,
-        password_len: usize,
-        cipher: *const std::ffi::c_char,
-        out: *mut u8,
-        capacity: usize,
-    ) -> usize;
-}
+
 fn key_encoding(q: &J) -> Result<J> {
     let input = bytes(q, "data")?;
     let password = bytes(q, "password")?;

@@ -15,3 +15,6 @@ bun_semver = { path = "../../vendor/bun/src/semver" }
 bun_threading = { path = "../../vendor/bun/src/threading" }
 libc = "0.2"
 miniz_oxide = "0.8"
+
+[target.'cfg(target_os = "wasi")'.dependencies]
+bunwasm-crypto-sys = { path = "../bunwasm-crypto-sys" }
