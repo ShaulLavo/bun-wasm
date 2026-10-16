@@ -74,6 +74,12 @@ await check("native method receivers and metadata", async () => {
  assert.equal(provider.sign.name,signMetadata.name);
  assert.equal(provider.sign.length,signMetadata.length);
 });
+await check("native JWK dictionary ignores unrelated getters", async () => {
+ const jwk = Object.create({kty:"oct",k:Buffer.alloc(16,1).toString("base64url")});
+ Object.defineProperty(jwk,"unrelated",{enumerable:true,get(){throw new Error("unrelated JWK member was read");}});
+ const key = await provider.importKey("jwk",jwk,{name:"HMAC",hash:"SHA-256"},false,["sign"]);
+ assert.deepEqual(keys.KeyObject.from(key).export(),Buffer.alloc(16,1));
+});
 assert.equal(provider, webcrypto.subtle);
 console.log("failures",failures);
 process.exitCode=failures?1:0;
