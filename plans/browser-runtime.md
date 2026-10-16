@@ -50,9 +50,11 @@ than it is today. The process layer loads on the first spawn.
   Firefox and WebKit stop within a millisecond. So a shared interrupt word that guests check is
   the primary stop, and `terminate()` the backstop. Revocation wakes blocked peers at once (EOF in
   about 0.06 ms, EPIPE in about 0.3 ms), so pipelines never wait on a dying worker. The supervisor
-  bumps a generation number on the dead process's descriptors so its late writes are ignored, and
-  reports exit only once the worker's heartbeat stops. A dead worker's shared buffers are never
-  reused for a new process until then, because an epoch can't unmap memory from a running worker.
+  bumps a generation number on the dead process's descriptors so its late writes are ignored; that
+  revocation is the correctness boundary. A guest that stops cooperatively acknowledges its exit;
+  for an uncooperative kill the browser gives no teardown signal, and silence isn't proof (a guest
+  may just be blocked). So a killed process's shared buffers are never handed to another process:
+  new processes get fresh buffers, and the old ones are released for garbage collection.
 - **Pipes run directly between workers** over shared memory, not through the supervisor.
 - **Not adopted:** `@wasmer/sdk`, a fork of `@bjorn3/browser_wasi_shim`, SLICC code.
 
