@@ -19,7 +19,7 @@ export interface ChildTransport {
 export const MAX_CHILDREN: number;
 export function createProcessBudget(): SharedArrayBuffer;
 export class SharedPipe {
-  constructor(buffer: SharedArrayBuffer | undefined, budget: SharedArrayBuffer);
+  constructor(buffer?: SharedArrayBuffer, budget?: SharedArrayBuffer);
   buffer: SharedArrayBuffer;
   read(cap?: number): Uint8Array | number;
   write(bytes: Uint8Array): number;
