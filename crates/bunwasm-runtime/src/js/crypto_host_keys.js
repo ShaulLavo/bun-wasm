@@ -95,7 +95,7 @@
     if (!derivation(target))
       return retain(await host.unwrapKey(format, bytes, await toHost(key), params, target, true, policy), extractable);
     const result = await host.unwrapKey(format, bytes, await toHost(key), params, target, extractable, policy);
-    if (!c.isKey(key)) return result;
+    if (!c.isKey(key) || !c.supportsAlgorithm(nameOf(params))) return result;
     const raw = c.crypt("decrypt", params, key, bytes, "unwrapKey");
     return remember(result, {kty:"oct", k:c.encode(raw)});
   };

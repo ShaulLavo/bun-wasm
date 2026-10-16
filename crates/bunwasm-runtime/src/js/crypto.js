@@ -558,6 +558,7 @@
     }
   }
   internal.crypto = {
+    supportsAlgorithm: name => names.some(item => item.toUpperCase() === name.toUpperCase()),
     isKey: (value) => material.has(value),
     isWasmKey: (value) => material.has(value) && !material.get(value).nativeKey,
     rememberKey(key, jwk) {
