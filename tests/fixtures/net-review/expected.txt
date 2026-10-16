@@ -3,6 +3,7 @@ PASS attempt
 PASS writesCancel
 PASS writesBlocked
 PASS writesFailure
+PASS writesRefused
 PASS read
 PASS timeout
 PASS eofEmpty

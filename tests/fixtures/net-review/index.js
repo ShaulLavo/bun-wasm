@@ -161,6 +161,19 @@ async function writesFailure() {
   assert.equal(failedError?.code, "ENOTFOUND");
   assert.equal(failed.writableLength, 0);
 }
+async function writesRefused() {
+  const server = await listen(() => {});
+  const port = server.address().port;
+  await new Promise(resolve => server.close(resolve));
+  const socket = own(net.connect({ host: "127.0.0.1", port }));
+  let calls = 0;
+  let failure;
+  socket.write("pending", err => { calls++; failure = err; });
+  await event(socket, "close");
+  assert.equal(calls, 1, "refused connection settles pending write");
+  assert.equal(failure?.code, "ECONNREFUSED");
+  assert.equal(socket.writableLength, 0);
+}
 async function read() {
   let peer;
   const server = await listen(socket => { peer = own(socket); socket.write("ab"); });
@@ -269,7 +282,7 @@ async function blocklist() {
 }
 
 let failures = 0;
-for (const [name, run] of Object.entries({ pipe, attempt, writesCancel, writesBlocked, writesFailure, read, timeout, eofEmpty, eofPartial, headersDefault, headersConfigured, headersHead, blocklist })) {
+for (const [name, run] of Object.entries({ pipe, attempt, writesCancel, writesBlocked, writesFailure, writesRefused, read, timeout, eofEmpty, eofPartial, headersDefault, headersConfigured, headersHead, blocklist })) {
   try {
     await run();
     console.log("PASS " + name);
