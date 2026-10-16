@@ -16,6 +16,10 @@ fi
 
 cargo build -j "${JOBS:-12}" --release --target wasm32-wasip1 -p bunwasm-cli "${features[@]}"
 
+if [[ "${1:-}" != "--no-bun-transpiler" ]]; then
+  "$root/scripts/test-transpiler-example.sh"
+fi
+
 raw="$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm"
 mkdir -p "$root/dist"
 if command -v wasm-opt >/dev/null; then

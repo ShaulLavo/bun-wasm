@@ -7,7 +7,7 @@ fn main() {
     let source = std::fs::read_to_string(path).expect("read input");
     let loader = bunwasm_transpiler::Loader::from_path(path).unwrap_or(bunwasm_transpiler::Loader::Ts);
     let result = if map {
-        bunwasm_transpiler::transpile_with_source_map(&source, path, loader)
+        bunwasm_transpiler::transpile_with_source_map(&source, path, loader, false)
             .map(|t| bunwasm_transpiler::source_map_json(path, &source, &t.mappings))
     } else {
         bunwasm_transpiler::transpile(&source, path, loader)
