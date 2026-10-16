@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBrowserEntries, buildClassicWorker } from "../../scripts/browser-build";
 import { initialJavaScript } from "../../scripts/runtime-size";
@@ -34,7 +35,8 @@ test("split main/worker graph has all static and dynamic chunks in the worker sc
 
 async function sandboxOnlyInstall() {
   // Outside this checkout: none of the installed web dependencies can mask a missing resolver.
-  const dir = await mkdtemp(join(process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? "/work/tmp", "bun-wasm-resolver-"));
+  const scratch = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  const dir = await mkdtemp(join(scratch, "bun-wasm-resolver-"));
   owned.push(dir);
   const main = join(dir, "sandbox/src/main.ts");
   const worker = join(dir, "web/src/worker.ts");
