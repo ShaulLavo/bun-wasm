@@ -304,7 +304,6 @@ test("path_open respects parent open and inheriting rights before creating or tr
   expect(h.fs.root).toEqual(before);
   expect(h.calls.fd_fdstat_set_rights(dir.fd, 0n, READ)).toBe(0);
   expect(openRights(h, "anything", READ, 0n, dir.fd).result).toBe(76);
-  expect(openRights(h, "inside", READ, 0n, 3, 8).result).toBe(76);
   expect(h.fs.root).toEqual(before);
 });
 
@@ -353,3 +352,72 @@ test("readdir follows the directory's new parent after a cross-directory rename"
   expect(h.view.getBigUint64(2048 + 8, true)).toBe(BigInt(h.fs.lookup("/allowed/container/moved").ino));
   expect(h.view.getBigUint64(2048 + 25 + 8, true)).toBe(BigInt(h.fs.lookup("/allowed/container").ino));
 });
+
+
+test("FD_TELL permits seek CUR zero but not other seeks", () => {
+  const h = host();
+  const file = openRights(h, "inside", 1n << 5n);
+  expect(file.result).toBe(0);
+  expect(h.calls.fd_seek(file.fd, 0n, 1, 1024)).toBe(0);
+  expect(h.view.getBigUint64(1024, true)).toBe(0n);
+  expect(h.calls.fd_seek(file.fd, 1n, 1, 1024)).toBe(76);
+  expect(h.calls.fd_seek(file.fd, 0n, 0, 1024)).toBe(76);
+});
+
+test("truncation is authorized by the parent, not the returned descriptor's write right", () => {
+  const h = host();
+  expect(openRights(h, "inside", READ, 0n, 3, 8).result).toBe(0);
+  expect(h.fs.readFile("/allowed/inside").length).toBe(0);
+  h.fs.writeFile("/allowed/inside", "preserved");
+  const all = (1n << 29n) - 1n;
+  expect(h.calls.fd_fdstat_set_rights(3, all & ~(1n << 19n), all)).toBe(0);
+  expect(openRights(h, "inside", READ | WRITE, 0n, 3, 8).result).toBe(76);
+  expect(new TextDecoder().decode(h.fs.readFile("/allowed/inside"))).toBe("preserved");
+});
+
+for (const replaced of [false, true]) {
+  test(`detached directory descriptors cannot create unreachable files (replaced=${replaced})`, () => {
+    const h = host();
+    const dir = h.open("sub", 3, 2);
+    if (replaced) {
+      h.fs.mkdirp("/allowed/other");
+      expect(rename(h, "other", "sub")).toBe(0);
+    } else {
+      expect(h.calls.path_remove_directory(3, 256, h.path("sub"))).toBe(0);
+    }
+    expect(h.open("lost", dir.fd, 1).result).toBe(44);
+    expect(h.calls.path_create_directory(dir.fd, 256, h.path("lost-dir"))).toBe(44);
+    expect(h.calls.path_link(3, 0, 256, h.path("inside"), dir.fd, 512, h.path("lost-link", 512))).toBe(44);
+    expect(h.calls.path_rename(3, 256, h.path("inside"), dir.fd, 512, h.path("lost-rename", 512))).toBe(44);
+    expect(h.fs.lookup("/allowed/inside")?.kind).toBe("file");
+  });
+}
+
+for (const path of ["sub/.", "sub/./", "."]) {
+  test(`rmdir rejects terminal dot in ${path} without removing a directory`, () => {
+    const h = host();
+    const before = structuredClone(h.fs.root);
+    expect(h.calls.path_remove_directory(3, 256, h.path(path))).toBe(28);
+    expect(h.fs.root).toEqual(before);
+  });
+}
+
+
+for (const [from, to] of [["sub/.", "other"], ["other", "sub/."]]) {
+  test(`rename rejects terminal dot in ${from} -> ${to}`, () => {
+    const h = host();
+    h.fs.mkdirp("/allowed/other");
+    const before = structuredClone(h.fs.root);
+    expect(rename(h, from, to)).toBe(28);
+    expect(h.fs.root).toEqual(before);
+  });
+}
+
+for (const root of [false, true]) {
+  test(`readdir does not search the whole filesystem for a known parent (root=${root})`, () => {
+    const h = host(root ? { "/": "/" } : undefined);
+    const fd = root ? 3 : h.open("sub", 3, 2).fd;
+    h.fs.root.children.values = () => { throw new Error("whole-tree parent scan"); };
+    expect(h.calls.fd_readdir(fd, 2048, 128, 0n, 1024)).toBe(0);
+  });
+}

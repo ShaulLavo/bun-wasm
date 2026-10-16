@@ -85,14 +85,15 @@ function smoke(fallback: boolean): string {
   views.view().setUint32(4, 64, true);
   equal(read(fd, 0, 1, 8), 0, "read file into grown page");
   const count = views.view().getUint32(8, true);
-  equal(decoder.decode(views.bytes().subarray(65536, 65536 + count)), "browser host file", "WASI file contents");
+  // TextDecoder's WebIDL rejects resizable buffers; take a fixed-buffer snapshot.
+  equal(decoder.decode(views.bytes().slice(65536, 65536 + count)), "browser host file", "WASI file contents");
   memory.grow(0);
   equal(views.view().getUint32(8, true), count, "zero-growth refresh");
   equal(openPath("hello.txt", 2n, 0n), 0, "open read-only file");
   const readOnlyFd = views.view().getUint32(512, true);
   const write = instance.exports.fd_write as typeof read;
   views.view().setUint32(8, 0xfeedbeef, true);
-  equal(write(readOnlyFd, 0, 1, 8), 63, "write denied without descriptor rights");
+  equal(write(readOnlyFd, 0, 1, 8), 76, "write denied without descriptor rights");
   equal(views.view().getUint32(8, true), 0xfeedbeef, "denied write preserves output count");
   equal(decoder.decode(cloned.readFile("/sandbox/hello.txt")), "browser host file", "denied write preserves file");
   return fallback ? "fallback memory views" : "native memory views";

@@ -86,6 +86,7 @@ interface ResolvedPath {
   name: string;
   node: Node | undefined;
   trailingSlash: boolean;
+  terminalDot: boolean;
 }
 
 export interface WasiOptions {
@@ -153,6 +154,10 @@ export class Wasi {
    */
   hostCall: ((slot: number, args: number[]) => number) | null = null;
   private fds = new Map<number, Fd>();
+  // Remember parents at open/rename rather than searching the whole tree on every readdir page.
+  private directoryParents = new WeakMap<DirNode, DirNode>();
+  // Open handles survive removal, but detached directories cannot accept new entries.
+  private removedDirectories = new WeakSet<DirNode>();
   private nextFd = 0;
   private args: Uint8Array[];
   private env: Uint8Array[];
@@ -181,6 +186,7 @@ export class Wasi {
     this.nextFd = 3;
     for (const [name, path] of Object.entries(opts.preopens)) {
       const node = opts.fs.mkdirp(path);
+      this.directoryParents.set(node, this.directoryParent(node) ?? node);
       this.fds.set(this.nextFd++, { type: "dir", node, preopen: name, rightsBase: RIGHTS_ALL, rightsInheriting: RIGHTS_ALL });
     }
   }
@@ -287,12 +293,14 @@ export class Wasi {
     let node: Node = dir.node;
     let parent: DirNode | undefined;
     let name = "";
+    let terminalDot = false;
     for (let start = 0; start < path.length;) {
       let end = path.indexOf("/", start);
       if (end < 0) end = path.length;
       const part = path.slice(start, end);
       start = end + 1;
       if (part === "") continue;
+      terminalDot = part === "." || part === "..";
       if (node.kind !== "dir") return ENOTDIR;
       if (part === ".") continue;
       if (part === "..") {
@@ -308,21 +316,23 @@ export class Wasi {
       if (!child) {
         // Only the last component may be absent, for create/link/rename targets.
         for (let i = start; i < path.length; i++) if (path.charCodeAt(i) !== 47) return ENOENT;
-        return { parent, name, node: undefined, trailingSlash: path.endsWith("/") };
+        return { parent, name, node: undefined, trailingSlash: path.endsWith("/"), terminalDot: false };
       }
       dirs.push(parent);
       node = child;
     }
     const trailingSlash = path.endsWith("/");
     if (trailingSlash && node.kind !== "dir") return ENOTDIR;
-    return { parent, name, node, trailingSlash };
+    return { parent, name, node, trailingSlash, terminalDot };
   }
 
   private parentOf(path: ResolvedPath): DirNode | number {
-    return path.parent ?? EPERM;
+    if (!path.parent) return EPERM;
+    return this.removedDirectories.has(path.parent) ? ENOENT : path.parent;
   }
 
   private directoryParent(node: DirNode, root = this.opts.fs.root): DirNode | undefined {
+    if (root === node) return root;
     for (const child of root.children.values()) {
       if (child === node) return root;
       if (child.kind === "dir") {
@@ -537,7 +547,7 @@ export class Wasi {
         if (!entry) return EBADF;
         if ((entry.rightsBase & RIGHT_FD_READDIR) !== RIGHT_FD_READDIR) return ENOTCAPABLE;
         if (entry.type !== "dir") return ENOTDIR;
-        const parent = this.directoryParent(entry.node);
+        const parent = this.directoryParents.get(entry.node);
         const list: [string, Node][] = [
           [".", entry.node],
           ["..", parent?.kind === "dir" ? parent : entry.node],
@@ -574,7 +584,8 @@ export class Wasi {
       fd_seek: (fd: number, offset: bigint, whence: number, newOffsetPtr: number) => {
         const entry = this.fds.get(fd);
         if (!entry) return EBADF;
-        if ((entry.rightsBase & RIGHT_FD_SEEK) !== RIGHT_FD_SEEK) return ENOTCAPABLE;
+        const right = offset === 0n && whence === 1 ? RIGHT_FD_TELL : RIGHT_FD_SEEK;
+        if (!(entry.rightsBase & right)) return ENOTCAPABLE;
         if (entry.type === "stdio") return ESPIPE;
         if (entry.type === "dir") return EISDIR;
         const base = whence === 0 ? 0 : whence === 1 ? entry.pos : whence === 2 ? entry.node.data.length : NaN;
@@ -676,7 +687,7 @@ export class Wasi {
         rightsInheriting = BigInt.asUintN(64, rightsInheriting);
         if ((rightsBase & dir.rightsInheriting) !== rightsBase || (rightsInheriting & dir.rightsInheriting) !== rightsInheriting) return ENOTCAPABLE;
         if (oflags & O_CREAT && !(dir.rightsBase & RIGHT_PATH_CREATE_FILE)) return ENOTCAPABLE;
-        if (oflags & O_TRUNC && (!(dir.rightsBase & RIGHT_PATH_FILESTAT_SET_SIZE) || !(rightsBase & RIGHT_FD_WRITE))) return ENOTCAPABLE;
+        if (oflags & O_TRUNC && !(dir.rightsBase & RIGHT_PATH_FILESTAT_SET_SIZE)) return ENOTCAPABLE;
         let node = path.node;
         if (node && oflags & O_CREAT && oflags & O_EXCL) return EEXIST;
         if (!node) {
@@ -692,6 +703,8 @@ export class Wasi {
         let entry: Fd;
         if (node.kind === "dir") {
           if (oflags & O_TRUNC) return EISDIR;
+          if (path.parent) this.directoryParents.set(node, path.parent);
+          else if (!this.directoryParents.has(node)) this.directoryParents.set(node, this.directoryParent(node) ?? node);
           entry = { type: "dir", node, rightsBase, rightsInheriting };
         } else {
           if (oflags & O_TRUNC) {
@@ -713,12 +726,14 @@ export class Wasi {
       path_remove_directory: (fd: number, ptr: number, len: number) => {
         const path = this.resolve(fd, ptr, len, RIGHT_PATH_REMOVE_DIRECTORY);
         if (typeof path === "number") return path;
+        if (path.terminalDot) return EINVAL;
         const node = path.node;
         if (!node) return ENOENT;
         if (node.kind !== "dir") return ENOTDIR;
         if (node.children.size > 0) return ENOTEMPTY;
         if (!path.parent) return EPERM;
         path.parent.children.delete(path.name);
+        this.removedDirectories.add(node);
         return SUCCESS;
       },
       path_rename: (oldFd: number, oldPtr: number, oldLen: number, newFd: number, newPtr: number, newLen: number) => {
@@ -726,6 +741,7 @@ export class Wasi {
         if (typeof from === "number") return from;
         const to = this.resolve(newFd, newPtr, newLen, RIGHT_PATH_RENAME_TARGET);
         if (typeof to === "number") return to;
+        if (from.terminalDot || to.terminalDot) return EINVAL;
         const node = from.node;
         if (!node) return ENOENT;
         const target = to.node;
@@ -740,6 +756,8 @@ export class Wasi {
         if (!from.parent) return EPERM;
         from.parent.children.delete(from.name);
         parent.children.set(to.name, node);
+        if (node.kind === "dir") this.directoryParents.set(node, parent);
+        if (target?.kind === "dir") this.removedDirectories.add(target);
         parent.mtime = Date.now();
         return SUCCESS;
       },
