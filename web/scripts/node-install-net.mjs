@@ -1,6 +1,6 @@
 // Rust CLI commands run synchronously before the host JS engine starts. Keep
 // their fetches on a worker so WASI poll can wait without blocking Node I/O.
-import { memoryViews } from "../src/memory-views.js";
+import { memoryViews } from "../../runtime/core/memory-views.js";
 import { MessageChannel, Worker, receiveMessageOnPort, workerData } from "node:worker_threads";
 
 const AGAIN = -2;

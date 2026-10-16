@@ -32,6 +32,13 @@ class ReportTests(unittest.TestCase):
                 connection, _ = listener.accept()
                 connection.close()
 
+    def test_browser_provenance_hashes_runtime_core(self):
+        opts = types.SimpleNamespace(engine="browser", suite=suite.ROOT, dependencies=suite.ROOT / ".unused-provenance-dependencies",
+                                     network="host", timeout=1, test_timeout=1)
+        sources = suite.provenance(opts, Path(__file__))["host_sources"]
+        for path in ["runtime/core/wasi.ts", "runtime/core/memory-views.js", "runtime/core/descriptors.ts", "runtime/core/filesystem.ts", "runtime/core/path.ts"]:
+            self.assertEqual(sources[path], suite.digest(suite.ROOT / path))
+
     def test_footer_overrides_compressed_repeated_lines(self):
         result = suite.parse_output("(pass) repeated\n[repeated 99 times]\n(fail) broken [2ms]\n 100 pass\n 1 fail\nRan 101 tests across 1 file. [3ms]\n")
         self.assertEqual(result["counts"]["pass"], 100)
