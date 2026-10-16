@@ -208,3 +208,22 @@ All three current full fixture gates pass 152/152. Runtime stream behavior is
 not established by these non-collecting upstream files. The compatibility track
 owns resolving the upstream harness/capability boundary and removes the retained
 evidence after reproduction and independent review.
+
+### Native stream construction overhead
+
+The PR12 round-5 bounded probe creates, closes and cancels 10,000 native
+readables, then repeats through the construction bridge. On the M1 Mac with
+Chromium 153 it measured 14.1ms native and 35.3ms bridged; WebKit 26.6 measured
+19ms and 45ms. These single-run timings include serial cancellation awaits,
+have no warmup/GC control and are labeled noisy, not a performance improvement.
+Reproduce with `node scripts/test-native-stream-interop.mjs --benchmark` using
+Playwright Chromium and WebKit. Raw source and browser/version provenance are
+in `/work/reports/bun-wasm-streams-round5-2026-10-16/mac-final30.log`.
+
+Completion records are currently allocated eagerly by `construct` in
+`web/src/native-stream-state.ts`. If stream construction is hot in a real app,
+measure lazy completion-record allocation while retaining eager controller
+capture, pre-start abort propagation, native brands and both Transform ports.
+The 30-case browser fixture and all-engine lifecycle fixtures must stay green.
+The compatibility/performance track owns that work and evidence removal after
+reproduction. Round 5 deliberately leaves allocation behavior unchanged.
