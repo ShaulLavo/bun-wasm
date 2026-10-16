@@ -1,0 +1,4 @@
+finish calls custom destroy
+asynchronous writes complete
+asynchronous write errors are ignored
+autoDestroy false and explicit destroy
