@@ -34,6 +34,44 @@
     Error.prepareStackTrace = defaultPrepare;
     const prototype = Object.getPrototypeOf(holder.stack[0]);
     internal.defineHidden(prototype, methods);
+    const nativeStack = Object.getOwnPropertyDescriptor(Error.prototype, "stack");
+    const nativePrepare = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+    nativePrepare.set.call(Error, (_error, sites) => sites);
+    Object.defineProperty(Error, "prepareStackTrace", { value: defaultPrepare, writable: true, configurable: true });
+
+    function store(target, value) {
+      Object.defineProperty(target, "stack", { value, writable: true, configurable: true, enumerable: false });
+    }
+    function format(target, sites) {
+      if (!Array.isArray(sites)) return sites;
+      const prepare = Error.prepareStackTrace;
+      return Reflect.apply(typeof prepare === "function" ? prepare : defaultPrepare, Error, [target, sites]);
+    }
+    Object.defineProperty(Error.prototype, "stack", {
+      configurable: true,
+      get() {
+        const value = format(this, nativeStack.get.call(this));
+        store(this, value);
+        return value;
+      },
+      set(value) { store(this, value); },
+    });
+    internal.defineHidden(Error, {
+      captureStackTrace: function captureStackTrace(target, constructorOpt) {
+        capture(target, typeof constructorOpt === "function" ? constructorOpt : captureStackTrace);
+        const sites = target.stack;
+        Object.defineProperty(target, "stack", {
+          configurable: true,
+          enumerable: false,
+          get() {
+            const value = format(this, sites);
+            store(this, value);
+            return value;
+          },
+          set(value) { store(this, value); },
+        });
+      },
+    });
   }
 
   if (native.engine === "jsc") {
