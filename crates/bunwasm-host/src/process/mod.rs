@@ -197,6 +197,7 @@ impl Processes {
         );
         let thread = std::thread::Builder::new()
             .name("bun-wasm-child".into())
+            .stack_size(crate::THREAD_STACK)
             .spawn(move || {
                 let code = crate::run_instance(
                     runtime.clone(),
