@@ -1,5 +1,6 @@
 """Exercise closed-pipe and sustained-output behavior for every wasm engine."""
 import argparse
+import json
 import os
 from pathlib import Path
 import signal
@@ -15,6 +16,7 @@ parser.add_argument("--engine", choices=["quickjs", "jsc", "browser"], required=
 parser.add_argument("--wasm", type=Path, required=True)
 parser.add_argument("--host", choices=["native", "node"])
 parser.add_argument("--large-only", action="store_true")
+parser.add_argument("--batch-only", action="store_true")
 args = parser.parse_args()
 host = args.host or ("node" if args.engine == "browser" else "native")
 
@@ -99,11 +101,46 @@ def check_large(directory: Path, fd: int):
     print(f"PASS pipe-closed-output {args.engine}/{host}: fd={fd} large {size} bytes in {seconds:.3f}s")
 
 
+def check_batch(directory: Path, fd: int):
+    expected = []
+    for round in range(2):
+        expected.append([f"initial{round}", True, False, None])
+        for i in range(3):
+            expected.extend([["returned", False], [f"write{round}.{i}", False, False, None]])
+        for i in range(3):
+            if i == 0:
+                expected.append(["error", "EPIPE", -32, "write", True])
+            expected.append([f"callback{round}.{i}", False, False, True])
+        expected.extend([f"tick{round}.{i}", True, False, None] for i in range(3))
+        expected.extend([[f"event{round}", True, False, True], [f"survived{round}", True, False, None]])
+    reader, writer = os.pipe()
+    os.close(reader)
+    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            command(directory, "batch.ts") + [str(fd)], cwd=directory,
+            stdout=writer if fd == 1 else subprocess.PIPE,
+            stderr=writer if fd == 2 else subprocess.PIPE, timeout=20,
+            env=dict(os.environ, NODE_NO_WARNINGS="1"),
+        )
+    finally:
+        os.close(writer)
+    output = result.stderr if fd == 1 else result.stdout
+    assert result.returncode == 0, f"fd={fd} batch exit={result.returncode}: {output!r}"
+    actual = json.loads(output)
+    assert actual == expected, f"fd={fd} batch behavior differs: {actual!r} != {expected!r}"
+    print(f"PASS pipe-closed-output {args.engine}/{host}: fd={fd} batch callbacks/identity/order/state/survival in {time.monotonic() - started:.3f}s")
+
+
 with tempfile.TemporaryDirectory(prefix="bun-wasm-closed-output-", dir="/work/tmp") as directory:
     work = Path(directory)
-    for name in ("index.js", "large.js"):
+    for name in ("index.js", "large.js", "batch.ts"):
         (work / name).write_bytes((FIXTURE / name).read_bytes())
     for fd in (1, 2):
+        if not args.large_only:
+            check_batch(work, fd)
+        if args.batch_only:
+            continue
         cases = () if args.large_only else (("stream", False), ("stream", True), ("console", False), ("fs", False), ("writev", False))
         for method, handled in cases:
             check_closed(work, fd, method, handled)
