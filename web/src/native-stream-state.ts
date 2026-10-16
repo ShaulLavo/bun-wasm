@@ -180,6 +180,24 @@ function notify(group: Group) {
   }, 0);
   owner.timers.add(notification.id);
 }
+function algorithm(group: Group, key: PropertyKey, source: object, callback: Function | undefined) {
+  return function (...args: unknown[]) {
+    if (key === "start") {
+      const controller = args[0];
+      if (typeof controller !== "object" || controller === null) throw new TypeError("Native controller missing");
+      captureController(group, controller);
+    }
+    let result;
+    try { result = callback === undefined ? undefined : apply(callback, source, args); }
+    catch (error) { if (key === "start") throw error; result = reject(error); }
+    const promise = resolve(result);
+    const barrier = key === "abort" && group.kind === "writable";
+    if (barrier) group.barriers.add(promise);
+    const complete = () => { if (barrier) group.barriers.delete(promise); notify(group); };
+    then(promise, complete, complete);
+    return promise;
+  };
+}
 function dictionary(input: unknown, methods: readonly PropertyKey[], group: Group) {
   const source = input === undefined ? {} : input;
   if (source === null || typeof source !== "object" && typeof source !== "function") return source;
@@ -191,25 +209,11 @@ function dictionary(input: unknown, methods: readonly PropertyKey[], group: Grou
       return { configurable: true, enumerable: true, writable: true, value: undefined };
     },
     get(target, key) {
-    const method = Reflect.get(source, key, source);
-    if (!methods.includes(key) || method === undefined && key !== "start" || method !== undefined && typeof method !== "function") return method;
-    return function (this: object, ...args: unknown[]) {
-      if (key === "start") {
-        const controller = args[0];
-        if (typeof controller !== "object" || controller === null) throw new TypeError("Native controller missing");
-        captureController(group, controller);
-      }
-      let result;
-      try { result = method === undefined ? undefined : apply(method, source, args); }
-      catch (error) { if (key === "start") throw error; result = reject(error); }
-      const promise = resolve(result);
-      const barrier = key === "abort" && group.kind === "writable";
-      if (barrier) group.barriers.add(promise);
-      const complete = () => { if (barrier) group.barriers.delete(promise); notify(group); };
-      then(promise, complete, complete);
-      return promise;
-    };
-  } });
+      const method = Reflect.get(source, key, source);
+      if (!methods.includes(key) || method === undefined && key !== "start" || method !== undefined && typeof method !== "function") return method;
+      return algorithm(group, key, source, method);
+    },
+  });
 }
 function construct<T extends typeof ReadableStream | typeof WritableStream | typeof TransformStream>(Ctor: T, kind: Kind, methods: readonly PropertyKey[]): T {
   let wrapper: T;
