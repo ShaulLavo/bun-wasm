@@ -1,0 +1,5 @@
+42
+properties 1 2 3
+literals import(never) true import(never) 4 import(never)
+regex statement true
+commented access 5 6
