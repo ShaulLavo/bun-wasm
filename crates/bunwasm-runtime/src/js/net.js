@@ -785,6 +785,7 @@
         this.socket = null;
         this.trailers = {};
       }
+      _read() {}
       setTimeout(ms, cb) {
         if (cb) this.once("timeout", cb);
         return this;
