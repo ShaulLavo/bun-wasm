@@ -2,13 +2,20 @@ import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { createNodeNet } from "../scripts/node-net.mjs";
 
+class QueuedSocket extends EventEmitter {
+  connecting = false;
+  writableLength = 0;
+  writes: Uint8Array[] = [];
+  write(bytes: Uint8Array) {
+    this.writes.push(bytes);
+    this.writableLength += bytes.length;
+    return false;
+  }
+  end() {}
+}
+
 function fixture() {
-  const socket = new EventEmitter();
-  socket.connecting = false;
-  socket.writableLength = 0;
-  socket.writes = [];
-  socket.write = bytes => { socket.writes.push(bytes); socket.writableLength += bytes.length; return false; };
-  socket.end = () => {};
+  const socket = new QueuedSocket();
   const { natives } = createNodeNet({ net: { connect: () => socket } });
   return { socket, natives, handle: natives.hostConnect("127.0.0.1", 1234) };
 }
