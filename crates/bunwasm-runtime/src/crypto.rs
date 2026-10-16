@@ -60,6 +60,7 @@ pub fn request(input: &str) -> String {
 fn dispatch(q: &J) -> Result<J> {
     let alg = &q["algorithm"];
     match text(q, "op")? {
+        "keyEncoding" => key_encoding(q),
         "generate" => generate(alg),
         "import" => import(alg, text(q, "format")?, &bytes(q, "data")?),
         "export" => export(alg, text(q, "format")?, &q["key"]),
@@ -889,4 +890,50 @@ fn kw_crypt(key: &[u8], input: &[u8], encrypt: bool) -> Result<Vec<u8>> {
         32 => run!(aes::Aes256),
         _ => Err("DataError"),
     }
+}
+
+unsafe extern "C" {
+    fn bunwasm_key_encoding(
+        op: i32,
+        input: *const u8,
+        input_len: usize,
+        password: *const u8,
+        password_len: usize,
+        cipher: *const std::ffi::c_char,
+        out: *mut u8,
+        capacity: usize,
+    ) -> usize;
+}
+fn key_encoding(q: &J) -> Result<J> {
+    let input = bytes(q, "data")?;
+    let password = bytes(q, "password")?;
+    let cipher = data(std::ffi::CString::new(q["cipher"].as_str().unwrap_or("")))?;
+    let op = i32::try_from(number(q, "mode")?).map_err(|_| "DataError")?;
+    if !(0..=5).contains(&op) {
+        return Err("DataError");
+    }
+    let capacity = input
+        .len()
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(4096))
+        .ok_or("OperationError")?;
+    let mut out = vec![0; capacity];
+    // The adapter borrows the inputs and copies the encoded key into this buffer.
+    let size = unsafe {
+        bunwasm_key_encoding(
+            op,
+            input.as_ptr(),
+            input.len(),
+            password.as_ptr(),
+            password.len(),
+            cipher.as_ptr(),
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    if size == 0 || size > out.len() {
+        return Err("OperationError");
+    }
+    out.truncate(size);
+    Ok(output(out))
 }

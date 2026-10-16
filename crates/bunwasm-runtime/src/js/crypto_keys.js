@@ -99,10 +99,12 @@
       }
       export(options) {
         const r = nodeRecord(this);
-        if (options?.cipher !== undefined || options?.passphrase !== undefined)
+        const encrypted =
+          options?.cipher !== undefined || options?.passphrase !== undefined;
+        if (encrypted && (r.type !== "private" || options?.format === "jwk"))
           throw Object.assign(
-            new Error("Encrypted key export is not supported"),
-            { code: "ERR_NOT_SUPPORTED_IN_WASM" },
+            new TypeError("Key encoding does not support encryption"),
+            { code: "ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS" },
           );
         if (r.type === "secret" && options?.format !== "jwk")
           return Buffer.from(c.decode(r.key.k));
@@ -120,6 +122,31 @@
             : publicUsages(r.algorithm),
           r.key,
         );
+        if (encrypted) {
+          if (
+            typeof options.cipher !== "string" ||
+            options.passphrase === undefined
+          )
+            throw error("Encryption requires a cipher and passphrase");
+          const mode =
+            format === "der"
+              ? type === "pkcs8"
+                ? 3
+                : undefined
+              : { pkcs8: 2, pkcs1: 4, sec1: 5 }[type];
+          if (mode === undefined)
+            throw Object.assign(
+              new TypeError("Key encoding does not support encryption"),
+              { code: "ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS" },
+            );
+          const encoded = keyEncoding(
+            mode,
+            c.exportKey("pkcs8", key),
+            options.passphrase,
+            options.cipher,
+          );
+          return format === "pem" ? encoded.toString() : encoded;
+        }
         const der = Buffer.from(
           type === "pkcs1" || type === "sec1"
             ? c.decode(
@@ -206,6 +233,74 @@
       }
       return { key: input };
     }
+    function keyEncoding(mode, data, password, cipher = "") {
+      const pass =
+        password === undefined ? Buffer.alloc(0) : inputBytes(password);
+      if (pass.byteLength > 1024)
+        throw Object.assign(new RangeError("Passphrase is too long"), {
+          code: "ERR_OUT_OF_RANGE",
+        });
+      try {
+        return Buffer.from(
+          c.decode(
+            c.backend(
+              "keyEncoding",
+              {},
+              { mode, data: c.encode(data), password: c.encode(pass), cipher },
+            ).data,
+          ),
+        );
+      } catch (error) {
+        throw Object.assign(
+          new Error(
+            mode <= 1
+              ? "Failed to decrypt private key"
+              : "Failed to encrypt private key",
+          ),
+          {
+            code:
+              mode <= 1 ? "ERR_OSSL_BAD_DECRYPT" : "ERR_CRYPTO_UNKNOWN_CIPHER",
+            cause: error,
+          },
+        );
+      }
+    }
+    function readPem(key, password) {
+      const pem = typeof key === "string" ? key : Buffer.from(key).toString();
+      if (
+        pem.includes("ENCRYPTED") ||
+        (password !== undefined && pem.includes("PRIVATE KEY"))
+      ) {
+        if (password === undefined && pem.includes("ENCRYPTED"))
+          throw Object.assign(
+            new Error("Passphrase required for encrypted key"),
+            { code: "ERR_MISSING_PASSPHRASE" },
+          );
+        return {
+          format: "pkcs8",
+          bytes: keyEncoding(0, Buffer.from(pem), password),
+          private: true,
+        };
+      }
+      const match =
+        /-----BEGIN (RSA PRIVATE KEY|RSA PUBLIC KEY|EC PRIVATE KEY|PRIVATE KEY|PUBLIC KEY)-----([\s\S]*?)-----END \1-----/.exec(
+          pem,
+        );
+      if (!match) throw error("Invalid PEM key");
+      const format =
+        match[1] === "RSA PRIVATE KEY" || match[1] === "RSA PUBLIC KEY"
+          ? "pkcs1"
+          : match[1] === "EC PRIVATE KEY"
+            ? "sec1"
+            : match[1] === "PRIVATE KEY"
+              ? "pkcs8"
+              : "spki";
+      return {
+        format,
+        bytes: Buffer.from(match[2].replace(/\s/g, ""), "base64"),
+        private: match[1].endsWith("PRIVATE KEY"),
+      };
+    }
     function importAsymmetric(input, wantPrivate) {
       const options = parseInput(input),
         key = options.key;
@@ -222,23 +317,21 @@
         isPrivateEncoding = wantPrivate;
       if (jwk) bytes = key;
       else if (typeof key === "string" || options.format !== "der") {
-        const pem = typeof key === "string" ? key : Buffer.from(key).toString();
-        const match =
-          /-----BEGIN (RSA PRIVATE KEY|RSA PUBLIC KEY|EC PRIVATE KEY|PRIVATE KEY|PUBLIC KEY)-----([\s\S]*?)-----END \1-----/.exec(
-            pem,
-          );
-        if (!match) throw error("Invalid PEM key");
-        format =
-          match[1] === "RSA PRIVATE KEY" || match[1] === "RSA PUBLIC KEY"
-            ? "pkcs1"
-            : match[1] === "EC PRIVATE KEY"
-              ? "sec1"
-              : match[1] === "PRIVATE KEY"
-                ? "pkcs8"
-                : "spki";
-        isPrivateEncoding = match[1].endsWith("PRIVATE KEY");
-        bytes = Buffer.from(match[2].replace(/\s/g, ""), "base64");
-      } else bytes = inputBytes(key);
+        const decoded = readPem(key, options.passphrase);
+        format = decoded.format;
+        bytes = decoded.bytes;
+        isPrivateEncoding = decoded.private;
+      } else {
+        bytes = inputBytes(key);
+        if (
+          options.passphrase !== undefined &&
+          (options.type === undefined || options.type === "pkcs8")
+        ) {
+          bytes = keyEncoding(1, bytes, options.passphrase);
+          format = "pkcs8";
+          isPrivateEncoding = true;
+        }
+      }
       const attempts = [
         { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
         { name: "ECDSA", namedCurve: "P-256" },

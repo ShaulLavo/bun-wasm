@@ -281,3 +281,40 @@ await new Promise((resolve, reject) =>
   }),
 );
 console.log("node secret generation ok");
+for (const [type, options] of [
+  ["rsa", { modulusLength: 1024 }],
+  ["ec", { namedCurve: "prime256v1" }],
+]) {
+  const pair = generateKeyPairSync(type, options);
+  const encodings = [
+    { format: "pem", type: "pkcs8" },
+    { format: "der", type: "pkcs8" },
+    { format: "pem", type: type === "rsa" ? "pkcs1" : "sec1" },
+  ];
+  for (const encoding of encodings) {
+    const password = Buffer.from("fixture passphrase 🔑");
+    const encrypted = pair.privateKey.export({
+      ...encoding,
+      cipher: "aes-256-cbc",
+      passphrase: password,
+    });
+    const imported = createPrivateKey({
+      key: encrypted,
+      ...encoding,
+      passphrase: password,
+    });
+    const publicKey = createPublicKey({
+      key: encrypted,
+      ...encoding,
+      passphrase: password,
+    });
+    assert(
+      verify("sha256", input, pair.publicKey, sign("sha256", input, imported)),
+    );
+    assert(publicKey.equals(pair.publicKey));
+    assert.throws(() =>
+      createPrivateKey({ key: encrypted, ...encoding, passphrase: "wrong" }),
+    );
+  }
+}
+console.log("node encrypted key formats ok");

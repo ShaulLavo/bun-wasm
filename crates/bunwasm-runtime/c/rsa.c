@@ -1,4 +1,9 @@
 #include <string.h>
+#include <limits.h>
+#include <openssl/bio.h>
+#include <openssl/bytestring.h>
+#include <openssl/err.h>
+#include <openssl/pem.h>
 #include <openssl/bn.h>
 #include <openssl/evp.h>
 #include <openssl/mem.h>
@@ -128,5 +133,72 @@ size_t bunwasm_rsa_der(const void *key, int private_key, unsigned char *output, 
   int ok = private_key ? RSA_private_key_to_bytes(&der, &size, key) : RSA_public_key_to_bytes(&der, &size, key);
   if (ok && capacity >= size) memcpy(output, der, size);
   OPENSSL_free(der);
+  return ok ? size : 0;
+}
+
+struct key_password { const unsigned char *bytes; size_t length; };
+static int key_password(char *out, int capacity, int writing, void *context) {
+  (void)writing;
+  const struct key_password *password = context;
+  if (capacity < 0 || password->length > (size_t)capacity) return 0;
+  memcpy(out, password->bytes, password->length);
+  return (int)password->length;
+}
+
+size_t bunwasm_key_encoding(int op, const unsigned char *input, size_t input_len,
+                           const unsigned char *password, size_t password_len,
+                           const char *cipher_name, unsigned char *output,
+                           size_t capacity) {
+  struct key_password pass = {password, password_len};
+  BIO *source = NULL, *dest = NULL;
+  EVP_PKEY *key = NULL;
+  CBB cbb;
+  CBB_zero(&cbb);
+  unsigned char *encoded = NULL;
+  const unsigned char *contents = NULL;
+  size_t size = 0;
+  int ok = 0;
+  if (input_len > INT_MAX || password_len > INT_MAX) goto done;
+  source = BIO_new_mem_buf(input, (int)input_len);
+  if (!source) goto done;
+  if (op == 0) {
+    key = PEM_read_bio_PrivateKey(source, NULL, key_password, &pass);
+  } else {
+    CBS cbs;
+    CBS_init(&cbs, input, input_len);
+    key = EVP_parse_private_key(&cbs);
+    if (key && CBS_len(&cbs)) { EVP_PKEY_free(key); key = NULL; }
+    if (!key && op == 1) {
+      ERR_clear_error();
+      key = d2i_PKCS8PrivateKey_bio(source, NULL, key_password, &pass);
+    }
+  }
+  if (!key) goto done;
+  if (op <= 1) {
+    if (!CBB_init(&cbb, input_len) || !EVP_marshal_private_key(&cbb, key) ||
+        !CBB_finish(&cbb, &encoded, &size)) goto done;
+    contents = encoded;
+    ok = 1;
+    goto copy;
+  }
+  const EVP_CIPHER *cipher = EVP_get_cipherbyname(cipher_name);
+  if (!cipher) goto done;
+  dest = BIO_new(BIO_s_mem());
+  if (!dest) goto done;
+  if (op == 2) ok = PEM_write_bio_PKCS8PrivateKey(dest, key, cipher, (const char *)password, (int)password_len, NULL, NULL);
+  if (op == 3) ok = i2d_PKCS8PrivateKey_bio(dest, key, cipher, (const char *)password, (int)password_len, NULL, NULL);
+  if (op == 4 && EVP_PKEY_id(key) == EVP_PKEY_RSA) ok = PEM_write_bio_RSAPrivateKey(dest, EVP_PKEY_get0_RSA(key), cipher, password, (int)password_len, NULL, NULL);
+  if (op == 5 && EVP_PKEY_id(key) == EVP_PKEY_EC) ok = PEM_write_bio_ECPrivateKey(dest, EVP_PKEY_get0_EC_KEY(key), cipher, password, (int)password_len, NULL, NULL);
+  if (!ok || !BIO_mem_contents(dest, &contents, &size)) { ok = 0; goto done; }
+copy:
+  if (ok && size <= capacity) memcpy(output, contents, size);
+  else ok = 0;
+done:
+  OPENSSL_free(encoded);
+  CBB_cleanup(&cbb);
+  EVP_PKEY_free(key);
+  BIO_free(source);
+  BIO_free(dest);
+  ERR_clear_error();
   return ok ? size : 0;
 }
