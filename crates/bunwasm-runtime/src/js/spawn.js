@@ -58,7 +58,7 @@
     const argv = cmd.map(String);
     if (argv.some((arg) => arg.includes("\0"))) throw new TypeError("Command arguments cannot contain null bytes");
     const proc = globalThis.process;
-    if (!["bun", "/bun", proc.execPath, proc.argv0].includes(argv[0])) {
+    if (!["bun", "/bun", "node", proc.execPath, proc.argv0].includes(argv[0])) {
       throw Object.assign(new Error(`Executable not found in bun-wasm: ${argv[0]}`), { code: "ENOENT", errno: -2, path: argv[0], syscall: "spawn" });
     }
     argv[0] = "bun";

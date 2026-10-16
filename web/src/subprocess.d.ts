@@ -16,6 +16,12 @@ export interface ChildTransport {
   inheritedStdin?: boolean;
   pipes: SharedArrayBuffer[];
   control: SharedArrayBuffer;
+  filesystem: { toChild: SharedArrayBuffer; toParent: SharedArrayBuffer } | null;
+}
+export interface FilesystemSync {
+  capture(): string;
+  commit(snapshot: string): void;
+  merge(snapshot: string): void;
 }
 export const MAX_CHILDREN: number;
 export function createProcessBudget(): SharedArrayBuffer;
@@ -29,11 +35,13 @@ export class SharedPipe {
   close(): void;
   readiness(): Readiness;
 }
-export function wasiPipe(pipe: SharedPipe, mode: "read" | "write"): Stream;
+export function wasiPipe(pipe: SharedPipe, mode: "read" | "write", hooks?: { afterRead?(): void; beforeWrite?(): void }): Stream;
 export function childTransport(transport: ChildTransport): {
   stdin: SharedPipe;
   stdout: SharedPipe;
   stderr: SharedPipe;
+  receiveFilesystem(): string | null;
+  sendFilesystem(snapshot: string): boolean;
   finish(code: number, snapshot?: string): void;
 };
 export class SubprocessHost {
@@ -44,7 +52,8 @@ export class SubprocessHost {
     stdin?: SharedArrayBuffer;
     launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): { terminate(): unknown };
     output(fd: number, bytes: Uint8Array): void;
-    sync?(snapshot: string): void;
+    filesystem?(): FilesystemSync;
+    syncFilesystem?(): void;
   });
   budget: SharedArrayBuffer;
   attach(memory: WebAssembly.Memory): void;
