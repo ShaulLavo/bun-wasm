@@ -23,7 +23,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [0007](#0007-string-equality) | Upstream bug | Correct string comparisons that skip bytes with 32-bit `usize`. |
 | [0008](#0008-await-context-hooks) | Host feature | Add optional printer hooks to preserve browser async context. |
 | [0009](#0009-bake-completion) | Port | Complete bake bundles through the synchronous WASI event loop. |
-| [0010](#0010-semantic-import-locations) | Host feature | Report dynamic-import keyword locations from Bun's parser for host module linking. |
+| [0010](#0010-semantic-import-locations) | Host feature | Collect semantic import locations in Bun's scan and print passes for host module linking. |
 | [`jsc/webkit-wasi.patch`, platform hunks](#webkit-platform-hunks) | Port | Compile the C-loop interpreter and WTF for WASI. |
 | [`jsc/webkit-wasi.patch`, module slots](#webkit-module-import-slots) | Upstream bug | Give import slots a full JSValue stride and initialize the whole slot. |
 | [`jsc/webkit-wasi.patch`, non-JIT declarations](#webkit-non-jit-declarations) | Upstream bug | Expose a required enum without DFG and add two missing includes. |
@@ -266,12 +266,9 @@ File `0009-Drive-bake-completion-from-the-WASI-mini-event-loop.patch`. Class **P
 
 File `0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch`. Class **Host feature**.
 
-Upstream paths are `src/js_parser/lib.rs` and `src/js_parser/parse/parse_import_export.rs` at pinned Bun revision `9510e74152073d850a18758ca41114d8f214ffa6`. A scoped, thread-local collector records the original UTF-8 keyword offset when Bun parses a dynamic import expression. It restores the previous collector on return or unwind. Import.meta and property names never enter that branch. The parser otherwise behaves unchanged.
+Upstream paths are `src/js_parser/lib.rs`, `src/js_parser/parse/parse_import_export.rs`, and `src/js_printer/lib.rs` at pinned Bun revision `9510e74152073d850a18758ca41114d8f214ffa6`. A scoped, thread-local parser collector records the original UTF-8 keyword offset when Bun scans a dynamic import expression. A printer collector records emitted UTF-8 spans for static paths and dynamic keywords during the existing transpile pass. Both restore the previous collector on return or unwind. Import.meta and property names never enter the dynamic-import branches. Parsing and printing otherwise behave unchanged.
 
-The original adapters in `crates/bunwasm-transpiler/src/lib.rs`, `crates/bunwasm-cli/src/main.rs`, and `crates/bunwasm-runtime/src/{transpiler,engine_host}.rs` combine these locations with Bun's existing static import records. Host module linking now uses semantic spans rather than a second JavaScript lexer. The source bytes and import arguments remain intact, including import attributes and template substitutions. This is a bun-wasm host requirement, not an upstream Bun bug.
-
-
-## Other vendored changes
+The original adapters in `crates/bunwasm-transpiler/src/lib.rs`, `crates/bunwasm-cli/src/main.rs`, and `crates/bunwasm-runtime/src/{transpiler,modules,engine_host}.rs` return spans with transpiled code and cache them by source path. Transformed modules are not parsed again for linking. Unchanged JavaScript uses Bun's scan-only parser without symbol binding, visiting or printing. An absence check for both grammar spellings, `import` and `from`, skips scanning modules that cannot have imports or re-exports. Eval sources scan once. The ESM-to-CJS adapter scans the bundled output once and caches it with its spans. Host prologues shift the stored byte spans without parsing. The import arguments remain intact, including import attributes and template substitutions. This is a bun-wasm host requirement, not an upstream Bun bug.
 
 ### WebKit platform hunks
 

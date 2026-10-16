@@ -63,14 +63,14 @@ impl fmt::Display for Loader {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ModuleImport {
     pub start: usize,
     pub end: usize,
     pub kind: ModuleImportKind,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ModuleImportKind {
     Static(String),
     Dynamic,
@@ -92,7 +92,7 @@ pub trait Transpiler {
     /// string (one source: the input) when the transpiler records one. The
     /// runtime uses it to report original positions in stack traces.
     fn transpile_with_map(&self, source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
-        self.transpile(source, path, loader).map(|code| Transpiled { code, mappings: None })
+        self.transpile(source, path, loader).map(|code| Transpiled { code, mappings: None, imports: Vec::new() })
     }
 
     /// Semantic imports for the host engine's module URL and dynamic-import hooks.
@@ -196,6 +196,7 @@ pub struct BuildResult {
 pub struct Transpiled {
     pub code: String,
     pub mappings: Option<String>,
+    pub imports: Vec<ModuleImport>,
 }
 
 /// Stand-in until Bun's real transpiler is wired in: plain JavaScript passes

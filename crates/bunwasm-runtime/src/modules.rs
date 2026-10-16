@@ -247,6 +247,8 @@ impl State {
                     .transpile_with_map(&raw, path, loader)
                     .map_err(|msg| build_error(&msg, &raw))?;
                 let format = self.detect_format(path, &out.code);
+                #[cfg(feature = "engine-host")]
+                self.source_imports.borrow_mut().insert(path.to_owned(), out.imports.into());
                 if let Some(mappings) = out.mappings.filter(|m| !m.is_empty()) {
                     let mut positions = self.positions.borrow_mut();
                     let entry = positions.entry(path.to_owned()).or_default();
@@ -306,16 +308,31 @@ impl State {
     /// recorded unless the file already has one (when it is also imported as
     /// a real ES module, that copy's positions win).
     #[cfg(feature = "engine-host")]
-    pub fn esm_as_cjs(&self, path: &str) -> Result<String, NativeError> {
+    pub fn esm_as_cjs(&self, path: &str) -> Result<crate::transpiler::Transpiled, NativeError> {
+        if let Some(hit) = self.cjs_sources.borrow().get(path) {
+            return Ok(hit.clone());
+        }
         let out = self.transpiler.esm_to_cjs(path).map_err(|msg| build_error(&msg, ""))?;
-        if let Some(mappings) = out.mappings.filter(|m| !m.is_empty()) {
+        if let Some(mappings) = out.mappings.as_ref().filter(|m| !m.is_empty()) {
             let mut positions = self.positions.borrow_mut();
             if !positions.contains_key(path) {
                 let original = std::fs::read_to_string(path).ok().map(|s| Rc::from(s.as_str()));
                 positions.insert(path.to_owned(), PositionMap { map: Some(crate::sourcemap::SourceMap::parse(&mappings)), original, ..Default::default() });
             }
         }
-        Ok(out.code)
+        self.cjs_sources.borrow_mut().insert(path.to_owned(), out.clone());
+        Ok(out)
+    }
+
+    #[cfg(feature = "engine-host")]
+    pub fn host_imports(&self, path: &str, code: &str) -> Result<Rc<[crate::transpiler::ModuleImport]>, NativeError> {
+        if let Some(imports) = self.source_imports.borrow().get(path) {
+            return Ok(imports.clone());
+        }
+        // Eval sources bypass file transpilation. Scan them once, then cache.
+        let imports: Rc<[_]> = self.transpiler.module_imports(code, path).map_err(NativeError::syntax_error)?.into();
+        self.source_imports.borrow_mut().insert(path.to_owned(), imports.clone());
+        Ok(imports)
     }
 
     /// Remember that `len` characters were injected before line 1 of `path`.

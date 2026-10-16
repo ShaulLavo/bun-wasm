@@ -102,10 +102,10 @@ fn init_state() -> Result<State, String> {
 /// Transpile one module to ESM JavaScript. `path` is used for error messages
 /// and the JSX/TS pragma lookups; it is not read from disk.
 pub fn transpile(source: &str, path: &str, loader: Loader) -> Result<String, String> {
-    with_state(|state| run(state, source, path, loader, None, None))
+    with_state(|state| run(state, source, path, loader, None))
 }
 
-/// A semantic source span in the original UTF-8 input.
+/// A semantic UTF-8 byte span in the associated source or emitted code.
 #[derive(Debug)]
 pub struct ModuleImport {
     pub start: usize,
@@ -115,16 +115,48 @@ pub struct ModuleImport {
     pub specifier: Option<String>,
 }
 
+/// Scan unchanged JavaScript without binding symbols, transforming or printing.
 pub fn module_imports(source: &str, path: &str) -> Result<Vec<ModuleImport>, String> {
-    let mut imports = Vec::new();
+    // Both spellings are required by the grammar for an import or re-export.
+    // Absence proves there are no spans; presence is resolved by Bun's parser.
+    if !source.contains("import") && !source.contains("from") {
+        return Ok(Vec::new());
+    }
+    let arena = Arena::new();
+    let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&arena);
+    let _ast_scope = ast_alloc.enter();
+    let src = bun_ast::Source::init_path_string(path.as_bytes(), source.as_bytes());
+    let mut log = bun_ast::Log::init();
+    let mut scanned = bun_js_parser::ScanPassResult::init();
     let (result, dynamic) = bun_js_parser::with_bunwasm_dynamic_imports(|| {
-        with_state(|state| run(state, source, path, Loader::Js, None, Some(&mut imports)))
+        with_state(|state| {
+            let mut options = bun_js_parser::ParserOptions::init(state.transpiler.options.jsx.clone(), BunLoader::Js);
+            options.features.commonjs_at_runtime = true;
+            let mut parser = bun_js_parser::Parser::init(options, &mut log, &src, &state.transpiler.options.define, &arena)
+                .map_err(|e| format!("failed to scan {path}: {e:?}"))?;
+            parser.scan_imports(&mut scanned).map_err(|e| format!("failed to scan {path}: {e:?}"))
+        })
     });
     result?;
+    if log.errors > 0 {
+        return Err(format_log(&log, path));
+    }
+    let mut imports = static_imports(&scanned.import_records);
     imports.extend(dynamic.into_iter().map(|start| ModuleImport { start, end: start + 6, specifier: None }));
     imports.sort_by_key(|import| import.start);
     imports.dedup_by_key(|import| import.start);
     Ok(imports)
+}
+
+fn static_imports(records: &[bun_ast::ImportRecord]) -> Vec<ModuleImport> {
+    records.iter().filter(|r| r.kind == bun_ast::ImportKind::Stmt).map(|record| {
+        let start = record.range.loc.start as usize;
+        ModuleImport {
+            start,
+            end: start + record.range.len as usize,
+            specifier: Some(String::from_utf8_lossy(record.path.text).into_owned()),
+        }
+    }).collect()
 }
 
 /// Output plus its source map.
@@ -132,18 +164,27 @@ pub struct Transpiled {
     pub code: String,
     /// Source map v3 `mappings` (base64 VLQ, one source: the input file).
     pub mappings: String,
+    pub imports: Vec<ModuleImport>,
 }
 
 /// Like [`transpile`], also returning the source map the printer recorded,
 /// so stack traces can point at the original TypeScript lines.
 pub fn transpile_with_source_map(source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
     let mut collector = ChunkCollector(None);
-    let code = with_state(|state| run(state, source, path, loader, Some(&mut collector), None))?;
+    let (code, imports) = bun_js_printer::with_bunwasm_imports(|| {
+        with_state(|state| run(state, source, path, loader, Some(&mut collector)))
+    });
+    let code = code?;
+    let imports = imports.into_iter().map(|import| ModuleImport {
+        start: import.start,
+        end: import.end,
+        specifier: import.specifier,
+    }).collect();
     let mappings = collector
         .0
         .map(|chunk| String::from_utf8_lossy(chunk.buffer.list.as_slice()).into_owned())
         .unwrap_or_default();
-    Ok(Transpiled { code, mappings })
+    Ok(Transpiled { code, mappings, imports })
 }
 
 /// Runs `f` with Bun's printer emitting the bun-wasm `await` hooks
@@ -213,7 +254,6 @@ fn run(
     path: &str,
     loader: Loader,
     source_map: Option<&mut ChunkCollector>,
-    imports: Option<&mut Vec<ModuleImport>>,
 ) -> Result<String, String> {
     let arena = Arena::new();
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&arena);
@@ -265,21 +305,6 @@ fn run(
         return Err(if msg.is_empty() { format!("failed to parse {path}") } else { msg });
     }
     let parsed = parsed.expect("checked above");
-    if let Some(imports) = imports {
-        for record in &parsed.ast.import_records {
-            if record.kind != bun_ast::ImportKind::Stmt {
-                continue;
-            }
-            let start = record.range.loc.start as usize;
-            imports.push(ModuleImport {
-                start,
-                end: start + record.range.len as usize,
-                specifier: Some(String::from_utf8_lossy(record.path.text).into_owned()),
-            });
-        }
-        restore(&mut state.transpiler, &mut state.log);
-        return Ok(String::new());
-    }
     let mut printer = bun_js_printer::BufferPrinter::init(bun_js_printer::BufferWriter::init());
     let format = bun_bundler::transpiler::PrintFormat::Esm;
     let printed = match source_map {

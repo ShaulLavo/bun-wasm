@@ -48,6 +48,18 @@ mod bun_transpiler {
     /// without AsyncContext: `await`s get hooks that carry AsyncLocalStorage.
     const AWAIT_HOOKS: bool = cfg!(feature = "engine-host");
 
+    fn runtime_imports(imports: Vec<bunwasm_transpiler::ModuleImport>) -> Vec<bunwasm_runtime::transpiler::ModuleImport> {
+        use bunwasm_runtime::transpiler::{ModuleImport, ModuleImportKind};
+        imports.into_iter().map(|import| ModuleImport {
+            start: import.start,
+            end: import.end,
+            kind: match import.specifier {
+                Some(specifier) => ModuleImportKind::Static(specifier),
+                None => ModuleImportKind::Dynamic,
+            },
+        }).collect()
+    }
+
     /// Bun's real parser and printer (crates/bunwasm-transpiler).
     ///
     /// Plain JavaScript skips it: QuickJS runs it as is, and the original
@@ -74,7 +86,11 @@ mod bun_transpiler {
                 // The browser engine needs every `await` printed with its
                 // AsyncLocalStorage hooks, plain JavaScript included.
                 Loader::Js if AWAIT_HOOKS && source.contains("await") => BunLoader::Js,
-                Loader::Js => return Ok(Transpiled { code: source.to_owned(), mappings: None }),
+                Loader::Js => return Ok(Transpiled {
+                    code: source.to_owned(),
+                    mappings: None,
+                    imports: if AWAIT_HOOKS { self.module_imports(source, path)? } else { Vec::new() },
+                }),
                 Loader::Jsx => BunLoader::Jsx,
                 Loader::Ts => BunLoader::Ts,
                 Loader::Tsx => BunLoader::Tsx,
@@ -88,21 +104,11 @@ mod bun_transpiler {
             let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
                 bunwasm_transpiler::transpile_with_source_map(source, path, loader)
             })?;
-            Ok(Transpiled { code: out.code, mappings: Some(out.mappings) })
+            Ok(Transpiled { code: out.code, mappings: Some(out.mappings), imports: runtime_imports(out.imports) })
         }
 
         fn module_imports(&self, source: &str, path: &str) -> Result<Vec<bunwasm_runtime::transpiler::ModuleImport>, String> {
-            use bunwasm_runtime::transpiler::{ModuleImport, ModuleImportKind};
-            bunwasm_transpiler::module_imports(source, path).map(|imports| {
-                imports.into_iter().map(|import| ModuleImport {
-                    start: import.start,
-                    end: import.end,
-                    kind: match import.specifier {
-                        Some(specifier) => ModuleImportKind::Static(specifier),
-                        None => ModuleImportKind::Dynamic,
-                    },
-                }).collect()
-            })
+            bunwasm_transpiler::module_imports(source, path).map(runtime_imports)
         }
 
         /// Bun's bundler on the one file, every import external: `bun build
@@ -135,7 +141,8 @@ mod bun_transpiler {
                 }
                 None => (code, None),
             };
-            Ok(Transpiled { code, mappings })
+            let imports = if AWAIT_HOOKS { self.module_imports(&code, path)? } else { Vec::new() };
+            Ok(Transpiled { code, mappings, imports })
         }
 
         #[cfg(feature = "bun-build")]

@@ -275,7 +275,7 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) {
     t.add("hostCjsSource", move |a| {
         let path = a.str(0)?;
         let (code, _) = st.load_source(path)?;
-        let (wrapped, first_line) = modules::cjs_wrapper(&host_dynamic_imports(&st, &code, path)?);
+        let (wrapped, first_line) = modules::cjs_wrapper(&host_dynamic_imports(&code, path, &st.host_imports(path, &code)?));
         // Our wrapper's two header lines sit above the file's line 1.
         if first_line == -1 {
             st.record_line_offset(path, 2);
@@ -285,7 +285,8 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("hostEsmAsCjs", move |a| {
         let path = a.str(0)?;
-        Ok(host_dynamic_imports(&st, &st.esm_as_cjs(path)?, path)?.into())
+        let out = st.esm_as_cjs(path)?;
+        Ok(host_dynamic_imports(&out.code, path, &out.imports).into())
     });
     t.add("polyfillSource", |a| Ok(modules::polyfill_source(a.str(0)?).map(Val::from).into()));
     let st = state.clone();
@@ -298,15 +299,11 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) {
 /// `import(...)` in code evaluated as a script (CommonJS) goes through the
 /// host's dynamic-import hook, like in ES modules (engine-host.js): the
 /// engine would resolve it against the host's own URL.
-fn host_dynamic_imports(state: &State, code: &str, from: &str) -> Result<String, NativeError> {
+fn host_dynamic_imports(code: &str, from: &str, imports: &[crate::transpiler::ModuleImport]) -> String {
     use crate::transpiler::ModuleImportKind;
-    let spans: Vec<_> = state.transpiler.module_imports(code, from)
-        .map_err(NativeError::syntax_error)?
-        .into_iter()
-        .filter(|s| matches!(s.kind, ModuleImportKind::Dynamic))
-        .collect();
+    let spans: Vec<_> = imports.iter().filter(|s| matches!(s.kind, ModuleImportKind::Dynamic)).collect();
     if spans.is_empty() {
-        return Ok(code.to_owned());
+        return code.to_owned();
     }
     let hook = format!("globalThis.__bunwasm_dynamicImport({})", json_string(from));
     let mut out = String::with_capacity(code.len() + spans.len() * hook.len());
@@ -317,7 +314,7 @@ fn host_dynamic_imports(state: &State, code: &str, from: &str) -> Result<String,
         at = span.end;
     }
     out.push_str(&code[at..]);
-    Ok(out)
+    out
 }
 
 fn json_string(s: &str) -> String {
@@ -353,9 +350,10 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
     let source = modules::esm_source_with(state, path, &code, &meta);
     let mut imports = Vec::new();
     use crate::transpiler::ModuleImportKind;
-    for span in state.transpiler.module_imports(&source, path).map_err(NativeError::syntax_error)? {
-        let mut rec = Record::new().set("start", span.start as f64).set("end", span.end as f64);
-        let specifier = match span.kind {
+    let offset = source.len() - code.len();
+    for span in state.host_imports(path, &code)?.iter() {
+        let mut rec = Record::new().set("start", (span.start + offset) as f64).set("end", (span.end + offset) as f64);
+        let specifier = match &span.kind {
             ModuleImportKind::Dynamic => {
                 rec.push("kind", "dynamic");
                 imports.push(rec.into());
