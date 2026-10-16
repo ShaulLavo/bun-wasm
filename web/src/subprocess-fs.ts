@@ -1,4 +1,4 @@
-import { type DirNode, type Node, MemFS, basename, dirname } from "./fs";
+import { type DirNode, type Node, MemFS } from "./fs";
 
 type Change = { path: string; node: Node | null };
 
@@ -37,9 +37,7 @@ export function mergeFilesystemChanges(fs: MemFS, snapshot: string): void {
     return value;
   });
   for (const { path, node } of changes) {
-    const parent = fs.lookup(dirname(path));
-    if (parent?.kind !== "dir") continue;
-    if (node === null) parent.children.delete(basename(path));
-    else parent.children.set(basename(path), node);
+    if (node === null) fs.remove(path);
+    else fs.replace(path, node);
   }
 }
