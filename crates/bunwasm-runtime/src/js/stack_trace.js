@@ -8,6 +8,7 @@
 
   function store(target, value) {
     formatted.set(target, value);
+    if (formatting) return value;
     const own = Object.getOwnPropertyDescriptor(target, "stack");
     if (own ? own.configurable : Object.isExtensible(target)) {
       Object.defineProperty(target, "stack", { value, writable: true, configurable: true, enumerable: false });
@@ -54,16 +55,18 @@
     if (formatted.has(target)) return formatted.get(target);
     if (formatting) return store(target, defaultStack(target, raw));
     formatting = true;
+    let value;
     try {
       const prepare = Error.prepareStackTrace;
-      if (typeof prepare !== "function" || prepare === defaultPrepare) return store(target, defaultStack(target, raw));
-      const sites = native.engine === "jsc"
+      const custom = typeof prepare === "function" && prepare !== defaultPrepare;
+      const sites = custom && native.engine === "jsc"
         ? internal.require("inspect").parseStack(raw).map(frame => new CallSite(frame))
         : raw;
-      return store(target, Reflect.apply(prepare, Error, [target, sites]));
+      value = custom ? Reflect.apply(prepare, Error, [target, sites]) : defaultStack(target, raw);
     } finally {
       formatting = false;
     }
+    return store(target, value);
   }
 
   if (native.engine === "quickjs") {
