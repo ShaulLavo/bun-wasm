@@ -101,11 +101,21 @@ report `0 passed, 5 failed` per engine on the original artifacts, then
 The retained WASMs contain the current HTTP JavaScript and erased TypeScript
 factories; `source-check.log` and `artifacts.json` record the checks and hashes.
 
+Round 2 passes all 161 fixtures on QuickJS, JSC and browser. Both new fixtures
+fail on each original artifact and pass on each rebuilt engine. The expanded
+twenty-file upstream selection adds `test-http-extra-response.js` and
+`test-http-response-multi-content-length.js`. Before/after counts remain identical
+on all engines: 0/20 fully passing files, 3 observed tests passing, 11 failing,
+2 skipped, one error and zero file timeouts. The Node shared harness remains the
+first blocker for its assertion scripts.
+The complete round-2 web gate passes, including memory growth on Chromium and
+WebKit with all three engines. The framework matrix again passes 24/24 stages.
+
 The earlier web gate stopped at the separately tracked browser memory-growth
 failure after the shared filesystem merge. The HTTP lane reproduced that timeout
 in the full gate, an isolated rerun, and a control using unchanged main guest
 artifacts. PR #36 fixes that failure and is merged into the round-2 branch.
-The full web gate runs without an exemption in this round. The historical
+The full web gate passes without an exemption in this round. The historical
 follow-up is recorded in `plans/compatibility-followups.md`; no HTTP workaround
 was applied.
 
@@ -151,3 +161,4 @@ coordinator. The coordinator owns removal after accepting the PR's independent
 review and rebuilt artifacts.
 PR #35 revision evidence and rebuilt artifact copies are retained separately in
 `/work/reports/bun-wasm-http-pr35/` under the same cleanup ownership.
+Round-2 records and rebuilt copies are in `/work/reports/bun-wasm-http-pr35-r2/`.
