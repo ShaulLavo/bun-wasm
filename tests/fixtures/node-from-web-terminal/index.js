@@ -44,3 +44,33 @@ const node = Writable.fromWeb(web);
 await new Promise((resolve, reject) => { node.on("error", reject); node.end(resolve); });
 assert.equal(node.writableFinished, true);
 console.log("normal fromWeb end");
+for (const failed of [false, true]) {
+  const reason = failed ? new Error("destroy adapter") : undefined;
+  const actions = [];
+  const web = new WritableStream({
+    write() { actions.push("write"); },
+    close() { actions.push("close"); },
+    abort(error) { assert.equal(error, reason); actions.push("abort"); },
+  });
+  const node = Writable.fromWeb(web);
+  node.on("error", error => assert.equal(error, reason));
+  const closed = new Promise(resolve => node.once("close", resolve));
+  node.destroy(reason);
+  const writeError = await new Promise(resolve => node.write("late", resolve));
+  assert.equal(writeError.code, "ERR_STREAM_DESTROYED");
+  await settle(closed);
+  assert.deepEqual(actions, [failed ? "abort" : "close"]);
+  console.log("destroy writable " + failed);
+}
+for (const failed of [false, true]) {
+  const reason = failed ? new Error("cancel adapter") : undefined;
+  const cancelled = [];
+  const web = new ReadableStream({ cancel(error) { cancelled.push(error); } });
+  const node = Readable.fromWeb(web);
+  node.on("error", error => assert.equal(error, reason));
+  const closed = new Promise(resolve => node.once("close", resolve));
+  node.destroy(reason);
+  await settle(closed);
+  assert.deepEqual(cancelled, [reason]);
+  console.log("destroy readable " + failed);
+}
