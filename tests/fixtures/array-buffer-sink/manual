@@ -1,0 +1,1 @@
+Closed and reentrant cases follow pinned Bun 1.4.4 crash regression tests. The native host binary is older, so --update must not run those crash triggers there.

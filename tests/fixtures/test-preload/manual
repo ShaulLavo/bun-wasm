@@ -1,1 +1,1 @@
-Checks wasm stubs and explicit preload support.
+Checks advertised wasm capabilities and explicit preload support.
