@@ -135,3 +135,22 @@ constructor implementation. Preserve the unchanged recursive control, also test
 plain recursion without Console, and rerun all engine fixtures when changing
 stack policy. Before/after evidence is retained in
 `/work/reports/bun-wasm-console/console-{before,after}-quickjs.json`.
+
+## JSC subprocess disposal timing
+
+The ArrayBufferSink campaign exposed a variable result in upstream
+`js/bun/spawn/spawn.test.ts`, case `dispose keyword works` at line 1387.
+The integrated three-file measurement has five spawn passes and 172 failures.
+A spawn-only repeat with identical wasm, launcher, runner and dependency hashes
+has six passes and 171 failures. Only the disposal case changes status.
+The sink file consistently has 13 passes and one skip. Raw results are retained
+in `/work/tmp/bun-wasm-track4-sink-evidence/after-jsc-refreshed.json` and
+`jsc-spawn-repeat.json` until coordinator review. The tracked sink report preserves
+the counts after those local artifacts are removed.
+
+Reproduce with the sink report's command and `--engine jsc`, selecting only
+`js/bun/spawn/spawn.test.ts`, through the heavy wrapper. Trace child completion
+before the disposal call in `crates/bunwasm-runtime/src/js/spawn.js:228` and the
+signal state set by `kill()` at line 223. The child may already have settled;
+that cause remains unconfirmed. No sink code or provenance changed in the repeat.
+Keep this subprocess investigation separate from byte-sink behavior.

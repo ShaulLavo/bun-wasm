@@ -1,0 +1,9 @@
+file sourceURL true
+https sourceURL true
+legacy sourceURL true
+sourceURL then sourceMappingURL true
+sourceMappingURL then sourceURL true
+file sourceMappingURL true
+https sourceMappingURL true
+legacy sourceMappingURL true
+inline sourceMappingURL true

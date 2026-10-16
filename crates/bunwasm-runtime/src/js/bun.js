@@ -426,6 +426,7 @@
   const { TOML, YAML, JSON5, JSONC } = internal.require("formats");
   const { Glob } = internal.require("glob");
   const { Cookie, CookieMap } = internal.require("cookie");
+  const { ArrayBufferSink } = internal.require("array_buffer_sink");
   function semverString(value) {
     if (typeof value === "symbol") throw new TypeError("Cannot convert a symbol to a string");
     return `${value}`;
@@ -447,6 +448,7 @@
     : globalThis.process.env.NO_COLOR === undefined && native.isatty(2);
 
   const Bun = {
+    ArrayBufferSink,
     semver,
     TOML, YAML, JSON5, JSONC, Glob, Cookie, CookieMap, JSONL: internal.require("jsonl"),
     version: info.version,
@@ -505,7 +507,6 @@
     spawn: (cmd, options) => internal.require("spawn").spawn(cmd, options),
     spawnSync: (cmd, options) => internal.require("spawn").spawnSync(cmd, options),
     unsafe: {
-      gcAggressionLevel: unsupported("Bun.unsafe.gcAggressionLevel", "engine GC scheduling is not exposed"),
       arrayBufferToString: unsupported("Bun.unsafe.arrayBufferToString", "zero-copy strings are not exposed"),
     },
     $: unsupported("Bun.$", noProcesses),
