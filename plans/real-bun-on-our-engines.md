@@ -48,7 +48,7 @@ The crypto algorithm and any later required operations still need a bounded repr
 
 ## TypeScript follow-up
 
-Status: Approved. Execute after runtime PRs #12, #13, #14, #16, #18, #19 and #20 merge.
+Status: Approved. Execute after remaining runtime PRs #12, #14, #16, #18, #19 and #20 merge.
 
 Convert the remaining runtime JavaScript to TypeScript in small module groups. Prefer replacing
 our implementations with Bun's own builtin modules where available. Extend `src/js/runtime.d.ts`
