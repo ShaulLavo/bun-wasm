@@ -1,3 +1,4 @@
+import type { Stream, Readiness } from "@bun-wasm/runtime/core";
 import type { EngineNet } from "./net/host";
 import type { SlotImpls } from "./net/trampoline";
 export interface SpawnMeta {
@@ -32,7 +33,9 @@ export class SharedPipe {
   writeAll(bytes: Uint8Array): void;
   readBlocking(cap: number): Uint8Array | number;
   close(): void;
+  readiness(): Readiness;
 }
+export function wasiPipe(pipe: SharedPipe, mode: "read" | "write"): Stream;
 export function childTransport(transport: ChildTransport): {
   stdin: SharedPipe;
   stdout: SharedPipe;
