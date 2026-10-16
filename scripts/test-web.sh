@@ -21,12 +21,36 @@ bun test tests/
 bun run build >/dev/null
 
 scratch="$(mktemp -d /work/tmp/bun-wasm-web-net-XXXXXX)"
+isolated_scratch="$(mktemp -d /work/tmp/bun-wasm-web-isolated-XXXXXX)"
+isolated_backups=()
 server_pid=""
 cleanup() {
   if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; fi
-  rm -rf "$scratch"
+  for app in "${isolated_backups[@]}"; do
+    backup="$isolated_scratch/$app.bunfig.toml"
+    if [[ -f "$backup" ]]; then
+      cp "$backup" "$root/$app/bunfig.toml"
+    else
+      rm -f "$root/$app/bunfig.toml"
+    fi
+  done
+  rm -rf "$scratch" "$isolated_scratch"
 }
 trap cleanup EXIT
+
+printf '[install]\nlinker = "isolated"\n' >"$isolated_scratch/bunfig.toml"
+for app in web sandbox site; do
+  config="$root/$app/bunfig.toml"
+  if [[ -e "$config" || -L "$config" ]]; then
+    cp "$config" "$isolated_scratch/$app.bunfig.toml"
+  fi
+  isolated_backups+=("$app")
+  cp "$isolated_scratch/bunfig.toml" "$config"
+done
+for app in web sandbox site; do
+  (cd "$root/$app" && bun install --frozen-lockfile && bun run build >/dev/null)
+done
+(cd "$root/web" && bun test tests/build-splitting.test.ts)
 
 bun "$root/tests/servers/http.ts" >"$scratch/port" &
 server_pid=$!
