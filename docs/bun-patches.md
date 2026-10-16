@@ -99,15 +99,16 @@ there is no copied upstream implementation. The OPFS spike informed the scheduli
 not the implementation. One worker allocates inodes, owns open identities and services all
 guests. Ancestor revocation cancels requests and releases each guest's references; bounded
 read/stat caches use a shared mutation epoch. Atomic append selects EOF and writes the whole
-request in the service; conditional creation carries the caller's exclusivity intent. Transient
+request under shared mutation and file locks; conditional creation carries the caller's exclusivity intent. Transient
 result handles are pinned together before eviction, and rejected cache reads do not touch guest
 buffers. Shared ancestor wakeups also cancel blocked and asynchronous guests if the filesystem
 worker fails. The sandbox's original network adapters send notification-only file-change events
 after a shared-FS save, rather than replaying its old bytes. Copy-at-spawn and merge-at-exit are removed.
 The original `runtime/fs/shared.ts` adapter adds shared file metadata, per-inode locks and
 service-owned 64 KiB page tables across 16 MiB SAB segments. Retained file reads and in-capacity
-writes stay in the guest; namespace edits, atomic appends and geometric capacity growth stay
-at the backend boundary. The default configurable storage cap is 1 GiB; pool exhaustion uses
+writes and appends stay in the guest; namespace edits and geometric capacity growth stay
+at the backend boundary. Original per-connection capability tables let cached opens and closes
+change atomic local references while the service retains sole ownership of backend pins. The default configurable storage cap is 1 GiB; pool exhaustion uses
 WASI ENOSPC and the per-file page-table limit uses EFBIG. Owner-tagged locks let revocation
 reclaim abandoned guest locks without changing allocator state. This is original bun-wasm code,
 not an adapted upstream allocator or filesystem. Path walking remains a local MemFS detail. Bun's

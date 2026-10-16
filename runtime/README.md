@@ -59,7 +59,9 @@ The connection's shared `signal` changes on completion/cancellation so a future 
 recheck readiness. No `runtime_proc` imports are implemented here. Read, stat and resolved-path
 caches are bounded and validated by the shared mutation epoch. Retained open files read and
 write shared pages directly when capacity is already allocated; neither operation needs a port
-round trip. Namespace edits, appends and growth are serialized by the service. Preopens and open descriptions retain handles; transient path pins
+round trip. In-capacity appends select EOF and write atomically in the guest too; namespace edits and growth
+remain service-owned. Cached opens/closes use per-connection shared reference counts, while the
+service alone owns backend pins. Preopens and open descriptions retain handles; transient path pins
 are bounded and evicting them invalidates cached paths.
 
 The service owns the page allocator and grows capacity geometrically in 64 KiB pages, across

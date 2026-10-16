@@ -57,6 +57,9 @@ function directFixture() {
   const client = new FilesystemClient(pair.client);
   client.shared.register(0, { kind: "file", ino: 1, size: 1, mtime: 1 }, new Uint8Array([65]));
   client.call = () => undefined;
+  const capabilities = new Int32Array(pair.client.capabilities);
+  Atomics.store(capabilities, 1, 0);
+  Atomics.store(capabilities, 2, 0);
   client.retain(0);
   return { client, cleanup: () => { client.dispose(); pair.server.port.close(); } };
 }
@@ -174,4 +177,24 @@ test("a failed SAB allocation rolls back all uncommitted page owners", () => {
   allocator.ensureSegment = original;
   state.register(2, { kind: "file", ino: 3, size: PAGE, mtime: 1 });
   expect(state.resources().usedBytes).toBe(PAGE * 256);
+});
+
+test("shared stat cannot observe a torn two-word timestamp", () => {
+  const state = new SharedFilesystemState();
+  const oldTime = 0x1ffffffff;
+  const newTime = 0x200000000;
+  state.register(0, { kind: "file", ino: 1, size: 1, mtime: oldTime }, new Uint8Array([65]));
+  const originalLoad = Atomics.load;
+  let intercepted = false;
+  Atomics.load = ((...args: any[]) => {
+    const value = Reflect.apply(originalLoad, Atomics, args);
+    if (!intercepted && args[0] === state.slots && args[1] === 12 + 3) {
+      intercepted = true;
+      // An actual competing writer can enter only if the metadata reader has no file lock.
+      if (originalLoad(state.slots, 12 + 8) === 0) state.setMtime(0, newTime);
+    }
+    return value;
+  }) as typeof Atomics.load;
+  try { expect([oldTime, newTime]).toContain(state.stat(0)!.mtime); }
+  finally { Atomics.load = originalLoad; }
 });

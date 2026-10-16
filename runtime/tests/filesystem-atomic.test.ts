@@ -174,24 +174,19 @@ test("WASI failed and empty appends preserve the description offset and failed o
   expect(host.errors).toEqual([]);
 });
 
-test("two real WASI workers append multi-page iovecs in one service operation per write", async () => {
-  const entered = deferred();
-  const release = deferred();
+test("two real WASI workers append multi-page iovecs atomically without append RPC", async () => {
   const appendSizes: number[] = [];
-  class GatedBackend extends MemoryBackend {
+  class TrackingAppendBackend extends MemoryBackend {
     execute(operation: string, args: any[], data: Uint8Array): unknown {
-      if (operation !== "append") return super.execute(operation, args, data);
-      appendSizes.push(data.length);
-      if (appendSizes.length === 1) {
-        entered.resolve();
-        return release.promise.then(() => super.execute(operation, args, data));
-      }
+      if (operation === "append") appendSizes.push(data.length);
       return super.execute(operation, args, data);
     }
   }
-  const { client } = fixture(new GatedBackend());
-  cleanups.push(release.resolve);
+  const { client } = fixture(new TrackingAppendBackend());
   await client.asyncCall("writeFile", ["/shared"], encode("seed"));
+  const root = await client.asyncCall("preopen", ["/"]);
+  const path = await client.asyncCall("resolve", [root, "shared"]);
+  await client.asyncCall("grow", [path.node, PAGE * 4]);
   const workers = [65, 66].map(byte => {
     const worker = new Worker(new URL("./fixtures/filesystem-atomic-guest.ts", import.meta.url).href);
     cleanups.push(() => worker.terminate());
@@ -213,12 +208,10 @@ test("two real WASI workers append multi-page iovecs in one service operation pe
   await Promise.all(workers.map(worker => worker.ready));
   for (const worker of workers) worker.worker.postMessage("write");
   await Promise.all(workers.map(worker => worker.writing));
-  await entered.promise;
-  release.resolve();
   const results = await Promise.all(workers.map(worker => worker.result));
   results.sort((a, b) => a.offset - b.offset);
   const size = PAGE + 20;
-  expect(appendSizes).toEqual([size, size]);
+  expect(appendSizes).toEqual([]);
   expect(results.map(result => ({ error: result.error, written: result.written, offset: result.offset, errors: result.errors }))).toEqual([
     { error: 0, written: size, offset: 4 + size, errors: [] },
     { error: 0, written: size, offset: 4 + size * 2, errors: [] },

@@ -114,7 +114,7 @@ test("revoking a guest cancels queued requests and releases open handles and ove
   await expect(pending.value()).rejects.toMatchObject({ errno: 11 });
   await client.asyncCall("listFiles", ["/"]);
   expect(await client.asyncCall("readFile", ["/must-not-exist"])).toBeUndefined();
-  expect(service.resources()).toEqual({ clients: 1, retained: 0, transient: 0, responses: 0 });
+  expect(service.resources()).toMatchObject({ clients: 1, retained: 0, transient: 0, responses: 0 });
   child.dispose();
 });
 
@@ -161,7 +161,7 @@ test("terminating a real worker during an in-flight backend request releases eve
   revokeFilesystem(connection);
   service.sweep();
   expect(backend.pinCount).toBe(0);
-  expect(service.resources()).toEqual({ clients: 1, retained: 0, transient: 0, responses: 0 });
+  expect(service.resources()).toMatchObject({ clients: 1, retained: 0, transient: 0, responses: 0 });
   gate.release();
   expect(text(await client.asyncCall("readFile", ["/held"]))).toBe("survives");
   await client.asyncCall("writeFile", ["/after-kill"], encode("still live"));
@@ -279,7 +279,7 @@ test("resource counts include transient capabilities, bound them, and preserve e
   client.dispose();
   service.sweep();
   expect(backend.pinCount).toBe(0);
-  expect(service.resources()).toEqual({ clients: 0, retained: 0, transient: 0, responses: 0 });
+  expect(service.resources()).toMatchObject({ clients: 0, retained: 0, transient: 0, responses: 0 });
 });
 
 test("blocking caches observe sibling same-size writes, stat changes, truncation, and growth after cached EOF", async () => {

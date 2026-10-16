@@ -1,5 +1,5 @@
 import type { FileSystem, FileHandle, FileStat, DirectoryEntry, ResolvedPath } from "../core";
-import { HEADER, PAGE, State, FilesystemError, createFilesystemConnection, errno, isRevoked, pack, revokeFilesystem, reapFilesystem, unpack, wake, type FilesystemConnection } from "./protocol";
+import { CAPABILITY_HEADER, CAPABILITY_SLOTS, CAPABILITY_WORDS, HEADER, PAGE, TRANSIENT_HANDLES, State, FilesystemError, createFilesystemConnection, errno, isRevoked, pack, reapFilesystem, unpack, wake, type FilesystemConnection } from "./protocol";
 import { MissingSegmentError, SharedFilesystemState, sharedRevoked } from "./shared";
 
 const asyncAtomics = Atomics as typeof Atomics & {
@@ -105,11 +105,18 @@ export class FilesystemClient implements FileSystem {
   private stats = new Map<number, { stat: FileStat; epoch: number }>();
   private paths = new Map<string, { path: ResolvedPath | number; epoch: number }>();
   private readdirs = new Map<number, { entries: DirectoryEntry[]; epoch: number }>();
-  private openHandles = new Set<number>();
+  private openHandles = new Map<number, number>();
+  private capabilityEntries = new Map<number, number>();
+  private capabilities: Int32Array;
+  private epoch: Int32Array;
+  private revoked: () => boolean;
   readonly shared: SharedFilesystemState;
   private watchingRevocation = false;
   constructor(readonly connection: FilesystemConnection) {
-    this.shared = new SharedFilesystemState(connection.shared, connection.maxBytes);
+    this.capabilities = new Int32Array(connection.capabilities);
+    this.epoch = new Int32Array(connection.epoch);
+    this.revoked = sharedRevoked(connection);
+    this.shared = new SharedFilesystemState(connection.shared, connection.maxBytes, connection.owner);
     connection.port.onmessage = ({ data }) => { if (data.segment) this.shared.addSegment(data.segment, data.index); else this.completions.get(data.completed)?.notify(); };
     connection.port.start();
   }
@@ -126,7 +133,7 @@ export class FilesystemClient implements FileSystem {
     try {
       while (this.completions.size) {
         const observed = Atomics.load(signal, 0);
-        if (isRevoked(this.connection)) {
+        if (this.revoked()) {
           for (const completion of this.completions.values()) completion.cancel();
           return;
         }
@@ -136,14 +143,14 @@ export class FilesystemClient implements FileSystem {
     } finally { this.watchingRevocation = false; }
   }
   fork(): FilesystemConnection {
-    if (isRevoked(this.connection)) throw new FilesystemError(11);
+    if (this.revoked()) throw new FilesystemError(11);
     const connection = createFilesystemConnection(this.connection);
     this.connection.port.postMessage({ connect: connection.server }, [connection.server.port]);
     return connection.client;
   }
   sweep(): void { this.connection.port.postMessage({ sweep: true }); }
   submit(operation: string, args: unknown[] = [], data: Uint8Array = new Uint8Array(), capacity = operation === "read" || operation === "take" || operation === "readdir" ? PAGE : 1024): FilesystemCompletion {
-    if (isRevoked(this.connection)) throw new FilesystemError(11);
+    if (this.revoked()) throw new FilesystemError(11);
     const input = pack({ operation, args });
     const buffer = new SharedArrayBuffer(HEADER + Math.max(input.length + data.length, capacity));
     const completion = new FilesystemCompletion(this.nextRequest++, buffer, this);
@@ -170,16 +177,64 @@ export class FilesystemClient implements FileSystem {
     // The disposing agent is quiescent: no synchronous file operation can be active here.
     reapFilesystem(this.connection);
     for (const completion of this.completions.values()) completion.cancel();
-    this.completions.clear(); this.reads.clear(); this.stats.clear(); this.paths.clear(); this.readdirs.clear(); this.openHandles.clear();
+    this.completions.clear(); this.reads.clear(); this.stats.clear(); this.paths.clear(); this.readdirs.clear(); this.openHandles.clear(); this.capabilityEntries.clear();
     this.sweep(); this.connection.port.close();
   }
   private version(): number {
-    if (isRevoked(this.connection)) throw new FilesystemError(11);
-    return Atomics.load(new Int32Array(this.connection.epoch), 0);
+    if (this.revoked()) throw new FilesystemError(11);
+    return Atomics.load(this.epoch, 0);
   }
   preopen(path: string): FileHandle { return this.call("preopen", [path]); }
-  retain(handle: FileHandle): void { this.call("retain", [handle]); this.openHandles.add(handle); }
-  release(handle: FileHandle): void { this.call("release", [handle]); this.openHandles.delete(handle); this.paths.clear(); this.stats.delete(handle); this.reads.delete(handle); }
+  private capabilityEntry(handle: FileHandle): number | undefined {
+    const cached = this.capabilityEntries.get(handle);
+    if (cached !== undefined && Atomics.load(this.capabilities, cached) === handle && Atomics.load(this.capabilities, cached + 1) >= 0) return cached;
+    this.capabilityEntries.delete(handle);
+    for (let key = CAPABILITY_HEADER; key < this.capabilities.length; key += CAPABILITY_WORDS) {
+      if (Atomics.load(this.capabilities, key) === handle && Atomics.load(this.capabilities, key + 1) >= 0) return key;
+    }
+    return undefined;
+  }
+  private dropReference(key: number): number {
+    for (;;) {
+      const count = Atomics.load(this.capabilities, key + 1);
+      if (count <= 0) return count;
+      if (Atomics.compareExchange(this.capabilities, key + 1, count, count - 1) !== count) continue;
+      if (count === 1 && !this.revoked() && (this.shared.isUnlinked(Atomics.load(this.capabilities, key)) || Atomics.load(this.capabilities, 0) > TRANSIENT_HANDLES)) this.connection.port.postMessage({ trim: true });
+      return count - 1;
+    }
+  }
+  retain(handle: FileHandle): void {
+    if (!Number.isInteger(handle) || handle < 0) throw new FilesystemError(8);
+    for (;;) {
+      if (this.revoked()) throw new FilesystemError(11);
+      const key = this.capabilityEntry(handle);
+      if (key === undefined) throw new FilesystemError(8);
+      const count = Atomics.load(this.capabilities, key + 1);
+      if (count < 0 || Atomics.load(this.capabilities, key) !== handle) continue;
+      if (count === 0x7fffffff) throw new FilesystemError(33);
+      if (Atomics.compareExchange(this.capabilities, key + 1, count, count + 1) !== count) continue;
+      // An idle entry may have been evicted and reassigned between the key read and CAS.
+      // Our temporary reference prevents further reuse while we validate its identity.
+      if (Atomics.load(this.capabilities, key) !== handle) { this.dropReference(key); continue; }
+      if (this.revoked()) { this.dropReference(key); throw new FilesystemError(11); }
+      this.capabilityEntries.set(handle, key);
+      this.openHandles.set(handle, (this.openHandles.get(handle) ?? 0) + 1);
+      if (this.capabilityEntries.size > CAPABILITY_SLOTS) for (const [cachedHandle, entry] of this.capabilityEntries) {
+        if (!this.openHandles.has(cachedHandle) && (Atomics.load(this.capabilities, entry) !== cachedHandle || Atomics.load(this.capabilities, entry + 1) < 0)) this.capabilityEntries.delete(cachedHandle);
+      }
+      return;
+    }
+  }
+  release(handle: FileHandle): void {
+    const count = this.openHandles.get(handle) ?? 0;
+    if (this.revoked()) { this.openHandles.delete(handle); return; }
+    if (!count) throw new FilesystemError(8);
+    const key = this.capabilityEntries.get(handle)!;
+    if (count > 1) this.openHandles.set(handle, count - 1); else this.openHandles.delete(handle);
+    // Keep linked zero-reference capabilities as a bounded cache. dropReference queues any
+    // needed detached-file/budget trim without waiting for a worker acknowledgment.
+    this.dropReference(key);
+  }
   resolve(directory: FileHandle, path: string): ResolvedPath | number {
     try {
       const epoch = this.version();
@@ -196,10 +251,9 @@ export class FilesystemClient implements FileSystem {
     } catch (error) { return errno(error); }
   }
   stat(handle: FileHandle): FileStat {
-    this.version();
-    const direct = this.openHandles.has(handle) ? this.shared.stat(handle) : undefined;
-    if (direct) return direct;
     const epoch = this.version();
+    const direct = this.openHandles.has(handle) ? this.shared.stat(handle, this.revoked) : undefined;
+    if (direct) return direct;
     const cached = this.stats.get(handle);
     if (!(epoch & 1) && cached?.epoch === epoch) return { ...cached.stat };
     const completion = this.submit("stat", [handle]);
@@ -214,13 +268,13 @@ export class FilesystemClient implements FileSystem {
     if (this.openHandles.has(handle) && this.shared.hasFile(handle)) {
       try {
         const epoch = this.version();
-        const beforeSize = this.shared.info(handle)?.size;
+        const beforeSize = this.shared.info(handle, this.revoked)?.size;
         const copies = chunks.map(chunk => new Uint8Array(chunk.length));
-        const count = this.shared.read(handle, copies, offset, sharedRevoked(this.connection), this.connection.owner);
+        const count = this.shared.read(handle, copies, offset, this.revoked, this.connection.owner);
         // The file lock makes the copied bytes a coherent snapshot. A same-file truncate that
         // raced the snapshot is the one case where the old cache contract must retry/EOF; a
         // mutation of another file must not turn this successful read into a spurious EOF.
-        if (this.version() !== epoch && (this.shared.info(handle)?.size ?? 0) < (beforeSize ?? 0) && (this.shared.info(handle)?.size ?? 0) <= offset) return 0;
+        if (this.version() !== epoch && (this.shared.info(handle, this.revoked)?.size ?? 0) < (beforeSize ?? 0) && (this.shared.info(handle, this.revoked)?.size ?? 0) <= offset) return 0;
         let copied = 0; for (let i = 0; i < chunks.length; i++) { const amount = Math.min(chunks[i]!.length, count - copied); if (amount > 0) chunks[i]!.set(copies[i]!.subarray(0, amount)); copied += amount; }
         return count;
       }
@@ -265,11 +319,21 @@ export class FilesystemClient implements FileSystem {
     if (this.openHandles.has(handle) && this.shared.hasFile(handle)) {
       const total = chunks.reduce((size, chunk) => size + chunk.length, 0);
       try {
-        const revoked = sharedRevoked(this.connection);
-        const ensure = this.shared.info(handle);
-        if (!ensure) throw new FilesystemError(8);
-        if (offset + total > ensure.capacity) this.call("grow", [handle, offset + total]);
-        return this.shared.mutate(new Int32Array(this.connection.epoch), revoked, () => this.shared.write(handle, chunks, offset, revoked, this.connection.owner), this.connection.owner);
+        this.version();
+        if (!total) return 0;
+        const revoked = this.revoked;
+        for (;;) {
+          const written = this.shared.mutate(this.epoch, revoked, () => {
+            const info = this.shared.info(handle, this.revoked);
+            if (!info) throw new FilesystemError(8);
+            // A service truncate may reclaim pages after grow replies. Check again while
+            // holding the mutation lock, and never ask the service to grow under that lock.
+            if (offset + total > info.capacity) return undefined;
+            return this.shared.write(handle, chunks, offset, revoked, this.connection.owner);
+          }, this.connection.owner);
+          if (written !== undefined) return written;
+          this.call("grow", [handle, offset + total]);
+        }
       } catch (error) {
         if (error instanceof MissingSegmentError) {
           const data = new Uint8Array(total); let at = 0; for (const chunk of chunks) { data.set(chunk, at); at += chunk.length; }
@@ -283,26 +347,50 @@ export class FilesystemClient implements FileSystem {
     catch (error) { return total || -errno(error); }
   }
   append(handle: FileHandle, chunks: readonly Uint8Array[]): { written: number; offset: number } | number {
-    try {
-      const data = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+    const total = chunks.reduce((size, chunk) => size + chunk.length, 0);
+    const fallback = () => {
+      const data = new Uint8Array(total);
       let at = 0; for (const chunk of chunks) { data.set(chunk, at); at += chunk.length; }
       return this.call("append", [handle], data);
-    } catch (error) { return -errno(error); }
+    };
+    try {
+      if (!this.openHandles.has(handle) || !this.shared.hasFile(handle)) return fallback();
+      this.version();
+      const revoked = this.revoked;
+      for (;;) {
+        const result = this.shared.mutate(this.epoch, revoked, () => {
+          const info = this.shared.info(handle, this.revoked);
+          if (!info) throw new FilesystemError(8);
+          if (info.size + total > info.capacity) return info.size + total;
+          return this.shared.append(handle, chunks, revoked, this.connection.owner);
+        }, this.connection.owner);
+        if (typeof result !== "number") return result;
+        this.call("grow", [handle, result]);
+      }
+    } catch (error) {
+      if (error instanceof MissingSegmentError) { try { return fallback(); } catch (failure) { return -errno(failure); } }
+      return -errno(error);
+    }
   }
   resize(handle: FileHandle, size: number, truncate: boolean): number {
     if (this.openHandles.has(handle) && this.shared.hasFile(handle)) {
       try {
-        const info = this.shared.info(handle);
-        if (!info) throw new FilesystemError(8);
-        if (size > info.capacity) this.call("grow", [handle, size]);
-        return this.shared.mutate(new Int32Array(this.connection.epoch), sharedRevoked(this.connection), () => this.shared.resize(handle, size, truncate, sharedRevoked(this.connection), this.connection.owner), this.connection.owner);
+        const result = this.shared.mutate(this.epoch, this.revoked, () => {
+          const info = this.shared.info(handle, this.revoked);
+          if (!info) throw new FilesystemError(8);
+          // Recheck under the global lock: an append may have turned this into a shrink,
+          // or a service shrink may have reclaimed the capacity sampled by the caller.
+          if (truncate && size < info.size || size > info.capacity) return undefined;
+          return this.shared.resize(handle, size, truncate, this.revoked, this.connection.owner);
+        }, this.connection.owner);
+        return result === undefined ? this.call("resize", [handle, size, truncate]) : result;
       } catch (error) { if (error instanceof MissingSegmentError) return this.call("resize", [handle, size, truncate]); return errno(error); }
     }
     try { return this.call("resize", [handle, size, truncate]); } catch (error) { return errno(error); }
   }
   setMtime(handle: FileHandle, mtime: number): number {
     if (this.openHandles.has(handle) && this.shared.hasFile(handle)) {
-      try { return this.shared.mutate(new Int32Array(this.connection.epoch), sharedRevoked(this.connection), () => this.shared.setMtime(handle, mtime, sharedRevoked(this.connection), this.connection.owner), this.connection.owner); }
+      try { return this.shared.mutate(this.epoch, this.revoked, () => this.shared.setMtime(handle, mtime, this.revoked, this.connection.owner), this.connection.owner); }
       catch (error) { return errno(error); }
     }
     try { return this.call("setMtime", [handle, mtime]); } catch (error) { return errno(error); }
@@ -311,10 +399,13 @@ export class FilesystemClient implements FileSystem {
     const epoch = this.version();
     const cached = this.readdirs.get(handle);
     if (!(epoch & 1) && cached?.epoch === epoch) return cached.entries.map(entry => ({ ...entry }));
-    const entries = this.call("readdir", [handle]) as DirectoryEntry[];
-    if (this.readdirs.size >= 64) this.readdirs.clear();
-    this.readdirs.set(handle, { entries, epoch: this.version() });
-    return entries.map(entry => ({ ...entry }));
+    const completion = this.submit("readdir", [handle]);
+    try {
+      const entries = completion.wait() as DirectoryEntry[];
+      if (this.readdirs.size >= 64) this.readdirs.clear();
+      this.readdirs.set(handle, { entries, epoch: completion.epoch });
+      return entries.map(entry => ({ ...entry }));
+    } finally { completion.release(); }
   }
   create(path: ResolvedPath, kind: "file" | "directory", exclusive = true): FileHandle | { error: number } {
     try { return this.call("create", [path, kind, exclusive]); } catch (error) { return { error: errno(error) }; }

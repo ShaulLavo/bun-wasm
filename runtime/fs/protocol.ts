@@ -5,6 +5,12 @@ const NativeMessageChannel = globalThis.MessageChannel;
 export const DEFAULT_SHARED_MAX_BYTES = 1024 * 1024 * 1024;
 export const HEADER = 32;
 export const PAGE = 64 * 1024;
+export const TRANSIENT_HANDLES = 256;
+export const CAPABILITY_SLOTS = 4096;
+// One candidate-count word, then reusable [handle, open-reference count] pairs. A negative
+// reference count revokes an entry. Handles never recycle, but these per-session entries do.
+export const CAPABILITY_HEADER = 1;
+export const CAPABILITY_WORDS = 2;
 export const enum State { Pending, Complete, Cancelled, Failed, Overflow }
 export class FilesystemError extends Error {
   constructor(public errno: number, message = `filesystem errno ${errno}`) { super(message); }
@@ -16,6 +22,8 @@ export interface FilesystemConnection {
   /** This connection's revocation word, then its ancestors. Never reused. */
   revocations: SharedArrayBuffer[];
   shared: SharedArrayBuffer;
+  /** Private to this connection, not its descendants: capabilities and local open references. */
+  capabilities: SharedArrayBuffer;
   /** Nonzero lock owner token; service clears it when this identity is revoked. */
   owner: number;
   maxBytes: number;
@@ -27,12 +35,17 @@ export type FilesystemIdentity = Omit<FilesystemConnection, "port">;
 export function createFilesystemIdentity(parent?: FilesystemIdentity, maxBytes = DEFAULT_SHARED_MAX_BYTES): FilesystemIdentity {
   const shared = parent?.shared ?? new SharedArrayBuffer(24 * 1024 * 1024);
   const owner = Atomics.add(new Int32Array(shared), 5, 1) + 1;
+  const capabilities = new SharedArrayBuffer((CAPABILITY_HEADER + CAPABILITY_SLOTS * CAPABILITY_WORDS) * 4);
+  const entries = new Int32Array(capabilities);
+  entries.fill(-1);
+  entries[0] = 0;
   return {
     epoch: parent?.epoch ?? new SharedArrayBuffer(4),
     // Every descendant waits here too, so root revocation can wake blocked guests after a crash.
     signal: parent?.signal ?? new SharedArrayBuffer(4),
     revocations: [new SharedArrayBuffer(4)].concat(parent?.revocations ?? []),
     shared,
+    capabilities,
     owner,
     maxBytes: parent?.maxBytes ?? maxBytes,
   };
@@ -70,7 +83,7 @@ export function unpack(bytes: Uint8Array): any {
   // Revivers returning undefined delete object properties, which is correct for resolved paths.
   return JSON.parse(decoder.decode(bytes.buffer instanceof SharedArrayBuffer ? bytes.slice() : bytes), (_key, item) => item?.$undefined ? undefined : item?.$map ? new Map(item.$map) : item);
 }
-export type RequestMessage = { id: number; buffer: SharedArrayBuffer } | { connect: FilesystemConnection } | { sweep: true } | { discard: number };
+export type RequestMessage = { id: number; buffer: SharedArrayBuffer } | { connect: FilesystemConnection } | { sweep: true } | { trim: true } | { discard: number };
 export function errno(error: unknown): number {
   if (error instanceof FilesystemError) return error.errno;
   if (error instanceof RangeError) return 27; // EFBIG
