@@ -1,0 +1,1 @@
+sync, callback and promise paths keep Buffer identity; falsy encodings use utf8

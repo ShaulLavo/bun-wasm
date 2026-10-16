@@ -1,0 +1,1 @@
+Node's Dir semantics. Bun 1.4.2 differs on invalid null callbacks and buffer names.

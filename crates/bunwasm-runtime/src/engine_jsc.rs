@@ -554,7 +554,7 @@ impl Engine for Jsc {
     }
 
     fn gc(&self) {
-        unsafe { JSGarbageCollect(ctx()) }
+        unsafe { bunjsc_collect_garbage(ctx()) }
     }
 
     fn memory_usage(&self) -> Val {
