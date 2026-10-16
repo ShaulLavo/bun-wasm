@@ -500,23 +500,25 @@
     if (args[0] !== 0 || !native.hostCaps.read) return readCallback(...args);
     const callback = args.pop();
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
+    const context = native.getAsyncContext();
+    const complete = (...values) => internal.runInContext(context, callback, undefined, values);
     const [fd, buffer, offsetOrOptions, length, position] = args;
     const options = readOptions(buffer, offsetOrOptions, length, position);
-    if (options.length === 0) return later(() => callback(null, 0, buffer));
+    if (options.length === 0) return later(() => complete(null, 0, buffer));
     const step = () => {
       const chunk = native.hostRead(0, options.length);
       if (chunk === -2) return false;
       if (chunk === -4) {
-        readCallback(fd, buffer, offsetOrOptions, length, position, callback);
+        readCallback(fd, buffer, offsetOrOptions, length, position, complete);
         return true;
       }
       if (typeof chunk === "number" && chunk < 0) throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO", syscall: "read", errno: -5 });
       if (chunk !== 0) internal.toUint8(buffer).set(chunk, options.offset);
-      later(() => callback(null, chunk === 0 ? 0 : chunk.length, buffer));
+      later(() => complete(null, chunk === 0 ? 0 : chunk.length, buffer));
       return true;
     };
     internal.require("net");
-    internal.addIoWaiter({ step, fail: error => later(() => callback(error, 0, buffer)) });
+    internal.addIoWaiter({ step, fail: error => later(() => complete(error, 0, buffer)) });
   };
   callbackApi.write = callbackify("write", writeSync, (cb, err, n, args) => cb(err, n, args[1]));
 
