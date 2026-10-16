@@ -157,6 +157,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "brotli"
+version = "8.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cc91aac060a7a1e25823bdccbfb6af1875b88f17c6daac97894eed8207166b3"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+ "brotli-decompressor",
+]
+
+[[package]]
 name = "brotli-decompressor"
 version = "5.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1141,6 +1152,7 @@ version = "0.0.18"
 dependencies = [
  "aes",
  "aes-kw",
+ "brotli",
  "bun_glob",
  "bun_semver",
  "bun_sys",
@@ -1153,6 +1165,7 @@ dependencies = [
  "cbc",
  "ctr",
  "ed25519-dalek",
+ "encoding_rs",
  "flate2",
  "getrandom 0.3.4",
  "ghash",

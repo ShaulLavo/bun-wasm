@@ -1,3 +1,4 @@
+import { installNativeStreamState } from "./native-stream-state.ts";
 import { oversizedCryptoInput } from "./crypto-inputs.js";
 import { installHostCrypto } from "./crypto-host.js";
 import { memoryViews } from "../../runtime/core/memory-views.js";
@@ -278,6 +279,7 @@ class ExitSignal {
 export function startEngineHost(o) {
   return new Promise((resolve) => {
     const host = new EngineHost(o, resolve);
+    host.disposeNativeStreams = installNativeStreamState();
     host.start();
   });
 }
@@ -917,6 +919,7 @@ class EngineHost {
   exit(code) {
     if (this.exited) return;
     this.exited = true;
+    this.disposeNativeStreams?.();
     this.native.closeAllDirs();
     this.flush();
     if (this.timer !== null) nativeClearTimeout(this.timer);

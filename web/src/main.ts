@@ -53,8 +53,24 @@ const previews = new Previews();
 // ---------- filesystem ----------
 
 const fs = new SharedFilesystem();
-await fs.mkdirp("/tmp");
-for (const [name, source] of Object.entries(examples)) await fs.writeFile(`${HOME}/${name}`, source);
+try {
+  await fs.mkdirp("/tmp");
+  // Background persistence can save a prefix of startup. Publish completion only after
+  // every example is present; a missing marker retries an interrupted seed from scratch.
+  // After completion, missing examples are intentional deletions and stay deleted.
+  const initialized = `${HOME}/.bunwasm-initialized`;
+  if (!await fs.lookup(initialized)) {
+    await fs.remove(HOME);
+    await fs.mkdirp(HOME);
+    for (const [name, source] of Object.entries(examples)) await fs.writeFile(`${HOME}/${name}`, source);
+    await fs.mkdirp(initialized);
+    await fs.flush();
+  }
+} catch (error) {
+  // The terminal is not initialized yet, but storage/lock failures must be visible.
+  setStatus(String(error), "error");
+  throw error;
+}
 
 // ---------- bun.wasm ----------
 
@@ -111,7 +127,7 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
   const scoped = await moduleScope;
   runButton.disabled = true;
   try {
-    await fs.flush();
+    await fs.drain();
     const run = startRun({ engine, module: wasm.module, args, env, filesystem: fs, moduleScope: scoped, trace }, {
       stdout: (data) => io.out(data),
       stderr: (data) => io.err(data),
@@ -184,7 +200,7 @@ const shell = new Shell(term, {
     `sleeps: ${sleepMode}`,
     `engine: ${engineName}`,
     `network: ${networkInfo()}`,
-    `filesystem: in memory, preopened at /, cwd ${HOME}; reloading the page resets it`,
+    `filesystem: persistent browser storage, preopened at /, cwd ${HOME}; editor saves survive reload`,
   ],
 });
 
@@ -264,6 +280,7 @@ class Editor {
     const path = this.path;
     const text = this.view.state.doc.toString();
     await fs.writeFile(path, text);
+    await fs.flush();
     this.saved.set(path, text);
     await this.renderTabs();
   }
