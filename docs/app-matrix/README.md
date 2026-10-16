@@ -85,10 +85,10 @@ and all six pass in the playground. No package source or fixture was changed.
 
 | Host | Engine | Before check | After check |
 | --- | --- | --- | --- |
-| Native | QuickJS | Fail, legacy-cli.mjs resolved from <input> | Pass |
+| Native | QuickJS | Fail, legacy-cli.mjs resolved from `<input>` | Pass |
 | Native | JSC | Pass | Pass |
 | Native | Browser | Fail, legacy-cli.mjs resolved from engine host | Pass |
-| Playground | QuickJS | Fail, legacy-cli.mjs resolved from <input> | Pass |
+| Playground | QuickJS | Fail, legacy-cli.mjs resolved from `<input>` | Pass |
 | Playground | JSC | Pass | Pass |
 | Playground | Browser | Fail, missing CLI success output | Pass |
 
