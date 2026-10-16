@@ -19,6 +19,10 @@ console.log("ws package client and server exchange a message and close");
 
 const net = await import("node:net");
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function sendResponse(peer, parts) {
+  for (const part of parts) { peer.write(part); await delay(5); }
+  peer.end();
+}
 let failures = 0;
 for (const [name, parts, code] of [
   ["empty EOF", [], "ECONNRESET"],
@@ -29,10 +33,7 @@ for (const [name, parts, code] of [
   const fixture = net.createServer(peer => {
     peers.push(peer);
     peer.on("error", () => {});
-    peer.once("data", async () => {
-      for (const part of parts) { peer.write(part); await delay(5); }
-      peer.end();
-    });
+    peer.once("data", () => sendResponse(peer, parts));
   });
   fixture.listen(0, "127.0.0.1");
   await new Promise(resolve => fixture.once("listening", resolve));

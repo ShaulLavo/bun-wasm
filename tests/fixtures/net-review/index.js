@@ -189,13 +189,14 @@ async function timeout() {
   assert.equal(active, 1);
   assert.equal(cancelled, 0);
 }
+async function sendResponse(socket, parts, keepOpen) {
+  for (const part of parts) { socket.write(part); await delay(5); }
+  if (!keepOpen) socket.end();
+}
 async function requestUpgrade(response, options = {}) {
   const server = await listen(socket => {
     own(socket);
-    socket.once("data", async () => {
-      for (const part of response) { socket.write(part); await delay(5); }
-      if (!options.keepOpen) socket.end();
-    });
+    socket.once("data", () => sendResponse(socket, response, options.keepOpen));
     socket.on("error", () => {});
   });
   const req = http.request(Object.assign({ host: "127.0.0.1", port: server.address().port, headers: { Connection: "Upgrade", Upgrade: "raw" } }, options));
