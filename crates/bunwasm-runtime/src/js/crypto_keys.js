@@ -280,6 +280,40 @@
     }
     const createPrivateKey = (input) => importAsymmetric(input, true);
     const createPublicKey = (input) => importAsymmetric(input, false);
+    function generateKeySync(type, options) {
+      if (type !== "hmac" && type !== "aes")
+        throw Object.assign(new TypeError("Unsupported key type"), {
+          code: "ERR_INVALID_ARG_VALUE",
+        });
+      const length = options?.length;
+      if (typeof length !== "number")
+        throw error("options.length must be a number");
+      if (!Number.isInteger(length) || length < 8 || length > 0x7fffffff)
+        throw Object.assign(new RangeError("Invalid key length"), {
+          code: "ERR_OUT_OF_RANGE",
+        });
+      if (type === "aes" && ![128, 192, 256].includes(length))
+        throw Object.assign(new TypeError("Invalid AES key length"), {
+          code: "ERR_INVALID_ARG_VALUE",
+        });
+      return createSecretKey(
+        internal.native.randomBytes(Math.floor(length / 8)),
+      );
+    }
+    function generateKey(type, options, callback) {
+      if (typeof callback !== "function")
+        throw error("Callback must be a function");
+      setImmediate(() => {
+        let key;
+        try {
+          key = generateKeySync(type, options);
+        } catch (e) {
+          callback(e);
+          return;
+        }
+        callback(null, key);
+      });
+    }
     function generateKeyPairSync(type, options = {}) {
       let a;
       const exponent = options.publicExponent ?? 65537;
@@ -515,6 +549,8 @@
       createSecretKey,
       createPrivateKey,
       createPublicKey,
+      generateKeySync,
+      generateKey,
       generateKeyPairSync,
       generateKeyPair,
       sign,

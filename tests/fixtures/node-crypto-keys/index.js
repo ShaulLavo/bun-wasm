@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { types } from "node:util";
 import {
+  generateKeySync,
+  generateKey,
   generateKeyPairSync,
   generateKeyPair,
   KeyObject,
@@ -267,3 +269,15 @@ assert.deepEqual(
   ),
 );
 console.log("node X25519 interop ok");
+
+assert.equal(generateKeySync("hmac", { length: 129 }).symmetricKeySize, 16);
+for (const length of [128, 192, 256])
+  assert.equal(generateKeySync("aes", { length }).symmetricKeySize, length / 8);
+await new Promise((resolve, reject) =>
+  generateKey("aes", { length: 128 }, (err, key) => {
+    if (err) return reject(err);
+    assert.equal(key.symmetricKeySize, 16);
+    resolve();
+  }),
+);
+console.log("node secret generation ok");
