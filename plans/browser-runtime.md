@@ -102,6 +102,10 @@ told when it is settled.
 
 ### 1. Build plan
 
+bun-wasm has no CI today (no `.github/workflows`; PRs report no checks). The runtime package's
+first PR adds a GitHub Actions gate that runs its unit tests and headless browser tests on every
+PR, and every later runtime PR must pass it.
+
 Written from the spike results, with sizes and estimates per step, before any runtime code. It
 covers where the package lives, the order of extraction, and the migration of bun-wasm's
 playground and brush-web onto it.
