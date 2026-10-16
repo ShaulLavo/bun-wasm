@@ -640,6 +640,8 @@
       constructor(options = {}) {
         super();
         this.readable = true;
+        this.closed = false;
+        this.errored = null;
         this._buffer = [];
         this._ended = false;
         this._flowing = false;
@@ -680,6 +682,8 @@
         if (this._flowing && this._buffer.length === 0 && this._ended && !this._endEmitted) {
           this._endEmitted = true;
           this.emit("end");
+          if (this.destroyed) return;
+          this.closed = true;
           this.emit("close");
         }
       }
@@ -705,13 +709,17 @@
         return this._buffer.length ? this._buffer.shift() : null;
       }
       destroy(err) {
-        if (this.destroyed) return this;
+        if (this.destroyed || this.closed) return this;
         this.destroyed = true;
+        this.errored = err || null;
         this.readable = false;
         this._flowing = false;
         this._buffer.length = 0;
         if (err) setImmediate(() => this.emit("error", err));
-        setImmediate(() => this.emit("close"));
+        setImmediate(() => {
+          this.closed = true;
+          this.emit("close");
+        });
         return this;
       }
       async *[Symbol.asyncIterator]() {

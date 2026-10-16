@@ -507,7 +507,11 @@ storage or the bytes retained by an existing clone. Neither boundary calls a
 polymorphic slice method. `net.js`
 marks network body streams as byte streams. `builtins.js` exports the complete
 `node:stream/web` module and connects Node readable and writable streams
-to the selected Web Streams constructors. These are original host adapters.
+to the selected Web Streams constructors. Readable destruction retains its original
+error and records close completion. The web adapter observes error events until
+that close completes, even after its controller has settled, and uses retained
+terminal state for sources that were closed before conversion. These are original
+host adapters.
 
 ## Port bugs fixed in bun-wasm's own code
 

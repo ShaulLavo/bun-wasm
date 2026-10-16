@@ -22,42 +22,53 @@
     node.pause();
     let ended = false;
     let cleanup;
+    let stopData;
     return new ReadableStream({
       start(controller) {
         const data = chunk => {
           controller.enqueue(Buffer.isBuffer(chunk) ? new Uint8Array(chunk) : chunk);
           if (controller.desiredSize <= 0) node.pause();
         };
+        stopData = () => {
+          node.removeListener("data", data);
+          node.removeListener("end", end);
+        };
         const end = () => {
+          if (ended) return;
           ended = true;
-          cleanup();
+          stopData();
           controller.close();
         };
         const error = reason => {
+          if (ended) return;
           ended = true;
-          cleanup();
+          stopData();
           controller.error(reason);
         };
         const close = () => {
-          if (!ended) error(new Error("Premature close"));
+          cleanup();
+          if (ended) return;
+          if (node.errored) error(node.errored);
+          else if (node._endEmitted || node.readableEnded) end();
+          else error(new Error("Premature close"));
         };
         cleanup = () => {
-          node.removeListener("data", data);
-          node.removeListener("end", end);
+          stopData();
           node.removeListener("error", error);
           node.removeListener("close", close);
         };
-        node.on("data", data).on("end", end).on("error", error).on("close", close);
-        if (node._endEmitted || node.readableEnded) end();
-        else if (node.destroyed) error(new Error("Premature close"));
+        node.on("error", error).on("close", close).on("end", end).on("data", data);
+        if (node.closed) close();
+        else if (node.errored) error(node.errored);
+        else if (node._endEmitted || node.readableEnded) end();
       },
-      pull() { node.resume(); },
+      pull() { if (!ended && !node.destroyed) node.resume(); },
       cancel(reason) {
         ended = true;
-        cleanup();
-        // Node destroy reports errors asynchronously, after the web side is cancelled.
-        node.once("error", () => {});
+        stopData();
+        node.pause();
         node.destroy(reason instanceof Error ? reason : undefined);
+        if (node.closed) cleanup();
       },
     }, options.strategy);
   }
