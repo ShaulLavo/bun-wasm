@@ -81,9 +81,9 @@ existing subprocess hosts. It copies no upstream implementation.
 
 ```sh
 source env.sh
-scripts/test.sh --no-build worker-threads worker-execution worker-port-closure
-scripts/test.sh --no-build --engine jsc worker-threads worker-execution worker-port-closure
-scripts/test.sh --no-build --engine browser worker-threads worker-execution worker-port-closure
+scripts/test.sh --no-build worker-threads worker-execution worker-port-closure worker-review
+scripts/test.sh --no-build --engine jsc worker-threads worker-execution worker-port-closure worker-review
+scripts/test.sh --no-build --engine browser worker-threads worker-execution worker-port-closure worker-review
 scripts/test-web.sh
 ```
 
@@ -102,6 +102,14 @@ transfers, queued messages, metadata, environment data, stdio, preload flags,
 errors, explicit exit, termination of an infinite loop and a message flood,
 nested workers, and references. The same fixture runs through real browser Web
 Workers in Chromium and WebKit for all engines.
+
+The `worker-review` cases also run directly on Node. They check unhandled errors
+and throwing lifecycle listeners, two-million-byte messages during explicit exit
+and exit listeners, atomic transfer rejection and constructor cleanup, termination
+after unref without another reference, drained stdout and stderr above 64 MiB,
+and termination after natural exit. Protocol parsing queues lifecycle delivery
+as event-loop callbacks. Exit drains the outgoing control pipe before host
+teardown. Worker streams have no cumulative subprocess capture limit.
 
 
 ## Guest worker measurement

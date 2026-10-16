@@ -3,6 +3,8 @@
   const native = internal.native.wasm;
   const modules = new WeakMap();
   const instances = new WeakMap();
+  const memoryBuffers = new WeakSet();
+  internal.isWasmMemoryBuffer = value => memoryBuffers.has(value);
   class CompileError extends Error { constructor(message) { super(message); this.name = 'CompileError'; } }
   class LinkError extends Error { constructor(message) { super(message); this.name = 'LinkError'; } }
   class RuntimeError extends Error { constructor(message) { super(message); this.name = 'RuntimeError'; } }
@@ -56,6 +58,7 @@
       if (memory.generation !== generation) {
         memory.buffer.transfer(0);
         memory.buffer = new ArrayBuffer(data.byteLength);
+        memoryBuffers.add(memory.buffer);
         memory.generation = generation;
       }
       new Uint8Array(memory.buffer).set(data);

@@ -93,7 +93,9 @@
       for (const buffer of buffers) new Uint8Array(buffer);
       return { graph: { root, nodes }, commit() {
         for (const plan of ports.values()) plan.validate();
-        for (const buffer of buffers) buffer.transfer();
+        for (const buffer of buffers) if (internal.isWasmMemoryBuffer?.(buffer)) throw cloneError("WebAssembly memory is not transferable");
+        try { internal.native.transferArrayBuffers(buffers); }
+        catch { throw cloneError("ArrayBuffer is not detachable"); }
         for (const plan of ports.values()) plan.commit();
       } };
     }

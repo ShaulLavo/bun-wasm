@@ -25,6 +25,7 @@
 #include "JSGlobalObject.h"
 #include "ObjectConstructor.h"
 #include "JSLock.h"
+#include "JSArrayBuffer.h"
 #include "JSModuleLoader.h"
 #include "JSPromise.h"
 #include "JSSourceCode.h"
@@ -306,6 +307,22 @@ bool bunjsc_is_error(JSContextRef ctx, JSValueRef value)
     JSGlobalObject* global = toJS(ctx);
     JSLockHolder lock(global->vm());
     return dynamicDowncast<ErrorInstance>(toJS(global, value));
+}
+
+bool bunjsc_is_detachable_buffer(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    auto* buffer = dynamicDowncast<JSArrayBuffer>(toJS(global, value));
+    return buffer && !buffer->impl()->isDetached() && buffer->impl()->isDetachable();
+}
+
+void bunjsc_detach_buffer(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    auto* buffer = jsCast<JSArrayBuffer*>(toJS(global, value));
+    buffer->impl()->detach(global->vm());
 }
 
 // The async context (AsyncLocalStorage frame): JSGlobalObject's

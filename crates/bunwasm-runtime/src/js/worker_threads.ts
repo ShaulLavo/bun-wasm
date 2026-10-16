@@ -268,7 +268,7 @@
         if (!Array.isArray(value.nodes) || typeof value.root !== "number") throw new Error("Invalid graph");
         state.pending.set(sequence, graph as Graph);
         port.#accept();
-      } catch (error) { port.dispatchEvent(new MessageEvent("messageerror", { data: error })); }
+      } catch (error) { setImmediate(() => port.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
     }
     #accept() {
       const state = this.#value();
@@ -551,7 +551,7 @@
       this.#port = publicPort;
       let transferPlan: ReturnType<BunWasm.WorkerCodec["prepare"]>;
       try { transferPlan = codec.prepare([options.workerData, Array.from(environmentData), childPort], transfers(options.transferList).concat([childPort])); }
-      catch (error) { publicPort.close(); throw error; }
+      catch (error) { publicPort.close(); childPort.close(); throw error; }
       const graph = transferPlan.graph;
       const group = options.env === SHARE_ENV ? envGroup : routeKey(this.#path);
       env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv, graph, resourceLimits: this.resourceLimits });
@@ -559,25 +559,36 @@
       let child: BunWasm.WorkerChild;
       try { child = internal.require("spawn").spawn(["bun"].concat(target.argv, argv), {
         env, cwd: process.cwd(), stdin: options.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe",
+        maxBuffer: Infinity,
         _worker: { resourceLimits: this.resourceLimits, memoryLimitMb: memoryLimitMb ? Math.ceil(memoryLimitMb) : undefined },
-      }); } catch (error) { publicPort.close(); throw error; }
-      transferPlan.commit();
+      }); } catch (error) { publicPort.close(); childPort.close(); throw error; }
       this.#child = child;
-      this.#channel = internal.require("worker_channel").open(native.hostChildPipe(child.pid, 4), native.hostChildPipe(child.pid, 3));
-      children.set(this.#id, { ref: true, send: frame => { if (!this.#exited) this.#channel.send(frame); }, pump: () => this.#pump(), event: frame => this.#event(frame) });
-      root({ kind: "member", path: this.#path, group });
-      if (!route.length) claimTransferred(graph, this.#path);
-      else root({ kind: "claim", graph, owner: this.#path });
-      const io = internal.require("worker_stdio");
-      const out = io.readable(child.stdout); const err = io.readable(child.stderr);
-      this.stdout = out.stream; this.stderr = err.stream;
-      this.stdin = child.stdin ? io.writable(child.stdin) : null;
-      if (!options.stdout) this.stdout.pipe(process.stdout);
-      if (!options.stderr) this.stderr.pipe(process.stderr);
-      this.#drained = Promise.all([out.drained, err.drained]);
-      publicPort.on("message", value => this.emit("message", value));
-      publicPort.on("messageerror", error => this.emit("messageerror", error)); publicPort.unref();
-      child.exited.then(code => this.#settled(code), error => { this.#settled(1); this.#error = true; this.emit("error", error); });
+      let control: BunWasm.WorkerChannel | null = null;
+      try {
+        control = internal.require("worker_channel").open(native.hostChildPipe(child.pid, 4), native.hostChildPipe(child.pid, 3));
+        this.#channel = control;
+        transferPlan.commit();
+        children.set(this.#id, { ref: true, send: frame => { if (!this.#exited) this.#channel.send(frame); }, pump: () => this.#pump(), event: frame => this.#event(frame) });
+        root({ kind: "member", path: this.#path, group });
+        if (!route.length) claimTransferred(graph, this.#path);
+        else root({ kind: "claim", graph, owner: this.#path });
+        const io = internal.require("worker_stdio");
+        const out = io.readable(child.stdout); const err = io.readable(child.stderr);
+        this.stdout = out.stream; this.stderr = err.stream;
+        this.stdin = child.stdin ? io.writable(child.stdin) : null;
+        if (!options.stdout) this.stdout.pipe(process.stdout);
+        if (!options.stderr) this.stderr.pipe(process.stderr);
+        this.#drained = Promise.all([out.drained, err.drained]);
+        publicPort.on("message", value => this.emit("message", value));
+        publicPort.on("messageerror", error => this.emit("messageerror", error)); publicPort.unref();
+        child.exited.then(code => this.#settled(code), error => { this.#settled(1); this.#error = true; this.emit("error", error); });
+      } catch (error) {
+        children.delete(this.#id);
+        root({ kind: "gone", path: this.#path });
+        publicPort.close(); childPort.close(); control?.close();
+        child._abortWorker();
+        throw error;
+      }
     }
     #settled(code: number) { this.#code = code; this.#schedule(); }
     #schedule() {
@@ -590,8 +601,9 @@
     ref() { this.#child.ref(); const actor = children.get(this.#id); if (actor) actor.ref = true; return this; }
     unref() { this.#child.unref(); const actor = children.get(this.#id); if (actor) actor.ref = false; return this; }
     terminate() {
+      if (this.#exited) return Promise.resolve(undefined);
       if (this.#termination) return this.#termination;
-      if (this.#exited) return Promise.resolve(this.#code ?? 0);
+      this.ref();
       this.#termination = new Promise(resolve => this.once("exit", code => resolve(Number(code))));
       this.#child.kill(9); return this.#termination;
     }
@@ -600,12 +612,12 @@
         if (typeof frame.messages !== "number" || !Number.isSafeInteger(frame.messages) || frame.messages < 0) throw new Error("Invalid worker exit sequence");
         this.#graceful = true; this.#expectedMessages = frame.messages; return;
       }
-      if (frame.kind === "online") { this.emit("online"); return; }
+      if (frame.kind === "online") { setImmediate(() => this.emit("online")); return; }
       if (frame.kind === "error") {
         this.#error = true;
         const error = codec.decode(frame.graph);
         if (error instanceof Error && typeof frame.code === "string") Object.assign(error, { code: frame.code });
-        this.emit("error", error); return;
+        setImmediate(() => this.emit("error", error)); return;
       }
       throw new Error("Unknown worker lifecycle event");
     }
@@ -613,7 +625,7 @@
       if (this.#exited) return false;
       let progress = false;
       try { progress = this.#channel.pump(incoming); }
-      catch (error) { this.emit("messageerror", error); this.#child.kill(9); }
+      catch (error) { this.#channel.close(); this.#child.kill(9); setImmediate(() => this.emit("messageerror", error)); }
       if (this.#code !== null && !this.#channel.ended) this.#schedule();
       if (this.#code !== null && this.#channel.ended && !this.#finishing) {
         this.#finishing = true;
@@ -655,7 +667,10 @@
     for (const pair of initial[1]) if (Array.isArray(pair) && pair.length === 2) environmentData.set(pair[0], pair[1]);
     process.argv = config.argv; process.execArgv = config.execArgv;
     root({ kind: "member", path: route, group: envGroup });
-    internal.workerExit = code => parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "exiting", child: route[route.length - 1], code, messages: parentPort ? portOps.sent(parentPort) : 0 } });
+    internal.workerExit = code => {
+      parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "exiting", child: route[route.length - 1], code, messages: parentPort ? portOps.sent(parentPort) : 0 } });
+      parentChannel?.drain();
+    };
     internal.workerError = error => {
       let graph: Graph;
       try { graph = codec.encode(error); }

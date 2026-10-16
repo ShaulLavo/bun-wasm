@@ -381,6 +381,9 @@ The original helper added to `third_party/rquickjs-sys/quickjs/quickjs.c` checks
 both ArrayBuffer and SharedArrayBuffer class tags without invoking a getter.
 QuickJS's existing `JS_IsArrayBuffer` recognizes only the first class, so using it
 alone would lose the shared-buffer conversion that the getter already supports.
+`JS_bunwasm_IsDetachableArrayBuffer` is another original inspection helper. It
+checks the ordinary-buffer class and detached flag before a transfer mutates any
+buffer. It copies no upstream implementation.
 
 ## Generated function imports
 
@@ -1099,6 +1102,14 @@ revision `9510e74152073d850a18758ca41114d8f214ffa6`. Its module initialization n
 `Worker.cpp` native bindings and the native web-worker constructor, so it cannot
 run through the builtin loader with the hooks currently available.
 [Worker threads](worker-threads.md) records supported operations and host limits.
+
+The original atomic-transfer native checks the complete buffer list before
+detachment. QuickJS uses its public detach operation plus the inspection helper
+above. The JSC adapter adds original `JSArrayBuffer` inspection and detach hooks
+in `crates/bunwasm-jsc/cpp/helpers.cpp`, against the same pinned WebKit headers as
+the existing helpers. The browser adapter captures the host's structured clone
+operation before installing guest globals. Copied WebAssembly memory buffers
+are tracked by the original runtime adapter and rejected as transfers.
 No vendor patch is needed for these adapters.
 
 The PR #31 close fixes are retained in the routed adapter. A pending peer-close

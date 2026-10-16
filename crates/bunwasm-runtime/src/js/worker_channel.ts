@@ -11,6 +11,11 @@
     let incoming = "";
     let ended = false;
     let writeClosed = false;
+    function fail(message: string): never {
+      incoming = "";
+      ended = true;
+      throw new Error(message);
+    }
     function flush() {
       let progress = false;
       for (let i = 0; i < 32 && outgoing.length; i++) {
@@ -25,6 +30,7 @@
     }
     return {
       send(frame) { if (!writeClosed) outgoing.push(encoder.encode(JSON.stringify(frame) + "\n")); flush(); },
+      drain() { while (outgoing.length) if (!flush()) native.hostPoll(100); },
       pump(receive) {
         let progress = flush();
         for (let i = 0; i < 32 && !ended; i++) {
@@ -33,7 +39,7 @@
           if (typeof bytes === "number") { ended = true; break; }
           progress = true;
           incoming += decoder.decode(bytes, { stream: true });
-          if (incoming.length > 64 * 1024 * 1024) throw new Error("Worker message exceeds 64 MiB");
+          if (incoming.length > 64 * 1024 * 1024) fail("Worker message exceeds 64 MiB");
           let end = incoming.indexOf("\n");
           while (end >= 0) {
             const line = incoming.slice(0, end);
@@ -42,7 +48,7 @@
             end = incoming.indexOf("\n");
           }
         }
-        if (ended && incoming.length) throw new Error("Incomplete worker message");
+        if (ended && incoming.length) fail("Incomplete worker message");
         return flush() || progress;
       },
       close() { native.hostClose(input); native.hostClose(output); ended = true; outgoing.length = 0; },

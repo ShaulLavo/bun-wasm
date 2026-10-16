@@ -64,9 +64,12 @@ declare namespace BunWasm {
     hostError(handle: number): string;
     base64Encode(bytes: Uint8Array, url: boolean): string;
     base64Decode(value: string): Uint8Array;
+    transferArrayBuffers(buffers: ArrayBuffer[]): void;
+    hostPoll(timeout: number): number;
   }
   interface WorkerChannel {
     send(frame: unknown): void;
+    drain(): void;
     pump(receive: (frame: unknown) => void): boolean;
     close(): void;
     readonly pending: boolean;
@@ -87,6 +90,7 @@ declare namespace BunWasm {
     clonePorts?: (value: unknown, options: unknown) => unknown;
     isMessagePort?: (value: unknown) => boolean;
     isProxy?: (value: unknown) => boolean;
+    isWasmMemoryBuffer?: (value: unknown) => boolean;
   }
 }
 interface ArrayBuffer {
@@ -117,6 +121,7 @@ declare namespace BunWasm {
     ref(): unknown;
     unref(): unknown;
     _finishWorker(): void;
+    _abortWorker(): void;
   }
   interface Internal {
     builtin(name: "node:module"): { createRequire(path: string): (specifier: string) => unknown };
