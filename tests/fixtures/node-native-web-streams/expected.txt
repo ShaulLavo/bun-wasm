@@ -1,0 +1,18 @@
+PASS readable finished callback preserves unlocked state
+PASS writable finished promise preserves unlocked state
+PASS readable original error
+PASS writable waits for pending write on error
+PASS reader release is not completion and queued close drains
+PASS BYOB completion and storage
+PASS abort readable rejects reader and finished
+PASS abort writable waits for pending write
+PASS transform native completion
+PASS transform abort readable
+PASS adapter readable completion
+PASS adapter writable waits for final
+PASS pipeline native streams and completion
+PASS pipeline original failure and abort propagation
+PASS native pipeTo abort propagation and completion
+PASS native transform original failure
+PASS compose native transforms
+PASS already completed native streams
