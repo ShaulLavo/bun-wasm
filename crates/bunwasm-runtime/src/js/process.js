@@ -74,8 +74,10 @@
         try {
           write(typeof chunk === "string" ? chunk : internal.toUint8(chunk));
         } catch (error) {
-          if (typeof callback === "function") internal.nextTick(callback, error);
-          stream.emit("error", error);
+          internal.nextTick(() => {
+            if (typeof callback === "function") callback(error);
+            internal.nextTick(() => stream.emit("error", error));
+          });
           return false;
         }
         if (typeof callback === "function") internal.nextTick(callback, null);

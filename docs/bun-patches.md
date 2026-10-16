@@ -91,13 +91,15 @@ Each row has one class. A file with independent changes has separate rows.
 ## Standard output errors
 
 Class **Host feature**, **original adapters** in `crates/bunwasm-runtime/src/lib.rs`,
-`src/natives.rs`, `src/js/{process,web}.js`, `web/scripts/node-host.mjs`,
+`src/natives.rs`, `src/js/{process,spawn,web}.js`, `web/scripts/node-host.mjs`,
 `web/scripts/node-stdio.ts`, `web/src/{subprocess.js,worker.ts}`, and
-`crates/bunwasm-host/src/process/pipe.rs`.
+`crates/bunwasm-host/src/process/{mod,pipe}.rs`, and its original `net/error.rs` error record.
 No Bun or Node implementation is copied or adapted for this change.
 Rust output natives return write errors with Node-style `EPIPE`, errno `-32`, and
 syscall `write`. The synchronous process writers emit their stream's `error` event.
-An unhandled error ends the guest with status 1. A listener can handle the error.
+Write callbacks receive the error on the next tick; stream error events run on a
+later tick, after ticks scheduled by the callback. An unhandled error ends the
+guest with status 1. A listener can handle the error.
 The Node WASI adapter waits only for temporary `EAGAIN` backpressure and returns
 WASI `PIPE` for closed output. Worker child adapters preserve the same error and
 close inherited output transports when their downstream reader disappears.
@@ -105,6 +107,10 @@ The minimal readable stream invokes its underlying cancellation callback so
 canceling a subprocess reader actually closes its pipe.
 Native child pipes attach the OS `EPIPE` number to their error. Wasmtime 39.0.2
 translates an `ErrorKind::BrokenPipe` without an OS errno to generic WASI `IO`.
+Child exit closes its owned stdin reader. Native and worker stdin write errors
+retain `code`, `errno`, and `syscall` through the public Bun and Node writers.
+Worker hosts retain each pipe's error until the handle is closed, so unrelated
+network errors cannot replace it on either the engine or WASI-slot bridge.
 
 The browser's top-level stdout and stderr write to a terminal through messages,
 so they have no OS reader that can close. Browser child pipes do have readers;
