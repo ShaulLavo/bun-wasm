@@ -291,3 +291,44 @@ scripts/bun-suite.sh --engine quickjs --jobs 1 --timeout 60 \
 
 Select either ALS or node:test file above with the same command when working on
 that module. Use the heavy-job wrapper and a private native launcher target.
+
+## MessagePort constructor errors and immediate-loop timer starvation
+
+PR #31 review verification measured five unmodified Node message-port files on
+all three engines before and after the close and receive fixes. Each engine
+passes 3/5 files in both runs. The two failures below predate those fixes.
+Evidence is in `/work/reports/bun-wasm-worker-threads-review-20261017/`, in the
+`before-suite-<engine>.json` and `after-suite-<engine>.json` records. The runtime
+fix was measured at `566601003675d08c912ff5fe6e88fe8f4ee3dfd0`, against the original
+worker factory at `44fafb4e3cd5df8dac49a0423486a38448a82934`. The upstream suite
+revision is `cd95fa7a13b3f13be73e512b38ec111c1c228084` in both runs.
+
+- `js/node/test/parallel/test-worker-message-port-constructor.js:14` calls
+  `MessagePort()` without `new` and expects `ERR_CONSTRUCT_CALL_INVALID`.
+  The class at `crates/bunwasm-runtime/src/js/worker_threads.ts:48` throws the
+  engine-generated TypeError before its constructor executes, so the error
+  has no code. QuickJS, JSC, and browser each fail this assertion before and
+  after the review fix. Preserve `instanceof`, constructor identity, and the
+  illegal-constructor checks when fixing the callable entry point.
+- `js/node/test/parallel/test-worker-message-port-infinite-message-loop.js:22`
+  fails with `AssertionError: hit 10001 loop iterations` on all three engines,
+  before and after the fix. The listener posts another message to itself and
+  schedules a zero-delay timer to close the port. The dynamically growing
+  `immediates` queue in `crates/bunwasm-runtime/src/js/bootstrap.js:390` drains
+  before the next timer turn. Bounded MessagePort delivery batches still
+  schedule another immediate, so they do not solve this shared scheduler bug.
+  Keep timer fairness and active-batch close ordering as separate assertions.
+
+After rebuilding the desired engine and native launcher in private targets,
+run this bounded reproduction through the slot wrapper. Substitute `jsc` or
+`browser` to repeat it on the other engines.
+
+```sh
+source env.sh
+bash /work/tmp/wave-heavy/run.sh --class light "MessagePort compatibility follow-ups" -- \
+  env PATH="$PATH" scripts/bun-suite.sh --engine quickjs --network loopback \
+  --jobs 1 --timeout 15 --launcher "$CARGO_TARGET_DIR/release/bun-wasm" \
+  --output /work/tmp/bun-wasm-message-port-followups.json \
+  js/node/test/parallel/test-worker-message-port-constructor.js \
+  js/node/test/parallel/test-worker-message-port-infinite-message-loop.js
+```
