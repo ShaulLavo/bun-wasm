@@ -35,6 +35,11 @@ than it is today. The process layer loads on the first spawn.
 - **One filesystem service on OPFS**, owned by one worker, reached synchronously from guest
   workers through shared memory. Writes are visible to every process when they complete. This
   replaces today's copy-at-spawn and merge-at-exit in both bun-wasm and brush-web.
+- **Storage backends are swappable.** The filesystem service talks to storage through a small
+  backend interface (load the tree, read data that isn't in memory, persist a batch, flush). We
+  ship one backend first, the fastest general one the spikes find. Later backends can include
+  IndexedDB without our own memory cache (lower memory, the browser caches for us) and memory-only
+  for throwaway sandboxes (owner, 2026-10-16).
 - **Pipes run directly between workers** over shared memory, not through the supervisor.
 - **Not adopted:** `@wasmer/sdk`, a fork of `@bjorn3/browser_wasi_shim`, SLICC code.
 
