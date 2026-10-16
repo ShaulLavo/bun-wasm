@@ -53,24 +53,28 @@ also matches Node 26.7.0.
 The unmodified first 160 tracked `.js` files under
 `test/js/node/test/parallel`, sorted by path, were measured before and after this
 change. The upstream revision, runner, dependencies, selection, and per-engine
-deadlines are identical within each comparison.
+deadlines are identical within each comparison. The original runtime baseline is
+`f5d18cf`; the combined branch also includes the WebSocket builtin from
+`40f7956`, which the selected files do not import.
 
 | Engine | Fully passing files before | Fully passing files after | Observed test passes before/after | Timeouts before/after |
 | --- | ---: | ---: | ---: | ---: |
 | QuickJS | 0/160 | 61/160 | 0/0 | 0/1 |
 | JSC | 0/160 | 61/160 | 0/0 | 0/1 |
-| Browser | 0/160 | 59/160 | 0/0 | 0/0 |
+| Browser | 0/160 | 60/160 | 0/0 | 0/0 |
 
 These are Node assertion scripts. The suite runner counts a clean script exit as
 a fully passing file and does not count its individual assertions. There are no
 newly failing files that previously passed. Before the change, the common helper
 stopped while importing `worker_threads`; after it, tests reach their own code.
 
-The first post-change browser census passed 60 files. The final artifacts pass
-59 because `test-child-process-can-write-to-stdout.js` observes empty stdout in
-its exit listener. Two of three isolated repetitions on the same final wasm fail
-that assertion, and one passes. Both censuses and all repeats are retained; the
-table uses the final artifact's full-census result.
+The browser censuses pass 59 or 60 files because
+`test-child-process-can-write-to-stdout.js` intermittently sees empty stdout in
+its exit listener. The timer-corrected artifact before rebasing onto the WebSocket
+builtin passed 59 files; two of three isolated repetitions on that wasm failed
+the stdout assertion, and one passed. The combined artifact after rebasing onto
+`40f7956` passes 60 files. The table uses that combined artifact's full census.
+Earlier measurements and all repetitions are retained.
 
 The newly reached timeout is `test-async-local-storage-http-agent.js`, which needs
 HTTP request streaming. The browser engine instead fails an earlier async-context

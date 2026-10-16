@@ -260,11 +260,13 @@ existing module gaps. Keep these separate from guest-worker execution.
   preserve async context across the response callbacks. The timeout is newly
   reached after the helper import succeeds; there were no passing files lost.
 
-- `test-child-process-can-write-to-stdout.js` intermittently fails on the final
-  browser wasm because its exit listener sees `output === ''` instead of
+- `test-child-process-can-write-to-stdout.js` intermittently fails on the timer-corrected
+  browser wasm before the WebSocket rebase. Its exit listener sees
+  `output === ''` instead of
   `'hello, world!\n'` at upstream line 21. The first post-change census passed it;
-  the final census fails it. Two of three isolated repetitions on the same final
-  wasm fail, and one passes. These are `final-after-browser.json` and
+  the timer-corrected census failed it. Two of three isolated repetitions on that
+  same wasm fail, and one passes. The combined census after the WebSocket rebase
+  passes it. These are `final-after-browser.json` and
   `stdout-repeat-{1,2,3}.json`. Start at the child waiter in
   `crates/bunwasm-runtime/src/js/spawn.js:248`, which resolves exit before reading
   pipes in that turn, and Node event reporting at line 415. Trace host pipe
@@ -273,9 +275,10 @@ existing module gaps. Keep these separate from guest-worker execution.
 
 Exact source, runtime and dependency hashes, errors and timeout records are in
 `/work/reports/bun-wasm-worker-threads/before-<engine>.json` and
-`final-after-<engine>.json`, with `before-jsc-warm.json` as the valid JSC baseline.
-Those files are retained until coordinator acceptance. Reproduce one failure after rebuilding the engine and
-warming the native launcher:
+`rebased-after-<engine>.json`, with `before-jsc-warm.json` as the valid JSC
+baseline. The earlier `final-after-*` files retain the stdout investigation.
+Those files are retained until coordinator acceptance. Reproduce one failure
+after rebuilding the engine and warming the native launcher:
 
 ```sh
 source env.sh
