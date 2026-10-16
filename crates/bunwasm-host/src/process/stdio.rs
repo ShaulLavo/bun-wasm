@@ -6,6 +6,9 @@ use std::task::{Context, Poll, Waker};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use wasmtime_wasi::cli::{IsTerminal, StdinStream, StdoutStream};
+use wasmtime_wasi::p2::{InputStream, Pollable, StreamError, StreamResult};
+use bytes::Bytes;
+use super::stdin::SharedInput;
 
 #[derive(Default)]
 pub struct Cancellation {
@@ -36,7 +39,7 @@ impl Cancellation {
 
 #[derive(Clone)]
 pub struct Stdio {
-    pub stdin: Arc<dyn StdinStream + Sync>,
+    pub stdin: SharedInput,
     pub stdout: Arc<dyn StdoutStream + Sync>,
     pub stderr: Arc<dyn StdoutStream + Sync>,
 }
@@ -44,7 +47,7 @@ pub struct Stdio {
 impl Stdio {
     pub fn inherited() -> Self {
         Self {
-            stdin: Arc::new(wasmtime_wasi::cli::stdin()),
+            stdin: SharedInput::new(Arc::new(wasmtime_wasi::cli::stdin())),
             stdout: Arc::new(std::io::stdout()),
             stderr: Arc::new(std::io::stderr()),
         }
@@ -66,7 +69,7 @@ impl Stdio {
 }
 
 struct Input {
-    stream: Arc<dyn StdinStream + Sync>,
+    stream: SharedInput,
     cancel: Arc<Cancellation>,
 }
 struct Output {
@@ -84,7 +87,7 @@ struct Writer {
 
 impl IsTerminal for Input {
     fn is_terminal(&self) -> bool {
-        self.stream.is_terminal()
+        self.stream.terminal
     }
 }
 impl IsTerminal for Output {
@@ -93,13 +96,38 @@ impl IsTerminal for Output {
     }
 }
 impl StdinStream for Input {
+    fn p2_stream(&self) -> Box<dyn InputStream> {
+        Box::new(Self { stream: self.stream.clone(), cancel: self.cancel.clone() })
+    }
     fn async_stream(&self) -> Box<dyn AsyncRead + Send + Sync> {
         Box::new(Reader {
-            stream: self.stream.async_stream().into(),
+            stream: Box::pin(self.stream.clone()),
             cancel: self.cancel.clone(),
         })
     }
 }
+#[async_trait::async_trait]
+impl Pollable for Input {
+    async fn ready(&mut self) {
+        std::future::poll_fn(|cx| {
+            if self.cancel.poll(cx).is_err() {
+                return Poll::Ready(());
+            }
+            self.stream.poll_ready(cx)
+        }).await;
+    }
+}
+
+#[async_trait::async_trait]
+impl InputStream for Input {
+    fn read(&mut self, size: usize) -> StreamResult<Bytes> {
+        if self.cancel.signal.load(Ordering::SeqCst) != 0 {
+            return Err(StreamError::LastOperationFailed(io::Error::from(io::ErrorKind::Interrupted).into()));
+        }
+        self.stream.read(size)
+    }
+}
+
 impl StdoutStream for Output {
     fn async_stream(&self) -> Box<dyn AsyncWrite + Send + Sync> {
         Box::new(Writer {

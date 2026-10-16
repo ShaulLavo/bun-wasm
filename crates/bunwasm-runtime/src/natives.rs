@@ -505,7 +505,8 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
             return Ok(Val::Bytes(buf));
         }
         let n = if fd == 0 {
-            io::stdin().read(&mut buf)
+            let count = unsafe { libc::read(0, buf.as_mut_ptr().cast(), buf.len()) };
+            if count < 0 { Err(io::Error::last_os_error()) } else { Ok(count as usize) }
         } else {
             let mut fds = st.fds.borrow_mut();
             let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("read"))?;
