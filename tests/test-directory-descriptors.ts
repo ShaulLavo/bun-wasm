@@ -10,6 +10,7 @@ const root = resolve(import.meta.dirname, "..");
 const engines = new Map([["quickjs", "bun.wasm"], ["jsc", "bun-jsc.wasm"], ["browser", "bun-browser.wasm"]]);
 const [engine, mode, directory] = nodeProcess.argv.slice(2);
 if (!directory) {
+  if (engine) assert(engines.has(engine), `unknown engine ${engine}`);
   const scratch = mkdtempSync("/work/tmp/bun-wasm-directory-descriptors-");
   try {
     mkdirSync(`${scratch}/retained-tree`);
