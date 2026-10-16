@@ -8,11 +8,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::pin::Pin;
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Waker};
 
 use serde::Deserialize;
-use tokio::io::{AsyncRead, ReadBuf};
 use wasmtime_wasi::cli::StdoutStream;
 
 use crate::net::{AGAIN, BADF, ErrorInfo, Notify};
@@ -69,7 +67,7 @@ struct PipeHandle {
 pub struct Processes {
     runtime: Arc<Runtime>,
     stdio: Stdio,
-    stdin: Pin<Box<dyn AsyncRead + Send + Sync>>,
+    stdin: SharedInput,
     notify: Arc<Notify>,
     next: i32,
     children: HashMap<i32, Child>,
@@ -84,7 +82,7 @@ impl Processes {
     pub fn new(runtime: Arc<Runtime>, stdio: Stdio, notify: Arc<Notify>) -> Self {
         Self {
             runtime,
-            stdin: Box::pin(stdio.stdin.clone()),
+            stdin: stdio.stdin.clone(),
             stdio,
             notify,
             next: FIRST_HANDLE,
@@ -307,13 +305,21 @@ impl Processes {
 
     pub fn read(&mut self, id: i32, buf: &mut [u8]) -> i32 {
         if id == 0 {
+            if buf.is_empty() {
+                return 0;
+            }
             let waker = Waker::from(self.notify.clone());
             let mut context = Context::from_waker(&waker);
-            let mut buffer = ReadBuf::new(buf);
-            return match self.stdin.as_mut().poll_read(&mut context, &mut buffer) {
-                Poll::Ready(Ok(())) => buffer.filled().len() as i32,
-                Poll::Ready(Err(_)) => -1,
-                Poll::Pending => AGAIN,
+            if self.stdin.poll_ready(&mut context).is_pending() {
+                return AGAIN;
+            }
+            return match self.stdin.read(buf.len()) {
+                Ok(bytes) => {
+                    buf[..bytes.len()].copy_from_slice(&bytes);
+                    bytes.len() as i32
+                }
+                Err(wasmtime_wasi::p2::StreamError::Closed) => 0,
+                Err(_) => -1,
             };
         }
         match self.pipes.get(&id) {

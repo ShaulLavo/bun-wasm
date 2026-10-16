@@ -57,6 +57,9 @@ impl SharedInput {
     }
 
     pub fn read(&self, size: usize) -> StreamResult<Bytes> {
+        if size == 0 {
+            return Ok(Bytes::new());
+        }
         let mut state = self.state.lock().unwrap();
         if let Some(error) = state.error.take() {
             return Err(StreamError::LastOperationFailed(error.into()));
@@ -128,10 +131,20 @@ mod tests {
     }
 
     #[test]
-    fn zero_length_host_read_does_not_poll_stdin() {
+    fn zero_length_read_returns_empty() {
         let input = input();
         let mut cx = Context::from_waker(Waker::noop());
         assert_eq!(input.poll_ready(&mut cx), Poll::Ready(()));
+        assert_eq!(input.read(0).unwrap(), b""[..]);
+    }
+
+    #[test]
+    fn zero_length_read_after_eof_is_successful() {
+        let input = input();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(input.poll_ready(&mut cx).is_ready());
+        assert_eq!(input.read(5).unwrap(), b"hello"[..]);
+        assert!(input.poll_ready(&mut cx).is_ready());
         assert_eq!(input.read(0).unwrap(), b""[..]);
     }
 }
