@@ -2,39 +2,28 @@
 
 Status: Approved
 
-## YAML stress tests can exhaust the WASM engine stack
+## YAML stringify: throwing Symbol.toPrimitive on a boxed primitive
 
-The unchanged main artifact and the compatibility branch both exit 134 while
-running `js/bun/yaml/yaml.test.ts` with the upstream runner. Before the snapshot
-matchers the file reports 588 passes and 673 failures; after them it reports
-1,261 passes and no assertion failures, then traps before the final report.
-Neither run is a fully passing file. Both use a 15-second file limit and a
-2-second test limit, and both trap rather than time out.
-
-Reproduce after installing the pinned supplemental dependencies:
+`js/bun/yaml/yaml.test.ts` used to trap with `wasm trap: call stack exhausted`
+on QuickJS before its final report. The wave/stack-overflow PR turns that
+recursion into a RangeError, and the file now runs to completion on every
+engine. One test fails the same way on QuickJS, JSC and the browser engine,
+before and after that PR: `Bun.YAML > stringify > JavaScript edge cases >
+boxed primitive whose Symbol.toPrimitive throws propagates the error`
+(`expect(received).toBe(expected)`). The browser engine also fails `parse
+rejects an input of 2**31 bytes or more instead of panicking` (expected
+`ERR_OUT_OF_RANGE`, received `undefined`).
 
 ```sh
 source env.sh
-scripts/bun-suite.sh --network loopback --jobs 1 \
+scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 \
+  --launcher "$CARGO_TARGET_DIR/release/bun-wasm" \
   --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" \
-  --output /work/tmp/bun-wasm-yaml-stack-control.json js/bun/yaml/yaml.test.ts
+  --output /work/tmp/bun-wasm-yaml.json js/bun/yaml/yaml.test.ts
 ```
 
-Evidence is retained in `/work/reports/bun-wasm-compat-next-2026-10-15/`:
-`before.json` and `snapshots-after.json`. The latter contains
-`wasm trap: call stack exhausted`, with `JS_ArraySpeciesCreate`,
-`js_array_every` and repeated `JS_CallInternal` frames. Snapshot comparison
-failures and the runner deadline are ruled out as the cause: the original
-artifact also traps, and the fixed snapshot comparisons all pass.
-
-Investigate the two million-node stringify stress cases at
-`vendor/bun/test/js/bun/yaml/yaml.test.ts:4310` and `:4323`, then the recursive
-`aliases.visit` and `yamlStringify` paths in
-`crates/bunwasm-runtime/src/js/formats.js`. These are candidates, not a confirmed
-stack trace mapping. Keep the upstream tests unchanged and make excessive depth
-throw a catchable error before reaching the engine's WASM call-stack limit.
-Verify the exact file on QuickJS, JSC and browser, plus the existing format
-fixtures. No suite timeout increase is needed.
+Start at `yamlStringify` in
+`crates/bunwasm-runtime/src/js/formats.js`. Keep the upstream test unchanged.
 
 ## Integration with the separate HTTP/WebSocket lane
 
@@ -104,37 +93,43 @@ Keep the upstream tests unchanged. Rerun the exact file on all three engines.
 The portable bridge PR separately fixes the engine-specific Symbol error wording
 and browser host GC recursion observed during the initial measurement.
 
-## QuickJS recursion traps before JavaScript can catch the error
+## Stack overflow paths that still trap
 
-The Console comparison reproduces another instance of the stack problem above.
-`js/node/console/console-constructor-exception.test.ts` fails unchanged before
-and after adding Console on QuickJS. Its self-spawned recursive `exhaust()`
-function traps with `wasm trap: call stack exhausted`; the backtrace repeats
-`JS_CallInternal`. The child prints no `OK`, and its parent assertion fails.
-This happens on every recorded run, without a suite timeout. The other two
-console files pass after the Console implementation. JSC passes this recursion
-control after the implementation.
+The wave/stack-overflow PR makes JavaScript recursion, getters, Proxy traps,
+JSON, the QuickJS parser and the console recursion control throw a catchable
+`RangeError` on every engine and host; `docs/stack-limits.md` has the limits,
+measurements and reproducer. These paths still end in a wasm trap:
 
-Reproduce through the heavy wrapper with the private launcher and rebuilt wasm:
-
-```sh
-source env.sh
-scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 \
-  --launcher "$CARGO_TARGET_DIR/release/bun-wasm" \
-  --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" \
-  --output /work/tmp/bun-wasm-console-stack.json \
-  js/node/console/console-constructor-exception.test.ts
-```
-
-The QuickJS engine requests a 4 MiB engine stack limit in
-`crates/bunwasm-runtime/src/engine_quickjs.rs:127`. Check its relation to the
-host's Wasm call-stack limit and the linear-memory C stack before choosing
-limits. A caught JavaScript RangeError is required; increasing a test deadline
-cannot repair an uncatchable Wasm trap. This is outside Console's stream and
-constructor implementation. Preserve the unchanged recursive control, also test
-plain recursion without Console, and rerun all engine fixtures when changing
-stack policy. Before/after evidence is retained in
-`/work/reports/bun-wasm-console/console-{before,after}-quickjs.json`.
+- **JSC native recursion outside reentry.** On JSC-wasm, nested blocks, arrow
+  functions and regexp groups spend about six times more host stack per
+  shadow-stack byte than getters (block 1,248 host bytes per level against 550
+  shadow bytes). On wasmtime's default stack, blocks trap after 415 levels,
+  arrows after 208 and regexp groups after 1,119, the same as before the stack
+  PR. On the native launcher, plain `JSON.stringify` (`FastStringifier`) traps
+  after 974 levels, a `JSON.parse` reviver after 4,013 and `Array.prototype.flat`
+  after 2,473, also unchanged. In WebKit with 512 KiB worker stacks and cold code,
+  every parser nesting shape (unary, conditional and `if` chains too) and Proxy
+  chains without traps trap at 200,000 levels. Reproduce with `python3 scripts/measure-stack.py
+  --engine jsc block arrow regexpnc flat proxychain jsonplain reviver` (add
+  `--host launcher --launcher "$CARGO_TARGET_DIR/release/bun-wasm"`) and the
+  WebKit command in `docs/stack-limits.md`. Fix by reserving shadow bytes in those WebKit
+  functions, as `js_reserve_wasm_frame` does in `quickjs.c`, then measure the
+  ratios again. Shrinking the native budget instead would cut getter depth from
+  56 to about 30. JSC's `maxPerThreadStackUsage` option is not a substitute: in
+  the C-loop build it also sizes the JavaScript frame stack.
+- **Bun's transpiler.** A module file with 2,000 nested array literals traps in
+  `bun_js_parser` before QuickJS sees it (`const x = [[[...]]];`; 400 levels
+  throw RangeError from QuickJS). `Bun__StackCheck__getMaxStack` in
+  `crates/bunwasm-glue/src/bun_native.rs` returns 0 on the main thread, so
+  `StackCheck::is_safe_to_recurse` always succeeds. Give the main thread a
+  shadow-stack bound and measure the transpiler's host-per-shadow ratio before
+  choosing it.
+- **Depth on larger hosts.** The default QuickJS budget catches plain recursion
+  at 501 calls on wasmtime, the launcher, Node and Chromium; wasmtime's CLI
+  still catches every path with 320 KiB of its 512 KiB stack, and Node's stack
+  is larger still. The launcher and the Node host could pass a larger
+  `BUN_WASM_STACK_KIB` (or raise `max_wasm_stack`) after measuring each path as
+  in `docs/stack-limits.md`.
 
 ## JSC subprocess disposal timing
 

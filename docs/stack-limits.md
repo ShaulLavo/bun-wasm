@@ -1,0 +1,193 @@
+# Stack overflow in wasm
+
+Deep recursion must reach the engine's own stack guard, which throws a catchable
+`RangeError`, before the wasm host runs out of call stack. A host stack overflow is a
+wasm trap: it ends the program, and no JavaScript `catch` runs.
+
+## Three stacks
+
+The module has three independent stacks:
+
+- **Host call stack.** The wasm engine keeps every function activation (its locals
+  and spills) outside linear memory. Its size belongs to the host: wasmtime's
+  `max_wasm_stack` (512 KiB by default, also in `crates/bunwasm-host`), V8's stack
+  limit in Node and Chromium, and the worker thread's stack in WebKit. The module
+  cannot read how much of it is in use.
+- **C shadow stack.** Address-taken C and Rust locals, `alloca` and large structs live
+  in an 8 MiB region of linear memory set by `crates/bunwasm-cli/build.rs`. Engine
+  stack guards measure this one.
+- **JSC's C-loop stack.** JSC's interpreter keeps JavaScript frames in a separate
+  5 MiB reservation, so JS-to-JS calls on JSC do not grow either native stack.
+
+Enlarging the shadow stack does not enlarge the host stack. A guard that counts
+shadow bytes protects the host stack only when each recursion level spends shadow
+bytes in proportion to its host frames.
+
+## The smallest host
+
+On Apple platforms WebKit gives worker threads the system default stack, 512 KiB
+(`stackSize()` in WebKit's `Source/WTF/wtf/Threading.cpp` returns no size there), and
+JSC keeps a 128 KiB reserve below that. The playground runs bun.wasm in a worker, so
+Safari on macOS and iOS has the least host stack. Playwright's WebKit on Linux sizes
+threads from `RLIMIT_STACK` instead (8 MiB here), which overstates Safari about
+fourteenfold. Running the browser under `ulimit -s 512` gives its worker threads
+Darwin's default size. It is still x86-64 Linux WebKit, not an iOS device: no iOS
+Safari measurement exists.
+
+JavaScriptCore first runs wasm in an interpreter whose frames are two to three
+times larger than its optimized code's, and a function keeps those frames until it
+tiers up. The first deep recursion through a function, often the first run after
+the page loads, therefore has the least room. V8 starts with a baseline compiler
+whose frames are close to its optimized ones; in Chromium and Node every path
+behaved the same on the first run as on later ones.
+
+## QuickJS
+
+QuickJS-ng in rquickjs-sys 0.13.0 disables its stack limit on WASI in both
+`JS_NewRuntime2` and `update_stack_limit`, so the previous 4 MiB
+`set_max_stack_size` request did nothing. The port restores the existing checks.
+
+The checks count shadow bytes, but recursion paths spend the two stacks in very
+different proportions. Measured on wasmtime before any change, host bytes per shadow
+byte were 1.9 for plain calls, 2.4 for getters, 13 for `JSON.stringify`, 11 for
+`JSON.parse` and 21 for nested source code. A single byte budget small enough for
+the parser would leave about 300 plain calls. Instead, `js_reserve_wasm_frame` in
+`quickjs.c` makes recursive C paths that keep few locals in memory reserve shadow
+bytes for their host frames. The serializer, JSON parser and reviver, the parser's
+expression and statement levels, `Array.prototype.flat`, Proxy traps, bound
+functions, async resumption, `ToPrimitive` and C-to-JavaScript calls reserve. After
+that every measured path spends between 1.2 and 1.9 host bytes per shadow byte. The
+reservation is a constant-size `alloca` whose pointer escapes. It is freed when the
+function returns, so it needs no bookkeeping on error paths.
+
+The budget is the host's choice. `crates/bunwasm-runtime/src/engine_quickjs.rs`
+uses `BUN_WASM_STACK_KIB` when the host sets it, and 152 KiB otherwise. The same
+variable sets JSC's budget below; the two engines have different defaults. The native
+launcher, the wasmtime CLI, Node and Chromium catch every measured path with the
+default; the wasmtime CLI still does with a 320 KiB host stack instead of its
+512 KiB default. The browser worker (`web/src/worker.ts`) passes 40 KiB unless the
+page runs on V8. In WebKit with 512 KiB worker stacks and every function in its first
+tier, the tightest path (`JSON.stringify`) has room for 54 KiB of budget, so 40 KiB
+leaves 26% for iOS frame sizes, which cannot be measured here. Engines other than
+V8 and JavaScriptCore are unmeasured and get the smaller budget.
+
+## JSC
+
+JSC's plain JavaScript calls stay in the C-loop and already throw. Getters, Proxy
+traps and other C++ reentry start a new `CLoop::execute` activation for each level.
+It costs about 2.1 KB of host stack and 5.8 KB of shadow stack. The WASI
+`StackBounds` port in `jsc/webkit-wasi.patch` limits native recursion to 320 KiB of
+shadow stack, or `BUN_WASM_STACK_KIB` when the host sets it, plus JSC's existing
+128 KiB exception reserve. JSC's `maxPerThreadStackUsage` option cannot do this:
+in the C-loop build it also sizes the separate JavaScript frame stack, and 448 KiB
+cut plain recursion from 63,887 calls to 4,085.
+
+In WebKit with 512 KiB worker stacks and cold code, getters have room for 57 levels
+and the default stops them at 56, leaving nothing for building the error. The
+browser worker therefore passes 224 KiB when the page is not on V8.
+
+Known gap: JSC's parser (every nesting shape), regular-expression compiler,
+`Array.prototype.flat`, `JSON.parse` revivers, Proxy chains without traps and the
+plain `JSON.stringify` fast path spend far more host stack per shadow byte than
+its reentry paths (parser blocks about six times more). Deeply nested input still
+traps there as it did before, for example blocks after 415 levels on wasmtime. Fixing
+them needs reservations in WebKit, like those in QuickJS. See
+`plans/compatibility-followups.md`.
+
+## Browser-native engine
+
+`bun-browser.wasm` runs guest JavaScript on the host's engine, which keeps its own
+guard. Host frames in the runtime's glue are small.
+
+## Measurements
+
+`scripts/measure-stack.py` finds, for each recursion path in `tests/stack-depth.js`,
+the deepest nesting that completes and what one level more does: `caught` means a
+catchable error, `trap` means the host stack ran out. `web/tests/browser-stack.mjs`
+runs the same probe in browser workers with `--measure`, and with `--cold` in a fresh
+browser context per attempt.
+
+Measured on 2026-10-16. A number is the deepest nesting that completed; one level
+more threw `RangeError` unless marked "trap". "ok" means the console control (every
+level swallows the overflow and touches `console.Console`) finished. "WebKit 512" is
+Playwright WebKit under `ulimit -s 512`; "first run" uses a fresh page per attempt.
+
+Main paths, before and after:
+
+| Engine, host | Plain | Getter | Proxy trap | `JSON.stringify` | Promise callback | Console |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| QuickJS, wasmtime CLI | trap 1,011 → 501 | trap 703 → 381 | trap 634 → 226 | trap 2,479 → 1,353 | trap 1,020 → 512 | trap → ok |
+| QuickJS, native launcher | trap 873 → 501 | trap 598 → 381 | trap 577 → 226 | trap 2,010 → 1,353 | trap 882 → 512 | trap → ok |
+| QuickJS, Node host | trap 1,835 → 501 | trap 1,287 → 381 | trap 1,248 → 226 | trap 4,983 → 1,353 | trap 1,844 → 512 | trap → ok |
+| QuickJS, Chromium | trap 923 → 501 | trap 660 → 381 | trap 640 → 226 | trap 2,842 → 1,353 | → 512 | → ok |
+| QuickJS, WebKit 512 | trap 644 → 124 | trap 481 → 94 | trap 291 → 56 | trap 1,773 → 329 | → 135 | → ok |
+| QuickJS, WebKit 512 first run | trap 286 → 124 | trap 140 → 94 | trap 143 → 56 | trap 483 → 329 | → 135 | → ok |
+| JSC, wasmtime CLI | 63,887 → 63,887 | trap 244 → 56 | trap 222 → 54 | 39,999 → 39,999 | 63,896 → 63,896 | ok → ok |
+| JSC, native launcher | 63,887 → 63,887 | trap 136 → 56 | trap 126 → 54 | 39,999 → 39,999 | 63,896 → 63,896 | ok → ok |
+| JSC, Node host | 63,887 → 63,887 | trap 783 → 56 | trap 737 → 54 | 39,999 → 39,999 | 63,896 → 63,896 | ok → ok |
+| JSC, Chromium | 63,887 → 63,887 | trap 389 → 56 | trap 361 → 54 | 39,999 → 39,999 | → 63,896 | → ok |
+| JSC, WebKit 512 | 63,887 → 63,887 | trap 82 → 39 | trap 71 → 37 | 39,999 → 39,999 | → 63,896 | → ok |
+| JSC, WebKit 512 first run | → 63,887 | trap 57 → 39 | trap 58 → 37 | → 39,999 | → 63,896 | → ok |
+| Browser-native, Node host | 11,403 | 2,986 | 2,917 | 5,667 | 11,422 | ok |
+| Browser-native, Chromium | 7,811 | 2,959 | 1,692 | 2,611 | 8,519 | ok |
+| Browser-native, WebKit 512 | 3,410 | 1,654 | 277 | 39,999 | 3,420 | ok |
+
+Blank "before" cells were not measured. The QuickJS "first run" before row was
+measured on a build whose 152 KiB guard does not trip in that tier, so it shows where
+the host stack ran out. WebKit rows use the budgets the browser passes off V8
+(40 KiB QuickJS, 224 KiB JSC); Chromium uses the defaults. The browser-native
+engine does not change; its counts vary by a few percent between runs as the host JIT
+tiers up. WebKit on Linux with its default 8 MiB
+threads trapped QuickJS after 8,850 plain calls before and catches at 124 after: it
+gets the 40 KiB budget because it is JavaScriptCore.
+
+Other QuickJS paths. "Before" is the native launcher; "after" is the same on every
+host with that budget:
+
+| Path | Before | After, 152 KiB | After, 40 KiB |
+| --- | ---: | ---: | ---: |
+| `JSON.stringify` without replacer | trap 2,010 | 1,356 | 332 |
+| `JSON.parse` | trap 2,683 | 1,346 | 322 |
+| `JSON.parse` with reviver | trap 2,013 | 862 | 210 |
+| Nested array literals in source | trap 243 | 162 | 38 |
+| Nested blocks | trap 1,038 | 628 | 150 |
+| Nested arrow functions | trap 185 | 126 | 29 |
+| Unary operator chain | trap 2,911 | 1,560 | 365 |
+| `**` chain | trap 2,912 | 1,560 | 365 |
+| Conditional operator chain | trap 2,288 | 936 | 219 |
+| `if` chain | trap 1,457 | 781 | 183 |
+| Regexp groups (SyntaxError) | trap 1,536 | 864 | 212 |
+| Proxy chain without traps | trap 1,700 | 414 | 102 |
+| Bound function chain | trap 645 | 352 | 86 |
+| Nested arrays to string | trap 222 | 134 | 32 |
+| `Array.prototype.flat` | trap 2,149 | 863 | 211 |
+| `toString` reentry | trap 258 | 156 | 38 |
+| Async recursion | trap 335 | 190 | 47 |
+
+With the 152 KiB default, every path is still caught when wasmtime's stack is cut
+to 320 KiB; at 256 KiB plain calls trap. The QuickJS fixture suite passes with
+`BUN_WASM_STACK_KIB=40`.
+
+## Reproduce
+
+Build the three artifacts and the launcher, then run these through the machine's
+heavy-job wrapper:
+
+```sh
+source env.sh
+python3 scripts/measure-stack.py --engine quickjs
+python3 scripts/measure-stack.py --engine jsc
+python3 scripts/measure-stack.py --engine quickjs --host launcher --launcher "$CARGO_TARGET_DIR/release/bun-wasm"
+python3 scripts/measure-stack.py --engine quickjs --host node
+python3 scripts/measure-stack.py --engine browser --host node plain getter proxy json promise console
+python3 scripts/measure-stack.py --engine quickjs --stack-kib 320   # margin: all paths must still be caught
+python3 scripts/measure-stack.py --engine quickjs --budget-kib 40     # the budget the browser passes off V8
+scripts/test.sh --no-build stack-overflow stack-overflow-console
+scripts/test.sh --no-build --engine jsc stack-overflow stack-overflow-console
+scripts/test.sh --no-build --engine browser stack-overflow stack-overflow-console
+(cd web && bun run build && node tests/browser-stack.mjs --measure)
+(cd web && ulimit -s 512 && ENGINES=quickjs,jsc node tests/browser-stack.mjs --measure --cold webkit)   # Darwin-sized worker stacks
+```
+
+`--wasm <path>` measures another build, such as the parent commit's. `--stack-kib`
+sets the host stack independently of the linked shadow stack.
