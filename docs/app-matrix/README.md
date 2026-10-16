@@ -77,6 +77,59 @@ The native run's main blockers were Rollup's native binary refusing the wasm32 p
 
 The raw records and logs are in `/work/reports/bun-wasm-app-matrix-2026-10-15/native/` and `/work/reports/bun-wasm-app-matrix-2026-10-15/playground-light/`. The committed reproducer is [the app matrix runner](../../scripts/app-matrix.sh); each row links to its fixture registry.
 
+## Server stack and socket rerun
+
+The 2026-10-16 rerun installs Express 5.1.0 and Koa 3.0.1 from the offline mirror,
+then runs the unchanged server fixtures and checks their HTTP response bodies.
+All 12 install and server stages pass on the three engines.
+
+| App command | Engine | Before | After |
+| --- | --- | --- | --- |
+| Express start | QuickJS | Fail, missing CallSite.isEval | Pass |
+| Express start | JSC | Fail, captured stack is text | Pass |
+| Express start | Browser | Pass | Pass |
+| Koa start | QuickJS | Fail, missing CallSite.isEval | Pass |
+| Koa start | JSC | Fail, captured stack is text | Pass |
+| Koa start | Browser | Fail, empty HTTP body in this rerun | Pass |
+
+QuickJS now supplies the missing CallSite queries, and JSC capture converts its
+text frames before invoking a custom stack formatter. Koa then exposed an HTTP
+socket gap shared by the engines. Its writable check saw an absent property and
+ended the response with no body. The HTTP socket now reports the connection's
+existing open and closing states. The earlier census reported a browser Koa pass;
+the current baseline rerun observed an empty body and records that failure above.
+
+Koa's cached keygrip metadata also contains an official npm tarball URL using
+HTTP. The mirror now routes that URL to its offline cache, as it already does for
+HTTPS npm URLs. Package sources and matrix fixtures are unchanged. The registry
+regression checks alternate origins and credentials as well as the historical URL.
+
+All 100 fixtures pass on each engine with the current caller-origin changes integrated. The structured-stack and HTTP socket
+regressions fail on the preserved baseline for their intended causes and pass
+after the fix. The eval-origin regression also rejects synthetic engine filenames
+as source metadata; unavailable origins return undefined. The bounded upstream selection remains at 0 of 3 fully passing
+files, 0 observed passes and 0 timeouts on each engine, before and after. The capture test still lacks `nativeFrameForTesting`; the other files reach an
+unconnected Socket.write and existing formatter failures.
+
+```sh
+source env.sh
+bash /work/tmp/wave-heavy/run.sh --class light "Express and Koa" -- \
+  env PATH="$PATH" scripts/app-matrix.sh --apps=express,koa \
+  --engines=quickjs,jsc,browser --hosts=native \
+  --output=/work/reports/bun-wasm-app-matrix/server-rerun
+bash /work/tmp/wave-heavy/run.sh --class light "stack suite" -- \
+  env PATH="$PATH" scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 \
+  --output=/work/reports/bun-wasm-app-matrix/stack-suite.json \
+  js/node/v8/capture-stack-trace.test.js \
+  regression/issue/prepare-stack-trace-crash.test.ts \
+  regression/issue/23022-stack-trace-iterator.test.ts
+```
+
+Repeat the suite command with `--engine jsc` and `--engine browser`, using separate
+output paths. Raw before/after records, artifact hashes and fixture logs are in
+`/work/reports/bun-wasm-app-blockers-2026-10-16/`, including
+`before-native/`, `before-koa-native/` and `after-server-current-native/`.
+
 ## Generated CLI import rerun
 
 Prettier 3.6.2 now completes its normal CLI check after a fresh install of the
@@ -137,7 +190,7 @@ These priorities count app projects, not individual command rows.
 
 1. Fix the browser module linker recognizing `import` methods as dynamic-import calls, and implement Bun's `ws` builtin for Vite. The [Rollup rerun](#rollup-distribution-rerun-2026-10-16) records the remaining diagnostics for the six affected projects.
 2. Complete Web Streams and replace ambiguous dynamic-import scanning for Next.js. Its earlier CommonJS, vectored-write, and legacy Stream-constructor boundaries are fixed; dev/build/start are still failing or blocked.
-3. Fix QuickJS and JSC stack call-site access for Express and Koa. This unblocks two server projects on two engines.
+3. Completed. Express and Koa pass on all three engines in the [server rerun](#server-stack-and-socket-rerun).
 4. Completed. Prettier passes on all three engines in the [generated CLI rerun](#generated-cli-import-rerun).
 5. Make Prisma's native-engine limitation explicit in the app fixture and add a WASM engine policy if the upstream package provides one.
 
@@ -164,6 +217,115 @@ bash /work/tmp/wave-heavy/run.sh --class browser "Next browser import follow-up"
 ```
 
 Evidence is retained in `/work/reports/bun-wasm-dynamic-import-2026-10-16/next-with-pr9/`. It includes the exact build error, all four stage records, artifact hashes, and an empty registry-miss list. The runner reported cleanup complete. The separate delivery-base replay under `next-after/` passed install, reported no useful diagnostic for dev or build, and blocked start on build. Both replays had no registry misses or errors and reported cleanup complete. The integration does not claim PR 9's earlier fixes shipped in this PR.
+
+### Lazy stack review rerun on main
+
+Both formatter timing and the non-idempotent source-map regression are fixed.
+JSC captures raw frames and chooses the public formatter at first access;
+successful arbitrary results are memoized, while formatter exceptions propagate
+at access. Already-mapped CallSites keep the same locations when stringified.
+QuickJS also defers public formatting for ordinary Error construction. JSC keeps
+its native Error constructor.
+
+The reviewed artifacts fail lazy capture on QuickJS and JSC, unread Error
+construction on QuickJS, and mapped JSC CallSite strings. All three regression
+fixtures pass on every engine after the fixes. The exact JSC reproducer now prints
+`mapped location 15 10 outer (/mapped.ts:15:10)`; the reviewed binary printed 22:10
+in the string while its getters reported 15:10.
+
+After normal merges of main through 84db5fe, all 120 fixtures pass on each
+engine. The complete web gate and all six built-site HMR runs pass. Express and
+Koa pass all 12 native install/server stages, with no registry misses. There are
+no playground rows defined for these server fixtures. Package sources and app
+fixtures are unchanged.
+
+| Engine | Reviewed Express/Koa stages | Current-main rerun |
+| --- | --- | --- |
+| QuickJS | 4/4 | 4/4 |
+| JSC | 4/4 | 4/4 |
+| Browser engine | 4/4 | 4/4 |
+
+Median microseconds per unread construction, measured inside the runtime with
+`scripts/bench/error-construction.js`. Each case warms up 1,000 operations, then
+runs five samples of 10,000 operations with stackTraceLimit 10. Startup is excluded.
+
+| Engine | Operation | Reviewed binary, µs | Current-main binary, µs |
+| --- | --- | ---: | ---: |
+| quickjs | new Error default | 10.187 | 1.790 |
+| quickjs | capture default | 10.090 | 2.650 |
+| quickjs | new Error custom | 10.481 | 1.704 |
+| quickjs | capture custom | 10.681 | 2.827 |
+| jsc | new Error default | 0.414 | 0.496 |
+| jsc | capture default | 1.224 | 1.994 |
+| jsc | new Error custom | 0.419 | 0.500 |
+| jsc | capture custom | 27.049 | 1.979 |
+
+Custom formatter counts fall from 50,000 to zero on QuickJS Error/capture and
+JSC capture. JSC ordinary Error construction calls none in both versions and
+keeps its native implementation. Default JSC capture adds a lazy accessor for
+late formatter selection. The current-main measurements include the merged
+Console and other runtime changes; the earlier isolated review-phase samples
+are retained alongside them.
+
+The same three upstream stack files retain 0/3 fully passing files, five failures,
+one error and zero timeouts on every engine. Current artifacts, logs and exact
+commands are in `/work/reports/bun-wasm-app-reviews-2026-10-16/main84/`.
+The coordinator removes retained review evidence after both app-blocker PRs merge
+and independent verification finishes.
+
+### Frozen and reentrant stack review rerun
+
+Lazy stack reads now cache successful values independently of the holder's
+properties. Frozen and sealed holders retain their accessors. Capture rejects
+non-extensible targets, including those with an existing configurable stack,
+before mutating them. A successful recapture clears the prior cached value.
+
+One formatter guard covers all errors, as V8's guard does. A reentrant read uses
+the default stack and caches it privately until the outer formatter finishes.
+This preserves the outer result even when the formatter freezes or seals its
+holder after a self-read. Exceptions clear the guard. A self-read followed by an
+exception preserves the default cache; an exception without a self-read permits
+a later retry.
+
+Node v26.7.0 passes all 22 behavior controls. The failing-first fixture commits
+precede the implementation fixes. The reviewed binaries are from cd99cba.
+
+| Engine | Frozen/non-extensible cases before | Reentrancy cases before | After |
+| --- | --- | --- | --- |
+| QuickJS | 8/14 | 1/8 | 22/22 |
+| JSC | 5/14 | 2/8 | 22/22 |
+| Browser engine | 14/14 | 8/8 | 22/22 |
+
+After a normal merge of main through 7bb1c12, all 124 fixtures pass on each
+engine. The complete web gate and all six built-site HMR runs pass. The unchanged
+Express/Koa projects pass all 12 fresh-install and server stages, retaining 4/4
+per engine from the reviewed binary. The offline registry has zero misses and
+errors. No app fixture or package implementation was changed.
+
+The same three upstream stack files retain 0/3 fully passing files, five failed
+tests, one error and zero timeouts per engine, matching the reviewed binaries.
+
+Construction controls still make zero public formatter calls in all four cases
+on QuickJS and JSC. The same five-sample, 10,000-operation benchmark gives these
+medians in microseconds per construction. This is one bounded run under shared
+host load; the before artifact predates the merged generated-import changes.
+
+| Engine | Operation | Reviewed binary, µs | Fixed binary, µs |
+| --- | --- | ---: | ---: |
+| quickjs | new Error default | 1.870 | 1.889 |
+| quickjs | capture default | 2.689 | 3.027 |
+| quickjs | new Error custom | 1.689 | 2.260 |
+| quickjs | capture custom | 2.654 | 4.794 |
+| jsc | new Error default | 0.465 | 0.495 |
+| jsc | capture default | 2.804 | 2.159 |
+| jsc | new Error custom | 0.496 | 0.485 |
+| jsc | capture custom | 2.566 | 2.248 |
+
+Artifacts and complete command logs are retained in
+`/work/reports/bun-wasm-stack-round2-2026-10-16/`. Its `dist/` directory contains
+`bun.wasm`, `bun-jsc.wasm` and `bun-browser.wasm`; `launcher` is the matching
+native launcher. The coordinator removes this evidence after PR #11 merges and
+independent verification finishes.
 
 ## Next.js runtime boundaries
 
