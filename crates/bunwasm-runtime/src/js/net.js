@@ -983,7 +983,8 @@
     // Client side: requests go through fetch.
     class ClientRequest extends Writable {
       constructor(options, callback) {
-        super();
+        super({ autoDestroy: false });
+        this._abortController = new AbortController();
         this._options = options;
         this._chunks = [];
         this._headers = Object.assign({}, options.headers);
@@ -1000,27 +1001,21 @@
       removeHeader(name) {
         delete this._headers[name];
       }
-      write(chunk, encoding, cb) {
-        if (typeof encoding === "function") cb = encoding;
-        this._chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : internal.toUint8(chunk));
-        if (typeof cb === "function") internal.nextTick(cb);
-        return true;
+      _write(chunk, encoding, callback) {
+        this._chunks.push(internal.toUint8(chunk));
+        callback();
       }
-      end(chunk, encoding, cb) {
-        if (typeof chunk === "function") cb = chunk;
-        else if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
-        this._send().catch((err) => this.emit("error", err));
-        if (typeof cb === "function") this.once("finish", cb);
-        internal.nextTick(() => this.emit("finish"));
-        return this;
+      _final(callback) {
+        this._send().catch(error => { if (!this.destroyed) this.destroy(error); });
+        callback();
       }
       abort() {
         this.destroy();
       }
-      destroy(err) {
+      _destroy(error, callback) {
         this._aborted = true;
-        if (err) internal.nextTick(() => this.emit("error", err));
-        return this;
+        this._abortController.abort(error);
+        callback(error);
       }
       setTimeout() {
         return this;
@@ -1032,7 +1027,7 @@
         const o = this._options;
         const url = o.href || `${o.protocol || protocol}//${o.hostname || o.host || "localhost"}${o.port ? ":" + o.port : ""}${this.path}`;
         const body = this._chunks.length ? internal.concatBytes(this._chunks) : undefined;
-        const res = await fetch(url, { method: this.method, headers: this._headers, body: this.method === "GET" || this.method === "HEAD" ? undefined : body, redirect: "manual" });
+        const res = await fetch(url, { method: this.method, headers: this._headers, body: this.method === "GET" || this.method === "HEAD" ? undefined : body, redirect: "manual", signal: this._abortController.signal });
         if (this._aborted) return;
         const msg = new IncomingMessage();
         msg.statusCode = res.status;
