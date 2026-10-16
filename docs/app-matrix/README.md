@@ -134,8 +134,8 @@ output paths. Raw before/after records, artifact hashes and fixture logs are in
 
 These priorities count app projects, not individual command rows.
 
-1. Replace or port the Rollup native package path with `@rollup/wasm-node`. This unblocks Vite vanilla, React, and Vue, Astro, SvelteKit, and Vitest build stages across all three engines.
-2. Implement the missing module and Node API boundaries used by Next.js. This unblocks its dev, build, and start stages.
+1. Fix the browser module linker recognizing `import` methods as dynamic-import calls, and implement Bun's `ws` builtin for Vite. The [Rollup rerun](#rollup-distribution-rerun-2026-10-16) records the remaining diagnostics for the six affected projects.
+2. Complete Web Streams and replace ambiguous dynamic-import scanning for Next.js. Its earlier CommonJS, vectored-write, and legacy Stream-constructor boundaries are fixed; dev/build/start are still failing or blocked.
 3. Completed. Express and Koa pass on all three engines in the [server rerun](#server-stack-and-socket-rerun).
 4. Add the missing CLI module resolution used by Prettier in QuickJS and the browser engine.
 5. Make Prisma's native-engine limitation explicit in the app fixture and add a WASM engine policy if the upstream package provides one.
@@ -191,3 +191,119 @@ one error and zero timeouts on each engine. Evidence, raw benchmark samples,
 artifacts and exact commands are in
 `/work/reports/bun-wasm-app-reviews-2026-10-16/`. The coordinator removes the
 retained review evidence after both app-blocker PRs merge and verification finishes.
+
+## Next.js runtime boundaries
+
+A 2026-10-16 offline replay of Next 15.5.6 uses the unchanged published-package fixture. Fresh installs pass on QuickJS, JSC, and the browser-engine native host. Dev/build still fail and production start remains blocked. The counts are unchanged at 3 pass, 6 fail, and 3 blocked; the changes remove earlier runtime boundaries rather than establish app compatibility.
+
+| Engine / host | Stage | Before | After |
+| --- | --- | --- | --- |
+| QuickJS / native | dev | `ReferenceError: module is not defined` | `ReferenceError: TextEncoderStream is not defined` |
+| QuickJS / native | build | `ReferenceError: module is not defined` | `ReferenceError: TextEncoderStream is not defined` |
+| QuickJS / native | start | Blocked by build | Blocked by build |
+| JSC / native | dev | `ReferenceError: module is not defined` | `ReferenceError: TextEncoderStream is not defined` |
+| JSC / native | build | `ReferenceError: module is not defined` | `ReferenceError: TextEncoderStream is not defined` |
+| JSC / native | start | Blocked by build | Blocked by build |
+| Browser engine / native | dev | Fails HTTP assertion without a diagnostic | Same observed failure |
+| Browser engine / native | build | `Error: No such module: fs` | `SyntaxError: Unexpected token '.'` in `bloom-filter.js` |
+| Browser engine / native | start | Blocked by build | Blocked by build |
+
+The original module error came from a minified CommonJS module with `await` inside an async method. The loader treated any unindented line containing `await` as top-level await. It now uses Bun's parser syntax flags, import records, and CommonJS classification. Real `import.meta` takes priority over CommonJS hints in raw sources. Printed CommonJS factories receive the per-module metadata argument when Bun emits it. Syntax-free scripts retain package and filename classification; data loaders report their generated ESM format.
+
+Next's bundled tar library probes `fs.writev`; its absence selected an unsupported private `process.binding("fs")` fallback. The public callback, synchronous, and FileHandle vectored-write APIs now use counted native writes. A short write or an error after earlier buffers returns the bytes actually written. Positioned writes preserve the descriptor cursor. Public vectored writes validate descriptor types, integers, and bounds before native conversion. The browser engine then reached a legacy `Stream.call(this)` constructor call; the base Node Stream constructor now supports that public subclass pattern.
+
+The next measured QuickJS/JSC blocker is category d. Reproduce with `bun run node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3000` or `bun run node_modules/next/dist/bin/next build` after a normal install. Both report `ReferenceError: TextEncoderStream is not defined` in `node_modules/next/dist/compiled/@edge-runtime/primitives/load.js:18588` on QuickJS, or line 18592 on JSC, while loading `@edge-runtime/ponyfill`. That loader reads both `TextEncoderStream` and `TextDecoderStream`. The runtime supplies only a minimal `ReadableStream` at `crates/bunwasm-runtime/src/js/web.js:764`, with no `WritableStream` or `TransformStream`. Correct text streams require the larger Web Streams implementation, including state, cancellation, and backpressure.
+
+The next measured browser-engine build blocker is also category d. Next's `dist/shared/lib/bloom-filter.js` declares an ordinary `import(data)` class method. `crates/bunwasm-runtime/src/engine_host.rs:455` treats its name as a dynamic-import expression. `host_dynamic_imports` at line 301 replaces the method name with `globalThis.__bunwasm_dynamicImport(...)`, producing an invalid method declaration. A diagnostic-only host copy identified the failing filename; the stock host reports the same syntax error. The earlier unsupported-SWC-platform line is a warning, not evidence for classifying this first blocker as a platform limitation.
+
+The original [six-line reproducer](repros/import-method.cjs) prints `42` on QuickJS and fails to compile on the browser engine. Run it with `node --no-warnings web/scripts/node-host.mjs --wasm dist/bun-browser.wasm --dir "$PWD/docs/app-matrix/repros::/" -- run /import-method.cjs`. A follow-up must obtain semantic dynamic-import locations from Bun's parser/printer for both CommonJS and ESM, including nonliteral imports, and remove the lexical method/call ambiguity. Its tests must cover method names, member calls, multiline declarations, and automatic semicolon insertion. The Next follow-up owns moving this reproducer into a passing runtime fixture after the scanner fix.
+
+Production start remains blocked because neither build has produced `.next/BUILD_ID`. The browser dev command's missing HTTP response and diagnostic are still unresolved; an IPC dependency in Next's source is not treated as a measured first blocker.
+
+Evidence lives in `/work/reports/bun-wasm-next-2026-10-16/before/`, `after-delivery/`, and `browser-module-diagnostic/`. Replay with `scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser --hosts=native --timeout=90 --output=<fresh-directory>`. The four selected upstream files retain 19 passed, 27 failed, 5 skipped, and 3 todo before and after, with one collection error. They are `cli/run/commonjs-no-export.test.ts`, `js/bun/resolve/require.test.ts`, `js/node/fs/promises.test.js`, and `js/node/stream/node-stream.test.js`.
+
+The final runtime fixture gates pass 103/103 on each engine, including mixed CommonJS/import-meta sources, invalid vectored-write descriptors, and nine bounded short-write/cursor cases. The focused matrix review file passes all eight tests, including rejection-prefixed diagnostics. The two remaining build blockers above are retained as measured compatibility gaps.
+
+The PR #9 review replay on 2026-10-16, after the import-metadata, partial-write, and descriptor-validation fixes, retains the same Next rows on all three engines. Install/dev/build/start remain pass/fail/fail/blocked per engine, with the same diagnostics listed above. The offline mirror had zero misses and errors, and the runner confirmed cleanup. Review evidence is retained at `/work/reports/bun-wasm-next-review-2026-10-16/next-after/`.
+
+## Rollup distribution rerun, 2026-10-16
+
+Fresh installs now select Rollup 4's unchanged official `@rollup/wasm-node`
+distribution at the exact selected version. QuickJS and JSC execute its wasm
+through the shared Rust interpreter adapter. The browser engine uses native
+WebAssembly. The installed files and package identity stay unchanged, and
+projects keep their existing `rollup` dependency names and imports. See
+[the installer policy](../install.md#webassembly-distributions).
+
+The offline rerun covers all six affected projects on all three engines. The
+fixture hash is unchanged. Each run has 18 install passes and 30 command
+failures. The first blocker changed in every command. These apps still do not
+pass their complete workflows. The published Rollup parser, Unicode and syntax
+errors, three hash exports, a complete bundle generation, and frozen reinstall pass on all three
+engines in `bun tests/rollup/run.mjs`.
+
+| Projects and commands | Before, every engine | After, QuickJS and JSC | After, browser engine |
+| --- | --- | --- | --- |
+| Vite vanilla, React, Vue; dev and build | Native Rollup rejects wasm32 | Missing Bun `ws` builtin | Linker rewrites an `import` method into invalid syntax |
+| Astro; build | Native Rollup rejects wasm32 | Missing Bun `ws` builtin | Same linker syntax error |
+| SvelteKit; dev and build | Native Rollup rejects wasm32 | Missing Bun `ws` builtin | Same linker syntax error |
+| Vitest; test | Native Rollup rejects wasm32 | Missing `node:console.Console` export | Same linker syntax error |
+
+The playground rerun adds three install passes and six command failures for
+Vite React. Its QuickJS and JSC commands now reach `ws`; its browser-engine
+commands reach the linker syntax error. The original 2026-10-15 playground
+census had six Rollup platform errors for these commands; the rerun has zero.
+
+[Per-command results](rollup-results.md) retain the observed diagnostics and
+run-time categories. The classifier conservatively labels the new blockers d;
+the method-declaration diagnosis below was established after the census. The raw before/after records are in
+`/work/reports/bun-wasm-rollup/{before,after}/`. The unchanged upstream installer
+subset has 113 files, 233 observed passes, 4,203 failures, 83 skips, 22 todos, 42
+errors, and zero timeouts before and after this change. The baseline predates
+the semver host-function merge; the final run includes it.
+
+Reproduce the remaining blockers with the same offline matrix:
+
+```sh
+source env.sh
+scripts/app-matrix.sh --apps=vite-vanilla,vite-react,vite-vue,astro,sveltekit,vitest \
+  --engines=quickjs,jsc,browser --hosts=native \
+  --output=/work/reports/bun-wasm-rollup/new-run
+```
+
+Run that command through the machine's heavy wrapper, as above. The next fixes
+are separate runtime API and module-linker work:
+
+- Vite 7.1.12's `dist/node/chunks/config.js:23728` selects
+  `process.versions.bun ? import.meta.require("ws").WebSocketServer : ...`.
+  `bun run node_modules/vite/bin/vite.js build` reports
+  `Cannot find package 'ws' from '/node_modules/vite/dist/node/chunks/config.js'`.
+  Astro reaches the same branch in its own Vite chunk. `ws` is a Vite development
+  dependency, not a missing published runtime dependency. Bun supplies it as a
+  builtin. The runtime registry in `crates/bunwasm-runtime/src/resolve.rs:40`
+  has no `ws`; the upstream adapter is `vendor/bun/src/js/thirdparty/ws.js`.
+  It needs the WebSocket server boundary, not an installer dependency injection.
+- `bun run node_modules/vitest/vitest.mjs run --maxWorkers=1 --no-file-parallelism`
+  reports `Could not find export 'Console' in module 'node:console'` on QuickJS
+  and the corresponding missing-export message on JSC.
+  `crates/bunwasm-runtime/src/js/builtins.js:1064` currently returns the console
+  singleton; `src/js/console.js` has no `Console` constructor.
+- The browser-engine command reports `SyntaxError: Unexpected token '.'`.
+  A syntax-checking diagnostic identified Vite 7.1.12's
+  `dist/node/module-runner.js:989`, `async import(url) { ... }`.
+  The emitted module has
+  `async globalThis.__bunwasm_dynamicImport("/node_modules/vite/dist/node/module-runner.js")(url) {`.
+  `crates/bunwasm-runtime/src/engine_host.rs:450` treats the method declaration
+  as a dynamic import, and `web/src/engine-host.js:545` substitutes the helper.
+  A two-line reproduction, independent of any installed package, is:
+
+  ```js
+  class Loader { async import(url) { return url; } }
+  console.log(await new Loader().import('ok'));
+  ```
+
+  Save it as `index.mjs` in a preopened directory and run
+  `node --no-warnings web/scripts/node-host.mjs --wasm dist/bun-browser.wasm --dir <directory>::/ --env PWD=/ -- run /index.mjs`.
+  The expected output is `ok`. The browser host reports the same syntax error.
+  Retained diagnostics and the minimal source are in
+  `/work/reports/bun-wasm-rollup/browser-diagnostic/`.

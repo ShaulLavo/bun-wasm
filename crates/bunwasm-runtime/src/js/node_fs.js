@@ -336,6 +336,46 @@
     return native.write(fd, view.slice(offset, offset + length), typeof position === "number" ? position : -1);
   }
 
+  function validateFd(fd) {
+    if (typeof fd !== "number") throw invalidArg("fd", "of type number", fd);
+    if (Number.isInteger(fd) && fd >= 0 && fd <= 2147483647) return;
+    const expected = Number.isInteger(fd) ? ">= 0 && <= 2147483647" : "an integer";
+    const error = new RangeError(`The value of "fd" is out of range. It must be ${expected}. Received ${internal.describe(fd)}`);
+    error.code = "ERR_OUT_OF_RANGE";
+    throw error;
+  }
+
+  function validateWritev(buffers) {
+    if (!Array.isArray(buffers)) throw invalidArg("buffers", "an array", buffers);
+    for (const buffer of buffers) {
+      if (!ArrayBuffer.isView(buffer)) throw invalidArg("buffers", "an array of ArrayBufferView instances", buffers);
+    }
+  }
+
+  function writeBuffers(fd, buffers, position) {
+    if (buffers.length === 0) return 0;
+    const at = typeof position === "number" && position >= 0 ? position : -1;
+    return native.writev(fd, buffers.map(internal.toUint8), at);
+  }
+
+  function writevSync(fd, buffers, position) {
+    validateWritev(buffers);
+    if (buffers.length === 0) return 0;
+    validateFd(fd);
+    return writeBuffers(fd, buffers, position);
+  }
+
+  function writev(fd, buffers, position, callback) {
+    if (typeof position === "function") { callback = position; position = null; }
+    validateFd(fd);
+    validateWritev(buffers);
+    if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
+    let written = 0;
+    let error = null;
+    try { written = writeBuffers(fd, buffers, position); } catch (err) { error = err; }
+    later(() => callback(error, written, buffers));
+  }
+
   const noop = () => {};
 
   function globSync(pattern, options) {
@@ -397,7 +437,7 @@
   const sync = {
     readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, mkdirSync, readdirSync,
     rmSync, rmdirSync, unlinkSync, renameSync, copyFileSync, cpSync, realpathSync, accessSync, mkdtempSync,
-    openSync, closeSync, readSync, writeSync, globSync,
+    openSync, closeSync, readSync, writeSync, writevSync, globSync,
     fstatSync: (fd) => new Stats(native.fstat(fd)),
     ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
     truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
@@ -449,6 +489,7 @@
     later(() => callback(result));
   };
   callbackApi.glob = glob;
+  callbackApi.writev = writev;
   callbackApi.read = callbackify("read", readSync, (cb, err, n, args) => cb(err, n, args[1]));
   callbackApi.write = callbackify("write", writeSync, (cb, err, n, args) => cb(err, n, args[1]));
 
@@ -490,6 +531,9 @@
     async write(data, offset, length, position) {
       const bytesWritten = writeSync(this.fd, data, offset, length, position);
       return { bytesWritten, buffer: data };
+    }
+    async writev(buffers, position) {
+      return { bytesWritten: writevSync(this.fd, buffers, position), buffers };
     }
     async stat() {
       return new Stats(native.fstat(this.fd));

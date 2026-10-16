@@ -49,6 +49,9 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/util.js`](#node-utility-fragments) | Port | Adapt argument parsing, comparison helpers, and inspection tables. |
 | [`crates/bunwasm-runtime/src/js/assert.js`](#node-assertions) | Port | Adapt assertion helpers and messages to the local inspector and equality implementation. |
 | [`crates/bunwasm-runtime/src/js/bun_sqlite.js`](#bun-sqlite) | Port | Move Bun's SQLite wrapper and inherited transaction code onto Rust SQLite natives. |
+| [`crates/bunwasm-runtime/src/js/array_buffer_sink.js`](#bun-array-buffer-sink) | Port | Adapt Bun's byte sink lifecycle and option parsing to engine-owned typed arrays. |
+| [`crates/bunwasm-runtime/src/engine_quickjs.rs`, string boundary](#quickjs-string-boundary) | Host feature | Decode lone UTF-16 surrogates as replacement characters at the native boundary. Original adapter. |
+| [`web/src/engine-host.js`, GC hook](#host-gc-hook) | Host feature | Capture host GC before guest code replaces globals. Original adapter. |
 | [`crates/bunwasm-runtime/src/js/cookie.js`](#bun-cookies) | Port | Translate Bun's cookie parsing, validation, and binding behavior. |
 | [`crates/bunwasm-runtime/src/js/string_decoder.js`](#node-string-decoder) | Port | Translate Node's chunk-decoder state machine to JavaScript. |
 | [`crates/bunwasm-runtime/src/js/bun_test.js`, diff formatting](#bun-test-diff-formatting) | Port | Translate Bun's colorless diff rendering around a local line differ. |
@@ -60,6 +63,9 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
 | [`crates/bunwasm-runtime/src/js/stack_trace.js`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
+
+| [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
+| [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
@@ -123,6 +129,52 @@ reads the existing host connection's closed and closing states. Published Koa
 3.0.1 checks this Node socket property before sending the response body; an
 absent property made a live connection appear unwritable. The lifecycle fixture
 checks both an open connection and a connection closed after its response.
+
+## Rollup WebAssembly distribution
+
+`crates/bunwasm-runtime/src/install/resolve.rs` selects the official
+`@rollup/wasm-node` npm distribution for Rollup 4 at the same version. The
+measured package is 4.64.7, including `dist/native.js`,
+`dist/wasm-node/bindings_wasm.js`, and `dist/wasm-node/bindings_wasm_bg.wasm`.
+These upstream files remain unchanged inside installed projects. No Rollup
+implementation is retained in this repository.
+
+`crates/bunwasm-runtime/src/wasm.rs` and `src/js/webassembly.js` are original
+adapters over the public `wasmi` 0.46.0 API and the WebAssembly JavaScript API.
+They do not adapt an upstream implementation. The Wasmi dependency has the
+small port described below. Resumable host traps let JavaScript imports reenter
+wasm without holding a Rust borrow across JavaScript execution. Memory synchronization keeps
+JavaScript views and interpreter memory consistent across those calls.
+`tests/fixtures/webassembly` is original test code; `tests/rollup/run.mjs`
+executes the real published parser and hashes through the recorded registry.
+
+
+## Wasmi memory identity and growth
+
+Class **Port**. `third_party/wasmi` copies the published Wasmi 0.46.0 crate,
+upstream `crates/wasmi` at revision `50ac76771d631f642e8c4c61bf44c99546024461`
+from `wasmi-labs/wasmi`. The MIT and Apache license files come from that revision.
+Cargo uses this local crate through `[patch.crates-io]`; Wasmi Core and its other
+dependencies remain published crates.
+
+Local changes are limited to these files:
+
+- `src/memory/mod.rs` derives equality on store-guarded memory handles and exposes
+  the growth generation. Successful public growth increments that generation.
+- `src/store/inner.rs` owns a generation counter for each allocated memory.
+- `src/store/pruned.rs` increments the counter after successful wasm growth.
+- `src/engine/translator/visit.rs` and `src/engine/executor/instrs/memory.rs`
+  preserve zero-page growth instead of replacing it with a memory-size read.
+- `src/engine/translator/tests/op/memory/memory_grow.rs` updates the corresponding
+  translation expectation to retain the zero-page growth instruction.
+
+The JavaScript API requires a new buffer after every successful unshared growth,
+even when its size stays the same. Tracking growth inside the interpreter covers
+both constant and dynamic wasm instructions, as well as JavaScript calls. Failed
+growth does not increment the counter. Store-guarded handle equality lets aliased
+exports share one JavaScript object without conflating separate empty memories.
+All other retained upstream files are unchanged.
+
 
 ## App compatibility fixtures
 
@@ -421,7 +473,7 @@ The incremental graph, packed map, and serialized-failure implementations are co
 
 `crates/bunwasm-transpiler/src/lib.rs`, `ChunkCollector` and its `OnSourceMapChunk` implementation. Class **Port**. Upstream `src/runtime/cli/pm_diff_normalize.rs` at the Bun pin.
 
-Retain the small callback that stores the emitted `bun_sourcemap::Chunk` in an `Option`. The local caller converts its buffer into the returned mappings string. This supplies source maps without the native runtime. The surrounding arena lifecycle, public transpile API, diagnostic conversion, and await-hook control are local adapters to Bun's parse/print APIs. They do not copy `src/runtime/api/JSTranspiler.rs` as an implementation.
+Retain the small callback that stores the emitted `bun_sourcemap::Chunk` in an `Option`. The local caller converts its buffer into the returned mappings string. This supplies source maps without the native runtime. The surrounding arena lifecycle, public transpile API, parser module-kind reporting, diagnostic conversion, and await-hook control are local adapters to Bun's parse/print APIs. Module classification uses the pinned parser's export kind, syntax flags and live static import records, rather than searching printed strings. Syntax-free scripts retain package and filename classification, and data loaders report their generated ESM format. `node_fs.js` vectored writes and `natives.rs` counted `write`/`pwrite` calls are original adapters over the host descriptor ABI; no Node implementation is copied. The native vectored operation accumulates complete chunks, returns progress on a short write or a later error, and leaves positioned-write cursors unchanged. Printed CommonJS factories receive Bun's sixth per-module import-meta argument when present; ordinary factories retain five arguments. The parser's real `import.meta` flag takes precedence over `require` and `__dirname` signals when choosing module grammar. They do not copy `src/runtime/api/JSTranspiler.rs` as an implementation.
 
 ### Bun console formatter
 
@@ -479,6 +531,45 @@ Adapt Database/Statement behavior, constants, named-parameter handling, strict m
 
 The transaction controller and wrapper retain code Bun explicitly attributes to Joshua Wise's better-sqlite3 `lib/methods/transaction.js`. The retained upstream revision is Bun's pin. A separate better-sqlite3 import revision is not recorded in that section. Keep BEGIN/COMMIT, nested savepoints, rollback, and the four transaction modes, replacing statement ownership/preparation with the local native-handle model. This is inherited copied implementation, not an original transaction adapter.
 
+### QuickJS string boundary
+
+Class **Host feature**. Original adapter using QuickJS-ng through rquickjs-sys 0.13.0.
+Retain the valid UTF-8 fast path. If QuickJS returns a string containing lone UTF-16
+surrogates, read its UTF-16 units through `JS_ToCStringLenUTF16`, replace unpaired units
+with Rust's `String::from_utf16_lossy` and release the QuickJS buffer. This prevents
+native UTF-8 consumers from receiving `undefined` for a valid JavaScript string.
+No upstream implementation is copied or modified.
+
+### Bun ArrayBufferSink
+
+Class **Port**. Upstream `src/runtime/webcore/ArrayBufferSink.rs`,
+`src/runtime/webcore/streams.rs` and `src/runtime/webcore/Sink.rs` at Bun
+`9510e74152073d850a18758ca41114d8f214ffa6`.
+
+Translate the byte ownership, streaming flush, repeated end, restart and closed-sink behavior
+to JavaScript typed arrays. Preserve the start option parser's own-property check, strict
+boolean modes, numeric watermark detection and getter ordering before the live-sink check.
+The closed-sink error text comes from `Sink.rs`.
+
+The upstream module depends on `bun_jsc`, so it cannot be imported as an independent Rust
+crate. Engine-owned buffers let every engine reclaim abandoned sinks without a new native
+handle table or finalizer interface. String writes use the existing Rust UTF-8 encoder.
+The watermark remains an allocation hint and causes no eager reservation in this adapter.
+The callable constructor and private JavaScript storage are original binding adapters.
+Detached backing stores produce an owned empty chunk before view bounds are read or a new view is constructed. Capture ArrayBuffer, SharedArrayBuffer, TypedArray and DataView intrinsic getters to extract the real backing buffer and
+bounds before copying. Own properties and accessors cannot replace those internal slots.
+This byte-view extraction is also an original binding adapter.
+The unsupported GC-tuning member is absent from `Bun.unsafe`, so the upstream harness's
+capability check can run byte-content tests without requesting unavailable GC controls.
+
+### Host GC hook
+
+Class **Host feature**. Original host adapter. Capture an exposed host collector before
+installing guest globals. Bun's `test/harness.ts` at revision
+`9510e74152073d850a18758ca41114d8f214ffa6` replaces global `gc` with a call to `Bun.gc`;
+looking up that guest wrapper from the host hook recurses. Hosts without an exposed collector
+still cannot force collection. No upstream implementation is copied.
+
 ### Bun cookies
 
 `crates/bunwasm-runtime/src/js/cookie.js`. Class **Port**. Upstream `src/jsc/bindings/{Cookie,CookieMap}.{cpp,h}` and `src/jsc/bindings/webcore/{JSCookie,JSCookieMap}.cpp` at the Bun pin.
@@ -507,7 +598,7 @@ Retain HTTP option extraction, IPv6 hostname handling, auth decoding, legacy fie
 
 `crates/bunwasm-runtime/src/js/builtins.js` (`STATUS_CODES`) and `crates/bunwasm-runtime/src/js/net.js` (`STATUS_TEXT`). Class **Port** for packaging shared HTTP data. Comparison source `src/js/internal/http.ts` at the Bun pin.
 
-The builtins module retains the status-code/reason table. The network module keeps a smaller reason-phrase table for response output. These are standard HTTP values rather than a copied server implementation. Networking, streams, request dispatch, and host transport around the tables are original bun-wasm adapters.
+The builtins module retains the status-code/reason table. The network module keeps a smaller reason-phrase table for response output. The callable Node `Stream` constructor and descriptor vectored writes are original adapters, not copied Node implementations. These are standard HTTP values rather than a copied server implementation. Networking, streams, request dispatch, and host transport around the tables are original bun-wasm adapters.
 
 ### Temporal
 
