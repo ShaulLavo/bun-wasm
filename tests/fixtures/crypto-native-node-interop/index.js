@@ -24,3 +24,11 @@ for (const name of ["HKDF", "PBKDF2"]) {
   );
 }
 console.log("native key roundtrips retain policy, material and native operations");
+
+const material = new Uint8Array(24).fill(4);
+const {createSecretKey} = await import("node:crypto");
+const aes = createSecretKey(material).toCryptoKey({name:"AES-GCM"},true,["encrypt","decrypt"]);
+const op = {name:"AES-GCM",iv:new Uint8Array(12)};
+assert.deepEqual(new Uint8Array(await s.decrypt(op,aes,await s.encrypt(op,aes,data))),data);
+assert.deepEqual(KeyObject.from(aes).export(),Buffer.from(material));
+console.log("AES-192 KeyObject conversion uses native support or the verified gap");
