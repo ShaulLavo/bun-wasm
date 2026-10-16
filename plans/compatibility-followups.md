@@ -269,3 +269,32 @@ capture, pre-start abort propagation, native brands and both Transform ports.
 The 30-case browser fixture and all-engine lifecycle fixtures must stay green.
 The compatibility/performance track owns that work and evidence removal after
 reproduction. Round 5 deliberately leaves allocation behavior unchanged.
+
+### Browser memory-growth gate after shared filesystem main
+
+The Streams/TCP integration at `c0793417` merges main through `c7f08312`.
+All 167 CLI fixtures pass on QuickJS, JSC and Node-host browser, including
+`memory-grow`, and networking/Streams/browser/HMR checks pass. The full web gate
+still times out in `web/tests/browser-memory.mjs:65`: the first Chromium guest
+never completes, yielding `code: null` and `^C` after the unchanged 120-second
+limit. The guest at `tests/fixtures/memory-grow/index.js` writes and reads a
+48 MiB file. Native memory-view checks pass before it stalls.
+
+Before the filesystem merge, the same Streams/TCP tree passed all six memory
+engine/browser combinations. Main's filesystem merge changes no embedded
+runtime or launcher source; that input comparison is retained in
+`/work/reports/bun-wasm-streams-round6-2026-10-16/fs-main-native-input-diff.txt`.
+The new real-browser shared filesystem path is the next boundary to inspect,
+especially `runtime/fs/shared.ts`, `runtime/fs/client.ts` and `runtime/fs/backend.ts`.
+
+Reproduce after building web assets with `PLAYWRIGHT=<playwright/index.mjs>
+node web/tests/browser-memory.mjs chromium`, or `scripts/test-web.sh` in full,
+through the heavy wrapper. The exact failed web log, full gate script, artifact
+hashes and all passing stage logs are retained in
+`/work/reports/bun-wasm-streams-round6-2026-10-16/`.
+The runtime-filesystem/crypto landing lane already has a separate candidate
+`fix/browser-memory-shared-fs` at `fae037bff367bca0f15be73b4d952207c885da6f`.
+The coordinator should review and land that dependency, then rerun the memory
+and full web gates. Do not reduce the guest allocation, relax its timeout or
+remove assertions to call the gate passing. The owning lane removes retained
+evidence after reproduction, review and merge.
