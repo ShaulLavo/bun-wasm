@@ -548,3 +548,15 @@ files. Commands and per-file results are in
 `/work/reports/bun-wasm-app-reviews-2026-10-16/main84/`.
 The coordinator removes retained review artifacts after both app-blocker PRs merge
 and independent verification finishes.
+
+## Next opendir rerun
+
+The 2026-10-16 Next rerun used the same recorded Next 15.5.6, React 19.1.1 and React DOM 19.1.1 fixture on all three engines. The directory API change did not change Next's first blocker. The Web Streams and import integration still stop the app earlier in this checkout.
+
+| Engine | Before | After | First blocker after |
+| --- | --- | --- | --- |
+| QuickJS | install pass; dev failed at `LinkError: Unsupported WebAssembly export table`; build failed without a diagnostic; start blocked | install pass; dev failed at the same export-table error; build failed without a diagnostic; start blocked | `server: LinkError: Unsupported WebAssembly export table` |
+| JSC | install pass; dev and build failed at `ReferenceError: TextEncoderStream is not defined`; start blocked | same result | `server: ReferenceError: TextEncoderStream is not defined` |
+| Browser | install pass; dev and build failed without a diagnostic; start blocked | dev failed without a diagnostic; build failed with `SyntaxError: Unexpected token '.'`; start blocked | `server: No diagnostic before exit or deadline` |
+
+The before and after result files are retained in `/work/reports/bun-wasm-next-opendir-2026-10-16/resume/next-before/` and `next-after/`. Both runs completed 13 stages with 3 install passes and 6 command failures. No stage timed out. The app row remains category `d` because the next blocker is outside the directory API.

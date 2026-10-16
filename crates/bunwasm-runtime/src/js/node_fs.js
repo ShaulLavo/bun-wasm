@@ -258,6 +258,7 @@
 
   function opendirSync(path, options) {
     const given = toPath(path);
+    if (given === "") throw Object.assign(new Error("ENOENT: no such file or directory, opendir ''"), { code: "ENOENT", errno: -2, syscall: "opendir", path: given });
     const config = directoryOptions(options);
     return new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, config);
   }
@@ -268,6 +269,10 @@
     const given = toPath(path);
     const config = directoryOptions(options);
     let result, error = null;
+    if (given === "") {
+      later(() => callback(Object.assign(new Error("ENOENT: no such file or directory, opendir ''"), { code: "ENOENT", errno: -2, syscall: "opendir", path: given })));
+      return;
+    }
     try { result = new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, config); }
     catch (err) { error = err; }
     later(() => callback(error, result));
