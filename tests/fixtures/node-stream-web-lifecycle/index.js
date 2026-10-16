@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { Readable, Writable, Duplex } from "node:stream";
+import { Readable, Writable, Duplex, finished } from "node:stream";
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 const writes = [];
@@ -92,3 +92,24 @@ assert.equal(pairClosed, false);
 abortDone();
 await pairClose;
 console.log("duplex waits for both sides");
+
+let completeAbort;
+let finishedEarly = false;
+const abortReason = new Error("finished waits for sink");
+const abortable = new WritableStream({ abort() {
+  return new Promise(resolve => { completeAbort = resolve; });
+} });
+const abortWriter = abortable.getWriter();
+abortWriter.closed.catch(() => {});
+const finish = new Promise(resolve => finished(abortable, error => {
+  assert.equal(error, abortReason);
+  finishedEarly = true;
+  resolve();
+}));
+const abort = abortWriter.abort(abortReason);
+await tick();
+assert.equal(finishedEarly, false);
+completeAbort();
+await abort;
+await finish;
+console.log("finished waits for abort");

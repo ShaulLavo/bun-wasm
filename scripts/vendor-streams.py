@@ -16,6 +16,8 @@ with tempfile.TemporaryDirectory(prefix="bun-wasm-streams-", dir="/work/tmp") as
     if (work / "bun.lock").exists():
         install.append("--frozen-lockfile")
     subprocess.run(install, cwd=work, check=True)
+    subprocess.run(["node", str(root / "scripts/stream-polyfill-node-hooks.mjs"), str(work / "node_modules/web-streams-polyfill/dist/ponyfill.mjs"), str(work / "ponyfill-node.mjs")], check=True)
+    (work / "entry.js").write_text('export * from "./ponyfill-node.mjs";\n')
     subprocess.run(["bun", "build", "entry.js", "--target", "browser", "--format", "cjs", "--minify", "--outfile", "bundle.js"], cwd=work, check=True)
     for package, name in (("web-streams-polyfill", "LICENSE"),):
         shutil.copyfile(work / "node_modules" / package / "LICENSE", source / name)

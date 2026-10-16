@@ -60,8 +60,10 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/builtins.js`, `crates/bunwasm-runtime/src/js/net.js`, HTTP tables](#http-status-tables) | Port | Retain HTTP status data separately from the original networking adapters. |
 | [`crates/bunwasm-runtime/src/js/{builtins,bootstrap}.js`, `web/src/engine-host.js`, caller origin](#caller-source-origin) | Host feature | Read caller origins through the existing engine stack parser. Original adapter. |
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
-| [`crates/bunwasm-runtime/src/js/streams_polyfill.js`](#web-streams) | Host feature | Package the unmodified WHATWG Streams ponyfill for embedded engines. |
-| [`streams.js`, `node_stream_web.js`, `streams.rs`](#web-streams) | Host feature | Original encoding, compression, body and Node adapters around the selected stream implementation. |
+| [`crates/bunwasm-runtime/src/js/streams_polyfill.js`](#web-streams) | Host feature | Package the reference WHATWG ponyfill with exact Node completion hooks. |
+| [`streams.js`, `streams.rs`](#web-streams) | Host feature | Original encoding, compression and body adapters around the selected stream implementation. |
+| [`node_stream_core.js`, `node_stream_web.js`, `third_party/node-streams/`](#portable-node-streams) | Port | Bundle the portable Node stream core and adapt Node's standard Web Stream bridges and completion tracking. |
+| [`node_stream_bindings.js`, `node_stream_internals.js`](#portable-node-streams) | Host feature | Original bindings expose real stream state, compose destruction hooks and connect the unchanged Node harness. |
 | [`crates/bunwasm-semver/src/lib.rs`](#portable-semver-host-functions) | Port | Compile Bun's semver host functions unchanged against a portable `bun_jsc` subset. |
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
@@ -627,7 +629,8 @@ The upstream implementation is `dist/ponyfill.mjs` in that npm release. Class
 **Host feature** for packaging the fallback.
 
 `scripts/vendor-streams.py` installs the frozen dependency into disposable scratch,
-bundles and minifies it without source edits, copies its MIT license, and wraps
+adds the Node completion hooks described below, bundles and minifies it, copies
+its MIT license, and wraps
 the CommonJS output as a runtime factory in
 `crates/bunwasm-runtime/src/js/streams_polyfill.js`. The bundle is about 60 KB.
 It includes byte streams, BYOB readers, tee, pipe cancellation and backpressure,
@@ -639,8 +642,9 @@ implementations live in `src/jsc/bindings/webcore/streams/*.cpp` and depend on J
 objects, rather than engine-independent TypeScript builtins. The WHATWG-reference
 ponyfill supplies those algorithms without translating or copying Bun's bindings.
 
-`crates/bunwasm-runtime/src/js/streams.js`, `node_stream_web.js`, and `streams.rs`
-are original adapters, class **Host feature**, with no copied upstream algorithm.
+`crates/bunwasm-runtime/src/js/streams.js` and `streams.rs` are original adapters,
+class **Host feature**, with no copied upstream algorithm. The Node stream core
+and Web bridges are classified separately below.
 They connect encoding streams to `encoding_rs` and compression streams to the
 existing `flate2` Rust backend. Codecs retain incremental state, reject truncated
 or trailing input, and release resources on completion, failure, cancellation,
@@ -655,21 +659,75 @@ enqueue allocates another ordinary Uint8Array so transfer never detaches caller
 storage or the bytes retained by an existing clone. Neither boundary calls a
 polymorphic slice method. `net.js`
 marks network body streams as byte streams. `builtins.js` exports the complete
-`node:stream/web` module and connects Node readable and writable streams
-to the selected Web Streams constructors. Readable destruction retains its original
-error and records close completion. The web adapter observes error events until
-that close completes, even after its controller has settled, and uses retained
-terminal state for sources that were closed before conversion. Writable state now
-also retains end, finish, error and close transitions, and rejects writes after end
-or destruction. Converting an already-terminal writable returns a closed web
-stream while observing queued Node errors through close. Active conversions
-settle their close promise or report source failure. Duplex conversion returns a
-readable/writable pair over the same source. Writable.fromWeb observes both
-success and failure of writer.closed, reports premature external closure, closes
-on clean Node destruction and aborts on failure. Readable.fromWeb cancellation
-and terminal-input behavior are covered alongside these checks. These are
-original host adapters, checked against Node 26.7.0 and Bun 1.4.2 behavior; no
-upstream stream adapter algorithm was copied.
+`node:stream/web` module. The portable Node stream core now owns queued writes,
+backpressure, finish and destruction. Web close/abort/cancel promises complete
+through its `_destroy` callback before Node error/close events are emitted.
+
+### Portable Node streams
+
+Class **Port**. `third_party/node-streams/package.json` and `bun.lock` pin
+**readable-stream 4.7.0**, the Node.js project's portable copy of the Node
+**18.19.0** stream implementation. The selected entry is `lib/stream.js`, with
+its internal stream state, buffering, operators, validators and errors. Bundled
+`string_decoder`, `safe-buffer`, `abort-controller` and `event-target-shim`
+licenses are copied beside the input. Buffer, events, async resources and process
+use the actual bun-wasm builtins. Browser timer-based process shims are excluded.
+
+`third_party/node-streams/adapters.js` is unchanged upstream
+`nodejs/node/lib/internal/webstreams/adapters.js` at **v26.7.0**, SHA-256
+`918e3382a8dc94fdd972f18b910807ae921754f3a6f714757f560559e15e2ec2`.
+`end-of-stream.js` is the same revision's `lib/internal/streams/end-of-stream.js`,
+SHA-256 `a206f4206b803529910fec9fcf62569621adb5689f39ec82a47641383de42c09`.
+The Node license and machine-readable provenance are included.
+
+`scripts/vendor-node-streams.mjs` installs frozen dependencies into owned scratch,
+copies the core before applying changes, and emits `node_stream_core.js` and
+`node_stream_web.js`. It retains the six standard Node/Web adapters and omits the
+native `StreamBase` socket bindings. The emitted adapters use our selected Web
+constructors and the core's validators/errors. Node destruction remains the sole
+completion boundary. Supported custom `options.destroy` hooks run after the Web
+operation settles. Pending terminal error observers detach on close or on finish
+when auto-destruction will not emit close.
+
+The modern completion implementation supplies the immediate-terminal callback
+used by readable adapters to avoid duplicate error observers. Public
+`AsyncResource` captures callback context unconditionally instead of querying
+Node's private async-hook/frame machinery. The internal Node-to-Web pipeline hop
+uses the standard readable adapter while retaining Node Buffer chunks; ordinary
+public `Readable.toWeb` still copies binary Buffers. Legacy Node readables pass
+through the core's `Readable.wrap` at this boundary. No test expectation or
+await-observer implementation is changed.
+
+The handwritten classes and their separate lifecycle flags were removed from
+`builtins.js`. Bun's current Node stream source was considered first, but its
+native-readable transfer, private Web stream hooks and additional engine
+intrinsics exceed the current generated builtin table. The portable Node core
+provides the actual queue/backpressure/destruction algorithms without replacing
+those dependencies with successful stubs. Bundle size and the unchanged Node
+adapter census are recorded with the PR measurements.
+
+Class **Host feature**, original adapters. `node_stream_bindings.js` supplies
+primitive bindings, terminal-observer cleanup and custom destroy composition.
+For the reference ponyfill, `scripts/stream-polyfill-node-hooks.mjs` adds a
+private completion record at initialization and settles it from the six actual
+readable/writable completion algorithms. Writable failure notification runs only
+after the pending abort algorithm has settled, not merely when `_state` changes
+to errored. Node's closed-promise symbol exposes that record without consuming or
+locking the stream. State getters and controller bindings still use actual
+ponyfill fields. The pinned input hash and exact six-match check guard codegen.
+The standard export surface and all stream algorithms remain in the reference
+implementation. Native host symbols
+remain native; opaque browser streams do not acquire invented private state.
+`node_stream_internals.js` exposes real adapter entry points and state getters to
+the flag-gated Node harness. The existing engine promise-state native answers
+`isPromisePending`; no promise or await status is simulated.
+
+The unchanged Node scripts require `Module.prototype.require` interception,
+connection-default accessors and the basic `node:test` registration surface.
+These are original runtime adapters. `scripts/bun-suite.sh --node-parallel`
+includes their tracked `test-*.js` files explicitly, keeps the default census
+unchanged and distinguishes successful assertion-script exits from registered
+test counts. `docs/bun-test-suite/stream-adapter-files.txt` fixes the selected set.
 
 ## Port bugs fixed in bun-wasm's own code
 

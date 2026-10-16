@@ -2,3 +2,4 @@ writable backpressure and close
 readable backpressure and drain
 readable waits for cancel
 duplex waits for both sides
+finished waits for abort
