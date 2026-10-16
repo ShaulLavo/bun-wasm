@@ -44,36 +44,31 @@ test("retained positioned writes and appends acquire one file lock each", () => 
   } finally { Atomics.compareExchange = compare; cleanup(); }
 });
 
-test("warmed small retained reads reuse their staging bytes and iovec", () => {
+test("retained reads copy straight into the guest iovecs", () => {
   const { client, cleanup } = fixture();
-  const read = client.shared.read.bind(client.shared);
-  const buffers: ArrayBufferLike[] = [];
+  const read = client.shared.directRead.bind(client.shared);
   const vectors: (readonly Uint8Array[])[] = [];
-  client.shared.read = (...args) => {
-    buffers.push(args[1][0]!.buffer);
-    vectors.push(args[1]);
+  client.shared.directRead = (...args) => {
+    vectors.push(args[2]);
     return read(...args);
   };
   try {
-    const bytes = new Uint8Array(4);
-    for (let i = 0; i < 3; i++) expect(client.read(0, [bytes], 0)).toBe(4);
-    expect(buffers[1]).toBe(buffers[0]);
-    expect(buffers[2]).toBe(buffers[0]);
-    expect(vectors[1]).toBe(vectors[0]);
+    const chunks = [new Uint8Array(4)];
+    expect(client.read(0, chunks, 0)).toBe(4);
+    expect(vectors).toEqual([chunks]);
+    expect(vectors[0]).toBe(chunks);
+    expect(chunks[0]).toEqual(new Uint8Array([65, 66, 67, 68]));
   } finally { cleanup(); }
 });
 
-test("reentrant guest copies cannot overwrite another read's leased staging bytes", () => {
+test("guest iovec subclasses cannot reenter the filesystem while a file lock is held", () => {
   const { client, cleanup } = fixture();
   let entered = false;
   class ReentrantBytes extends Uint8Array {
     set(source: ArrayLike<number>, offset = 0): void {
-      if (!entered) {
-        entered = true;
-        const nested = new Uint8Array(2);
-        expect(client.read(0, [nested], 2)).toBe(2);
-        expect(nested).toEqual(new Uint8Array([67, 68]));
-      }
+      // Reentering here under the read's file lock would spin on that lock forever.
+      entered = true;
+      expect(client.read(0, [new Uint8Array(2)], 2)).toBe(2);
       super.set(source, offset);
     }
   }
@@ -81,8 +76,87 @@ test("reentrant guest copies cannot overwrite another read's leased staging byte
     const first = new ReentrantBytes(2);
     const second = new Uint8Array(2);
     expect(client.read(0, [first, second], 0)).toBe(4);
+    expect(entered).toBe(false);
     expect(Array.from(first).concat(Array.from(second))).toEqual([65, 66, 67, 68]);
   } finally { cleanup(); }
+});
+
+test("retained read, write and append check revocation once each, after locking", () => {
+  const { client, cleanup } = fixture();
+  const internal = client as unknown as { revoked: () => boolean };
+  const guard = internal.revoked;
+  let checks = 0;
+  internal.revoked = () => { checks++; return guard(); };
+  try {
+    expect(client.read(0, [new Uint8Array(4)], 0)).toBe(4);
+    expect(checks).toBe(1);
+    checks = 0;
+    expect(client.write(0, [new Uint8Array([90])], 0)).toBe(1);
+    expect(checks).toBe(1);
+    checks = 0;
+    expect(client.append(0, [new Uint8Array([69])])).toEqual({ written: 1, offset: 5 });
+    expect(checks).toBe(1);
+  } finally { internal.revoked = guard; cleanup(); }
+});
+
+test("retained I/O looks up its shared file slot once per open handle", () => {
+  const { client, cleanup } = fixture();
+  const raw = client.shared as unknown as { findSlot(handle: number, create?: boolean): number };
+  const find = raw.findSlot.bind(raw);
+  let lookups = 0;
+  raw.findSlot = (handle, create) => { lookups++; return find(handle, create); };
+  try {
+    expect(client.read(0, [new Uint8Array(4)], 0)).toBe(4);
+    lookups = 0;
+    expect(client.read(0, [new Uint8Array(4)], 0)).toBe(4);
+    expect(client.write(0, [new Uint8Array([90])], 0)).toBe(1);
+    expect(client.append(0, [new Uint8Array([69])])).toEqual({ written: 1, offset: 5 });
+    expect(lookups).toBe(0);
+  } finally { cleanup(); }
+});
+
+test("a revocation seen under the locks fails I/O, releases both locks and leaves the epoch even", () => {
+  const { client, cleanup } = fixture();
+  const internal = client as unknown as { revoked: () => boolean };
+  const guard = internal.revoked;
+  internal.revoked = () => true;
+  try {
+    const bytes = new Uint8Array(4).fill(7);
+    expect(client.read(0, [bytes], 0)).toBe(-11);
+    expect(bytes).toEqual(new Uint8Array(4).fill(7));
+    expect(client.write(0, [new Uint8Array([90])], 0)).toBe(-11);
+    expect(client.append(0, [new Uint8Array([69])])).toBe(-11);
+    expect(Atomics.load(client.shared.cells, 1)).toBe(0);
+    expect(Atomics.load(client.shared.slots, 20)).toBe(0);
+    expect(Atomics.load(new Int32Array(client.connection.epoch), 0) & 1).toBe(0);
+    internal.revoked = guard;
+    const after = new Uint8Array(5);
+    expect(client.read(0, [after], 0)).toBe(4);
+    expect(Array.from(after)).toEqual([65, 66, 67, 68, 0]);
+  } finally { internal.revoked = guard; cleanup(); }
+});
+
+test("a truncate after the locked copy keeps the coherent bytes", () => {
+  const { client, cleanup } = fixture();
+  const compare = Atomics.compareExchange;
+  const owner = client.connection.owner;
+  let truncated = false;
+  Atomics.compareExchange = ((...args: any[]) => {
+    const result = Reflect.apply(compare, Atomics, args);
+    // Truncate to zero the moment the read releases its file lock.
+    if (!truncated && args[0] === client.shared.slots && args[1] === 20 && args[2] === owner && args[3] === 0) {
+      truncated = true;
+      client.shared.mutate(new Int32Array(client.connection.epoch), undefined, () => client.shared.resize(0, 0, true));
+    }
+    return result;
+  }) as typeof Atomics.compareExchange;
+  try {
+    const bytes = new Uint8Array(4);
+    expect(client.read(0, [bytes], 0)).toBe(4);
+    expect(truncated).toBe(true);
+    expect(bytes).toEqual(new Uint8Array([65, 66, 67, 68]));
+    expect(client.read(0, [new Uint8Array(4)], 0)).toBe(0);
+  } finally { Atomics.compareExchange = compare; cleanup(); }
 });
 
 const emptyLayouts = [
@@ -127,16 +201,19 @@ for (const operation of ["write", "append"] as const) for (const phase of ["befo
     const source = new Uint8Array(buffer, 1);
     source[0] = 90;
     const grow = () => { buffer.grow(3); source[1] = 91; };
-    const mutate = client.shared.mutate.bind(client.shared);
-    if (phase === "before-lock") client.shared.mutate = (...args) => {
-      client.shared.mutate = mutate;
+    const method = operation === "write" ? "directWrite" : "directAppend";
+    const direct = client.shared[method] as (...args: unknown[]) => unknown;
+    if (phase === "before-lock") (client.shared as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => {
+      delete (client.shared as unknown as Record<string, unknown>)[method];
       grow();
-      return mutate(...args);
+      return Reflect.apply(direct, client.shared, args);
     };
+    let grown = false;
     class GrowingBytes extends Uint8Array {
-      subarray(start?: number, end?: number): Uint8Array {
-        grow();
-        return super.subarray(start, end);
+      // Grow once the copy is under the global mutation lock, whatever path reads the length.
+      get length(): number {
+        if (Atomics.load(client.shared.cells, 1) !== 0) { grown = true; grow(); }
+        return super.length;
       }
     }
     const chunks = phase === "during-copy" ? [new GrowingBytes([88]), source] : [source];
@@ -158,6 +235,7 @@ for (const operation of ["write", "append"] as const) for (const phase of ["befo
         expect(client.read(0, [tail], 4)).toBe(1);
         expect(tail[0]).toBe(0);
       }
+      if (phase === "during-copy") expect(grown).toBe(true);
     } finally { cleanup(); }
   });
 }

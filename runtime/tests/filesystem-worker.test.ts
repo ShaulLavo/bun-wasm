@@ -430,13 +430,15 @@ test("resolve protects both returned capabilities from eviction when an old hard
   expect(service.resources().retained).toBe(backend.pinCount);
 });
 
+// Unopened handles read through the epoch-validated service cache. Retained handles read shared
+// pages under the file lock instead, where a later truncate cannot invalidate a finished copy.
 test("a cached read rejected by the epoch check does not modify guest bytes beyond the final EOF", async () => {
   const { client } = fixture();
   await client.asyncCall("writeFile", ["/cached"], encode("oldbytes"));
   const worker = guestWorker();
   const connection = client.fork();
   let result = nextMessage(worker);
-  worker.postMessage({ scenario: "cache", connection }, [connection.port]);
+  worker.postMessage({ scenario: "path-cache", connection }, [connection.port]);
   expect((await result).count).toBe(8);
   result = nextMessage(worker);
   worker.postMessage({ scenario: "race-truncate" });

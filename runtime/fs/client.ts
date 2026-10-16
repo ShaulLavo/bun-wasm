@@ -106,15 +106,15 @@ export class FilesystemClient implements FileSystem {
   private paths = new Map<string, { path: ResolvedPath | number; epoch: number }>();
   private readdirs = new Map<number, { entries: DirectoryEntry[]; epoch: number }>();
   private openHandles = new Map<number, number>();
+  // Shared slots of open regular files: a live handle never changes slot, and direct I/O
+  // rechecks the slot's handle under its file lock.
+  private fileSlots = new Map<number, number>();
   private capabilityEntries = new Map<number, number>();
   private capabilities: Int32Array;
   private epoch: Int32Array;
   private revoked: () => boolean;
   readonly shared: SharedFilesystemState;
   private watchingRevocation = false;
-  // One ordinary (nonshared) <=PAGE staging buffer. A read leases it through guest copying,
-  // so reentrant reads cannot overwrite bytes the outer operation has not committed yet.
-  private readScratch?: { bytes: Uint8Array; chunks: [Uint8Array] };
   constructor(readonly connection: FilesystemConnection) {
     this.capabilities = new Int32Array(connection.capabilities);
     this.epoch = new Int32Array(connection.epoch);
@@ -180,7 +180,7 @@ export class FilesystemClient implements FileSystem {
     // The disposing agent is quiescent: no synchronous file operation can be active here.
     reapFilesystem(this.connection);
     for (const completion of this.completions.values()) completion.cancel();
-    this.completions.clear(); this.reads.clear(); this.stats.clear(); this.paths.clear(); this.readdirs.clear(); this.openHandles.clear(); this.capabilityEntries.clear(); this.readScratch = undefined;
+    this.completions.clear(); this.reads.clear(); this.stats.clear(); this.paths.clear(); this.readdirs.clear(); this.openHandles.clear(); this.fileSlots.clear(); this.capabilityEntries.clear();
     this.sweep(); this.connection.port.close();
   }
   private version(): number {
@@ -230,13 +230,26 @@ export class FilesystemClient implements FileSystem {
   }
   release(handle: FileHandle): void {
     const count = this.openHandles.get(handle) ?? 0;
-    if (this.revoked()) { this.openHandles.delete(handle); return; }
+    if (this.revoked()) { this.openHandles.delete(handle); this.fileSlots.delete(handle); return; }
     if (!count) throw new FilesystemError(8);
     const key = this.capabilityEntries.get(handle)!;
-    if (count > 1) this.openHandles.set(handle, count - 1); else this.openHandles.delete(handle);
+    if (count > 1) this.openHandles.set(handle, count - 1); else { this.openHandles.delete(handle); this.fileSlots.delete(handle); }
     // Keep linked zero-reference capabilities as a bounded cache. dropReference queues any
     // needed detached-file/budget trim without waiting for a worker acknowledgment.
     this.dropReference(key);
+  }
+  /** The shared slot of a regular file this connection holds open, or 0. */
+  private directSlot(handle: FileHandle): number {
+    const cached = this.fileSlots.get(handle);
+    if (cached !== undefined) return cached;
+    if (!this.openHandles.has(handle)) return 0;
+    const slot = this.shared.fileSlot(handle);
+    if (slot) this.fileSlots.set(handle, slot);
+    return slot;
+  }
+  private directFailure(handle: FileHandle, error: unknown): number {
+    if (error instanceof FilesystemError && error.errno === 8) this.fileSlots.delete(handle);
+    return errno(error);
   }
   resolve(directory: FileHandle, path: string): ResolvedPath | number {
     try {
@@ -268,47 +281,18 @@ export class FilesystemClient implements FileSystem {
     } finally { completion.release(); }
   }
   read(handle: FileHandle, chunks: readonly Uint8Array[], offset: number): number {
-    if (this.openHandles.has(handle) && this.shared.hasFile(handle)) {
-      try {
-        const epoch = this.version();
-        const beforeSize = this.shared.size(handle);
-        const requested = chunks.reduce((size, chunk) => size + chunk.length, 0);
-        let scratch = requested <= PAGE ? this.readScratch : undefined;
-        if (scratch) this.readScratch = undefined;
-        if (!scratch || scratch.bytes.length !== requested) {
-          const bytes = new Uint8Array(requested);
-          scratch = { bytes, chunks: [bytes] };
-        }
-        try {
-          const count = this.shared.read(handle, scratch.chunks, offset, this.revoked, this.connection.owner);
-          // The locked copy is coherent. Reject only a concurrent same-file truncate to/below
-          // offset; unrelated mutations and appends must not invent EOF. Keep guest bytes
-          // untouched until both the epoch/revocation and truncate gates have accepted it.
-          if (this.version() !== epoch) {
-            const afterSize = this.shared.size(handle) ?? 0;
-            if (afterSize < (beforeSize ?? 0) && afterSize <= offset) return 0;
-          }
-          let copied = 0;
-          for (const chunk of chunks) {
-            if (copied >= count) break;
-            const amount = Math.min(chunk.length, count - copied);
-            if (!amount) continue;
-            chunk.set(copied === 0 && amount === scratch.bytes.length ? scratch.bytes : scratch.bytes.subarray(copied, copied + amount));
-            copied += amount;
-          }
-          return count;
-        } finally {
-          if (requested <= PAGE && !this.revoked()) this.readScratch = scratch;
-        }
-      }
+    const slot = this.directSlot(handle);
+    if (slot) {
+      try { return this.shared.directRead(slot, handle, chunks, offset, this.revoked, this.connection.owner); }
       catch (error) {
-        if (error instanceof MissingSegmentError) {
-          const requested = chunks.reduce((size, chunk) => size + chunk.length, 0);
+        if (!(error instanceof MissingSegmentError)) return -this.directFailure(handle, error);
+        // Only a standalone state can lack a segment; the service reply replaces every copied byte.
+        try {
+          let requested = 0; for (let i = 0; i < chunks.length; i++) requested += chunks[i]!.length;
           const bytes = this.call("read", [handle, requested, offset]) as Uint8Array;
           let at = 0; for (const chunk of chunks) { const count = Math.min(chunk.length, bytes.length - at); if (count > 0) chunk.set(bytes.subarray(at, at + count)); at += count; }
           return bytes.length;
-        }
-        return -errno(error);
+        } catch (failure) { return -errno(failure); }
       }
     }
     let total = 0;
@@ -340,26 +324,27 @@ export class FilesystemClient implements FileSystem {
   }
   write(handle: FileHandle, chunks: readonly Uint8Array[], offset: number): number {
     chunks = fixedWriteSources(chunks);
-    if (this.openHandles.has(handle) && this.shared.hasFile(handle)) {
-      const total = chunks.reduce((size, chunk) => size + chunk.length, 0);
+    const slot = this.directSlot(handle);
+    if (slot) {
+      let total = 0;
+      for (let i = 0; i < chunks.length; i++) total += chunks[i]!.length;
       try {
-        this.version();
-        if (!total) return 0;
-        const revoked = this.revoked;
+        if (!total) { if (this.revoked()) throw new FilesystemError(11); return 0; }
         for (;;) {
-          // The fused operation rechecks capacity and copies under the same file lock.
-          // A truncate can reclaim pages between retries, so grow only after both locks exit.
-          const written = this.shared.mutate(this.epoch, revoked,
-            () => this.shared.tryWrite(handle, chunks, offset, total, revoked, this.connection.owner), this.connection.owner);
+          // Capacity is rechecked under the file lock. A truncate can reclaim pages between
+          // retries, so grow only after both locks exit.
+          const written = this.shared.directWrite(slot, handle, chunks, offset, total, this.epoch, this.revoked, this.connection.owner);
           if (written !== undefined) return written;
           this.call("grow", [handle, offset + total]);
         }
       } catch (error) {
         if (error instanceof MissingSegmentError) {
-          const data = new Uint8Array(total); let at = 0; for (const chunk of chunks) { data.set(chunk, at); at += chunk.length; }
-          return this.call("write", [handle, offset], data);
+          try {
+            const data = new Uint8Array(total); let at = 0; for (const chunk of chunks) { data.set(chunk, at); at += chunk.length; }
+            return this.call("write", [handle, offset], data);
+          } catch (failure) { return -errno(failure); }
         }
-        return -errno(error);
+        return -this.directFailure(handle, error);
       }
     }
     let total = 0;
@@ -368,25 +353,24 @@ export class FilesystemClient implements FileSystem {
   }
   append(handle: FileHandle, chunks: readonly Uint8Array[]): { written: number; offset: number } | number {
     chunks = fixedWriteSources(chunks);
-    const total = chunks.reduce((size, chunk) => size + chunk.length, 0);
+    let total = 0;
+    for (let i = 0; i < chunks.length; i++) total += chunks[i]!.length;
     const fallback = () => {
       const data = new Uint8Array(total);
       let at = 0; for (const chunk of chunks) { data.set(chunk, at); at += chunk.length; }
       return this.call("append", [handle], data);
     };
+    const slot = this.directSlot(handle);
     try {
-      if (!this.openHandles.has(handle) || !this.shared.hasFile(handle)) return fallback();
-      this.version();
-      const revoked = this.revoked;
+      if (!slot) return fallback();
       for (;;) {
-        const result = this.shared.mutate(this.epoch, revoked,
-          () => this.shared.tryAppend(handle, chunks, total, revoked, this.connection.owner), this.connection.owner);
+        const result = this.shared.directAppend(slot, handle, chunks, total, this.epoch, this.revoked, this.connection.owner);
         if (typeof result !== "number") return result;
         this.call("grow", [handle, result]);
       }
     } catch (error) {
       if (error instanceof MissingSegmentError) { try { return fallback(); } catch (failure) { return -errno(failure); } }
-      return -errno(error);
+      return -this.directFailure(handle, error);
     }
   }
   resize(handle: FileHandle, size: number, truncate: boolean): number {

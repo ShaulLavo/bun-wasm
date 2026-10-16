@@ -29,6 +29,9 @@ const UNLINKED = 7;
 const FILE_LOCK = 8;
 const HANDLE = 9;
 
+// The intrinsic copy: guest iovecs may be subclasses, and no guest code may run under a file lock.
+const copyBytes = Uint8Array.prototype.set;
+
 export class MissingSegmentError extends Error {}
 export interface SharedFileInfo extends FileStat { capacity: number; }
 export interface SharedSegment { buffer: SharedArrayBuffer; index: number; }
@@ -115,31 +118,32 @@ export class SharedFilesystemState {
   }
   private at(slot: number, field: number): number { return slot * SLOT_WORDS + field; }
   private pageAt(slot: number, logical: number): number { return slot * MAX_FILE_PAGES + logical; }
+  /** The slot of a registered regular file, or 0. A live handle keeps its slot until it is freed. */
+  fileSlot(handle: FileHandle): number { const slot = this.findSlot(handle); return slot !== 0 && Atomics.load(this.slots, this.at(slot, 0)) === 1 ? slot : 0; }
   hasFile(handle: FileHandle): boolean { const slot = this.findSlot(handle); return slot !== 0 && Atomics.load(this.slots, this.at(slot, 0)) === 1; }
   isUnlinked(handle: FileHandle): boolean { const slot = this.findSlot(handle); return slot !== 0 && Atomics.load(this.slots, this.at(slot, UNLINKED)) !== 0; }
-  private lock(index: number, revoked?: () => boolean, owner = this.lockOwner): void {
+  /** Spin for a held lock. Only a contended caller checks revocation here; every acquirer
+   * checks it once after its locks are held, so a revoked guest never proceeds under a lock. */
+  private contend(cells: Int32Array, index: number, revoked: (() => boolean) | undefined, owner: number): void {
     for (;;) {
       if (revoked?.()) throw new FilesystemError(11);
-      if (Atomics.compareExchange(this.slots, index, 0, owner) === 0) {
-        if (!revoked?.()) return;
-        Atomics.compareExchange(this.slots, index, owner, 0);
-        throw new FilesystemError(11);
-      }
       this.onContention?.();
+      if (Atomics.compareExchange(cells, index, 0, owner) === 0) return;
     }
+  }
+  private lock(index: number, revoked?: () => boolean, owner = this.lockOwner): void {
+    if (Atomics.compareExchange(this.slots, index, 0, owner) !== 0) this.contend(this.slots, index, revoked, owner);
+    if (!revoked?.()) return;
+    Atomics.compareExchange(this.slots, index, owner, 0);
+    throw new FilesystemError(11);
   }
   private unlock(index: number, owner = this.lockOwner): void { Atomics.compareExchange(this.slots, index, owner, 0); }
   private globalLock(revoked?: () => boolean, owner = this.lockOwner): void {
     if (this.serviceMutation && owner === SERVICE_OWNER) return;
-    for (;;) {
-      if (revoked?.()) throw new FilesystemError(11);
-      if (Atomics.compareExchange(this.cells, GLOBAL_LOCK, 0, owner) === 0) {
-        if (!revoked?.()) return;
-        Atomics.compareExchange(this.cells, GLOBAL_LOCK, owner, 0);
-        throw new FilesystemError(11);
-      }
-      this.onContention?.();
-    }
+    if (Atomics.compareExchange(this.cells, GLOBAL_LOCK, 0, owner) !== 0) this.contend(this.cells, GLOBAL_LOCK, revoked, owner);
+    if (!revoked?.()) return;
+    Atomics.compareExchange(this.cells, GLOBAL_LOCK, owner, 0);
+    throw new FilesystemError(11);
   }
   private globalUnlock(owner = this.lockOwner): void {
     if (!this.serviceMutation) Atomics.compareExchange(this.cells, GLOBAL_LOCK, owner, 0);
@@ -254,6 +258,81 @@ export class SharedFilesystemState {
   }
   private copyInto(slot: number, source: Uint8Array, offset: number): void { let at = offset; for (let sourceAt = 0; sourceAt < source.length;) { const logical = Math.floor(at / PAGE); const page = Atomics.load(this.pages, this.pageAt(slot, logical)) - 1; const inPage = at % PAGE; const count = Math.min(source.length - sourceAt, PAGE - inPage); this.segmentFor(page).set(source.subarray(sourceAt, sourceAt + count), inPage); at += count; sourceAt += count; } }
   read(handle: FileHandle, chunks: readonly Uint8Array[], offset: number, revoked?: () => boolean, owner = this.lockOwner): number { const slot = this.slot(handle); if (Atomics.load(this.slots, this.at(slot, 0)) !== 1) throw new FilesystemError(31); this.lock(this.at(slot, FILE_LOCK), revoked, owner); try { const size = Atomics.load(this.slots, this.at(slot, FILE_SIZE)); let total = 0; for (const chunk of chunks) { let at = 0; while (at < chunk.length && offset + total < size) { const position = offset + total; const page = Atomics.load(this.pages, this.pageAt(slot, Math.floor(position / PAGE))) - 1; const inPage = position % PAGE; const count = Math.min(chunk.length - at, size - position, PAGE - inPage); chunk.set(this.segmentFor(page).subarray(inPage, inPage + count), at); at += count; total += count; } if (at < chunk.length) break; } return total; } finally { this.unlock(this.at(slot, FILE_LOCK), owner); } }
+  /** Client read of an open file from its cached slot: one file lock, one revocation check after
+   * locking, then a coherent copy straight into the guest iovecs. Every size change holds the
+   * same lock, so the copy is the file's content at one instant. */
+  directRead(slot: number, handle: FileHandle, chunks: readonly Uint8Array[], offset: number, revoked: () => boolean, owner: number): number {
+    const slots = this.slots, base = slot * SLOT_WORDS, lock = base + FILE_LOCK;
+    if (Atomics.compareExchange(slots, lock, 0, owner) !== 0) this.contend(slots, lock, revoked, owner);
+    try {
+      if (revoked()) throw new FilesystemError(11);
+      if (Atomics.load(slots, base + HANDLE) !== handle + 1) throw new FilesystemError(8);
+      const size = Atomics.load(slots, base + FILE_SIZE);
+      let position = offset;
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i]!, length = chunk.length;
+        let at = 0;
+        while (at < length && position < size) {
+          const inPage = position % PAGE;
+          const count = Math.min(length - at, size - position, PAGE - inPage);
+          const page = this.segmentFor(Atomics.load(this.pages, slot * MAX_FILE_PAGES + (position - inPage) / PAGE) - 1);
+          copyBytes.call(chunk, count === PAGE ? page : page.subarray(inPage, inPage + count), at);
+          at += count; position += count;
+        }
+        if (at < length) break;
+      }
+      return position - offset;
+    } finally { Atomics.compareExchange(slots, lock, owner, 0); }
+  }
+  private copyChunks(slot: number, chunks: readonly Uint8Array[], offset: number): void {
+    let position = offset;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i]!, length = chunk.length;
+      for (let at = 0; at < length;) {
+        const inPage = position % PAGE;
+        const count = Math.min(length - at, PAGE - inPage);
+        const page = this.segmentFor(Atomics.load(this.pages, slot * MAX_FILE_PAGES + (position - inPage) / PAGE) - 1);
+        // A fixed-length source view never changes length; build sub-views without species lookup.
+        page.set(count === length ? chunk : new Uint8Array(chunk.buffer, chunk.byteOffset + at, count), inPage);
+        at += count; position += count;
+      }
+    }
+  }
+  /** Client in-capacity write (offset >= 0) or append (offset < 0) under one global mutation (odd
+   * epoch) and one file lock, with one revocation check once both are held. Returns the end
+   * offset, or the negated size the service must grow to after both locks exit. Sources must
+   * be fixed-length views. */
+  private direct(slot: number, handle: FileHandle, chunks: readonly Uint8Array[], offset: number, total: number, epoch: Int32Array, revoked: () => boolean, owner: number): number {
+    const cells = this.cells, slots = this.slots, base = slot * SLOT_WORDS, lock = base + FILE_LOCK;
+    if (Atomics.compareExchange(cells, GLOBAL_LOCK, 0, owner) !== 0) this.contend(cells, GLOBAL_LOCK, revoked, owner);
+    Atomics.add(epoch, 0, 1);
+    try {
+      if (Atomics.compareExchange(slots, lock, 0, owner) !== 0) this.contend(slots, lock, revoked, owner);
+      try {
+        if (revoked()) throw new FilesystemError(11);
+        if (Atomics.load(slots, base + HANDLE) !== handle + 1) throw new FilesystemError(8);
+        const size = Atomics.load(slots, base + FILE_SIZE);
+        const at = offset < 0 ? size : offset;
+        if (!total) return at;
+        const end = at + total;
+        if (end > Atomics.load(slots, base + CAPACITY) * PAGE) return -end;
+        this.copyChunks(slot, chunks, at);
+        if (end > size) Atomics.store(slots, base + FILE_SIZE, end);
+        this.setTimestamp(slot, Date.now());
+        return end;
+      } finally { Atomics.compareExchange(slots, lock, owner, 0); }
+    } finally {
+      Atomics.add(epoch, 0, 1);
+      Atomics.compareExchange(cells, GLOBAL_LOCK, owner, 0);
+    }
+  }
+  directWrite(slot: number, handle: FileHandle, chunks: readonly Uint8Array[], offset: number, total: number, epoch: Int32Array, revoked: () => boolean, owner: number): number | undefined {
+    return this.direct(slot, handle, chunks, offset, total, epoch, revoked, owner) < 0 ? undefined : total;
+  }
+  directAppend(slot: number, handle: FileHandle, chunks: readonly Uint8Array[], total: number, epoch: Int32Array, revoked: () => boolean, owner: number): { written: number; offset: number } | number {
+    const end = this.direct(slot, handle, chunks, -1, total, epoch, revoked, owner);
+    return end < 0 ? -end : { written: total, offset: end };
+  }
   /** Caller owns the global mutation lock. Undefined asks for service growth after unlock. */
   tryWrite(handle: FileHandle, chunks: readonly Uint8Array[], offset: number, total: number, revoked?: () => boolean, owner = this.lockOwner): number | undefined {
     const slot = this.slot(handle);
@@ -351,4 +430,12 @@ export class SharedFilesystemState {
     return { bytes: poolBytes + metadataBytes, poolBytes, metadataBytes, usedBytes, freeBytes: poolBytes - usedBytes, maxBytes: Atomics.load(this.cells, 4) * SEGMENT_BYTES, files };
   }
 }
-export function sharedRevoked(connection: { revocations: SharedArrayBuffer[] }): () => boolean { const words = connection.revocations.map(buffer => new Int32Array(buffer)); return () => words.some(word => Atomics.load(word, 0) !== 0); }
+/** This connection's revocation word or any ancestor's. An indexed scan: Array#some with a
+ * callback costs several times more in WebKit, and every direct I/O call checks it. */
+export function sharedRevoked(connection: { revocations: SharedArrayBuffer[] }): () => boolean {
+  const words = connection.revocations.map(buffer => new Int32Array(buffer));
+  return () => {
+    for (let i = 0; i < words.length; i++) if (Atomics.load(words[i]!, 0) !== 0) return true;
+    return false;
+  };
+}
