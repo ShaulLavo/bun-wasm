@@ -3,7 +3,9 @@
 Measured on 2026-10-16 with unchanged pinned project fixtures and offline
 registry digest `bff1211cea1f8aed1dacd80b53b81b8a75a1a63987c8b053e426021269389b59`.
 The private integration commit is `f7659376c594a5f6f6bf7a8035be69a5b23a2281`;
-its exact full revision is also retained in the execution provenance. It combines
+its exact full revision is also retained in the execution provenance. Cargo added
+two already-locked workspace dev dependencies during the build; the retained
+`app-integration-lock.patch` records that delta without changing versions. It combines
 the TCP/ws commits with Rollup prerequisite
 `97e67614b2a4cd6eaca6d8ef339ce1af30252802`. Rollup changes are not part of the
 ws builtin PR.
