@@ -15,13 +15,11 @@
     const error = (message) =>
       Object.assign(new TypeError(message), { code: "ERR_INVALID_ARG_TYPE" });
     const family = (a) =>
-      a.name === "RSA-PSS"
-        ? "rsa-pss"
-        : a.name.startsWith("RSA")
-          ? "rsa"
-          : a.name === "ECDSA"
-            ? "ec"
-            : a.name.toLowerCase();
+      a.name.startsWith("RSA")
+        ? "rsa"
+        : a.name === "ECDSA"
+          ? "ec"
+          : a.name.toLowerCase();
     const hash = (name) => {
       const normalized = String(name)
         .toUpperCase()
@@ -48,7 +46,13 @@
     }
     function make(r) {
       const key = Object.create(KeyObject.prototype);
-      records.set(key, r);
+      const algorithm =
+        r.key.kty === "RSA"
+          ? { ...r.algorithm, name: "RSASSA-PKCS1-v1_5" }
+          : r.key.kty === "EC"
+            ? { name: "ECDSA", namedCurve: r.algorithm.namedCurve }
+            : r.algorithm;
+      records.set(key, { ...r, algorithm });
       return key;
     }
     class KeyObject {
@@ -280,9 +284,9 @@
     const createPublicKey = (input) => importAsymmetric(input, false);
     function generateKeyPairSync(type, options = {}) {
       let a;
-      if (type === "rsa" || type === "rsa-pss")
+      if (type === "rsa")
         a = {
-          name: type === "rsa-pss" ? "RSA-PSS" : "RSASSA-PKCS1-v1_5",
+          name: "RSASSA-PKCS1-v1_5",
           modulusLength: options.modulusLength,
           publicExponent: new Uint8Array([
             (options.publicExponent ?? 65537) >>> 24,
@@ -347,10 +351,9 @@
         a = { ...r.algorithm };
       if (a.name === "X25519") throw error("Key cannot sign");
       if (a.name !== "Ed25519") a.hash = { name: hash(digest) };
-      if (family(a) === "rsa" || family(a) === "rsa-pss") {
+      if (family(a) === "rsa") {
         a.name =
-          options.padding === constants.RSA_PKCS1_PSS_PADDING ||
-          a.name === "RSA-PSS"
+          options.padding === constants.RSA_PKCS1_PSS_PADDING
             ? "RSA-PSS"
             : "RSASSA-PKCS1-v1_5";
         a.saltLength = options.saltLength ?? -2;

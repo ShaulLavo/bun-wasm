@@ -149,3 +149,26 @@ await new Promise((resolve, reject) =>
   }),
 );
 console.log("node interop ok");
+for (const algorithm of [
+  {
+    name: "RSA-PSS",
+    modulusLength: 1024,
+    publicExponent: new Uint8Array([1, 0, 1]),
+    hash: "SHA-256",
+  },
+  { name: "ECDH", namedCurve: "P-256" },
+]) {
+  const pair = await crypto.subtle.generateKey(
+    algorithm,
+    true,
+    algorithm.name === "ECDH" ? ["deriveBits"] : ["sign", "verify"],
+  );
+  const privateKey = KeyObject.from(pair.privateKey),
+    publicKey = KeyObject.from(pair.publicKey);
+  assert.equal(
+    privateKey.asymmetricKeyType,
+    algorithm.name === "ECDH" ? "ec" : "rsa",
+  );
+  assert(verify("sha256", input, publicKey, sign("sha256", input, privateKey)));
+}
+console.log("node key purposes ok");
