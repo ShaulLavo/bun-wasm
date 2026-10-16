@@ -3,6 +3,7 @@
 // (Not BUN_JSC_WASM: Bun refuses to start when a BUN_JSC_* variable is not a JSC option.)
 import { existsSync, rmSync, statSync } from "node:fs";
 import { previewWebsocketScript } from "./preview-build";
+import { buildBrowserEntries, buildClassicWorker } from "../scripts/browser-build";
 import { join, resolve } from "node:path";
 
 const here = import.meta.dir;
@@ -11,40 +12,13 @@ const wasmSource = resolve(here, process.env.BUN_WASM ?? "../dist/bun.wasm");
 
 rmSync(out, { recursive: true, force: true });
 
-const result = await Bun.build({
-  entrypoints: [join(here, "src/main.ts"), join(here, "src/worker.ts")],
-  outdir: out,
-  target: "browser",
-  format: "esm",
-  minify: true,
-  sourcemap: "linked",
-  naming: "[name].[ext]",
-});
-if (!result.success) {
-  for (const log of result.logs) console.error(log);
-  process.exit(1);
-}
+// Main and worker share chunks; the helper also mirrors chunks into the worker's scope.
+const result = await buildBrowserEntries([join(here, "src/main.ts"), join(here, "src/worker.ts")], out);
 
 // The service worker is a classic script (module service workers are newer in Safari).
-const previewSocketScript = await previewWebsocketScript();
-
-const sw = await Bun.build({
-  entrypoints: [join(here, "src/sw.ts")],
-  define: { __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(previewSocketScript) },
-  outdir: out,
-  target: "browser",
-  format: "iife",
-  minify: true,
-  naming: "[name].[ext]",
+const sw = await buildClassicWorker(join(here, "src/sw.ts"), out, {
+  __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(await previewWebsocketScript()),
 });
-if (!sw.success) {
-  for (const log of sw.logs) console.error(log);
-  process.exit(1);
-}
-
-// Safari may fetch a dedicated worker's initial script from the network on its first visit.
-// Keep the script in its controlling scope without relying on fetch interception to bootstrap it.
-await Bun.write(join(out, "__bunwasm/worker.js"), Bun.file(join(out, "worker.js")));
 
 await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 // Cloudflare Static Assets headers: cross-origin isolation (SharedArrayBuffer for
