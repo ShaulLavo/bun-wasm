@@ -45,7 +45,7 @@ try {
     const manifest = JSON.parse(readFileSync(join(scratch, 'node_modules/esbuild/package.json'), 'utf8'));
     assert.equal(manifest.name, 'esbuild-wasm');
     assert.equal(manifest.version, '0.25.12');
-    assert.match(await run(engine, ['run', '/check.cjs']), /esbuild transform, build, context rebuild, plugins passed/);
+    assert.match(await run(engine, ['run', '/check.cjs']), /esbuild API passed/);
     assert.match(await run(engine, ['run', '/node_modules/esbuild/bin/esbuild', '--version']), /0\.25\.12/);
     await run(engine, ['run', '/node_modules/esbuild/bin/esbuild', '/entry.ts', '--bundle', '--outfile=/cli.js']);
     assert.match(readFileSync(join(scratch, 'cli.js'), 'utf8'), /43/);

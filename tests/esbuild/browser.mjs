@@ -29,7 +29,7 @@ async function check(browserName, engine, url) {
     await writeFile(page, '/home/user/bunfig.toml', `[install]\nregistry = ${JSON.stringify(mirror.base)}\n`);
     await writeFile(page, '/home/user/check.cjs', readFileSync(new URL('check.cjs', import.meta.url), 'utf8'));
     await command(page, 'bun install');
-    assert.match(await command(page, 'bun run check.cjs'), /esbuild transform, build, context rebuild, plugins passed/);
+    assert.match(await command(page, 'bun run check.cjs'), /esbuild API passed/);
     assert.match(await command(page, 'bun run node_modules/esbuild/bin/esbuild --version'), /0\.25\.12/);
     await command(page, 'bun run node_modules/esbuild/bin/esbuild entry.ts --bundle --outfile=cli.js');
     assert.match(await command(page, 'cat cli.js'), /43/);

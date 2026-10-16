@@ -31,6 +31,6 @@ const esbuild = require('esbuild');
       } }],
     });
     assert.match(pluginBuild.outputFiles[0].text, /123/);
-    console.log('esbuild transform, build, context rebuild, plugins passed');
+    console.log('esbuild API passed');
   } finally { await esbuild.stop(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
