@@ -9,6 +9,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$root/env.sh"
+"$root/scripts/sync-crypto.sh"
 export CARGO_TARGET_DIR="${BROWSER_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR}-browser}"
 export WASI_SDK="${WASI_SDK:-$WASI_SDK_PATH}"
 

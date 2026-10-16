@@ -756,6 +756,7 @@
 
   internal.mainPath = native.mainPath();
   internal.require("web")(defineGlobal, defineLazyGlobal);
+  internal.require("crypto")(defineGlobal);
   defineGlobal("process", internal.require("process"));
   if (typeof globalThis.Temporal === "undefined") defineLazyGlobal("Temporal", () => internal.require("temporal").Temporal);
   defineGlobal("console", internal.require("console"));

@@ -1267,18 +1267,7 @@
   }
   internal.randomUUID = randomUUID;
 
-  const subtle = {
-    async digest(algorithm, data) {
-      const name = typeof algorithm === "string" ? algorithm : algorithm.name;
-      const digest = native.hash(String(name), toUint8(data).slice());
-      return digest.buffer;
-    },
-  };
-  for (const op of ["encrypt", "decrypt", "sign", "verify", "generateKey", "deriveKey", "deriveBits", "importKey", "exportKey", "wrapKey", "unwrapKey"]) {
-    subtle[op] = () => Promise.reject(new DOMException(`crypto.subtle.${op} is not supported in bun-wasm`, "NotSupportedError"));
-  }
-
-  const crypto = { getRandomValues, randomUUID, subtle };
+  const crypto = { getRandomValues, randomUUID };
 
   // --- FormData / MessageChannel / navigator ----------------------------------
 

@@ -14,3 +14,5 @@ agree ECDH P-256
 agree ECDH P-384
 agree X25519 ok
 validation ok
+wrap AES-KW
+key boundaries ok

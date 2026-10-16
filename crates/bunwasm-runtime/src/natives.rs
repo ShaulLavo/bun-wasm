@@ -637,6 +637,7 @@ fn install_encoding(t: &mut Table) {
 }
 
 fn install_crypto(t: &mut Table) {
+    t.add("cryptoOp", |a| Ok(crate::crypto::request(a.str(0)?).into()));
     t.add("randomBytes", |a| {
         let mut buf = vec![0u8; a.num(0)? as usize];
         getrandom::fill(&mut buf).map_err(|e| NativeError::error(e.to_string()))?;

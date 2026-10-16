@@ -60,6 +60,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
+| [`crates/bunwasm-runtime/src/crypto.rs`, GCM adapter](#webcrypto-backend) | Port | Adapt RustCrypto GCM to WebCrypto nonce and tag lengths. |
+| [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 
 ## Portable semver host functions
 
@@ -506,3 +508,30 @@ The numbered JavaScript files in `crates/bunwasm-runtime/generated/builtins/` re
 ## Builtin loader adapter
 
 Class **Host feature**. `scripts/generate-bun-builtins.mjs`, its shell runner, the selection manifest, and `crates/bunwasm-runtime/src/js/bun_builtins.js` are original adapters. `src/js/bun_builtin_globals.js` is the original bootstrap capture of intrinsic constructors, before application code can replace public globals. They call Bun's codegen and consume its generated module protocol. They do not copy the codegen implementation. Rust source lookup and Engine natives are original bun-wasm glue. The loader uses lazy factories, isolated caches, explicit unsupported errors, and the existing builtin implementations for dependencies not switched yet. [bun-builtins.md](bun-builtins.md) records its limits and hook status.
+
+
+## WebCrypto backend
+
+`crates/bunwasm-runtime/src/crypto.rs` links RustCrypto primitives and its maintained JWK,
+PKCS#8 and SPKI parsers. Cargo.lock pins the dependency revisions. Bun's BoringSSL pin `41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f` handles RSA signing,
+verification and OAEP encryption and decryption through the original `c/rsa.c` adapter.
+RustCrypto RSA is used for key generation and format parsing, never private-key operations.
+Its documented RUSTSEC-2023-0071 timing issue rules out using it for signing or decryption.
+`scripts/sync-crypto.sh` downloads the unmodified source. The build disables assembly,
+threads and socket BIOs on WASI, as in the earlier successful runtime spike.
+
+The original request adapter
+and `src/js/crypto.js` connect them to every Engine through the existing data-native bridge.
+Bun's WebCrypto implementation calls JSC and native C++ bindings, so it cannot run as an
+engine-independent builtin yet.
+
+The `gcm` helper adapts `aes-gcm` 0.10.3 `src/lib.rs`, `init_ctr`, `compute_tag`, and its
+`AeadInPlace` implementation from RustCrypto/AEADs. WebCrypto accepts runtime nonce lengths
+and 32-bit and 64-bit tags, while that crate requires a type-level nonce length and tags of at
+least 96 bits. The adapter uses the same RustCrypto AES, CTR32 and GHASH implementations,
+authenticates before decryption, and compares tags with `subtle::ConstantTimeEq`. Its MIT
+license is retained in `third_party/licenses/aes-gcm-MIT`. This is a port, not an upstream bug.
+
+`scripts/generate-crypto-vectors.mjs` and both crypto fixture directories are original test
+adapters. Native Node generates signatures, key formats, ciphertext and derived bytes for
+comparison with wasm. No upstream test implementation is copied.
