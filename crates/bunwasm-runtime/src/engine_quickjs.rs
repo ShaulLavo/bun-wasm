@@ -20,6 +20,7 @@ use crate::engine::{Engine, ErrorKind, ModuleHost, NativeError, PromiseState, Va
 type V = Value<'static>;
 
 unsafe extern "C" {
+    fn JS_bunwasm_IsArrayBufferLike(value: qjs::JSValue) -> bool;
     /// Added to QuickJS by bun-wasm (third_party/rquickjs-sys): remaining
     /// entries of a Map/Set iterator, without advancing it.
     fn JS_bunwasm_IteratorEntries(ctx: *mut qjs::JSContext, value: qjs::JSValue) -> qjs::JSValue;
@@ -383,7 +384,9 @@ fn to_val(v: &Value<'_>) -> Val {
         // SAFETY: no JS runs while the slice is alive; it is copied at once.
         return Val::Bytes(unsafe { arr.as_bytes() }.unwrap_or(&[]).to_vec());
     }
-    if let Some(buf) = rquickjs::ArrayBuffer::from_object(obj.clone()) {
+    // SAFETY: v is live; the tag query does not call JavaScript or throw.
+    let is_buffer = unsafe { JS_bunwasm_IsArrayBufferLike(v.as_raw()) };
+    if is_buffer && let Some(buf) = rquickjs::ArrayBuffer::from_object(obj.clone()) {
         // SAFETY: as above.
         return Val::Bytes(unsafe { buf.as_bytes() }.unwrap_or(&[]).to_vec());
     }
@@ -458,4 +461,31 @@ impl Loader for QjsLoader {
 fn unerase<'js>(v: V) -> Value<'js> {
     // SAFETY: see `erase`.
     unsafe { std::mem::transmute::<V, Value<'js>>(v) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_arrays_leave_no_exception() {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            let array = ctx.eval::<Value, _>("[1, 2]").unwrap();
+            assert_eq!(to_val(&array), Val::Array(vec![Val::Num(1.0), Val::Num(2.0)]));
+            assert!(!ctx.has_exception(), "array conversion left an exception pending");
+            let object = ctx.eval::<Value, _>("({ answer: 3 })").unwrap();
+            assert_eq!(to_val(&object), Val::Object(vec![("answer".into(), Val::Num(3.0))]));
+            assert!(!ctx.has_exception(), "object conversion left an exception pending");
+            let bytes = ctx.eval::<Value, _>("new Uint8Array([4, 5]).buffer").unwrap();
+            assert_eq!(to_val(&bytes), Val::Bytes(vec![4, 5]));
+            assert!(!ctx.has_exception(), "buffer conversion left an exception pending");
+            if ctx.eval::<bool, _>("typeof SharedArrayBuffer === 'function'").unwrap() {
+                let shared = ctx.eval::<Value, _>("new SharedArrayBuffer(2)").unwrap();
+                assert_eq!(to_val(&shared), Val::Bytes(vec![0, 0]));
+                assert!(!ctx.has_exception(), "shared buffer conversion left an exception pending");
+            }
+        });
+    }
 }
