@@ -103,20 +103,21 @@ measurements and reproducer. These paths still end in a wasm trap:
 - **JSC native recursion outside reentry.** On JSC-wasm, nested blocks, arrow
   functions and regexp groups spend about six times more host stack per
   shadow-stack byte than getters (block 1,248 host bytes per level against 550
-  shadow bytes). On wasmtime's default stack, blocks trap after 415 levels,
-  arrows after 208 and regexp groups after 1,119, the same as before the stack
-  PR. On the native launcher, plain `JSON.stringify` (`FastStringifier`) traps
-  after 974 levels, a `JSON.parse` reviver after 4,013 and `Array.prototype.flat`
-  after 2,473, also unchanged. In WebKit with 512 KiB worker stacks and cold code,
-  every parser nesting shape (unary, conditional and `if` chains too) and Proxy
-  chains without traps trap at 200,000 levels. Reproduce with `python3 scripts/measure-stack.py
-  --engine jsc block arrow regexpnc flat proxychain jsonplain reviver` (add
-  `--host launcher --launcher "$CARGO_TARGET_DIR/release/bun-wasm"`) and the
-  WebKit command in `docs/stack-limits.md`. Fix by reserving shadow bytes in those WebKit
+  shadow bytes). On wasmtime's default 512 KiB stack, blocks trap after 415
+  levels, arrows after 208 and regexp groups after 1,119, the same as before the
+  stack PR. In WebKit with 512 KiB worker stacks and cold code, every parser
+  nesting shape, regexp groups, `Array.prototype.flat`, Proxy chains without
+  traps and plain `JSON.stringify` (`FastStringifier`) trap at 200,000 levels.
+  On the native launcher's 16 MiB stack they all throw, except unary operator
+  chains (`!!!…0`), which trap after 80,618 levels at any budget. Reproduce
+  with `python3 scripts/measure-stack.py --engine jsc block arrow unary regexpnc
+  flat proxychain jsonplain` (add `--host launcher --launcher
+  "$CARGO_TARGET_DIR/release/bun-wasm"`) and the WebKit command in
+  `docs/stack-limits.md`. Fix by reserving shadow bytes in those WebKit
   functions, as `js_reserve_wasm_frame` does in `quickjs.c`, then measure the
-  ratios again. Shrinking the native budget instead would cut getter depth from
-  56 to about 30. JSC's `maxPerThreadStackUsage` option is not a substitute: in
-  the C-loop build it also sizes the JavaScript frame stack.
+  ratios again. Shrinking the native budget instead would cut getter depth
+  further. JSC's `maxPerThreadStackUsage` option is not a substitute: in the
+  C-loop build it also sizes the JavaScript frame stack.
 - **Bun's transpiler.** A module file with 2,000 nested array literals traps in
   `bun_js_parser` before QuickJS sees it (`const x = [[[...]]];`; 400 levels
   throw RangeError from QuickJS). `Bun__StackCheck__getMaxStack` in
@@ -124,12 +125,6 @@ measurements and reproducer. These paths still end in a wasm trap:
   `StackCheck::is_safe_to_recurse` always succeeds. Give the main thread a
   shadow-stack bound and measure the transpiler's host-per-shadow ratio before
   choosing it.
-- **Depth on larger hosts.** The default QuickJS budget catches plain recursion
-  at 501 calls on wasmtime, the launcher, Node and Chromium; wasmtime's CLI
-  still catches every path with 320 KiB of its 512 KiB stack, and Node's stack
-  is larger still. The launcher and the Node host could pass a larger
-  `BUN_WASM_STACK_KIB` (or raise `max_wasm_stack`) after measuring each path as
-  in `docs/stack-limits.md`.
 
 ## JSC subprocess disposal timing
 

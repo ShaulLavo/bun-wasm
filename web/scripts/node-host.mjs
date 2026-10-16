@@ -8,6 +8,7 @@
 // --net gives the program fetch, Bun.serve, node:http and node:net on real
 // sockets, like crates/bunwasm-host; without it, network APIs are missing as
 // under plain wasmtime (fetch still works, through Node's fetch).
+import { spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { registerHooks } from "node:module";
 import * as http from "node:http";
@@ -17,10 +18,23 @@ import * as zlib from "node:zlib";
 import { resolve, posix } from "node:path";
 import { WASI } from "node:wasi";
 import { fileURLToPath } from "node:url";
-import { Worker, workerData } from "node:worker_threads";
+import { Worker, isMainThread, workerData } from "node:worker_threads";
 import { installCliFetch } from "./node-install-net.mjs";
 import { memoryViews } from "../src/memory-views.js";
 import { SubprocessHost, childTransport } from "../src/subprocess.js";
+
+// V8's default stack limit (about 984 KB) also bounds wasm frames. Run once more with a larger
+// one, as the native launcher does, so deep guest recursion has room; Linux and macOS give the
+// main thread 8 MiB. Workers get Node's default 4 MB. The guest's stack budget fits both
+// (docs/stack-limits.md). An explicit --stack-size is kept.
+const STACK_KB = 4000;
+const GUEST_STACK_KIB = "1024";
+if (isMainThread && !process.execArgv.some((arg) => arg.startsWith("--stack-size"))) {
+  const rerun = [`--stack-size=${STACK_KB}`].concat(process.execArgv, [fileURLToPath(import.meta.url)], process.argv.slice(2));
+  const result = spawnSync(process.execPath, rerun, { stdio: "inherit" });
+  if (result.signal) process.kill(process.pid, result.signal);
+  process.exit(result.status ?? 1);
+}
 
 // The runtime replaces globalThis.process with its own; keep Node's.
 const nodeProcess = process;
@@ -59,6 +73,7 @@ if (Object.keys(preopens).length === 0) {
   preopens[process.cwd()] = process.cwd();
   env.PWD ??= process.cwd();
 }
+env.BUN_WASM_STACK_KIB ??= GUEST_STACK_KIB;
 
 const child = workerData?.bunwasmChild ? childTransport(workerData.transport) : null;
 let subprocess;
@@ -130,7 +145,7 @@ async function run() {
       validateCwd(meta.cwd);
       const worker = new Worker(new URL(import.meta.url), {
         workerData: { bunwasmChild: true, module, preopens, meta, transport, withNet },
-        resourceLimits: { maxOldGenerationSizeMb: 128 },
+        resourceLimits: { maxOldGenerationSizeMb: 128, stackSizeMb: 4 },
       });
       worker.on("error", onError);
       return worker;

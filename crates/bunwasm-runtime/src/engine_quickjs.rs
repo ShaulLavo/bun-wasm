@@ -119,9 +119,10 @@ impl QuickJs {
 }
 
 /// Bytes of C shadow stack QuickJS may use before it throws RangeError. It must
-/// trip before the host's separate wasm call stack runs out. The default is
-/// measured for wasmtime, Node and Chromium; a host with less call stack sets
-/// `BUN_WASM_STACK_KIB` (see docs/stack-limits.md).
+/// trip before the host's separate wasm call stack runs out. The default fits
+/// wasmtime's default 512 KiB stack and Chromium; hosts set `BUN_WASM_STACK_KIB`
+/// for their own stack: the launcher and the Node host raise it, browsers off
+/// V8 lower it (see docs/stack-limits.md).
 fn stack_budget() -> usize {
     let kib = std::env::var("BUN_WASM_STACK_KIB").ok().and_then(|v| v.parse::<usize>().ok());
     kib.filter(|&kib| kib > 0).unwrap_or(152) * 1024

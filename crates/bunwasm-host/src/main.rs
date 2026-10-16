@@ -106,9 +106,20 @@ fn wasm_path(options: &Options) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/bun.wasm")
 }
 
+/// Host call stack for wasm frames. wasmtime's 512 KiB default holds about
+/// 1,000 QuickJS calls; this launcher can afford far more (docs/stack-limits.md).
+pub(crate) const WASM_STACK: usize = 16 << 20;
+/// Native stack of every thread that runs an instance: the wasm stack plus room
+/// for the host functions it calls. The main thread's 8 MiB is too small.
+pub(crate) const THREAD_STACK: usize = WASM_STACK + (8 << 20);
+/// The guest engines' stack budget (`BUN_WASM_STACK_KIB`) that fits in
+/// `WASM_STACK`: every measured recursion path throws RangeError before it.
+const GUEST_STACK_KIB: &str = "4096";
+
 fn engine() -> Result<Engine> {
     let mut config = Config::new();
     config.epoch_interruption(true);
+    config.max_wasm_stack(WASM_STACK);
     match std::env::var("BUN_WASM_CACHE_DIR").ok().as_deref() {
         Some("off" | "0") => {}
         Some(dir) => {
@@ -161,13 +172,22 @@ fn run(options: Options) -> Result<i32> {
         }
     });
     let args = std::iter::once("bun".into()).chain(options.args).collect();
-    let result = run_instance(runtime, args, env, process::Stdio::inherited(), Arc::default());
+    let result = std::thread::Builder::new()
+        .name("bun-wasm".into())
+        .stack_size(THREAD_STACK)
+        .spawn(move || run_instance(runtime, args, env, process::Stdio::inherited(), Arc::default()))
+        .context("starting the guest thread")?
+        .join()
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("the guest thread panicked")));
     running.store(false, Ordering::Relaxed);
     let _ = ticker.join();
     result
 }
 
-fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, env: Vec<(String, String)>, stdio: process::Stdio, cancel: Arc<process::Cancellation>) -> Result<i32> {
+fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<(String, String)>, stdio: process::Stdio, cancel: Arc<process::Cancellation>) -> Result<i32> {
+    if !env.iter().any(|(k, _)| k == "BUN_WASM_STACK_KIB") {
+        env.push(("BUN_WASM_STACK_KIB".into(), GUEST_STACK_KIB.into()));
+    }
     let mut wasi = WasiCtxBuilder::new();
     wasi.args(&argv).envs(&env);
     stdio.install(&mut wasi, cancel.clone());

@@ -10,7 +10,7 @@ The module has three independent stacks:
 
 - **Host call stack.** The wasm engine keeps every function activation (its locals
   and spills) outside linear memory. Its size belongs to the host: wasmtime's
-  `max_wasm_stack` (512 KiB by default, also in `crates/bunwasm-host`), V8's stack
+  `max_wasm_stack` (512 KiB by default; 16 MiB in the native launcher), V8's stack
   limit in Node and Chromium, and the worker thread's stack in WebKit. The module
   cannot read how much of it is in use.
 - **C shadow stack.** Address-taken C and Rust locals, `alloca` and large structs live
@@ -62,10 +62,20 @@ function returns, so it needs no bookkeeping on error paths.
 
 The budget is the host's choice. `crates/bunwasm-runtime/src/engine_quickjs.rs`
 uses `BUN_WASM_STACK_KIB` when the host sets it, and 152 KiB otherwise. The same
-variable sets JSC's budget below; the two engines have different defaults. The native
-launcher, the wasmtime CLI, Node and Chromium catch every measured path with the
-default; the wasmtime CLI still does with a 320 KiB host stack instead of its
-512 KiB default. The browser worker (`web/src/worker.ts`) passes 40 KiB unless the
+variable sets JSC's budget below; the two engines have different defaults. The
+defaults fit wasmtime's 512 KiB default stack, so `wasmtime run` as in the README
+and Chromium catch every measured path; the wasmtime CLI still does with a 320 KiB
+host stack.
+
+Hosts we control give the guest more. The native launcher
+(`crates/bunwasm-host/src/main.rs`) sets `max_wasm_stack` to 16 MiB, runs every
+instance, children included, on a thread with a 24 MiB native stack, and passes
+4096 KiB to both engines. The Node host (`web/scripts/node-host.mjs`) reruns itself
+once with `--stack-size=4000`, about four times V8's default (Linux and macOS give
+the main thread 8 MiB; its child Workers keep Node's 4 MB), and passes 1024 KiB. A
+budget one and a half times as large still catches every path on both hosts.
+Browsers cannot raise their stacks; that is the platform limit behind their smaller
+depths. The browser worker (`web/src/worker.ts`) passes 40 KiB unless the
 page runs on V8. In WebKit with 512 KiB worker stacks and every function in its first
 tier, the tightest path (`JSON.stringify`) has room for 54 KiB of budget, so 40 KiB
 leaves 26% for iOS frame sizes, which cannot be measured here. Engines other than
@@ -90,7 +100,9 @@ Known gap: JSC's parser (every nesting shape), regular-expression compiler,
 `Array.prototype.flat`, `JSON.parse` revivers, Proxy chains without traps and the
 plain `JSON.stringify` fast path spend far more host stack per shadow byte than
 its reentry paths (parser blocks about six times more). Deeply nested input still
-traps there as it did before, for example blocks after 415 levels on wasmtime. Fixing
+traps there as it did before, for example blocks after 415 levels on wasmtime. On the
+native launcher's 16 MiB stack they throw instead, except unary operator chains, which
+trap after 80,618 levels at any budget. Fixing
 them needs reservations in WebKit, like those in QuickJS. See
 `plans/compatibility-followups.md`.
 
@@ -117,52 +129,55 @@ Main paths, before and after:
 | Engine, host | Plain | Getter | Proxy trap | `JSON.stringify` | Promise callback | Console |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | QuickJS, wasmtime CLI | trap 1,011 → 501 | trap 703 → 381 | trap 634 → 226 | trap 2,479 → 1,353 | trap 1,020 → 512 | trap → ok |
-| QuickJS, native launcher | trap 873 → 501 | trap 598 → 381 | trap 577 → 226 | trap 2,010 → 1,353 | trap 882 → 512 | trap → ok |
-| QuickJS, Node host | trap 1,835 → 501 | trap 1,287 → 381 | trap 1,248 → 226 | trap 4,983 → 1,353 | trap 1,844 → 512 | trap → ok |
+| QuickJS, native launcher | trap 873 → 13,786 | trap 598 → 10,477 | trap 577 → 6,236 | trap 2,010 → 37,413 | trap 882 → 13,797 | trap → ok |
+| QuickJS, Node host | trap 1,835 → 3,439 | trap 1,287 → 2,613 | trap 1,248 → 1,555 | trap 4,983 → 9,326 | trap 1,844 → 3,449 | trap → ok |
 | QuickJS, Chromium | trap 923 → 501 | trap 660 → 381 | trap 640 → 226 | trap 2,842 → 1,353 | → 512 | → ok |
 | QuickJS, WebKit 512 | trap 644 → 124 | trap 481 → 94 | trap 291 → 56 | trap 1,773 → 329 | → 135 | → ok |
 | QuickJS, WebKit 512 first run | trap 286 → 124 | trap 140 → 94 | trap 143 → 56 | trap 483 → 329 | → 135 | → ok |
 | JSC, wasmtime CLI | 63,887 → 63,887 | trap 244 → 56 | trap 222 → 54 | 39,999 → 39,999 | 63,896 → 63,896 | ok → ok |
-| JSC, native launcher | 63,887 → 63,887 | trap 136 → 56 | trap 126 → 54 | 39,999 → 39,999 | 63,896 → 63,896 | ok → ok |
-| JSC, Node host | 63,887 → 63,887 | trap 783 → 56 | trap 737 → 54 | 39,999 → 39,999 | 63,896 → 63,896 | ok → ok |
+| JSC, native launcher | 63,887 → 63,887 | trap 136 → 731 | trap 126 → 695 | 39,999 → 39,999 | 63,896 → 63,896 | ok → ok |
+| JSC, Node host | 63,887 → 63,887 | trap 783 → 182 | trap 737 → 173 | 39,999 → 39,999 | 63,896 → 63,896 | ok → ok |
 | JSC, Chromium | 63,887 → 63,887 | trap 389 → 56 | trap 361 → 54 | 39,999 → 39,999 | → 63,896 | → ok |
 | JSC, WebKit 512 | 63,887 → 63,887 | trap 82 → 39 | trap 71 → 37 | 39,999 → 39,999 | → 63,896 | → ok |
 | JSC, WebKit 512 first run | → 63,887 | trap 57 → 39 | trap 58 → 37 | → 39,999 | → 63,896 | → ok |
-| Browser-native, Node host | 11,403 | 2,986 | 2,917 | 5,667 | 11,422 | ok |
+| Browser-native, Node host | 11,403 → 46,498 | 2,986 → 12,178 | 2,917 → 11,894 | 5,667 → 23,215 | 11,422 → 46,517 | ok |
 | Browser-native, Chromium | 7,811 | 2,959 | 1,692 | 2,611 | 8,519 | ok |
 | Browser-native, WebKit 512 | 3,410 | 1,654 | 277 | 39,999 | 3,420 | ok |
 
 Blank "before" cells were not measured. The QuickJS "first run" before row was
 measured on a build whose 152 KiB guard does not trip in that tier, so it shows where
 the host stack ran out. WebKit rows use the budgets the browser passes off V8
-(40 KiB QuickJS, 224 KiB JSC); Chromium uses the defaults. The browser-native
-engine does not change; its counts vary by a few percent between runs as the host JIT
-tiers up. WebKit on Linux with its default 8 MiB
+(40 KiB QuickJS, 224 KiB JSC); Chromium uses the defaults. The launcher passes
+4096 KiB and the Node host 1024 KiB with its larger V8 stack, which also deepens the
+browser-native engine there. Otherwise the browser-native engine does not change; its
+counts vary by a few percent between runs as the host JIT tiers up. JSC getters on the
+Node host stay below their old trap depth: 783 levels would need about 4.4 MiB of
+budget, and JSC's parser paths would then overflow the 4 MB V8 stack. WebKit on Linux with its default 8 MiB
 threads trapped QuickJS after 8,850 plain calls before and catches at 124 after: it
 gets the 40 KiB budget because it is JavaScriptCore.
 
-Other QuickJS paths. "Before" is the native launcher; "after" is the same on every
-host with that budget:
+Other QuickJS paths. "Before" is the native launcher; the 152 and 40 KiB columns are
+the same on every host with that budget:
 
-| Path | Before | After, 152 KiB | After, 40 KiB |
-| --- | ---: | ---: | ---: |
-| `JSON.stringify` without replacer | trap 2,010 | 1,356 | 332 |
-| `JSON.parse` | trap 2,683 | 1,346 | 322 |
-| `JSON.parse` with reviver | trap 2,013 | 862 | 210 |
-| Nested array literals in source | trap 243 | 162 | 38 |
-| Nested blocks | trap 1,038 | 628 | 150 |
-| Nested arrow functions | trap 185 | 126 | 29 |
-| Unary operator chain | trap 2,911 | 1,560 | 365 |
-| `**` chain | trap 2,912 | 1,560 | 365 |
-| Conditional operator chain | trap 2,288 | 936 | 219 |
-| `if` chain | trap 1,457 | 781 | 183 |
-| Regexp groups (SyntaxError) | trap 1,536 | 864 | 212 |
-| Proxy chain without traps | trap 1,700 | 414 | 102 |
-| Bound function chain | trap 645 | 352 | 86 |
-| Nested arrays to string | trap 222 | 134 | 32 |
-| `Array.prototype.flat` | trap 2,149 | 863 | 211 |
-| `toString` reentry | trap 258 | 156 | 38 |
-| Async recursion | trap 335 | 190 | 47 |
+| Path | Before | After, 152 KiB | After, 40 KiB | After, launcher (4096 KiB) |
+| --- | ---: | ---: | ---: | ---: |
+| `JSON.stringify` without replacer | trap 2,010 | 1,356 | 332 | 37,416 |
+| `JSON.parse` | trap 2,683 | 1,346 | 322 | 37,406 |
+| `JSON.parse` with reviver | trap 2,013 | 862 | 210 | 23,809 |
+| Nested array literals in source | trap 243 | 162 | 38 | 4,514 |
+| Nested blocks | trap 1,038 | 628 | 150 | 17,456 |
+| Nested arrow functions | trap 185 | 126 | 29 | 3,537 |
+| Unary operator chain | trap 2,911 | 1,560 | 365 | 43,629 |
+| `**` chain | trap 2,912 | 1,560 | 365 | 43,629 |
+| Conditional operator chain | trap 2,288 | 936 | 219 | 26,177 |
+| `if` chain | trap 1,457 | 781 | 183 | 21,815 |
+| Regexp groups (SyntaxError) | trap 1,536 | 864 | 212 | 23,811 |
+| Proxy chain without traps | trap 1,700 | 414 | 102 | 11,389 |
+| Bound function chain | trap 645 | 352 | 86 | completes at 2,000 |
+| Nested arrays to string | trap 222 | 134 | 32 | 3,740 |
+| `Array.prototype.flat` | trap 2,149 | 863 | 211 | 23,810 |
+| `toString` reentry | trap 258 | 156 | 38 | 4,294 |
+| Async recursion | trap 335 | 190 | 47 | 5,238 |
 
 With the 152 KiB default, every path is still caught when wasmtime's stack is cut
 to 320 KiB; at 256 KiB plain calls trap. The QuickJS fixture suite passes with
