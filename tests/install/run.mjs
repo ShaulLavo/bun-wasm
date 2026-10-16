@@ -62,6 +62,27 @@ function installed(directory, name) {
 }
 
 const cases = {
+  async wasmDistributions() {
+    const directory = project("wasm-distributions", { dependencies: { esbuild: "0.25.12", "uses-esbuild": "1.0.0" } });
+    await bun(directory, ["install"]);
+    assert.equal(installed(directory, "esbuild").name, "esbuild-wasm");
+    assert.equal(installed(directory, "esbuild").version, "0.25.12");
+    const result = await bun(directory, ["-e", "console.log(require('esbuild'), require('uses-esbuild'))"]);
+    assert.equal(result.stdout.trim(), "esbuild-wasm@0.25.12 esbuild-wasm@0.25.12");
+    const lock = readFileSync(join(directory, "bun.lock"), "utf8");
+    assert.match(lock, /esbuild-wasm@0\.25\.12/);
+    rmSync(join(directory, "node_modules"), { recursive: true });
+    registry.setOffline(true);
+    try { await bun(directory, ["install", "--frozen-lockfile"]); }
+    finally { registry.setOffline(false); }
+    assert.equal(installed(directory, "esbuild").name, "esbuild-wasm");
+    assert.equal(readFileSync(join(directory, "bun.lock"), "utf8"), lock);
+    const transitive = project("wasm-transitive", { dependencies: { "uses-esbuild": "1.0.0" } });
+    await bun(transitive, ["install"]);
+    assert.equal(installed(transitive, "esbuild").name, "esbuild-wasm");
+    const missing = project("wasm-missing", { dependencies: { esbuild: "0.25.11" } });
+    assert.match((await bun(missing, ["install"], false)).output, /No version matching.*0\.25\.11.*esbuild-wasm/);
+  },
   async aliases() {
     const directory = project("aliases", { name: "install-fixture", dependencies: { "is-odd": "3.0.1" } });
     const result = await bun(directory, ["i"]);
@@ -275,8 +296,8 @@ try {
   registry = await createRegistry();
   const wanted = process.env.INSTALL_CASES?.split(",") ?? Object.keys(cases);
   for (const name of wanted) {
-    if (process.env.INSTALL_NATIVE_BUN === "1" && name === "idleTimeout") {
-      console.log("skip idleTimeout (bun-wasm host bridge check)"); skipped++; continue;
+    if (process.env.INSTALL_NATIVE_BUN === "1" && ["idleTimeout", "wasmDistributions"].includes(name)) {
+      console.log(`skip ${name} (bun-wasm platform check)`); skipped++; continue;
     }
     try { assert.ok(cases[name], `unknown install case ${name}`); await cases[name](); console.log(`ok ${name}`); passed++; }
     catch (error) { console.error(`FAIL ${name}\n${error.stack}`); failed++; }
