@@ -345,6 +345,20 @@ fn wasm_memory_bytes() -> f64 {
     }
 }
 
+fn utf16_string_val(value: &Value<'_>) -> Val {
+    let mut len = 0;
+    // SAFETY: value is a live string in this context; QuickJS owns the returned buffer.
+    let ptr = unsafe { qjs::JS_ToCStringLenUTF16(value.ctx().as_raw().as_ptr(), &mut len, value.as_raw()) };
+    if ptr.is_null() {
+        return Val::Undefined;
+    }
+    // SAFETY: the buffer contains len UTF-16 units and remains alive until FreeCStringUTF16.
+    let text = unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len as usize)) };
+    // SAFETY: ptr is the buffer returned by QuickJS in this context, freed exactly once.
+    unsafe { qjs::JS_FreeCStringUTF16(value.ctx().as_raw().as_ptr(), ptr) };
+    Val::Str(text)
+}
+
 /// JS -> plain data.
 fn to_val(v: &Value<'_>) -> Val {
     if v.is_undefined() {
@@ -360,7 +374,7 @@ fn to_val(v: &Value<'_>) -> Val {
         return Val::Num(n);
     }
     if let Some(s) = v.as_string() {
-        return s.to_string().map(Val::Str).unwrap_or(Val::Undefined);
+        return s.to_string().map(Val::Str).unwrap_or_else(|_| utf16_string_val(v));
     }
     if let Some(b) = v.as_big_int() {
         return b.clone().to_i64().map(Val::BigInt).unwrap_or(Val::Undefined);
