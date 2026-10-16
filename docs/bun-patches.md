@@ -34,6 +34,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, async context](#quickjs) | Host feature | Capture and restore async context in promise reactions. |
 | [`third_party/rquickjs-sys/build.rs`](#quickjs) | Host feature | Rebuild when the locally patched C sources or binding header change. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, WASI stack checks](#wasm-stack-guards) | Port | Restore the stack checks on WASI and reserve shadow stack for host frames, so recursion throws before the host wasm stack runs out. |
+| [`third_party/rquickjs-sys/quickjs/libregexp.c`, WASI stack reservation](#wasm-stack-guards) | Port | Reserve shadow stack per regexp group nesting level, so the parser's stack check trips before the host wasm stack runs out. |
 | [`jsc/webkit-wasi.patch`, `StackBounds.cpp` budget](#wasm-stack-guards) | Port | Bound JSC's native recursion to a host-configurable budget below the host wasm stack. |
 | [Console recursion fixture](#wasm-stack-guards) | Port | Adapt Bun's console-constructor stack exhaustion control to a standalone fixture. |
 | [`jsc/build-icu.sh`, makefile rewrite](#icu) | Port | Select a usable cross-build makefile without native assembly output. |
@@ -810,7 +811,8 @@ in the recursive functions whose host frames are larger than their shadow
 frames: the JSON serializer, parser and reviver, `Array.prototype.flat`, Proxy
 traps (through `get_proxy_method`, renamed `get_proxy_method1` behind a
 macro), bound and async calls, `ToPrimitive`, `JS_Call`, `JS_CallFree`, and
-the expression, unary and statement parsers. Sizes are measured per path; no
+the expression, unary and statement parsers, and `re_parse_disjunction` in
+`libregexp.c` through the same macro there. Sizes are measured per path; no
 upstream algorithm or error changes. Our Rust engine adapter requests the
 measured stack budget. It is original adapter code and retains no upstream
 implementation.
