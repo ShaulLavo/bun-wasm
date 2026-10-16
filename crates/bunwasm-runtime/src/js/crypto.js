@@ -172,6 +172,7 @@
   function generate(a, extractable, usages) {
     a = algorithm(a);
     usages = Array.from(new Set(usages));
+    if (a.name === "HMAC") requiredHash(a);
     if (a.name.startsWith("AES-") || a.name === "HMAC") {
       const length =
         a.name === "HMAC"
@@ -217,10 +218,10 @@
     };
   }
   function jwkAlg(a) {
-    if (a.name === "HMAC") return `HS${sizes[requiredHash(a).name]}`;
-    if (a.name === "RSA-PSS") return `PS${sizes[requiredHash(a).name]}`;
-    if (a.name === "RSASSA-PKCS1-v1_5")
-      return `RS${sizes[requiredHash(a).name]}`;
+    const suffix = a.hash?.name === "SHA-1" ? 1 : sizes[a.hash?.name];
+    if (a.name === "HMAC") return `HS${suffix}`;
+    if (a.name === "RSA-PSS") return `PS${suffix}`;
+    if (a.name === "RSASSA-PKCS1-v1_5") return `RS${suffix}`;
     if (a.name === "RSA-OAEP")
       return a.hash.name === "SHA-1"
         ? "RSA-OAEP"
@@ -542,7 +543,7 @@
     }
   }
   const cryptoObject = globalThis.crypto;
-  const subtleInstance = Object.create(SubtleCrypto.prototype);
+  const subtleInstance = native.subtleCrypto || Object.create(SubtleCrypto.prototype);
   class Crypto {
     constructor() {
       throw new TypeError("Illegal constructor");
@@ -576,7 +577,7 @@
   return (defineGlobal) => {
     defineGlobal("Crypto", Crypto);
     Object.setPrototypeOf(globalThis.crypto, Crypto.prototype);
-    defineGlobal("CryptoKey", CryptoKey);
-    defineGlobal("SubtleCrypto", SubtleCrypto);
+    defineGlobal("CryptoKey", native.subtleCrypto ? native.CryptoKey : CryptoKey);
+    defineGlobal("SubtleCrypto", native.subtleCrypto ? native.SubtleCrypto : SubtleCrypto);
   };
 });

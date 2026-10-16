@@ -692,3 +692,13 @@ console contract without changing the engine's global Error constructor.
 Bootstrap captures its default stack formatter identity for this adapter.
 An installed user formatter stays authoritative; the runtime's own default
 frame-only formatter still receives the Console Trace header.
+
+### WebCrypto review corrections
+
+The original host adapter captures SubtleCrypto and its key constructors before bootstrap
+replaces globals. The browser engine exposes that same provider; QuickJS and wasm JSC use
+the shared RustCrypto/BoringSSL adapter. No browser cryptographic operation is replaced.
+SHA-1 JWK identifiers are HS1, RS1 and PS1. HMAC generation validates the required hash
+before allocating key material. The ECDSA adapter left-pads short P-384 prehashes with zeros,
+preserving the integer defined by ECDSA while meeting ecdsa 0.16.9's prehash input bound.
+No upstream source was copied or changed for these corrections.

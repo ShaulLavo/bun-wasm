@@ -514,7 +514,13 @@ fn sign(q: &J) -> Result<J> {
     }
 }
 fn ec_sign(a: &J, k: &J, input: &[u8], sig: &[u8], verify: bool) -> Result<J> {
-    let digest = hash(a, input)?;
+    let mut digest = hash(a, input)?;
+    // RustCrypto rejects short prehashes. Left padding preserves ECDSA's digest integer.
+    if text(a, "namedCurve")? == "P-384" && digest.len() < 48 {
+        let mut padded = vec![0; 48 - digest.len()];
+        padded.extend_from_slice(&digest);
+        digest = padded;
+    }
     macro_rules! curve { ($c:ident) => {{
         if !verify {
             let key=data($c::ecdsa::SigningKey::from_slice(&bytes(k,"d")?))?;

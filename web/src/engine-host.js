@@ -19,6 +19,9 @@ import { memoryViews } from "./memory-views.js";
 // Plain JS (no TypeScript) so Node can import it directly.
 
 // The host's own versions of what the polyfills replace on globalThis.
+const nativeSubtleCrypto = globalThis.crypto?.subtle;
+const NativeCryptoKey = globalThis.CryptoKey;
+const NativeSubtleCrypto = globalThis.SubtleCrypto;
 const NativeTextEncoder = globalThis.TextEncoder;
 const NativeTextDecoder = globalThis.TextDecoder;
 const NativeBlob = globalThis.Blob;
@@ -366,6 +369,9 @@ class EngineHost {
       net.onNews(() => this.schedule(0));
     }
     native.engine = "host";
+    native.subtleCrypto = nativeSubtleCrypto;
+    native.CryptoKey = NativeCryptoKey;
+    native.SubtleCrypto = NativeSubtleCrypto;
     Object.assign(native, this.valueNatives());
     return native;
   }
