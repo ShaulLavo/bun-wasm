@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { FilesystemClient, FilesystemService, MemoryBackend, SharedFilesystemState, createFilesystemConnection } from "../fs";
+import { FilesystemClient, FilesystemService, MemoryBackend, createFilesystemConnection } from "../fs";
 import { DEFAULT_SHARED_MAX_BYTES, errno } from "../fs/protocol";
 
 const MiB = 1024 * 1024;
@@ -31,8 +31,16 @@ test("shared files cross multiple 16 MiB segments and return their pages on remo
   } finally { client.dispose(); service.dispose(); }
 });
 
-test("a single file can address the whole storage cap without a dense per-file table", () => {
-  const state = new SharedFilesystemState();
-  expect(state.buffer.byteLength).toBeLessThanOrEqual(24 * MiB);
-  expect(() => state.grow(0, DEFAULT_SHARED_MAX_BYTES + 1)).toThrow();
+test("oversized growth reaches the caller as EFBIG and leaves the file usable", async () => {
+  const service = new FilesystemService(new MemoryBackend());
+  const pair = createFilesystemConnection();
+  service.connect(pair.server);
+  const client = new FilesystemClient(pair.client);
+  try {
+    await client.asyncCall("writeFile", ["/file"], new Uint8Array([7]));
+    const root = await client.asyncCall("preopen", ["/"]);
+    const path = await client.asyncCall("resolve", [root, "file"]);
+    expect(await client.asyncCall("grow", [path.node, DEFAULT_SHARED_MAX_BYTES + 1]).catch(error => error)).toMatchObject({ errno: 22 });
+    expect(await client.asyncCall("readFile", ["/file"])).toEqual(new Uint8Array([7]));
+  } finally { client.dispose(); service.dispose(); }
 });
