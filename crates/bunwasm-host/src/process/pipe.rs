@@ -124,7 +124,7 @@ impl AsyncWrite for Pipe {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<io::Result<usize>> {
         let mut state = self.state.lock().unwrap();
         if state.reader_closed || state.eof {
-            return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
+            return Poll::Ready(Err(io::Error::from_raw_os_error(libc::EPIPE)));
         }
         let count = bytes.len().min(CAPACITY - state.bytes.len());
         if count == 0 && !bytes.is_empty() {
@@ -144,5 +144,22 @@ impl AsyncWrite for Pipe {
     fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.close_writer();
         Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode;
+
+    #[test]
+    fn closed_pipe_keeps_wasi_epipe() {
+        let mut pipe = Pipe::new(crate::net::Net::new().notify());
+        pipe.close_reader();
+        let mut context = Context::from_waker(Waker::noop());
+        let Poll::Ready(Err(error)) = Pin::new(&mut pipe).poll_write(&mut context, b"output") else {
+            panic!("closed pipe did not reject a write");
+        };
+        assert!(matches!(ErrorCode::from(error), ErrorCode::Pipe));
     }
 }

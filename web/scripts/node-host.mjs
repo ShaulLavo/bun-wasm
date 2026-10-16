@@ -20,7 +20,8 @@ import { fileURLToPath } from "node:url";
 import { Worker, isMainThread, workerData } from "node:worker_threads";
 import { installCliFetch } from "./node-install-net.mjs";
 import { memoryViews } from "../../runtime/core/memory-views.js";
-import { SubprocessHost, childTransport } from "../src/subprocess.js";
+import { SubprocessHost, childTransport, wasiPipe } from "../src/subprocess.js";
+import { forwardOutput, writeStdio } from "./node-stdio.ts";
 
 // V8's stack limit also bounds wasm frames, and the main thread's (about 984 KB) is small. Every
 // guest, the top-level one included, runs in a Worker whose thread Node creates with this stack,
@@ -95,7 +96,7 @@ function finish(code) {
   nodeProcess.exit(code);
 }
 
-function installChildStdio(imports, getInstance) {
+function installStdio(imports, getInstance) {
   const originalRead = imports.wasi_snapshot_preview1.fd_read;
   const originalWrite = imports.wasi_snapshot_preview1.fd_write;
   let memory;
@@ -108,7 +109,7 @@ function installChildStdio(imports, getInstance) {
     });
   };
   imports.wasi_snapshot_preview1.fd_read = (fd, ptr, count, result) => {
-    if (fd !== 0 || workerData.meta.stdin === "inherit" && !workerData.transport.inheritedStdin) return originalRead(fd, ptr, count, result);
+    if (!child || fd !== 0 || workerData.meta.stdin === "inherit" && !workerData.transport.inheritedStdin) return originalRead(fd, ptr, count, result);
     const chunks = vectors(ptr, count);
     const bytes = child.stdin.readBlocking(chunks.reduce((n, chunk) => n + chunk.length, 0));
     let at = 0;
@@ -124,8 +125,9 @@ function installChildStdio(imports, getInstance) {
   imports.wasi_snapshot_preview1.fd_write = (fd, ptr, count, result) => {
     if (fd !== 1 && fd !== 2) return originalWrite(fd, ptr, count, result);
     const chunks = vectors(ptr, count);
-    for (const chunk of chunks) child[fd === 2 ? "stderr" : "stdout"].writeAll(chunk);
-    views().view().setUint32(result, chunks.reduce((n, chunk) => n + chunk.length, 0), true);
+    const written = child ? wasiPipe(child[fd === 2 ? "stderr" : "stdout"], "write").write(chunks) : writeStdio(fd, chunks);
+    if (written < 0) return -written;
+    views().view().setUint32(result, written, true);
     return 0;
   };
 }
@@ -148,8 +150,8 @@ async function run() {
     token: workerData?.transport?.token,
     stdin: child && (workerData.meta.stdin !== "inherit" || workerData.transport.inheritedStdin) ? workerData.transport.pipes[0] : undefined,
     output: (fd, bytes) => {
-      if (child) child[fd === 2 ? "stderr" : "stdout"].writeAll(bytes);
-      else writeSync(fd === 2 ? 2 : 1, bytes);
+      if (child) return wasiPipe(child[fd === 2 ? "stderr" : "stdout"], "write").write([bytes]) === bytes.length;
+      return forwardOutput(fd === 2 ? 2 : 1, bytes);
     },
     launch: (meta, transport, onError) => {
       validateCwd(meta.cwd);
@@ -164,7 +166,7 @@ async function run() {
   const wasi = new WASI({ version: "preview1", args: ["bun"].concat(args), env, preopens, returnOnExit: true });
   const imports = wasi.getImportObject();
   let instance;
-  if (child) installChildStdio(imports, () => instance);
+  installStdio(imports, () => instance);
   if (withNet) cliFetch = installCliFetch(imports, () => instance);
   instance = await WebAssembly.instantiate(module, imports);
   cliFetch?.install();

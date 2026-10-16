@@ -1,0 +1,2 @@
+stdout callback, callback tick, event; EPIPE -32 write
+stderr callback, callback tick, event; EPIPE -32 write
