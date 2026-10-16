@@ -23,7 +23,13 @@ try {
   request.destroy();
   assert.equal(request.destroyed, true);
   const lateError = await new Promise(resolve => request.write("late", resolve));
-  assert.equal(lateError.code, "ERR_STREAM_DESTROYED");
+  assert.equal(lateError.code, "ERR_STREAM_WRITE_AFTER_END");
+  const destroyed = http.request({ hostname: "127.0.0.1", port: server.address().port });
+  destroyed.on("error", () => {});
+  destroyed.destroy();
+  assert.equal(destroyed.destroyed, true);
+  const destroyedError = await new Promise(resolve => destroyed.write("late", resolve));
+  assert.equal(destroyedError.code, "ERR_STREAM_DESTROYED");
   console.log("destroyed HTTP request rejects writes");
 } finally {
   request?.destroy();
