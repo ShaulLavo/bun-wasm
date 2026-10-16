@@ -88,6 +88,7 @@ export class PersistentBackend extends MemoryBackend {
       if (node.kind === "dir") for (const child of node.children.values()) this.changeLinks(child, -1);
     }
   }
+  protected isLinked(node: Node): boolean { return this.nodes.has(node.ino); }
   /** Dead handles are no longer enumerable in shared memory; prune their private owners too. */
   private pruneDetached(): void {
     for (const [handle, node] of this.registeredNodes) if (this.shared.revision(handle) === undefined) {

@@ -48,6 +48,7 @@ export class MemoryBackend implements FilesystemBackend {
       this.directoryTimes.set(handle, stat.mtime);
     }
   }
+  protected isLinked(node: Node): boolean { return this.fs.hasNode(node); }
   retain(handle: number): void { this.check(handle); this.fs.retain(handle); this.shared.retain(handle); }
   release(handle: number): void { this.shared.release(handle); this.fs.release(handle); }
   private check(handle: number, kind?: "file" | "directory"): void {
@@ -109,14 +110,14 @@ export class MemoryBackend implements FilesystemBackend {
         this.path(a); const handle = a.node;
         const removed = handle === undefined ? undefined : this.fs.nodeForHandle(handle);
         const result = this.fs.removePath(a, b);
-        if (!result && handle !== undefined && removed && !this.fs.hasNode(removed)) this.shared.unlink(handle);
+        if (!result && handle !== undefined && removed && !this.isLinked(removed)) this.shared.unlink(handle);
         return result;
       }
       case "rename": {
         this.path(a); this.path(b); const target = b.node;
         const replaced = target === undefined ? undefined : this.fs.nodeForHandle(target);
         const result = this.fs.rename(a, b);
-        if (!result && target !== undefined && target !== a.node && replaced && !this.fs.hasNode(replaced)) this.shared.unlink(target);
+        if (!result && target !== undefined && target !== a.node && replaced && !this.isLinked(replaced)) this.shared.unlink(target);
         return result;
       }
       case "lookup": {
@@ -160,7 +161,7 @@ export class MemoryBackend implements FilesystemBackend {
         const node = this.fs.lookup(a);
         if (node) collect(node);
         const result = this.fs.remove(a);
-        if (result) for (const entry of detached) if (!this.fs.hasNode(entry.node)) this.shared.unlink(entry.handle);
+        if (result) for (const entry of detached) if (!this.isLinked(entry.node)) this.shared.unlink(entry.handle);
         return result;
       }
       case "listFiles": return this.fs.listFiles(a);
@@ -173,7 +174,7 @@ export class MemoryBackend implements FilesystemBackend {
         const target = to.node;
         const replaced = target === undefined ? undefined : this.fs.nodeForHandle(target);
         const result = this.fs.rename(from, to);
-        if (!result && target !== undefined && target !== from.node && replaced && !this.fs.hasNode(replaced)) this.shared.unlink(target);
+        if (!result && target !== undefined && target !== from.node && replaced && !this.isLinked(replaced)) this.shared.unlink(target);
         return result;
       }
       default: throw new FilesystemError(52, `unknown filesystem operation ${operation}`);

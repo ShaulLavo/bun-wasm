@@ -240,11 +240,13 @@ test("full replacement and truncate-to-zero do not load discarded cold contents"
   expect((await second.client.asyncCall("readFile", ["/truncate"])).length).toBe(0);
 });
 
-test("a single rename does not walk the cold namespace during checkpoint", async () => {
+test("rename replacement and removal do not walk the unrelated cold namespace", async () => {
   const store = new Store();
   const first = await fixture(store);
   for (let i = 0; i < 100; i++) await first.client.asyncCall("writeFile", [`/cold${i}/a`], encode("cold"));
   await first.client.asyncCall("writeFile", ["/a"], encode("hot"));
+  await first.client.asyncCall("writeFile", ["/renamed"], encode("replaced"));
+  await first.client.asyncCall("writeFile", ["/removed"], encode("removed"));
   await first.client.asyncCall("flush");
   const second = await fixture(store);
   const children = second.backend.fs.root.children;
@@ -252,6 +254,7 @@ test("a single rename does not walk the cold namespace during checkpoint", async
   let walks = 0;
   children.values = () => { walks++; return values(); };
   await second.client.asyncCall("move", ["/a", "/renamed"]);
+  await second.client.asyncCall("remove", ["/removed"]);
   await second.client.asyncCall("flush");
   expect(walks).toBe(0);
   expect(store.reads).toBe(0);
