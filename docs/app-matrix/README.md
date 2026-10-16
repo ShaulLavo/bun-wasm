@@ -623,3 +623,19 @@ and the before/after result files are in
 change is recorded in `integration-before-fs.sha256`. Both runs report cleanup
 complete and zero registry misses or errors. The coordinator removes this review
 evidence after accepting the PR and finishing independent verification.
+
+### Directory hard-exit review
+
+The second directory review adds retained-instance checks for browser-host
+`process.reallyExit`, abort and self-kill. With the reviewed host implementation,
+each leaves ten native cursors and ten WASI descriptors open. `EngineHost.exit`
+now releases the table before notifying the host, and all 13 host observations
+pass. After exit, the same retained instance can open and close a directory using
+a released descriptor. Ordinary fatal-error handling remains a control that runs
+its exit listeners; hard exits continue to skip them.
+
+The browser-engine GC observations use Node/V8 with `--expose-gc`. Real browser
+workers have no forced-GC hook. The Chromium/WebKit web and HMR gates are separate
+checks of browser behavior, not evidence of forced collection in those workers.
+The second-review red/green logs are retained in
+`/work/reports/bun-wasm-rv28-round2-20261016/`.
