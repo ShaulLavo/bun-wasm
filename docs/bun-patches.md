@@ -516,9 +516,12 @@ Class **Host feature**. `scripts/generate-bun-builtins.mjs`, its shell runner, t
 `crates/bunwasm-runtime/src/crypto.rs` links RustCrypto primitives and its maintained JWK,
 PKCS#8 and SPKI parsers. Cargo.lock pins the dependency revisions. Bun's BoringSSL pin `41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f` handles RSA signing,
 verification and OAEP encryption and decryption through the original `c/rsa.c` adapter.
-RustCrypto RSA is used for key generation and format parsing, never private-key operations.
-Its documented RUSTSEC-2023-0071 timing issue rules out using it for signing or decryption.
-`scripts/sync-crypto.sh` downloads the unmodified source. The build disables assembly,
+BoringSSL also owns RSA key generation, component validation and PKCS#1 parsing. The
+RustCrypto RSA dependency is excluded because it documents RUSTSEC-2023-0071. The maintained
+RustCrypto PKCS#8 and SPKI parsers handle the outer key-format envelopes.
+`scripts/sync-crypto.sh` downloads the unmodified source. The old `OPENSSL_free` placeholder
+in `crates/bunwasm-glue/src/extra.rs` is removed so Bun and this adapter use BoringSSL's actual
+allocator interface. The build disables assembly,
 threads and socket BIOs on WASI, as in the earlier successful runtime spike.
 
 The original request adapter
@@ -543,6 +546,6 @@ comparison with wasm. No upstream test implementation is copied.
 `src/js/crypto_keys.js` is an original adapter, not copied Bun or Node code. It shares the
 WebCrypto backend while providing synchronous Node operations, Writable signing objects,
 PEM encoding and WebCrypto key conversions. `src/crypto.rs` adds Node's PKCS#1 and SEC1
-formats through the maintained RustCrypto parsers and converts ECDSA signatures between DER
+formats through the BoringSSL and RustCrypto parsers and converts ECDSA signatures between DER
 and IEEE P1363. Bun's Node crypto builtin requires a native binding, so loading its generated
 JavaScript alone cannot supply this behavior. The new fixture is original test code.

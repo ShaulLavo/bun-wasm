@@ -2,13 +2,9 @@ use aes::cipher::{
     BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher, block_padding::Pkcs7,
 };
 use aes::cipher::{BlockEncrypt, KeyInit};
-use ed25519_dalek::{Signer, Verifier};
+use ed25519_dalek::Signer;
 use pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use rand_core::OsRng;
-use rsa::pkcs1::{
-    DecodeRsaPrivateKey, DecodeRsaPublicKey, EncodeRsaPrivateKey, EncodeRsaPublicKey,
-};
-use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use serde_json::{Value as J, json};
 use signature::hazmat::{PrehashSigner, PrehashVerifier};
 use spki::{DecodePublicKey, EncodePublicKey};
@@ -42,9 +38,6 @@ fn b64(b: &[u8]) -> String {
 fn output(b: impl AsRef<[u8]>) -> J {
     json!({"data":b64(b.as_ref())})
 }
-fn big(v: &J, key: &str) -> Result<rsa::BigUint> {
-    Ok(rsa::BigUint::from_bytes_be(&bytes(v, key)?))
-}
 fn hash(alg: &J, input: &[u8]) -> Result<Vec<u8>> {
     crate::encoding::digest(text(alg, "hash")?, input).ok_or("NotSupportedError")
 }
@@ -72,36 +65,154 @@ fn dispatch(q: &J) -> Result<J> {
     }
 }
 
-fn rsa_private(k: &J) -> Result<rsa::RsaPrivateKey> {
-    let primes = if k["p"].is_string() && k["q"].is_string() {
-        vec![big(k, "p")?, big(k, "q")?]
-    } else {
-        vec![]
+struct RsaKey(*mut std::ffi::c_void);
+unsafe extern "C" {
+    fn bunwasm_rsa_generate(bits: i32, exponent: *const u8, len: usize) -> *mut std::ffi::c_void;
+    fn bunwasm_rsa_free(key: *mut std::ffi::c_void);
+    fn bunwasm_rsa_from_jwk(
+        fields: *const *const u8,
+        lengths: *const usize,
+        private: i32,
+    ) -> *mut std::ffi::c_void;
+    fn bunwasm_rsa_parse(der: *const u8, len: usize, private: i32) -> *mut std::ffi::c_void;
+    fn bunwasm_rsa_field(
+        key: *const std::ffi::c_void,
+        index: i32,
+        out: *mut u8,
+        capacity: usize,
+    ) -> usize;
+    fn bunwasm_rsa_der(
+        key: *const std::ffi::c_void,
+        private: i32,
+        out: *mut u8,
+        capacity: usize,
+    ) -> usize;
+}
+impl Drop for RsaKey {
+    fn drop(&mut self) {
+        unsafe { bunwasm_rsa_free(self.0) }
+    }
+}
+impl RsaKey {
+    fn new(pointer: *mut std::ffi::c_void) -> Result<Self> {
+        if pointer.is_null() {
+            Err("DataError")
+        } else {
+            Ok(Self(pointer))
+        }
+    }
+    fn from_jwk(k: &J) -> Result<Self> {
+        let private = k["d"].is_string();
+        let names = ["n", "e", "d", "p", "q", "dp", "dq", "qi"];
+        let mut values = Vec::new();
+        for name in names.iter().take(if private { 8 } else { 2 }) {
+            values.push(bytes(k, name)?);
+        }
+        let pointers: Vec<_> = values.iter().map(|v| v.as_ptr()).collect();
+        let lengths: Vec<_> = values.iter().map(Vec::len).collect();
+        // BoringSSL copies each component and owns the returned RSA object.
+        Self::new(unsafe {
+            bunwasm_rsa_from_jwk(pointers.as_ptr(), lengths.as_ptr(), i32::from(private))
+        })
+    }
+    fn parse(bytes: &[u8], private: bool) -> Result<Self> {
+        Self::new(unsafe { bunwasm_rsa_parse(bytes.as_ptr(), bytes.len(), i32::from(private)) })
+    }
+    fn field(&self, index: i32) -> Result<Vec<u8>> {
+        let size = unsafe { bunwasm_rsa_field(self.0, index, std::ptr::null_mut(), 0) };
+        if size == 0 {
+            return Err("DataError");
+        }
+        let mut out = vec![0; size];
+        if unsafe { bunwasm_rsa_field(self.0, index, out.as_mut_ptr(), out.len()) } != size {
+            return Err("DataError");
+        }
+        Ok(out)
+    }
+    fn jwk(&self, private: bool) -> Result<J> {
+        let mut out = json!({"kty":"RSA"});
+        for (index, name) in ["n", "e", "d", "p", "q", "dp", "dq", "qi"]
+            .iter()
+            .enumerate()
+            .take(if private { 8 } else { 2 })
+        {
+            out[name] = b64(&self.field(index as i32)?).into();
+        }
+        Ok(out)
+    }
+    fn der(&self, private: bool) -> Result<Vec<u8>> {
+        let size = unsafe { bunwasm_rsa_der(self.0, i32::from(private), std::ptr::null_mut(), 0) };
+        if size == 0 {
+            return Err("DataError");
+        }
+        let mut out = vec![0; size];
+        if unsafe { bunwasm_rsa_der(self.0, i32::from(private), out.as_mut_ptr(), out.len()) }
+            != size
+        {
+            return Err("DataError");
+        }
+        Ok(out)
+    }
+}
+fn rsa_format(format: &str, bytes: &[u8]) -> Result<(RsaKey, bool)> {
+    if format == "jwk" {
+        let k: J = data(serde_json::from_slice(bytes))?;
+        let private = k["d"].is_string();
+        return Ok((RsaKey::from_jwk(&k)?, private));
+    }
+    let (inner, private) = match format {
+        "pkcs1-private" => (bytes, true),
+        "pkcs1-public" => (bytes, false),
+        "pkcs8" => {
+            let info = data(pkcs8::PrivateKeyInfo::try_from(bytes))?;
+            if info.algorithm.oid.to_string() != "1.2.840.113549.1.1.1" {
+                return Err("DataError");
+            }
+            (info.private_key, true)
+        }
+        "spki" => {
+            let info = data(spki::SubjectPublicKeyInfoRef::try_from(bytes))?;
+            if info.algorithm.oid.to_string() != "1.2.840.113549.1.1.1" {
+                return Err("DataError");
+            }
+            (
+                info.subject_public_key.as_bytes().ok_or("DataError")?,
+                false,
+            )
+        }
+        _ => return Err("NotSupportedError"),
     };
-    let key = data(rsa::RsaPrivateKey::from_components(
-        big(k, "n")?,
-        big(k, "e")?,
-        big(k, "d")?,
-        primes,
-    ))?;
-    data(key.validate())?;
-    Ok(key)
+    Ok((RsaKey::parse(inner, private)?, private))
 }
-fn rsa_public(k: &J) -> Result<rsa::RsaPublicKey> {
-    data(rsa::RsaPublicKey::new(big(k, "n")?, big(k, "e")?))
-}
-fn rsa_jwk(k: &rsa::RsaPublicKey) -> J {
-    json!({"kty":"RSA","n":b64(&k.n().to_bytes_be()),"e":b64(&k.e().to_bytes_be())})
-}
-fn rsa_private_jwk(k: &rsa::RsaPrivateKey) -> Result<J> {
-    let mut v = rsa_jwk(&k.to_public_key());
-    v["d"] = b64(&k.d().to_bytes_be()).into();
-    v["p"] = b64(&k.primes()[0].to_bytes_be()).into();
-    v["q"] = b64(&k.primes()[1].to_bytes_be()).into();
-    v["dp"] = b64(&(k.d() % (&k.primes()[0] - 1u32)).to_bytes_be()).into();
-    v["dq"] = b64(&(k.d() % (&k.primes()[1] - 1u32)).to_bytes_be()).into();
-    v["qi"] = b64(&data(k.crt_coefficient().ok_or("DataError"))?.to_bytes_be()).into();
-    Ok(v)
+fn rsa_export(format: &str, k: &J) -> Result<J> {
+    use pkcs8::der::Encode;
+    let key = RsaKey::from_jwk(k)?;
+    let oid = data(pkcs8::ObjectIdentifier::new("1.2.840.113549.1.1.1"))?;
+    let alg = pkcs8::AlgorithmIdentifierRef {
+        oid,
+        parameters: Some(pkcs8::der::asn1::AnyRef::NULL),
+    };
+    match format {
+        "pkcs1-private" => Ok(output(key.der(true)?)),
+        "pkcs1-public" => Ok(output(key.der(false)?)),
+        "pkcs8" => {
+            let inner = key.der(true)?;
+            Ok(output(data(
+                pkcs8::PrivateKeyInfo::new(alg, &inner).to_der(),
+            )?))
+        }
+        "spki" => {
+            let inner = key.der(false)?;
+            Ok(output(data(
+                spki::SubjectPublicKeyInfoRef {
+                    algorithm: alg,
+                    subject_public_key: data(pkcs8::der::asn1::BitStringRef::from_bytes(&inner))?,
+                }
+                .to_der(),
+            )?))
+        }
+        _ => Err("NotSupportedError"),
+    }
 }
 fn okp_jwk(curve: &str, secret: &[u8], public: &[u8]) -> J {
     let mut k = json!({"kty":"OKP","crv":curve,"x":b64(public)});
@@ -132,11 +243,12 @@ fn generate(a: &J) -> Result<J> {
             if !(512..=8192).contains(&bits) {
                 return Err("OperationError");
             }
-            let exponent = rsa::BigUint::from_bytes_be(&bytes(a, "publicExponent")?);
-            let k = operation(rsa::RsaPrivateKey::new_with_exp(
-                &mut OsRng, bits, &exponent,
-            ))?;
-            Ok(pair(rsa_private_jwk(&k)?))
+            let exponent = bytes(a, "publicExponent")?;
+            let key = RsaKey::new(unsafe {
+                bunwasm_rsa_generate(bits as i32, exponent.as_ptr(), exponent.len())
+            })
+            .map_err(|_| "OperationError")?;
+            Ok(pair(key.jwk(true)?))
         }
         "ECDSA" | "ECDH" => match text(a, "namedCurve")? {
             "P-256" => Ok(pair(data(serde_json::from_str(
@@ -209,21 +321,10 @@ fn import(a: &J, format: &str, b: &[u8]) -> Result<J> {
     let name = text(a, "name")?;
     let k = match name {
         "ECDSA" | "ECDH" => ec_import(a, format, b)?,
-        "RSASSA-PKCS1-v1_5" | "RSA-PSS" | "RSA-OAEP" => match format {
-            "pkcs1-private" => rsa_private_jwk(&data(rsa::RsaPrivateKey::from_pkcs1_der(b))?)?,
-            "pkcs1-public" => rsa_jwk(&data(rsa::RsaPublicKey::from_pkcs1_der(b))?),
-            "pkcs8" => rsa_private_jwk(&data(rsa::RsaPrivateKey::from_pkcs8_der(b))?)?,
-            "spki" => rsa_jwk(&data(rsa::RsaPublicKey::from_public_key_der(b))?),
-            "jwk" => {
-                let k: J = data(serde_json::from_slice(b))?;
-                if k["d"].is_string() {
-                    rsa_private_jwk(&rsa_private(&k)?)?
-                } else {
-                    rsa_jwk(&rsa_public(&k)?)
-                }
-            }
-            _ => return Err("NotSupportedError"),
-        },
+        "RSASSA-PKCS1-v1_5" | "RSA-PSS" | "RSA-OAEP" => {
+            let (key, private) = rsa_format(format, b)?;
+            key.jwk(private)?
+        }
         "Ed25519" | "X25519" => okp_import(name, format, b)?,
         _ => return Err("NotSupportedError"),
     };
@@ -306,13 +407,7 @@ fn export(a: &J, format: &str, k: &J) -> Result<J> {
     if name == "Ed25519" || name == "X25519" {
         return okp_export(name, format, k);
     }
-    match format {
-        "pkcs1-private" => Ok(output(data(rsa_private(k)?.to_pkcs1_der())?.as_bytes())),
-        "pkcs1-public" => Ok(output(data(rsa_public(k)?.to_pkcs1_der())?.as_bytes())),
-        "pkcs8" => Ok(output(data(rsa_private(k)?.to_pkcs8_der())?.as_bytes())),
-        "spki" => Ok(output(data(rsa_public(k)?.to_public_key_der())?.as_bytes())),
-        _ => Err("NotSupportedError"),
-    }
+    rsa_export(format, k)
 }
 fn ec_export(a: &J, format: &str, k: &J) -> Result<J> {
     macro_rules! curve {
@@ -408,7 +503,7 @@ fn sign(q: &J) -> Result<J> {
             }
             let key = data(ed25519_dalek::VerifyingKey::from_bytes(&public32(k)?))?;
             Ok(
-                json!({"verified":ed25519_dalek::Signature::from_slice(&sig).is_ok_and(|s| key.verify(&input,&s).is_ok())}),
+                json!({"verified":ed25519_dalek::Signature::from_slice(&sig).is_ok_and(|s| key.verify_strict(&input,&s).is_ok())}),
             )
         }
         "ECDSA" => ec_sign(a, k, &input, &sig, verify),
@@ -453,11 +548,8 @@ unsafe extern "C" {
 }
 fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J> {
     let private = op == 0 || op == 3;
-    let der = if private {
-        data(rsa_private(k)?.to_pkcs1_der())?.as_bytes().to_vec()
-    } else {
-        data(rsa_public(k)?.to_pkcs1_der())?.as_bytes().to_vec()
-    };
+    let key = RsaKey::from_jwk(k)?;
+    let der = key.der(private)?;
     let hash = match text(a, "hash")? {
         "SHA-1" => 1,
         "SHA-224" => 224,
@@ -477,7 +569,7 @@ fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J
     let mut output = if op == 1 {
         signature.to_vec()
     } else {
-        vec![0; rsa_public(k)?.size()]
+        vec![0; key.field(0)?.len()]
     };
     let mut length = output.len();
     // The C adapter borrows every slice for this call and writes at most output's capacity.
