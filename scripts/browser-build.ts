@@ -7,10 +7,7 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
   const main = entrypoints[0];
   if (!main) throw new Error("Browser build needs the consuming application's main entry");
   const consumer = dirname(main);
-  const runtimePackage = (createRequire(main).resolve.paths("@bun-wasm/runtime") ?? [])
-    .map(path => join(path, "@bun-wasm/runtime")).find(existsSync);
-  if (!runtimePackage) throw new Error("The consuming app must install @bun-wasm/runtime");
-  const physicalRuntime = realpathSync(runtimePackage);
+  let runtimePackage: { path: string; physical: string } | undefined;
   return {
     entrypoints, outdir, target: "browser", format: "esm",
     splitting: options.splitting ?? true,
@@ -21,9 +18,17 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
       setup(build) {
         // Shared web sources belong to the app being built. A sandbox-only install
         // supplies this dependency; Bun's package resolver still enforces exports.
-        build.onResolve({ filter: /^@bun-wasm\/runtime(?:\/|$)/ }, ({ path }) => ({
-          path: join(runtimePackage, relative(physicalRuntime, Bun.resolveSync(path, consumer))),
-        }));
+        // Route the result through the consumer package path so isolated cache names stay
+        // out of the plugin.
+        build.onResolve({ filter: /^@bun-wasm\/runtime(?:\/|$)/ }, ({ path }) => {
+          runtimePackage ??= (() => {
+            const packagePath = (createRequire(main).resolve.paths("@bun-wasm/runtime") ?? [])
+              .map(path => join(path, "@bun-wasm/runtime")).find(existsSync);
+            if (!packagePath) throw new Error("The consuming app must install @bun-wasm/runtime");
+            return { path: packagePath, physical: realpathSync(packagePath) };
+          })();
+          return { path: join(runtimePackage.path, relative(runtimePackage.physical, Bun.resolveSync(path, consumer))) };
+        });
       },
     }],
   };

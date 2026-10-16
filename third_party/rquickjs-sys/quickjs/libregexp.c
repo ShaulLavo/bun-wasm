@@ -32,6 +32,17 @@
 #include "libregexp.h"
 #include "libunicode.h"
 
+/* bun-wasm: as js_reserve_wasm_frame in quickjs.c. The wasm host keeps call frames outside
+   linear memory, so each level of group nesting reserves shadow stack for its host frames
+   and the stack check trips first (docs/stack-limits.md). */
+#if defined(__wasi__)
+#include <alloca.h>
+static void *volatile lre_wasm_frame_sink;
+#define lre_reserve_wasm_frame(size) ((void)(lre_wasm_frame_sink = alloca(size)))
+#else
+#define lre_reserve_wasm_frame(size) ((void)0)
+#endif
+
 /* ASCII identifier tables, used by lre_js_is_ident_first/next in libregexp.h
    and by quickjs.c. */
 uint32_t const lre_id_start_table_ascii[4] = {
@@ -2456,6 +2467,7 @@ static int re_parse_disjunction(REParseState *s, bool is_backward_dir)
 {
     int start, len, pos;
 
+    lre_reserve_wasm_frame(160);
     if (lre_check_stack_overflow(s->opaque, 0))
         return re_parse_error(s, "stack overflow");
 

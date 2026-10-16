@@ -40,6 +40,12 @@ impl Notify {
     }
 }
 
+impl std::task::Wake for Notify {
+    fn wake(self: Arc<Self>) {
+        self.bump();
+    }
+}
+
 /// Bytes received from the network, waiting for the guest's `read`.
 #[derive(Default)]
 pub struct ByteQueue(VecDeque<u8>);
@@ -248,7 +254,9 @@ impl Net {
             (_, Some(Handle::Listener(_))) => None,
             (_, None) => return Output::Code(BADF),
         };
-        let error = error.unwrap_or_else(|| ErrorInfo::new("Error", "Unknown error", None));
+        let error = error.unwrap_or_else(|| {
+            ErrorInfo::new("Error", format!("network operation failed for handle {handle}"), Some("ERR_NETWORK"))
+        });
         Output::Bytes(error.to_json())
     }
 

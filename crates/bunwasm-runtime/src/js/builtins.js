@@ -1,6 +1,6 @@
 // Registry of built-in modules (`node:*`, `bun`, `bun:*`) and the small Node
 // modules that don't deserve their own file. Modules for things WASI can't do
-// (processes, sockets) import fine but throw a clear error when used.
+// reject loading or throw a clear error when used.
 (function (internal) {
   "use strict";
   const native = internal.native;
@@ -1054,18 +1054,7 @@
       WriteStream: thrower("tty.WriteStream", "no terminal streams"),
     }),
     "node:constants": () => Object.assign({}, internal.builtin("node:os").constants.signals, internal.builtin("node:fs").constants),
-    "node:worker_threads": () =>
-      unsupportedModule("worker_threads", NO_THREADS, ["Worker", "MessageChannel", "BroadcastChannel", "receiveMessageOnPort"], {
-        isMainThread: true,
-        parentPort: null,
-        workerData: null,
-        threadId: 0,
-        resourceLimits: {},
-        SHARE_ENV: Symbol("SHARE_ENV"),
-        markAsUntransferable() {},
-        getEnvironmentData: () => undefined,
-        setEnvironmentData() {},
-      }),
+    "node:worker_threads": thrower("worker_threads", NO_THREADS),
     "node:child_process": () => internal.require("spawn").nodeChildProcess(),
     "node:cluster": () => unsupportedModule("cluster", NO_PROCESSES, ["fork", "setupPrimary", "setupMaster", "disconnect"], { isPrimary: true, isMaster: true, isWorker: false, workers: {} }),
     "ws": () => internal.require("ws_builtin"),
