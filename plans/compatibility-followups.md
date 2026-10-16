@@ -229,3 +229,49 @@ The six Vite dev rows on QuickJS and JSC have empty logs and no captured exit
 code. Add exit/deadline provenance to the server measurement before assigning
 those rows a cause. Preserve the passing Vite production-build controls while
 investigating each failure.
+
+## Node parallel tests after main-thread worker imports
+
+Status: Approved
+
+The worker-thread main-thread adapter lets Node's shared helper load. The bounded
+160-file census in [the worker-thread report](../docs/worker-threads.md) now reaches
+existing module gaps. Keep these separate from guest-worker execution.
+
+- `js/node/test/parallel/test-als-defaultvalue-original.js` and
+  `test-als-defaultvalue.js` fail with `AssertionError: Expected values to be
+  strictly equal` and `expected: "default"` on all engines. The
+  `AsyncLocalStorage` class at `crates/bunwasm-runtime/src/js/builtins.js:370` has
+  no options constructor and `getStore()` returns `undefined` without a frame.
+  Add the actual default-value and naming contract, then measure these files.
+- `test-arm-math-illegal-instruction.js` and
+  `test-assert-calltracker-getCalls.js` reach `No such built-in module: node:test`.
+  Implement the Node test API through the builtin loader where possible, with its
+  lifecycle and reporting behavior; do not merely suppress the import.
+- `test-async-local-storage-http-agent.js` times out with no stdout or stderr
+  after five seconds on QuickJS and fifteen seconds on JSC. The test requires a
+  response after `r2.write(payload)` before calling `r2.end('')` in that response
+  callback. `ClientRequest.write` at
+  `crates/bunwasm-runtime/src/js/net.js:1043` only appends chunks, and `end` at
+  line 1049 starts `_send()`. That buffered request path cannot satisfy this
+  exchange. The browser engine fails earlier at the first response callback,
+  with `actual: undefined`, `expected: "first"` for `cls.getStore()` at upstream
+  line 39. Implement request streaming through the HTTP host contract and
+  preserve async context across the response callbacks. The timeout is newly
+  reached after the helper import succeeds; there were no passing files lost.
+
+Exact source, runtime and dependency hashes, errors and timeout records are in
+`/work/reports/bun-wasm-worker-threads/{before,after}-<engine>.json`, with
+`before-jsc-warm.json` as the valid JSC baseline. Those files are retained until
+coordinator acceptance. Reproduce one failure after rebuilding the engine and
+warming the native launcher:
+
+```sh
+source env.sh
+scripts/bun-suite.sh --engine quickjs --jobs 1 --timeout 60 \
+  --output /work/tmp/bun-wasm-node-http-agent.json \
+  js/node/test/parallel/test-async-local-storage-http-agent.js
+```
+
+Select either ALS or node:test file above with the same command when working on
+that module. Use the heavy-job wrapper and a private native launcher target.
