@@ -205,16 +205,20 @@ connection, same length protocol as `fetch_head`.
 
 ## Bun child processes
 
-`spawn` starts a fresh instance of the same compiled module. It never invokes a
-native executable or shell. The metadata is JSON:
+`spawn` returns a child handle without waiting for execution. The browser starts a fresh worker
+using a registered compiled module and guest adapter; it never invokes a native executable.
+The native launcher and Node adapter support their configured Bun executables. Metadata is JSON:
 
 ```json
 {"argv":["bun","run","/app.ts"],"cwd":"/","env":{"HOME":"/"},
  "stdin":"pipe","stdout":"pipe","stderr":"pipe"}
 ```
 
-`argv[0]` must be `bun` or `/bun`. The guest recognizes its own `process.execPath`
-and `process.argv0`, then sends `bun`. Other commands fail with `ENOENT`.
+The guest preserves `argv[0]`; executable selection belongs to the host's registry.
+The browser registers `bun`, `/bun`, `node` and `/usr/local/bin/bun` as Bun light;
+`bun-quickjs`, `bun-jsc` and `bun-browser` select an engine explicitly. Children do not inherit
+their parent's engine. A browser start failure appears through `child_wait`: 127 for an
+unregistered executable, 126 for a registered executable that cannot start.
 `env` replaces the child environment; the host sets `PWD` to `cwd` because the
 WASI guest changes directory there at startup. Each stdio mode is `pipe`,
 `inherit`, or `ignore`. Inheritance refers to the immediate parent's stream,
@@ -231,10 +235,15 @@ on the native launcher and apply backpressure.
 `child_wait` is nonblocking and repeatable: `AGAIN` while running, then the exit
 code. Waiting does not close the child or its pipes. Drain and close the pipes,
 then `close(child)` to release the handle. Closing a running child kills it.
-`child_kill` accepts a Linux signal number; 0 checks whether the child is alive,
-and a nonzero signal terminates the instance with exit code `128 + signal`.
-This is instance termination, without guest POSIX signal handlers. Timeouts and
-abort signals use this same operation.
+`child_kill(..., 0)` checks whether the child is alive. Browser SIGINT, SIGTERM and SIGPIPE
+publish the process's shared interrupt without immediate revocation. A checkpoint may handle
+that signal and exit with its own code, or explicitly take the default action through
+`runtime_proc.default_signal(sig)`; that records `128 + sig` and revokes before termination.
+SIGKILL immediately records 137, revokes and requests physical termination; late worker
+messages cannot override it. QuickJS/JSC checkpoints are the separate engine-interruption
+step; this layer exposes the word/import, not engine hooks. There are no escalation timers.
+Timeouts and abort signals use the same operation. The native launcher retains its
+wasmtime-specific interruption path below.
 
 The native launcher shares the compiled module and preopened host directories
 between independent stores on child threads. Filesystem changes are visible
@@ -247,11 +256,13 @@ Handles are virtual identifiers, not host process IDs. Guest timer waits and
 `Bun.sleepSync` use host polling so cancellation also interrupts long sleeps.
 
 Browser and Node hosts implement the same process slots. The browser uses a page
-broker to start child workers while their parent is blocked in `spawnSync`. Its
-filesystem is copied at spawn and changed paths merge back on normal exit, with
-an 8 MiB serialized change limit. Node workers share their real preopens. See
-[the browser host notes](../web/README.md#bun-subprocess-workers) for sync-back,
-networking and isolation details.
+broker to start child workers while their parent is blocked in `spawnSync`. The broker lazily
+activates the generic process service on first spawn and shares compiled modules across workers.
+Processes register independent identities with the live filesystem service; no snapshots or
+merge-at-exit are used. Revocation is immediate at logical death, but lock reaping requires the
+guest's quiescent exit acknowledgement, not merely a call to `Worker.terminate()`.
+Node workers share their real preopens. See
+[the browser host notes](../web/README.md#bun-subprocess-workers) for networking and isolation.
 
 The guest exposes Bun spawn APIs and Node spawn/exec/fork wrappers over these
 slots. Fork launches a bun child; IPC channels and native descriptors are not

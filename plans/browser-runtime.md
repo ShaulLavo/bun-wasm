@@ -59,8 +59,10 @@ than it is today. The process layer loads on the first spawn.
   optimization. Our own programs check it at their checkpoints, including inside the JS engines
   (QuickJS's interrupt handler, a JSC trap hook); third-party WASM gets checks injected at loop
   headers and function entries (covering tail-call cycles) when loaded, or is refused.
-  `terminate()` stays as the backstop. Revocation wakes blocked peers at once (EOF in about
-  0.06 ms, EPIPE in about 0.3 ms), so pipelines never wait on a dying worker.
+  `terminate()` stays as the backstop. Catchable signals first give the guest a chance to handle
+  them; a reported default action or SIGKILL establishes logical death. Revocation at that
+  boundary wakes blocked peers at once (EOF in about 0.06 ms, EPIPE in about 0.3 ms), so pipelines
+  never wait on a dying worker. There is no automatic escalation timer.
 - **A killed process can't corrupt shared state.** Shared memory can't be taken back from a
   running worker, and a worker can be killed between checking a flag and publishing a write. So
   no ring is ever written by two processes: each (writing process, pipe) pair gets its own
@@ -181,13 +183,19 @@ are non-blocking except `poll`.
 | `kill` | `(pid, sig) -> 0` | Signals one process. |
 | `kill_job` | `(job, sig) -> 0` | Signals every process in a job, including descendants spawned into it. |
 | `poll` | `(subs_ptr, n, timeout_ms, out_ptr) -> n_ready` | Each subscription is 16 bytes: `u32 kind` (0 readable, 1 writable, 2 child exit, 3 filesystem completion), `u32 id` (fd, pid or request), `u64 userdata`. Each event written is 16 bytes: `u64 userdata`, `u32 kind`, `u32 flags` (bit 0 hang-up). Also returns when this process's interrupt word is set (`n_ready` may be 0). The only call that blocks. |
-| `interrupted` | `() -> sig` | Returns and clears the pending signal for this process (0 if none). Guests call it at checkpoints and stop when it returns a signal. Don't rely on the host call itself to make `terminate()` work: in real Safari, `terminate()` alone stopped only 13 of 50 runs with tiny injected host checks, while stopping on the returned signal worked 50 of 50 (spike 5). |
+| `interrupted` | `() -> sig` | Returns and clears the pending signal for this process (0 if none). Guests call it at checkpoints, dispatch a handler if present, or take the default action. Don't rely on the host call itself to make `terminate()` work: in real Safari, `terminate()` alone stopped only 13 of 50 runs with tiny injected host checks, while stopping on the returned signal worked 50 of 50 (spike 5). |
+| `default_signal` | `(sig) -> never` | Takes the default action for the signal returned by a checkpoint. The adapter reports it explicitly before unwinding; the supervisor records `128 + sig`, revokes descriptors and requests physical termination. An unrelated later trap is not inferred to be a signal exit. |
 
-Signals are `SIGINT`, `SIGTERM`, `SIGKILL` and `SIGPIPE`. `kill` revokes the target's descriptors
-at once and sets its interrupt word; physical teardown follows. The supervisor records the
-requested signal, and that record, not the way the guest happened to stop, decides the status:
-shells see 128 + sig (130, 143, 137, 141). A guest that handles a signal or EPIPE and exits on its
-own keeps its own code.
+Signals are `SIGINT`, `SIGTERM`, `SIGKILL` and `SIGPIPE`. `SIGINT`, `SIGTERM` and `SIGPIPE`
+are catchable: `kill` records the signal and sets the interrupt word without revoking descriptors
+or terminating the worker. A guest may handle the signal, keep running, or exit with its own code.
+A guest taking the default action explicitly reports that signal (the preview1 adapter exposes
+`runtime_proc.default_signal(sig)`); the supervisor then records the signaled outcome, revokes
+and terminates. Injected third-party checks take this default action. `SIGKILL` immediately records
+137, revokes and terminates; no late guest message can replace that outcome. Default-action
+statuses are 128 + sig (130, 143, 137, 141), while an EPIPE-handling guest keeps its own exit code.
+Ctrl+C signals the foreground job and waits; a second Ctrl+C or explicit kill may escalate to
+`SIGKILL`. The runtime has no signal-escalation timers.
 
 WASI preview1 programs use the same descriptors through ordinary fd calls: a spawned child's
 `fd_read(0)` blocks on its bound pipe, and `poll_oneoff` reports pipe readiness. Third-party

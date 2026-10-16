@@ -164,7 +164,7 @@ export interface RunResult {
 
 export interface Run {
   readonly done: Promise<RunResult>;
-  /** Terminates the worker (exit code 130); completed filesystem writes remain visible. */
+  /** Signal the foreground job with SIGINT; a second call force-kills it with SIGKILL. */
   kill(): void;
 }
 
@@ -196,20 +196,38 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     moduleCache,
     slots: slotsMode(),
     spawnBroker: true,
+    pid: 1,
+    jobId: 1,
+    interrupt: new SharedArrayBuffer(4),
   };
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
   const subprocess = new SubprocessBroker(workerUrl, options.filesystem);
+  // Executable selection belongs to the registry, not the spawning guest's engine.
+  // `bun` is Bun light; named executables select the interpreter engines explicitly.
+  const modules = new Map<Engine, Promise<WebAssembly.Module>>();
+  modules.set(options.engine, Promise.resolve(options.module));
+  const moduleFor = (engine: Engine) => () => {
+    let module = modules.get(engine);
+    if (!module) {
+      module = loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
+      modules.set(engine, module);
+    }
+    return module;
+  };
+  for (const name of ["bun", "/bun", "node", "/usr/local/bin/bun"]) subprocess.register(name, { module: moduleFor("browser"), adapter: "bun", engine: "browser" });
+  for (const engine of ["quickjs", "jsc", "browser"] as const) subprocess.register(`bun-${engine}`, { module: moduleFor(engine), adapter: "bun", engine });
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
   let settle: (result: RunResult) => void = () => {};
   const done = new Promise<RunResult>((resolve) => (settle = resolve));
   let finished = false;
-  const finish = (result: RunResult) => {
+  const finish = (result: RunResult, acknowledged = false) => {
     if (finished) return;
     finished = true;
+    if (acknowledged) options.filesystem.reap(request.filesystem);
+    else options.filesystem.revoke(request.filesystem);
     worker.terminate();
-    subprocess.dispose();
-    options.filesystem.revoke(request.filesystem);
+    subprocess.rootExit(result.code);
     helper?.dispose();
     if (moduleCache) void caches.delete(moduleCache);
     settle(result);
@@ -236,13 +254,21 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       return;
     }
     // Terminals want CRLF between the error's stack lines.
-    if (msg.type === "error") finish({ code: 134, error: `bun.wasm crashed: ${msg.message}`.replace(/\r?\n/g, "\r\n") });
-    else finish({ code: msg.code });
+    if (msg.type === "error") finish({ code: 134, error: `bun.wasm crashed: ${msg.message}`.replace(/\r?\n/g, "\r\n") }, true);
+    else finish({ code: msg.code }, true);
   };
   worker.onerror = (event) => {
     event.preventDefault();
     finish({ code: 1, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
   worker.postMessage(request, [request.filesystem.port]);
-  return { done, kill: () => finish({ code: 130 }) };
+  let interrupted = false;
+  return { done, kill: () => {
+    if (finished) return;
+    const signal = interrupted ? 9 : 2;
+    interrupted = true;
+    Atomics.store(new Int32Array(request.interrupt!), 0, signal);
+    void subprocess.killJob(1, signal);
+    if (signal === 9) finish({ code: 137 });
+  } };
 }

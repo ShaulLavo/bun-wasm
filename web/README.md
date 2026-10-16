@@ -114,29 +114,33 @@ bun.wasm must `chdir($PWD)` at startup for relative paths to resolve from `/home
 
 ## Bun subprocess workers
 
-When the page is cross-origin isolated, the subprocess ABI starts a fresh worker
-with the same compiled wasm module and engine. The page creates child workers through
-a broker so a synchronous wasm call cannot block child startup. Commands must name `bun` or `/bun`; the guest normalizes its executable identities.
-Other executables fail with `ENOENT`; the host never runs a native program.
-The browser engine uses the same host functions directly, and the headless Node
-host starts another Node worker running the same wasm module.
+When the page is cross-origin isolated, the subprocess ABI reserves a pid immediately and the
+page broker lazily loads `runtime/proc` to start one worker per process. A synchronous wasm call
+cannot block that startup. The executable registry maps a name to a compiled module and guest
+adapter; modules are shared between fresh workers, never retained guest instances. `bun`, `/bun`,
+`node` and `/usr/local/bin/bun` select Bun light. `bun-quickjs`, `bun-jsc` and `bun-browser` select
+an engine explicitly instead of inheriting the parent's engine. Other registered preview1
+programs use the same service; missing programs exit 127 and unrunnable programs exit 126.
+The host never starts a native executable. The headless Node adapter maintains its explicit
+Bun alias registry and real filesystem preopens.
 
-Each process has separate argv, environment, cwd and stdio. Pipes use bounded
-1 MiB shared byte buffers. Closing the stdin handle sends EOF. `child_wait` polls
-the exit status; `child_kill` terminates the worker and reports `128 + signal`.
-There are at most four live child instances across the entire process tree.
-Each wasm instance retains the module's 512 MiB memory limit, and Node children
-also have a 128 MiB JS heap limit. Finishing the parent terminates its children.
-Close the child handle after consuming its output to release its transport buffers.
+Each process has separate argv, environment, cwd and stdio. Bun's existing bounded 1 MiB pipe
+transport remains until step 4b. Closing stdin sends EOF; `child_wait` polls the exit status.
+SIGINT, SIGTERM and SIGPIPE publish a shared interrupt so a guest can handle the signal and
+keep its own exit code. An explicit default action reports `128 + signal`; SIGKILL immediately
+records 137 and revokes before requesting physical termination. Engine-specific checkpoints
+are step 7a. A second Run/Ctrl+C stop request escalates to SIGKILL; the runtime adds no timer.
+Jobs and pids have separate namespaces; foreground job termination leaves other background jobs
+alive, and ordinary parent exit does not kill children. Bun's adapter retains its four-active-child
+budget; the generic service does not impose that limit. Each wasm instance retains the module's
+512 MiB memory limit, and Node children have a 128 MiB JS heap limit. Close child handles after
+consuming output to release transport buffers.
 
-The browser filesystem is copied at spawn. At normal child exit, changed and
-deleted paths are merged into the parent before `child_wait` returns its status.
-Unchanged paths preserve concurrent parent edits. Conflicting writes to the same
-path use the child's final value. Changes are not visible between processes while
-the child runs, and forcibly terminated children cannot sync their final changes.
-The serialized changes have an 8 MiB limit; exceeding it prints an error and exits
-with code 1. Node workers use the same real filesystem preopens, so their file
-changes are visible immediately.
+All browser processes connect to one live filesystem worker. Completed writes are immediately
+visible to the editor and other processes; there is no copy-at-spawn or merge-at-exit. Each
+process has its own revocable identity. Calling `terminate()` is not proof of death; only a
+quiescent guest acknowledgement allows the filesystem to reap an active lock owner. Killed
+process buffers are never reused for another process. Node workers use their real preopens.
 
 Browser children do not share the parent's networking ring. The browser engine
 still has direct host `fetch`; QuickJS/JSC children have no networking slots.
@@ -147,4 +151,6 @@ to the parent's stdout/stderr, and ignored output is drained and discarded.
 Run `node --no-warnings web/tests/subprocess.mjs` for Node worker checks, or build
 web/ and run `bun web/tests/browser-subprocess.ts` for Chromium and WebKit
 checks across all three engines. `bun test web/tests/subprocess.test.ts` checks
-pipe wrapping, filesystem merging, and the Node worker checks.
+pipe wrapping, live filesystem visibility, and the Node worker checks. The artifact-free
+`bun web/tests/browser-process.ts chromium|firefox|webkit` gate exercises the generic supervisor
+and real workers, including cooperative CPU-loop signal handling and background jobs.

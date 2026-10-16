@@ -58,11 +58,7 @@
     const argv = cmd.map(String);
     if (argv.some((arg) => arg.includes("\0"))) throw new TypeError("Command arguments cannot contain null bytes");
     const proc = globalThis.process;
-    if (!["bun", "/bun", "node", proc.execPath, proc.argv0].includes(argv[0])) {
-      throw Object.assign(new Error(`Executable not found in bun-wasm: ${argv[0]}`), { code: "ENOENT", errno: -2, path: argv[0], syscall: "spawn" });
-    }
-    argv[0] = "bun";
-    if (!native.hostCaps.spawn) throw unsupported("Spawning bun without host process support");
+    if (!native.hostCaps.spawn) throw unsupported("Spawning a process without host process support");
     const env = {};
     for (const [key, value] of Object.entries(options.env || proc.env)) if (value !== undefined) env[key] = String(value);
     const io = options.stdio;
@@ -71,7 +67,7 @@
     const error = Array.isArray(io) ? io[2] : options.stderr;
     const requestedCwd = options.cwd instanceof URL ? decodeURIComponent(options.cwd.pathname) : String(options.cwd || native.cwd());
     const cwd = internal.require("path").resolve(native.cwd(), requestedCwd);
-    const meta = { argv, cwd, env,
+    const meta = { executable: argv[0], argv, cwd, env,
       stdin: stdioMode(input, 0, "ignore"),
       stdout: stdioMode(output, 1, "pipe"),
       stderr: stdioMode(error, 2, sync ? "pipe" : "inherit") };
@@ -220,7 +216,9 @@
           if (native.hostChildWait(spec.handle) >= 0) return;
           throw hostError(spec.handle);
         }
-        if (number) { child.killed = true; signalCode = number; }
+        if (number) child.killed = true;
+        // Catchable signals are requests, not exit statuses. The guest may handle them.
+        if (number === 9) signalCode = number;
       },
       ref() { waiter.ref = true; return child; },
       unref() { waiter.ref = false; return child; },
@@ -285,6 +283,7 @@
     const sizes = [0, 0];
     let exitCode = AGAIN;
     let signalCode = null;
+    let timedOut = false;
     try {
       if (spec.input && typeof spec.input.getReader === "function") throw unsupported("Synchronous streaming stdin");
       initialInput(spec.input, sink);
@@ -298,14 +297,16 @@
         }));
         exitCode = native.hostChildWait(spec.handle);
         if (exitCode < 0 && exitCode !== AGAIN) throw hostError(spec.handle);
-        if (spec.options.timeout > 0 && native.now() - started >= spec.options.timeout && signalCode === null) {
-          signalCode = signalNumber(spec.options.killSignal);
-          native.hostChildKill(spec.handle, signalCode);
+        if (exitCode === AGAIN && !timedOut && spec.options.timeout > 0 && native.now() - started >= spec.options.timeout) {
+          timedOut = true;
+          const requestedSignal = signalNumber(spec.options.killSignal);
+          if (requestedSignal === 9) signalCode = requestedSignal;
+          if (native.hostChildKill(spec.handle, requestedSignal) < 0) throw hostError(spec.handle);
         }
         if (exitCode === AGAIN || states.some((state) => state.handle)) native.hostPoll(1);
       }
       return { pid: spec.handle, success: exitCode === 0, exitCode: signalCode === null ? exitCode : null, signalCode: signalCode === null ? null : signalName(signalCode),
-        exitedDueToTimeout: signalCode !== null, stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])) };
+        exitedDueToTimeout: timedOut, stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])) };
     } catch (error) {
       native.hostChildKill(spec.handle, 9);
       return { pid: spec.handle, success: false, exitCode: 1, signalCode: 9,

@@ -20,7 +20,8 @@ import { fileURLToPath } from "node:url";
 import { Worker, isMainThread, workerData } from "node:worker_threads";
 import { installCliFetch } from "./node-install-net.mjs";
 import { memoryViews } from "../../runtime/core/memory-views.js";
-import { SubprocessHost, childTransport, wasiPipe } from "../src/subprocess.js";
+import { SubprocessHost, childTransport, wasiPipe } from "../src/subprocess.ts";
+import { launchNodeExecutable } from "./node-spawn.ts";
 import { forwardOutput, writeStdio } from "./node-stdio.ts";
 
 // V8's stack limit also bounds wasm frames, and the main thread's (about 984 KB) is small. Every
@@ -146,6 +147,9 @@ async function run() {
   const module = workerData?.module || await WebAssembly.compile(readFileSync(wasmPath));
   subprocess = new SubprocessHost({
     budget: workerData?.transport?.budget,
+    identity: workerData?.transport?.identity,
+    pid: workerData?.transport?.pid,
+    jobId: workerData?.transport?.jobId,
     slot: workerData?.transport?.slot,
     token: workerData?.transport?.token,
     stdin: child && (workerData.meta.stdin !== "inherit" || workerData.transport.inheritedStdin) ? workerData.transport.pipes[0] : undefined,
@@ -153,7 +157,7 @@ async function run() {
       if (child) return wasiPipe(child[fd === 2 ? "stderr" : "stdout"], "write").write([bytes]) === bytes.length;
       return forwardOutput(fd === 2 ? 2 : 1, bytes);
     },
-    launch: (meta, transport, onError) => {
+    launch: (meta, transport, onError) => launchNodeExecutable(meta, transport, () => {
       validateCwd(meta.cwd);
       const worker = new Worker(new URL(import.meta.url), {
         workerData: { bunwasmChild: true, module, preopens, meta, transport, withNet, stackMb: workerData.stackMb },
@@ -161,7 +165,7 @@ async function run() {
       });
       worker.on("error", onError);
       return worker;
-    },
+    }),
   });
   const wasi = new WASI({ version: "preview1", args: ["bun"].concat(args), env, preopens, returnOnExit: true });
   const imports = wasi.getImportObject();

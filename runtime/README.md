@@ -1,8 +1,8 @@
 # @bun-wasm/runtime
 
-Browser runtime layers, consumed as a local TypeScript package. `./core` and `./fs` are available
-now. Network, process and terminal implementations get their own `./net`, `./proc` and `./term`
-entries as those plan steps land; core imports none of them.
+Browser runtime layers, consumed as a local TypeScript package. `./core`, `./fs`, `./proc` and
+the lightweight `./proc/stub` are available now. Network and terminal implementations get their
+own `./net` and `./term` entries as those plan steps land; core imports none of them.
 
 ```ts
 import { Wasi } from "@bun-wasm/runtime/core";
@@ -32,6 +32,41 @@ the resulting description offset. `create` carries exclusivity so competing none
 open the same current entry instead of replacing it or failing spuriously.
 `readdir` produces one entry list per call. The blocking worker adapter implements this interface
 with `Atomics.wait`, without changing preview1.
+
+## Process service
+
+`ProcessSupervisor` from `./proc` owns process records and separate foreground/background job
+records. Its injected launcher starts one worker per process; the supervisor never executes a
+guest inline. `ExecutableRegistry` maps any executable name to a compiled module (or a cached
+asynchronous loader) and an opaque guest-adapter key. The Bun adapter uses its existing slots
+12–15, while the same worker bootstrap can execute an ordinary preview1 module.
+
+`reserveSpawn` synchronously snapshots argv/env/cwd and retains descriptor bindings (including
+nonstandard fds); `start` asynchronously resolves the module and launches the worker. `spawn`
+combines them without waiting. `FirstSpawnStub` from `./proc/stub` reserves before returning and
+shares a single delayed activation promise. `ProcessIdentityAllocator` supplies monotonic ids in
+shared memory so a blocked guest can reserve its pid before the page imports the service.
+`wait` is nonblocking; `waitForExit` and `onChildExit` provide asynchronous completion.
+Missing executables exit 127, and loader/adapter startup failures exit 126.
+
+`kill` publishes SIGINT, SIGTERM or SIGPIPE in the per-process interrupt word without tearing
+down a signal handler. Checkpoints consume it with `Atomics.exchange`. A guest's ordinary `exit`
+retains its code; `defaultSignal` explicitly requests the default signaled outcome. The preview1
+worker exposes `runtime_proc.interrupted()` and `runtime_proc.default_signal(sig)` for these two
+paths. SIGKILL instead records 137, revokes descriptors and terminates immediately. Late worker
+messages cannot change that outcome. There are no escalation timers. `killJob` addresses the job
+namespace, including descendants in that job but not unrelated background jobs.
+
+Revocation hooks connect logical process death to host capabilities. Filesystem revocation is
+not proof of physical teardown: only a quiescent guest exit acknowledgement permits reaping an
+active filesystem lock owner. Each process has fresh interrupt/revocation/transport buffers;
+killed buffers are never assigned to another process. The browser keeps pooling disabled:
+measurements must justify enabling it per browser before adding idle workers.
+
+The generic service is dynamically imported on first spawn. Bun's existing pipe/slot transport
+is measured separately and remains in the initial adapter closure until step 4b. The unified
+`runtime_proc` descriptor/pipe imports are also step 4b; QuickJS/JSC interrupt checkpoints are
+step 7a. This step exposes their interrupt word without rebuilding those engines.
 
 ## Shared filesystem service
 

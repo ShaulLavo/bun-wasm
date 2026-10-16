@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { initialJavaScript, checkCoreBudget } from "./runtime-size";
+import { initialJavaScript, checkCoreBudget, checkLazyProcessService, processServiceInputs } from "./runtime-size";
 
 test("initial download closure deduplicates static chunks and omits lazy chunks and maps", () => {
   const outputs = {
@@ -21,6 +21,13 @@ test("initial download accounting rejects missing chunks rather than silently un
 
 test("initial download accounting refuses unmeasured static external scripts", () => {
   expect(() => initialJavaScript({ "main.js": { imports: [{ path: "https://example.test/large.js", kind: "import-statement", external: true }] } }, ["main.js"])).toThrow("Unmeasured external");
+});
+
+test("the first-spawn service gate allows the tiny identity/stub but rejects the process table", () => {
+  const inputs = ["runtime/proc/stub.ts", "runtime/proc/identity.ts", "web/src/subprocess.ts"];
+  expect(() => checkLazyProcessService(inputs)).not.toThrow();
+  expect(processServiceInputs(inputs.concat(["runtime/proc/table.ts"]))).toEqual(["runtime/proc/table.ts"]);
+  expect(() => checkLazyProcessService(inputs.concat(["runtime/proc/supervisor.ts"]))).toThrow("process service is eager");
 });
 
 test("core gzip budget includes boundary, reports actionable excess", () => {

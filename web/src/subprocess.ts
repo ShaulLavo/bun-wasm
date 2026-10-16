@@ -1,4 +1,50 @@
+import type { Stream } from "@bun-wasm/runtime/core";
+import type { EngineNet } from "./net/host";
+import type { SlotImpls } from "./net/trampoline";
+import { ProcessIdentityAllocator } from "../../runtime/proc/identity.ts";
 import { memoryViews } from "../../runtime/core/memory-views.js";
+
+export interface SpawnMeta {
+  executable?: string;
+  argv: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  job?: number;
+  stdin?: "pipe" | "inherit" | "ignore";
+  stdout?: "pipe" | "inherit" | "ignore";
+  stderr?: "pipe" | "inherit" | "ignore";
+}
+export interface ChildTransport {
+  pid: number;
+  parentPid: number;
+  jobId: number;
+  identity: SharedArrayBuffer;
+  interrupt: SharedArrayBuffer;
+  requestedSignal: SharedArrayBuffer;
+  budget: SharedArrayBuffer;
+  slot: number;
+  token: number;
+  inheritedStdin?: boolean;
+  pipes: SharedArrayBuffer[];
+  control: SharedArrayBuffer;
+}
+export interface ChildWorker {
+  /** Revoke access before requesting physical worker termination. */
+  revoke?(): void;
+  terminate(): unknown;
+}
+export interface SubprocessOptions {
+  budget?: SharedArrayBuffer;
+  identity?: SharedArrayBuffer;
+  pid?: number;
+  jobId?: number;
+  slot?: number;
+  token?: number;
+  stdin?: SharedArrayBuffer;
+  launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): ChildWorker;
+  /** Return false when the inherited reader has closed. */
+  output(fd: number, bytes: Uint8Array): void | boolean;
+}
 
 // Shared transport for browser and Node workers. No native executables are launched.
 const NativeEncoder = TextEncoder;
@@ -17,7 +63,7 @@ export function createProcessBudget() {
   return new SharedArrayBuffer(8 + MAX_CHILDREN * 4);
 }
 
-function wake(budget) {
+function wake(budget?: SharedArrayBuffer) {
   if (budget === undefined) return;
   const cells = new Int32Array(budget);
   Atomics.add(cells, 1, 1);
@@ -25,7 +71,11 @@ function wake(budget) {
 }
 
 export class SharedPipe {
-  constructor(buffer = new SharedArrayBuffer(16 + PIPE_SIZE), budget) {
+  buffer: SharedArrayBuffer;
+  cells: Int32Array;
+  bytes: Uint8Array;
+  budget?: SharedArrayBuffer;
+  constructor(buffer = new SharedArrayBuffer(16 + PIPE_SIZE), budget?: SharedArrayBuffer) {
     this.buffer = buffer;
     this.cells = new Int32Array(buffer, 0, 4);
     this.bytes = new Uint8Array(buffer, 16);
@@ -56,7 +106,7 @@ export class SharedPipe {
     Atomics.notify(this.cells, 3);
     return out;
   }
-  write(bytes) {
+  write(bytes: Uint8Array) {
     if (Atomics.load(this.cells, 2)) return -1;
     const read = Atomics.load(this.cells, 0) >>> 0;
     const written = Atomics.load(this.cells, 1) >>> 0;
@@ -72,7 +122,7 @@ export class SharedPipe {
     wake(this.budget);
     return size;
   }
-  writeAll(bytes) {
+  writeAll(bytes: Uint8Array) {
     let at = 0;
     while (at < bytes.length) {
       const seen = Atomics.load(this.cells, 3);
@@ -82,7 +132,7 @@ export class SharedPipe {
       else at += n;
     }
   }
-  readBlocking(cap) {
+  readBlocking(cap: number) {
     for (;;) {
       const seen = Atomics.load(this.cells, 3);
       const value = this.read(cap);
@@ -99,7 +149,7 @@ export class SharedPipe {
 }
 
 /** Original adapter from the existing Bun pipe transport to runtime descriptors. */
-export function wasiPipe(pipe, mode) {
+export function wasiPipe(pipe: SharedPipe, mode: "read" | "write"): Stream {
   return {
     kind: "pipe",
     read(chunks) {
@@ -139,15 +189,15 @@ export function wasiPipe(pipe, mode) {
   };
 }
 
-export function childTransport(transport) {
+export function childTransport(transport: ChildTransport) {
   return {
     stdin: new SharedPipe(transport.pipes[0], transport.budget),
     stdout: new SharedPipe(transport.pipes[1], transport.budget),
     stderr: new SharedPipe(transport.pipes[2], transport.budget),
-    finish(code) {
+    finish(code: number) {
       const cells = new Int32Array(transport.control, 0, 4);
       if (Atomics.load(cells, 0)) return;
-      Atomics.store(cells, 1, code);
+      Atomics.store(cells, 1, Atomics.load(new Int32Array(transport.requestedSignal), 0) === 9 ? 137 : code);
       for (const [fd, pipe] of transport.pipes.entries()) {
         if (fd === 0 && transport.inheritedStdin) continue;
         new SharedPipe(pipe, transport.budget).close();
@@ -159,10 +209,37 @@ export function childTransport(transport) {
   };
 }
 
+type Child = {
+  transport: ChildTransport;
+  pipes: SharedPipe[];
+  handles: number[];
+  modes: string[];
+  worker: ChildWorker | null;
+  ended: boolean;
+};
+
 export class SubprocessHost {
-  constructor(options) {
+  options: SubprocessOptions;
+  budget: SharedArrayBuffer;
+  identity: SharedArrayBuffer;
+  identities: ProcessIdentityAllocator;
+  children: Map<number, Child>;
+  handles: Map<number, { pipe: SharedPipe; fd: number; child: number }>;
+  pipeErrors: Map<number, string>;
+  nextHandle: number;
+  lastError: string | null;
+  timer: ReturnType<typeof setTimeout> | null;
+  notify: () => void;
+  memory: ReturnType<typeof memoryViews> | null;
+  stdin: SharedPipe | null;
+  stdinWaiting: boolean;
+  constructor(options: SubprocessOptions) {
     this.options = options;
     this.budget = options.budget || createProcessBudget();
+    this.identities = new ProcessIdentityAllocator(options.identity);
+    this.identity = this.identities.buffer;
+    this.identities.observePid(options.pid ?? 1);
+    this.identities.observeJob(options.jobId ?? 1);
     this.children = new Map();
     this.handles = new Map();
     this.pipeErrors = new Map();
@@ -174,12 +251,12 @@ export class SubprocessHost {
     this.stdin = options.stdin ? new SharedPipe(options.stdin, this.budget) : null;
     this.stdinWaiting = false;
   }
-  attach(memory) { this.memory = memoryViews(memory); }
-  fail(message, code) {
+  attach(memory: WebAssembly.Memory) { this.memory = memoryViews(memory); }
+  fail(message: string, code: string) {
     this.lastError = JSON.stringify({ name: "Error", message, code });
     return -1;
   }
-  parentActive(cells) {
+  parentActive(cells: Int32Array) {
     const slot = this.options.slot;
     if (slot === undefined) return true;
     const state = Atomics.load(cells, slot + 2);
@@ -188,7 +265,8 @@ export class SubprocessHost {
   reserve() {
     const cells = new Int32Array(this.budget);
     if (!this.parentActive(cells)) return null;
-    const token = (Atomics.add(cells, 0, 1) >>> 0) % 0x0fffffff + 1;
+    const token = Atomics.add(cells, 0, 1) + 1;
+    if (token <= 0 || token > 0x0fffffff) return null;
     const parent = this.options.slot;
     // One atomic word carries both generation and parent link; checking a separate token races reuse.
     const state = token * 8 + (parent === undefined ? 1 : parent + 2);
@@ -200,23 +278,22 @@ export class SubprocessHost {
     }
     return null;
   }
-  releaseSlot(slot, token) {
+  releaseSlot(slot: number, token: number) {
     const cells = new Int32Array(this.budget);
     const state = Atomics.load(cells, slot + 2);
     if (state <= 0 || Math.floor(state / 8) !== token) return;
     if (Atomics.compareExchange(cells, slot + 2, state, -token) !== state) return;
-    for (let child = 0; child < MAX_CHILDREN; child++) {
-      const owned = Atomics.load(cells, child + 2);
-      if (owned > 0 && owned % 8 === slot + 2) this.releaseSlot(child, Math.floor(owned / 8));
-    }
     Atomics.compareExchange(cells, slot + 2, -token, 0);
   }
-  spawn(text) {
-    let meta;
+  spawn(text: string) {
+    let meta: SpawnMeta;
     try { meta = JSON.parse(text); } catch { return this.fail("spawn: invalid metadata", "EINVAL"); }
     if (!meta || typeof meta !== "object") return this.fail("spawn: invalid metadata", "EINVAL");
     if (!Array.isArray(meta.argv) || !meta.argv.length || meta.argv.some((v) => typeof v !== "string")) return this.fail("spawn: invalid argv", "EINVAL");
-    if (!["bun", "/bun"].includes(meta.argv[0])) return this.fail(`spawn ${meta.argv[0]}: not supported in bun-wasm`, "ENOENT");
+    const executable = meta.executable === undefined ? meta.argv[0] : meta.executable;
+    if (typeof executable !== "string" || !executable || executable.includes("\0") || meta.argv.some(value => value.includes("\0"))) return this.fail("spawn: invalid executable", "EINVAL");
+    if (meta.job !== undefined && (!Number.isInteger(meta.job) || meta.job < -1)) return this.fail("spawn: invalid job", "EINVAL");
+    meta.executable = executable;
     if (meta.cwd !== undefined && typeof meta.cwd !== "string") return this.fail("spawn: invalid cwd", "EINVAL");
     if (meta.env !== undefined && (!meta.env || typeof meta.env !== "object" || Array.isArray(meta.env) || Object.values(meta.env).some((v) => typeof v !== "string"))) return this.fail("spawn: invalid env", "EINVAL");
     const modes = [meta.stdin || "pipe", meta.stdout || "pipe", meta.stderr || "pipe"];
@@ -226,9 +303,22 @@ export class SubprocessHost {
     const { slot, token } = reservation;
     const buffers = modes.map(() => new SharedArrayBuffer(16 + PIPE_SIZE));
     const inheritedStdin = modes[0] === "inherit" && Boolean(this.options.stdin);
-    if (inheritedStdin) buffers[0] = this.options.stdin;
-    const transport = { budget: this.budget, slot, token, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16) };
-    const id = this.nextHandle++;
+    if (inheritedStdin) buffers[0] = this.options.stdin!;
+    let id: number;
+    let jobId: number;
+    try {
+      id = this.identities.pid();
+      if (id >= FIRST_HANDLE) throw new Error("process id space exhausted");
+      jobId = meta.job === 0 || meta.job === -1 ? this.identities.job() : meta.job ?? this.options.jobId ?? 1;
+    } catch (error) {
+      this.releaseSlot(slot, token);
+      return this.fail(String(error), "EAGAIN");
+    }
+    const transport: ChildTransport = {
+      pid: id, parentPid: this.options.pid ?? 1, jobId, identity: this.identity,
+      interrupt: new SharedArrayBuffer(4), requestedSignal: new SharedArrayBuffer(4),
+      budget: this.budget, slot, token, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16),
+    };
     const pipes = transport.pipes.map((buffer) => new SharedPipe(buffer, this.budget));
     const handles = pipes.map((pipe, fd) => {
       if (modes[fd] !== "pipe") return 0;
@@ -236,30 +326,30 @@ export class SubprocessHost {
       this.handles.set(handle, { pipe, fd, child: id });
       return handle;
     });
-    const child = { transport, pipes, handles, modes, worker: null, ended: false };
+    const child: Child = { transport, pipes, handles, modes, worker: null, ended: false };
     this.children.set(id, child);
-    if (modes[0] !== "pipe" && !inheritedStdin) pipes[0].close();
+    if (modes[0] !== "pipe" && !inheritedStdin) pipes[0]!.close();
     try { child.worker = this.options.launch(meta, transport, (error) => this.workerError(id, error)); }
     catch (error) {
       this.kill(id, 9);
       this.release(id);
-      return this.fail(String(error), error?.code || "EIO");
+      return this.fail(String(error), error && typeof error === "object" && "code" in error ? String(error.code) : "EIO");
     }
     this.watch();
     return id;
   }
-  workerError(id, error) {
+  workerError(id: number, error: unknown) {
     const child = this.children.get(id);
     if (!child || child.ended) return;
-    child.pipes[2].write(encode.encode(`bun-wasm: ${String(error)}\n`));
+    child.pipes[2]!.write(encode.encode(`bun-wasm: ${String(error)}\n`));
     childTransport(child.transport).finish(1);
     this.notify();
   }
-  pipe(id, fd) {
+  pipe(id: number, fd: number) {
     const child = this.children.get(id);
-    return child && fd >= 0 && fd <= 2 ? child.handles[fd] : BADF;
+    return child && fd >= 0 && fd <= 2 ? (child.handles[fd] ?? BADF) : BADF;
   }
-  read(handle, cap) {
+  read(handle: number, cap = 65536) {
     if (handle === 0) {
       const value = this.stdin ? this.stdin.read(cap) : -4;
       this.stdinWaiting = value === AGAIN;
@@ -269,17 +359,17 @@ export class SubprocessHost {
     const h = this.handles.get(handle);
     return h && h.fd !== 0 ? h.pipe.read(cap) : BADF;
   }
-  write(handle, bytes) {
+  write(handle: number, bytes: Uint8Array) {
     const h = this.handles.get(handle);
     if (!h || h.fd !== 0) return BADF;
     const result = h.pipe.write(bytes);
     return result === -1 ? this.closedPipe(handle) : result;
   }
-  closedPipe(handle) {
+  closedPipe(handle: number) {
     this.pipeErrors.set(handle, JSON.stringify({ name: "Error", message: "EPIPE: broken pipe, write", code: "EPIPE", errno: -32, syscall: "write" }));
     return -1;
   }
-  close(handle) {
+  close(handle: number) {
     if (this.children.has(handle)) {
       this.kill(handle, 9);
       this.release(handle);
@@ -292,21 +382,21 @@ export class SubprocessHost {
     this.pipeErrors.delete(handle);
     return 0;
   }
-  wait(id) {
+  wait(id: number) {
     const child = this.children.get(id);
     if (!child) return BADF;
     this.drainInherited(child);
     const cells = new Int32Array(child.transport.control, 0, 4);
     if (!Atomics.load(cells, 0)) return AGAIN;
-    if (!child.ended) this.reap(child, cells);
-    return Atomics.load(cells, 1);
+    if (!child.ended) this.reap(child);
+    return Atomics.load(new Int32Array(child.transport.requestedSignal), 0) === 9 ? 137 : Atomics.load(cells, 1);
   }
-  reap(child, cells) {
+  reap(child: Child) {
     child.ended = true;
     this.releaseSlot(child.transport.slot, child.transport.token);
     child.worker?.terminate();
   }
-  release(id) {
+  release(id: number) {
     const child = this.children.get(id);
     if (!child) return;
     for (const handle of child.handles) {
@@ -315,28 +405,42 @@ export class SubprocessHost {
     }
     this.children.delete(id);
   }
-  kill(id, signal = 15) {
+  kill(id: number, signal = 15) {
     const child = this.children.get(id);
     if (!child) return BADF;
-    if (!Number.isInteger(signal) || signal < 0 || signal > 64) return this.fail("kill: invalid signal", "EINVAL");
+    if (![0, 2, 9, 13, 15].includes(signal)) return this.fail("kill: invalid signal", "EINVAL");
     if (this.wait(id) !== AGAIN || signal === 0) return 0;
+    const transport = child.transport;
+    const requested = new Int32Array(transport.requestedSignal);
+    for (;;) {
+      const previous = Atomics.load(requested, 0);
+      if (previous === 9) { signal = 9; break; }
+      if (Atomics.compareExchange(requested, 0, previous, signal) === previous) break;
+    }
+    Atomics.store(new Int32Array(transport.interrupt), 0, signal);
+    Atomics.notify(new Int32Array(transport.interrupt), 0);
+    wake(this.budget);
+    if (signal !== 9) return 0;
+    child.worker?.revoke?.();
+    Atomics.store(new Int32Array(transport.control), 3, 1);
+    // Close this process's endpoints before physical teardown; inherited stdin is not ours.
+    childTransport(transport).finish(128 + signal);
     child.worker?.terminate();
-    childTransport(child.transport).finish(128 + signal);
     this.wait(id);
     return 0;
   }
-  drainInherited(child) {
+  drainInherited(child: Child) {
     for (const fd of [1, 2]) {
       if (child.modes[fd] === "pipe") continue;
       this.drainPipe(child, fd);
     }
   }
-  drainPipe(child, fd) {
+  drainPipe(child: Child, fd: number) {
     for (;;) {
-      const bytes = child.pipes[fd].read();
+      const bytes = child.pipes[fd]!.read();
       if (typeof bytes === "number") return;
       if (child.modes[fd] !== "inherit" || this.options.output(fd, bytes) !== false) continue;
-      child.pipes[fd].close();
+      child.pipes[fd]!.close();
       return;
     }
   }
@@ -358,22 +462,24 @@ export class SubprocessHost {
       if (this.stdinWaiting || Array.from(this.children.values()).some((child) => !child.ended)) this.watch();
     }, 4);
   }
-  dispose() {
+  detach() {
     this.stdinWaiting = false;
     if (this.timer !== null) nativeClearTimeout(this.timer);
     this.timer = null;
+  }
+  dispose() {
+    this.detach();
     for (const id of this.children.keys()) {
       this.kill(id, 9);
       this.release(id);
     }
   }
-  owns(handle) { return handle >= FIRST_HANDLE; }
-  engineNet(net) {
-    const fallback = Object.fromEntries(Object.entries(net?.natives || {}).map(([name, fn]) => [name, (...args) => {
+  owns(handle: number) { return handle >= FIRST_HANDLE || this.children.has(handle); }
+  engineNet(net?: EngineNet): EngineNet {
+    const fallback = Object.fromEntries(Object.entries(net?.natives || {}).map(([name, fn]) => [name, (...args: never[]) => {
       if (name !== "hostError") this.lastError = null;
       return fn(...args);
     }]));
-    const route = (name, operation) => (handle, ...args) => this.owns(handle) || name === "hostRead" && handle === 0 ? operation(handle, ...args) : (fallback[name]?.(handle, ...args) ?? BADF);
     return {
       natives: {
         ...fallback,
@@ -382,28 +488,31 @@ export class SubprocessHost {
         hostChildWait: (id) => this.wait(id),
         hostChildPipe: (id, fd) => this.pipe(id, fd),
         hostChildKill: (id, signal) => this.kill(id, signal),
-        hostRead: route("hostRead", (id, cap) => this.read(id, cap)),
-        hostWrite: route("hostWrite", (id, bytes) => this.write(id, bytes)),
-        hostClose: route("hostClose", (id) => this.close(id)),
-        hostError: (id) => this.pipeErrors.get(id) ?? (id === 0 && this.lastError ? this.lastError : (fallback.hostError?.(id) ?? this.lastError ?? BADF)),
+        hostRead: (id: number, cap?: number) => this.owns(id) || id === 0 ? this.read(id, cap) : fallback.hostRead?.(...([id, cap] as never[])) ?? BADF,
+        hostWrite: (id: number, bytes: Uint8Array) => this.owns(id) ? this.write(id, bytes) : fallback.hostWrite?.(...([id, bytes] as never[])) ?? BADF,
+        hostClose: (id: number) => this.owns(id) ? this.close(id) : fallback.hostClose?.(...([id] as never[])) ?? BADF,
+        hostError: (id) => this.pipeErrors.get(id) ?? (id === 0 && this.lastError ? this.lastError : (fallback.hostError?.(...([id] as never[])) ?? this.lastError ?? BADF)),
       },
       caps: { ...net?.caps, spawn: true, child_wait: true, child_pipe: true, child_kill: true, read: true, write: true, close: true, error: true },
       onNews: (cb) => { this.notify = cb; net?.onNews(cb); },
     };
   }
-  slots(network = {}) {
-    const net = Object.fromEntries(Object.entries(network).map(([name, fn]) => [name, (...args) => {
+  slots(network: SlotImpls = {}): SlotImpls {
+    const net = Object.fromEntries(Object.entries(network).map(([name, fn]) => [name, (...args: number[]) => {
       if (name !== "error" && name !== "poll") this.lastError = null;
       return fn(...args);
     }]));
-    const bytes = (ptr, len) => this.memory.range(ptr >>> 0, len);
-    const read = (id, ptr, cap) => {
+    const bytes = (ptr: number, len: number) => {
+      if (!this.memory) throw new Error("Subprocess memory is not attached");
+      return this.memory.range(ptr >>> 0, len);
+    };
+    const read = (id: number, ptr: number, cap: number) => {
       const value = this.read(id, cap);
       if (typeof value === "number") return value;
       bytes(ptr, value.length).set(value);
       return value.length;
     };
-    const error = (id, ptr, cap) => {
+    const error = (id: number, ptr: number, cap: number) => {
       const value = encode.encode(this.pipeErrors.get(id) ?? this.lastError ?? '{"message":"no error"}');
       if (value.length <= cap) bytes(ptr, value.length).set(value);
       return value.length;

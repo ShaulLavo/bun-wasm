@@ -8,12 +8,17 @@ import { NetHost } from "./net/host";
 import type { NetRequest } from "./net/protocol";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline";
 import { Wasi, WasiExit } from "@bun-wasm/runtime/core";
-import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.js";
+import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.ts";
 
 export type Engine = "quickjs" | "jsc" | "browser";
 
 export interface RunRequest {
   engine: Engine;
+  adapter?: "bun" | "preview1";
+  pid?: number;
+  jobId?: number;
+  identity?: SharedArrayBuffer;
+  interrupt?: SharedArrayBuffer;
   module: WebAssembly.Module;
   args: string[];
   env: Record<string, string>;
@@ -55,7 +60,27 @@ function moduleStore(cacheName: string) {
   };
 }
 
-export type SpawnRequest = Omit<RunRequest, "filesystem"> & { filesystem: FilesystemIdentity };
+export interface SpawnRequest {
+  executable: string;
+  argv: string[];
+  pid: number;
+  parentPid: number;
+  jobId: number;
+  /** Preserve 0/-1 new-job intent separately from the pre-reserved job id. */
+  job?: number;
+  cwd: string;
+  env: Record<string, string>;
+  filesystem: FilesystemIdentity;
+  child: ChildTransport;
+  trace: boolean;
+  slots?: RunRequest["slots"];
+  spawnBroker: true;
+}
+
+/** A guest explicitly choosing the default action, not an unrelated guest trap. */
+class DefaultSignal extends Error {
+  constructor(readonly signal: number) { super(`Process stopped by signal ${signal}`); }
+}
 
 export type WorkerMessage =
   | { type: "spawn"; request: SpawnRequest }
@@ -63,7 +88,7 @@ export type WorkerMessage =
   | { type: "stdout"; data: Uint8Array }
   | { type: "stderr"; data: Uint8Array }
   | { type: "net"; req: NetRequest }
-  | { type: "exit"; code: number; sleep: SleepMode }
+  | { type: "exit"; code: number; signal?: number; sleep: SleepMode }
   | { type: "error"; message: string; sleep: SleepMode };
 
 export type SleepMode = "atomics" | "busy-wait";
@@ -123,6 +148,9 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   };
   const subprocess = ctx.crossOriginIsolated && typeof SharedArrayBuffer === "function" ? new SubprocessHost({
     budget: req.child?.budget,
+    identity: req.child?.identity ?? req.identity,
+    pid: req.child?.pid ?? req.pid,
+    jobId: req.child?.jobId ?? req.jobId,
     slot: req.child?.slot,
     token: req.child?.token,
     stdin: req.child?.pipes[0],
@@ -131,13 +159,20 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
       const cwd = meta.cwd || req.env.PWD || "/";
       if (fs.lookup(cwd)?.kind !== "dir") throw Object.assign(new Error(`spawn: cwd does not exist: ${cwd}`), { code: "ENOENT" });
       if (!req.spawnBroker) throw Object.assign(new Error("spawn: this worker has no page subprocess broker"), { code: "ENOTSUP" });
+      // Process ancestry is not capability ancestry: another job may outlive this parent.
+      const filesystem = createFilesystemIdentity({ ...fs.connection, revocations: fs.connection.revocations.slice(-1) });
       const request: SpawnRequest = {
-        ...req, args: meta.argv, env: { ...meta.env, PWD: cwd },
-        filesystem: createFilesystemIdentity(fs.connection), child: transport, net: null, moduleCache: null,
+        executable: meta.executable ?? meta.argv[0]!, argv: meta.argv, cwd,
+        pid: transport.pid, parentPid: transport.parentPid, jobId: transport.jobId, job: meta.job ?? transport.jobId,
+        env: { ...meta.env, PWD: cwd }, filesystem, child: transport,
+        trace: req.trace, slots: req.slots, spawnBroker: true,
       };
       ctx.postMessage({ type: "spawn", request } satisfies WorkerMessage);
       const control = new Int32Array(transport.control, 0, 4);
-      return { terminate: () => { revokeFilesystem(request.filesystem); fs.sweep(); Atomics.store(control, 3, 1); } };
+      return {
+        revoke: () => { revokeFilesystem(filesystem); fs.sweep(); },
+        terminate: () => { Atomics.store(control, 3, 1); },
+      };
     },
   }) : null;
   const wasi = new Wasi({
@@ -150,25 +185,42 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     stdout: (data) => post("stdout", data),
     stderr: (data) => post("stderr", data),
     sleep,
+    namespaces: {
+      runtime_proc: {
+        interrupted: () => {
+          const interrupt = req.child?.interrupt ?? req.interrupt;
+          return interrupt ? Atomics.exchange(new Int32Array(interrupt), 0, 0) : 0;
+        },
+        default_signal: (signal: number) => {
+          if (![2, 9, 13, 15].includes(signal)) throw new Error(`Invalid default signal: ${signal}`);
+          throw new DefaultSignal(signal);
+        },
+      },
+    },
     trace: req.trace ? (line) => console.debug(`[wasi] ${line}`) : undefined,
   });
   let done = false;
+  let started = false;
   /** Sends the result (once) with the filesystem; the page then terminates this worker. */
-  const finish = (result: { code: number } | { error: unknown }) => {
+  const finish = (result: { code: number; signal?: number } | { error: unknown }) => {
     if (done) return;
     done = true;
-    subprocess?.dispose();
+    subprocess?.detach();
     if (child) {
       if ("error" in result) child.stderr.writeAll(new TextEncoder().encode(`${describeError(result.error)}\n`));
-      child.finish("code" in result ? result.code : 1);
+      const code = "code" in result ? result.code : started ? 1 : 126;
+      const signal = "signal" in result ? result.signal : undefined;
       wasi.descriptors.dispose();
       fs.dispose();
+      child.finish(code);
+      // A completion word alone does not prove the worker released filesystem references.
+      ctx.postMessage({ type: "exit", code, signal, sleep: sleepMode } satisfies WorkerMessage);
       return;
     }
     wasi.descriptors.dispose();
     fs.dispose();
     if ("code" in result) {
-      ctx.postMessage({ type: "exit", code: result.code, sleep: sleepMode } satisfies WorkerMessage);
+      ctx.postMessage({ type: "exit", code: result.code, signal: result.signal, sleep: sleepMode } satisfies WorkerMessage);
       return;
     }
     const err = result.error;
@@ -179,7 +231,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     const instantiating = perfNow();
     const instance = new WebAssembly.Instance(req.module, wasi.imports(req.module));
     ctx.postMessage({ type: "phase", name: "instantiate", duration: perfNow() - instantiating } satisfies WorkerMessage);
-    const slots = req.slots ?? "imports";
+    const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
     const netHost = req.net ? new NetHost(req.net, sendNet, (path, bytes) => fs.writeFile(path, bytes)) : null;
     if (slots !== "off") {
       const memory = instance.exports.memory;
@@ -190,9 +242,12 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
       if (impls && slots === "imports") wasi.hostCall = installHostSlotsViaImport(instance, impls);
       else if (impls) installHostSlots(instance, impls);
     }
+    if (typeof instance.exports._start !== "function") throw new TypeError("guest has no _start entry point");
+    if (!(instance.exports.memory instanceof WebAssembly.Memory)) throw new TypeError("guest has no memory");
+    started = true;
     const exited = wasi.launch(instance);
     const ready = instance.exports.bunwasm_ready as (() => number) | undefined;
-    if (exited !== null || req.engine !== "browser" || ready?.() !== 1) {
+    if (exited !== null || req.adapter === "preview1" || req.engine !== "browser" || ready?.() !== 1) {
       finish({ code: exited ?? 0 });
       return;
     }
@@ -224,6 +279,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     finish({ code });
   } catch (err) {
     if (err instanceof WasiExit) finish({ code: err.code });
+    else if (err instanceof DefaultSignal) finish({ code: 128 + err.signal, signal: err.signal });
     else finish({ error: err });
   }
 };

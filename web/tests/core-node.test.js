@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 
 test('plain Node can consume the JS memory helper through the existing host adapters', () => {
-  const source = `await import(${JSON.stringify(new URL('../src/subprocess.js', import.meta.url).href)});`;
+  const source = `await import(${JSON.stringify(new URL('../src/subprocess.ts', import.meta.url).href)});`;
   const result = spawnSync('node', ['--input-type=module', '-e', source], { encoding: 'utf8' });
   expect(result.stderr).toBe('');
   expect(result.status).toBe(0);
@@ -30,13 +30,13 @@ test('unbundled headless hosts load in a dependency-free source checkout', async
   const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? (existsSync('/work/tmp') ? '/work/tmp' : tmpdir());
   const dir = await mkdtemp(join(base, 'bun-wasm-node-clean-'));
   try {
-    for (const path of ['web/package.json', 'runtime/package.json', 'runtime/core/memory-views.js',
-      'web/scripts/node-host.mjs', 'web/scripts/node-stdio.ts', 'web/scripts/node-install-net.mjs', 'web/src/subprocess.js', 'web/src/engine-host.js']) {
+    for (const path of ['web/package.json', 'runtime/package.json', 'runtime/core/memory-views.js', 'runtime/proc/identity.ts',
+      'web/scripts/node-host.mjs', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-install-net.mjs', 'web/src/subprocess.ts', 'web/src/engine-host.js']) {
       const target = join(dir, path);
       await mkdir(dirname(target), { recursive: true });
       await copyFile(new URL(`../../${path}`, import.meta.url), target);
     }
-    const imports = ['web/src/engine-host.js', 'web/src/subprocess.js', 'web/scripts/node-install-net.mjs', 'web/scripts/node-stdio.ts'];
+    const imports = ['web/src/engine-host.js', 'web/src/subprocess.ts', 'web/scripts/node-install-net.mjs', 'web/scripts/node-stdio.ts'];
     const load = spawnSync('node', ['--input-type=module', '-e', `for (const path of ${JSON.stringify(imports)}) await import('./' + path);`], { cwd: dir, encoding: 'utf8' });
     expect(load.stderr).toBe('');
     expect(load.status).toBe(0);
