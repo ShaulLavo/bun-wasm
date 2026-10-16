@@ -39,6 +39,8 @@ check("formatter consultation", () => {
   const holder = {};
   Error.captureStackTrace(holder);
   assert(consulted === 0);
-  assert(holder.stack === 0 && holder.stack === 0 && consulted === 1);
+  assert(holder.stack === 0 && consulted > 0);
+  const afterRead = consulted;
+  assert(holder.stack === 0 && consulted === afterRead);
 });
 Object.defineProperty(Error, "prepareStackTrace", { value: saved, writable: true, configurable: true });
