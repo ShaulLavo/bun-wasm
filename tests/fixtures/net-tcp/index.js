@@ -1,0 +1,73 @@
+import assert from "node:assert/strict";
+import net from "node:net";
+import { Duplex } from "node:stream";
+
+assert.equal(typeof net.getDefaultAutoSelectFamilyAttemptTimeout, "function");
+const attemptTimeout = net.getDefaultAutoSelectFamilyAttemptTimeout();
+net.setDefaultAutoSelectFamilyAttemptTimeout(30);
+assert.equal(net.getDefaultAutoSelectFamilyAttemptTimeout(), 30);
+net.setDefaultAutoSelectFamilyAttemptTimeout(attemptTimeout);
+assert.equal(net.isIP("fe80::1%eth0"), 6);
+assert.equal(net.isIP("01.2.3.4"), 0);
+const zero = new net.Socket({ highWaterMark: 0 });
+assert.equal(zero.writableHighWaterMark, 0);
+await zero[Symbol.asyncDispose]();
+assert.equal(zero.destroyed, true);
+assert.throws(() => net.createServer().listen({ exclusive: true }), { code: "ERR_INVALID_ARG_VALUE" });
+const blocked = new net.BlockList();
+blocked.addSubnet("192.168.0.0", 16);
+blocked.addRange("::1", "::f", "ipv6");
+assert.equal(blocked.check("192.168.3.4"), true);
+assert.equal(blocked.check("::8", "ipv6"), true);
+assert.equal(blocked.check("127.0.0.1"), false);
+assert.equal(new net.SocketAddress({ port: 80 }).toJSON().port, 80);
+const normalized = net._normalizeArgs([80, "localhost", () => {}]);
+assert.equal(normalized[0].port, 80);
+assert.equal(normalized[0].host, "localhost");
+
+const once = (object, name) => new Promise((resolve, reject) => {
+  object.once(name, (...args) => resolve(args));
+  object.once("error", reject);
+});
+const payload = "x".repeat(2 * 1024 * 1024);
+const closeOrder = [];
+const server = net.createServer({ allowHalfOpen: true }, socket => {
+  socket.on("close", () => closeOrder.push("socket"));
+  assert.equal(socket instanceof Duplex, true);
+  assert.equal(socket.localPort, server.address().port);
+  socket.setEncoding("utf8");
+  let data = "";
+  socket.on("data", chunk => { data += chunk; });
+  socket.on("end", () => {
+    assert.equal(data, payload);
+    setTimeout(() => socket.end("after-fin"), 5);
+  });
+});
+server.listen(0, "127.0.0.1");
+await once(server, "listening");
+const serverPort = server.address().port;
+const client = net.connect({ port: serverPort, host: "127.0.0.1", highWaterMark: 1024 });
+assert.equal(client.connecting, true);
+const received = [];
+const closed = once(client, "close");
+client.on("data", chunk => received.push(chunk));
+client.write(payload);
+client.end();
+await closed;
+assert.equal(Buffer.concat(received).toString(), "after-fin");
+assert.equal(client.bytesWritten, payload.length);
+assert.equal(client.bytesRead, 9);
+assert.equal(client.destroyed, true);
+await new Promise(resolve => server.close(() => { closeOrder.push("server"); resolve(); }));
+assert.equal(server.listening, false);
+assert.deepEqual(closeOrder, ["socket", "server"]);
+
+const refused = net.connect({ host: "127.0.0.1", port: serverPort });
+let connected = false;
+refused.on("connect", () => { connected = true; });
+const refusedClosed = new Promise(resolve => refused.once("close", resolve));
+const error = await new Promise(resolve => refused.once("error", resolve));
+await refusedClosed;
+assert.equal(connected, false);
+assert.equal(error.code, "ECONNREFUSED");
+console.log("tcp helpers, queued writes, half-close, counters, refused connection ok");

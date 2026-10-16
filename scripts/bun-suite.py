@@ -70,7 +70,7 @@ def git(suite, *args):
 
 def discover(opts):
     paths = git(opts.suite, "ls-files", "test").splitlines()
-    paths = [path[5:] for path in paths if TEST_NAME.search(Path(path).name)]
+    paths = [path[5:] for path in paths if TEST_NAME.search(Path(path).name) or (path[5:] in opts.glob and Path(path).suffix in {".js", ".mjs", ".cjs", ".ts"})]
     paths = [path for path in paths if any(fnmatch.fnmatchcase(path, glob) or path.startswith(glob.rstrip("/") + "/") for glob in opts.glob)]
     return sorted(paths)[:opts.limit]
 
@@ -162,6 +162,8 @@ def command(opts, wasm, work, preloads, path):
     tests = ["test", "--timeout", str(opts.test_timeout)]
     tests += [part for preload in preloads for part in ["--preload", "/bun/test/" + preload.removeprefix("./")]]
     tests += ["/bun/test/" + path]
+    if not TEST_NAME.search(Path(path).name):
+        tests = ["run", "/bun/test/" + path]
     if opts.engine == "browser":
         return ["node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm), "--net"] + dirs + flags + ["--"] + tests
     return [str(opts.launcher), "--wasm", str(wasm)] + dirs + flags + tests
@@ -232,7 +234,11 @@ def invoke(opts, wasm, work, preloads, path):
             text += "\n[output truncated]\n" + output.read().decode("utf-8", errors="replace")
     result = parse_output(text)
     result.update(file=path, exit=proc.returncode, duration_seconds=round(time.monotonic() - started, 3), timed_out=timed_out, output_bytes=size, interrupted=STOP.is_set())
+    result["kind"] = "test" if TEST_NAME.search(Path(path).name) else "script"
     result["fully_passing"] = proc.returncode == 0 and result["complete"] and result["counts"]["fail"] == 0 and result["counts"]["errors"] == 0 and result["counts"]["pass"] > 0
+    if result["kind"] == "script":
+        result["complete"] = not timed_out and not STOP.is_set()
+        result["fully_passing"] = result["complete"] and proc.returncode == 0
     return result
 
 

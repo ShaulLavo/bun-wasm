@@ -27,6 +27,7 @@ export function createNodeNet({ net, http, https, zlib }) {
     const info = { name: err && err.name === "TypeError" ? "TypeError" : "Error", message: (err && err.message) || fallback };
     const code = (err && err.code) || (cause && cause.code);
     if (code) info.code = code;
+    if (err?.syscall) info.syscall = err.syscall;
     return info;
   };
   const fail = (info) => {
@@ -59,6 +60,7 @@ export function createNodeNet({ net, http, https, zlib }) {
       news();
     });
     socket.on("drain", news);
+    socket.on("connect", news);
     return h;
   }
 
@@ -206,10 +208,26 @@ export function createNodeNet({ net, http, https, zlib }) {
       if (!h) return BADF;
       if (h.kind !== "conn") return UNSUPPORTED;
       if (h.error) return ERROR;
+      if (h.socket.connecting) return AGAIN;
       if (h.socket.writableLength > MAX_QUEUED) return AGAIN;
       if (bytes.length === 0) return 0;
       h.socket.write(new Uint8Array(bytes));
       return bytes.length;
+    },
+
+    hostShutdown(handle) {
+      const h = handles.get(handle);
+      if (h?.kind !== "conn") return BADF;
+      h.socket.end();
+      return 0;
+    },
+
+    hostLocalAddr(handle) {
+      const h = handles.get(handle);
+      if (!h || h.kind === "fetch") return BADF;
+      if (h.error) return ERROR;
+      const address = h.kind === "conn" ? h.socket.address() : h.server.address();
+      return address && typeof address === "object" ? json(address) : AGAIN;
     },
 
     hostClose(handle) {
@@ -236,6 +254,7 @@ export function createNodeNet({ net, http, https, zlib }) {
       const host = hostname === "localhost" || !hostname ? "127.0.0.1" : hostname;
       const server = net.createServer({ allowHalfOpen: true });
       const h = { kind: "listener", server, pending: [], error: null };
+      server.on("listening", news);
       server.on("connection", (socket) => {
         h.pending.push(add(attachSocket(stream("conn"), socket)));
         news();
@@ -288,11 +307,13 @@ export function createNodeNet({ net, http, https, zlib }) {
       const h = handles.get(handle);
       if (!h || h.kind !== "conn") return BADF;
       const s = h.socket;
+      if (h.error) return ERROR;
+      if (s.connecting || !s.remotePort) return AGAIN;
       return json({ address: s.remoteAddress || "127.0.0.1", port: s.remotePort || 0, family: s.remoteFamily || "IPv4" });
     },
   };
 
-  const caps = { poll: false, fetch: true, fetch_head: true, read: true, write: true, close: true, listen: true, local_port: true, accept: true, connect: true, error: true, peer_addr: true };
+  const caps = { poll: false, fetch: true, fetch_head: true, read: true, write: true, close: true, listen: true, local_port: true, accept: true, connect: true, error: true, peer_addr: true, shutdown: true, local_addr: true };
   return {
     natives,
     caps,

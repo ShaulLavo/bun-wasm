@@ -138,6 +138,167 @@
     }
   }
 
+  function directoryOptions(options) {
+    if (options == null) options = {};
+    if (typeof options === "string") options = { encoding: options };
+    if (typeof options !== "object") throw invalidArg("options", "of type object", options);
+    const encoding = options.encoding || "utf8";
+    if (encoding !== "buffer" && !Buffer.isEncoding(encoding)) {
+      throw Object.assign(new TypeError(`The argument 'encoding' is invalid. Received ${String(encoding)}`), { code: "ERR_INVALID_ARG_VALUE" });
+    }
+    const bufferSize = options.bufferSize === undefined ? 32 : options.bufferSize;
+    if (typeof bufferSize !== "number") throw invalidArg("options.bufferSize", "of type number", bufferSize);
+    if (!Number.isInteger(bufferSize) || bufferSize < 1 || bufferSize > 4294967295) {
+      throw Object.assign(new RangeError(`The value of "options.bufferSize" is out of range. Received ${bufferSize}`), { code: "ERR_OUT_OF_RANGE" });
+    }
+    return { encoding, bufferSize, recursive: Boolean(options.recursive) };
+  }
+
+  function directoryClosed() {
+    return Object.assign(new Error("Directory handle was closed"), { code: "ERR_DIR_CLOSED" });
+  }
+
+  const directoryCleanup = new FinalizationRegistry((handle) => native.releaseDir(handle));
+
+  class Dir {
+    #handle;
+    #path;
+    #lookupPath;
+    #token = {};
+    #options;
+    #entries = [];
+    #index = 0;
+    #operations = [];
+    #active = false;
+
+    constructor(handle, lookupPath, publicPath, options) {
+      this.#handle = handle;
+      this.#path = publicPath;
+      this.#lookupPath = lookupPath;
+      this.#options = options;
+      directoryCleanup.register(this, handle, this.#token);
+    }
+    get path() {
+      if (!(#path in this)) throw Object.assign(new TypeError('Value of "this" must be of type Dir'), { code: "ERR_INVALID_THIS" });
+      return this.#path;
+    }
+    #checkOpen() {
+      if (this.#handle === null) throw directoryClosed();
+    }
+    #checkSync() {
+      this.#checkOpen();
+      if (this.#active || this.#operations.length !== 0) {
+        throw Object.assign(new Error("Cannot do synchronous work on directory handle with concurrent asynchronous operations"), { code: "ERR_DIR_CONCURRENT_OPERATION" });
+      }
+    }
+    #readEntry() {
+      this.#checkOpen();
+      if (this.#index === this.#entries.length) {
+        this.#entries = native.readDir(this.#handle, this.#options.bufferSize);
+        this.#index = 0;
+      }
+      if (this.#entries.length === 0) return null;
+      const [bytes, kind, parentPath] = this.#entries[this.#index++];
+      const buffer = asBuffer(bytes);
+      const name = this.#options.encoding === "buffer" ? buffer : buffer.toString(this.#options.encoding);
+      const parent = this.#path instanceof Uint8Array ? (parentPath === this.#lookupPath ? this.#path : Buffer.from(parentPath)) : parentPath;
+      return new Dirent(name, kind, parent);
+    }
+    #closeHandle() {
+      this.#checkOpen();
+      const handle = this.#handle;
+      this.#handle = null;
+      directoryCleanup.unregister(this.#token);
+      native.closeDir(handle);
+      this.#entries = [];
+    }
+    #enqueue(operation, callback) {
+      if (callback !== undefined && typeof callback !== "function") throw invalidArg("callback", "of type function", callback);
+      if (callback === undefined) return new Promise((resolve, reject) => this.#enqueue(operation, (error, result) => error ? reject(error) : resolve(result)));
+      const buffered = operation === "read" && this.#index < this.#entries.length;
+      if (this.#operations.length === 0 && (buffered || operation === "close")) {
+        const { error, result } = this.#run(operation);
+        later(() => operation === "close" ? callback(error) : callback(error, result));
+        return;
+      }
+      this.#operations.push({ operation, callback });
+      if (this.#operations.length === 1) later(() => this.#drain());
+    }
+    #run(operation) {
+      try { return { error: null, result: operation === "read" ? this.#readEntry() : this.#closeHandle() }; }
+      catch (error) { return { error, result: undefined }; }
+    }
+    #drain() {
+      const { operation, callback } = this.#operations[0];
+      this.#active = operation === "read" && this.#index === this.#entries.length;
+      const { error, result } = this.#run(operation);
+      this.#operations.shift();
+      if (this.#operations.length !== 0) later(() => this.#drain());
+      try {
+        if (operation === "close") callback(error);
+        else callback(error, result);
+      } finally {
+        this.#active = false;
+      }
+    }
+    readSync() {
+      this.#checkSync();
+      return this.#readEntry();
+    }
+    read(callback) {
+      if (arguments.length > 0) {
+        this.#checkOpen();
+        if (callback === undefined) throw invalidArg("callback", "of type function", callback);
+      }
+      return this.#enqueue("read", callback);
+    }
+    closeSync() {
+      this.#checkSync();
+      this.#closeHandle();
+    }
+    close(callback) {
+      return this.#enqueue("close", callback);
+    }
+    [Symbol.dispose]() {
+      if (this.#handle !== null) this.closeSync();
+    }
+    async [Symbol.asyncDispose]() {
+      if (this.#handle !== null) await this.close();
+    }
+    async *[Symbol.asyncIterator]() {
+      try {
+        let entry;
+        while ((entry = await this.read()) !== null) yield entry;
+      } finally {
+        await this.close();
+      }
+    }
+  }
+
+  function opendirSync(path, options) {
+    const given = toPath(path);
+    if (given === "") throw Object.assign(new Error("ENOENT: no such file or directory, opendir ''"), { code: "ENOENT", errno: -2, syscall: "opendir", path: given });
+    const config = directoryOptions(options);
+    const publicPath = path instanceof Uint8Array ? path : given;
+    return new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, publicPath, config);
+  }
+
+  function opendir(path, options, callback) {
+    if (typeof options === "function") { callback = options; options = undefined; }
+    if (typeof callback !== "function") throw invalidArg("callback", "of type function", callback);
+    const given = toPath(path);
+    const config = directoryOptions(options);
+    let result, error = null;
+    if (given === "") {
+      later(() => callback(Object.assign(new Error("ENOENT: no such file or directory, opendir ''"), { code: "ENOENT", errno: -2, syscall: "opendir", path: given })));
+      return;
+    }
+    const publicPath = path instanceof Uint8Array ? path : given;
+    try { result = new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, publicPath, config); }
+    catch (err) { error = err; }
+    later(() => callback(error, result));
+  }
+
   // --- sync API ---------------------------------------------------------------
 
   function readFileSync(path, options) {
@@ -442,7 +603,7 @@
   const sync = {
     readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, mkdirSync, readdirSync,
     rmSync, rmdirSync, unlinkSync, renameSync, copyFileSync, cpSync, realpathSync, accessSync, mkdtempSync,
-    openSync, closeSync, readSync, writeSync, writevSync, globSync,
+    openSync, closeSync, readSync, writeSync, writevSync, globSync, opendirSync,
     fstatSync: (fd) => new Stats(native.fstat(fd)),
     ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
     truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
@@ -494,6 +655,7 @@
     later(() => callback(result));
   };
   callbackApi.glob = glob;
+  callbackApi.opendir = opendir;
   callbackApi.writev = writev;
   const readCallback = callbackify("read", readSync, (cb, err, n, args) => cb(err, n, args[1]));
   callbackApi.read = function (...args) {
@@ -680,6 +842,7 @@
     constants,
     Stats,
     Dirent,
+    Dir,
     createReadStream,
     createWriteStream,
     watch: watchUnsupported,

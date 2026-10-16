@@ -158,6 +158,7 @@ unsafe extern "C" {
     pub fn bunjsc_evaluate_script(ctx: JSContextRef, source: *const c_char, filename: *const c_char, first_line: c_int, exception: *mut JSValueRef) -> JSValueRef;
     pub fn bunjsc_enter(ctx: JSContextRef);
     pub fn bunjsc_drain_microtasks(ctx: JSContextRef) -> bool;
+    pub fn bunjsc_collect_garbage(ctx: JSContextRef);
     pub fn bunjsc_is_error(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_get_async_context(ctx: JSContextRef) -> JSValueRef;
     pub fn bunjsc_set_async_context(ctx: JSContextRef, value: JSValueRef);

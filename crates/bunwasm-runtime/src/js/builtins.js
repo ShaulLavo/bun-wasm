@@ -743,7 +743,7 @@
         super();
         this.writable = true;
         this.destroyed = false;
-        this._writableState = { errorEmitted: false, autoDestroy: options.autoDestroy !== false };
+        this._writableState = { length: 0, needDrain: false, finished: false, errorEmitted: false, autoDestroy: options.autoDestroy !== false };
         if (typeof options.write === "function") this._write = options.write;
         if (typeof options.final === "function") this._final = options.final;
         if (typeof options.destroy === "function") this._destroy = options.destroy;
@@ -767,6 +767,7 @@
         else if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
         const finish = () => {
           this.writable = false;
+          this._writableState.finished = true;
           this.emit("finish");
           if (typeof callback === "function") callback();
           if (this._writableState.autoDestroy) this.destroy();
@@ -798,7 +799,7 @@
         super(options);
         this.writable = true;
         this.destroyed = false;
-        this._writableState = { errorEmitted: false, autoDestroy: options.autoDestroy !== false };
+        this._writableState = { length: 0, needDrain: false, finished: false, errorEmitted: false, autoDestroy: options.autoDestroy !== false };
         if (typeof options.write === "function") this._write = options.write;
         if (typeof options.final === "function") this._final = options.final;
         if (typeof options.destroy === "function") this._destroy = options.destroy;
@@ -962,20 +963,6 @@
 
   // --- net / http helpers that work without sockets -------------------------
 
-  function isIPv4(s) {
-    return /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(String(s));
-  }
-  function isIPv6(s) {
-    const str = String(s);
-    if (!str.includes(":")) return false;
-    try {
-      return new URL(`http://[${str}]/`).hostname.length > 2;
-    } catch {
-      return false;
-    }
-  }
-  const isIP = (s) => (isIPv4(s) ? 4 : isIPv6(s) ? 6 : 0);
-
   const STATUS_CODES = {
     100: "Continue", 101: "Switching Protocols", 102: "Processing", 103: "Early Hints", 200: "OK", 201: "Created",
     202: "Accepted", 203: "Non-Authoritative Information", 204: "No Content", 205: "Reset Content", 206: "Partial Content",
@@ -1070,7 +1057,7 @@
     "node:worker_threads": thrower("worker_threads", NO_THREADS),
     "node:child_process": () => internal.require("spawn").nodeChildProcess(),
     "node:cluster": () => unsupportedModule("cluster", NO_PROCESSES, ["fork", "setupPrimary", "setupMaster", "disconnect"], { isPrimary: true, isMaster: true, isWorker: false, workers: {} }),
-    "node:net": () => native.hostCaps.listen ? Object.assign(internal.require("net").nodeNet(), { isIP, isIPv4, isIPv6, getDefaultAutoSelectFamily: () => true, setDefaultAutoSelectFamily() {} }) : unsupportedModule("net", NO_NETWORK, ["createServer", "createConnection", "connect", "Socket", "Server", "Stream", "BlockList", "SocketAddress"], { isIP, isIPv4, isIPv6, getDefaultAutoSelectFamily: () => true, setDefaultAutoSelectFamily() {} }),
+    "node:net": () => Object.assign(internal.require("net").nodeNet(), internal.require("net_address")),
     "node:tls": () => unsupportedModule("tls", NO_NETWORK, ["connect", "createServer", "createSecureContext", "TLSSocket", "Server", "checkServerIdentity"], { rootCertificates: [], DEFAULT_MIN_VERSION: "TLSv1.2", DEFAULT_MAX_VERSION: "TLSv1.3", DEFAULT_ECDH_CURVE: "auto" }),
     "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
     "node:dns": () => unsupportedModule("dns", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "resolveMx", "resolveTxt", "resolveSrv", "resolveNs", "resolveCname", "reverse", "lookupService", "Resolver"], { promises: internal.builtin("node:dns/promises"), getServers: () => [], setServers() {}, setDefaultResultOrder() {} }),
@@ -1141,6 +1128,7 @@
     "bun:internal-for-testing": () => ({
       isASANEnabled: () => false,
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
+      directoryCount: () => native.directoryCount(),
     }),
     "bun:test": () => internal.require("bun_test").exports,
     "bun:sqlite": () => internal.require("bun_sqlite"),
