@@ -291,7 +291,7 @@ diff --git i/Source/WTF/wtf/StackBounds.cpp w/Source/WTF/wtf/StackBounds.cpp
 index 8cea1e87..2c53b5b9 100644
 --- i/Source/WTF/wtf/StackBounds.cpp
 +++ w/Source/WTF/wtf/StackBounds.cpp
-@@ -102,6 +102,37 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+@@ -102,6 +102,39 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
      return StackBounds { origin, bound };
  }
  
@@ -316,9 +316,11 @@ index 8cea1e87..2c53b5b9 100644
 +    // Native recursion gets a measured budget, which a host with less call stack
 +    // lowers with BUN_WASM_STACK_KIB, plus JSC's 128 KiB error reserve.
 +    size_t budget = 320 * 1024;
-+    if (const char* kib = getenv("BUN_WASM_STACK_KIB")) {
-+        if (size_t value = strtoul(kib, nullptr, 10))
-+            budget = value * 1024;
++    const char* kib = getenv("BUN_WASM_STACK_KIB");
++    if (kib && *kib >= '0' && *kib <= '9') {
++        // Past 7 MiB the guard would never trip; the clamp also keeps value * 1024 from wrapping.
++        if (unsigned long long value = strtoull(kib, nullptr, 10))
++            budget = std::min<unsigned long long>(value, 7 * 1024) * 1024;
 +    }
 +    auto low = reinterpret_cast<uintptr_t>(&__stack_low);
 +    auto high = reinterpret_cast<uintptr_t>(&__stack_high);

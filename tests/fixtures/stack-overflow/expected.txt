@@ -2,7 +2,9 @@ plain RangeError
 plain again RangeError
 getter RangeError
 proxy RangeError
-json RangeError
+reflect construct RangeError
+require at limit survived 2
+json survived
 json parse survived
 nested source survived
 promise RangeError

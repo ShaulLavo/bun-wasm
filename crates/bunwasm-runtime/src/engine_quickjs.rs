@@ -124,8 +124,11 @@ impl QuickJs {
 /// for their own stack: the launcher and the Node host raise it, browsers off
 /// V8 lower it (see docs/stack-limits.md).
 fn stack_budget() -> usize {
-    let kib = std::env::var("BUN_WASM_STACK_KIB").ok().and_then(|v| v.parse::<usize>().ok());
-    kib.filter(|&kib| kib > 0).unwrap_or(152) * 1024
+    // The shadow stack is 8 MiB (crates/bunwasm-cli/build.rs). A larger budget would never
+    // trip, and `kib * 1024` must not wrap to 0, which QuickJS reads as "no limit".
+    const MAX_KIB: usize = 7 * 1024;
+    let kib = std::env::var("BUN_WASM_STACK_KIB").ok().and_then(|v| v.trim().parse::<usize>().ok());
+    kib.filter(|&kib| kib > 0).unwrap_or(152).min(MAX_KIB) * 1024
 }
 
 impl Engine for QuickJs {
