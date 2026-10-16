@@ -221,10 +221,9 @@
     const buffers = transferList(options);
     if (internal.clonePorts && buffers.some((item) => internal.isMessagePort(item))) return internal.clonePorts(value, { transfer: buffers });
     const result = new Cloner().clone(value);
-    // The clone holds copies; detach the originals when the engine supports it.
-    if (typeof ArrayBuffer.prototype.transfer === "function") {
-      for (const buffer of buffers) buffer.transfer();
-    }
+    for (const buffer of buffers) if (internal.isWasmMemoryBuffer?.(buffer)) throw dataCloneError("WebAssembly memory is not transferable");
+    try { internal.native.transferArrayBuffers(buffers); }
+    catch { throw dataCloneError("ArrayBuffer is not detachable"); }
     return result;
   }
 
