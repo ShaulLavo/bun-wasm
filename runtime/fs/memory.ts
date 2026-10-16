@@ -368,4 +368,3 @@ function ensureSize(node: FileNode, size: number): void {
   grown.set(node.data);
   node.data = grown.subarray(0, size);
 }
-

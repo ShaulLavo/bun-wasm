@@ -162,3 +162,18 @@ test("shell discards filesystem completion after the line was submitted", async 
   await completing;
   expect(ui.line).toBe("cat f");
 });
+
+test("shared filesystem flush reports failed writes and permits later writes", async () => {
+  const source = await Bun.file(new URL("../src/shared-fs.ts", import.meta.url)).text();
+  const code = source.slice(source.indexOf("export class SharedFilesystem")).replace("export class", "class");
+  const Filesystem = new Function(`${transpiler.transformSync(code)}; return SharedFilesystem;`)();
+  const fs = Object.create(Filesystem.prototype);
+  fs.writes = Promise.resolve();
+  const failure = new Error("failed editor save");
+  fs.client = { asyncCall: async () => { throw failure; } };
+  await expect(fs.writeFile("/file", "first")).rejects.toBe(failure);
+  await expect(fs.flush()).rejects.toBe(failure);
+  fs.client = { asyncCall: async () => {} };
+  await fs.writeFile("/file", "second");
+  await fs.flush();
+});
