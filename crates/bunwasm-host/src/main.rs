@@ -218,6 +218,15 @@ fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<
     });
     let mut linker: Linker<Host> = Linker::new(&runtime.engine);
     p1::add_to_linker_sync(&mut linker, |host| &mut host.wasi)?;
+    // Wasmtime's preview1 proc_exit rejects statuses >=126. This process host
+    // instead uses the native byte-sized status, including ordinary exit143.
+    // Normalizing here also keeps negative status values out of child_wait's
+    // control-code range; signal provenance comes only from Cancellation.
+    linker.allow_shadowing(true);
+    linker.func_wrap("wasi_snapshot_preview1", "proc_exit", |status: i32| -> Result<()> {
+        Err(I32Exit(i32::from(status as u8)).into())
+    })?;
+    linker.allow_shadowing(false);
     slots::add_import(&mut linker)?;
     let instance = linker.instantiate(&mut store, &runtime.module)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");
@@ -255,6 +264,61 @@ fn select_instance_outcome(result: Result<()>, cancel: &process::Cancellation) -
 mod tests {
     use super::*;
     use process::{Cancellation, FinalOutcome};
+
+    /// Original minimal guest: import proc_exit, export memory, and call the
+    /// import from _start. Encode directly so the test needs no WAT dependency.
+    fn proc_exit_guest(status: i32) -> Vec<u8> {
+        fn section(module: &mut Vec<u8>, id: u8, payload: &[u8]) {
+            assert!(payload.len() < 128);
+            module.extend_from_slice(&[id, payload.len() as u8]);
+            module.extend_from_slice(payload);
+        }
+        let mut module = b"\0asm\x01\0\0\0".to_vec();
+        section(&mut module, 1, &[2, 0x60, 1, 0x7f, 0, 0x60, 0, 0]);
+        let mut import = vec![1, 22];
+        import.extend_from_slice(b"wasi_snapshot_preview1");
+        import.push(9);
+        import.extend_from_slice(b"proc_exit");
+        import.extend_from_slice(&[0, 0]);
+        section(&mut module, 2, &import);
+        section(&mut module, 3, &[1, 1]);
+        section(&mut module, 5, &[1, 0, 1]);
+        let mut exports = vec![2, 6];
+        exports.extend_from_slice(b"_start");
+        exports.extend_from_slice(&[0, 1, 6]);
+        exports.extend_from_slice(b"memory");
+        exports.extend_from_slice(&[2, 0]);
+        section(&mut module, 7, &exports);
+        let mut body = vec![0, 0x41]; // no locals; i32.const (signed LEB128)
+        let mut remaining = status;
+        loop {
+            let byte = (remaining & 0x7f) as u8;
+            remaining >>= 7;
+            let done = (remaining == 0 && byte & 0x40 == 0)
+                || (remaining == -1 && byte & 0x40 != 0);
+            body.push(if done { byte } else { byte | 0x80 });
+            if done { break; }
+        }
+        body.extend_from_slice(&[0x10, 0, 0x0b]); // call proc_exit; end
+        let mut code = vec![1, body.len() as u8];
+        code.extend_from_slice(&body);
+        section(&mut module, 10, &code);
+        module
+    }
+
+    #[test]
+    fn real_wasi_proc_exit_preserves_ordinary_native_statuses() {
+        let mut config = Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).unwrap();
+        for (status, expected) in [(23, 23), (126, 126), (143, 143), (255, 255), (-1, 255), (256, 0)] {
+            let module = Module::new(&engine, proc_exit_guest(status)).unwrap();
+            let runtime = process::Runtime::new(engine.clone(), module, Vec::new());
+            let outcome = run_instance(runtime, Vec::new(), Vec::new(), process::Stdio::inherited(), Arc::default()).unwrap();
+            assert_eq!(outcome, FinalOutcome::Exit(expected), "proc_exit({status})");
+            assert_eq!(outcome.signal(), 0);
+        }
+    }
 
     #[test]
     fn explicit_exit_143_is_not_a_requested_term() {

@@ -215,7 +215,8 @@ The native launcher and Node adapter support their configured Bun executables. M
 ```
 
 The guest preserves `argv[0]`; executable selection belongs to the host's registry.
-The browser registers `bun`, `/bun`, `node` and `/usr/local/bin/bun` as Bun light;
+The browser registers `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and
+`/usr/local/bin/node` as Bun light;
 `bun-quickjs`, `bun-jsc` and `bun-browser` select an engine explicitly. Children do not inherit
 their parent's engine. A browser start failure appears through `child_wait`: 127 for an
 unregistered executable, 126 for a registered executable that cannot start.
@@ -274,6 +275,15 @@ against a selected but not yet observed native child is a successful no-op, even
 while publication is pending. Once a successful wait or final-signal query observes
 completion, further native signal requests return `BADF`; the completion metadata
 remains available for repeatable queries until `close(child)`.
+
+Root and child stores share a native WASI `proc_exit` adapter that retains ordinary
+exit codes 126–255 instead of Wasmtime's default trap for those values. It applies
+the launcher's byte-sized OS exit convention (-1 becomes 255, 256 becomes 0), then
+reports a typed ordinary exit. The browser WASI adapter uses the same byte-sized
+exit convention, keeping negative values out of the child-control result namespace.
+Thus `process.exit(143)` is an ordinary exit with status 143 and no signal, not a
+trap or a SIGTERM result. The guest flushes buffered stdout before a blocking stdin
+read, allowing the parent to wait for readiness output before sending input.
 
 Browser and Node hosts implement the same process slots. The browser uses a page
 broker to start child workers while their parent is blocked in `spawnSync`. The broker lazily

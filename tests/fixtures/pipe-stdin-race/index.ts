@@ -41,8 +41,42 @@ try {
   console.log("Node stdin callback, event; EPIPE -32 write");
 } finally { node.kill(); await closed; }
 }
+async function bufferedReady() {
+  const child = Bun.spawn([process.execPath, "-e", 'console.log("ready"); console.log("input", await Bun.stdin.text())'], {
+    stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  let timeout;
+  try {
+    const reader = child.stdout.getReader();
+    const ready = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("buffered stdout readiness was not flushed before stdin read")), 3000);
+      }),
+    ]);
+    clearTimeout(timeout);
+    assert.equal(ready.done, false);
+    assert.equal(new TextDecoder().decode(ready.value), "ready\n");
+    child.stdin.end("hello");
+    let output = "";
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      output += new TextDecoder().decode(next.value);
+    }
+    assert.equal(output, "input hello\n");
+    assert.equal(await child.exited, 0);
+    assert.equal(child.signalCode, null);
+    assert.equal(await new Response(child.stderr).text(), "");
+    console.log("Bun buffered stdout before stdin");
+  } finally {
+    clearTimeout(timeout);
+    child.kill("SIGKILL");
+    await child.exited.catch(() => {});
+  }
+}
 const failures = [];
-for (const scenario of [bunRace, nodeRace]) {
+for (const scenario of [bunRace, nodeRace, bufferedReady]) {
   try { await scenario(); } catch (error) { failures.push(scenario.name + ": " + error.message); }
 }
 if (failures.length) throw new Error(failures.join("\n"));

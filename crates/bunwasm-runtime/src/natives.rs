@@ -256,7 +256,10 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
         };
         Ok(tty.into())
     });
-    t.add("readStdin", |_| {
+    let st = state.clone();
+    t.add("readStdin", move |_| {
+        // Make buffered readiness output visible before waiting for parent input.
+        st.flush();
         let mut buf = Vec::new();
         io::stdin().read_to_end(&mut buf).map_err(|e| io_error(e, "read", None))?;
         Ok(Val::Bytes(buf))

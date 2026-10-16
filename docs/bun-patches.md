@@ -75,7 +75,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, `web/src/engine-host.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
 
 | [`runtime/core/`, `runtime/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, memory, path, descriptor and filesystem-boundary adapters extracted into a reusable package. |
-| [`runtime/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry, job control, explicit signal actions and immutable final-kind query. |
+| [`runtime/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry, job control, explicit signal actions, immutable final-kind query and byte-sized exit statuses. |
 | [`runtime/fs/`, filesystem quiescence](#filesystem-quiescence) | Host feature | Original shared admission and revocation fence lets controllers stop workers only after direct filesystem operations finish. |
 | [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
@@ -100,9 +100,10 @@ Each row has one class. A file with independent changes has separate rows.
 
 Class **Host feature**, **original adapters** in `runtime/proc/`,
 `web/src/{subprocess,subprocess-broker,worker,runner,shared-fs}.ts`,
-`web/scripts/node-spawn.ts`, `crates/bunwasm-host/src/{main,slots}.rs`,
+`web/scripts/node-spawn.ts`, `runtime/core/wasi.ts`,
+`crates/bunwasm-host/src/{main,slots}.rs`,
 `crates/bunwasm-host/src/process/{mod,stdio}.rs`, and
-`crates/bunwasm-runtime/src/js/spawn.js`. These implement this project's process contract;
+`crates/bunwasm-runtime/src/{natives.rs,js/spawn.js}`. These implement this project's process contract;
 no Bun, Node, WebKit or other upstream implementation is copied or adapted in this change.
 The process slots retain Bun host ABI version 1, slots 12–15 (`docs/host-abi.md`).
 The generic service shares compiled modules and keeps process ids separate from job ids.
@@ -122,8 +123,20 @@ retains an immutable typed outcome: catchable signals select signal death only a
 observing checkpoint, while SIGKILL selects immediately. The original slot-14 metadata
 selector `CHILD_FINAL_SIGNAL = 3` exposes the completed signal kind on every host without
 changing slots 12–15 or pipe selectors 0–2. The shared Bun facade reads that selected kind
-rather than guessing from status 143 or a prior kill request. These are original host
-protocol extensions, not copied upstream implementations. Filesystem revocation no longer claims
+rather than guessing from status 143 or a prior kill request. The native linker's original
+`wasi_snapshot_preview1::proc_exit` adapter preserves ordinary exit codes 126–255, which
+Wasmtime 39.0.2's standard preview-1 implementation rejects as traps. The upstream reference
+is `bytecodealliance/wasmtime`, `crates/wasi/src/p1.rs` at
+`f66a5b61465c937aba66d73cd5d82f763cc3074f`; no implementation is copied. The adapter
+uses the launcher's existing byte-sized OS exit convention (for example, -1 becomes 255),
+then returns Wasmtime's typed `I32Exit` so normal exits cannot be confused with traps or
+negative child-control results. Root and child stores use the same linker setup. The browser
+WASI adapter applies the same byte-sized exit convention before publishing completion;
+original tiny-Wasm tests cover negative and oversized values through the real import and
+child wait/final-signal transport. The original Rust `readStdin` adapter flushes buffered
+stdout before blocking, so a parent's readiness-before-input handshake cannot deadlock.
+These are original host protocol extensions, not copied upstream implementations.
+Filesystem revocation no longer claims
 that `Worker.terminate()` proves death: an original admission/critical-section guard in
 `runtime/fs/{protocol,client,shared,service}.ts` proves host operations quiescent before lock
 reaping and physical termination; an ordinary guest exit acknowledgement also proves quiescence.
