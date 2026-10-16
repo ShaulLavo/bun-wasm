@@ -1,0 +1,10 @@
+plain RangeError
+plain again RangeError
+getter RangeError
+proxy RangeError
+json RangeError
+json parse survived
+nested source survived
+promise RangeError
+promise chain 5000
+continued 4
