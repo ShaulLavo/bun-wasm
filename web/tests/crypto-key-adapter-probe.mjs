@@ -58,6 +58,15 @@ for(const padding of [3,4,999]) for(const name of ["sign","verify","createSign",
   return keys.createVerify("sha256").update(data).verify({key:publicKey,padding},data);
  },e=>/ERR_OSSL_/.test(e.code));
 });
+await check("native-only wrapping algorithm remains usable", async () => {
+ const wrapping = await provider.generateKey({name:"AES-OCB",length:128},true,["wrapKey","unwrapKey"]);
+ const key = await provider.importKey("raw",new Uint8Array(16),{name:"HMAC",hash:"SHA-256"},true,["sign"]);
+ const op = {name:"AES-OCB",iv:new Uint8Array(12)};
+ const wrapped = await provider.wrapKey("raw",key,wrapping,op);
+ const unwrapped = await provider.unwrapKey("raw",wrapped,wrapping,op,"HKDF",false,["deriveBits"]);
+ const bits = await SubtleCrypto.prototype.deriveBits.call(provider,{name:"HKDF",hash:"SHA-256",salt:data,info:data},unwrapped,128);
+ assert.equal(bits.byteLength,16);
+});
 assert.equal(provider, webcrypto.subtle);
 console.log("failures",failures);
 process.exitCode=failures?1:0;
