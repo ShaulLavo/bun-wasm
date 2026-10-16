@@ -3,6 +3,22 @@
 // Guest browser-engine polyfills replace MessageChannel; transport endpoints must stay native.
 const NativeMessageChannel = globalThis.MessageChannel;
 export const DEFAULT_SHARED_MAX_BYTES = 1024 * 1024 * 1024;
+export const SHARED_SEGMENT_BYTES = 16 * 1024 * 1024;
+export const MAX_SHARED_SEGMENTS = DEFAULT_SHARED_MAX_BYTES / SHARED_SEGMENT_BYTES;
+export interface GrowableSharedSegment extends SharedArrayBuffer {
+  readonly growable: boolean;
+  readonly maxByteLength: number;
+  grow(byteLength: number): void;
+}
+export function createSharedSegment(): GrowableSharedSegment {
+  // The runtime supports growable SABs; ES2022's library declarations do not yet expose them.
+  const Constructor = SharedArrayBuffer as unknown as new (bytes: number, options: { maxByteLength: number }) => GrowableSharedSegment;
+  return new Constructor(0, { maxByteLength: SHARED_SEGMENT_BYTES });
+}
+export function normalizeSharedMaxBytes(maxBytes: number): number {
+  if (Number.isNaN(maxBytes)) throw new RangeError("invalid shared filesystem storage cap");
+  return Math.max(1, Math.min(MAX_SHARED_SEGMENTS, Math.floor(maxBytes / SHARED_SEGMENT_BYTES))) * SHARED_SEGMENT_BYTES;
+}
 export const HEADER = 32;
 export const PAGE = 64 * 1024;
 export const TRANSIENT_HANDLES = 256;
@@ -22,6 +38,8 @@ export interface FilesystemConnection {
   /** This connection's revocation word, then its ancestors. Never reused. */
   revocations: SharedArrayBuffer[];
   shared: SharedArrayBuffer;
+  /** Extra data segments, published before guests run; only the service grows their backing. */
+  segments: SharedArrayBuffer[];
   /** Private to this connection, not its descendants: capabilities and local open references. */
   capabilities: SharedArrayBuffer;
   /** Nonzero lock owner token; service clears it when this identity is revoked. */
@@ -33,7 +51,9 @@ export type FilesystemIdentity = Omit<FilesystemConnection, "port">;
  * Firefox does not activate guest-created channels until that guest returns to its event loop.
  */
 export function createFilesystemIdentity(parent?: FilesystemIdentity, maxBytes = DEFAULT_SHARED_MAX_BYTES): FilesystemIdentity {
+  maxBytes = parent?.maxBytes ?? normalizeSharedMaxBytes(maxBytes);
   const shared = parent?.shared ?? new SharedArrayBuffer(24 * 1024 * 1024);
+  const segments = parent?.segments ?? Array.from({ length: maxBytes / SHARED_SEGMENT_BYTES - 1 }, () => createSharedSegment());
   const owner = Atomics.add(new Int32Array(shared), 5, 1) + 1;
   const capabilities = new SharedArrayBuffer((CAPABILITY_HEADER + CAPABILITY_SLOTS * CAPABILITY_WORDS) * 4);
   const entries = new Int32Array(capabilities);
@@ -45,9 +65,10 @@ export function createFilesystemIdentity(parent?: FilesystemIdentity, maxBytes =
     signal: parent?.signal ?? new SharedArrayBuffer(4),
     revocations: [new SharedArrayBuffer(4)].concat(parent?.revocations ?? []),
     shared,
+    segments,
     capabilities,
     owner,
-    maxBytes: parent?.maxBytes ?? maxBytes,
+    maxBytes,
   };
 }
 export function connectFilesystemIdentity(identity: FilesystemIdentity) {

@@ -105,7 +105,9 @@ buffers. Shared ancestor wakeups also cancel blocked and asynchronous guests if 
 worker fails. The sandbox's original network adapters send notification-only file-change events
 after a shared-FS save, rather than replaying its old bytes. Copy-at-spawn and merge-at-exit are removed.
 The original `runtime/fs/shared.ts` adapter adds shared file metadata, per-inode locks and
-service-owned 64 KiB page tables across 16 MiB SAB segments. Retained file reads and in-capacity
+service-owned 64 KiB page tables across 16 MiB SAB segments. Original connection adapters
+publish zero-byte growable segment references before execution, so service-owned backing
+growth is visible even to a synchronous guest that cannot drain port messages. Retained file reads and in-capacity
 writes and appends stay in the guest; namespace edits and geometric capacity growth stay
 at the backend boundary. Original per-connection capability tables let cached opens and closes
 change atomic local references while the service retains sole ownership of backend pins. The default configurable storage cap is 1 GiB; pool exhaustion uses

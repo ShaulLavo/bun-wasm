@@ -65,12 +65,16 @@ service alone owns backend pins. Preopens and open descriptions retain handles; 
 are bounded and evicting them invalidates cached paths.
 
 The service owns the page allocator and grows capacity geometrically in 64 KiB pages, across
-16 MiB SharedArrayBuffer segments. `createFilesystemIdentity(undefined, maxBytes)` configures
+16 MiB growable SharedArrayBuffer segments. Connections carry the zero-byte segment references
+before execution; only the service grows their backing storage. A synchronous guest therefore
+sees completed growth without returning to its event loop or receiving another port message.
+`createFilesystemIdentity(undefined, maxBytes)` configures
 the pool cap (1 GiB by default, rounded to whole segments); an individual file supports 256 pages
-(16 MiB). A full pool reports WASI ENOSPC; exceeding the per-file limit reports EFBIG. Segment
-messages attach new pages to runnable guests; a blocked guest missing a segment uses the
-service until its port can deliver it. `resources()` reports allocated data bytes, used/free bytes
-and registered identities. Segments are retained for page reuse until the filesystem is disposed.
+(16 MiB). A full pool reports WASI ENOSPC; exceeding the per-file limit reports EFBIG.
+`resources()` reports allocated backing bytes, data-pool and metadata bytes (including private
+capability tables), used/free bytes, the configured cap, and registered identities. Zero-byte
+segment references do not count as allocated backing storage. Grown segments are retained
+for page reuse until the filesystem is disposed.
 
 Connections carry their own revocation word and every ancestor's word, plus a shared ancestry
 wake signal. Blocking waits recheck revocation after a signal change; asynchronous values use

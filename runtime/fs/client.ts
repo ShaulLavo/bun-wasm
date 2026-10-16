@@ -116,7 +116,7 @@ export class FilesystemClient implements FileSystem {
     this.capabilities = new Int32Array(connection.capabilities);
     this.epoch = new Int32Array(connection.epoch);
     this.revoked = sharedRevoked(connection);
-    this.shared = new SharedFilesystemState(connection.shared, connection.maxBytes, connection.owner);
+    this.shared = new SharedFilesystemState(connection.shared, connection.maxBytes, connection.owner, connection.segments);
     connection.port.onmessage = ({ data }) => { if (data.segment) this.shared.addSegment(data.segment, data.index); else this.completions.get(data.completed)?.notify(); };
     connection.port.start();
   }

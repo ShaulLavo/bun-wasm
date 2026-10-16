@@ -21,7 +21,7 @@ export class FilesystemService {
   constructor(private backend: FilesystemBackend) {}
   connect(connection: FilesystemConnection): void {
     if (this.backend instanceof MemoryBackend) {
-      this.backend.attachShared(connection.shared, connection.maxBytes);
+      this.backend.attachShared(connection.shared, connection.maxBytes, connection.segments);
       this.backend.shared.onContention = () => this.sweep();
     }
     const session: Session = { connection, handles: new Map(), capabilities: new Int32Array(connection.capabilities), freeEntries: Array.from({ length: CAPABILITY_SLOTS }, (_, index) => CAPABILITY_HEADER + (CAPABILITY_SLOTS - index - 1) * CAPABILITY_WORDS), preopens: new Set(), transient: new Map(), references: new Map(), responses: new Map(), pending: new Map() };

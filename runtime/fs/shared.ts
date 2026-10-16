@@ -1,15 +1,14 @@
 import type { FileHandle, FileStat } from "../core";
-import { PAGE, FilesystemError, isRevoked } from "./protocol";
+import { PAGE, FilesystemError, isRevoked, SHARED_SEGMENT_BYTES, MAX_SHARED_SEGMENTS, DEFAULT_SHARED_MAX_BYTES, createSharedSegment, normalizeSharedMaxBytes, type GrowableSharedSegment } from "./protocol";
+export { SHARED_SEGMENT_BYTES, DEFAULT_SHARED_MAX_BYTES } from "./protocol";
 
 const MAGIC = 0x42574653;
 const HEADER_WORDS = 16;
 const MAX_FILES = 4096;
 const MAX_FILE_PAGES = 256;
 const SEGMENT_PAGES = 256;
-export const SHARED_SEGMENT_BYTES = SEGMENT_PAGES * PAGE;
 const SEGMENT_BYTES = SEGMENT_PAGES * PAGE;
-const MAX_SEGMENTS = 64;
-export const DEFAULT_SHARED_MAX_BYTES = MAX_SEGMENTS * SHARED_SEGMENT_BYTES;
+const MAX_SEGMENTS = MAX_SHARED_SEGMENTS;
 const TOTAL_PAGES = SEGMENT_PAGES * MAX_SEGMENTS;
 const SLOT_WORDS = 12;
 const PAGE_OWNER_OFFSET = HEADER_WORDS;
@@ -20,7 +19,6 @@ const BUFFER_SIZE = DATA_OFFSET + SEGMENT_BYTES;
 const GLOBAL_LOCK = 1;
 const SERVICE_OWNER = 0x7fffffff;
 const USED_PAGES = 2;
-const SEGMENT_COUNT = 3;
 const FILE_SIZE = 1;
 const MTIME_LOW = 2;
 const MTIME_HIGH = 3;
@@ -35,7 +33,7 @@ export class MissingSegmentError extends Error {}
 export interface SharedFileInfo extends FileStat { capacity: number; }
 export interface SharedSegment { buffer: SharedArrayBuffer; index: number; }
 
-/** Shared metadata and a service-grown pool of fixed-size SAB data segments. */
+/** Shared metadata and a service-grown pool of prepublished growable SAB data segments. */
 export class SharedFilesystemState {
   readonly cells: Int32Array;
   readonly owners: Int32Array;
@@ -46,23 +44,24 @@ export class SharedFilesystemState {
   private readonly firstBytes: Uint8Array;
   private serviceMutation = false;
   onContention?: () => void;
-  constructor(readonly buffer: SharedArrayBuffer = SharedFilesystemState.createBuffer(), maxBytes = DEFAULT_SHARED_MAX_BYTES, readonly lockOwner = SERVICE_OWNER) {
+  constructor(readonly buffer: SharedArrayBuffer = SharedFilesystemState.createBuffer(), maxBytes = DEFAULT_SHARED_MAX_BYTES, readonly lockOwner = SERVICE_OWNER, segments: readonly SharedArrayBuffer[] = []) {
     this.cells = new Int32Array(buffer, 0, HEADER_WORDS);
     if (Atomics.compareExchange(this.cells, 0, 0, MAGIC) === 0) {
       Atomics.store(this.cells, USED_PAGES, 0);
-      Atomics.store(this.cells, SEGMENT_COUNT, 1);
-      Atomics.store(this.cells, 4, Math.max(1, Math.min(MAX_SEGMENTS, Math.floor(maxBytes / SEGMENT_BYTES))));
+      Atomics.store(this.cells, 4, normalizeSharedMaxBytes(maxBytes) / SEGMENT_BYTES);
     } else while (Atomics.load(this.cells, 0) !== MAGIC) { /* another connection initializes */ }
     this.owners = new Int32Array(buffer, PAGE_OWNER_OFFSET * 4, TOTAL_PAGES);
     this.slots = new Int32Array(buffer, SLOT_OFFSET * 4, MAX_FILES * SLOT_WORDS);
     this.pages = new Int32Array(buffer, PAGE_TABLE_OFFSET * 4, MAX_FILES * MAX_FILE_PAGES);
     this.firstBytes = new Uint8Array(buffer, DATA_OFFSET, SEGMENT_BYTES);
-    this.segments = [buffer];
+    this.segments = [buffer].concat(segments);
   }
   static createBuffer(): SharedArrayBuffer { return new SharedArrayBuffer(BUFFER_SIZE); }
   addSegment(buffer: SharedArrayBuffer, index = this.segments.length): void {
     if (buffer.byteLength < SEGMENT_BYTES || !Number.isInteger(index) || index < 1 || index >= Atomics.load(this.cells, 4)) throw new RangeError("invalid shared filesystem segment");
-    this.segments[index] = buffer;
+    // An indexed announcement may arrive after a prepublished wrapper has already grown.
+    // Keep the original wrapper so queued delivery cannot replace a live segment.
+    this.segments[index] ??= buffer;
   }
   takeNewSegments(): SharedSegment[] { const out = this.pendingSegments.slice(); this.pendingSegments.length = 0; return out; }
   private segmentFor(page: number): Uint8Array {
@@ -141,11 +140,17 @@ export class SharedFilesystemState {
   private setTimestamp(slot: number, mtime: number): void { Atomics.store(this.slots, this.at(slot, MTIME_LOW), mtime >>> 0); Atomics.store(this.slots, this.at(slot, MTIME_HIGH), Math.floor(mtime / 0x100000000) >>> 0); }
   private getMtime(slot: number): number { return (Atomics.load(this.slots, this.at(slot, MTIME_HIGH)) >>> 0) * 0x100000000 + (Atomics.load(this.slots, this.at(slot, MTIME_LOW)) >>> 0); }
   private ensureSegment(segment: number): void {
-    if (segment < this.segments.length) return;
     if (segment >= Atomics.load(this.cells, 4)) throw new FilesystemError(51, "shared filesystem storage exhausted");
-    const buffer = new SharedArrayBuffer(SEGMENT_BYTES);
-    this.segments.push(buffer); this.pendingSegments.push({ buffer, index: segment });
-    Atomics.store(this.cells, SEGMENT_COUNT, this.segments.length);
+    if (segment === 0 || this.segments[segment]?.byteLength === SEGMENT_BYTES) return;
+    const existing = this.segments[segment];
+    const buffer = existing ?? createSharedSegment();
+    (buffer as GrowableSharedSegment).grow(SEGMENT_BYTES);
+    if (!existing) {
+      // Standalone states can still exchange indexed segments. Connected identities already
+      // own every wrapper, so their synchronous guests need no port delivery after growth.
+      this.segments[segment] = buffer;
+      this.pendingSegments.push({ buffer, index: segment });
+    }
   }
   private allocate(slot: number, needed: number): void {
     const current = Atomics.load(this.slots, this.at(slot, CAPACITY));
@@ -266,7 +271,7 @@ export class SharedFilesystemState {
     let files = 0;
     for (let slot = 1; slot < MAX_FILES; slot++) if (Atomics.load(this.slots, this.at(slot, 0))) files++;
     const usedBytes = Atomics.load(this.cells, USED_PAGES) * PAGE;
-    const poolBytes = Atomics.load(this.cells, SEGMENT_COUNT) * SEGMENT_BYTES;
+    const poolBytes = this.segments.slice(1).reduce((bytes, buffer) => bytes + buffer.byteLength, SEGMENT_BYTES);
     const metadataBytes = this.buffer.byteLength - SEGMENT_BYTES;
     return { bytes: poolBytes + metadataBytes, poolBytes, metadataBytes, usedBytes, freeBytes: poolBytes - usedBytes, maxBytes: Atomics.load(this.cells, 4) * SEGMENT_BYTES, files };
   }

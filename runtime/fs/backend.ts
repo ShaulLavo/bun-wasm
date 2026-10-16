@@ -19,7 +19,7 @@ export class MemoryBackend implements FilesystemBackend {
   shared = new SharedFilesystemState();
   private sharedAttached = false;
   private directoryTimes = new Map<FileHandle, number>();
-  attachShared(buffer: SharedArrayBuffer, maxBytes?: number): void {
+  attachShared(buffer: SharedArrayBuffer, maxBytes?: number, segments: readonly SharedArrayBuffer[] = []): void {
     if (this.sharedAttached) {
       // SAB wrappers change identity when cloned through a port. Probe a reserved header word
       // instead; connect runs synchronously on the sole service thread and guests never use it.
@@ -32,7 +32,7 @@ export class MemoryBackend implements FilesystemBackend {
       if (same) return;
       throw new Error("filesystem service cannot attach a second shared tree");
     }
-    this.shared = new SharedFilesystemState(buffer, maxBytes);
+    this.shared = new SharedFilesystemState(buffer, maxBytes, undefined, segments);
     this.sharedAttached = true;
   }
   private sync(handle: FileHandle): void {
@@ -170,6 +170,6 @@ export class MemoryBackend implements FilesystemBackend {
   }
   revokeOwner(owner: number, epoch?: Int32Array): void { this.shared.revokeOwner(owner, epoch); }
   takeSharedSegments(): SharedSegment[] { return this.shared.takeNewSegments(); }
-  sharedSegments(): SharedSegment[] { return this.shared.segments.slice(1).map((buffer, index) => ({ buffer, index: index + 1 })); }
+  sharedSegments(): SharedSegment[] { return this.shared.segments.slice(1).flatMap((buffer, index) => buffer.byteLength ? [{ buffer, index: index + 1 }] : []); }
   resources(): Record<string, number> { return this.shared.resources(); }
 }
