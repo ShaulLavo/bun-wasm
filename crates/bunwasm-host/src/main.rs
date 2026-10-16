@@ -178,7 +178,8 @@ fn run(options: Options) -> Result<i32> {
         .spawn(move || run_instance(runtime, args, env, process::Stdio::inherited(), Arc::default()))
         .context("starting the guest thread")?
         .join()
-        .unwrap_or_else(|_| Err(anyhow::anyhow!("the guest thread panicked")));
+        // A guest-thread panic has printed its message; panic here too, so the exit code stays 101.
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
     running.store(false, Ordering::Relaxed);
     let _ = ticker.join();
     result

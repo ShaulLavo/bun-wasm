@@ -118,6 +118,22 @@ measurements and reproducer. These paths still end in a wasm trap:
   ratios again. Shrinking the native budget instead would cut getter depth
   further. JSC's `maxPerThreadStackUsage` option is not a substitute: in the
   C-loop build it also sizes the JavaScript frame stack.
+- **QuickJS reports a SyntaxError for a parse cut short near the limit.**
+  Retrying `require()` of a TypeScript module one level further up after each
+  RangeError, so that the first success parses with the least stack left, ends
+  in an uncaught `SyntaxError: invalid property name` on QuickJS. It happens on
+  every run of this source at the default and the 40 KiB budget, on main's
+  parser plus this PR's guard. JSC and the browser engine load the module. A
+  longer variant of the same script loads it too, so the outcome depends on
+  how much stack remains. The parser's own stack check (in `next_token`) throws
+  RangeError, so some path replaces that pending exception with a syntax
+  error; `js_parse_property_name`'s callers all check its result, so start from
+  the token handling around object literals. Repro:
+  `/work/reports/bun-wasm-stack-2026-10-16/repro/require-near-limit.js`, run
+  from a writable directory as `wasmtime run --dir .::/ --env PWD=/
+  dist/bun.wasm run /require-near-limit.js`. The stack-overflow fixture covers
+  the plain case: a `require()` from the deepest catch throws RangeError and
+  the program goes on.
 - **Bun's transpiler.** A module file with 2,000 nested array literals traps in
   `bun_js_parser` before QuickJS sees it (`const x = [[[...]]];`; 400 levels
   throw RangeError from QuickJS). `Bun__StackCheck__getMaxStack` in
