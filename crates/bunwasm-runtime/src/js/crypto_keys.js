@@ -81,7 +81,7 @@
         if (a.modulusLength)
           return {
             modulusLength: a.modulusLength,
-            publicExponent: Array.from(a.publicExponent).reduce(
+            publicExponent: a.publicExponent.reduce(
               (n, b) => n * 256n + BigInt(b),
               0n,
             ),
@@ -404,18 +404,17 @@
     }
     const { Writable } = internal.builtin("node:stream");
     class Sign extends Writable {
+      #chunks = [];
       constructor(algorithm, options) {
         super(options);
         this.algorithm = hash(algorithm);
-        this.chunks = [];
-        this.finalized = false;
       }
       update(data, encoding) {
-        if (this.finalized)
+        if (this.#chunks === null)
           throw Object.assign(new Error("Not initialised"), {
             code: "ERR_CRYPTO_INVALID_STATE",
           });
-        this.chunks.push(Buffer.from(inputBytes(data, encoding)));
+        this.#chunks.push(Buffer.from(inputBytes(data, encoding)));
         return this;
       }
       _write(data, encoding, callback) {
@@ -428,12 +427,13 @@
         callback();
       }
       finalize() {
-        if (this.finalized)
+        if (this.#chunks === null)
           throw Object.assign(new Error("Not initialised"), {
             code: "ERR_CRYPTO_INVALID_STATE",
           });
-        this.finalized = true;
-        return Buffer.concat(this.chunks);
+        const data = Buffer.concat(this.#chunks);
+        this.#chunks = null;
+        return data;
       }
       sign(key, encoding) {
         const result = sign(this.algorithm, this.finalize(), key);
