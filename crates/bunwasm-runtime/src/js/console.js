@@ -160,6 +160,20 @@
   for (const key of Object.keys(console)) {
     Object.defineProperty(console[key], "name", { value: key });
   }
+  Object.defineProperty(console, "Console", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      const Console = internal.require("bun_console_constructor")(console);
+      Object.defineProperty(console, "Console", { value: Console, writable: true, configurable: true, enumerable: true });
+      return Console;
+    },
+  });
+  for (const name of ["stdout", "stderr"]) {
+    Object.defineProperty(console, "_" + name, {
+      value: globalThis.process[name], writable: true, configurable: true,
+    });
+  }
   Object.defineProperty(console, Symbol.toStringTag, { value: "console", configurable: true });
   return console;
 })

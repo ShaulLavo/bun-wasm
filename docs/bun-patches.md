@@ -49,11 +49,15 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/util.js`](#node-utility-fragments) | Port | Adapt argument parsing, comparison helpers, and inspection tables. |
 | [`crates/bunwasm-runtime/src/js/assert.js`](#node-assertions) | Port | Adapt assertion helpers and messages to the local inspector and equality implementation. |
 | [`crates/bunwasm-runtime/src/js/bun_sqlite.js`](#bun-sqlite) | Port | Move Bun's SQLite wrapper and inherited transaction code onto Rust SQLite natives. |
+| [`crates/bunwasm-runtime/src/js/array_buffer_sink.js`](#bun-array-buffer-sink) | Port | Adapt Bun's byte sink lifecycle and option parsing to engine-owned typed arrays. |
+| [`crates/bunwasm-runtime/src/engine_quickjs.rs`, string boundary](#quickjs-string-boundary) | Host feature | Decode lone UTF-16 surrogates as replacement characters at the native boundary. Original adapter. |
+| [`web/src/engine-host.js`, GC hook](#host-gc-hook) | Host feature | Capture host GC before guest code replaces globals. Original adapter. |
 | [`crates/bunwasm-runtime/src/js/cookie.js`](#bun-cookies) | Port | Translate Bun's cookie parsing, validation, and binding behavior. |
 | [`crates/bunwasm-runtime/src/js/string_decoder.js`](#node-string-decoder) | Port | Translate Node's chunk-decoder state machine to JavaScript. |
 | [`crates/bunwasm-runtime/src/js/bun_test.js`, diff formatting](#bun-test-diff-formatting) | Port | Translate Bun's colorless diff rendering around a local line differ. |
 | [`crates/bunwasm-runtime/src/js/node_url.js`](#node-url-helpers) | Port | Adapt Node URL helpers around the local URL implementation. |
 | [`crates/bunwasm-runtime/src/js/builtins.js`, `crates/bunwasm-runtime/src/js/net.js`, HTTP tables](#http-status-tables) | Port | Retain HTTP status data separately from the original networking adapters. |
+| [`crates/bunwasm-runtime/src/js/{builtins,bootstrap}.js`, `web/src/engine-host.js`, caller origin](#caller-source-origin) | Host feature | Read caller origins through the existing engine stack parser. Original adapter. |
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
 | [`crates/bunwasm-semver/src/lib.rs`](#portable-semver-host-functions) | Port | Compile Bun's semver host functions unchanged against a portable `bun_jsc` subset. |
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
@@ -65,6 +69,9 @@ Each row has one class. A file with independent changes has separate rows.
 | [`third_party/licenses/boringssl-LICENSE`](#webcrypto-backend) | Port | Retain BoringSSL license notices with the wasm backend. |
 | [`crates/bunwasm-runtime/src/crypto.rs`, GCM adapter and `third_party/licenses/aes-gcm-MIT`](#webcrypto-backend) | Port | Adapt RustCrypto GCM to WebCrypto nonce and tag lengths. |
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
+
+| [`src/js/bun_console_constructor.js`](#bun-console-constructor) | Port | Generate Bun's Console constructor with lexical engine-independent hooks. |
+| [`scripts/generate-bun-console.mjs`, `src/js/console_constructor.js`, global Console wiring](#bun-console-constructor) | Host feature | Original generation and runtime adapters expose the shared constructor and its streams. |
 
 ## Portable semver host functions
 
@@ -144,6 +151,19 @@ All other retained upstream files are unchanged.
 ## App compatibility fixtures
 
 `scripts/app-matrix/apps.mjs` contains original minimal projects that use published framework APIs. The dependency versions in that file identify the npm upstream revisions. No template source or upstream implementation is copied or adapted. The runner, registry recorder, network namespace wrapper, shared assertions/classifier, and browser driver are original bun-wasm host adapters. The namespace wrapper uses Linux user/network namespaces without changing any upstream source. Retained diagnostic fixtures under `scripts/app-matrix/review-evidence/` are unmodified logs from the pinned packages in the 2026-10-15 census, including Next 15.5.6, Prisma 6.17.1, Vite 7.1.12 and Rollup 4.64.7; they are regression inputs, not adapted implementations. The browser driver calls the existing playground test helpers. Recorded dependency tarballs remain unmodified in the external cache, verified by SHA-256; registry metadata is rewritten only in loopback responses to point tarballs at that mirror.
+
+## Caller source origin
+
+Class **Host feature**. Original bun-wasm adapter for `bun:jsc.callerSourceOrigin`.
+The contract is defined by `src/jsc/modules/BunJSCModule.h`, `functionCallerSourceOrigin`,
+at Bun revision `4ceda2c2868d3a7703c7737ddd9de7244ec384df`. No upstream implementation is copied.
+The native implementation walks JSC call frames. This adapter uses the existing stack parser
+for QuickJS, JSC and browser engines, then encodes the calling file as a file URL.
+Browser module URL mapping stays in the engine host. Without a caller frame, it returns `null`. Preserve V8 eval creation metadata while formatting call sites. Missing-source user frames remain distinct from native frames. The origin adapter stops at opaque user frames and rejects pseudo filenames such as `<input>` instead of scanning onward to an unrelated module. V8 eval sourceURLs bypass host-frame URL filtering after registered module URLs are resolved. Source-map URLs do not name the calling script. These stack adapters are original implementations.
+WebKit's browser engine omits eval source locations even with `sourceURL` directives.
+CommonJS uses eval in this host, so its caller origin is `null` there. The adapter stops at
+an opaque caller frame instead of reporting a later ES module as the caller. ES modules work
+in WebKit, and CommonJS origins work in QuickJS, wasm JSC and the Node host.
 
 ## Bun patch series
 
@@ -483,6 +503,45 @@ Adapt Database/Statement behavior, constants, named-parameter handling, strict m
 
 The transaction controller and wrapper retain code Bun explicitly attributes to Joshua Wise's better-sqlite3 `lib/methods/transaction.js`. The retained upstream revision is Bun's pin. A separate better-sqlite3 import revision is not recorded in that section. Keep BEGIN/COMMIT, nested savepoints, rollback, and the four transaction modes, replacing statement ownership/preparation with the local native-handle model. This is inherited copied implementation, not an original transaction adapter.
 
+### QuickJS string boundary
+
+Class **Host feature**. Original adapter using QuickJS-ng through rquickjs-sys 0.13.0.
+Retain the valid UTF-8 fast path. If QuickJS returns a string containing lone UTF-16
+surrogates, read its UTF-16 units through `JS_ToCStringLenUTF16`, replace unpaired units
+with Rust's `String::from_utf16_lossy` and release the QuickJS buffer. This prevents
+native UTF-8 consumers from receiving `undefined` for a valid JavaScript string.
+No upstream implementation is copied or modified.
+
+### Bun ArrayBufferSink
+
+Class **Port**. Upstream `src/runtime/webcore/ArrayBufferSink.rs`,
+`src/runtime/webcore/streams.rs` and `src/runtime/webcore/Sink.rs` at Bun
+`9510e74152073d850a18758ca41114d8f214ffa6`.
+
+Translate the byte ownership, streaming flush, repeated end, restart and closed-sink behavior
+to JavaScript typed arrays. Preserve the start option parser's own-property check, strict
+boolean modes, numeric watermark detection and getter ordering before the live-sink check.
+The closed-sink error text comes from `Sink.rs`.
+
+The upstream module depends on `bun_jsc`, so it cannot be imported as an independent Rust
+crate. Engine-owned buffers let every engine reclaim abandoned sinks without a new native
+handle table or finalizer interface. String writes use the existing Rust UTF-8 encoder.
+The watermark remains an allocation hint and causes no eager reservation in this adapter.
+The callable constructor and private JavaScript storage are original binding adapters.
+Detached backing stores produce an owned empty chunk before view bounds are read or a new view is constructed. Capture ArrayBuffer, SharedArrayBuffer, TypedArray and DataView intrinsic getters to extract the real backing buffer and
+bounds before copying. Own properties and accessors cannot replace those internal slots.
+This byte-view extraction is also an original binding adapter.
+The unsupported GC-tuning member is absent from `Bun.unsafe`, so the upstream harness's
+capability check can run byte-content tests without requesting unavailable GC controls.
+
+### Host GC hook
+
+Class **Host feature**. Original host adapter. Capture an exposed host collector before
+installing guest globals. Bun's `test/harness.ts` at revision
+`9510e74152073d850a18758ca41114d8f214ffa6` replaces global `gc` with a call to `Bun.gc`;
+looking up that guest wrapper from the host hook recurses. Hosts without an exposed collector
+still cannot force collection. No upstream implementation is copied.
+
 ### Bun cookies
 
 `crates/bunwasm-runtime/src/js/cookie.js`. Class **Port**. Upstream `src/jsc/bindings/{Cookie,CookieMap}.{cpp,h}` and `src/jsc/bindings/webcore/{JSCookie,JSCookieMap}.cpp` at the Bun pin.
@@ -588,3 +647,48 @@ license is retained in `third_party/licenses/aes-gcm-MIT`. This is a port, not a
 `scripts/generate-crypto-vectors.mjs` and both crypto fixture directories are original test
 adapters. Native Node generates signatures, key formats, ciphertext and derived bytes for
 comparison with wasm. No upstream test implementation is copied.
+
+## Bun Console constructor
+
+`crates/bunwasm-runtime/src/js/bun_console_constructor.js` is generated from
+Bun's `src/js/builtins/ConsoleObject.ts`, function `createConsoleConstructor`,
+at revision `9510e74152073d850a18758ca41114d8f214ffa6`. Bun attributes this
+constructor to Node's `lib/internal/console/constructor.js` at
+`d2c7c367741bdcb6f7f77f55ce95a745f0b29fef/lib/internal/console/constructor.js`.
+The existing generated-builtins directory contains Bun's license.
+
+`scripts/generate-bun-console.mjs` removes TypeScript and lowers dollar intrinsics
+to a lexical adapter. It preserves the constructor body, including both overloads,
+stream writes, method binding, per-instance state, inspect options, colors,
+groups, timers, and tables. `--check` checks reproducibility against the pinned
+source. This function is a Bun global-object builtin, outside its module registry.
+Bun's `src/js/node/console.ts` only exports the global singleton, so switching
+that module's factory cannot supply the missing constructor.
+
+`src/js/console_constructor.js` is an original adapter. It supplies ordinary
+JavaScript brand checks, uncurried calls, validation errors, and Bun's existing string-width API. Its public dependencies use the runtime's
+builtin module registry. The ordinary polyfill loader compiles the generated
+function on first access to `console.Console`. The global singleton keeps its
+Bun formatter; new instances use Bun's Node Console and existing Node inspector.
+`src/js/console.js` adds the lazy constructor and the global stdio properties.
+The original `src/js/bun.js` adapter now derives `Bun.enableANSIColors` from
+FORCE_COLOR, NO_COLOR, and stderr's TTY state. Bun's Console reads this flag
+when automatic color mode encounters FORCE_COLOR; the old constant false
+prevented forced colors on every engine.
+
+The generated constructor also embeds Bun's
+`src/js/internal/util/debuglog.ts` time formatter, with its default export
+replaced by the constructor's lexical require. The formatter retains Bun's
+Node v26.3.0 adaptation, including minute and hour output. No local formatter
+approximates the upstream implementation.
+
+The generator also routes the constructor's `Error.captureStackTrace` call to
+an original adapter. JSC's bare stack strings omit the Trace name and message;
+the adapter prepends them while preserving stack frames. Browser engines
+without captureStackTrace use Error.stack. It leaves a native Node-style
+header and a custom prepareStackTrace result intact. This supplies the Node
+console contract without changing the engine's global Error constructor.
+
+Bootstrap captures its default stack formatter identity for this adapter.
+An installed user formatter stays authoritative; the runtime's own default
+frame-only formatter still receives the Console Trace header.

@@ -103,3 +103,54 @@ Implement these in the package-manager track with its existing install fixtures.
 Keep the upstream tests unchanged. Rerun the exact file on all three engines.
 The portable bridge PR separately fixes the engine-specific Symbol error wording
 and browser host GC recursion observed during the initial measurement.
+
+## QuickJS recursion traps before JavaScript can catch the error
+
+The Console comparison reproduces another instance of the stack problem above.
+`js/node/console/console-constructor-exception.test.ts` fails unchanged before
+and after adding Console on QuickJS. Its self-spawned recursive `exhaust()`
+function traps with `wasm trap: call stack exhausted`; the backtrace repeats
+`JS_CallInternal`. The child prints no `OK`, and its parent assertion fails.
+This happens on every recorded run, without a suite timeout. The other two
+console files pass after the Console implementation. JSC passes this recursion
+control after the implementation.
+
+Reproduce through the heavy wrapper with the private launcher and rebuilt wasm:
+
+```sh
+source env.sh
+scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 \
+  --launcher "$CARGO_TARGET_DIR/release/bun-wasm" \
+  --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" \
+  --output /work/tmp/bun-wasm-console-stack.json \
+  js/node/console/console-constructor-exception.test.ts
+```
+
+The QuickJS engine requests a 4 MiB engine stack limit in
+`crates/bunwasm-runtime/src/engine_quickjs.rs:127`. Check its relation to the
+host's Wasm call-stack limit and the linear-memory C stack before choosing
+limits. A caught JavaScript RangeError is required; increasing a test deadline
+cannot repair an uncatchable Wasm trap. This is outside Console's stream and
+constructor implementation. Preserve the unchanged recursive control, also test
+plain recursion without Console, and rerun all engine fixtures when changing
+stack policy. Before/after evidence is retained in
+`/work/reports/bun-wasm-console/console-{before,after}-quickjs.json`.
+
+## JSC subprocess disposal timing
+
+The ArrayBufferSink campaign exposed a variable result in upstream
+`js/bun/spawn/spawn.test.ts`, case `dispose keyword works` at line 1387.
+The integrated three-file measurement has five spawn passes and 172 failures.
+A spawn-only repeat with identical wasm, launcher, runner and dependency hashes
+has six passes and 171 failures. Only the disposal case changes status.
+The sink file consistently has 13 passes and one skip. Raw results are retained
+in `/work/tmp/bun-wasm-track4-sink-evidence/after-jsc-refreshed.json` and
+`jsc-spawn-repeat.json` until coordinator review. The tracked sink report preserves
+the counts after those local artifacts are removed.
+
+Reproduce with the sink report's command and `--engine jsc`, selecting only
+`js/bun/spawn/spawn.test.ts`, through the heavy wrapper. Trace child completion
+before the disposal call in `crates/bunwasm-runtime/src/js/spawn.js:228` and the
+signal state set by `kill()` at line 223. The child may already have settled;
+that cause remains unconfirmed. No sink code or provenance changed in the repeat.
+Keep this subprocess investigation separate from byte-sink behavior.

@@ -1,0 +1,6 @@
+ArrayBuffer detached empty true
+ArrayBuffer detached pending true
+Uint8Array detached empty true
+Uint8Array detached pending true
+DataView detached empty true
+DataView detached pending true
