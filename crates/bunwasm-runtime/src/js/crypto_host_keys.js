@@ -9,7 +9,15 @@
   const converted = new WeakMap();
   const nameOf = a => typeof a === "string" ? a.toUpperCase() : a.name.toUpperCase();
   const derivation = a => ["HKDF", "PBKDF2"].includes(nameOf(a));
-  const cloneData = (format, data) => format === "jwk" ? {...data} : c.buffer(data);
+  function cloneData(format, data) {
+    if (format !== "jwk") return c.buffer(data);
+    const material = {};
+    for (const field of ["kty", "crv", "k", "n", "e", "d", "p", "q", "dp", "dq", "qi", "x", "y"]) {
+      const value = data[field];
+      if (value !== undefined) material[field] = value;
+    }
+    return material;
+  }
   function remember(key, jwk) {
     c.rememberKey(key, jwk);
     return key;
