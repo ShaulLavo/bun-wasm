@@ -197,44 +197,6 @@ These priorities count app projects, not individual command rows.
 
 Rank remaining causes by the number of distinct app projects they would unblock, rather than counting install, dev, and build rows as separate apps. An install or module-loading fix exposes the next blocker; it does not promise that the app will then pass.
 
-## Next after standard Web Streams
-
-This measurement predates the WebAssembly support introduced by PR #8. It records
-the earlier missing-global failure, not the current combined branch's first blocker.
-
-The Streams lane replayed Next 15.5.6 with React 19.1.1 on all three native hosts.
-The disposable integration combines this branch with PR #9, which supplies the
-preceding module-classification, file-write and legacy-stream fixes. PR #9 is a
-prerequisite of this measurement, not a prerequisite included in the Streams diff.
-
-Run the replay with all three wasm artifacts built in that integration checkout:
-
-```sh
-source env.sh
-scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser --hosts=native \
-  --timeout=90 --launcher=/work/tmp/bun-wasm-target/release/bun-wasm \
-  --output=/work/reports/bun-wasm-streams-next-replay
-```
-
-Fresh installs still pass on all three engines. QuickJS dev and JSC dev/build
-advance beyond `TextEncoderStream` and fail while loading Next's bundled undici
-HTTP parser. `next/dist/compiled/@edge-runtime/primitives/load.js:5626` first
-tries the SIMD llhttp module; its fallback at line 5628 also calls
-`WebAssembly.compile`. QuickJS reports `ReferenceError: WebAssembly is not defined`.
-JSC reports `TypeError: undefined is not an object (evaluating 'WebAssembly.compile')`.
-QuickJS build exits 1 with `unhandledRejection [ReferenceError: WebAssembly is not defined]`.
-The matrix classifier now recognizes that bracketed diagnostic instead of calling
-it an exit without a diagnostic. There is no timeout in that build observation.
-
-Browser build still fails at the known dynamic-import rewrite of a method named
-`import`, and browser dev produces no diagnostic before exit. All starts remain
-blocked by failed builds. The replay therefore has 3 passing installs, 6 failed
-command rows and 3 blocked starts. No Next application is claimed to pass.
-
-Evidence, exact artifact hashes, raw logs, matrix results and cleanup ownership
-are retained in `/work/reports/bun-wasm-web-streams-2026-10-16/`. Those observations exposed the llhttp WebAssembly requirement. PR #8 now supplies
-a limited WebAssembly API; the Next lane owns measuring its remaining requirements.
-
 ## Browser import parsing follow-up
 
 The browser engine now locates import expressions with Bun's parser. The passing runtime fixtures `import-method`, `import-syntax`, and `import-eval` cover method and property names, strings, comments, regex literals, template substitutions, literal and computed specifiers, import attributes, re-exports, import.meta, CommonJS, and ESM loaded through `require`. The browser smoke test also runs the first two fixtures in Chromium and WebKit.
@@ -556,30 +518,9 @@ write errors without leaking stdio error listeners. Native Bun 1.4.2 drops a
 Console trace's message; the Node-contract fixture is marked manual, and a
 minimal Bun/Node comparison is recorded in the owner's upstream bug report.
 
-## Next after the Web Streams review fixes
-
-The combined branch includes main through PR #17 and the Web Streams lifecycle
-fixes. Its 2026-10-16 offline native replay retains 3 passing installs, 6 failed
-commands and 3 blocked starts. Registry replay has zero misses and errors.
-
-| Engine | Dev | Build | Start |
-| --- | --- | --- | --- |
-| QuickJS | `LinkError: Unsupported WebAssembly export table` | Exit 1 without a diagnostic | Blocked by build |
-| JSC | `LinkError: Unsupported WebAssembly export table` | Exit 1 without a diagnostic | Blocked by build |
-| Browser | Exits without an HTTP response or diagnostic | `SyntaxError: Unexpected token '.'` | Blocked by build |
-
-The embedded-engine dev error occurs while instantiating undici's llhttp module
-in `next/dist/compiled/@edge-runtime/primitives/load.js:5630`. The shared
-WebAssembly adapter rejects table exports in
-`crates/bunwasm-runtime/src/js/webassembly.js:136`. The older missing-WebAssembly
-observations above are historical. This replay does not establish a passing Next
-application or explain the silent build exits.
-
-Reproduce with `scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser
---hosts=native --timeout=90 --output=<fresh-directory>`. Logs, matrix rows and
-registry verification are retained in
-`/work/reports/bun-wasm-streams-review2-2026-10-16/next-after/` until the
-coordinator completes review and the WebAssembly follow-up reproduces the gap.
+The [esbuild follow-up measurement](esbuild-results.md) records the five requested
+framework projects after selecting the official wasm distribution, including
+passing production builds and the exact next blockers.
 
 ## Generated-function import review rerun
 
@@ -632,26 +573,3 @@ files. Commands and per-file results are in
 `/work/reports/bun-wasm-app-reviews-2026-10-16/main84/`.
 The coordinator removes retained review artifacts after both app-blocker PRs merge
 and independent verification finishes.
-
-### Web Streams round-3 replay with semantic imports
-
-The round-3 replay includes main's semantic import linking from PR #13. It uses
-runtime artifacts built at `400a264`; the replay revision `fbb9a81` adds only
-follow-up documentation. Next 15.5.6 has 3 passing installs, 6 failed commands
-and 3 blocked starts. The offline registry serves 213 requests with no misses
-or errors, and the runner reports cleanup complete.
-
-QuickJS and JSC dev stop at `LinkError: Unsupported WebAssembly export table`
-while loading llhttp. Their builds exit without a useful diagnostic. Browser
-build advances to `NotSupportedError: crypto.subtle.generateKey is not supported
-in bun-wasm`; browser dev still has no useful diagnostic. These are separate
-observations. No missing Streams global appears and no passing Next app is
-claimed. Main's WASI-host changes from PR #24 are integrated afterward and get
-separate host verification.
-
-Reproduce with `scripts/app-matrix.sh --apps=next
---engines=quickjs,jsc,browser --hosts=native --timeout=90 --output=<fresh-output>`,
-using the built native launcher and the heavy wrapper. Exact artifacts, all
-stage records, raw output and registry provenance are in
-`/work/reports/bun-wasm-streams-round3-fix-2026-10-16/next-final/`. The coordinator
-owns the retained evidence until independent review and follow-up reproduction.

@@ -14,7 +14,6 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`web/src/native-stream-state.ts`](#native-browser-stream-completion) | Host feature | Original bridge from browser-native completion promises and captured controllers to Node stream hooks. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
@@ -35,6 +34,10 @@ Each row has one class. A file with independent changes has separate rows.
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, inspection helpers](#quickjs) | Host feature | Inspect keys and iterator entries without consuming them. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, async context](#quickjs) | Host feature | Capture and restore async context in promise reactions. |
 | [`third_party/rquickjs-sys/build.rs`](#quickjs) | Host feature | Rebuild when the locally patched C sources or binding header change. |
+| [`third_party/rquickjs-sys/quickjs/quickjs.c`, WASI stack checks](#wasm-stack-guards) | Port | Restore the stack checks on WASI and reserve shadow stack for host frames, so recursion throws before the host wasm stack runs out. |
+| [`third_party/rquickjs-sys/quickjs/libregexp.c`, WASI stack reservation](#wasm-stack-guards) | Port | Reserve shadow stack per regexp group nesting level, so the parser's stack check trips before the host wasm stack runs out. |
+| [`jsc/webkit-wasi.patch`, `StackBounds.cpp` budget](#wasm-stack-guards) | Port | Bound JSC's native recursion to a host-configurable budget below the host wasm stack. |
+| [Console recursion fixture](#wasm-stack-guards) | Port | Adapt Bun's console-constructor stack exhaustion control to a standalone fixture. |
 | [`jsc/build-icu.sh`, makefile rewrite](#icu) | Port | Select a usable cross-build makefile without native assembly output. |
 | [`jsc/build-icu.sh`, filtered ICU data](#icu) | Port | Reduce the embedded locale data to fit the wasm memory budget. |
 | [`scripts/sync-bun.sh`, generated linker config](#nested-bun-dependencies) | Port | Remove Bun configure's generated host linker override. |
@@ -63,10 +66,6 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/builtins.js`, `crates/bunwasm-runtime/src/js/net.js`, HTTP tables](#http-status-tables) | Port | Retain HTTP status data separately from the original networking adapters. |
 | [`crates/bunwasm-runtime/src/js/{builtins,bootstrap}.js`, `web/src/engine-host.js`, caller origin](#caller-source-origin) | Host feature | Read caller origins through the existing engine stack parser. Original adapter. |
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
-| [`crates/bunwasm-runtime/src/js/streams_polyfill.js`](#web-streams) | Host feature | Package the reference WHATWG ponyfill with exact Node completion hooks. |
-| [`streams.js`, `streams.rs`](#web-streams) | Host feature | Original encoding, compression and body adapters around the selected stream implementation. |
-| [`node_stream_core.js`, `node_stream_web.js`, `third_party/node-streams/`](#portable-node-streams) | Port | Bundle the portable Node stream core and adapt Node's standard Web Stream bridges and completion tracking. |
-| [`node_stream_bindings.js`, `node_stream_internals.js`](#portable-node-streams) | Host feature | Original bindings expose real stream state, compose destruction hooks and connect the unchanged Node harness. |
 | [`crates/bunwasm-semver/src/lib.rs`](#portable-semver-host-functions) | Port | Compile Bun's semver host functions unchanged against a portable `bun_jsc` subset. |
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
 | [`crates/bunwasm-runtime/src/js/stack_trace.js`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
@@ -74,6 +73,7 @@ Each row has one class. A file with independent changes has separate rows.
 
 | [`runtime/core/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, memory, path, descriptor and filesystem-boundary adapters extracted into a reusable package. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
+| [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and synchronize stdin and idle filesystem changes. |
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
@@ -690,124 +690,6 @@ The builtins module retains the status-code/reason table. The network module kee
 
 `scripts/vendor-temporal.py` bundles the unmodified packages, minifies them, and wraps the CommonJS output as a factory in `crates/bunwasm-runtime/src/js/temporal.js`. Without the wrapper our engine cannot load the fallback used for Bun's TOML date values. There are no local changes to either dependency's source. The entry, lockfile, and copied licenses record its provenance.
 
-### Web Streams
-
-`third_party/streams/entry.js`, `package.json`, and `bun.lock` pin
-**web-streams-polyfill 4.2.0**, published from MattiasBuelens/web-streams-polyfill.
-The upstream implementation is `dist/ponyfill.mjs` in that npm release. Class
-**Host feature** for packaging the fallback.
-
-`scripts/vendor-streams.py` installs the frozen dependency into disposable scratch,
-adds the Node completion hooks described below, bundles and minifies it, copies
-its MIT license, and wraps
-the CommonJS output as a runtime factory in
-`crates/bunwasm-runtime/src/js/streams_polyfill.js`. The bundle is about 60 KB.
-It includes byte streams, BYOB readers, tee, pipe cancellation and backpressure,
-async iteration, `ReadableStream.from`, writable/transform streams and queuing
-strategies. The browser engine retains its native stream constructors as one set.
-
-Bun's pinned `src/js/node/stream.web.ts` only reexports globals. Its stream
-implementations live in `src/jsc/bindings/webcore/streams/*.cpp` and depend on JSC
-objects, rather than engine-independent TypeScript builtins. The WHATWG-reference
-ponyfill supplies those algorithms without translating or copying Bun's bindings.
-
-`crates/bunwasm-runtime/src/js/streams.js` and `streams.rs` are original adapters,
-class **Host feature**, with no copied upstream algorithm. The Node stream core
-and Web bridges are classified separately below.
-They connect encoding streams to `encoding_rs` and compression streams to the
-existing `flate2` Rust backend and the pinned `brotli` 8.0.4 Rust crate. Codecs retain incremental state, reject truncated
-or trailing input, and release resources on completion, failure, cancellation,
-and collection of abandoned transforms. Brotli uses the crate's streaming writer
-interfaces, explicit decoder close validation and ordinary owned output buffers;
-partial input and separate trailing chunks remain errors. The codec readable side
-has a bounded 16 KiB byte queue, so a small initial write can finish before its
-consumer starts. BufferSource validation reads intrinsic view slots, rejects
-shared storage, and retains Node's invalid-input error codes. Text decoding preserves BOM, partial
-characters and fatal-error state across chunks. Text encoding carries a trailing
-high surrogate into the next chunk before converting to Unicode scalar values.
-
-The changes in `web.js` select constructors before creating fetch/Blob body
-producers, expose byte readers, and tee streamed bodies when cloning. BufferSource
-extraction snapshots visible bytes into an ordinary Uint8Array, and byte-stream
-enqueue allocates another ordinary Uint8Array so transfer never detaches caller
-storage or the bytes retained by an existing clone. Neither boundary calls a
-polymorphic slice method. `net.js`
-marks network body streams as byte streams. `builtins.js` exports the complete
-`node:stream/web` module. The portable Node stream core now owns queued writes,
-backpressure, finish and destruction. Web close/abort/cancel promises complete
-through its `_destroy` callback before Node error/close events are emitted.
-
-### Portable Node streams
-
-Class **Port**. `third_party/node-streams/package.json` and `bun.lock` pin
-**readable-stream 4.7.0**, the Node.js project's portable copy of the Node
-**18.19.0** stream implementation. The selected entry is `lib/stream.js`, with
-its internal stream state, buffering, operators, validators and errors. Bundled
-`string_decoder`, `safe-buffer`, `abort-controller` and `event-target-shim`
-licenses are copied beside the input. Buffer, events, async resources and process
-use the actual bun-wasm builtins. Browser timer-based process shims are excluded.
-
-`third_party/node-streams/adapters.js` is unchanged upstream
-`nodejs/node/lib/internal/webstreams/adapters.js` at **v26.7.0**, SHA-256
-`918e3382a8dc94fdd972f18b910807ae921754f3a6f714757f560559e15e2ec2`.
-`end-of-stream.js` is the same revision's `lib/internal/streams/end-of-stream.js`,
-SHA-256 `a206f4206b803529910fec9fcf62569621adb5689f39ec82a47641383de42c09`.
-The Node license and machine-readable provenance are included.
-
-`scripts/vendor-node-streams.mjs` installs frozen dependencies into owned scratch,
-copies the core before applying changes, and emits `node_stream_core.js` and
-`node_stream_web.js`. It retains the six standard Node/Web adapters and omits the
-native `StreamBase` socket bindings. The emitted adapters use our selected Web
-constructors and the core's validators/errors. Node destruction remains the sole
-completion boundary. Supported custom `options.destroy` hooks run after the Web
-operation settles. Pending terminal error observers detach on close or on finish
-when auto-destruction will not emit close.
-
-The modern completion implementation supplies the immediate-terminal callback
-used by readable adapters to avoid duplicate error observers. Public
-`AsyncResource` captures callback context unconditionally instead of querying
-Node's private async-hook/frame machinery. The internal Node-to-Web pipeline hop
-uses the standard readable adapter while retaining Node Buffer chunks; ordinary
-public `Readable.toWeb` still copies binary Buffers. Legacy Node readables pass
-through the core's `Readable.wrap` at this boundary. No test expectation or
-await-observer implementation is changed.
-
-HTTP `IncomingMessage` declares its externally pushed `_read` hook. HTTP
-`ClientRequest` uses `_write`, `_final` and `_destroy` rather than replacing public
-writable methods, so pipeline completion, synchronous end/destruction state and
-late-write errors use the same Node core. Destruction aborts its fetch request.
-
-The handwritten classes and their separate lifecycle flags were removed from
-`builtins.js`. Bun's current Node stream source was considered first, but its
-native-readable transfer, private Web stream hooks and additional engine
-intrinsics exceed the current generated builtin table. The portable Node core
-provides the actual queue/backpressure/destruction algorithms without replacing
-those dependencies with successful stubs. Bundle size and the unchanged Node
-adapter census are recorded with the PR measurements.
-
-Class **Host feature**, original adapters. `node_stream_bindings.js` supplies
-primitive bindings, terminal-observer cleanup and custom destroy composition.
-For the reference ponyfill, `scripts/stream-polyfill-node-hooks.mjs` adds a
-private completion record at initialization and settles it from the six actual
-readable/writable completion algorithms. Writable failure notification runs only
-after the pending abort algorithm has settled, not merely when `_state` changes
-to errored. Node's closed-promise symbol exposes that record without consuming or
-locking the stream. State getters and controller bindings still use actual
-ponyfill fields. The pinned input hash and exact six-match check guard codegen.
-The standard export surface and all stream algorithms remain in the reference
-implementation. Native host symbols
-remain native; opaque browser streams do not acquire invented private state.
-`node_stream_internals.js` exposes real adapter entry points and state getters to
-the flag-gated Node harness. The existing engine promise-state native answers
-`isPromisePending`; no promise or await status is simulated.
-
-The unchanged Node scripts require `Module.prototype.require` interception,
-connection-default accessors and the basic `node:test` registration surface.
-These are original runtime adapters. `scripts/bun-suite.sh --node-parallel`
-includes their tracked `test-*.js` files explicitly, keeps the default census
-unchanged and distinguishes successful assertion-script exits from registered
-test counts. `docs/bun-test-suite/stream-adapter-files.txt` fixes the selected set.
-
 ## Port bugs fixed in bun-wasm's own code
 
 ### Zero-length stdin reads waited for EOF
@@ -915,40 +797,87 @@ Bootstrap captures its default stack formatter identity for this adapter.
 An installed user formatter stays authoritative; the runtime's own default
 frame-only formatter still receives the Console Trace header.
 
-### Native browser stream completion
+## esbuild WebAssembly distribution
 
-Class **Host feature**, original bun-wasm implementation. No upstream source was
-copied or adapted for `web/src/native-stream-state.ts`. Chromium and WebKit lack
-Node's private closed-promise and controller-error symbols. The host installs
-those hooks before the runtime bootstrap; Node-host execution retains Node's
-existing hooks and embedded engines retain the reference ponyfill hooks.
+Class **Host feature**. The distribution selector in
+`crates/bunwasm-runtime/src/install/resolve.rs` maps `esbuild` to the matching
+`esbuild-wasm` version. The original subprocess adapter in
+`crates/bunwasm-runtime/src/js/spawn.js` accepts `node` as a guest runtime name.
+The original stdin adapters in `crates/bunwasm-runtime/src/js/node_fs.js`,
+`crates/bunwasm-runtime/src/natives.rs`,
+`crates/bunwasm-host/src/process/mod.rs`, `process/stdin.rs`, `process/stdio.rs`,
+its slot and notification hooks,
+and `web/src/subprocess.js` let callback reads wait through the host I/O loop.
+The original browser filesystem adapters in `web/src/subprocess-fs.ts`,
+`web/src/subprocess.js`, and `web/src/worker.ts` exchange changes through the
+host I/O pump as well as stdin, stdout, and exit boundaries. Each child has separate incoming and outgoing
+mailboxes and a baseline; native hosts use their shared physical filesystem.
+The synchronous path reads the WASI descriptor without Rust stdin prefetching.
+The native WASI and host interfaces share a buffer, including bytes read ahead.
+This prevents Go's service loop from blocking JavaScript callbacks and preserves
+stdin position when callers mix synchronous and callback reads.
+No upstream implementation is copied or patched. The published esbuild 0.25.12
+files `lib/main.js`, `bin/esbuild`, `wasm_exec_node.js`, `wasm_exec.js`, and
+`esbuild.wasm` install unchanged from the official npm tarball. Its source is
+`evanw/esbuild` tag `v0.25.12`, including `lib/npm/node.ts`,
+`lib/npm/node-platform.ts`, `npm/esbuild-wasm/bin/esbuild`, and the Go compiler runtime.
+The package owns that Go runtime revision. Our test fixtures and subprocess
+changes are original adapters, separate from those upstream files.
 
-Construction proxies delegate to the browser's native ReadableStream,
-WritableStream and TransformStream constructors and capture their controllers.
-Native prototypes, instance brands, byte/BYOB queues and algorithms stay native.
-The global constructor references change. Frozen underlying dictionaries are
-wrapped without mutation, and callbacks retain their original receiver.
+The original builtin registry in `crates/bunwasm-runtime/src/js/builtins.js`
+rejects loading `worker_threads` because the guest engines cannot create Node
+workers. Packages can detect its absence with their ordinary `require` guard.
+The official esbuild package then uses its synchronous subprocess backend for
+`buildSync`, `transformSync`, `formatMessagesSync`, and `analyzeMetafileSync`.
+No package-specific environment override is installed.
 
-Completion comes from actual native reader/writer `closed` promises. Temporary
-probes release locks immediately without reading or writing. Releasing a pending
-closed promise rejects it in place; releasing a terminal promise replaces it.
-That identity change distinguishes terminal observation from release errors.
-Notifications from controllers and underlying callbacks trigger another probe.
-Pending sink abort promises delay completion. Internally acquired native locks,
-such as async iterators and pipeTo, use weak polling with host timers. Session
-exit stops the timers. No private stream state or promise status is invented.
+Idle filesystem synchronization retains byte-exact comparisons, including edits
+within one millisecond. A direct byte loop replaces the callback per byte when comparing the unchanged
+dependency wasm during host I/O polling.
 
-Streams created outside the construction bridge, including saved original
-constructors and opaque native factory outputs, support completion observation.
-Their controllers are unavailable through browser APIs, so the error hook cannot
-provide Node-style error injection for those opaque readables. The bridge raises
-an explicit error rather than treating cancellation as an errored stream.
+The runtime-core descriptor integration uses the original `wasiPipe` adapter's
+read/write hooks to apply queued filesystem changes after stdin and publish
+changes before stdout or stderr. The existing callback output path shares the
+same publisher. Snapshot replacement/removal uses MemFS's handle-lifetime APIs.
+The applications select hoisted native Bun installs to avoid the recorded build
+plugin path-validation bug; no upstream loader or global package state changes.
 
-`scripts/test-native-stream-interop.mjs` executes the exact runtime stream modules
-and this host bridge in Chromium and WebKit. Its minimal process/async-context
-boundary is a direct-module test, not a wasm-build claim. The same fixture also
-runs through the actual built browser engine in `web/tests/browser-engine.mjs`.
-CI runs the direct native-browser proof so Node-host symbols cannot mask a gap.
+## Wasm stack guards
+
+Class **Port**. The upstream files are QuickJS-ng `quickjs/quickjs.c` from
+rquickjs-sys 0.13.0, and Bun's WebKit `Source/WTF/wtf/StackBounds.cpp` at
+`3d3257150c40a1aabdc5f8b48d5b33d0413674cb`.
+
+QuickJS disables its stack limit on WASI in both `JS_NewRuntime2` and
+`update_stack_limit`. Remove those exceptions so the existing guards in the
+interpreter, property accessors, JSON serializer, and parser work on the C
+shadow stack. A wasm host keeps call frames outside linear memory, so those
+guards see only part of each recursion level. The `js_reserve_wasm_frame`
+macro, compiled only for WASI, reserves a constant number of shadow-stack bytes
+in the recursive functions whose host frames are larger than their shadow
+frames: the JSON serializer, parser and reviver, `Array.prototype.flat`, Proxy
+traps (through `get_proxy_method`, renamed `get_proxy_method1` behind a
+macro), bound and async calls, `ToPrimitive`, `JS_Call`, `JS_CallFree`, and
+the expression, unary and statement parsers, and `re_parse_disjunction` in
+`libregexp.c` through the same macro there. Sizes are measured per path; no
+upstream algorithm or error changes. Our Rust engine adapter requests the
+measured stack budget. It is original adapter code and retains no upstream
+implementation.
+
+The WebKit WASI port bounds the C shadow stack to a native recursion budget
+below the host wasm call-stack limit, read from `BUN_WASM_STACK_KIB` when set,
+while retaining JSC's exception reserve. Its separate C-loop JavaScript frame
+reservation keeps its existing capacity. This extends the platform hunk in
+`jsc/webkit-wasi.patch`; it changes no upstream JavaScript algorithms. The
+browser worker's choice of budget in `web/src/worker.ts` is original code.
+[Stack limits](stack-limits.md) records the measurements and reproducer.
+
+`tests/fixtures/stack-overflow-console/index.js` adapts the script in Bun's
+`test/js/node/console/console-constructor-exception.test.ts` at upstream
+`9510e74152073d850a18758ca41114d8f214ffa6`. Class **Port**. The local fixture
+runs directly on all engines, verifies the caught error type, and prints a
+fixed recovery marker instead of spawning a child test process.
+
 ## Runtime TypeScript
 
 Class **Host feature**. `scripts/transpile-runtime.ts`, the runtime embedding build step,

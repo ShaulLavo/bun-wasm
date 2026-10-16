@@ -40,6 +40,12 @@ impl Notify {
     }
 }
 
+impl std::task::Wake for Notify {
+    fn wake(self: Arc<Self>) {
+        self.bump();
+    }
+}
+
 /// Bytes received from the network, waiting for the guest's `read`.
 #[derive(Default)]
 pub struct ByteQueue(VecDeque<u8>);

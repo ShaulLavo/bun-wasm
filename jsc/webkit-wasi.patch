@@ -291,11 +291,13 @@ diff --git i/Source/WTF/wtf/StackBounds.cpp w/Source/WTF/wtf/StackBounds.cpp
 index 8cea1e87..2c53b5b9 100644
 --- i/Source/WTF/wtf/StackBounds.cpp
 +++ w/Source/WTF/wtf/StackBounds.cpp
-@@ -102,6 +102,24 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+@@ -102,6 +102,39 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
      return StackBounds { origin, bound };
  }
  
 +#elif OS(WASI)
++
++#include <cstdlib>
 +
 +// wasm-ld places the C (shadow) stack in linear memory between these symbols; it grows down.
 +extern "C" {
@@ -310,7 +312,20 @@ index 8cea1e87..2c53b5b9 100644
 +
 +StackBounds StackBounds::currentThreadStackBoundsInternal()
 +{
-+    return StackBounds { static_cast<void*>(&__stack_high), static_cast<void*>(&__stack_low) };
++    // The wasm host's call stack can run out long before this 8 MiB shadow stack.
++    // Native recursion gets a measured budget, which a host with less call stack
++    // lowers with BUN_WASM_STACK_KIB, plus JSC's 128 KiB error reserve.
++    size_t budget = 320 * 1024;
++    const char* kib = getenv("BUN_WASM_STACK_KIB");
++    if (kib && *kib >= '0' && *kib <= '9') {
++        // Past 7 MiB the guard would never trip; the clamp also keeps value * 1024 from wrapping.
++        if (unsigned long long value = strtoull(kib, nullptr, 10))
++            budget = std::min<unsigned long long>(value, 7 * 1024) * 1024;
++    }
++    auto low = reinterpret_cast<uintptr_t>(&__stack_low);
++    auto high = reinterpret_cast<uintptr_t>(&__stack_high);
++    auto bound = high - std::min<size_t>(budget + 128 * 1024, high - low);
++    return StackBounds { static_cast<void*>(&__stack_high), reinterpret_cast<void*>(bound) };
 +}
 +
  #elif OS(UNIX) || OS(HAIKU)
