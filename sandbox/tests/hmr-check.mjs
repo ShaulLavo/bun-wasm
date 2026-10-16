@@ -60,10 +60,10 @@ async function check(browserName, engine) {
   };
   const app = page.frameLocator("#preview");
   const setFile = async (path, edit) => {
-    await page.evaluate(([path, edit]) => {
+    await page.evaluate(async ([path, edit]) => {
       const { editor, fs } = globalThis.sandbox;
-      editor.open(path);
-      const text = new TextDecoder().decode(fs.readFile(`/home/user/app/${path}`));
+      await editor.open(path);
+      const text = new TextDecoder().decode(await fs.readFile(`/home/user/app/${path}`));
       editor.setText(edit.reduce((t, [from, to]) => t.replace(from, to), text));
     }, [path, edit]);
   };

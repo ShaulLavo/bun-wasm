@@ -78,7 +78,7 @@ if [[ $browser == 1 ]]; then
   node "$root/scripts/test-native-stream-interop.mjs" || failed=1
   node tests/browser-install.mjs || failed=1
   node tests/browser-net.mjs || failed=1
-  node tests/browser-subprocess.mjs || failed=1
+  bun tests/browser-subprocess.ts || failed=1
   node tests/browser-stack.mjs || failed=1
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
     node tests/browser-engine.mjs || failed=1

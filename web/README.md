@@ -145,6 +145,6 @@ parent has one; the playground's root stdin remains EOF. Inherited output goes
 to the parent's stdout/stderr, and ignored output is drained and discarded.
 
 Run `node --no-warnings web/tests/subprocess.mjs` for Node worker checks, or build
-web/ and run `node web/tests/browser-subprocess.mjs` for Chromium and WebKit
+web/ and run `bun web/tests/browser-subprocess.ts` for Chromium and WebKit
 checks across all three engines. `bun test web/tests/subprocess.test.ts` checks
 pipe wrapping, filesystem merging, and the Node worker checks.

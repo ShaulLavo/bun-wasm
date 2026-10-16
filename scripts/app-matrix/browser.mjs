@@ -47,6 +47,14 @@ export async function serverCommand({ page, context, command, app, engine, optio
 }
 
 
+/** A guest file's text from the playground's shared filesystem, or null when it is missing. */
+export async function readGuest(page, path) {
+  return page.evaluate(async path => {
+    const bytes = await globalThis.playground.fs.readFile(`/home/user/${path}`);
+    return bytes ? new TextDecoder().decode(bytes) : null;
+  }, path);
+}
+
 export async function browserHost({ root, options, launch, stop }) {
   const playwrightPath = process.env.PLAYWRIGHT ?? "/home/shaul/.local/share/mise/installs/npm-playwright/1.63.0/node_modules/.mise/playwright@1.63.0/node_modules/playwright/index.mjs";
   const { chromium } = await import(pathToFileURL(playwrightPath).href);
@@ -85,13 +93,6 @@ export async function browserHost({ root, options, launch, stop }) {
     if (["http", "page"].includes(command.check.kind)) return serverCommand({ page, context, command, app, engine, options, terminalText });
     const runResult = await run(page, ["bun"].concat(command.args).join(" "), options.timeout);
     return checkCommand(command, runResult, path => readGuest(page, path));
-  }
-
-  async function readGuest(page, path) {
-    return page.evaluate(path => {
-      const bytes = globalThis.playground.fs.readFile(`/home/user/${path}`);
-      return bytes ? new TextDecoder().decode(bytes) : null;
-    }, path);
   }
 
   async function runApp({ app, engine, registry, record }) {

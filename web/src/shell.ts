@@ -1,7 +1,8 @@
 // A tiny shell for the xterm terminal: line editing, history, builtins and `bun …`.
 
 import type { Terminal } from "@xterm/xterm";
-import { type MemFS, basename, dirname, normalize } from "./fs";
+import { basename, dirname, normalize } from "./fs";
+import type { SharedFilesystem } from "./shared-fs";
 import { HOME } from "./examples";
 
 export interface Output {
@@ -10,15 +11,15 @@ export interface Output {
 }
 
 export interface ShellHost {
-  fs: MemFS;
+  fs: SharedFilesystem;
   /** Runs bun.wasm with `args` (without the leading "bun"). Resolves to the exit code. */
   runBun(args: string[], cwd: string, io: Output): Promise<number>;
   /** Stops the running bun.wasm, if any. */
   kill(): void;
   /** The filesystem changed outside the editor. */
-  changed(): void;
+  changed(): void | Promise<void>;
   /** Open a file in the editor. */
-  open(path: string): void;
+  open(path: string): void | Promise<void>;
   info(): string[];
 }
 
@@ -96,6 +97,7 @@ export class Shell {
   private busy = false;
   private lastExit = 0;
   private atLineStart = true;
+  private completionRevision = 0;
   cwd = HOME;
 
   constructor(
@@ -172,6 +174,7 @@ export class Shell {
   }
 
   private input(data: string): void {
+    this.completionRevision++;
     if (this.busy) {
       if (data.includes("\x03")) this.host.kill();
       return;
@@ -258,7 +261,14 @@ export class Shell {
         this.cursor = this.line.length;
         return this.render();
       case "\t":
-        return this.complete();
+        void this.complete().catch((error) => {
+          this.write(`\r\n${RED}${String(error)}${RESET}\r\n`);
+          if (!this.busy) {
+            this.row = 0;
+            this.render();
+          }
+        });
+        return;
     }
     if (ch < " ") return;
     const atEnd = this.cursor === this.line.length;
@@ -283,8 +293,12 @@ export class Shell {
     this.render();
   }
 
-  private complete(): void {
-    const before = this.line.slice(0, this.cursor);
+  private async complete(): Promise<void> {
+    const revision = ++this.completionRevision;
+    const line = this.line;
+    const cursor = this.cursor;
+    const cwd = this.cwd;
+    const before = line.slice(0, cursor);
     const match = /(\S*)$/.exec(before)!;
     const partial = match[1]!;
     const first = before.trimStart() === partial;
@@ -295,8 +309,9 @@ export class Shell {
     } else {
       const slash = partial.lastIndexOf("/");
       prefix = slash >= 0 ? partial.slice(0, slash + 1) : "";
-      const dir = this.host.fs.lookup(normalize(prefix || ".", this.cwd));
+      const dir = await this.host.fs.lookup(normalize(prefix || ".", cwd));
       if (dir?.kind !== "dir") return;
+      if (this.busy || revision !== this.completionRevision || this.line !== line || this.cursor !== cursor || this.cwd !== cwd) return;
       const stem = partial.slice(prefix.length);
       candidates = Array.from(dir.children, ([name, node]) => (node.kind === "dir" ? `${name}/` : `${name} `)).filter((n) => n.startsWith(stem));
     }
@@ -316,6 +331,7 @@ export class Shell {
   }
 
   private async enter(): Promise<void> {
+    this.completionRevision++;
     const line = this.line;
     this.cursor = this.line.length;
     this.render();
@@ -391,8 +407,8 @@ export class Shell {
         at += c.length;
       }
       try {
-        this.host.fs.writeFile(redirect.path, data, redirect.append);
-        this.host.changed();
+        await this.host.fs.writeFile(redirect.path, data, redirect.append);
+        await this.host.changed();
       } catch (err) {
         this.write(`${RED}${String(err)}${RESET}\r\n`);
         return 1;
@@ -449,7 +465,7 @@ export class Shell {
       }
       case "cd": {
         const target = path(args[0] ?? HOME);
-        const node = fs.lookup(target);
+        const node = await fs.lookup(target);
         if (!node) return fail(`${args[0]}: no such file or directory`);
         if (node.kind !== "dir") return fail(`${args[0]}: not a directory`);
         this.cwd = target;
@@ -461,7 +477,7 @@ export class Shell {
         if (targets.length === 0) targets.push(".");
         let code = 0;
         for (const t of targets) {
-          const node = fs.lookup(path(t));
+          const node = await fs.lookup(path(t));
           if (!node) {
             code = fail(`${t}: no such file or directory`);
             continue;
@@ -484,29 +500,29 @@ export class Shell {
       case "cat": {
         let code = 0;
         for (const a of args) {
-          const node = fs.lookup(path(a));
+          const node = await fs.lookup(path(a));
           if (!node) code = fail(`${a}: no such file or directory`);
           else if (node.kind === "dir") code = fail(`${a}: is a directory`);
-          else io.out(node.data);
+          else io.out(await fs.readFile(path(a)) ?? new Uint8Array());
         }
         return code;
       }
       case "touch":
-        for (const a of args) if (!fs.lookup(path(a))) fs.writeFile(path(a), "");
-        this.host.changed();
+        for (const a of args) if (!await fs.lookup(path(a))) await fs.writeFile(path(a), "");
+        await this.host.changed();
         return 0;
       case "mkdir": {
         const parents = args.includes("-p");
         for (const a of args.filter((x) => x !== "-p")) {
           const p = path(a);
-          if (fs.lookup(p)) {
+          if (await fs.lookup(p)) {
             if (!parents) return fail(`${a}: file exists`);
             continue;
           }
-          if (!parents && fs.lookup(dirname(p))?.kind !== "dir") return fail(`${a}: no such file or directory`);
-          fs.mkdirp(p);
+          if (!parents && (await fs.lookup(dirname(p)))?.kind !== "dir") return fail(`${a}: no such file or directory`);
+          await fs.mkdirp(p);
         }
-        this.host.changed();
+        await this.host.changed();
         return 0;
       }
       case "rm": {
@@ -514,39 +530,38 @@ export class Shell {
         let code = 0;
         for (const a of args.filter((x) => !x.startsWith("-"))) {
           const p = path(a);
-          const node = fs.lookup(p);
+          const node = await fs.lookup(p);
           if (!node) code = fail(`${a}: no such file or directory`);
           else if (node.kind === "dir" && !recursive) code = fail(`${a}: is a directory (use rm -r)`);
           else if (p === "/") code = fail("refusing to remove /");
-          else fs.remove(p);
+          else await fs.remove(p);
         }
-        this.host.changed();
+        await this.host.changed();
         return code;
       }
       case "mv": {
         if (args.length !== 2) return fail("usage: mv <from> <to>");
         const from = path(args[0]!);
         let to = path(args[1]!);
-        const node = fs.lookup(from);
+        const node = await fs.lookup(from);
         if (!node) return fail(`${args[0]}: no such file or directory`);
-        if (fs.lookup(to)?.kind === "dir") to = normalize(basename(from), to);
-        const parent = fs.lookup(dirname(to));
+        if ((await fs.lookup(to))?.kind === "dir") to = normalize(basename(from), to);
+        const parent = await fs.lookup(dirname(to));
         if (parent?.kind !== "dir") return fail(`${args[1]}: no such directory`);
-        fs.remove(from);
-        parent.children.set(basename(to), node);
-        this.host.changed();
+        await fs.move(from, to);
+        await this.host.changed();
         return 0;
       }
       case "edit": {
         if (!args[0]) return fail("usage: edit <file>");
         const p = path(args[0]);
-        const node = fs.lookup(p);
+        const node = await fs.lookup(p);
         if (node?.kind === "dir") return fail(`${args[0]}: is a directory`);
         if (!node) {
-          fs.writeFile(p, "");
-          this.host.changed();
+          await fs.writeFile(p, "");
+          await this.host.changed();
         }
-        this.host.open(p);
+        await this.host.open(p);
         return 0;
       }
       default:
