@@ -1060,6 +1060,8 @@ name = "bunwasm-host"
 version = "0.0.14"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "bytes",
  "brotli-decompressor",
  "flate2",
  "hyper",

@@ -1,5 +1,6 @@
 mod pipe;
 mod stdio;
+mod stdin;
 
 pub use stdio::{Cancellation, Stdio};
 
@@ -12,10 +13,11 @@ use std::task::{Context, Poll, Waker};
 
 use serde::Deserialize;
 use tokio::io::{AsyncRead, ReadBuf};
-use wasmtime_wasi::cli::{StdinStream, StdoutStream};
+use wasmtime_wasi::cli::StdoutStream;
 
 use crate::net::{AGAIN, BADF, ErrorInfo, Notify};
 use pipe::Pipe;
+use stdin::SharedInput;
 
 pub const FIRST_HANDLE: i32 = 0x4000_0000;
 const MAX_CHILDREN: usize = 4;
@@ -82,7 +84,7 @@ impl Processes {
     pub fn new(runtime: Arc<Runtime>, stdio: Stdio, notify: Arc<Notify>) -> Self {
         Self {
             runtime,
-            stdin: Box::into_pin(stdio.stdin.async_stream()),
+            stdin: Box::pin(stdio.stdin.clone()),
             stdio,
             notify,
             next: FIRST_HANDLE,
@@ -110,13 +112,13 @@ impl Processes {
         (id, pipe)
     }
 
-    fn stdin(&mut self, mode: &str) -> Result<(i32, Arc<dyn StdinStream + Sync>), ErrorInfo> {
+    fn stdin(&mut self, mode: &str) -> Result<(i32, SharedInput), ErrorInfo> {
         match mode {
             "inherit" => Ok((0, self.stdio.stdin.clone())),
-            "ignore" => Ok((0, Arc::new(wasmtime_wasi::p2::pipe::MemoryInputPipe::new(Vec::new())))),
+            "ignore" => Ok((0, SharedInput::new(Arc::new(wasmtime_wasi::p2::pipe::MemoryInputPipe::new(Vec::new()))))),
             "pipe" => {
                 let (id, pipe) = self.pipe(true);
-                Ok((id, Arc::new(pipe)))
+                Ok((id, SharedInput::new(Arc::new(pipe))))
             }
             _ => Err(error("Unsupported stdin mode in bun-wasm", "EINVAL")),
         }
