@@ -235,6 +235,27 @@ Evidence, exact artifact hashes, raw logs, matrix results and cleanup ownership
 are retained in `/work/reports/bun-wasm-web-streams-2026-10-16/`. Those observations exposed the llhttp WebAssembly requirement. PR #8 now supplies
 a limited WebAssembly API; the Next lane owns measuring its remaining requirements.
 
+## Browser import parsing follow-up
+
+The browser engine now locates import expressions with Bun's parser. The passing runtime fixtures `import-method`, `import-syntax`, and `import-eval` cover method and property names, strings, comments, regex literals, template substitutions, literal and computed specifiers, import attributes, re-exports, import.meta, CommonJS, and ESM loaded through `require`. The browser smoke test also runs the first two fixtures in Chromium and WebKit.
+
+A 2026-10-16 offline Next 15.5.6 replay combined this transform with the runtime fixes from PR 9 at `4e48b1ecb17fbc1a8d5edfa68305f0222500fe77`. The probe started from main `84dccd1`; its temporary integration head was `82ba601`. The delivery branch was then rebased to main `bf0a4a6` after the generated-builtins changes merged. Install passed. Build advanced beyond the import-method syntax error and stopped at `NotSupportedError: crypto.subtle.generateKey is not supported in bun-wasm`. Start remained blocked by build. Dev still returned no useful diagnostic. This is progress to another missing API, not a passing Next application.
+
+The next owner should implement the Web Crypto operations Next needs. The current rejection comes from `crates/bunwasm-runtime/src/js/web.js:1277`, where `generateKey`, `importKey`, `exportKey`, encryption, and other operations are unsupported stubs. The SWC platform warning appeared before the failure but was not the terminating error. No additional crypto operation or algorithm was isolated in this run.
+
+After building both changes, reproduce with a fresh output directory:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+bash /work/tmp/wave-heavy/run.sh --class browser "Next browser import follow-up" -- \
+  env PATH="$PATH" scripts/app-matrix.sh --apps=next --engines=browser \
+  --hosts=native --timeout=90 \
+  --output=/work/reports/bun-wasm-next-browser-import-follow-up
+```
+
+Evidence is retained in `/work/reports/bun-wasm-dynamic-import-2026-10-16/next-with-pr9/`. It includes the exact build error, all four stage records, artifact hashes, and an empty registry-miss list. The runner reported cleanup complete. The separate delivery-base replay under `next-after/` passed install, reported no useful diagnostic for dev or build, and blocked start on build. Both replays had no registry misses or errors and reported cleanup complete. The integration does not claim PR 9's earlier fixes shipped in this PR.
+
 ### Lazy stack review rerun on main
 
 Both formatter timing and the non-idempotent source-map regression are fixed.

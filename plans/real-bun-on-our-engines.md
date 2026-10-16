@@ -131,3 +131,11 @@ failure is in
 `/work/reports/bun-wasm-streams-round3-fix-2026-10-16/final-gate-browser.log`.
 The isolated retry and full rerun are retained alongside it. This is a
 browser-host subprocess lifecycle follow-up owned by the compatibility track.
+
+## Next browser follow-up, 2026-10-16
+
+Track 4 continues with Web Crypto after the semantic import rewrite. Next 15.5.6 build,
+with PR 9's runtime fixes included, now reaches the unsupported `crypto.subtle.generateKey`
+stub in `crates/bunwasm-runtime/src/js/web.js:1277`. Dev still has no useful diagnostic;
+start is blocked by build. See [the exact command and retained evidence](../docs/app-matrix/README.md#browser-import-parsing-follow-up).
+The crypto algorithm and any later required operations still need a bounded reproduction.
