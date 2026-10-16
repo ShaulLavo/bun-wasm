@@ -458,7 +458,7 @@ crate. Engine-owned buffers let every engine reclaim abandoned sinks without a n
 handle table or finalizer interface. String writes use the existing Rust UTF-8 encoder.
 The watermark remains an allocation hint and causes no eager reservation in this adapter.
 The callable constructor and private JavaScript storage are original binding adapters.
-Capture TypedArray and DataView intrinsic getters to extract the real backing buffer and
+Detached backing stores produce an owned empty chunk before view bounds are read or a new view is constructed. Capture ArrayBuffer, SharedArrayBuffer, TypedArray and DataView intrinsic getters to extract the real backing buffer and
 bounds before copying. Own properties and accessors cannot replace those internal slots.
 This byte-view extraction is also an original binding adapter.
 The unsupported GC-tuning member is absent from `Bun.unsafe`, so the upstream harness's

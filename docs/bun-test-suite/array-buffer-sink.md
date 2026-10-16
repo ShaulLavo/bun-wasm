@@ -73,3 +73,16 @@ bytes after each write to check ownership. Captured intrinsic getters read the a
 The pre-fix runs use the immutable published artifacts at `16766ff`. Native Bun 1.4.2
 passes all ten new sink cases. Review evidence is retained in
 `/work/tmp/bun-wasm-track4-review/`, including engine-specific red and green logs.
+
+## Detached input regression
+
+`array-buffer-sink-detached` covers detached ArrayBuffers, Uint8Arrays and DataViews,
+both with no pending bytes and after writing `"a"`. Every write must return zero and
+preserve pending bytes, matching native Bun. The backing buffer has a throwing own
+`byteLength` getter to ensure reads still use internal slots.
+
+The published `0a82855` artifacts throw for all six cases on all engines. Captured
+ArrayBuffer and SharedArrayBuffer length getters now identify empty backing storage
+before constructing views or reading detached DataView bounds. The same fixture runs
+in Chromium and WebKit through the web gate. Red and green logs and rebuilt artifacts
+are retained under `/work/tmp/bun-wasm-track4-review2/` until coordinator acceptance.
