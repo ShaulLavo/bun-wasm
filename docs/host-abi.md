@@ -148,10 +148,9 @@ return values. A host that does not expose stdin through this interface returns
 `UNSUPPORTED`; ordinary WASI stdin remains available. The native launcher polls
 its stdin stream, and browser and Node workers expose their shared subprocess
 stdin pipe. Callback `fs.read(0, ...)` registers an I/O waiter for these reads.
-Synchronous reads use the same queue, polling while input is pending. When the
-host does not expose stdin, reads use the WASI descriptor. Both paths avoid
-Rust stdin prefetching. The native WASI adapter and host interface also share
-one read-ahead buffer, so synchronous and callback reads keep one position.
+Synchronous reads use the WASI descriptor without Rust stdin prefetching.
+The native WASI adapter and host interface share one read-ahead buffer, so
+synchronous and callback reads keep one position.
 
 ### `write(handle, buf_ptr, len) -> n`
 

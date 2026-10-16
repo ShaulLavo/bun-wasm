@@ -670,8 +670,7 @@ The original stdin adapters in `crates/bunwasm-runtime/src/js/node_fs.js`,
 `crates/bunwasm-host/src/process/mod.rs`, `process/stdin.rs`, `process/stdio.rs`,
 its slot and notification hooks,
 and `web/src/subprocess.js` let callback reads wait through the host I/O loop.
-The synchronous path uses the same host queue, or the WASI descriptor when the
-host does not expose stdin. It avoids Rust stdin prefetching.
+The synchronous path reads the WASI descriptor without Rust stdin prefetching.
 The native WASI and host interfaces share a buffer, including bytes read ahead.
 This prevents Go's service loop from blocking JavaScript callbacks and preserves
 stdin position when callers mix synchronous and callback reads.
