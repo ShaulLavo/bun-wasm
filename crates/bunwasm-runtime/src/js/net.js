@@ -827,7 +827,7 @@
       }
       destroy(error) {
         if (this._onDestroy) this._onDestroy();
-        if (this.socket) this.socket.destroy();
+        if (this.socket && !this.readableEnded) this.socket.destroy();
         return super.destroy(error);
       }
       setTimeout(ms, cb) {
@@ -1079,9 +1079,7 @@
         this._completed = true;
         if (this._chunked && !this._bodyless) {
           let trailers = "0\r\n";
-          for (const [name, value] of this._trailers) {
-            for (const item of Array.isArray(value) ? value : [value]) trailers += `${name}: ${String(item)}\r\n`;
-          }
+          for (const [name, value] of this._trailers) trailers += `${name}: ${value}\r\n`;
           this._conn.write(Buffer.from(`${trailers}\r\n`, "latin1"));
         }
         const connection = (this._framingHeaders || this._headers).get("connection")?.[1];
@@ -1152,7 +1150,10 @@
           if (!this.listenerCount("upgrade")) { conn.destroy(); return false; }
           conn.upgraded = { activate: head => {
             socket._attach(conn);
+            req.complete = true;
+            if (request.body.length) req.push(Buffer.from(request.body));
             this.emit("upgrade", req, socket, Buffer.from(head));
+            if (!req.destroyed) req.push(null);
           } };
           return UPGRADED;
         }

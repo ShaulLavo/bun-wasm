@@ -1099,7 +1099,8 @@ same socket transport for ordinary and upgraded responses to preserve raw
 header names and trailers. A typed incremental body decoder handles fixed,
 chunked, and EOF framing. Header, method, path and status validation occurs
 before protocol bytes are written. A 100 Continue response can precede the
-request body.
+request body. Server upgrades expose the parsed request body and its EOF before
+handing later bytes to the upgraded socket.
 
 HTTPS requests continue to use the host's TLS fetch transport. The raw socket
 ABI has no TLS capability, so HTTPS upgrades without a caller-supplied connection
