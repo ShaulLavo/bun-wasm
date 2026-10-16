@@ -518,7 +518,9 @@ verification and OAEP encryption and decryption through the original `c/rsa.c` a
 BoringSSL also owns RSA key generation, component validation and PKCS#1 parsing. The
 RustCrypto RSA dependency is excluded because it documents RUSTSEC-2023-0071. The maintained
 RustCrypto PKCS#8 and SPKI parsers handle the outer key-format envelopes.
-`scripts/sync-crypto.sh` downloads the unmodified source. The build disables assembly,
+`scripts/sync-crypto.sh` downloads the unmodified source. The old `OPENSSL_free` placeholder
+in `crates/bunwasm-glue/src/extra.rs` is removed so Bun and this adapter use BoringSSL's actual
+allocator interface. The build disables assembly,
 threads and socket BIOs on WASI, as in the earlier successful runtime spike.
 
 The original request adapter
