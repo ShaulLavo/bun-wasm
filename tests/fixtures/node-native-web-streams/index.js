@@ -17,7 +17,7 @@ async function test(name, run) {
     results.push({ name, pass: true });
     console.log("PASS " + name);
   } catch (error) {
-    results.push({ name, pass: false, error: String(error) });
+    results.push({ name, pass: false, error: String(error), stack: error?.stack });
     console.log("FAIL " + name + " " + error);
   } finally { clearTimeout(timer); }
 }
@@ -242,6 +242,43 @@ await test("already completed native streams", async () => {
   await writer.close(); writer.releaseLock();
   await Promise.all([finishedPromise(readable), finishedPromise(writable)]);
   check(!readable.locked && !writable.locked, "closed observation retained locks");
+});
+await test("delayed native async iteration after queued close", async () => {
+  const stream = new ReadableStream({ start(controller) { controller.enqueue("x"); controller.close(); } });
+  const done = finishedPromise(stream);
+  await tick();
+  let output = "";
+  for await (const value of stream) output += value;
+  await done;
+  check(output === "x" && !stream.locked, "async iteration lost data or retained lock");
+});
+await test("frozen readable source and callback receiver", async () => {
+  let seen;
+  const source = Object.freeze({ start(controller) { seen = this; controller.close(); } });
+  const stream = new ReadableStream(source);
+  await finishedPromise(stream);
+  check(seen === source, "source callback receiver changed");
+});
+await test("frozen writable sink and callback receiver", async () => {
+  let seen;
+  const sink = Object.freeze({ write() { seen = this; } });
+  const stream = new WritableStream(sink);
+  const done = finishedPromise(stream);
+  const writer = stream.getWriter();
+  await writer.write("x"); await writer.close(); await done;
+  writer.releaseLock();
+  check(seen === sink, "sink callback receiver changed");
+});
+await test("frozen native transformer and callback receiver", async () => {
+  let seen;
+  const transformer = Object.freeze({ transform(value, controller) { seen = this; controller.enqueue(value); } });
+  const stream = new TransformStream(transformer);
+  const done = Promise.all([finishedPromise(stream.readable), finishedPromise(stream.writable)]);
+  const reader = stream.readable.getReader(); const writer = stream.writable.getWriter();
+  const writing = writer.write("x"); check((await reader.read()).value === "x", "bad frozen transform");
+  await writing; await writer.close(); await reader.read(); await done;
+  reader.releaseLock(); writer.releaseLock();
+  check(seen === transformer, "transform callback receiver changed");
 });
 globalThis.__nativeStreamResults = results;
 if (results.some(result => !result.pass)) throw new Error("Native stream interop regressions failed");

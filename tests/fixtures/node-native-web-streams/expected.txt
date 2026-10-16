@@ -16,3 +16,7 @@ PASS native pipeTo abort propagation and completion
 PASS native transform original failure
 PASS compose native transforms
 PASS already completed native streams
+PASS delayed native async iteration after queued close
+PASS frozen readable source and callback receiver
+PASS frozen writable sink and callback receiver
+PASS frozen native transformer and callback receiver
