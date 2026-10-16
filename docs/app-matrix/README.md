@@ -143,22 +143,28 @@ These priorities count app projects, not individual command rows.
 
 Rank remaining causes by the number of distinct app projects they would unblock, rather than counting install, dev, and build rows as separate apps. An install or module-loading fix exposes the next blocker; it does not promise that the app will then pass.
 
-### Stack review follow-up
+### Lazy stack review rerun on main
 
-The revised capture adapter selects the formatter on the first stack read and
-memoizes successful results, including non-string values. Throwing formatters
-throw at access and can be retried after replacement. JSC CallSite strings keep
-the locations already mapped by the inspector. QuickJS Error construction also
-defers public formatting; ordinary JSC Error construction stays native.
+Both formatter timing and the non-idempotent source-map regression are fixed.
+JSC captures raw frames and chooses the public formatter at first access;
+successful arbitrary results are memoized, while formatter exceptions propagate
+at access. Already-mapped CallSites keep the same locations when stringified.
+QuickJS also defers public formatting for ordinary Error construction. JSC keeps
+its native Error constructor.
 
-The reviewed artifacts fail lazy capture on QuickJS and JSC, eager construction
-on QuickJS, and the non-idempotent mapped-location regression on JSC. The revised
-artifacts pass all three regression fixtures on every engine. All 104 fixtures
-pass on each engine. The complete web gate and all six site HMR runs pass.
-Express and Koa retain all 12 native install/server passes, with no registry
-misses. There are no playground rows defined for these server fixtures.
+The reviewed artifacts fail lazy capture on QuickJS and JSC, unread Error
+construction on QuickJS, and mapped JSC CallSite strings. All three regression
+fixtures pass on every engine after the fixes. The exact JSC reproducer now prints
+`mapped location 15 10 outer (/mapped.ts:15:10)`; the reviewed binary printed 22:10
+in the string while its getters reported 15:10.
 
-| Engine | Reviewed Express/Koa stages | Revised stages |
+After normal merges of main through 84db5fe, all 120 fixtures pass on each
+engine. The complete web gate and all six built-site HMR runs pass. Express and
+Koa pass all 12 native install/server stages, with no registry misses. There are
+no playground rows defined for these server fixtures. Package sources and app
+fixtures are unchanged.
+
+| Engine | Reviewed Express/Koa stages | Current-main rerun |
 | --- | --- | --- |
 | QuickJS | 4/4 | 4/4 |
 | JSC | 4/4 | 4/4 |
@@ -168,29 +174,29 @@ Median microseconds per unread construction, measured inside the runtime with
 `scripts/bench/error-construction.js`. Each case warms up 1,000 operations, then
 runs five samples of 10,000 operations with stackTraceLimit 10. Startup is excluded.
 
-| Engine | Operation | Before, µs | After, µs |
+| Engine | Operation | Reviewed binary, µs | Current-main binary, µs |
 | --- | --- | ---: | ---: |
-| quickjs | new Error default | 10.187 | 1.493 |
-| quickjs | capture default | 10.090 | 2.478 |
-| quickjs | new Error custom | 10.481 | 2.331 |
-| quickjs | capture custom | 10.681 | 2.663 |
-| jsc | new Error default | 0.414 | 0.457 |
-| jsc | capture default | 1.224 | 1.769 |
-| jsc | new Error custom | 0.419 | 0.460 |
-| jsc | capture custom | 27.049 | 1.734 |
+| quickjs | new Error default | 10.187 | 1.790 |
+| quickjs | capture default | 10.090 | 2.650 |
+| quickjs | new Error custom | 10.481 | 1.704 |
+| quickjs | capture custom | 10.681 | 2.827 |
+| jsc | new Error default | 0.414 | 0.496 |
+| jsc | capture default | 1.224 | 1.994 |
+| jsc | new Error custom | 0.419 | 0.500 |
+| jsc | capture custom | 27.049 | 1.979 |
 
 Custom formatter counts fall from 50,000 to zero on QuickJS Error/capture and
-JSC capture. JSC Error construction calls none in both versions. Its unchanged
-native construction path measures 0.414 to 0.457 µs, with overlapping sample
-ranges. Default JSC capture pays about 0.545 µs for the lazy accessor required by
-late formatter selection. These are local construction measurements, not an
-application throughput claim.
+JSC capture. JSC ordinary Error construction calls none in both versions and
+keeps its native implementation. Default JSC capture adds a lazy accessor for
+late formatter selection. The current-main measurements include the merged
+Console and other runtime changes; the earlier isolated review-phase samples
+are retained alongside them.
 
 The same three upstream stack files retain 0/3 fully passing files, five failures,
-one error and zero timeouts on each engine. Evidence, raw benchmark samples,
-artifacts and exact commands are in
-`/work/reports/bun-wasm-app-reviews-2026-10-16/`. The coordinator removes the
-retained review evidence after both app-blocker PRs merge and verification finishes.
+one error and zero timeouts on every engine. Current artifacts, logs and exact
+commands are in `/work/reports/bun-wasm-app-reviews-2026-10-16/main84/`.
+The coordinator removes retained review evidence after both app-blocker PRs merge
+and independent verification finishes.
 
 ## Next.js runtime boundaries
 
