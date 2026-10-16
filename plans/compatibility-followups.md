@@ -332,3 +332,76 @@ bash /work/tmp/wave-heavy/run.sh --class light "MessagePort compatibility follow
   js/node/test/parallel/test-worker-message-port-constructor.js \
   js/node/test/parallel/test-worker-message-port-infinite-message-loop.js
 ```
+
+## Guest worker follow-ups
+
+The guest-worker implementation at `9f780ca411096b1bdae995d729982aaa9160b521`
+passes 67/120 selected Node parallel files on each engine, compared with 21/120
+at Step 1 revision `8596b11a`. These are clean script exits, including early
+skips; observed assertion counters remain zero. No previously passing file fails.
+[The worker report](../docs/worker-threads.md#guest-worker-measurement) contains
+the exact selection and full gate results. Raw records are retained under
+`/work/reports/bun-wasm-worker-execution/` until coordinator acceptance.
+
+### Shared memory and transferable engine objects
+
+`tests/esbuild/run.mjs`, with `ESBUILD_CHECKS=sync.cjs`, still has no fully passing
+engine run before or after guest workers. Its four synchronous APIs need a shared
+buffer between the caller and worker. QuickJS and the browser engine now stop in
+`worker_codec.ts` with `DataCloneError`; JSC stops in esbuild's `lib/main.js:1941`
+with `SharedArrayBuffer is not defined`. The three raw runs are in
+`esbuild-before.log` and `esbuild-after.log`. The final aggregate repeats earlier
+output, so raw occurrences of `PASS` are not a count of independent checks.
+
+Implement real shared backing storage and atomic access across guest instances.
+Do not copy SharedArrayBuffer bytes or force the package onto its other backend.
+WebAssembly.Module cloning also remains unsupported by the guest codec. Keep
+these objects separate from the existing byte-copy ArrayBuffer transfer and
+routed MessagePort transfer. Reproduce through the heavy wrapper using the
+commands in the worker report and the unchanged official esbuild package.
+
+### Vite's builtin lookup before worker pools
+
+The same frozen offline cache gives six successful installs and twelve failed
+commands both before and after. This includes Vite React dev/build, Vitest's
+default pool, and its explicit `--pool=threads` row on all three engines.
+The first diagnostic is `ENOENT: no such file or directory, open 'ws'` at Vite's
+`import.meta.require("ws").WebSocketServer` in `dist/node/chunks/config.js`.
+The Vitest browser-engine log points to line 20578; the Vite React build log
+points to line 23728. The error precedes worker construction. The portable ws
+builtin is present, so inspect whether `import.meta.require` follows the same
+builtin lookup as ordinary `require`; the exact cause is not established here.
+
+Reproduce with `scripts/app-matrix.sh --apps=vitest,vite-react --hosts=native
+--engines=quickjs,jsc,browser --timeout=45 --cache=<offline-mirror>
+--launcher=<private-launcher> --output=<fresh-directory>`. The retained
+`apps-before-complete/` and `apps-after/` records both have zero registry misses
+and errors. Do not alter the real package sources to bypass this lookup.
+
+### Browser-host round-trip deadline
+
+Only the browser engine times out in
+`js/node/test/parallel/test-worker-message-port-message-before-close.js` at the
+shared fifteen-second deadline. This file performs 10,000 cross-guest port round
+trips. QuickJS and JSC complete it in the same census. No output appears before
+the browser deadline. Reproduce it alone with `scripts/bun-suite.sh --engine
+browser --jobs 1 --timeout 60 --output <fresh.json>` and that file path before
+claiming either a scheduling bug or a performance cause. Start by tracing control
+pipe notification in `web/src/subprocess.js`, including its four-millisecond
+watch interval. No timing optimization or cause is claimed by this measurement.
+
+### Existing full-web memory-growth gate
+
+The full web gate fails after 243 unit passes and all six real-browser worker
+runs. Chromium's first growth guest in `web/tests/browser-memory.mjs:65` times out
+after 120 seconds and reports `null !== 0`. Its program is the unchanged
+`tests/fixtures/memory-grow/index.js`, which writes and reads a 48 MiB file.
+The same main failure was independently recorded during
+[Step 1 review](https://github.com/ShaulLavo/bun-wasm/pull/31#issuecomment-6225280460).
+This lane did not change the memory test or the filesystem implementation.
+
+The final Step 2 batched gate has 158/158 fixtures per engine and HMR 6/6, but its
+overall status is failed because of this external gate. Apply the separate
+filesystem/runtime fix and rerun `scripts/test-web.sh` before treating the branch
+as fully green. The actual blocker was sent to the coordinator in
+[this comment](https://github.com/ShaulLavo/bun-wasm/pull/31#issuecomment-6225879642).
