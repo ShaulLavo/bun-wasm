@@ -742,8 +742,11 @@
       constructor(options = {}) {
         super();
         this.writable = true;
+        this.destroyed = false;
+        this._writableState = { errorEmitted: false, autoDestroy: options.autoDestroy !== false };
         if (typeof options.write === "function") this._write = options.write;
         if (typeof options.final === "function") this._final = options.final;
+        if (typeof options.destroy === "function") this._destroy = options.destroy;
       }
       _write(chunk, encoding, callback) {
         callback();
@@ -751,8 +754,11 @@
       write(chunk, encoding, callback) {
         if (typeof encoding === "function") callback = encoding;
         this._write(chunk, typeof encoding === "string" ? encoding : "utf8", (err) => {
-          if (err) this.emit("error", err);
-          if (typeof callback === "function") callback(err);
+          if (typeof callback === "function") callback(err || null);
+          if (err && !this._writableState.errorEmitted) {
+            this._writableState.errorEmitted = true;
+            this.emit("error", err);
+          }
         });
         return true;
       }
@@ -762,26 +768,43 @@
         const finish = () => {
           this.writable = false;
           this.emit("finish");
-          this.emit("close");
           if (typeof callback === "function") callback();
+          if (this._writableState.autoDestroy) this.destroy();
         };
         if (this._final) this._final(() => setImmediate(finish));
         else setImmediate(finish);
         return this;
       }
-      destroy() {
+      _destroy(error, callback) {
+        callback(error);
+      }
+      destroy(error = null) {
+        if (this.destroyed) return this;
+        this.destroyed = true;
+        this.writable = false;
+        this._destroy(error, (err) => setImmediate(() => this._emitDestroy(err)));
         return this;
+      }
+      _emitDestroy(error) {
+        if (error && !this._writableState.errorEmitted) {
+          this._writableState.errorEmitted = true;
+          this.emit("error", error);
+        }
+        this.emit("close");
       }
     }
     class Duplex extends Readable {
       constructor(options = {}) {
         super(options);
         this.writable = true;
+        this.destroyed = false;
+        this._writableState = { errorEmitted: false, autoDestroy: options.autoDestroy !== false };
         if (typeof options.write === "function") this._write = options.write;
         if (typeof options.final === "function") this._final = options.final;
+        if (typeof options.destroy === "function") this._destroy = options.destroy;
       }
     }
-    for (const key of ["write", "end", "_write"]) Duplex.prototype[key] = Writable.prototype[key];
+    for (const key of ["write", "end", "_write", "destroy", "_destroy", "_emitDestroy"]) Duplex.prototype[key] = Writable.prototype[key];
     class Transform extends Duplex {
       constructor(options = {}) {
         super(options);
@@ -1081,6 +1104,30 @@
     "node:punycode": () => internal.require("bun_builtins").require("node:punycode"),
     bun: () => globalThis.Bun,
     "bun:jsc": () => ({
+      callerSourceOrigin() {
+        const prepare = Error.prepareStackTrace;
+        let stack;
+        try {
+          Error.prepareStackTrace = internal.defaultPrepareStackTrace;
+          stack = new Error().stack;
+        } finally {
+          Error.prepareStackTrace = prepare;
+        }
+        const lines = String(stack || "").split("\n").slice(1);
+        const inspector = internal.require("inspect");
+        for (const raw of lines) {
+          const line = raw.trim();
+          if (!line || line === "Error") continue;
+          const frame = inspector.parseStack(line)[0];
+          if (frame) {
+            if (frame.file.startsWith("/")) return internal.pathToFileHref(frame.file);
+            return /^[a-z][a-z0-9+.-]*:/i.test(frame.file) ? frame.file : null;
+          }
+          if (/^(?:at (?:.* \()?|[^@]*@)bun-wasm:/.test(line) || /\(native\)$|@\[native code\]$/.test(line)) continue;
+          return null;
+        }
+        return null;
+      },
       gcAndSweep: () => native.gc(),
       fullGC: () => native.gc(),
       edenGC: () => native.gc(),

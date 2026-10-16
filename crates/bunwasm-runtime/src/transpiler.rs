@@ -82,6 +82,10 @@ pub enum ModuleImportKind {
 /// settings lookups). Errors are returned as a human readable message, which
 /// the runtime throws as a `SyntaxError`-like error in JS.
 pub trait Transpiler {
+    fn function_imports(&self, _args: &[String], _kind: &str) -> Result<Vec<Vec<usize>>, String> {
+        Err("generated imports need Bun's parser".to_owned())
+    }
+
     fn parse_data(&self, _source: &[u8], format: &str) -> Result<String, crate::engine::NativeError> {
         Err(crate::engine::NativeError::error(format!("{format}.parse needs Bun's parser, which this bun.wasm was built without")))
     }

@@ -67,6 +67,10 @@ mod bun_transpiler {
     pub struct BunTranspiler;
 
     impl Transpiler for BunTranspiler {
+        fn function_imports(&self, args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, String> {
+            bunwasm_transpiler::function_imports(args, kind)
+        }
+
         fn parse_data(&self, source: &[u8], format: &str) -> Result<String, bunwasm_runtime::engine::NativeError> {
             use bunwasm_runtime::engine::NativeError;
             use bunwasm_transpiler::data::Error;
