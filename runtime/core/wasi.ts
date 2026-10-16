@@ -77,7 +77,7 @@ export class WasiExit extends Error {
 }
 
 export interface WasiOptions {
-  args: string[];
+  args: readonly string[];
   env: Record<string, string>;
   fs: FileSystem;
   /** Explicit guest adapter namespaces; unknown imports fail before instantiation. */
@@ -164,8 +164,13 @@ export class Wasi {
       }, RIGHTS_TTY, RIGHTS_TTY);
     }
     for (const [name, path] of Object.entries(opts.preopens)) {
-      this.descriptors.open({ kind: "directory", handle: opts.fs.preopen(path) }, RIGHTS_ALL, RIGHTS_ALL, undefined, name);
+      this.openFile({ kind: "directory", handle: opts.fs.preopen(path) }, RIGHTS_ALL, RIGHTS_ALL, name);
     }
+  }
+
+  private openFile(resource: Extract<Resource, { handle: number }>, base: bigint, inheriting: bigint, preopen?: string): number {
+    this.opts.fs.retain(resource.handle);
+    return this.descriptors.open(resource, base, inheriting, () => this.opts.fs.release(resource.handle), preopen);
   }
 
   /** Runs `_start`; returns the exit code. */
@@ -563,7 +568,7 @@ export class Wasi {
         if (kind === "directory" && oflags & O_TRUNC) return EISDIR;
         if (kind === "file" && oflags & O_TRUNC) this.opts.fs.resize(node, 0, true);
         const resource: Resource = kind === "directory" ? { kind, handle: node } : { kind, handle: node, offset: 0, append: (fdflags & FDFLAG_APPEND) !== 0 };
-        const newFd = this.descriptors.open(resource, rightsBase, rightsInheriting);
+        const newFd = this.openFile(resource, rightsBase, rightsInheriting);
         this.view().setUint32(fdOut, newFd, true);
         return SUCCESS;
       },

@@ -60,6 +60,7 @@ export function decode(data: Uint8Array): string {
 export class MemFS implements FileSystem {
   // Handles belong to this filesystem, not to the WASI adapter. Node identity survives unlink.
   private handles = new Map<FileHandle, Node>();
+  private references = new Map<FileHandle, number>();
   private directoryParents = new WeakMap<DirNode, DirNode>();
   private removedDirectories = new WeakSet<DirNode>();
   private pathDirs: DirNode[] = [];
@@ -67,6 +68,20 @@ export class MemFS implements FileSystem {
   private handle(node: Node): FileHandle {
     this.handles.set(node.ino, node);
     return node.ino;
+  }
+  retain(handle: FileHandle): void {
+    this.node(handle);
+    this.references.set(handle, (this.references.get(handle) ?? 0) + 1);
+  }
+  release(handle: FileHandle): void {
+    const count = this.references.get(handle);
+    if (!count) throw new Error("filesystem handle has no references");
+    if (count > 1) this.references.set(handle, count - 1);
+    else { this.references.delete(handle); this.handles.delete(handle); }
+  }
+  private forget(node: Node): void {
+    if (!this.references.has(node.ino)) this.handles.delete(node.ino);
+    if (node.kind === "dir") for (const child of node.children.values()) this.forget(child);
   }
   private node(handle: FileHandle): Node {
     const node = this.handles.get(handle);
@@ -219,6 +234,7 @@ export class MemFS implements FileSystem {
     if (node.kind === "dir" && node.children.size > 0) return 55;
     if (path.parent === undefined) return 63;
     this.directory(path.parent).children.delete(path.name);
+    this.forget(node);
     if (node.kind === "dir") this.removedDirectories.add(node);
     return 0;
   }
@@ -239,6 +255,7 @@ export class MemFS implements FileSystem {
     this.directory(from.parent).children.delete(from.name);
     parent.children.set(to.name, node);
     if (node.kind === "dir") this.directoryParents.set(node, parent);
+    if (target) this.forget(target);
     if (target?.kind === "dir") this.removedDirectories.add(target);
     parent.mtime = Date.now();
     return 0;
@@ -305,6 +322,8 @@ export class MemFS implements FileSystem {
   remove(path: string): boolean {
     const parent = this.lookup(dirname(path));
     if (parent?.kind !== "dir") return false;
+    const node = parent.children.get(basename(path));
+    if (node) this.forget(node);
     return parent.children.delete(basename(path));
   }
 

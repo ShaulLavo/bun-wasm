@@ -38,7 +38,7 @@ test('WASI duplicates really share the seek cursor, append flags, and lifetime',
 test('core uses only the filesystem contract and accepts a zero-valued opaque handle', () => {
   const record = { kind: 'file', ino: 89, size: 4, mtime: 0 };
   const fs = {
-    preopen: () => 99,
+    preopen: () => 99, retain() {}, release() {},
     resolve: () => ({ parent: 99, name: 'file', node: 0, trailingSlash: false, terminalDot: false }),
     stat: (handle) => { expect(handle).toBe(0); return record; },
     read: (_handle, chunks) => { chunks[0].set([1, 2, 3, 4]); return 4; },
@@ -57,4 +57,21 @@ test('injected stdio are descriptors with real stream readiness and errno result
   h.view.setUint32(0, 512, true); h.view.setUint32(4, 1, true);
   expect(h.calls.fd_read(0, 0, 1, 1024)).toBe(6);
   expect(h.calls.fd_write(0, 0, 1, 1024)).toBe(64);
+});
+
+test('filesystem handles live once per open description, not once per duplicate', () => {
+  const fs = new MemFS(); fs.writeFile('/file', 'data');
+  let retains = 0, releases = 0;
+  fs.retain = () => retains++;
+  fs.release = () => releases++;
+  const h = host(fs);
+  const fd = h.open('file');
+  const dup = h.wasi.descriptors.dup(fd);
+  expect(retains).toBe(2); // preopen + one file description
+  expect(h.calls.fd_close(fd)).toBe(0);
+  expect(releases).toBe(0);
+  expect(h.calls.fd_close(dup)).toBe(0);
+  expect(releases).toBe(1);
+  h.wasi.descriptors.dispose();
+  expect(releases).toBe(2);
 });

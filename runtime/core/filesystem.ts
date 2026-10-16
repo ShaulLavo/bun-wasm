@@ -23,6 +23,9 @@ export interface ResolvedPath {
  */
 export interface FileSystem {
   preopen(path: string): FileHandle;
+  /** One retain/release pair per open description; duplicates share that lifetime. */
+  retain(handle: FileHandle): void;
+  release(handle: FileHandle): void;
   resolve(directory: FileHandle, path: string): ResolvedPath | number;
   stat(handle: FileHandle): FileStat;
   read(handle: FileHandle, chunks: readonly Uint8Array[], offset: number): number;

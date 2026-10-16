@@ -18,7 +18,9 @@ wasi.descriptors.dispose();
 
 `fs` implements `FileSystem`; today's MemFS implementation lives in `web/src/fs.ts`. Its handles
 are filesystem-owned identities, not paths or concrete tree nodes. A handle used by an open
-description must remain valid after rename or unlink. `resolve` walks the real tree relative to
+description must remain valid after rename or unlink. The host calls `retain`/`release` once per
+open description, not per duplicate; a filesystem worker can use those calls to reclaim detached
+files after their final open description closes. `resolve` walks the real tree relative to
 a directory capability and returns a handle or positive WASI errno. Other path operations work
 on that result, with no asynchronous interleaving between resolution and mutation. Reads and
 writes use iovec views directly. `readdir` produces one entry list per call. Future worker-backed
