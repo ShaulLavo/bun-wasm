@@ -302,7 +302,9 @@
                 }
               : a,
           );
-    if (k.alg !== undefined && expected !== undefined && k.alg !== expected)
+    const matchesAlgorithm =
+      k.alg === expected || (a.name === "Ed25519" && k.alg === "Ed25519");
+    if (k.alg !== undefined && expected !== undefined && !matchesAlgorithm)
       fail("DataError", "JWK algorithm does not match");
   }
   function importKey(format, data, a, extractable, usages) {
