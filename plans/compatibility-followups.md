@@ -196,7 +196,7 @@ source location remain unconfirmed. Exact logs and artifact hashes are retained
 in `/work/reports/bun-wasm-rv28-final-20261016/next-before/` and `next-after/`.
 
 The pending WebCrypto integration also exposes a standalone-example build gap.
-`scripts/build.sh` reaches `scripts/test-transpiler-example.sh:8`, then the linker
+`scripts/build.sh` reaches `scripts/test-transpiler-example.sh:9`, then the linker
 cannot find `-lc` with WebCrypto's `link-self-contained=no` flags. Restoring Rust's
 libc alone exposes unresolved BoringSSL symbols. The local integration links that
 example with the same SDK libc, C++ runtime and BoringSSL archive as the CLI, and
