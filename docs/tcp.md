@@ -16,7 +16,8 @@ HTTP upgrade listeners receive a Socket and the bytes already read after the
 header. The HTTP client also supports upgrade responses. The published `ws`
 8.18.3 client and server run over these sockets without package changes.
 `scripts/test-net-ws.sh` copies the pinned package into a disposable directory
-and checks a message exchange and close handshake on all three engines.
+and checks a message exchange, close handshake, premature EOF and oversized
+upgrade responses on all three engines.
 Install its dependencies with `bun install --cwd docs/bun-test-suite/dependencies
 --ignore-scripts --linker hoisted --frozen-lockfile` first.
 
@@ -37,7 +38,12 @@ preview relay.
 
 TLS sockets, Unix sockets, native file descriptors, keepalive tuning, and local
 address/port binding for outbound connections are not implemented. The native
-host resolves and connects addresses itself. The address-family defaults are
+host resolves and connects addresses itself. With a BlockList, outbound
+hostnames are rejected with ERR_IP_BLOCKED before opening a handle, because
+the host ABI cannot expose the resolved address for validation before dialing.
+This includes localhost and legacy numeric spellings such as 127.1. Supply a
+literal IP, or a custom lookup that returns a literal IP, to apply the rules
+to that address. The address-family defaults are
 retained for the Node API, but do not add Node's timed Happy Eyeballs algorithm
 to that host. `setNoDelay`, `setKeepAlive`, and corking return the socket; the
 native host already disables Nagle's algorithm. These are compatibility
@@ -71,3 +77,20 @@ The [measured comparison](tcp-results.md) includes the remaining first blockers.
 callback, constructor, option, and address-contract gaps. The adapter supports
 working TCP and WebSocket exchanges; it does not claim complete Node net
 conformance.
+
+## TCP review regressions
+
+`tests/fixtures/net-review` covers pipe backpressure and forwarding-listener
+cleanup, connection-attempt cancellation, write callbacks before connection
+and under blocked host writes, cross-chunk read sizes and EOF, timeout
+cancellation, premature upgrade EOF, header limits and a large valid upgrade
+head, and hostname BlockList enforcement. The HTTP response header limit is
+`http.maxHeaderSize`, 16 KiB by default, or the request maxHeaderSize option.
+Bytes after the header terminator remain the upgrade head and do not consume
+that limit. EOF before a complete response fails once with ECONNRESET; header
+overflow fails once with HPE_HEADER_OVERFLOW. Handshake listeners are removed
+before the socket is handed to the upgrade listener.
+
+Run `scripts/test.sh --no-build --engine ENGINE net-review` and
+`scripts/test-net-ws.sh` against rebuilt artifacts. The regression commit
+precedes the fix, so the same tests can reproduce the reviewed failures.

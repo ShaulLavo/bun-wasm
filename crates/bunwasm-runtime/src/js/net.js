@@ -331,7 +331,10 @@
       }
     }
     write(bytes, callback) {
-      if (this.closed || this.closing) return;
+      if (this.closed || this.closing) {
+        if (callback) internal.nextTick(() => callback(this._writeError || Object.assign(new Error("Connection is closed"), { code: "ERR_STREAM_DESTROYED" })));
+        return;
+      }
       this.queue.push({ bytes, callback });
       this.flush();
     }
@@ -365,19 +368,15 @@
     }
     waitWritable() {
       if (this.writer) return;
-      this.writer = addWaiter({
-        ref: this.referenced !== false,
-        step: () => {
-          if (this.closed) return true;
-          const done = this.flush();
-          if (done || this.closed) {
-            this.writer = null;
-            if (!this.closed && this.onDrain) this.onDrain();
-            return true;
-          }
-          return false;
-        },
-      });
+      this.writer = addWaiter({ ref: this.referenced !== false, step: () => this.pumpWrite() });
+    }
+    pumpWrite() {
+      if (this.closed) return true;
+      const done = this.flush();
+      if (!done && !this.closed) return false;
+      this.writer = null;
+      if (!this.closed && this.onDrain) this.onDrain();
+      return true;
     }
     ref(value) {
       this.referenced = value;
@@ -394,18 +393,23 @@
       this.closing = true;
       if (this.queue.length === 0) this.destroy();
     }
-    destroy() {
+    destroy(err) {
       if (this.closed) return;
       this.closed = true;
+      this._writeError = err || Object.assign(new Error("Connection is closed"), { code: "ERR_STREAM_DESTROYED" });
       this.reading = false;
       if (this.reader) waiters.delete(this.reader);
       if (this.writer) waiters.delete(this.writer);
+      this.reader = this.writer = null;
+      for (const item of this.queue.splice(0)) {
+        if (item.callback) internal.nextTick(() => item.callback(this._writeError));
+      }
       native.hostClose(this.handle);
       if (this.onClose) this.onClose();
     }
     fail(err) {
       try { if (this.onError) this.onError(err); }
-      finally { this.destroy(); }
+      finally { this.destroy(err); }
     }
     peer() {
       const text = native.hostPeerAddr(this.handle);
@@ -956,29 +960,30 @@
         conn.onClose = () => socket.destroy();
         trackServerConnection(this, conn);
         this.emit("connection", socket);
-        serveHttp(conn, (request, c, keepAlive) => {
-          const req = new IncomingMessage();
-          req.method = request.method;
-          req.url = request.target;
-          req.httpVersion = request.version.slice(5);
-          req.socket = req.connection = socket;
-          setHeaderPairs(req, request.headers);
-          if (header(request.headers, "upgrade")) {
-            if (!this.listenerCount("upgrade")) { conn.destroy(); return false; }
-            conn.upgraded = { activate: head => {
-              socket._attach(conn);
-              this.emit("upgrade", req, socket, Buffer.from(head));
-            } };
-            return UPGRADED;
-          }
-          return new Promise(resolve => {
-            const res = new ServerResponse(c, req, keepAlive, resolve);
-            res.socket = res.connection = socket;
-            this.emit("request", req, res);
-            if (request.body.length) req.push(Buffer.from(request.body));
-            req.push(null);
-            req.complete = true;
-          });
+        serveHttp(conn, (request, c, keepAlive) => this._request(request, c, keepAlive, socket));
+      }
+      _request(request, conn, keepAlive, socket) {
+        const req = new IncomingMessage();
+        req.method = request.method;
+        req.url = request.target;
+        req.httpVersion = request.version.slice(5);
+        req.socket = req.connection = socket;
+        setHeaderPairs(req, request.headers);
+        if (header(request.headers, "upgrade")) {
+          if (!this.listenerCount("upgrade")) { conn.destroy(); return false; }
+          conn.upgraded = { activate: head => {
+            socket._attach(conn);
+            this.emit("upgrade", req, socket, Buffer.from(head));
+          } };
+          return UPGRADED;
+        }
+        return new Promise(resolve => {
+          const res = new ServerResponse(conn, req, keepAlive, resolve);
+          res.socket = res.connection = socket;
+          this.emit("request", req, res);
+          if (request.body.length) req.push(Buffer.from(request.body));
+          req.push(null);
+          req.complete = true;
         });
       }
       address() {
@@ -1048,7 +1053,9 @@
         this.destroy();
       }
       destroy(err) {
+        if (this._aborted) return this;
         this._aborted = true;
+        if (this._upgrade) this._cancelUpgrade();
         if (this.socket) this.socket.destroy();
         if (err) internal.nextTick(() => this.emit("error", err));
         return this;
@@ -1059,33 +1066,74 @@
       setNoDelay() {}
       setSocketKeepAlive() {}
       flushHeaders() {}
+      _cancelUpgrade() {
+        if (this._upgrade.state !== "pending") return;
+        this._upgrade.state = "aborted";
+        this._upgrade.cleanup();
+      }
+      _failUpgrade(err) {
+        const handshake = this._upgrade;
+        if (handshake.state !== "pending") return;
+        handshake.state = "failed";
+        handshake.cleanup();
+        this.socket.destroy();
+        this.emit("error", err);
+      }
+      _receiveUpgrade(chunk) {
+        const handshake = this._upgrade;
+        if (handshake.state !== "pending") return;
+        const count = Math.min(chunk.length, handshake.limit + 4 - handshake.buffer.length);
+        const buffer = internal.concatBytes([handshake.buffer, chunk.subarray(0, count)]);
+        const end = indexOfCrlfCrlf(buffer, 0);
+        if (end < 0 && buffer.length <= handshake.limit) { handshake.buffer = buffer; return; }
+        if (end < 0 || end + 4 > handshake.limit) {
+          this._failUpgrade(Object.assign(new Error("Parse Error: Header overflow"), { code: "HPE_HEADER_OVERFLOW" }));
+          return;
+        }
+        const lines = latin1(buffer.subarray(0, end)).split("\r\n");
+        const status = /^HTTP\/1\.[01] (\d{3})(?: (.*))?$/.exec(lines.shift());
+        if (!status) { this._failUpgrade(new Error("Invalid HTTP response")); return; }
+        const msg = new IncomingMessage();
+        msg.statusCode = Number(status[1]);
+        msg.statusMessage = status[2] || "";
+        msg.socket = this.socket;
+        setHeaderPairs(msg, lines.map(line => {
+          const colon = line.indexOf(":");
+          return [line.slice(0, colon), line.slice(colon + 1).trim()];
+        }));
+        const head = Buffer.from(internal.concatBytes([buffer.subarray(end + 4), chunk.subarray(count)]));
+        handshake.state = "complete";
+        handshake.cleanup();
+        if (msg.statusCode === 101) this.emit("upgrade", msg, this.socket, head);
+        else { this.emit("response", msg); this.socket.destroy(); }
+      }
       _sendUpgrade() {
+        if (this._aborted) return;
         const options = this._options;
+        const limit = options.maxHeaderSize || internal.builtin("node:http").maxHeaderSize;
+        if (!Number.isInteger(limit) || limit < 0) throw new RangeError("Invalid maxHeaderSize");
         const net = internal.builtin("node:net");
         const socket = options.createConnection ? options.createConnection(options) : net.connect({ host: options.hostname || options.host || "localhost", port: options.port || 80 });
         this.socket = this.connection = socket;
-        this.emit("socket", socket);
-        socket.on("error", err => this.emit("error", err));
-        if (options.timeout) socket.setTimeout(options.timeout, () => this.emit("timeout"));
-        let buffer = new Uint8Array(0);
-        const receive = chunk => {
-          buffer = internal.concatBytes([buffer, chunk]);
-          const end = indexOfCrlfCrlf(buffer, 0);
-          if (end < 0) return;
+        const receive = chunk => this._receiveUpgrade(chunk);
+        const fail = err => this._failUpgrade(err);
+        const eof = () => fail(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
+        const timeout = () => this.emit("timeout");
+        this._upgrade = { state: "pending", buffer: new Uint8Array(0), limit, cleanup: () => {
           socket.removeListener("data", receive);
-          const lines = latin1(buffer.subarray(0, end)).split("\r\n");
-          const status = /^HTTP\/1\.[01] (\d{3})(?: (.*))?$/.exec(lines.shift());
-          if (!status) { socket.destroy(new Error("Invalid HTTP response")); return; }
-          const msg = new IncomingMessage();
-          msg.statusCode = Number(status[1]);
-          msg.statusMessage = status[2] || "";
-          msg.socket = socket;
-          setHeaderPairs(msg, lines.map(line => { const colon = line.indexOf(":"); return [line.slice(0, colon), line.slice(colon + 1).trim()]; }));
-          const head = Buffer.from(buffer.subarray(end + 4));
-          if (msg.statusCode === 101) this.emit("upgrade", msg, socket, head);
-          else { this.emit("response", msg); socket.destroy(); }
-        };
+          socket.removeListener("error", fail);
+          socket.removeListener("end", eof);
+          socket.removeListener("close", eof);
+          if (options.timeout) socket.setTimeout(0, timeout);
+          this._upgrade.buffer = null;
+        } };
+        socket.on("error", fail);
+        socket.on("end", eof);
+        socket.on("close", eof);
         socket.on("data", receive);
+        if (options.timeout) socket.setTimeout(options.timeout, timeout);
+        this.emit("socket", socket);
+        if (this._upgrade.state !== "pending") return;
         const headers = Object.assign({}, this._headers);
         if (!Object.keys(headers).some(key => key.toLowerCase() === "host")) headers.Host = `${options.hostname || options.host || "localhost"}:${options.port || 80}`;
         const lines = [`${this.method} ${this.path} HTTP/1.1`].concat(Object.keys(headers).map(key => `${key}: ${headers[key]}`), ["", ""]);
