@@ -75,7 +75,7 @@ The other address helpers, `node_net.js`, `bun_tcp.js`, and the changes to
 one byte transport with fetch, Bun.serve, and WebSockets. The added host slots
 provide write-side shutdown and the local endpoint. HTTP upgrade listeners get
 a real Socket with the bytes received after the request header. The original
-adapters also own pipe backpressure, cancellation of queued writes, exact-size
+adapters also own pipe backpressure across multiple destinations, cancellation of queued writes, exact-size
 reads, timeout listener cancellation, and bounded HTTP upgrade handshakes.
 No additional upstream implementation was copied for these corrections.
 

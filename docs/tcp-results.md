@@ -125,3 +125,28 @@ The drop-event case also fails on reviewed JSC artifacts in the paired
 controls. The existing adapter emits peer address fields instead of Node
 local/remote drop fields. That remaining address-contract gap predates these
 fixes; the original census and repeated controls are retained separately.
+
+## Multi-destination pipe correction
+
+The round-two review found that each destination independently resumed its
+source on drain. With one native peer paused and another receiving data, the
+blocked guest write queue grew to 11,534,336 bytes on QuickJS and JSC, and
+11,603,968 bytes on the browser engine. The allowed bound in this fixture is
+66,560 bytes, the destination high-water mark plus one TCP delivery.
+
+The source now owns the blocked pipe records. Drain and cleanup release only
+their own record, and reads resume only after every blocked pipe has released.
+`unpipe(destination)` removes the forwarding listeners and releases that pipe.
+Destroy and finish use the same idempotent cleanup. A deferred resume checks
+that the source is live and still has a pipe before reading again.
+
+Reproduce with `scripts/test.sh --no-build --engine ENGINE net-pipe-fanout`.
+The fixture uses an independently paused native TCP peer and a second,
+draining destination. It checks the write bound and stopped reads, then checks
+release through drain, unpipe and destroy. Each release must let the remaining
+receiver get the complete payload. Detached destinations receive no later
+writes, and finished pipes remove their listeners. The drain and unpipe cases
+fail on every reviewed engine; the destroy case is a passing baseline control.
+
+Round-two logs and artifact hashes are retained in
+`/work/reports/bun-wasm-tcp-fanout-2026-10-16/` until coordinator acceptance.
