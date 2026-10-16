@@ -251,7 +251,7 @@
         let entry;
         while ((entry = await this.read()) !== null) yield entry;
       } finally {
-        if (this.#handle !== null) await this.close();
+        await this.close();
       }
     }
   }

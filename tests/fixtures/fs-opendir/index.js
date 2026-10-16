@@ -44,6 +44,10 @@ async function main() {
   const early = await fsp.opendir(new URL("file://" + path.resolve("tree")));
   for await (const entry of early) break;
   await assert.rejects(early.read(), { code: "ERR_DIR_CLOSED" });
+  const manuallyClosed = await fsp.opendir("tree");
+  await assert.rejects(async () => {
+    for await (const entry of manuallyClosed) { await manuallyClosed.close(); break; }
+  }, { code: "ERR_DIR_CLOSED" });
   console.log("promises, dirents, iteration and early close");
 
   let sync = true;
