@@ -21,12 +21,29 @@ bun test tests/
 bun run build >/dev/null
 
 scratch="$(mktemp -d /work/tmp/bun-wasm-web-net-XXXXXX)"
+isolated_scratch="$(mktemp -d /work/tmp/bun-wasm-web-isolated-XXXXXX)"
+isolated_links=()
 server_pid=""
 cleanup() {
   if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; fi
-  rm -rf "$scratch"
+  for link in "${isolated_links[@]}"; do rm -f "$link"; done
+  rm -rf "$scratch" "$isolated_scratch"
 }
 trap cleanup EXIT
+
+printf '[install]\nlinker = "isolated"\n' >"$isolated_scratch/bunfig.toml"
+for app in web sandbox site; do
+  link="$root/$app/bunfig.toml"
+  if [[ -e "$link" || -L "$link" ]]; then
+    echo "cannot install temporary bunfig.toml at $link" >&2
+    exit 1
+  fi
+  ln -s "$isolated_scratch/bunfig.toml" "$link"
+  isolated_links+=("$link")
+done
+for app in web sandbox site; do
+  (cd "$root/$app" && bun install --frozen-lockfile && bun run build >/dev/null)
+done
 
 bun "$root/tests/servers/http.ts" >"$scratch/port" &
 server_pid=$!
