@@ -12,10 +12,14 @@ export interface FilesystemBackend {
   revokeOwner?(owner: number, epoch?: Int32Array): void;
   takeSharedSegments?(): SharedSegment[];
   sharedSegments?(): SharedSegment[];
+  /** Lazy storage reads finish before the service acquires its mutation lock. */
+  prepare?(operation: string, args: any[], data: Uint8Array): void | Promise<void>;
+  flush?(): Promise<void>;
 }
 const namespaceOperations = new Set(["preopen", "create", "link", "removePath", "rename", "writeFile", "mkdirp", "remove", "move"]);
 export class MemoryBackend implements FilesystemBackend {
-  readonly fs = new MemFS();
+  readonly fs: MemFS;
+  constructor(fs = new MemFS()) { this.fs = fs; }
   shared = new SharedFilesystemState();
   private sharedAttached = false;
   private directoryTimes = new Map<FileHandle, number>();
@@ -35,11 +39,11 @@ export class MemoryBackend implements FilesystemBackend {
     this.shared = new SharedFilesystemState(buffer, maxBytes, undefined, segments);
     this.sharedAttached = true;
   }
-  private sync(handle: FileHandle): void {
+  protected sync(handle: FileHandle): void {
     const node = this.fs.nodeForHandle(handle);
     const stat = this.fs.stat(handle);
     if (node.kind === "file") this.shared.register(handle, stat, node.data);
-    else if (this.directoryTimes.get(handle) !== stat.mtime) {
+    else if (this.directoryTimes.get(handle) !== stat.mtime || !this.shared.stat(handle)) {
       this.shared.register(handle, stat);
       this.directoryTimes.set(handle, stat.mtime);
     }
@@ -77,6 +81,8 @@ export class MemoryBackend implements FilesystemBackend {
   private executeOperation(operation: string, args: any[], data: Uint8Array): unknown {
     const [a, b, c] = args;
     switch (operation) {
+      case "flush": return;
+      case "sync": this.check(a); return 0;
       case "preopen": { const handle = this.fs.preopen(a); this.sync(handle); return handle; }
       case "resolve": this.check(a, "directory"); return this.fs.resolve(a, b);
       case "stat": this.check(a); return this.shared.stat(a)!;
