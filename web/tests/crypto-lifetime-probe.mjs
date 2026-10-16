@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {startEngineHost} from "../src/engine-host.js";
-const memory = new WebAssembly.Memory({initial:1});
+const memory = new WebAssembly.Memory({initial:1, maximum:2});
 const u32 = n => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b; };
 function encode(value) {
   if (value === undefined) return Buffer.from([0]);
