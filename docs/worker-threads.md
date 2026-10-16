@@ -12,7 +12,14 @@ messaging constructors are the same constructors exported by the module.
 Ports queue cloned messages until `start()`, an `onmessage` handler, or a web or
 Node `message` listener starts delivery. Synchronous receive removes a queued message
 without emitting its event. Node event methods reuse the runtime's EventEmitter.
-Closing either end disconnects the pair and emits `close` on both ends. Reference
+Closing a port cancels future delivery tasks and drops its pending queue.
+A delivery batch already executing finishes before the close event, as in Node.
+The close task disconnects the pair and emits `close` on both ends exactly once.
+Messages already sent to the open peer drain before its close notification.
+The peer can still post a synchronously received message before disentangling.
+`receiveMessageOnPort` accepts only MessagePort and rejects BroadcastChannel with
+`ERR_INVALID_ARG_TYPE`. Node 26.7.0 accepts BroadcastChannel here, so this rejection
+is a deliberate restriction requested for this adapter. Reference
 counts keep a listening port or open broadcast channel alive until it is closed or
 unreferenced. Broadcast channels communicate among instances in one guest.
 
@@ -46,7 +53,9 @@ The fixture checks the main-thread exports, environment key identity, cyclic
 cloning, synchronous draining, transfer markers, ArrayBuffer detachment, queued
 Node events, web handlers, broadcast delivery, references, closing, and the
 deadline of an unreferenced timer while a port keeps the guest alive. Its output
-also matches Node 26.7.0.
+matches the adapter's contract. The separate `worker-threads-close` and
+`worker-threads-close-queued` fixtures also pass unchanged on Node 26.7.0.
+`worker-threads-receive` covers the deliberate BroadcastChannel restriction.
 
 ## Node parallel-file measurement
 

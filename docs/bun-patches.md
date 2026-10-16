@@ -17,7 +17,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
-| [`crates/bunwasm-runtime/src/js/worker_threads.ts`](#worker-threads-adapter) | Host feature | Original adapter for main-thread worker metadata and same-guest message channels. |
+| [`crates/bunwasm-runtime/src/js/worker_threads.ts`](#worker-threads-adapter) | Host feature | Original adapter for main-thread worker metadata, endpoint-local closure, and same-guest message channels. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
 | [0003](#0003-transpiler-dependencies) | Port | Supply WASI wakers, CPU features, crash, and resolver implementations. |
@@ -1071,3 +1071,10 @@ revision `9510e74152073d850a18758ca41114d8f214ffa6`. Its module initialization n
 run through the builtin loader with the hooks currently available.
 [Worker threads](worker-threads.md) records the supported operations and remaining
 guest-worker work. No vendor patch is needed for this adapter.
+
+The PR #31 review correction cancels future delivery tasks when a receiver closes,
+drops its pending messages, and asynchronously disentangles the pair and notifies its
+peer. Already-sent messages to an open peer drain before that peer closes.
+`receiveMessageOnPort` rejects BroadcastChannel with `ERR_INVALID_ARG_TYPE`, as
+requested for this adapter. Node 26.7.0 accepts BroadcastChannel, so this guard is
+an intentional difference rather than a claim of parity with that Node version.

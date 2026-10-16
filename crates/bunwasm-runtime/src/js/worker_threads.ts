@@ -123,17 +123,19 @@
     }
 
     #schedule() {
-      if (!this.#started || this.#scheduled || !this.#queue.length) return;
+      if (this.#closed || !this.#started || this.#scheduled || !this.#queue.length) return;
       this.#scheduled = true;
       setImmediate(() => this.#deliver());
     }
 
     #deliver() {
       this.#scheduled = false;
-      if (!this.#started || !this.#queue.length) return;
-      const data = this.#queue.shift();
+      if (this.#closed || !this.#started || !this.#queue.length) return;
+      const queue = this.#queue;
+      for (let remaining = queue.length; remaining > 0 && queue.length; remaining--) {
+        this.dispatchEvent(messageEvent(queue.shift()));
+      }
       this.#schedule();
-      this.dispatchEvent(messageEvent(data));
     }
 
     start() { this.#started = true; this.#schedule(); }
@@ -152,24 +154,34 @@
     close(callback?: () => void) {
       if (typeof callback === "function") this.once("close", callback);
       if (this.#closed) return;
-      const other = this.#other;
       this.#disconnect();
-      if (other) other.#disconnect();
     }
 
     #disconnect() {
       this.#closed = true;
+      this.#queue = [];
       this.unref();
-      this.#other = null;
       setImmediate(() => this.#finishClose());
     }
 
     #finishClose() {
-      if (this.#started && this.#queue.length) {
-        setImmediate(() => this.#finishClose());
-        return;
+      const other = this.#other;
+      this.#other = null;
+      this.#queue.length = 0;
+      if (other) {
+        other.#other = null;
+        other.#closeWhenDrained();
       }
       this.dispatchEvent(new Event("close"));
+    }
+
+    #closeWhenDrained() {
+      if (this.#closed) return;
+      if (this.#started && this.#queue.length) {
+        setImmediate(() => this.#closeWhenDrained());
+        return;
+      }
+      this.close();
     }
 
     on(event: string | symbol, listener: BunWasm.EventListener) {
@@ -237,11 +249,6 @@
       internal.messagePortRefs++;
     }
 
-    static receive(channel: BroadcastChannel) {
-      if (!channel.#queue.length) return undefined;
-      return { message: channel.#queue.shift() };
-    }
-
     postMessage(value: unknown) {
       if (this.#closed) throw new DOMException("BroadcastChannel is closed.", "InvalidStateError");
       if (!arguments.length) throw new TypeError("postMessage requires a message");
@@ -280,7 +287,6 @@
 
   function receiveMessageOnPort(port: unknown) {
     if (port instanceof MessagePort) return MessagePort.receive(port);
-    if (port instanceof BroadcastChannel) return BroadcastChannel.receive(port);
     throw invalidPort();
   }
 
