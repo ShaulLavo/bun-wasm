@@ -206,3 +206,27 @@ context rebuilds after a file change, plugin callbacks, the CLI, and frozen
 reinstalls across all three engines. `bun tests/esbuild/browser.mjs` runs the
 same API and CLI checks in the playground under Chromium and WebKit. Build
 `web/` first. Both tests use the app-matrix mirror without contacting npm.
+
+
+The esbuild port's local verification on 2026-10-16 passed:
+
+| Check | Result |
+| --- | --- |
+| Complete runtime fixtures | 117 passed, 0 failed per engine |
+| Deterministic installer fixtures | 20 passed, 0 failed per engine |
+| Published esbuild API and CLI, native hosts | All three engines passed |
+| Published esbuild API and CLI, Chromium and WebKit pages | All six engine/browser combinations passed |
+| Browser host gate | Passed |
+| Sandbox HMR | All six runs passed |
+
+The package check includes live browser filesystem changes and context rebuilds.
+The bounded upstream files `integration/esbuild/esbuild.test.ts` and
+`cli/install/bun-install-cpu-os.test.ts` remain at 0 passes, 3 failures, 1 error,
+and no timeouts before and after. The first file cannot download packages in
+its loopback namespace; the second requires the missing `Bun.jest` harness API.
+Those results do not exercise the published esbuild package, which has its own
+recorded-registry check above. The full upstream baseline is unchanged.
+
+[Framework results](app-matrix/esbuild-results.md) record the subsequent Vite,
+Astro, and SvelteKit blockers. TCP and ws review heads changed after that pinned
+integration measurement; the report does not claim to measure those later heads.
