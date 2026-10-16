@@ -1,5 +1,7 @@
 const closedKey = Symbol.for("nodejs.webstream.isClosedPromise");
 const errorKey = Symbol.for("nodejs.webstream.controllerErrorFunction");
+const NativeAbortController = globalThis.AbortController;
+const NativeAbortSignal = globalThis.AbortSignal;
 const Native = { ReadableStream, WritableStream, TransformStream, ReadableStreamDefaultReader, ReadableStreamBYOBReader, WritableStreamDefaultWriter, ReadableStreamDefaultController, ReadableByteStreamController, WritableStreamDefaultController, TransformStreamDefaultController };
 type Kind = "readable" | "writable" | "transform";
 type Timer = ReturnType<typeof setTimeout>;
@@ -254,6 +256,18 @@ function handleMethods(Ctor: { prototype: object }, readable: boolean) {
     request(value);
   });
 }
+function nativePipeTo(stream: object, destination: unknown, options: unknown, original: Function) {
+  if (options === null || typeof options !== "object") return apply(original, stream, [destination, options]);
+  const signal = Reflect.get(options, "signal");
+  if (signal === undefined || signal instanceof NativeAbortSignal) return apply(original, stream, [destination, options]);
+  if (typeof signal !== "object" || signal === null || typeof Reflect.get(signal, "addEventListener") !== "function") return apply(original, stream, [destination, options]);
+  const controller = new NativeAbortController();
+  const abort = () => controller.abort(Reflect.get(signal, "reason"));
+  if (Reflect.get(signal, "aborted")) abort();
+  else Reflect.apply(Reflect.get(signal, "addEventListener"), signal, ["abort", abort, { once: true }]);
+  return apply(original, stream, [destination, Object.assign({}, options, { signal: controller.signal })]);
+}
+
 function streamMethods(Ctor: typeof ReadableStream | typeof WritableStream, readable: boolean) {
   const prototype = Ctor.prototype;
   Object.defineProperty(prototype, closedKey, { configurable: true, get() { return watch(record(this, readable)); } });
@@ -280,7 +294,20 @@ function streamMethods(Ctor: typeof ReadableStream | typeof WritableStream, read
     if (alias?.value === values) Object.defineProperty(prototype, Symbol.asyncIterator, Object.assign({}, alias, { value: wrapped }));
     else method(prototype, Symbol.asyncIterator, stream => request(record(stream, true)));
   }
-  for (const name of readable ? ["cancel", "pipeTo", "pipeThrough"] : ["abort", "close"]) method(prototype, name, stream => request(record(stream, readable)));
+  for (const name of readable ? ["cancel", "pipeThrough"] : ["abort", "close"]) method(prototype, name, stream => request(record(stream, readable)));
+  if (readable) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "pipeTo");
+    if (descriptor?.value) {
+      const original = descriptor.value;
+      const wrapped = function (this: object, destination: unknown, options?: unknown) {
+        const result = nativePipeTo(this, destination, options, original);
+        request(record(this, true));
+        return result;
+      };
+      Object.defineProperties(wrapped, { name: { value: original.name }, length: { value: original.length } });
+      Object.defineProperty(prototype, "pipeTo", Object.assign({}, descriptor, { value: wrapped }));
+    }
+  }
 }
 
 export function installNativeStreamState() {
