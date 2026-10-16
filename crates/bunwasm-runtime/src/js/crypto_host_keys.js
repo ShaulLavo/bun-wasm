@@ -4,7 +4,8 @@
   const provider = internal.native.subtleCrypto;
   if (!provider) return;
   const operations = ["generateKey", "importKey", "exportKey", "sign", "verify", "encrypt", "decrypt", "deriveBits", "deriveKey", "wrapKey", "unwrapKey"];
-  const host = Object.fromEntries(operations.map(name => [name, provider[name].bind(provider)]));
+  const original = Object.fromEntries(operations.map(name => [name, provider[name]]));
+  const host = Object.fromEntries(operations.map(name => [name, original[name].bind(provider)]));
   const converted = new WeakMap();
   const nameOf = a => typeof a === "string" ? a.toUpperCase() : a.name.toUpperCase();
   const derivation = a => ["HKDF", "PBKDF2"].includes(nameOf(a));
@@ -98,5 +99,12 @@
     if (!c.isKey(key) || !c.supportsAlgorithm(nameOf(params))) return result;
     const raw = c.crypt("decrypt", params, key, bytes, "unwrapKey");
     return remember(result, {kty:"oct", k:c.encode(raw)});
-  };
+  };  for (const name of operations) {
+    const bridge = provider[name], operation = original[name];
+    const wrapper = { [name](...args) {
+      return Reflect.apply(this === provider ? bridge : operation, this, args);
+    } }[name];
+    Object.defineProperty(wrapper, "length", {value:operation.length});
+    Object.defineProperty(provider, name, {value:wrapper, writable:true, configurable:true});
+  }
 });
