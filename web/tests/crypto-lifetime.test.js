@@ -5,9 +5,9 @@ test("native crypto settles before host exit", () => {
   expect(result.stderr).toBe("");
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("native SubtleCrypto keeps the host alive");
-});
+}, 15000);
 test("unhandled native crypto rejection remains fatal", () => {
   const result = spawnSync("node", [new URL("./crypto-lifetime-probe.mjs", import.meta.url).pathname], {encoding:"utf8", timeout:10000, env:{...process.env, NATIVE_CRYPTO_REJECT:"1"}});
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("native rejection TypeError");
-});
+}, 15000);

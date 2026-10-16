@@ -31,6 +31,7 @@ function bufferFrom(input: string | ArrayBuffer | ArrayLike<number>) {
 class Connection {
   closed = false;
   queue: Uint8Array[] = [];
+  get bufferedAmount(): number { return this.queue.reduce((size, bytes) => size + bytes.length, 0); }
   onData: ((bytes: Uint8Array) => void) | null = null;
   onEnd: (() => void) | null = null;
   onClose: (() => void) | null = null;

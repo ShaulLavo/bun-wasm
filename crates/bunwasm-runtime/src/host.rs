@@ -9,7 +9,7 @@
 use std::ptr::{addr_of, addr_of_mut, read_volatile};
 
 pub const ABI_VERSION: u32 = 1;
-pub const SLOT_COUNT: usize = 16;
+pub const SLOT_COUNT: usize = 18;
 
 pub const ERROR: i32 = -1;
 pub const AGAIN: i32 = -2;
@@ -35,11 +35,13 @@ pub enum Slot {
     ChildWait = 13,
     ChildPipe = 14,
     ChildKill = 15,
+    Shutdown = 16,
+    LocalAddr = 17,
 }
 
 pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
     "poll", "fetch", "fetch_head", "read", "write", "close", "listen", "local_port", "accept", "connect",
-    "error", "peer_addr", "spawn", "child_wait", "child_pipe", "child_kill",
+    "error", "peer_addr", "spawn", "child_wait", "child_pipe", "child_kill", "shutdown", "local_addr",
 ];
 
 #[repr(C)]
@@ -113,10 +115,10 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
     // (docs/host-abi.md); a mismatch traps in call_indirect.
     Some(unsafe {
         match id {
-            Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept | Slot::ChildWait => std::mem::transmute::<usize, F1>(index as usize)(args[0]),
+            Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept | Slot::ChildWait | Slot::Shutdown => std::mem::transmute::<usize, F1>(index as usize)(args[0]),
             Slot::Spawn | Slot::ChildPipe | Slot::ChildKill => std::mem::transmute::<usize, F2>(index as usize)(args[0], args[1]),
             Slot::Fetch => std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3]),
-            _ => std::mem::transmute::<usize, F3>(index as usize)(args[0], args[1], args[2]),
+            Slot::FetchHead | Slot::Read | Slot::Write | Slot::Listen | Slot::Connect | Slot::Error | Slot::PeerAddr | Slot::LocalAddr => std::mem::transmute::<usize, F3>(index as usize)(args[0], args[1], args[2]),
         }
     })
 }
@@ -191,6 +193,14 @@ pub fn local_port(handle: i32) -> i32 {
 
 pub fn accept(listener: i32) -> i32 {
     call(Slot::Accept, [listener, 0, 0, 0]).unwrap_or(UNSUPPORTED)
+}
+
+pub fn shutdown(handle: i32) -> i32 {
+    call(Slot::Shutdown, [handle, 0, 0, 0]).unwrap_or(UNSUPPORTED)
+}
+
+pub fn local_addr(handle: i32) -> Result<Vec<u8>, i32> {
+    read_sized(Slot::LocalAddr, handle)
 }
 
 pub fn connect(host: &str, port: i32) -> i32 {
