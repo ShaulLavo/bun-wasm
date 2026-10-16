@@ -7,7 +7,8 @@ const s = session("bun-wasm-crypto-browser-");
 try {
   const root = join(s.scratch, "dist");
   cpSync(new URL("../dist/", import.meta.url), root, {recursive:true});
-  const preload = readFileSync(new URL("./crypto-provider-preload.mjs", import.meta.url), "utf8");
+  const preload = readFileSync(new URL("./crypto-provider-preload.mjs", import.meta.url), "utf8")
+    .replace("await provider.generateKey", "provider.generateKey");
   for (const path of ["worker.js", "__bunwasm/worker.js"]) {
     const file = join(root, path);
     writeFileSync(file, preload + "\n" + readFileSync(file, "utf8"));
