@@ -990,8 +990,8 @@
         STATUS_CODES,
         METHODS,
         maxHeaderSize: 16384,
-        validateHeaderName() {},
-        validateHeaderValue() {},
+        validateHeaderName: internal.require("http_common").validateHeaderName,
+        validateHeaderValue: internal.require("http_common").validateHeaderValue,
         setMaxIdleHTTPParsers() {},
       });
     }
@@ -999,8 +999,8 @@
       STATUS_CODES,
       METHODS,
       maxHeaderSize: 16384,
-      validateHeaderName() {},
-      validateHeaderValue() {},
+      validateHeaderName: internal.require("http_common").validateHeaderName,
+      validateHeaderValue: internal.require("http_common").validateHeaderValue,
       setMaxIdleHTTPParsers() {},
     });
   }

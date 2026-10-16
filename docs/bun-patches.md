@@ -85,6 +85,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.ts`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
 | [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets and write-side shutdown over the existing host ABI. |
+| [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming and upgrade response adapters shared by all engines. |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
 | [`scripts/generate-ws.sh` and builtin resolution](#portable-ws-builtin) | Host feature | Original module wrapper supplies Bun's builtin ws import on every engine. |
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
@@ -1079,3 +1080,28 @@ The host stripper blanks erasable TypeScript during Cargo's build, preserving Ja
 constructor calls, class fields and source coordinates. The loader still
 looks up the same extension-free names. Existing `.js` sources remain raw. No TypeScript parser
 or typecheck is added to the wasm runtime.
+
+
+## HTTP framing
+
+Class **Host feature**, **original adapters** in `src/js/net.js`,
+`src/js/http_common.ts`, `src/js/http_body.ts`, and the `node:http` registry
+in `src/js/builtins.js`. No upstream implementation is copied or patched.
+Bun's `src/js/node/http.ts` depends on native HTTP bindings, so this change keeps
+the existing portable adapter over the socket ABI.
+
+The Node v26.7.0 control and Bun's Node test files at
+`9510e74152073d850a18758ca41114d8f214ffa6` supply behavioral references.
+Header commitment is distinct from flushing bytes. Response framing preserves
+explicit length and transfer encoding, streams chunked bodies, omits bodies
+for HEAD and bodyless status codes, and writes trailers. HTTP clients use the
+same socket transport for ordinary and upgraded responses to preserve raw
+header names and trailers. A typed incremental body decoder handles fixed,
+chunked, and EOF framing. Header, method, path and status validation occurs
+before protocol bytes are written. A 100 Continue response can precede the
+request body.
+
+HTTPS requests continue to use the host's TLS fetch transport. The raw socket
+ABI has no TLS capability, so HTTPS upgrades without a caller-supplied connection
+fail with `ERR_TLS_NOT_SUPPORTED` instead of opening a plaintext connection.
+The caller-supplied connection path retains caller ownership of TLS setup.
