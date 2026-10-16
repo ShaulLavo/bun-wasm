@@ -1,0 +1,8 @@
+finished
+ended
+destroyed
+errored
+destroying
+erroring
+live error
+node late write

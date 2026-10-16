@@ -74,7 +74,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
 | [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, `web/src/engine-host.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
 
-| [`runtime/core/`, `runtime/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, memory, path, descriptor and filesystem-boundary adapters extracted into a reusable package. |
+| [`runtime/core/`, `runtime/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, shared filesystem, IndexedDB persistence, lazy residency and descriptor adapters. |
+| [`web/tests/persistence-browser-worker.ts`, persistence corpus](#browser-runtime-core) | Host feature | Original browser test adapter reproduces the local storage spike's generated sizes and synthetic bytes; no package contents or upstream implementation. |
 | [`runtime/fs/`, filesystem quiescence](#filesystem-quiescence) | Host feature | Original shared admission and revocation fence lets controllers stop workers only after direct filesystem operations finish. |
 | [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
@@ -238,6 +239,24 @@ WASI ENOSPC and the per-file page-table limit uses EFBIG. Owner-tagged locks let
 reclaim abandoned guest locks without changing allocator state. This is original bun-wasm code,
 not an adapted upstream allocator or filesystem. Path walking remains a local MemFS detail. Bun's
 reserved socket slot bridge stays configured by `web/`, not imported into the generic core.
+The persistence layer in `runtime/fs/{storage,indexeddb,persistent}.ts` is also an original adapter,
+not copied or translated from PGlite, SQLite, Emscripten, or another upstream. The storage spike
+informed its batched scheduling and crash-safety requirements. It adds immutable payloads,
+checksummed incremental metadata, dual base snapshots, strict atomic IndexedDB commits, lifetime
+Web Locks and lazy data hydration. Shared revision counters capture direct guest writes; clean
+persisted data can leave the pool without changing inode identity. The editor adapters wait for
+a durable checkpoint before marking a save complete, seed workspaces once, and explicitly reset
+sandbox templates. `runtime/core/wasi.ts` routes both preview1 sync calls through this boundary.
+The original persistence browser fixtures in `web/tests/persistence-browser-{main,worker}.ts`
+and their Playwright/Safari runners exercise these adapters without a wasm build. The corpus
+fixture retains only generated package-file sizes from the original local storage spike's
+`build-corpus.py` output, identified by its SHA-256 in `fixtures/persistence-corpus.json`.
+The worker reproduces the spike's original `fs-worker.js` synthetic seeded-word generator
+(SHA-256 `4ea7e6f89a64af1c53b3b5eb5deb30291ff9f2dbbf7222cdee03ca627fe6e3fc`),
+including its small-file seeds `17+i` and three large-file seeds `10033+i`. Local changes
+add browser-native payload-read counters, incremental checkpoint timings and full-byte
+integrity checks. This is original benchmark input, not copied package content or a Bun,
+Node, WebKit, PGlite, or SQLite implementation.
 Unbundled Node host adapters import the extracted JavaScript memory helper by repository-relative
 path so headless CLI workflows remain dependency-free.
 The original browser-build adapter resolves declared exports through the consuming app.
@@ -1188,3 +1207,72 @@ a second native build. `crates/bunwasm-transpiler/build.rs` and `crates/bunwasm-
 example and bundler WASI startup objects because the shared environment disables Rust's self-contained C runtime.
 No upstream implementation changed. `scripts/test-transpiler-example.sh` and its mandatory
 invocation from `scripts/build.sh` remain unchanged.
+
+### Round-5 native stream reflection and abort cleanup
+
+Class **Host feature**, original bridge refinement. `web/src/native-stream-state.ts` now rewrites each wrapped native stream prototype's `constructor` descriptor to the wrapper, preserving `instance.constructor === GlobalConstructor` and subclassing while retaining native prototypes and brands. Guest abort signals passed to native `pipeTo` are mirrored through a native controller. The guest listener is detached when the native pipe fulfills or rejects and when the native call throws synchronously. The browser fixture counts add/remove operations across repeated successful pipes.
+
+### Native browser stream completion
+
+Class **Host feature**, original bun-wasm implementation. No upstream source was
+copied or adapted for `web/src/native-stream-state.ts`. Chromium and WebKit lack
+Node's private closed-promise and controller-error symbols. The host installs
+those hooks before the runtime bootstrap; Node-host execution retains Node's
+existing hooks and embedded engines retain the reference ponyfill hooks.
+
+Construction proxies delegate to the browser's native ReadableStream,
+WritableStream and TransformStream constructors and capture their controllers.
+Native prototypes, instance brands, byte/BYOB queues and algorithms stay native.
+The global constructor references change. Frozen underlying dictionaries are
+wrapped without mutation, and callbacks retain their original receiver.
+
+Completion comes from actual native reader/writer `closed` promises. Temporary
+probes release locks immediately without reading or writing. Releasing a pending
+closed promise rejects it in place; releasing a terminal promise replaces it.
+That identity change distinguishes terminal observation from release errors.
+Notifications from controllers and underlying callbacks trigger another probe.
+Pending sink abort promises delay completion. Internally acquired native locks,
+such as async iterators and pipeTo, use weak polling with host timers. Session
+exit stops the timers. No private stream state or promise status is invented.
+
+Streams created outside the construction bridge, including saved original
+constructors and opaque native factory outputs, support completion observation.
+Their controllers are unavailable through browser APIs, so the error hook cannot
+provide Node-style error injection for those opaque readables. The bridge raises
+an explicit error rather than treating cancellation as an errored stream.
+
+`scripts/test-native-stream-interop.mjs` executes the exact runtime stream modules
+and this host bridge in Chromium and WebKit. Its minimal process/async-context
+boundary is a direct-module test, not a wasm-build claim. The same fixture also
+runs through the actual built browser engine in `web/tests/browser-engine.mjs`.
+CI runs the direct native-browser proof so Node-host symbols cannot mask a gap.
+
+The copied Node stream licenses retain their text with whitespace-only normalization
+of blank EOF lines and one mixed space/tab indent.
+
+
+### TCP streams after the portable-core merge
+
+Class **Host feature**, original adapters. `node_net.js` retains the TCP transport,
+lookup, address, timeout and server behavior from main PR14. Socket now uses the
+portable Duplex's actual readable/writable states and `_read`, `_write`, `_final`
+and `_destroy` hooks. Its old public write/end/destroy, byte queues and synthetic
+state records are removed. Connection callbacks drive stream callbacks and
+`push`; the native read waiter pauses when `push` reaches the high-water mark.
+This is original API glue, not copied upstream stream logic.
+
+`net.js` retains PR14's Connection shutdown/ref/write callbacks and complete HTTP
+upgrade handling. The Streams byte-body producer and HTTP request hooks are
+applied to that implementation. Socket and upgrade cleanup run from the real
+ClientRequest `_destroy` hook. The host engine releases both native stream
+observers and directory cursors at exit. The suite runner retains explicit plain
+script selection and opt-in Node assertion scripts without counting registered
+Node tests as assertion scripts. The merged TCP fixture exercises successful
+Readable.toWeb reads and cancellation of a connected socket.
+
+The original Node-host TCP adapter in `web/scripts/node-net.mjs` now limits each
+write to the remaining one-MiB host queue capacity and returns the short byte
+count. Checking the queue only before accepting an entire large write allowed
+the first write to bypass the limit. The bounded host test fails with that
+implementation and passes with capacity-aware writes, including full-queue,
+zero-length and owned-copy cases. No upstream implementation is copied.

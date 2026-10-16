@@ -761,74 +761,14 @@
     }
   }
 
-  // A minimal ReadableStream: enough for `for await` over a body and
-  // getReader().read(). Full WHATWG streams are not implemented.
-  class ReadableStream {
-    #chunks;
-    #locked = false;
-    constructor(source = {}) {
-      this.#chunks = [];
-      let closed = false;
-      const controller = {
-        enqueue: (chunk) => this.#chunks.push(chunk),
-        close: () => {
-          closed = true;
-        },
-        error: (err) => {
-          this.#chunks.push({ __error: err });
-        },
-      };
-      if (typeof source.start === "function") source.start(controller);
-      this._closed = () => closed;
-      this._pull = typeof source.pull === "function" ? () => source.pull(controller) : null;
-      this._cancel = reason => {
-        this.#chunks.length = 0;
-        if (closed) return;
-        closed = true;
-        return typeof source.cancel === "function" ? source.cancel(reason) : undefined;
-      };
-    }
-    get locked() {
-      return this.#locked;
-    }
-    getReader() {
-      this.#locked = true;
-      const chunks = this.#chunks;
-      const stream = this;
-      return {
-        async read() {
-          if (chunks.length === 0 && stream._pull && !stream._closed()) await stream._pull();
-          if (chunks.length === 0) return { done: true, value: undefined };
-          const chunk = chunks.shift();
-          if (chunk && chunk.__error) throw chunk.__error;
-          return { done: false, value: chunk };
-        },
-        releaseLock() {
-          stream.#locked = false;
-        },
-        cancel(reason) {
-          return stream.cancel(reason);
-        },
-        closed: Promise.resolve(),
-      };
-    }
-    async *[Symbol.asyncIterator]() {
-      const reader = this.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) return;
-        yield value;
-      }
-    }
-    cancel(reason) {
-      return Promise.resolve(this._cancel(reason));
-    }
-  }
+  const streamWeb = internal.require("streams");
+  const { ReadableStream } = streamWeb;
 
   internal.makeByteStream = function makeByteStream(bytes) {
     return new ReadableStream({
+      type: "bytes",
       start(controller) {
-        if (bytes.length > 0) controller.enqueue(bytes);
+        if (bytes.length > 0) controller.enqueue(new Uint8Array(bytes));
         controller.close();
       },
     });
@@ -944,7 +884,7 @@
       return { bytes: native.utf8Encode(body.toString()), type: "application/x-www-form-urlencoded;charset=UTF-8" };
     }
     if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
-    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return { bytes: toUint8(body).slice(), type: null };
+    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return { bytes: new Uint8Array(toUint8(body)), type: null };
     if (body instanceof ReadableStream) return { stream: body, bytes: null, type: null };
     return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
   }
@@ -957,7 +897,7 @@
 
   const BodyMixin = {
     async _consume() {
-      if (this._bodyUsed) throw new TypeError("Body already used");
+      if (this.bodyUsed) throw new TypeError("Body already used");
       this._bodyUsed = true;
       if (this._stream) return streamBytes(this._stream);
       return this._body || new Uint8Array(0);
@@ -1058,7 +998,7 @@
       return this.#redirected;
     }
     get bodyUsed() {
-      return this._bodyUsed;
+      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
     }
     get body() {
       if (this._stream) return this._stream;
@@ -1067,8 +1007,10 @@
       return this._stream;
     }
     clone() {
-      if (this._bodyUsed) throw new TypeError("Body already used");
-      const copy = new Response(this._body, { status: this.#status, statusText: this.#statusText, headers: this.#headers });
+      if (this.bodyUsed || this._stream?.locked) throw new TypeError("Body already used");
+      let body = this._body;
+      if (this._stream) [this._stream, body] = this._stream.tee();
+      const copy = new Response(body, { status: this.#status, statusText: this.#statusText, headers: this.#headers });
       copy.#url = this.#url;
       return copy;
     }
@@ -1122,13 +1064,19 @@
       return this.#redirect;
     }
     get bodyUsed() {
-      return this._bodyUsed;
+      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
     }
     get body() {
-      return this._body === null ? null : internal.makeByteStream(this._body);
+      if (this._stream) return this._stream;
+      if (this._body === null) return null;
+      this._stream = internal.makeByteStream(this._body);
+      return this._stream;
     }
     clone() {
-      return new Request(this, { body: this._body });
+      if (this.bodyUsed || this._stream?.locked) throw new TypeError("Body already used");
+      let body = this._body;
+      if (this._stream) [this._stream, body] = this._stream.tee();
+      return new Request(this, { body });
     }
     get [Symbol.toStringTag]() {
       return "Request";
@@ -1373,6 +1321,7 @@
       Request, Response, fetch, ReadableStream, performance, crypto, FormData, MessageChannel,
       MessagePort, navigator,
     };
+    Object.assign(globals, streamWeb);
     for (const name of Object.keys(globals)) defineGlobal(name, globals[name]);
     defineLazyGlobal("WebSocket", () => internal.require("net").WebSocket);
   };
