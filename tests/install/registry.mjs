@@ -31,6 +31,10 @@ function packageFixture(name, version, extra = {}, source, entries = []) {
 
 function fixtures() {
   return [
+    packageFixture("esbuild", "0.25.11"),
+    packageFixture("esbuild", "0.25.12"),
+    packageFixture("esbuild-wasm", "0.25.12"),
+    packageFixture("uses-esbuild", "1.0.0", { dependencies: { esbuild: "0.25.12" } }, "module.exports = require('esbuild');\n"),
     packageFixture("is-number", "7.0.0", {}, "module.exports = value => typeof value === 'number' && Number.isFinite(value);\n"),
     packageFixture("is-odd", "3.0.1", { dependencies: { "is-number": "^7.0.0" } }, "const isNumber = require('is-number'); module.exports = value => isNumber(value) && Math.abs(value % 2) === 1;\n"),
     packageFixture("@fixture/scoped", "1.0.0"),

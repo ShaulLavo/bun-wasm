@@ -118,14 +118,25 @@ impl QuickJs {
     }
 }
 
+/// Bytes of C shadow stack QuickJS may use before it throws RangeError. It must
+/// trip before the host's separate wasm call stack runs out. The default fits
+/// wasmtime's default 512 KiB stack and Chromium; hosts set `BUN_WASM_STACK_KIB`
+/// for their own stack: the launcher and the Node host raise it, browsers off
+/// V8 lower it (see docs/stack-limits.md).
+fn stack_budget() -> usize {
+    // The shadow stack is 8 MiB (crates/bunwasm-cli/build.rs). A larger budget would never
+    // trip, and `kib * 1024` must not wrap to 0, which QuickJS reads as "no limit".
+    const MAX_KIB: usize = 7 * 1024;
+    let kib = std::env::var("BUN_WASM_STACK_KIB").ok().and_then(|v| v.trim().parse::<usize>().ok());
+    kib.filter(|&kib| kib > 0).unwrap_or(152).min(MAX_KIB) * 1024
+}
+
 impl Engine for QuickJs {
     type Value = V;
 
     fn new(host: Rc<dyn ModuleHost<QuickJs>>) -> QuickJs {
         let runtime = Runtime::new().expect("create QuickJS runtime");
-        // The default 256 KiB native stack limit is far below what wasm gives
-        // us; QuickJS checks against it to throw RangeError instead of crashing.
-        runtime.set_max_stack_size(4 * 1024 * 1024);
+        runtime.set_max_stack_size(stack_budget());
         let context = Context::full(&runtime).expect("create QuickJS context");
         // SAFETY: single-threaded; the context lives as long as the process.
         let ctx: Ctx<'static> = unsafe { Ctx::from_raw(context.as_raw()) };
