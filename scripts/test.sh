@@ -40,6 +40,7 @@ set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$root/env.sh"
+"$root/scripts/check-runtime.sh" || exit $?
 
 build=1
 update=0
