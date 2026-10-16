@@ -590,3 +590,10 @@ The generated constructor also embeds Bun's
 replaced by the constructor's lexical require. The formatter retains Bun's
 Node v26.3.0 adaptation, including minute and hour output. No local formatter
 approximates the upstream implementation.
+
+The generator also routes the constructor's `Error.captureStackTrace` call to
+an original adapter. JSC's bare stack strings omit the Trace name and message;
+the adapter prepends them while preserving stack frames. Browser engines
+without captureStackTrace use Error.stack. It leaves a native Node-style
+header and a custom prepareStackTrace result intact. This supplies the Node
+console contract without changing the engine's global Error constructor.

@@ -23,6 +23,9 @@ function lower(context) {
       return f.createCallExpression(intrinsic(property.name.text.slice(1)), undefined,
         [ts.visitNode(property.expression, visit)].concat(Array.from(node.arguments, arg => ts.visitNode(arg, visit))));
     }
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Error" && node.name.text === "captureStackTrace") {
+      return intrinsic("captureStackTrace");
+    }
     if (ts.isIdentifier(node) && node.text.startsWith("$")) return intrinsic(node.text.slice(1));
     return ts.visitEachChild(node, visit, context);
   }

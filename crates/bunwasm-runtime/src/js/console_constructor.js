@@ -5,9 +5,22 @@
   const setHas = Set.prototype.has;
   const mapGet = Map.prototype.get;
   const probe = {};
+  const nativeCaptureStackTrace = Error.captureStackTrace;
 
   function hasBrand(method, value) {
     try { apply(method, value, [probe]); return true; } catch { return false; }
+  }
+
+  function captureStackTrace(target, skip) {
+    const nativeCapture = typeof nativeCaptureStackTrace === "function";
+    if (nativeCapture) apply(nativeCaptureStackTrace, Error, [target, skip]);
+    if (nativeCapture && typeof target.stack !== "string") return;
+    const stack = nativeCapture ? target.stack : String(new Error().stack || "");
+    const header = target.name + (target.message ? ": " + target.message : "");
+    if (stack === header || stack.startsWith(header + "\n")) return;
+    let frames = stack.replace(/^(?:Error|Trace)(?::[^\n]*)?(?:\n|$)/, "");
+    if (!nativeCapture) frames = frames.split("\n").slice(2).join("\n");
+    Object.defineProperty(target, "stack", { value: header + (frames ? "\n" + frames : ""), writable: true, configurable: true });
   }
 
   function error(Ctor, code, message) {
@@ -43,6 +56,7 @@
 
   return {
     require,
+    captureStackTrace,
     call: (fn, receiver, ...args) => apply(fn, receiver, args),
     apply: (fn, receiver, args) => apply(fn, receiver, args),
     get: (map, key) => apply(mapGet, map, [key]),

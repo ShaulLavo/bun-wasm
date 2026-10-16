@@ -388,7 +388,7 @@ function createConsoleConstructor(console) {
                 name: "Trace",
                 message: this[kFormatForStderr](args),
             };
-            Error.captureStackTrace(err, trace);
+            intrinsics.captureStackTrace(err, trace);
             this.error(err.stack);
         },
         assert(expression, ...args) {
