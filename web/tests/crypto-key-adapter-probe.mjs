@@ -5,6 +5,7 @@ import * as stream from "node:stream";
 import assert from "node:assert/strict";
 const root = fileURLToPath(new URL("../../crates/bunwasm-runtime/src/js/", import.meta.url));
 const provider = webcrypto.subtle;
+const signMetadata = {name:provider.sign.name, length:provider.sign.length};
 const beforeSign = provider.sign.bind(provider), beforeVerify = provider.verify.bind(provider);
 const load = path => (0, eval)(readFileSync(path, "utf8"));
 const internal = {
@@ -66,6 +67,12 @@ await check("native-only wrapping algorithm remains usable", async () => {
  const unwrapped = await provider.unwrapKey("raw",wrapped,wrapping,op,"HKDF",false,["deriveBits"]);
  const bits = await SubtleCrypto.prototype.deriveBits.call(provider,{name:"HKDF",hash:"SHA-256",salt:data,info:data},unwrapped,128);
  assert.equal(bits.byteLength,16);
+});
+await check("native method receivers and metadata", async () => {
+ const key = await provider.generateKey({name:"HMAC",hash:"SHA-256"},true,["sign"]);
+ await assert.rejects(async () => Reflect.apply(provider.sign, {}, ["HMAC",key,data]), {name:"TypeError"});
+ assert.equal(provider.sign.name,signMetadata.name);
+ assert.equal(provider.sign.length,signMetadata.length);
 });
 assert.equal(provider, webcrypto.subtle);
 console.log("failures",failures);
