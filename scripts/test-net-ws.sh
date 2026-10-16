@@ -4,6 +4,8 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$root/env.sh"
 scratch="$(mktemp -d /work/tmp/bun-wasm-tcp-ws-XXXXXX)"
 trap 'rm -rf "$scratch"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 mkdir -p "$scratch/node_modules"
 cp -r "$root/docs/bun-test-suite/dependencies/node_modules/ws" "$scratch/node_modules/ws"
 cp "$root/tests/net-ws.mjs" "$scratch/index.mjs"
