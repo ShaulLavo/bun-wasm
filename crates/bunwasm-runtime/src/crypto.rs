@@ -363,7 +363,10 @@ fn okp_import(name: &str, format: &str, b: &[u8]) -> Result<J> {
             }
             use pkcs8::der::Decode;
             let inner = data(pkcs8::der::asn1::OctetStringRef::from_der(info.private_key))?;
-            (inner.as_bytes().to_vec(), vec![])
+            (
+                inner.as_bytes().to_vec(),
+                info.public_key.unwrap_or_default().to_vec(),
+            )
         }
         _ => return Err("NotSupportedError"),
     };
