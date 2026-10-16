@@ -20,7 +20,7 @@
     return value;
   }
 
-  function codecTransformer(id) {
+  function codecTransformer(id, convert = internal.toUint8) {
     const token = {};
     finalizers.register(token, id, token);
     function release() {
@@ -38,7 +38,7 @@
     }
     return {
       transform(chunk, controller) {
-        try { push(internal.toUint8(chunk), false, controller); }
+        try { push(convert(chunk), false, controller); }
         catch (error) { release(); throw error; }
       },
       flush(controller) {
@@ -98,10 +98,44 @@
     get [Symbol.toStringTag]() { return "TextDecoderStream"; }
   }
 
+  const typedArray = Object.getPrototypeOf(Uint8Array.prototype);
+  const slot = (prototype, key) => {
+    const get = Object.getOwnPropertyDescriptor(prototype, key).get;
+    return value => Reflect.apply(get, value, []);
+  };
+  const typedBuffer = slot(typedArray, "buffer");
+  const typedOffset = slot(typedArray, "byteOffset");
+  const typedLength = slot(typedArray, "byteLength");
+  const dataBuffer = slot(DataView.prototype, "buffer");
+  const dataOffset = slot(DataView.prototype, "byteOffset");
+  const dataLength = slot(DataView.prototype, "byteLength");
+  const arrayBufferLength = slot(ArrayBuffer.prototype, "byteLength");
+  function compressionView(value) {
+    try { return [typedBuffer(value), typedOffset(value), typedLength(value)]; }
+    catch { return [dataBuffer(value), dataOffset(value), dataLength(value)]; }
+  }
+  function compressionBytes(value) {
+    const code = value === null ? "ERR_STREAM_NULL_VALUES" : "ERR_INVALID_ARG_TYPE";
+    try {
+      const [buffer, offset, length] = ArrayBuffer.isView(value) ? compressionView(value) : [value, 0, arrayBufferLength(value)];
+      arrayBufferLength(buffer);
+      return new Uint8Array(buffer, offset, length);
+    } catch {
+      throw Object.assign(new TypeError("Expected a non-shared ArrayBuffer or ArrayBufferView"), { code });
+    }
+  }
+  function compressedStream(format, decompress) {
+    return new streams.TransformStream(
+      codecTransformer(native.codec(domString(format).toWellFormed(), decompress), compressionBytes),
+      undefined,
+      { highWaterMark: 16384, size: chunk => chunk.byteLength },
+    );
+  }
+
   class CompressionStream {
     #stream;
     constructor(format) {
-      this.#stream = new streams.TransformStream(codecTransformer(native.codec(domString(format).toWellFormed(), false)));
+      this.#stream = compressedStream(format, false);
     }
     get readable() { return this.#stream.readable; }
     get writable() { return this.#stream.writable; }
@@ -111,7 +145,7 @@
   class DecompressionStream {
     #stream;
     constructor(format) {
-      this.#stream = new streams.TransformStream(codecTransformer(native.codec(domString(format).toWellFormed(), true)));
+      this.#stream = compressedStream(format, true);
     }
     get readable() { return this.#stream.readable; }
     get writable() { return this.#stream.writable; }
