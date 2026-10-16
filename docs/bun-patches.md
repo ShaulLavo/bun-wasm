@@ -76,6 +76,7 @@ Each row has one class. A file with independent changes has separate rows.
 
 | [`runtime/core/`, `runtime/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, memory, path, descriptor and filesystem-boundary adapters extracted into a reusable package. |
 | [`runtime/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original lazy process supervisor, generic executable registry, job control and explicit signal-action adapters. |
+| [`runtime/fs/`, filesystem quiescence](#filesystem-quiescence) | Host feature | Original shared admission and revocation fence lets controllers stop workers only after direct filesystem operations finish. |
 | [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
 | [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and support asynchronous stdin with live shared filesystem changes. |
@@ -120,6 +121,28 @@ reaping and physical termination; an ordinary guest exit acknowledgement also pr
 Children use independent process revocation identities while
 sharing the filesystem service's root revocation word. New browser fixtures and timing
 harnesses are original test programs, not copies of the spike implementations.
+
+## Filesystem quiescence
+
+Class **Host feature**, **original adapters** in `runtime/fs/{protocol,client,shared,service,index}.ts`.
+No Bun, Node, WebKit or other upstream implementation is copied; there is no upstream source
+path or revision for this host-only protocol.
+
+Each connection owns a shared count of synchronous host sections. Admission increments before
+checking revocation and precedes any direct lock acquisition, capability-reference mutation or
+page write. Nested operations keep the count nonzero until the outer operation releases its
+locks. `waitForFilesystemQuiescence(identity)` revokes first, then observes or asynchronously
+waits for zero, proving no future entrant can touch storage even if the worker remains alive.
+The service uses this admission proof before releasing pins, rather than sampling lock owners,
+which misses an operation between admission and acquisition. Controllers can then reap and stop
+the worker without stranding a lock or allowing a write into reclaimed pages. An independently
+proven-dead reap also settles pending waiters without resetting the count or losing a wakeup.
+
+No section spans an await or guest Wasm call. Direct reads, writes and appends retain their
+existing locks and zero-intermediate-copy paths, with one additional outer admission increment,
+revocation check, decrement and final-exit notification. Regression tests cover revocation
+between admission and its check, nested metadata operations, service pin retention, and a live
+worker paused inside a locked write followed by a rejected late write.
 
 ## Standard output errors
 
