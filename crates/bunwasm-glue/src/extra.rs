@@ -225,9 +225,4 @@ macro_rules! unreachable_c {
         }
     )*};
 }
-unreachable_c!(
-    X509_NAME_get_index_by_NID, sk_pop_free_ex, sk_num, sk_value, i2d_SSL_SESSION,
-    GENERAL_NAME_free, X509V3_EXT_get_nid, X509V3_EXT_get, X509V3_EXT_d2i, X509_NAME_get_entry,
-    X509_NAME_ENTRY_get_data, X509_get_subject_name, X509_get_ext_by_NID, X509_get_ext,
-    SSL_SESSION_up_ref, SSL_SESSION_free, ASN1_STRING_to_UTF8,
-);
+unreachable_c!(i2d_SSL_SESSION, SSL_SESSION_up_ref, SSL_SESSION_free);
