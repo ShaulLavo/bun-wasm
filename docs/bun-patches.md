@@ -809,3 +809,7 @@ workers. Packages can detect its absence with their ordinary `require` guard.
 The official esbuild package then uses its synchronous subprocess backend for
 `buildSync`, `transformSync`, `formatMessagesSync`, and `analyzeMetafileSync`.
 No package-specific environment override is installed.
+
+Idle filesystem synchronization retains byte-exact comparisons, including edits
+within one millisecond. A direct byte loop replaces the callback per byte, so
+comparing the unchanged dependency wasm does not delay watch notifications.

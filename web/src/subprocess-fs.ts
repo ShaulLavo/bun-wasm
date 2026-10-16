@@ -4,8 +4,11 @@ type Change = { path: string; node: Node | null };
 
 function sameFile(before: Node | undefined, after: Node): boolean {
   if (before?.kind !== "file" || after.kind !== "file") return false;
-  return before.ino === after.ino && before.mtime === after.mtime
-    && before.data.length === after.data.length && before.data.every((byte, i) => byte === after.data[i]);
+  if (before.ino !== after.ino || before.mtime !== after.mtime || before.data.length !== after.data.length) return false;
+  for (let i = 0; i < before.data.length; i++) {
+    if (before.data[i] !== after.data[i]) return false;
+  }
+  return true;
 }
 
 function changes(before: DirNode, after: DirNode, path: string, out: Change[]): void {
