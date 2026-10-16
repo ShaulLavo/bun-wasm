@@ -131,6 +131,15 @@ for name in "${names[@]}"; do
     fi
     continue
   fi
+  if [[ $update == 0 && "$name" == fs-writev-partial ]]; then
+    if python3 "$root/tests/test-writev-partial.py" --engine "$engine" --wasm "$wasm"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      failed+=("$name")
+    fi
+    continue
+  fi
   src="$root/tests/fixtures/$name"
   work="$scratch/$name"
   rm -rf "$work" && cp -r "$src" "$work"
