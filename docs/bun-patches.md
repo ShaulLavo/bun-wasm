@@ -77,7 +77,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`runtime/core/`, `runtime/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, memory, path, descriptor and filesystem-boundary adapters extracted into a reusable package. |
 | [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
-| [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and support asynchronous stdin with live shared filesystem changes. |
+| [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and support asynchronous stdin with live shared filesystem changes and large files. |
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
@@ -1039,6 +1039,11 @@ boundaries, including parent edits while a persistent child waits without stdin.
 The service replaces the earlier snapshot baselines and filesystem mailboxes;
 open descriptors retain their original file identity across removal or replacement.
 Native hosts use their shared physical filesystem.
+The original shared allocator uses sparse two-level page tables so one file can
+span all storage segments within the configured cap. Table blocks are returned
+on truncation, removal, or failed growth. Metadata remains within the original
+24 MiB connection buffer. Allocation range errors use WASI EFBIG, number 22;
+number 27 is EINTR and would make Rust retry a rejected write indefinitely.
 The synchronous path reads the WASI descriptor without Rust stdin prefetching.
 The native WASI and host interfaces share a buffer, including bytes read ahead.
 This prevents Go's service loop from blocking JavaScript callbacks and preserves
