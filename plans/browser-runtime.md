@@ -47,8 +47,11 @@ than it is today. The process layer loads on the first spawn.
 - **Killing is not instant, so kills interrupt, revoke and confirm.** Chromium waits 2 s before
   forcibly stopping a busy worker after `terminate()` (`kForcibleTerminationDelay` in Blink's
   `worker_thread.cc`; spike 2 saw CPU-bound WASM and JS keep running and writing shared memory).
-  Firefox and WebKit stop within a millisecond. So a shared interrupt word that guests check is
-  the primary stop, and `terminate()` the backstop. Revocation wakes blocked peers at once (EOF in
+  Safari and WebKit never stop a WASM loop that makes no host calls: real Safari 26.4 kept all
+  three such loops running past 5 s in 15 of 15 trials, while loops that call the host stopped at
+  once. So a shared interrupt word that guests check is the required stop, not an optimization:
+  our own programs (bun.wasm, the shell) check it, and third-party WASM gets interrupt checks
+  injected at loop headers when it is loaded. `terminate()` stays as the backstop. Revocation wakes blocked peers at once (EOF in
   about 0.06 ms, EPIPE in about 0.3 ms), so pipelines never wait on a dying worker. The supervisor
   bumps a generation number on the dead process's descriptors so its late writes are ignored; that
   revocation is the correctness boundary. A guest that stops cooperatively acknowledges its exit;
