@@ -3,6 +3,8 @@
 The browser engine uses the host's native SubtleCrypto provider when it is available.
 A valid-key capability probe identifies native AES-192 gaps. Only those operations use the
 shared RustCrypto backend; native-supported algorithms and key operations stay native.
+A separate probe fills native AES-KW JWK alignment gaps by passing aligned bytes to native
+raw wrapping. It also works with non-extractable wrapping keys.
 The host captures that provider and its CryptoKey constructors before installing runtime
 globals. Keys created before bootstrap remain usable. The host tracks native crypto
 promises so pending operations keep the runtime alive and unhandled rejections remain fatal.
