@@ -72,7 +72,7 @@
       write(chunk, encoding, callback) {
         if (typeof encoding === "function") callback = encoding;
         write(typeof chunk === "string" ? chunk : internal.toUint8(chunk));
-        if (typeof callback === "function") internal.nextTick(callback);
+        if (typeof callback === "function") internal.nextTick(callback, null);
         return true;
       },
       end(chunk, encoding, callback) {

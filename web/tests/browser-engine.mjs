@@ -5,7 +5,9 @@
 // Starts web/serve.ts and a CORS fixture server on another origin (no public internet); kills both on exit.
 import { checkPhoneUI } from "./phone-ui.mjs";
 import { firstVisit } from "./first-visit.mjs";
+import { readFile } from "node:fs/promises";
 import { playwright, ready, run, session, terminalText, writeFile } from "./playground.mjs";
+import { readFileSync, readdirSync } from "node:fs";
 
 const { chromium, webkit, devices } = playwright;
 const s = session("bun-wasm-web-engine-");
@@ -60,6 +62,28 @@ async function checkPage(name, page, visit, fixtureBase) {
   await writeFile(page, `${HOME}/app.ts`, `import answer, { greet, type Who } from "./lib/greet";\nconst who: Who = { name: "ts" };\nconsole.log(greet(who), answer satisfies number);\n`);
   await expectRun(page, `${name}: TS file importing another file`, "bun run app.ts", 0, ["hi ts 42"]);
 
+  const callerFixture = new URL("../../tests/fixtures/caller-source-origin/", import.meta.url);
+  for (const file of readdirSync(callerFixture).filter((file) => /\.[cm]?js$/.test(file))) {
+    await writeFile(page, `${HOME}/caller-origin/${file}`, readFileSync(new URL(encodeURIComponent(file), callerFixture), "utf8"));
+  }
+  const callerOutput = readFileSync(new URL("expected.txt", callerFixture), "utf8").trim().split("\n")
+    .map((line) => engine === "browser" && name === "webkit" && line === "cjs true" ? "cjs unavailable" : line);
+  await expectRun(page, `${name}: caller source origin across modules and callbacks`, "bun run caller-origin/index.js", 0, callerOutput);
+
+  const evalFixture = new URL("../../tests/fixtures/caller-source-origin-eval/", import.meta.url);
+  for (const file of readdirSync(evalFixture).filter((file) => /\.[cm]?js$/.test(file))) {
+    await writeFile(page, `${HOME}/caller-eval/${file}`, readFileSync(new URL(file, evalFixture), "utf8"));
+  }
+  const evalOutput = readFileSync(new URL("expected.txt", evalFixture), "utf8").trim().split("\n");
+  await expectRun(page, `${name}: opaque eval caller origins`, "bun run caller-eval/index.js", 0, evalOutput);
+
+  const taggedFixture = new URL("../../tests/fixtures/caller-source-origin-source-url/", import.meta.url);
+  for (const file of ["index.js", "helper.mjs"]) {
+    await writeFile(page, `${HOME}/caller-tagged/${file}`, readFileSync(new URL(file, taggedFixture), "utf8"));
+  }
+  const taggedOutput = readFileSync(new URL("expected.txt", taggedFixture), "utf8").trim().split("\n");
+  await expectRun(page, `${name}: eval sourceURL and sourceMappingURL origins`, "bun run caller-tagged/index.js", 0, taggedOutput);
+
   // An import cycle with a hoisted function called before its module evaluated (the browser engine
   // needs the service worker's named module URLs for this).
   await writeFile(page, `${HOME}/cycle/a.ts`, `import { b } from "./b";\nexport function a(): string { return "a"; }\nexport let count = 0;\nexport function bump() { count++; }\nconsole.log("a sees", b());\n`);
@@ -111,6 +135,18 @@ rl.on("close", () => console.log("readline closed:", JSON.stringify(lines)));
 `,
   );
   await expectRun(page, `${name}: readline sees end of input`, "bun run ask.ts", 0, ["readline closed: []"]);
+
+  const sinkFixture = new URL("../../tests/fixtures/array-buffer-sink/", import.meta.url);
+  await writeFile(page, `${HOME}/sink.js`, await readFile(new URL("index.js", sinkFixture), "utf8"));
+  const sinkOutput = (await readFile(new URL("expected.txt", sinkFixture), "utf8")).trim().split("\n");
+  await expectRun(page, `${name}: Bun.ArrayBufferSink ownership and lifecycle`, "bun run sink.js", 0, sinkOutput);
+
+  for (const fixture of ["array-buffer-sink-strings", "array-buffer-sink-view-slots", "array-buffer-sink-detached"]) {
+    const folder = new URL(`../../tests/fixtures/${fixture}/`, import.meta.url);
+    await writeFile(page, `${HOME}/${fixture}.js`, await readFile(new URL("index.js", folder), "utf8"));
+    const output = (await readFile(new URL("expected.txt", folder), "utf8")).trim().split("\n");
+    await expectRun(page, `${name}: ${fixture}`, `bun run ${fixture}.js`, 0, output);
+  }
 
   await writeFile(page, `${HOME}/shutdown.test.ts`, `import { test, afterAll } from "bun:test";
 test("live interval", () => { setInterval(() => {}, 1000); });
