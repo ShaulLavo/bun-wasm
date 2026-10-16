@@ -558,8 +558,17 @@ marks network body streams as byte streams. `builtins.js` exports the complete
 to the selected Web Streams constructors. Readable destruction retains its original
 error and records close completion. The web adapter observes error events until
 that close completes, even after its controller has settled, and uses retained
-terminal state for sources that were closed before conversion. These are original
-host adapters.
+terminal state for sources that were closed before conversion. Writable state now
+also retains end, finish, error and close transitions, and rejects writes after end
+or destruction. Converting an already-terminal writable returns a closed web
+stream while observing queued Node errors through close. Active conversions
+settle their close promise or report source failure. Duplex conversion returns a
+readable/writable pair over the same source. Writable.fromWeb observes both
+success and failure of writer.closed, reports premature external closure, closes
+on clean Node destruction and aborts on failure. Readable.fromWeb cancellation
+and terminal-input behavior are covered alongside these checks. These are
+original host adapters, checked against Node 26.7.0 and Bun 1.4.2 behavior; no
+upstream stream adapter algorithm was copied.
 
 ## Port bugs fixed in bun-wasm's own code
 

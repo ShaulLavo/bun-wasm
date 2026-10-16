@@ -134,25 +134,45 @@
     return node;
   }
 
+  function prematureClose() {
+    const error = new Error("Premature close");
+    error.code = "ERR_STREAM_PREMATURE_CLOSE";
+    return error;
+  }
+
   function toWebWritable(node) {
     checkNode(node, "write");
+    if (node.destroyed || node.writable === false || node.writableEnded || node.writableFinished) {
+      const error = () => {};
+      const close = () => node.removeListener("error", error);
+      if (!node.closed) node.on("error", error).once("close", close);
+      const web = new WritableStream();
+      void web.close();
+      return web;
+    }
     let finished = false;
+    let completion;
     const pending = new Set();
-    let fail;
-    let cleanup;
     return new WritableStream({
       start(controller) {
-        fail = error => {
+        const fail = error => {
           for (const reject of pending) reject(error);
           pending.clear();
+          if (completion) completion.reject(error);
           controller.error(error);
         };
-        const finish = () => { finished = true; };
-        const close = () => {
-          if (!finished) fail(new Error("Premature close"));
-          cleanup();
+        const finish = () => {
+          finished = true;
+          if (completion) completion.resolve();
+          else {
+            const error = new Error("The operation was aborted");
+            error.name = "AbortError";
+            error.code = "ABORT_ERR";
+            fail(error);
+          }
         };
-        cleanup = () => {
+        const close = () => {
+          if (!finished) fail(node.errored || prematureClose());
           node.removeListener("error", fail);
           node.removeListener("finish", finish);
           node.removeListener("close", close);
@@ -170,17 +190,13 @@
         });
       },
       close() {
+        if (node.writableEnded || node.writableFinished) return;
         return new Promise((resolve, reject) => {
-          pending.add(reject);
-          const error = reason => { pending.delete(reject); node.removeListener("finish", finish); reject(reason); };
-          const finish = () => { pending.delete(reject); node.removeListener("error", error); cleanup(); resolve(); };
-          node.once("error", error).once("finish", finish);
+          completion = { resolve, reject };
           node.end();
         });
       },
       abort(reason) {
-        cleanup();
-        node.once("error", () => {});
         node.destroy(reason instanceof Error ? reason : undefined);
       },
     });
@@ -208,20 +224,23 @@
       if (!ended) {
         ended = true;
         cleanup();
-        writer.abort(error).catch(() => {}).finally(() => writer.releaseLock());
+        (error ? writer.abort(error) : writer.close()).catch(() => {}).finally(() => writer.releaseLock());
       }
       return destroy.call(this, error);
     };
-    writer.closed.catch(error => { if (!ended) node.destroy(error); });
+    writer.closed.then(() => {
+      if (!ended && !node.writableEnded) node.destroy(prematureClose());
+    }, error => { if (!ended) node.destroy(error); });
     cleanup = aborted(options.signal, error => node.destroy(error));
     return node;
   }
 
-  return function install({ Readable, Writable }) {
+  return function install({ Readable, Writable, Duplex }) {
     Readable.toWeb = toWebReadable;
     Readable.fromWeb = (web, options) => fromWebReadable(Readable, web, options);
     Writable.toWeb = toWebWritable;
     Writable.fromWeb = (web, options) => fromWebWritable(Writable, web, options);
+    Duplex.toWeb = node => ({ readable: toWebReadable(node), writable: toWebWritable(node) });
 
   };
 })

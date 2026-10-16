@@ -684,8 +684,9 @@
         while (this._flowing && this._buffer.length) this.emit("data", this._buffer.shift());
         if (this._flowing && this._buffer.length === 0 && this._ended && !this._endEmitted) {
           this._endEmitted = true;
+          this.readable = false;
           this.emit("end");
-          if (this.destroyed) return;
+          if (this.destroyed || this.writable || (this.writableEnded && !this.writableFinished)) return;
           this.closed = true;
           this.emit("close");
         }
@@ -716,6 +717,7 @@
         this.destroyed = true;
         this.errored = err || null;
         this.readable = false;
+        if ("writable" in this) this.writable = false;
         this._flowing = false;
         this._buffer.length = 0;
         if (err) setImmediate(() => this.emit("error", err));
@@ -754,6 +756,10 @@
       constructor(options = {}) {
         super();
         this.writable = true;
+        this.writableEnded = false;
+        this.writableFinished = false;
+        this.closed = false;
+        this.errored = null;
         if (typeof options.write === "function") this._write = options.write;
         if (typeof options.final === "function") this._final = options.final;
       }
@@ -762,6 +768,15 @@
       }
       write(chunk, encoding, callback) {
         if (typeof encoding === "function") callback = encoding;
+        if (this.destroyed || this.writableEnded) {
+          const error = new Error(this.destroyed ? "Cannot call write after a stream was destroyed" : "write after end");
+          error.code = this.destroyed ? "ERR_STREAM_DESTROYED" : "ERR_STREAM_WRITE_AFTER_END";
+          setImmediate(() => {
+            if (typeof callback === "function") callback(error);
+            if (!this.destroyed) this.destroy(error);
+          });
+          return false;
+        }
         this._write(chunk, typeof encoding === "string" ? encoding : "utf8", (err) => {
           if (err) this.destroy(err);
           if (typeof callback === "function") callback(err);
@@ -772,10 +787,17 @@
         if (typeof encoding === "function") { callback = encoding; encoding = undefined; }
         if (typeof chunk === "function") callback = chunk;
         else if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
+        if (this.destroyed || this.writableEnded) return this;
+        this.writableEnded = true;
+        this.writable = false;
         const finish = () => {
-          this.writable = false;
+          if (this.destroyed) return;
+          this.writableFinished = true;
           this.emit("finish");
-          this.emit("close");
+          if (!this.destroyed && !this.readable && !this.closed) {
+            this.closed = true;
+            this.emit("close");
+          }
           if (typeof callback === "function") callback();
         };
         if (this._final) this._final((err) => {
@@ -786,11 +808,15 @@
         return this;
       }
       destroy(err) {
-        if (this.destroyed) return this;
+        if (this.destroyed || this.closed) return this;
         this.destroyed = true;
+        this.errored = err || null;
         this.writable = false;
         if (err) setImmediate(() => this.emit("error", err));
-        setImmediate(() => this.emit("close"));
+        setImmediate(() => {
+          this.closed = true;
+          this.emit("close");
+        });
         return this;
       }
     }
@@ -798,6 +824,10 @@
       constructor(options = {}) {
         super(options);
         this.writable = true;
+        this.writableEnded = false;
+        this.writableFinished = false;
+        this.closed = false;
+        this.errored = null;
         if (typeof options.write === "function") this._write = options.write;
         if (typeof options.final === "function") this._final = options.final;
       }
@@ -822,7 +852,12 @@
         if (typeof encoding === "function") { callback = encoding; encoding = undefined; }
         if (typeof chunk === "function") callback = chunk;
         else if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
+        if (this.destroyed || this.writableEnded) return this;
+        this.writableEnded = true;
+        this.writable = false;
         const done = () => {
+          if (this.destroyed) return;
+          this.writableFinished = true;
           this.push(null);
           this.emit("finish");
           if (typeof callback === "function") callback();
@@ -871,7 +906,7 @@
     Stream.promises = promises;
     Stream.isReadable = (s) => Boolean(s && s.readable);
     Stream.isErrored = () => false;
-    internal.require("node_stream_web")({ Readable, Writable });
+    internal.require("node_stream_web")({ Readable, Writable, Duplex });
     return Stream;
   }
 
