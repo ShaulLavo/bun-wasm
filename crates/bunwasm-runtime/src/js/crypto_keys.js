@@ -342,6 +342,10 @@
       const r = nodeRecord(key),
         a = { ...r.algorithm };
       if (a.name === "X25519") throw error("Key cannot sign");
+      if (a.name === "Ed25519" && digest != null)
+        throw Object.assign(new Error("Ed25519 does not accept a digest"), {
+          code: "ERR_OSSL_EVP_COMMAND_NOT_SUPPORTED",
+        });
       if (a.name !== "Ed25519") a.hash = { name: hash(digest) };
       if (family(a) === "rsa") {
         a.name =

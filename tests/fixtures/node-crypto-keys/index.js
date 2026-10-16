@@ -192,3 +192,9 @@ assert.equal(
   "rsa",
 );
 console.log("node JWK metadata ok");
+
+const ed = generateKeyPairSync("ed25519");
+assert.throws(() => sign("sha256", input, ed.privateKey), {
+  code: "ERR_OSSL_EVP_COMMAND_NOT_SUPPORTED",
+});
+console.log("node digest validation ok");

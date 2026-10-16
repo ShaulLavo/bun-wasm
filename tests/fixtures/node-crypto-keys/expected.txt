@@ -5,3 +5,4 @@ node keys ed25519 ok
 node interop ok
 node key purposes ok
 node JWK metadata ok
+node digest validation ok
