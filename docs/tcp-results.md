@@ -101,3 +101,27 @@ Review logs, artifact hashes and commands are retained in
 `/work/reports/bun-wasm-tcp-review-2026-10-16/` until coordinator review is
 accepted. Reproduce with `scripts/test.sh --no-build --engine ENGINE net-review`
 and `scripts/test-net-ws.sh [WASM_DIR]`.
+
+## Native accept-close correction
+
+The paired server controls exposed ECONNRESET in the half-open child. The
+native accept loop discarded a just-accepted socket if listener close had
+already started. Dropping it with unread bytes resets the peer. A deterministic
+native test queues bytes before that branch and reproduces ConnectionReset.
+The fix sends that socket through the existing connection close/drain path.
+All native host unit tests and all three full fixture gates pass afterward.
+The browser transport and the ABI are unchanged.
+
+The following final census uses that rebuilt launcher. The earlier paired
+controls above retain the original launcher and their original records.
+
+| Engine | Files passing before / final | Observed passes before / final |
+| --- | ---: | ---: |
+| quickjs | 9 / 9 | 179 / 180 |
+| jsc | 9 / 9 | 180 / 179 |
+| browser | 9 / 9 | 180 / 180 |
+
+The drop-event case also fails on reviewed JSC artifacts in the paired
+controls. The existing adapter emits peer address fields instead of Node
+local/remote drop fields. That remaining address-contract gap predates these
+fixes; the original census and repeated controls are retained separately.

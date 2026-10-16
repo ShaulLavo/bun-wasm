@@ -72,7 +72,7 @@ async function pipe() {
   const read = source.bytesRead;
   await delay(30);
   assert.ok(source.bytesRead - read <= 65536, "source stops reading while destination is blocked");
-  assert.ok(source.readableLength <= 65536, "paused source queue is bounded");
+  assert.ok(source.readableLength <= source.readableHighWaterMark + 65536, "paused source queue is bounded to its high-water mark plus one delivery");
   const finished = event(destination, "finish");
   await control("/tcp-sink/resume");
   await finished;
