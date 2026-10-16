@@ -3,7 +3,7 @@
 //! This is the same parse → print path `Bun.Transpiler#transformSync` takes
 //! (vendor/bun/src/runtime/api/JSTranspiler.rs), minus the JavaScriptCore
 //! glue: TypeScript/JSX/JSON/TOML in, ESM JavaScript out.
-use std::cell::RefCell;
+use std::{borrow::Cow, cell::RefCell};
 
 pub mod data;
 
@@ -122,7 +122,7 @@ pub fn function_imports(args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, 
     }
     source.push_str("\n})");
     let (_, mut offsets) = with_state(|state| {
-        let (result, offsets) = bun_js_parser::with_bunwasm_dynamic_imports(|| run(state, &source, "<Function>", Loader::Js, None));
+        let (result, offsets) = bun_js_parser::with_bunwasm_dynamic_imports(|| run(state, &source, "<Function>", Loader::Js, None, false));
         result.map(|code| (code, offsets))
     })?;
     offsets.sort_unstable();
@@ -161,6 +161,11 @@ pub fn module_imports(source: &str, path: &str) -> Result<Vec<ModuleImport>, Str
 }
 
 fn scan_imports(state: &State, source: &str, path: &str) -> Result<Vec<ModuleImport>, String> {
+    // Match the runtime's same-length replacement so spans still address the input.
+    let source = match source.strip_prefix("#!") {
+        Some(rest) => Cow::Owned(format!("//{rest}")),
+        None => Cow::Borrowed(source),
+    };
     let arena = Arena::new();
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&arena);
     let _ast_scope = ast_alloc.enter();

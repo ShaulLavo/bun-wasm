@@ -98,7 +98,7 @@ async function checkPage(name, page, visit, fixtureBase) {
   await writeFile(page, `${HOME}/throws.ts`, `console.log("before");\nthrow new Error("kaboom");\n`);
   await expectRun(page, `${name}: uncaught error`, "bun run throws.ts", 1, ["before", "kaboom"]);
 
-  for (const [fixture, entry] of [["import-method", "index.cjs"], ["import-syntax", "index.mjs"], ["import-classified", "index.js"]]) {
+  for (const [fixture, entry] of [["import-method", "index.cjs"], ["import-syntax", "index.mjs"], ["import-classified", "index.js"], ["shebang-cjs", "index.cjs"], ["shebang-mjs", "index.mjs"], ["shebang-js", "index.js"]]) {
     const root = new URL(`../../tests/fixtures/${fixture}/`, import.meta.url);
     for (const file of readdirSync(root, { recursive: true })) {
       if (!/\.(?:js|cjs|mjs|json)$/.test(file)) continue;
