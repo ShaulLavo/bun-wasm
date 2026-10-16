@@ -602,3 +602,8 @@ JavaScript alone cannot supply this behavior. The new fixture is original test c
 
 `scripts/generate-node-key-vectors.mjs` generates six native Node encrypted-key and signature
 vectors for the original Node key fixture. Its synthetic keys and passphrase are test data.
+
+The pinned cipher-name registry references BoringSSL's CFB and Blowfish entry points. The
+Node build compiles the unchanged `decrepit/cfb/cfb.cc` and `decrepit/blowfish/blowfish.cc`
+from the same pin into its own Cargo output directory. The shared prebuilt archive remains
+read-only. These are dependency build selections, not copied or patched implementations.

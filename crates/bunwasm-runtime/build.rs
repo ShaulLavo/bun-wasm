@@ -124,6 +124,29 @@ fn crypto(manifest: &Path, out: &Path) {
             "BoringSSL build failed"
         );
     }
+    let mut legacy = cc::Build::new();
+    legacy
+        .cpp(true)
+        .std("c++17")
+        .cpp_link_stdlib(None)
+        .include(source.join("include"))
+        .define("BORINGSSL_IMPLEMENTATION", None)
+        .define("OPENSSL_NO_ASM", None)
+        .flag_if_supported("-fno-exceptions")
+        .flag_if_supported("-fno-rtti");
+    if wasm {
+        legacy
+            .define(
+                "OPENSSL_NO_THREADS_CORRUPT_MEMORY_AND_LEAK_SECRETS_IF_THREADED",
+                None,
+            )
+            .define("OPENSSL_NO_SOCK", None);
+    }
+    for file in ["decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc"] {
+        println!("cargo:rerun-if-changed={}", source.join(file).display());
+        legacy.file(source.join(file));
+    }
+    legacy.compile("bunwasm_crypto_legacy");
     cc::Build::new()
         .file(manifest.join("c/rsa.c"))
         .include(source.join("include"))
