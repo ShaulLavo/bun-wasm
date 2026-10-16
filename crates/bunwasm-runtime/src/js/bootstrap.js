@@ -539,7 +539,7 @@
       return;
     }
     const meta = Object.create(null);
-    initImportMeta(meta, path, mod === mainModule);
+    internal.initImportMeta(meta, path, mod === mainModule);
     wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
   }
 
