@@ -53,6 +53,8 @@
   function buffer(data) {
     if (!(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data))
       throw new TypeError("Expected an ArrayBuffer or ArrayBufferView");
+    if (data.byteLength > 0x7fffffff)
+      fail("OperationError", "Crypto input is too large");
     return internal.toUint8(data).slice();
   }
   const encode = (data) => native.base64Encode(buffer(data), true);
