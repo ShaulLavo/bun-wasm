@@ -1,4 +1,4 @@
-// One worker per `bun …` command: instantiate bun.wasm fresh, run it, use the shared filesystem service.
+// One worker per process: instantiate its registered module fresh and use the shared filesystem service.
 // The "browser" engine (bun-browser.wasm) runs natives and the transpiler in wasm, then hands the
 // program to engine-host.js, which runs it in this worker's own JS engine.
 

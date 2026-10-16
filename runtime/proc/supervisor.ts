@@ -155,9 +155,15 @@ export class ProcessSupervisor {
     if (record.result) return;
     record.signal = publishSignal(record.requestedSignal, record.signal === Signal.SIGKILL ? record.signal : signal);
     if (!interrupt) return;
+    if (Atomics.load(record.requestedSignal, 0) === Signal.SIGKILL) record.signal = Signal.SIGKILL;
     record.signal = publishSignal(record.interrupt, record.signal);
-    // A guest may publish SIGKILL between our requested-word and interrupt-word CAS.
-    if (record.signal === Signal.SIGKILL) publishSignal(record.requestedSignal, record.signal);
+    // SIGKILL may arrive between the two word publications and its interrupt may already
+    // be consumed. The persistent request, not only the pending interrupt, remains decisive.
+    if (Atomics.load(record.requestedSignal, 0) === Signal.SIGKILL) record.signal = Signal.SIGKILL;
+    if (record.signal === Signal.SIGKILL) {
+      publishSignal(record.requestedSignal, record.signal);
+      publishSignal(record.interrupt, record.signal);
+    }
     Atomics.notify(record.interrupt, 0);
   }
   /** Explicit guest default action. A random trap after a handled signal is not a signal exit. */

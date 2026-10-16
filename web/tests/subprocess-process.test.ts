@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { SubprocessHost, childTransport, type ChildTransport } from "../src/subprocess.ts";
 
 function fixture() {
@@ -73,6 +73,34 @@ test.each([2, 13, 15])("catchable signal %i notifies without destroying descript
     childTransport(launched[0]!).finish(23);
     expect(host.wait(pid)).toBe(23);
   } finally { host.dispose(); }
+});
+
+test("a concurrent supervisor SIGKILL cannot be downgraded while publishing a catchable interrupt", () => {
+  const { host, launched } = fixture();
+  const pid = host.spawn(command());
+  const transport = launched[0]!;
+  const requested = new Int32Array(transport.requestedSignal);
+  const interrupt = new Int32Array(transport.interrupt);
+  const compareExchange = Atomics.compareExchange;
+  let injected = false;
+  const publication = spyOn(Atomics, "compareExchange").mockImplementation((array, index, expected, replacement) => {
+    const previous = Reflect.apply(compareExchange, Atomics, [array, index, expected, replacement]);
+    if (!injected && array.buffer === transport.requestedSignal && Number(replacement) === 15) {
+      injected = true;
+      // The page wins SIGKILL after the stub's requested-signal CAS but before its interrupt write.
+      Atomics.store(requested, 0, 9);
+      Atomics.store(interrupt, 0, 9);
+      childTransport(transport).finish(137);
+    }
+    return previous;
+  });
+  try {
+    expect(host.kill(pid, 15)).toBe(0);
+    expect(injected).toBe(true);
+    expect(Atomics.load(requested, 0)).toBe(9);
+    expect(Atomics.load(interrupt, 0)).toBe(9);
+    expect(host.wait(pid)).toBe(137);
+  } finally { publication.mockRestore(); host.dispose(); }
 });
 
 test("invalid executable metadata is rejected before launch", () => {

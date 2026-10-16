@@ -477,3 +477,27 @@ for (const word of ["requestedSignal", "interrupt"] as const) {
     expect(Atomics.load(context.interrupt, 0)).toBe(9);
   });
 }
+
+test("persistent SIGKILL wins when its pending interrupt was consumed before a stale publication", async () => {
+  const { supervisor, root, contexts } = fixture();
+  const pid = supervisor.spawn(root, request());
+  await supervisor.start(pid);
+  const context = contexts.get(pid)!;
+  const original = Atomics.compareExchange;
+  let raced = false;
+  Atomics.compareExchange = ((array: Int32Array, index: number, expected: number, replacement: number) => {
+    if (!raced && array === context.interrupt) {
+      raced = true;
+      Atomics.store(context.requestedSignal, 0, 9);
+      Atomics.store(context.interrupt, 0, 9);
+      Atomics.exchange(context.interrupt, 0, 0);
+    }
+    return original(array, index, expected, replacement);
+  }) as typeof Atomics.compareExchange;
+  try { supervisor.kill(pid, Signal.SIGINT); }
+  finally { Atomics.compareExchange = original; }
+  expect(raced).toBe(true);
+  expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: 9, status: 137 });
+  expect(Atomics.load(context.requestedSignal, 0)).toBe(9);
+  expect(Atomics.load(context.interrupt, 0)).toBe(9);
+});

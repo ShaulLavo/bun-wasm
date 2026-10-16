@@ -428,8 +428,16 @@ export class SubprocessHost {
       if (previous === 9) { signal = 9; break; }
       if (Atomics.compareExchange(requested, 0, previous, signal) === previous) break;
     }
-    Atomics.store(new Int32Array(transport.interrupt), 0, signal);
-    Atomics.notify(new Int32Array(transport.interrupt), 0);
+    const interrupt = new Int32Array(transport.interrupt);
+    for (;;) {
+      const pending = Atomics.load(interrupt, 0);
+      if (pending === 9 || Atomics.load(requested, 0) === 9) signal = 9;
+      if (Atomics.compareExchange(interrupt, 0, pending, signal) !== pending) continue;
+      // A page-side kill can win between publication to the two separate cells.
+      if (signal !== 9 && Atomics.load(requested, 0) === 9) { signal = 9; continue; }
+      break;
+    }
+    Atomics.notify(interrupt, 0);
     wake(this.budget);
     if (signal !== 9) return 0;
     child.worker?.revoke?.();

@@ -213,7 +213,7 @@ try {
           while (decoder.decode(await fs.readFile(marker)) !== "done") { if (performance.now() > end) throw new Error(`orphan ${iteration} lost filesystem access after parent exit`); await pause(); }
           await until(() => slots.every(word => word === 0), "orphan completion releases capacity without a living parent waiter");
           parent.host.close(parent.handle);
-          const supervisor = await s.broker.activate();
+          const supervisor = await s.broker.ready();
           await until(() => Array.from(supervisor.table.values()).length === 1, "closed parent and completed orphan release process metadata");
           equal(supervisor.get(parent.transport.pid), undefined, "closed parent record reaped");
         }
