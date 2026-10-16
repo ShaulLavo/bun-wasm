@@ -1153,7 +1153,6 @@
       isASANEnabled: () => false,
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
       directoryCount: () => native.directoryCount(),
-      closeAllDirs: () => native.closeAllDirs(),
     }),
     "bun:test": () => internal.require("bun_test").exports,
     "bun:sqlite": () => internal.require("bun_sqlite"),

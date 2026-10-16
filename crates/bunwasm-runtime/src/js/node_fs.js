@@ -158,45 +158,24 @@
     return Object.assign(new Error("Directory handle was closed"), { code: "ERR_DIR_CLOSED" });
   }
 
-  const directoryCleanup = new FinalizationRegistry((handle) => {
-    try { native.closeDir(handle); } catch {}
-  });
-  const directoryRefs = [];
-  function sweepDirectories() {
-    const live = [];
-    for (const record of directoryRefs) {
-      if (record.closed) continue;
-      if (record.ref.deref()) {
-        live.push(record);
-      } else {
-        try { native.closeDir(record.handle); } catch {}
-      }
-    }
-    directoryRefs.length = 0;
-    directoryRefs.push(...live);
-  }
-  globalThis.__bunwasmSweepDirs = sweepDirectories;
-  globalThis.process?.once?.("exit", () => native.closeAllDirs());
+  const directoryCleanup = new FinalizationRegistry((handle) => native.releaseDir(handle));
 
   class Dir {
     #handle;
     #path;
-    #publicPath;
-    #token;
+    #lookupPath;
     #options;
     #entries = [];
     #index = 0;
     #operations = [];
     #active = false;
 
-    constructor(handle, path, publicPath, options) {
+    constructor(handle, lookupPath, publicPath, options) {
       this.#handle = handle;
       this.#path = publicPath;
-      this.#publicPath = publicPath;
-      this.#token = { handle, ref: new WeakRef(this), closed: false };
+      this.#lookupPath = lookupPath;
       this.#options = options;
-      directoryRefs.push(this.#token);
-      directoryCleanup.register(this, handle, this.#token);
+      directoryCleanup.register(this, handle, this);
     }
     get path() {
       if (!(#path in this)) throw Object.assign(new TypeError('Value of "this" must be of type Dir'), { code: "ERR_INVALID_THIS" });
@@ -221,15 +200,14 @@
       const [bytes, kind, parentPath] = this.#entries[this.#index++];
       const buffer = asBuffer(bytes);
       const name = this.#options.encoding === "buffer" ? buffer : buffer.toString(this.#options.encoding);
-      const parent = this.#publicPath instanceof Uint8Array ? Buffer.from(parentPath) : parentPath;
+      const parent = this.#path instanceof Uint8Array ? (parentPath === this.#lookupPath ? this.#path : Buffer.from(parentPath)) : parentPath;
       return new Dirent(name, kind, parent);
     }
     #closeHandle() {
       this.#checkOpen();
       const handle = this.#handle;
       this.#handle = null;
-      this.#token.closed = true;
-      directoryCleanup.unregister(this.#token);
+      directoryCleanup.unregister(this);
       native.closeDir(handle);
       this.#entries = [];
     }
@@ -300,7 +278,7 @@
     const given = toPath(path);
     if (given === "") throw Object.assign(new Error("ENOENT: no such file or directory, opendir ''"), { code: "ENOENT", errno: -2, syscall: "opendir", path: given });
     const config = directoryOptions(options);
-    const publicPath = path instanceof Uint8Array ? Buffer.from(path) : path;
+    const publicPath = path instanceof Uint8Array ? path : given;
     return new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, publicPath, config);
   }
 
@@ -314,7 +292,7 @@
       later(() => callback(Object.assign(new Error("ENOENT: no such file or directory, opendir ''"), { code: "ENOENT", errno: -2, syscall: "opendir", path: given })));
       return;
     }
-    const publicPath = path instanceof Uint8Array ? Buffer.from(path) : path;
+    const publicPath = path instanceof Uint8Array ? path : given;
     try { result = new Dir(native.opendir(given === "" ? "" : absolute(given), given, config.recursive), given, publicPath, config); }
     catch (err) { error = err; }
     later(() => callback(error, result));

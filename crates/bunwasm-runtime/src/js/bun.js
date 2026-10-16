@@ -478,11 +478,7 @@
     CryptoHasher,
     randomUUIDv7,
     peek,
-    gc: () => {
-      const result = native.gc();
-      globalThis.__bunwasmSweepDirs?.();
-      return result;
-    },
+    gc: () => native.gc(),
     resolveSync,
     resolve: async (spec, from) => resolveSync(spec, from),
     fileURLToPath: (url) => internal.require("node_url").fileURLToPath(url),

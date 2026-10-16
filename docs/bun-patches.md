@@ -14,6 +14,7 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
@@ -808,12 +809,32 @@ returns at most `bufferSize` entries. Raw filename bytes cross the engine bounda
 before JavaScript applies the requested encoding. JavaScript owns the async operation
 queue, callback timing, Dirent construction, iteration and explicit disposal.
 Closing drops the active native cursor and pending traversal paths. `FinalizationRegistry`
-releases abandoned native IDs, and the process exit hook clears the remaining cursor table
-when an engine instance outlives guest execution. The public path representation stays
+releases abandoned native IDs through an idempotent native release. Runtime shutdown
+clears the remaining cursor table after user exit listeners, including when the host
+retains the wasm instance. Native exits also clear the table before skipping engine teardown. The public path representation stays
 separate from the lookup string, so Buffer paths remain Buffers in `Dir.path` and
 `Dirent.parentPath`. The async queue keeps a refill operation active through its callback,
 while an already-buffered read does not block synchronous work. The fixture is original
 test code and runs against Node as a contract control.
+
+Recursive traversal is breadth-first. Node's order can change with buffer size;
+this adapter does not promise that order. Directory enumeration order is unspecified.
+
+## JSC finalizer dispatch
+
+Class **Host feature**. The additions to `crates/bunwasm-jsc/cpp/helpers.cpp`,
+`src/sys.rs` and `crates/bunwasm-runtime/src/engine_jsc.rs` are original adapters.
+They call WebKit's existing full-collection and deferred-work APIs. No upstream
+implementation is copied or modified. The references are
+`Source/JavaScriptCore/API/JSBase.cpp`, `heap/Heap.cpp`, `runtime/VM.cpp`,
+`runtime/DeferredWorkTimer.h` and `runtime/JSFinalizationRegistry.cpp` in Bun's
+WebKit fork at `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`.
+
+The public `JSGarbageCollect` API reports an abandoned object graph without
+forcing collection. The adapter collects synchronously with the VM's atom table
+installed, then restores the calling thread's table. Event-loop microtask draining
+also dispatches deferred work, which is where JSC schedules registry callbacks.
+Without this dispatch, collected directory owners retain their native cursors.
 
 ## Runtime TypeScript
 

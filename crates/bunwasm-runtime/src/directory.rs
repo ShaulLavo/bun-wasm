@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, ReadDir};
 use std::path::PathBuf;
@@ -6,6 +5,7 @@ use std::rc::Rc;
 
 use crate::engine::{NativeError, NativeResult, Val};
 use crate::natives::{Table, io_error};
+use crate::State;
 
 struct Cursor {
     current: Option<ReadDir>,
@@ -82,13 +82,13 @@ impl Cursor {
 }
 
 #[derive(Default)]
-struct Directories {
+pub(crate) struct Directories {
     next: i32,
     cursors: HashMap<i32, Cursor>,
 }
 
 impl Directories {
-    fn close_all(&mut self) {
+    pub(crate) fn close_all(&mut self) {
         self.cursors.clear();
     }
 }
@@ -97,8 +97,8 @@ fn closed() -> NativeError {
     NativeError::error("Directory handle was closed").prop("code", "ERR_DIR_CLOSED")
 }
 
-pub(crate) fn install(table: &mut Table) {
-    let directories = Rc::new(RefCell::new(Directories::default()));
+pub(crate) fn install(table: &mut Table, state: &Rc<State>) {
+    let directories = state.directories.clone();
     let state = directories.clone();
     table.add("opendir", move |args| {
         let absolute = args.str(0)?;
@@ -130,6 +130,11 @@ pub(crate) fn install(table: &mut Table) {
             .cursors
             .remove(&args.i32(0)?)
             .ok_or_else(closed)?;
+        Ok(Val::Undefined)
+    });
+    let state = directories.clone();
+    table.add("releaseDir", move |args| {
+        state.borrow_mut().cursors.remove(&args.i32(0)?);
         Ok(Val::Undefined)
     });
     let state = directories.clone();
