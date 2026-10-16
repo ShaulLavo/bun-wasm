@@ -747,6 +747,11 @@ public `Readable.toWeb` still copies binary Buffers. Legacy Node readables pass
 through the core's `Readable.wrap` at this boundary. No test expectation or
 await-observer implementation is changed.
 
+HTTP `IncomingMessage` declares its externally pushed `_read` hook. HTTP
+`ClientRequest` uses `_write`, `_final` and `_destroy` rather than replacing public
+writable methods, so pipeline completion, synchronous end/destruction state and
+late-write errors use the same Node core. Destruction aborts its fetch request.
+
 The handwritten classes and their separate lifecycle flags were removed from
 `builtins.js`. Bun's current Node stream source was considered first, but its
 native-readable transfer, private Web stream hooks and additional engine

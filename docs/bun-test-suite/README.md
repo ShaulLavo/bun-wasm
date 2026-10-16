@@ -82,6 +82,31 @@ Discovery includes tracked files under `test/` ending in `.test`, `_test`, `.spe
 
 Categories describe the current first blocker. Category b now requires evidence of a missing subprocess capability, such as an external executable, IPC or descriptor redirection. Using `spawn` in a failing test no longer qualifies by itself. Category c covers bounded helpers and setup gaps. Category d includes unresolved behavior until reproduced. Category a covers native or OS facilities beyond the host ABI; TCP itself already works. Category e covers private native-engine instrumentation. Category f means a measured QuickJS failure fully passes on another engine, without claiming a root cause.
 
+## Node adapter selection
+
+`--node-parallel` also discovers tracked `test-*.js`, `.mjs` and `.cjs` scripts
+in Node's parallel directory. Plain assertion scripts use `bun run`, so delayed
+callbacks remain part of the process lifetime. Files importing `node:test` use
+the test runner. A plain script passes only after a clean process exit; its
+assertions are not converted into invented subtest counts. Native script skips
+remain skips. `--log-dir` retains bounded output from every selected file.
+
+The fixed [stream adapter selection](stream-adapter-files.txt) contains 22 files.
+Run it on each built engine with the same launcher, deadlines and dependency set:
+
+```bash
+source env.sh
+mapfile -t files < docs/bun-test-suite/stream-adapter-files.txt
+scripts/bun-suite.sh --node-parallel --engine quickjs --jobs 1 --timeout 15 \
+  --network loopback --output /work/tmp/bun-wasm-adapters/quickjs.json \
+  --log-dir /work/tmp/bun-wasm-adapters/quickjs-logs "${files[@]}"
+```
+
+Run this through the host's heavy-job wrapper. Repeat with `--engine jsc` and
+`--engine browser`, using fresh output paths. Compare file outcomes separately
+from registered test counts, and check matching suite, runner and dependency
+hashes before comparing revisions.
+
 ## Reproduce
 
 From a checkout with the pinned `vendor/bun` and all three wasm artifacts built:

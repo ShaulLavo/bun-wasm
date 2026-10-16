@@ -82,3 +82,31 @@ proof of the same cause. All three installs pass and all production starts are
 blocked by failed builds. Reproduce with the command above and a fresh output
 directory. Exact rows, complete command output and the zero-miss offline registry
 check are in `/work/reports/bun-wasm-streams-review2-2026-10-16/next-after/`.
+
+### HTTP response chunk framing after the adapter census
+
+The round-3 Web Streams fix replaces the minimal Node stream classes and fixes
+HTTP source and request lifecycle integration. The unchanged Node adapter census
+now reaches an HTTP data-chunk mismatch in
+`test/js/node/test/parallel/test-webstreams-pipeline.js:215`. All three engines
+receive `['helloworld']` instead of `['hello', 'world']`. This is a body-framing
+observation; byte content is intact. Do not classify the entire file as passing.
+
+`ServerResponse._send` in `crates/bunwasm-runtime/src/js/net.js` concatenates
+response writes and sends Content-Length. `ClientRequest._send` reads
+`res.arrayBuffer()` before pushing one response chunk. Investigate incremental
+HTTP response framing and forwarding together rather than splitting a completed
+buffer to satisfy this fixture. The HTTP/Web round-trip fixture and Node client
+finish/destruction fixture pass on QuickJS, JSC and browser after the lifecycle
+fix. A native Node control passes the unchanged upstream file.
+
+Reproduce with `scripts/bun-suite.sh --node-parallel --engine quickjs --jobs 1
+--timeout 15 --network loopback --output <fresh-results.json> --log-dir
+<fresh-logs> js/node/test/parallel/test-webstreams-pipeline.js`, repeated for JSC
+and browser, through the heavy-job wrapper. Exact all-engine diagnostics and
+before/after provenance are retained in
+`/work/reports/bun-wasm-streams-round3-fix-2026-10-16/` under
+`http-final-*-logs/` and `final-after-*-logs/`. This is the consistent first
+remaining failure after fixing the earlier `_read` error and request completion
+hang. The compatibility track owns the framing follow-up and evidence removal
+after reproduction.
