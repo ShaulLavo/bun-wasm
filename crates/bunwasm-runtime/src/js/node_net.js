@@ -131,7 +131,7 @@
         // The host ABI resolves names only after opening a connection. Deny names when a
         // BlockList is present so DNS cannot bypass the address check.
         if (options.blockList && (!family || options.blockList.check(target, family === 6 ? "ipv6" : "ipv4"))) {
-          internal.nextTick(() => this.destroy(error(Error, "ERR_IP_BLOCKED", "IP address is blocked")));
+          internal.nextTick(() => this.destroy(error(Error, "ERR_IP_BLOCKED", family ? "IP address is blocked" : "Hostnames with a BlockList require a lookup that returns a literal IP address")));
           return;
         }
         const handle = native.hostConnect(target, targetPort);
