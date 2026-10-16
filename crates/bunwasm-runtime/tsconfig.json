@@ -6,6 +6,7 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": [],
     "strict": true,
+    "erasableSyntaxOnly": true,
     "allowJs": true,
     "checkJs": false,
     "noEmit": true

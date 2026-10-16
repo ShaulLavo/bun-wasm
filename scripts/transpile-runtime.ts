@@ -1,11 +1,7 @@
-const [source, destination] = process.argv.slice(2);
-if (!source || !destination) throw new Error("Usage: bun scripts/transpile-runtime.ts <source.ts> <output.js>");
+import { readFileSync, writeFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 
-const transpiler = new Bun.Transpiler({
-  loader: "ts",
-  target: "bun",
-  treeShaking: false,
-  deadCodeElimination: false,
-});
-// Bun prints modules as implicitly strict; these factories run as scripts.
-await Bun.write(destination, '"use strict";\n' + transpiler.transformSync(await Bun.file(source).text()));
+const [source, destination] = process.argv.slice(2);
+if (!source || !destination) throw new Error("Usage: node scripts/transpile-runtime.ts <source.ts> <output.js>");
+
+writeFileSync(destination, stripTypeScriptTypes(readFileSync(source, "utf8"), { mode: "strip" }));

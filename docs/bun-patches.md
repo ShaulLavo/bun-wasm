@@ -780,12 +780,13 @@ frame-only formatter still receives the Console Trace header.
 
 Class **Host feature**. `scripts/transpile-runtime.ts`, the runtime embedding build step,
 `src/js/runtime.d.ts`, the typecheck configuration and build regression tests are original
-bun-wasm adapters. They call the installed host Bun transpiler. No upstream implementation
+bun-wasm adapters. They call the host Node.js `node:module.stripTypeScriptTypes` API in whitespace-preserving
+strip mode. No Node implementation is copied. No upstream implementation
 is copied or changed. `src/js/glob.ts` and `src/js/bun_builtin_globals.ts` are the existing
-original adapters renamed from JavaScript with type annotations. Glob option assembly gains
-one local variable to type its mixed string/boolean argument array. The builtin loader adapter
+original adapters renamed from JavaScript with type annotations. Glob option assembly returns a tuple derived from the positional native contract. The builtin loader adapter
 section above records their original role; neither file is an upstream fork.
 
-The host transpiler emits ordinary JavaScript factories during Cargo's build. The loader still
+The host stripper blanks erasable TypeScript during Cargo's build, preserving JavaScript
+constructor calls, class fields and source coordinates. The loader still
 looks up the same extension-free names. Existing `.js` sources remain raw. No TypeScript parser
 or typecheck is added to the wasm runtime.

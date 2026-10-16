@@ -3,20 +3,19 @@
   const native = internal.native;
   const own = (o: Record<string, unknown>, k: string, fallback: unknown) => Object.prototype.hasOwnProperty.call(o, k) ? o[k] : fallback;
 
-  function options(value: Record<string, unknown> | string | null | undefined) {
+  function options(value: Record<string, unknown> | string | null | undefined): BunWasm.GlobScanOptions {
     if (value == null) value = {};
     if (typeof value === "string") value = { cwd: value };
     if (!value || typeof value !== "object") throw new TypeError("Expected options to be an object");
     const cwd = own(value, "cwd", process.cwd());
     if (typeof cwd !== "string" && !(cwd instanceof String)) throw new TypeError("Expected cwd to be a string");
     if (cwd.length > 4096) throw Object.assign(new Error("ENAMETOOLONG: name too long, scandir"), { code: "ENAMETOOLONG" });
-    const flags = ["dot", "absolute", "followSymlinks", "throwErrorOnBrokenSymlink", "onlyFiles"];
-    const defaults = [false, false, false, false, true];
-    const args: (string | boolean)[] = [internal.require("path").resolve(String(cwd))];
-    return args.concat(flags.map((key, i) => {
-      const flag = own(value, key, defaults[i]);
-      return typeof flag === "boolean" ? flag : false;
-    }));
+    const flag = (key: string, fallback = false) => {
+      const result = own(value, key, fallback);
+      return typeof result === "boolean" ? result : false;
+    };
+    return [internal.require("path").resolve(String(cwd)), flag("dot"), flag("absolute"),
+      flag("followSymlinks"), flag("throwErrorOnBrokenSymlink"), flag("onlyFiles", true)];
   }
 
   class Glob {
