@@ -499,6 +499,7 @@
     }
     async deriveKey(a, key, derived, extractable, usages) {
       derived = algorithm(derived);
+      if (derived.name === "HMAC") requiredHash(derived);
       const length =
         derived.length ??
         (derived.name === "HMAC"
