@@ -64,8 +64,11 @@ than it is today. The process layer loads on the first spawn.
 - **A killed process can't corrupt shared state.** Shared memory can't be taken back from a
   running worker, and a worker can be killed between checking a flag and publishing a write. So
   no ring is ever written by two processes: each (writing process, pipe) pair gets its own
-  single-producer ring, and the reader takes from all of a pipe's rings, skipping revoked ones. A
-  zombie's late writes land in a ring nobody reads. A pipe with more than one reading process
+  single-producer ring, and the reader takes from all of a pipe's rings. When a writer is
+  revoked, the supervisor records that ring's committed write position at that moment; the
+  reader still drains every byte committed before it, then treats the ring as closed. Anything a
+  zombie publishes afterwards lies past the recorded position and is never read, and since a
+  writer only fills free space, it can't overwrite unread bytes. A pipe with more than one reading process
   (rare, such as two children inheriting one stdin) switches to relay mode through the
   supervisor, which checks revocation on every chunk. A killed process's buffers are never handed
   to another process; new processes get fresh ones. A guest that stops cooperatively acknowledges
@@ -138,8 +141,11 @@ sections 7 and 8) maps its `ProcessHost` trait onto this layer. The process laye
 A new `runtime/` directory in bun-wasm: a TypeScript package (`@bun-wasm/runtime`) with one entry
 per layer (`core`, `fs`, `net`, `proc`, `term`) so a bundler includes only what a page imports,
 and `proc` loaded on the first spawn. A guest's `spawn` import can't await an `import()`, so the
-guest worker keeps a stub of about 1 KiB that sends the request to the supervisor over shared
-memory and waits; the supervisor loads proc asynchronously and answers. The builds (`web/build.ts`,
+guest worker keeps a stub of about 1 KiB: it reserves a pid, takes the inherited descriptor
+references and returns at once, and the supervisor loads proc and starts the process
+asynchronously. A start failure shows up through `wait` (127 for a missing program, 126 for one
+that can't run) and as a child-exit event in `poll`. A synchronous caller such as Bun's
+`spawnSync` polls afterwards; the shell never blocks on a first spawn. The builds (`web/build.ts`,
 `sandbox/build.ts`) enable code splitting and serve the split chunks under every worker scope.
 Bun's adapter and executor stay in
 `web/`. brush-web and the own shell consume the package as a pinned copy, the way brush-web
@@ -165,7 +171,7 @@ are non-blocking except `poll`.
 
 | Import | Signature | Meaning |
 |---|---|---|
-| `spawn` | `(desc_ptr, desc_len) -> pid` | `desc` is UTF-8 JSON: `executable`, `argv`, `env`, `cwd`, `job` (`0` for a new foreground job, `-1` for a new background job, or an existing job id), and `fds`: `[{child, parent}]` binding child fd numbers (0, 1, 2 and any higher) to parent fds. Returns the pid. |
+| `spawn` | `(desc_ptr, desc_len) -> pid` | `desc` is UTF-8 JSON: `executable`, `argv`, `env`, `cwd`, `job` (`0` for a new foreground job, `-1` for a new background job, or an existing job id), and `fds`: `[{child, parent}]` binding child fd numbers (0, 1, 2 and any higher) to parent fds. Returns the pid at once; the process starts asynchronously, and a start failure is reported through `wait`. |
 | `job_of` | `(pid) -> job` | The job id a process belongs to. Job ids and pids are separate number spaces. |
 | `pipe` | `(out_ptr) -> 0` | Writes two `u32` fds: read end, then write end. |
 | `dup` | `(fd) -> fd` | A new descriptor for the same open description. |
@@ -200,8 +206,8 @@ the CI gate.
 | 3a | **Filesystem worker and protocol.** In-memory tree owned by one worker; non-blocking submit and completion handles over shared memory; blocking preview1 adapter; open-file identity across rename and unlink. Memory-only backend. Replaces copy-at-spawn and merge-at-exit. | 1,500-2,200 |
 | 3b | **Persistence.** Backend interface; IndexedDB backend (default); background batched persistence; `fsync`; checksummed metadata written beside the old copy then swapped; Web Locks for one writer tab; the editor's persisted save. Reload test immediately after a save resolves. | 1,200-1,800 |
 | 3c | **OPFS backend.** One file per file, lazy loading, bounded handle cache under Safari's 253, per-browser create concurrency. | 600-1,000 |
-| 4a | **Processes.** Supervisor, process table, generic registry (module plus guest adapter), shared compiled modules, the first-spawn stub, spawn/wait/kill/kill_job, jobs, interrupt words and recorded signals, revocation. Optional per-browser pool. | 1,200-1,800 |
-| 4b | **Pipes.** Per-writer rings built from `SharedPipe`, reader merging, relay mode for multiple reading processes, reference counts, readiness, the `runtime_proc` imports. Tests: inherited concurrent writers, inherited readers, kill between a writer's check and publish, zero-length and partial I/O. | 1,000-1,500 |
+| 4a | **Processes.** Supervisor, process table, generic registry (module plus guest adapter), shared compiled modules, the first-spawn stub, spawn/wait/kill/kill_job, jobs, interrupt words and recorded signals, revocation. Optional per-browser pool. Test: a deliberately delayed first activation while another shell task keeps running. | 1,200-1,800 |
+| 4b | **Pipes.** Per-writer rings built from `SharedPipe`, reader merging, relay mode for multiple reading processes, reference counts, readiness, the `runtime_proc` imports. Tests: inherited concurrent writers, inherited readers, kill between a writer's check and publish, output queued before a kill still drained, a delayed publish after a kill never read, zero-length and partial I/O. | 1,000-1,500 |
 | 4c | **Process gate for the shell.** The own-shell spike's section 8 gate on real workers: external producer and consumer with a builtin filter, bounded flow and early reader close across workers, interrupt while WASM runs, descendant kill with reaping, an inherited nonstandard fd closed by the parent right after spawn, a background job surviving one command and controlled by the next. Runs against a preview1 fixture until the shell lands. | 500-800 |
 | 4d | **IPC.** Node `fork()` and Bun `spawn({ipc})` as a pipe pair on a child fd with newline-delimited JSON; guest send and receive on QuickJS and JSC as well as Bun light. | 400-700 |
 | 5 | **Terminal.** Terminal descriptor kind with a foreground owner; cooked mode (echo, line editing, Ctrl+D) ported from brush-web; raw mode passes Ctrl+C through as a byte; resize events. | 600-1,000 |
