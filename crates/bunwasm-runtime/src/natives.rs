@@ -473,6 +473,31 @@ fn write_chunk(fd: libc::c_int, bytes: &[u8], position: Option<libc::off_t>) -> 
     Ok(written as usize)
 }
 
+fn read_stdin(length: usize) -> NativeResult {
+    if length == 0 {
+        return Ok(Val::Bytes(Vec::new()));
+    }
+    loop {
+        let result = crate::host::read(0, length);
+        if matches!(result, Err(crate::host::AGAIN)) {
+            crate::host::poll(-1);
+            continue;
+        }
+        match result {
+            Ok(bytes) => return Ok(Val::Bytes(bytes)),
+            Err(crate::host::UNSUPPORTED) => break,
+            Err(_) => return Err(io_error(io::Error::other("stdin read failed"), "read", None)),
+        }
+    }
+    let mut bytes = vec![0u8; length];
+    let count = unsafe { libc::read(0, bytes.as_mut_ptr().cast(), bytes.len()) };
+    if count < 0 {
+        return Err(io_error(io::Error::last_os_error(), "read", None));
+    }
+    bytes.truncate(count as usize);
+    Ok(Val::Bytes(bytes))
+}
+
 fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("open", move |a| {
@@ -499,22 +524,17 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("read", move |a| {
         let fd = a.i32(0)?;
-        let mut buf = vec![0u8; a.num(1)? as usize];
-        if fd == 0 && buf.is_empty() {
-            return Ok(Val::Bytes(buf));
+        let length = a.num(1)? as usize;
+        if fd == 0 {
+            return read_stdin(length);
         }
-        let n = if fd == 0 {
-            let n = unsafe { libc::read(0, buf.as_mut_ptr().cast(), buf.len()) };
-            if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
-        } else {
-            let mut fds = st.fds.borrow_mut();
-            let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("read"))?;
-            if let Some(p) = a.opt_num(2).filter(|p| *p >= 0.0) {
-                file.seek(SeekFrom::Start(p as u64)).map_err(|e| io_error(e, "read", None))?;
-            }
-            file.read(&mut buf)
-        };
-        let n = n.map_err(|e| io_error(e, "read", None))?;
+        let mut buf = vec![0u8; length];
+        let mut fds = st.fds.borrow_mut();
+        let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("read"))?;
+        if let Some(p) = a.opt_num(2).filter(|p| *p >= 0.0) {
+            file.seek(SeekFrom::Start(p as u64)).map_err(|e| io_error(e, "read", None))?;
+        }
+        let n = file.read(&mut buf).map_err(|e| io_error(e, "read", None))?;
         buf.truncate(n);
         Ok(Val::Bytes(buf))
     });
