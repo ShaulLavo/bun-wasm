@@ -597,3 +597,7 @@ the adapter prepends them while preserving stack frames. Browser engines
 without captureStackTrace use Error.stack. It leaves a native Node-style
 header and a custom prepareStackTrace result intact. This supplies the Node
 console contract without changing the engine's global Error constructor.
+
+Bootstrap captures its default stack formatter identity for this adapter.
+An installed user formatter stays authoritative; the runtime's own default
+frame-only formatter still receives the Console Trace header.

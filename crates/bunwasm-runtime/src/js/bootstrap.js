@@ -113,6 +113,7 @@
     for (let i = start; i < callsites.length; i++) out += `    at ${formatCallSite(callsites[i])}\n`;
     return out;
   };
+  internal.defaultPrepareStackTrace = Error.prepareStackTrace;
 
   function isErrorConstructorFrame(site) {
     return site.isConstructor() && isErrorConstructor(site.getFunction());
