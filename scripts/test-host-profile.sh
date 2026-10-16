@@ -2,6 +2,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$root/env.sh"
+cd "$root"
 scratch="$(mktemp -d /work/tmp/bun-wasm-host-profile-XXXXXX)"
 trap 'rm -rf "$scratch"' EXIT
 cargo build -j "${JOBS:-8}" --release --target wasm32-wasip1 -p bunwasm-cli \
