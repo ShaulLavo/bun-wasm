@@ -38,6 +38,7 @@ def arguments():
     parser.add_argument("--suite", type=Path, default=ROOT / "vendor/bun")
     parser.add_argument("--launcher", type=Path, default=Path(os.environ["CARGO_TARGET_DIR"]) / "release/bun-wasm")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--log-dir", type=Path, help="retain bounded per-file output for diagnosing the full selected census")
     parser.add_argument("--dependencies", type=Path, help="additional installed suite node_modules directory")
     parser.add_argument("--resume", action="store_true", help="reuse finished files with identical provenance")
     parser.add_argument("--rerun", action="store_true", help="with --resume, replace results for the selected files")
@@ -231,6 +232,10 @@ def invoke(opts, wasm, work, preloads, path):
         if size > 4 * 1024 * 1024:
             output.seek(max(0, size - 65536))
             text += "\n[output truncated]\n" + output.read().decode("utf-8", errors="replace")
+    if opts.log_dir:
+        log = opts.log_dir / (path + ".log")
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(text)
     result = parse_output(text)
     result.update(file=path, exit=proc.returncode, duration_seconds=round(time.monotonic() - started, 3), timed_out=timed_out, output_bytes=size, interrupted=STOP.is_set())
     result["assertion_script"] = opts.node_parallel and path.startswith("js/node/test/parallel/") and sum(result["counts"].values()) == 0
