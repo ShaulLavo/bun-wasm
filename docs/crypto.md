@@ -1,9 +1,10 @@
 # Crypto APIs
 
-All three engines use the same WebCrypto implementation. Cryptographic operations run in
-wasm through the runtime's data-native bridge. The browser engine also uses this backend;
-it does not depend on the host browser's secure-context `crypto.subtle` implementation.
-The WASI host captures its entropy function before the runtime installs its globals.
+The browser engine uses the host's native SubtleCrypto provider when it is available.
+The host captures that provider and its CryptoKey constructors before installing runtime
+globals. Keys created before bootstrap remain usable. In an insecure context without
+SubtleCrypto, the browser engine uses the wasm provider shared with QuickJS and wasm JSC.
+The WASI host also captures its entropy function before globals change.
 
 | Algorithms | Operations | Key formats |
 | --- | --- | --- |
@@ -25,7 +26,8 @@ labels are byte strings, including non-UTF-8 data.
 
 CryptoKey records enforce algorithm, usage and extractability checks. Public metadata is
 separate from the operation's internal algorithm record. Assigning `crypto.subtle` is ignored,
-as in native Bun. SubtleCrypto returns promises; the actual wasm operation is synchronous.
+as in native Bun. SubtleCrypto returns promises. Operations on the wasm provider run
+synchronously inside those promises; native provider scheduling stays with the host.
 
 ## Backend
 
@@ -56,6 +58,10 @@ formats, usage checks, tamper rejection and key wrapping.
 [crypto-vectors](../tests/fixtures/crypto-vectors/) checks 45 native Node vectors, including
 all GCM tag sizes, AES-192, non-96-bit GCM IVs, CTR field wrap and binary OAEP labels.
 `scripts/generate-crypto-vectors.mjs` regenerates those vectors with native Node.
+`scripts/check-crypto-review.sh <report-dir>` replays the SHA-1 JWK, P-384/SHA-1 and
+required-HMAC-hash regressions in every engine and verifies the runtime outputs in both
+native Node and Bun. `web/tests/browser-crypto.mjs` saves the provider and a native key
+before boot, then tests provider identity and native key operations in Chromium and WebKit.
 
 Measured against main `6f1e576` on 2026-10-16, all 24 selected upstream crypto files run
 without timeouts. Observed passing tests rise from 165 to 185 on QuickJS and browser, and

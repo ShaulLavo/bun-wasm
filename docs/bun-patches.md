@@ -68,7 +68,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
 | [`third_party/licenses/boringssl-LICENSE`](#webcrypto-backend) | Port | Retain BoringSSL license notices with the wasm backend. |
 | [`crates/bunwasm-runtime/src/crypto.rs`, GCM adapter and `third_party/licenses/aes-gcm-MIT`](#webcrypto-backend) | Port | Adapt RustCrypto GCM to WebCrypto nonce and tag lengths. |
-| [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
+| [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters and `web/src/engine-host.js` provider capture](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 
 | [`src/js/bun_console_constructor.js`](#bun-console-constructor) | Port | Generate Bun's Console constructor with lexical engine-independent hooks. |
 | [`scripts/generate-bun-console.mjs`, `src/js/console_constructor.js`, global Console wiring](#bun-console-constructor) | Host feature | Original generation and runtime adapters expose the shared constructor and its streams. |
