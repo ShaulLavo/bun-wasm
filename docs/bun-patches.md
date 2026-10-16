@@ -809,7 +809,8 @@ returns at most `bufferSize` entries. Raw filename bytes cross the engine bounda
 before JavaScript applies the requested encoding. JavaScript owns the async operation
 queue, callback timing, Dirent construction, iteration and explicit disposal.
 Closing drops the active native cursor and pending traversal paths. `FinalizationRegistry`
-releases abandoned native IDs through an idempotent native release. Runtime shutdown
+releases abandoned native IDs through an idempotent native release. Its unregister
+token is separate from the owner, because the pinned QuickJS stores tokens strongly. Runtime shutdown
 clears the remaining cursor table after user exit listeners, including when the host
 retains the wasm instance. Native exits also clear the table before skipping engine teardown. The public path representation stays
 separate from the lookup string, so Buffer paths remain Buffers in `Dir.path` and

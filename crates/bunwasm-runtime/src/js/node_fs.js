@@ -164,6 +164,7 @@
     #handle;
     #path;
     #lookupPath;
+    #token = {};
     #options;
     #entries = [];
     #index = 0;
@@ -175,7 +176,7 @@
       this.#path = publicPath;
       this.#lookupPath = lookupPath;
       this.#options = options;
-      directoryCleanup.register(this, handle, this);
+      directoryCleanup.register(this, handle, this.#token);
     }
     get path() {
       if (!(#path in this)) throw Object.assign(new TypeError('Value of "this" must be of type Dir'), { code: "ERR_INVALID_THIS" });
@@ -207,7 +208,7 @@
       this.#checkOpen();
       const handle = this.#handle;
       this.#handle = null;
-      directoryCleanup.unregister(this);
+      directoryCleanup.unregister(this.#token);
       native.closeDir(handle);
       this.#entries = [];
     }
