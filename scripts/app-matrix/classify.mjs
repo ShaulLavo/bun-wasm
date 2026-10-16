@@ -7,7 +7,7 @@ export function stageOutput(log, command) {
 }
 
 export function firstError(output) {
-  const lines = output.replace(/\x1b\[[0-9;]*m/g, "").split("\n").map(line => line.trim().replace(/^(?:unhandledRejection|uncaughtException)\s+(?=\w*Error:)/, ""));
+  const lines = output.replace(/\x1b\[[0-9;]*m/g, "").split("\n").map(line => line.trim().replace(/^\[((?:\w*Error|error):.*)\]$/, "$1").replace(/^(?:unhandledRejection|uncaughtException)\s+(?=\w*Error:)/, ""));
   const diagnostic = lines.find(line => /^(?:(?:\w*Error|error|panic|fatal|bun-wasm):|memory allocation of \d+ bytes failed|thread '.+' panicked|[^|\n]+error TS\d+:)/i.test(line));
   return (diagnostic ?? "No diagnostic before exit or deadline").slice(0, 500);
 }

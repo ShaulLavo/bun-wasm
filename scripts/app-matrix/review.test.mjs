@@ -82,3 +82,7 @@ test("playground server exiting during the page assertion also fails", async () 
   const result = await serverCommand({ page, context: { newPage: async () => preview }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run server.ts\nuser@bun:~$" });
   expect(result).toMatchObject({ status: "fail", exit: 0 });
 });
+
+test("bracketed Next build errors retain their diagnostic", () => {
+  expect(failure("Build error occurred\n[TypeError: _promises.default.opendir is not a function]", "build")).toEqual({ category: "d", blocker: "build: TypeError: _promises.default.opendir is not a function" });
+});
