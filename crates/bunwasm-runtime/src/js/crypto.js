@@ -539,10 +539,17 @@
       return "SubtleCrypto";
     }
   }
+  const cryptoObject = globalThis.crypto;
+  const subtleInstance = Object.create(SubtleCrypto.prototype);
   class Crypto {
     constructor() {
       throw new TypeError("Illegal constructor");
     }
+    get subtle() {
+      if (this !== cryptoObject) throw new TypeError("Illegal invocation");
+      return subtleInstance;
+    }
+    set subtle(_value) {}
     get [Symbol.toStringTag]() {
       return "Crypto";
     }
@@ -569,6 +576,5 @@
     Object.setPrototypeOf(globalThis.crypto, Crypto.prototype);
     defineGlobal("CryptoKey", CryptoKey);
     defineGlobal("SubtleCrypto", SubtleCrypto);
-    globalThis.crypto.subtle = Object.create(SubtleCrypto.prototype);
   };
 });
