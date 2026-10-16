@@ -5,6 +5,7 @@ Bun's own Rust toolchain (transpiler, bundler, dev server graph, parsers, semver
 runs in the browser and under wasmtime. The runtime uses
 [Bun's generated JavaScript builtins](docs/bun-builtins.md) where they run independently of JavaScriptCore. Rust natives and the remaining JavaScript API implementations
 fill the gaps. We measure compatibility against [Bun's own test suite](docs/bun-test-suite/README.md).
+[Runtime TypeScript](docs/runtime-typescript.md) describes the factory build and typecheck gate.
 
 - `bun run`, `bun test`, `bun build`, `Bun.build`, `bun:sqlite`, `fetch`, `Bun.serve`
 - Bun's real transpiler and bundler
