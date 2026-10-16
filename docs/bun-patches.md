@@ -1005,7 +1005,9 @@ open descriptors retain their original file identity across removal or replaceme
 Native hosts use their shared physical filesystem.
 The original shared allocator uses sparse two-level page tables so one file can
 span all storage segments within the configured cap. Table blocks are returned
-on truncation, removal, or failed growth. Metadata remains within the original
+on truncation, removal, or failed growth. Growth reserves tables after choosing
+physical capacity, so geometric growth can fall back to the remaining free pages.
+Metadata remains within the original
 24 MiB connection buffer. Allocation range errors use WASI EFBIG, number 22;
 number 27 is EINTR and would make Rust retry a rejected write indefinitely.
 The synchronous path reads the WASI descriptor without Rust stdin prefetching.
