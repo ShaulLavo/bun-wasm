@@ -62,6 +62,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.js`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
+| [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
+| [`patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch`](#generated-function-parser-locations) | Port | Bun parser and printer import metadata, reused unchanged from the semantic-import lane. |
 | [`crates/bunwasm-runtime/src/engine_quickjs.rs`, data conversion; `host.rs`, native-test import gate](#quickjs-data-conversion) | Host feature | Original adapter checks buffer tags before calling a throwing getter. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, buffer tag predicate](#quickjs-data-conversion) | Host feature | Original nonthrowing class query for ordinary and shared buffers. |
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-imports) | Host feature | Original generated-function adapter with module-relative dynamic imports. |
@@ -119,12 +121,12 @@ alone would lose the shared-buffer conversion that the getter already supports.
 
 `crates/bunwasm-runtime/src/js/function.js` is an original adapter for the public
 Function, AsyncFunction, GeneratorFunction and AsyncGeneratorFunction constructors.
-It uses the caller-origin helper and the existing import lexer, moved from
-`engine_host.rs` into `module_imports.rs`, to route generated dynamic imports
-through the runtime resolver. No Bun, Node, QuickJS or WebKit implementation is
+It uses the caller-origin helper and Bun parser keyword positions to route
+generated dynamic imports through the runtime resolver. No Bun, Node, QuickJS or WebKit implementation is
 copied. Native constructors still parse the arguments and construct the function. On QuickJS
-and the host engine, native parsing selects valid import replacements so methods
-named `import` remain intact and invalid original syntax still throws. Temporary
+and the host engine, native parsing validates the original function before Bun's
+parser identifies replacements. Methods named `import` remain intact and invalid
+original syntax still throws. Temporary
 validation functions are never executed. JSC keeps its native constructors because
 its generated imports already preserve the caller origin. The host adapter also
 attaches the creating module's source URL to generated bodies. Otherwise the
