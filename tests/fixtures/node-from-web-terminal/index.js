@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { Readable, Writable } from "node:stream";
-const tick = () => new Promise(resolve => setImmediate(resolve));
+async function settle(promise) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("stream settlement timed out")), 300);
+    })]);
+  } finally { clearTimeout(timer); }
+}
 for (const type of ["closed", "errored"]) {
   const reason = new Error("web failure");
   const web = new WritableStream({ start(controller) { if (type === "errored") controller.error(reason); } });
@@ -8,7 +15,7 @@ for (const type of ["closed", "errored"]) {
   const node = Writable.fromWeb(web);
   const errors = [];
   node.on("error", error => errors.push(error));
-  await tick();
+  await settle(new Promise(resolve => node.once("close", resolve)));
   assert.equal(node.destroyed, true);
   assert.equal(errors.length, 1);
   if (type === "errored") assert.equal(errors[0], reason);
@@ -28,7 +35,7 @@ for (const type of ["closed", "errored"]) {
     node.on("close", resolve);
   });
   node.resume();
-  await done;
+  await settle(done);
   assert.deepEqual(events, [type === "errored" ? "error" : "end"]);
   console.log("readable " + type);
 }
