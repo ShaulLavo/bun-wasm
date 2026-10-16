@@ -1,0 +1,5 @@
+rejected padding 3 for sign and verify, one-shot and stream
+rejected padding 4 for sign and verify, one-shot and stream
+rejected padding 999 for sign and verify, one-shot and stream
+accepted padding 1
+accepted padding 6
