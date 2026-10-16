@@ -9,7 +9,7 @@
     getMethodName() { return null; },
     getScriptNameOrSourceURL() { return this.getFileName(); },
     isEval() { return /^(?:<input>|<eval>)$/.test(this.getFileName()); },
-    getEvalOrigin() { return this.isEval() ? this.getFileName() : undefined; },
+    getEvalOrigin() { return undefined; },
     toString() { return internal.formatCallSite(this); },
   };
 
