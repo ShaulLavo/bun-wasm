@@ -66,6 +66,7 @@ test("rejects duplicate module stems and invalid TypeScript", () => {
   rmSync(join(source, "leaf.js"));
   writeFileSync(join(source, "leaf.ts"), "(function (value: ) {})\n");
   expect(runBuild().exitCode).not.toBe(0);
+  rmSync(join(source, "leaf.ts"));
 });
 
 test("embeds the converted runtime factories under their original names", () => {
@@ -87,4 +88,43 @@ test("embeds the converted runtime factories under their original names", () => 
   });
   expect(new Glob("fixture.ts").match("fixture.ts")).toBe(true);
   expect(Array.from(new Glob("*").scanSync())).toEqual(["fixture.ts"]);
+});
+
+test("erases types without printing constructors or moving source positions", () => {
+  const text = '(function (value: string) { "use strict"; throw new TypeError(value); })\n';
+  writeFileSync(join(source, "position.ts"), text);
+  const result = runBuild();
+  expect(result.exitCode).toBe(0);
+  expect(readFileSync(join(out, "runtime-js/position.js"), "utf8"))
+    .toBe('(function (value        ) { "use strict"; throw new TypeError(value); })\n');
+});
+
+test("converted Glob preserves replacement error classes and their stacks", async () => {
+  const { runInNewContext } = await import("node:vm");
+  expect(runBuild(undefined, join(root, "crates/bunwasm-runtime")).exitCode).toBe(0);
+  class ReplacementError extends Error { name = "ReplacementError"; }
+  class ReplacementTypeError extends Error { name = "ReplacementTypeError"; }
+  const factory = runInNewContext(readFileSync(join(out, "runtime-js/glob.js"), "utf8"), {
+    TypeError: ReplacementTypeError, Error: ReplacementError, process: { cwd: () => "/" },
+  }, { filename: "bun-wasm:glob" });
+  const { Glob } = factory({ native: {}, require: () => ({ resolve: (cwd: string) => cwd }) });
+  const cases: [() => unknown, typeof Error, string][] = [
+    [() => new Glob(), ReplacementTypeError, "Glob.constructor: expected 1 arguments, got 0"],
+    [() => new Glob(7), ReplacementTypeError, "Glob.constructor: first argument is not a string"],
+    [() => new Glob("*").match(), ReplacementTypeError, "Glob.matchString: expected 1 arguments, got 0"],
+    [() => new Glob("*").match(7), ReplacementTypeError, "Glob.matchString: first argument is not a string"],
+    [() => new Glob("*").scanSync(false), ReplacementTypeError, "Expected options to be an object"],
+    [() => new Glob("*").scanSync({ cwd: false }), ReplacementTypeError, "Expected cwd to be a string"],
+    [() => new Glob("*").scanSync({ cwd: "/".repeat(4097) }), ReplacementError, "ENAMETOOLONG: name too long, scandir"],
+  ];
+  for (const [trigger, Ctor, message] of cases) {
+    let error: unknown;
+    try { trigger(); } catch (caught) { error = caught; }
+    expect(error).toBeInstanceOf(Ctor);
+    if (!(error instanceof Error)) throw new Error("Expected an Error instance");
+    expect(Object.getPrototypeOf(error)).toBe(Ctor.prototype);
+    expect(error.name).toBe(Ctor === ReplacementError ? "ReplacementError" : "ReplacementTypeError");
+    expect(error.message).toBe(message);
+    expect(error.stack).toContain("bun-wasm:glob");
+  }
 });
