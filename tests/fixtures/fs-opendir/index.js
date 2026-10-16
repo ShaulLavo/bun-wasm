@@ -176,6 +176,8 @@ async function main() {
       await new Promise((resolve) => setImmediate(resolve));
     }
     assert.equal(testing.directoryCount(), baseline);
+    fs.opendirSync("tree");
+    process.once("exit", () => fs.writeFileSync("directory-exit-count", String(testing.directoryCount())));
   }
   console.log("entry encodings and callback validation");
 }

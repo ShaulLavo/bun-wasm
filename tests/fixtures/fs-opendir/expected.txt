@@ -4,3 +4,5 @@ callback open, read, close and errors are asynchronous
 queued reads and close, sync operations reject concurrency
 options, paths and eager open errors
 entry encodings and callback validation
+--- directory-exit-count
+0
