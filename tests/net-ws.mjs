@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import http from "node:http";
-import WebSocket, { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer } from "./node_modules/ws/index.js";
 const server = http.createServer();
 const wss = new WebSocketServer({ server, perMessageDeflate: false });
 wss.on("connection", socket => socket.on("message", data => socket.send(data)));
