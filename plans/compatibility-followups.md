@@ -271,7 +271,9 @@ existing module gaps. Keep these separate from guest-worker execution.
   `crates/bunwasm-runtime/src/js/spawn.js:248`, which resolves exit before reading
   pipes in that turn, and Node event reporting at line 415. Trace host pipe
   completion and Node data-event delivery before choosing a change; preserve the
-  distinct exit and close events. No subprocess code changes in this PR.
+  distinct exit and close events. PR 30 later changed pipe handling and stream
+  error callbacks, so repeat the reproduction on that integration before assuming
+  the failure remains. No subprocess code changes in this PR.
 
 Exact source, runtime and dependency hashes, errors and timeout records are in
 `/work/reports/bun-wasm-worker-threads/before-<engine>.json` and

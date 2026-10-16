@@ -55,7 +55,9 @@ The unmodified first 160 tracked `.js` files under
 change. The upstream revision, runner, dependencies, selection, and per-engine
 deadlines are identical within each comparison. The original runtime baseline is
 `f5d18cf`; the combined branch also includes the WebSocket builtin from
-`40f7956`, which the selected files do not import.
+`40f7956`, which the selected files do not import. These census records predate
+the closed-pipe merge `4da6a6b`; the required gates are repeated after rebasing
+onto that host change.
 
 | Engine | Fully passing files before | Fully passing files after | Observed test passes before/after | Timeouts before/after |
 | --- | ---: | ---: | ---: | ---: |
