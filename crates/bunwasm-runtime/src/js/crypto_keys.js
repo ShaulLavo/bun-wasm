@@ -276,15 +276,26 @@
     const createPublicKey = (input) => importAsymmetric(input, false);
     function generateKeyPairSync(type, options = {}) {
       let a;
+      const exponent = options.publicExponent ?? 65537;
+      if (
+        type === "rsa" &&
+        (!Number.isInteger(exponent) ||
+          exponent < 3 ||
+          exponent > 0xffffffff ||
+          exponent % 2 === 0)
+      )
+        throw Object.assign(new RangeError("Invalid publicExponent"), {
+          code: "ERR_OUT_OF_RANGE",
+        });
       if (type === "rsa")
         a = {
           name: "RSASSA-PKCS1-v1_5",
           modulusLength: options.modulusLength,
           publicExponent: new Uint8Array([
-            (options.publicExponent ?? 65537) >>> 24,
-            ((options.publicExponent ?? 65537) >>> 16) & 255,
-            ((options.publicExponent ?? 65537) >>> 8) & 255,
-            (options.publicExponent ?? 65537) & 255,
+            exponent >>> 24,
+            (exponent >>> 16) & 255,
+            (exponent >>> 8) & 255,
+            exponent & 255,
           ]),
           hash: options.hashAlgorithm || "SHA-256",
         };

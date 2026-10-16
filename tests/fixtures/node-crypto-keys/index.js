@@ -198,3 +198,13 @@ assert.throws(() => sign("sha256", input, ed.privateKey), {
   code: "ERR_OSSL_EVP_COMMAND_NOT_SUPPORTED",
 });
 console.log("node digest validation ok");
+
+assert.throws(
+  () =>
+    generateKeyPairSync("rsa", {
+      modulusLength: 512,
+      publicExponent: 4294967299,
+    }),
+  { code: "ERR_OUT_OF_RANGE" },
+);
+console.log("node exponent validation ok");
