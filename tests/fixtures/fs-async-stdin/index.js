@@ -1,11 +1,15 @@
 const { spawn, spawnSync } = require('node:child_process');
 const child = spawn(process.execPath, ['-e', `
   const fs = require('node:fs');
+  const assert = require('node:assert/strict');
+  const { AsyncLocalStorage } = require('node:async_hooks');
+  const storage = new AsyncLocalStorage();
   setTimeout(() => console.log('ready'), 0);
-  fs.read(0, Buffer.alloc(10, 'a'), 3, 4, null, (error, count, buffer) => {
+  storage.run('stdin', () => fs.read(0, Buffer.alloc(10, 'a'), 3, 4, null, (error, count, buffer) => {
     if (error) throw error;
+    assert.equal(storage.getStore(), 'stdin', 'stdin async context');
     console.log(count, buffer.toString());
-  });
+  }));
 `]);
 let output = '';
 let replied = false;
