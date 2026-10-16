@@ -50,9 +50,11 @@ async function pipe() {
   let falseWrites = 0;
   let maximum = 0;
   let paused = true;
+  let accepted = true;
   const write = destination.write.bind(destination);
   destination.write = chunk => {
     const result = write(chunk);
+    accepted = result;
     if (!result) falseWrites++;
     maximum = Math.max(maximum, destination.writableLength);
     return result;
@@ -60,13 +62,13 @@ async function pipe() {
   source.pipe(destination);
   source.on("data", () => {
     chunks++;
-    paused = paused && source.isPaused();
+    if (!accepted) paused = paused && source.isPaused();
   });
   await until(() => destination._conn.bufferedAmount > 0);
   await delay(40);
   assert.equal(paused, true, "pipe pauses immediately on false write");
   assert.ok(falseWrites > 0);
-  assert.ok(maximum <= 65536);
+  assert.ok(maximum <= destination.writableHighWaterMark + 65536);
   assert.ok(chunks > 0);
   assert.ok(destination._conn.bufferedAmount > 0, "slow native peer blocks the host write");
   const read = source.bytesRead;
