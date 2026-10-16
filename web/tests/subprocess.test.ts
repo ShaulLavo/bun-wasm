@@ -140,3 +140,22 @@ test("host stdin reads wait without blocking and preserve EOF on both bridges", 
     expect(slots.read?.(0, 32, 4)).toBe(0);
   } finally { pipe.close(); host.dispose(); }
 });
+
+test("stdin wakes host-engine waiters without spawning another child", async () => {
+  const budget = createProcessBudget();
+  const pipe = new SharedPipe(undefined, budget);
+  const host = new SubprocessHost({
+    budget, stdin: pipe.buffer, output() {},
+    launch() { throw new Error("this test does not spawn"); },
+  });
+  try {
+    const net = host.engineNet();
+    expect(net.natives.hostRead(0, 4)).toBe(-2);
+    await new Promise<void>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error("stdin waiter was not woken")), 250);
+      net.onNews(() => { clearTimeout(deadline); resolve(); });
+      pipe.write(encoder.encode("ping"));
+    });
+    expect(net.natives.hostRead(0, 4)).toEqual(encoder.encode("ping"));
+  } finally { pipe.close(); host.dispose(); }
+});
