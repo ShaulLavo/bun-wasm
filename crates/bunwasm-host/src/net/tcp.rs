@@ -136,6 +136,9 @@ fn accept_loop(listener: TcpListener, shared: Arc<ListenerShared>, notify: Arc<N
     loop {
         let accepted = listener.accept();
         if shared.closed.load(Ordering::SeqCst) {
+            if let Ok((stream, _)) = accepted {
+                Conn::accepted(stream, notify.clone()).close();
+            }
             return;
         }
         match accepted {
