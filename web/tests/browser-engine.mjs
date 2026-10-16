@@ -3,7 +3,6 @@
 // ENGINE=quickjs|jsc runs the same checks on another engine.
 // Needs web/dist/bun-browser.wasm.gz (dist/bun-browser.wasm from scripts/build-bun-browser.sh).
 // Starts web/serve.ts and a CORS fixture server on another origin (no public internet); kills both on exit.
-import { readFileSync, readdirSync } from "node:fs";
 import { checkPhoneUI } from "./phone-ui.mjs";
 import { firstVisit } from "./first-visit.mjs";
 import { readFile } from "node:fs/promises";
