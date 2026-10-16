@@ -89,3 +89,12 @@ These priorities count app projects, not individual command rows.
 
 
 Rank remaining causes by the number of distinct app projects they would unblock, rather than counting install, dev, and build rows as separate apps. An install or module-loading fix exposes the next blocker; it does not promise that the app will then pass.
+
+
+## TCP and ws follow-up
+
+The [ws replay](ws-results.md) reruns the five projects previously blocked on
+Bun's missing ws builtin, including Vite React in the playground. All 18
+installs pass. The 33 complete commands still fail on later esbuild, module
+linking, HTTP/2 export or silent-exit blockers. The missing ws import is no
+longer the first blocker in any of the 22 affected QuickJS/JSC command rows.
