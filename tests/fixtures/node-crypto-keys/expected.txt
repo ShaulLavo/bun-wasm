@@ -13,3 +13,4 @@ node X25519 interop ok
 node secret generation ok
 node encrypted key formats ok
 native encrypted vectors 6
+node RSA-OAEP interop ok

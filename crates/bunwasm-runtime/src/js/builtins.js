@@ -178,7 +178,7 @@
       return buffer;
     }
 
-    const unsupportedCrypto = ["createCipheriv", "createDecipheriv", "createECDH", "createDiffieHellman", "scrypt", "scryptSync", "publicEncrypt", "privateDecrypt", "privateEncrypt", "publicDecrypt"];
+    const unsupportedCrypto = ["createCipheriv", "createDecipheriv", "createECDH", "createDiffieHellman", "scrypt", "scryptSync", "privateEncrypt", "publicDecrypt"];
     return unsupportedModule("crypto", "this Node crypto operation is not implemented", unsupportedCrypto, {
       createHash,
       createHmac,

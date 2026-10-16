@@ -506,6 +506,38 @@
       });
       return verify ? result.verified : Buffer.from(c.decode(result.data));
     }
+    function rsaCrypt(decrypt, inputKey, data) {
+      const options = parseInput(inputKey);
+      if (
+        options.padding !== undefined &&
+        options.padding !== constants.RSA_PKCS1_OAEP_PADDING
+      )
+        throw Object.assign(
+          new Error("Only RSA-OAEP encryption is implemented"),
+          { code: "ERR_NOT_SUPPORTED_IN_WASM" },
+        );
+      const key = decrypt
+        ? createPrivateKey(options)
+        : createPublicKey(options);
+      const r = nodeRecord(key);
+      if (r.key.kty !== "RSA") throw error("Expected an RSA key");
+      const algorithm = {
+        name: "RSA-OAEP",
+        hash: { name: hash(options.oaepHash || "sha1") },
+        label:
+          options.oaepLabel === undefined
+            ? ""
+            : c.encode(inputBytes(options.oaepLabel)),
+      };
+      return Buffer.from(
+        c.decode(
+          c.backend(decrypt ? "decrypt" : "encrypt", algorithm, {
+            key: r.key,
+            data: c.encode(inputBytes(data)),
+          }).data,
+        ),
+      );
+    }
     function sign(algorithm, data, key, callback) {
       if (typeof callback !== "function")
         return signVerify(false, algorithm, data, key);
@@ -646,6 +678,8 @@
       generateKey,
       generateKeyPairSync,
       generateKeyPair,
+      publicEncrypt: (key, data) => rsaCrypt(false, key, data),
+      privateDecrypt: (key, data) => rsaCrypt(true, key, data),
       sign,
       verify,
       Sign,

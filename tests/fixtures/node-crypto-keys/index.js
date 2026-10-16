@@ -2,6 +2,8 @@ import encryptedVectors from "./encrypted-vectors.json";
 import assert from "node:assert/strict";
 import { types } from "node:util";
 import {
+  publicEncrypt,
+  privateDecrypt,
   generateKeySync,
   generateKey,
   generateKeyPairSync,
@@ -337,3 +339,12 @@ for (const v of encryptedVectors.vectors) {
   assert(verify("sha256", data, pub, sign("sha256", data, key)));
 }
 console.log("native encrypted vectors", encryptedVectors.vectors.length);
+
+const rsaCipher = generateKeyPairSync("rsa", { modulusLength: 1024 });
+const oaep = { oaepHash: "sha256", oaepLabel: new Uint8Array([0, 255, 128]) };
+const ciphertext = publicEncrypt({ ...oaep, key: rsaCipher.publicKey }, input);
+assert.deepEqual(
+  privateDecrypt({ ...oaep, key: rsaCipher.privateKey }, ciphertext),
+  input,
+);
+console.log("node RSA-OAEP interop ok");
