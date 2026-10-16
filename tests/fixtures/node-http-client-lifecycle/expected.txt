@@ -1,0 +1,2 @@
+HTTP request uses Node completion state
+destroyed HTTP request rejects writes
