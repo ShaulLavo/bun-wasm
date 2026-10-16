@@ -883,6 +883,7 @@ class EngineHost {
   exit(code) {
     if (this.exited) return;
     this.exited = true;
+    this.native.closeAllDirs();
     this.flush();
     if (this.timer !== null) nativeClearTimeout(this.timer);
     if (this.o.onExit) this.o.onExit(code);

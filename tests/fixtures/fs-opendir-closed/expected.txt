@@ -1,0 +1,1 @@
+closed callback and explicit undefined reads throw; no-argument calls reject
