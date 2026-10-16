@@ -1,0 +1,5 @@
+writable closed
+writable errored
+readable closed
+readable errored
+normal fromWeb end
