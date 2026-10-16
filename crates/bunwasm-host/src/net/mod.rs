@@ -222,6 +222,22 @@ impl Net {
         }
     }
 
+    pub fn shutdown(&mut self, handle: i32) -> i32 {
+        match self.handles.get(&handle) {
+            Some(Handle::Conn(conn)) => { conn.shutdown(); 0 }
+            _ => BADF,
+        }
+    }
+
+    pub fn local_addr(&mut self, handle: i32) -> Output {
+        let address = match self.handles.get(&handle) {
+            Some(Handle::Conn(conn)) => conn.local_addr(),
+            Some(Handle::Listener(listener)) => Some(listener.local_addr()),
+            _ => return Output::Code(BADF),
+        };
+        address.map_or(Output::Code(AGAIN), |addr| Output::Bytes(tcp::addr_json(addr)))
+    }
+
     pub fn connect(&mut self, host: &str, port: i32) -> i32 {
         if !(0..=65535).contains(&port) {
             return self.fail(ErrorInfo::new("RangeError", format!("Port should be >= 0 and < 65536. Received {port}."), Some("ERR_SOCKET_BAD_PORT")));
@@ -238,7 +254,9 @@ impl Net {
             (_, Some(Handle::Listener(_))) => None,
             (_, None) => return Output::Code(BADF),
         };
-        let error = error.unwrap_or_else(|| ErrorInfo::new("Error", "Unknown error", None));
+        let error = error.unwrap_or_else(|| {
+            ErrorInfo::new("Error", format!("network operation failed for handle {handle}"), Some("ERR_NETWORK"))
+        });
         Output::Bytes(error.to_json())
     }
 

@@ -1,0 +1,3 @@
+PASS fanout drain
+PASS fanout unpipe
+PASS fanout destroy
