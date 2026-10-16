@@ -15,7 +15,7 @@
 
   class CallSite {
     #frame;
-    constructor(frame) { this.#frame = frame; }
+    constructor(frame) { this.#frame = frame; internal.mappedCallSites.add(this); }
     getFileName() { return this.#frame.file; }
     getFunctionName() { return this.#frame.name || null; }
     getFunction() { return undefined; }
@@ -40,11 +40,20 @@
     internal.defineHidden(Error, {
       captureStackTrace: function captureStackTrace(target, constructorOpt) {
         capture(target, typeof constructorOpt === "function" ? constructorOpt : captureStackTrace);
-        const prepare = Error.prepareStackTrace;
-        if (typeof prepare !== "function" || prepare === defaultPrepare) return;
-        const frames = internal.require("inspect").parseStack(target.stack);
-        const stack = Reflect.apply(prepare, Error, [target, frames.map(frame => new CallSite(frame))]);
-        Object.defineProperty(target, "stack", { value: stack, writable: true, configurable: true, enumerable: false });
+        const raw = target.stack;
+        Object.defineProperty(target, "stack", {
+          configurable: true,
+          enumerable: false,
+          get() {
+            const prepare = Error.prepareStackTrace;
+            const value = typeof prepare === "function" && prepare !== defaultPrepare
+              ? Reflect.apply(prepare, Error, [this, internal.require("inspect").parseStack(raw).map(frame => new CallSite(frame))])
+              : raw;
+            Object.defineProperty(this, "stack", { value, writable: true, configurable: true, enumerable: false });
+            return value;
+          },
+          set(value) { Object.defineProperty(this, "stack", { value, writable: true, configurable: true, enumerable: false }); },
+        });
       },
     });
   }

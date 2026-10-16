@@ -89,7 +89,7 @@
     }
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
-    if (line !== null && file) {
+    if (line !== null && file && !internal.mappedCallSites?.has(site)) {
       const mapped = native.mapPosition(file, line, col);
       if (mapped) [line, col] = mapped;
       if (isV8) col = pastNew(file, line, col);
@@ -130,6 +130,7 @@
   }
 
   internal.formatCallSite = formatCallSite;
+  internal.mappedCallSites = new WeakSet();
 
   // --- small path helpers (the full node:path lives in path.js) ------------
 
