@@ -37,3 +37,33 @@ where they help.
 
 Every failing file in Bun's suite is categorised as a platform limitation or "not worth it",
 with its reason, and the app matrix lists only failures with the same causes.
+
+## Next after crypto, 2026-10-16
+
+Status: Approved.
+
+WebCrypto and Node key APIs remove the earlier `crypto.subtle.generateKey` rejection.
+An integration of main `6f1e576`, PR 13 `eae65c7`, and the crypto branches now reaches
+`TypeError: _promises.default.opendir is not a function` during Next 15.5.6 build.
+The SWC unsupported-platform warning is earlier output, not the terminating error.
+
+Next owner: implement `fs.promises.opendir` and the directory handle iteration/close behavior
+needed by Next. Inspect the promise export registry in
+`crates/bunwasm-runtime/src/js/node_fs.js`, which exports readdir but has no opendir.
+Reproduce in an integration with PR 13 and the crypto PRs, after building the browser artifact:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+scripts/app-matrix.sh --apps=next --engines=browser --hosts=native \
+  --cache=/work/cache/bun-wasm-app-matrix --timeout=90 \
+  --output=/work/reports/bun-wasm-next-opendir \
+  --launcher=/work/tmp/bun-wasm-target/release/bun-wasm
+```
+
+Run through the machine's heavy wrapper. The retained reproduction is
+`/work/reports/bun-wasm-crypto-2026-10-16/next-after/next-browser-build.log`.
+Installation passed; build exited 1 without a timeout; dev produced no diagnostic and start
+was blocked by build. Registry replay had 71 requests, no misses and no errors. Cleanup passed.
+The original matrix summary missed the bracketed error; its raw log and a corrected diagnostic
+projection are retained. The parser has a regression test for that exact format.
