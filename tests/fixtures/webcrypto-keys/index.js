@@ -157,6 +157,19 @@ for (const algorithm of [
       128,
     ),
   );
+  const full = await s.deriveBits(
+    { ...algorithm, public: b.publicKey },
+    a.privateKey,
+  );
+  assert.equal(full.byteLength, algorithm.namedCurve === "P-384" ? 48 : 32);
+  equal(
+    full,
+    await s.deriveBits(
+      { ...algorithm, public: a.publicKey },
+      b.privateKey,
+      null,
+    ),
+  );
   console.log("agree", algorithm.name, algorithm.namedCurve || "ok");
 }
 const hidden = await s.generateKey({ name: "HMAC", hash: "SHA-256" }, false, [

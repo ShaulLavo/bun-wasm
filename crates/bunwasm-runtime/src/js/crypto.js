@@ -437,7 +437,7 @@
         : r.algorithm.namedCurve === "P-384"
           ? 384
           : 256;
-    if (length === null && agreement) length = max;
+    if (length == null && agreement) length = max;
     integer(length, 0, 0x7fffffff, "derived length");
     if (length % 8)
       fail("OperationError", "Derived length must be a multiple of eight");
@@ -546,6 +546,7 @@
     }
   }
   internal.crypto = {
+    isKey: (value) => material.has(value),
     record,
     makeKey,
     generate,
