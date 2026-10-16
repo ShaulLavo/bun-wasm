@@ -14,12 +14,14 @@ if (!directory) {
   try {
     mkdirSync(`${scratch}/retained-tree`);
     const failures: string[] = [];
-    for (const [name, exit] of Array.from(engines.keys()).flatMap(name => [[name, "natural"], [name, "explicit"]])) {
-      writeFileSync(`${scratch}/index.js`, `const fs = require('node:fs');
+    for (const [name, exit] of Array.from(engines.keys()).flatMap(name => [[name, "natural"], [name, "explicit"], [name, "gc"]])) {
+      if (exit === "gc") rmSync(`${scratch}/gc-tree`, { recursive: true, force: true });
+      const source = exit === "gc" ? readFileSync(`${root}/tests/fixtures/fs-opendir-gc/index.js`, "utf8") : `const fs = require('node:fs');
           globalThis.heldDirectories = Array.from({length: 10}, () => fs.opendirSync('/retained-tree'));
           process.on('exit', () => { globalThis.lastDirectory = fs.opendirSync('/retained-tree'); });
-          ${exit === "explicit" ? "process.exit(0);" : ""}`);
-      const result = spawnSync(nodeProcess.execPath, ["--no-warnings", import.meta.filename, name, exit, scratch], { encoding: "utf8", timeout: 60000 });
+          ${exit === "explicit" ? "process.exit(0);" : ""}`;
+      writeFileSync(`${scratch}/index.js`, source);
+      const result = spawnSync(nodeProcess.execPath, ["--expose-gc", "--no-warnings", import.meta.filename, name, exit, scratch], { encoding: "utf8", timeout: 60000 });
       if (result.status !== 0) failures.push(`${name} ${exit}\n${result.stdout}\n${result.stderr}`);
       nodeProcess.stdout.write(result.stdout);
     }
@@ -29,7 +31,7 @@ if (!directory) {
   }
 } else {
   observe().then(() => nodeProcess.exit(0), error => {
-    nodeProcess.stderr.write(`${error.stack || error}\n`);
+    nodeProcess.stderr.write(`${error}\n${error.stack || ""}\n`);
     nodeProcess.exit(1);
   });
 }
@@ -39,6 +41,8 @@ async function observe() {
   const imports = wasi.getImportObject();
   const live = new Set<number>();
   let opened = 0;
+  let collectedDescriptorsReleased = false;
+  const target = mode === "gc" ? "gc-tree" : "retained-tree";
   let instance: WebAssembly.Instance;
   function memory() {
     const value = instance.exports.memory;
@@ -50,7 +54,11 @@ async function observe() {
   imports.wasi_snapshot_preview1.path_open = (fd: number, flags: number, ptr: number, length: number, oflags: number, base: bigint, inheriting: bigint, fdflags: number, out: number) => {
     const name = new TextDecoder().decode(new Uint8Array(memory(), ptr, length));
     const result = originalOpen(fd, flags, ptr, length, oflags, base, inheriting, fdflags, out);
-    if (result === 0 && name.endsWith("retained-tree")) {
+    if (result === 0 && name.endsWith(target)) {
+      if (mode === "gc" && opened === 21) {
+        assert.equal(live.size, 0, "collection and held-owner close released all twenty-one descriptors before exit");
+        collectedDescriptorsReleased = true;
+      }
       live.add(new DataView(memory()).getUint32(out, true));
       opened++;
     }
@@ -71,8 +79,10 @@ async function observe() {
     const exitCode = await startEngineHost({ instance, moduleUrls: "data" });
     assert.equal(exitCode, 0);
   } else assert.equal(code, 0);
-  assert.equal(opened, 11, "ten held owners and one exit-listener owner opened real WASI descriptors");
+  const expected = mode === "gc" ? 22 : 11;
+  assert.equal(opened, expected, "guest owners opened real WASI descriptors");
+  if (mode === "gc") assert(collectedDescriptorsReleased);
   assert.equal(live.size, 0, "guest exit closes every descriptor while its wasm instance is retained");
   assert(memory().byteLength > 0);
-  nodeProcess.stdout.write(`PASS directory descriptors ${engine} ${mode}: 11 opens, 11 closes, retained instance\n`);
+  nodeProcess.stdout.write(`PASS directory descriptors ${engine} ${mode}: ${opened} opens, ${opened} closes, retained instance\n`);
 }
