@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import { createRequire, isBuiltin } from "node:module";
 import WebSocket, { WebSocketServer } from "ws";
 assert.equal(WebSocket.WebSocketServer, WebSocketServer);
 assert.equal(WebSocket.Server, WebSocketServer);
+assert.equal(import.meta.require("ws"), WebSocket);
+const require = createRequire(import.meta.url);
+assert.equal(require("ws"), WebSocket);
+assert.equal(require.resolve.paths("ws"), null);
+assert.equal(isBuiltin("ws"), true);
+assert.equal(isBuiltin("bun:not-a-module"), false);
 const server = http.createServer();
 const wss = new WebSocketServer({ server, perMessageDeflate: false });
 wss.on("connection", socket => socket.on("message", data => socket.send(data)));

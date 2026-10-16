@@ -302,7 +302,7 @@
     Object.assign(Module, {
       builtinModules,
       createRequire,
-      isBuiltin: (name) => Object.prototype.hasOwnProperty.call(reg, name.startsWith("node:") ? name : "node:" + name) || name === "bun" || name.startsWith("bun:"),
+      isBuiltin: (name) => typeof name === "string" && (Object.hasOwn(reg, name) || Object.hasOwn(reg, name.startsWith("node:") ? name : "node:" + name)),
       _cache: internal.moduleCache,
       _extensions: { ".js": () => {}, ".json": () => {}, ".node": () => {} },
       _resolveFilename: (request, parent) => native.resolve(request, (parent && parent.filename) || native.cwd() + "/", true),

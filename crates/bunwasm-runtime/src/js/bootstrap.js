@@ -484,7 +484,7 @@
   }
 
   function isBuiltinId(id) {
-    return id.startsWith("node:") || id === "bun" || id.startsWith("bun:");
+    return id.startsWith("node:") || id === "bun" || id.startsWith("bun:") || Object.hasOwn(builtinFactories, id);
   }
 
   function loadModule(path, format) {
