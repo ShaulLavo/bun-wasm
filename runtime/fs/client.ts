@@ -281,6 +281,7 @@ export class FilesystemClient implements FileSystem {
     } finally { completion.release(); }
   }
   read(handle: FileHandle, chunks: readonly Uint8Array[], offset: number): number {
+    if (!(offset >= 0)) return -28; // EINVAL: positions are never negative.
     const slot = this.directSlot(handle);
     if (slot) {
       try { return this.shared.directRead(slot, handle, chunks, offset, this.revoked, this.connection.owner); }
@@ -323,6 +324,7 @@ export class FilesystemClient implements FileSystem {
     } catch (error) { return total || -errno(error); }
   }
   write(handle: FileHandle, chunks: readonly Uint8Array[], offset: number): number {
+    if (!(offset >= 0)) return -28; // EINVAL: positions are never negative.
     chunks = fixedWriteSources(chunks);
     const slot = this.directSlot(handle);
     if (slot) {

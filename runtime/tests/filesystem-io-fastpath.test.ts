@@ -159,6 +159,36 @@ test("a truncate after the locked copy keeps the coherent bytes", () => {
   } finally { Atomics.compareExchange = compare; cleanup(); }
 });
 
+test("WASI fd_pwrite and fd_pread reject a negative offset with EINVAL", () => {
+  const { client, cleanup } = fixture();
+  const host = atomicHost(client, {});
+  try {
+    const fd = host.wasi.descriptors.open({ kind: "file", handle: 0, offset: 0, append: false }, (1n << 29n) - 1n, 0n);
+    host.iovecs([new Uint8Array([90, 91])]);
+    expect(host.calls.fd_pwrite!(fd, 0, 1, -1n, 1024)).toBe(28);
+    host.iovecs([new Uint8Array(4).fill(7)]);
+    expect(host.calls.fd_pread!(fd, 0, 1, -1n, 1024)).toBe(28);
+    expect(Array.from(new Uint8Array(host.memory.buffer, 2048, 4))).toEqual([7, 7, 7, 7]);
+    const bytes = new Uint8Array(6);
+    expect(client.read(0, [bytes], 0)).toBe(4);
+    expect(Array.from(bytes)).toEqual([65, 66, 67, 68, 0, 0]);
+    expect(host.errors).toEqual([]);
+  } finally { host.wasi.descriptors.dispose(); cleanup(); }
+});
+
+test("retained read and write reject a negative offset without touching the file or guest", () => {
+  const { client, cleanup } = fixture();
+  try {
+    expect(client.write(0, [new Uint8Array([90])], -1)).toBe(-28);
+    const guest = new Uint8Array(4).fill(7);
+    expect(client.read(0, [guest], -1)).toBe(-28);
+    expect(Array.from(guest)).toEqual([7, 7, 7, 7]);
+    const bytes = new Uint8Array(6);
+    expect(client.read(0, [bytes], 0)).toBe(4);
+    expect(Array.from(bytes)).toEqual([65, 66, 67, 68, 0, 0]);
+  } finally { cleanup(); }
+});
+
 const emptyLayouts = [
   { name: "leading", lengths: [0, 2, 2] },
   { name: "middle", lengths: [2, 0, 2] },

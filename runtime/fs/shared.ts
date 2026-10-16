@@ -298,11 +298,11 @@ export class SharedFilesystemState {
       }
     }
   }
-  /** Client in-capacity write (offset >= 0) or append (offset < 0) under one global mutation (odd
-   * epoch) and one file lock, with one revocation check once both are held. Returns the end
-   * offset, or the negated size the service must grow to after both locks exit. Sources must
-   * be fixed-length views. */
-  private direct(slot: number, handle: FileHandle, chunks: readonly Uint8Array[], offset: number, total: number, epoch: Int32Array, revoked: () => boolean, owner: number): number {
+  /** Client in-capacity write at offset, or append at EOF, under one global mutation (odd epoch)
+   * and one file lock, with one revocation check once both are held. Returns the end offset, or
+   * the negated size the service must grow to after both locks exit. Sources must be fixed-length
+   * views; callers reject negative offsets. */
+  private direct(slot: number, handle: FileHandle, chunks: readonly Uint8Array[], append: boolean, offset: number, total: number, epoch: Int32Array, revoked: () => boolean, owner: number): number {
     const cells = this.cells, slots = this.slots, base = slot * SLOT_WORDS, lock = base + FILE_LOCK;
     if (Atomics.compareExchange(cells, GLOBAL_LOCK, 0, owner) !== 0) this.contend(cells, GLOBAL_LOCK, revoked, owner);
     Atomics.add(epoch, 0, 1);
@@ -312,7 +312,7 @@ export class SharedFilesystemState {
         if (revoked()) throw new FilesystemError(11);
         if (slots[base + HANDLE] !== handle + 1) throw new FilesystemError(8);
         const size = slots[base + FILE_SIZE]!;
-        const at = offset < 0 ? size : offset;
+        const at = append ? size : offset;
         if (!total) return at;
         const end = at + total;
         if (end > slots[base + CAPACITY]! * PAGE) return -end;
@@ -329,10 +329,10 @@ export class SharedFilesystemState {
     }
   }
   directWrite(slot: number, handle: FileHandle, chunks: readonly Uint8Array[], offset: number, total: number, epoch: Int32Array, revoked: () => boolean, owner: number): number | undefined {
-    return this.direct(slot, handle, chunks, offset, total, epoch, revoked, owner) < 0 ? undefined : total;
+    return this.direct(slot, handle, chunks, false, offset, total, epoch, revoked, owner) < 0 ? undefined : total;
   }
   directAppend(slot: number, handle: FileHandle, chunks: readonly Uint8Array[], total: number, epoch: Int32Array, revoked: () => boolean, owner: number): { written: number; offset: number } | number {
-    const end = this.direct(slot, handle, chunks, -1, total, epoch, revoked, owner);
+    const end = this.direct(slot, handle, chunks, true, 0, total, epoch, revoked, owner);
     return end < 0 ? -end : { written: total, offset: end };
   }
   /** Caller owns the global mutation lock. Undefined asks for service growth after unlock. */

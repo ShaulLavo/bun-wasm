@@ -136,7 +136,10 @@ service-owned 64 KiB page tables across 16 MiB SAB segments. Original connection
 publish zero-byte growable segment references before execution, so service-owned backing
 growth is visible even to a synchronous guest that cannot drain port messages. Retained file reads and in-capacity
 writes and appends stay in the guest; namespace edits and geometric capacity growth stay
-at the backend boundary. Original per-connection capability tables let cached opens and closes
+at the backend boundary. A guest read holds the file lock once and copies straight into guest
+buffers; writes and appends also hold the global mutation lock. Each checks revocation once
+while holding its locks and reads or writes slot fields only under the lock that guards them.
+Negative `fd_pread`/`fd_pwrite` offsets return EINVAL. Original per-connection capability tables let cached opens and closes
 change atomic local references while the service retains sole ownership of backend pins. The default configurable storage cap is 1 GiB; pool exhaustion uses
 WASI ENOSPC and the per-file page-table limit uses EFBIG. Owner-tagged locks let revocation
 reclaim abandoned guest locks without changing allocator state. This is original bun-wasm code,

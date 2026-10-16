@@ -3,7 +3,7 @@ import { Wasi, type FileSystem } from "../../core";
 const encoder = new TextEncoder();
 const ALL = (1n << 29n) - 1n;
 const signatures: Record<string, string> = {
-  path_open: "iiiiijjii", fd_read: "iiii", fd_write: "iiii", fd_pwrite: "iiiji", fd_tell: "ii", fd_fdstat_set_flags: "ii",
+  path_open: "iiiiijjii", fd_read: "iiii", fd_write: "iiii", fd_pwrite: "iiiji", fd_pread: "iiiji", fd_tell: "ii", fd_fdstat_set_flags: "ii",
 };
 function leb(value: number): number[] {
   const bytes: number[] = [];

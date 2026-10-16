@@ -60,7 +60,9 @@ recheck readiness. No `runtime_proc` imports are implemented here. Read, stat an
 caches are bounded and validated by the shared mutation epoch. Retained open files read and
 write shared pages directly when capacity is already allocated; neither operation needs a port
 round trip. In-capacity appends select EOF and write atomically in the guest too; namespace edits and growth
-remain service-owned. Cached opens/closes use per-connection shared reference counts, while the
+remain service-owned. A direct read takes the file's lock once, checks revocation once while holding it,
+and copies straight into the guest's buffers; writes and appends also hold the global mutation lock,
+so the epoch stays odd until their bytes, size and timestamp are in place. Cached opens/closes use per-connection shared reference counts, while the
 service alone owns backend pins. Preopens and open descriptions retain handles; transient path pins
 are bounded and evicting them invalidates cached paths.
 

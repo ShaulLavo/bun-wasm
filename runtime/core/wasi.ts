@@ -411,6 +411,7 @@ export class Wasi {
         if ((entry.rightsBase & (RIGHT_FD_READ | RIGHT_FD_SEEK)) !== (RIGHT_FD_READ | RIGHT_FD_SEEK)) return ENOTCAPABLE;
         if (entry.resource.kind === "directory") return EISDIR;
         if (entry.resource.kind !== "file") return ESPIPE;
+        if (offset < 0n) return EINVAL;
         const read = this.readIn(entry.resource, this.iovecs(iovs, count), Number(offset));
         if (read < 0) return -read;
         this.view().setUint32(nreadPtr, read, true);
@@ -422,6 +423,7 @@ export class Wasi {
         if ((entry.rightsBase & (RIGHT_FD_WRITE | RIGHT_FD_SEEK)) !== (RIGHT_FD_WRITE | RIGHT_FD_SEEK)) return ENOTCAPABLE;
         if (entry.resource.kind === "directory") return EISDIR;
         if (entry.resource.kind !== "file") return ESPIPE;
+        if (offset < 0n) return EINVAL;
         const written = this.writeOut(entry.resource, iovs, count, Number(offset));
         if (written < 0) return -written;
         this.view().setUint32(nwrittenPtr, written, true);
