@@ -1132,6 +1132,11 @@ data cannot disappear between parser removal and stream consumption. Empty or
 whitespace-only transfer-encoding fields produce `HPE_INVALID_TRANSFER_ENCODING`
 before informational, upgrade or bodyless-response dispatch.
 
+The Streams main integration keeps HTTP transport work in Writable lifecycle
+hooks. The original TCP adapter defers socket-destroy completion to the check
+phase so the completed request stream closes before its socket, as in Node.
+`net-http-close-order` compares this order unchanged on Node and all engines.
+
 HTTPS requests continue to use the host's TLS fetch transport. The raw socket
 ABI has no TLS capability, so HTTPS upgrades without a caller-supplied connection
 fail with `ERR_TLS_NOT_SUPPORTED` instead of opening a plaintext connection.
