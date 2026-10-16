@@ -1,0 +1,1 @@
+process.stdout.write("x".repeat(8 * 1024 * 1024));
