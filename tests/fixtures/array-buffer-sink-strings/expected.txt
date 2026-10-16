@@ -1,0 +1,4 @@
+lone high true
+lone low true
+mixed text true
+valid pair true

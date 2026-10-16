@@ -1,0 +1,6 @@
+DataView shadowed bounds true
+DataView throwing getters true
+Uint8Array shadowed bounds true
+Uint8Array throwing getters true
+Uint16Array shadowed bounds true
+Uint16Array throwing getters true
