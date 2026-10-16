@@ -1069,6 +1069,9 @@ physical capacity, so geometric growth can fall back to the remaining free pages
 Metadata remains within the original
 24 MiB connection buffer. Allocation range errors use WASI EFBIG, number 22;
 number 27 is EINTR and would make Rust retry a rejected write indefinitely.
+The original browser test adapter in `web/tests/stop-shell.ts` waits for an idle
+shell before submitting the next command. Ctrl-C text can appear before
+asynchronous worker cleanup finishes.
 The synchronous path reads the WASI descriptor without Rust stdin prefetching.
 The native WASI and host interfaces share a buffer, including bytes read ahead.
 This prevents Go's service loop from blocking JavaScript callbacks and preserves
