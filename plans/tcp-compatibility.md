@@ -62,6 +62,32 @@ child ABI deliberately cannot run. These first blockers do not establish that
 all later assertions need the same fix. Preserve them in the compatibility
 campaign rather than posting new issues.
 
+## CLI preview port isolation
+
+Status: Approved.
+
+During the round-two TCP gates, `scripts/test-web.sh` failed ten CLI fixture
+comparisons with an extra diagnostic:
+
+```text
+[preview] port 49152: Error: Failed to start server. Is port 49152 in use?
+```
+
+The guest assertions still produced their expected output. All 24 web unit
+tests and the Chromium/WebKit checks passed. The complete failing run is
+`/work/reports/bun-wasm-tcp-fanout-2026-10-16/tcp-web.log`. No listener or
+TIME_WAIT connection using 49152 remained when inspected afterward, so the
+identity of the conflicting binder is unknown. This was observed once; the
+retry is recorded separately in that report.
+
+Inspect `web/scripts/net-helper.ts` in `serve(port)` and the `EPHEMERAL_BASE`
+allocation in `web/src/net/host.ts`. The CLI helper binds the guest virtual port
+directly on the real host, including guest-selected ephemeral ports. Concurrent
+CLI helpers therefore share that host namespace. Give automatic guest listeners
+isolated host ports while keeping external preview URLs correct. First force
+a collision in an isolated fixture, then verify both helpers and their teardown.
+Do not stop another session or mask the diagnostic in fixture expectations.
+
 ## Framework commands after ws import
 
 The complete [offline replay](../docs/app-matrix/ws-results.md) uses integration

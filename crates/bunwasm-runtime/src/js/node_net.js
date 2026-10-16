@@ -18,6 +18,8 @@
         this._writes = [];
         this._decoder = null;
         this._paused = false;
+        this._pipes = new Set();
+        this._awaitDrain = new Set();
         this._highWaterMark = options.highWaterMark ?? 65536;
         this.allowHalfOpen = Boolean(options.allowHalfOpen);
         this.readable = options.readable !== false;
@@ -212,9 +214,19 @@
         return result;
       }
       pipe(destination, options = {}) {
-        const receive = chunk => { if (!destination.write(chunk)) this.pause(); };
-        const drain = () => this.resume();
+        const receive = chunk => {
+          if (destination.write(chunk) || !this._pipes.has(pipe)) return;
+          this._awaitDrain.add(pipe);
+          this.pause();
+        };
+        const drain = () => {
+          if (!this._awaitDrain.delete(pipe)) return;
+          internal.nextTick(() => {
+            if (!this._awaitDrain.size && this._pipes.size && !this.destroyed && this.listenerCount("data")) this.resume();
+          });
+        };
         const cleanup = () => {
+          if (!this._pipes.delete(pipe)) return;
           this.removeListener("data", receive);
           this.removeListener("end", end);
           this.removeListener("close", cleanup);
@@ -223,6 +235,7 @@
           destination.removeListener("close", cleanup);
           destination.removeListener("finish", cleanup);
           destination.removeListener("error", destinationError);
+          drain();
         };
         const sourceError = err => {
           cleanup();
@@ -236,6 +249,8 @@
           cleanup();
           if (options.end !== false && destination !== globalThis.process.stdout && destination !== globalThis.process.stderr) destination.end();
         };
+        const pipe = { destination, cleanup };
+        this._pipes.add(pipe);
         this.on("data", receive);
         this.once("end", end);
         this.once("close", cleanup);
@@ -246,6 +261,15 @@
         destination.once("error", destinationError);
         destination.emit("pipe", this);
         return destination;
+      }
+      unpipe(destination) {
+        for (const pipe of Array.from(this._pipes)) {
+          if (destination && destination !== pipe.destination) continue;
+          pipe.cleanup();
+          pipe.destination.emit("unpipe", this);
+        }
+        if (!this._pipes.size) this.pause();
+        return this;
       }
       pause() { this._paused = true; this._flowing = false; return this; }
       resume() { this._paused = false; this._flowing = true; this._flush(); if (native.wake) native.wake(0); return this; }
