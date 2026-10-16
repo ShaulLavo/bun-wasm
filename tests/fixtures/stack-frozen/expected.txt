@@ -1,0 +1,14 @@
+frozen Error ok
+frozen capture ok
+frozen empty capture rejects ok
+frozen existing capture rejects ok
+sealed Error ok
+sealed capture ok
+sealed empty capture rejects ok
+sealed existing capture rejects ok
+nonextensible Error ok
+nonextensible capture ok
+nonextensible empty capture rejects ok
+nonextensible existing capture rejects ok
+nonconfigurable capture rejects ok
+recapture replaces memo ok

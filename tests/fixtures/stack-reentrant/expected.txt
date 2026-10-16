@@ -1,0 +1,6 @@
+self reentrant ok
+new Error reentrant ok
+nested capture reentrant ok
+throw clears guard ok
+self read survives formatter throw ok
+nested read survives formatter throw ok
