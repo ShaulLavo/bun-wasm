@@ -34,11 +34,12 @@
         this._readableState = { get endEmitted() { return socket.readableEnded; } };
         this._writableState = { get length() { return socket.writableLength; }, get finished() { return socket.writableFinished; }, get needDrain() { return socket.writableNeedDrain; }, errorEmitted: false };
         this.on("newListener", event => {
-          if (event === "data" && !this._paused) internal.nextTick(() => { if (!this._paused) this.resume(); });
+          if (event === "data" && !this._paused) internal.nextTick(() => this._resumeIfUnpaused());
         });
         if (options.encoding) this.setEncoding(options.encoding);
         if (options.signal) this._useSignal(options.signal);
       }
+      _resumeIfUnpaused() { if (!this._paused) this.resume(); }
       get connecting() { return this._phase === "connecting"; }
       get pending() { return this._phase === "idle" || this.connecting; }
       get readyState() {
@@ -65,20 +66,22 @@
         this._updatePeer();
         conn.canRead = () => this.readable && (this._flowing || this.readableLength < this._highWaterMark);
         conn.onData = chunk => this._receive(chunk);
-        conn.onEnd = () => {
-          if (this._decoder) {
-            const tail = this._decoder.end();
-            if (tail) this._buffer.push(tail);
-          }
-          this._ended = true;
-          this._flush();
-        };
+        conn.onEnd = () => this._receiveEnd();
         conn.onError = err => this.destroy(err);
         const previousClose = conn.onClose;
         conn.onClose = () => { if (previousClose) previousClose(); if (!this.destroyed) this.destroy(); };
         conn.startReading();
         this._setRef();
         this._touch();
+      }
+      _receiveEnd() {
+        if (this._decoder) {
+          const tail = this._decoder.end();
+          if (tail) this._buffer.push(tail);
+        }
+        this._ended = true;
+        this.emit("readable");
+        this._flush();
       }
       _updatePeer() {
         const peer = this._conn.peer();
@@ -108,23 +111,27 @@
         this._phase = "connecting";
         if (options.highWaterMark !== undefined) this._highWaterMark = options.highWaterMark;
         if (options.lookup && typeof options.host === "string" && !internal.require("net_address").isIP(options.host)) {
-          options.lookup(options.host, { family: options.family || 0, all: options.autoSelectFamily !== false }, (err, addresses, family) => {
-            if (this.destroyed) return;
-            if (err) { this.destroy(err); return; }
-            const address = typeof addresses === "string" ? addresses : addresses[0]?.address;
-            this.emit("lookup", null, address, family || addresses[0]?.family, options.host);
-            this._dial(Object.assign({}, options, { host: address }), targetPort);
-          });
+          options.lookup(options.host, { family: options.family || 0, all: options.autoSelectFamily !== false },
+            (err, addresses, family) => this._lookupResult(options, targetPort, err, addresses, family));
           return this;
         }
         this._dial(options, targetPort);
         return this;
       }
+      _lookupResult(options, targetPort, err, addresses, family) {
+        if (this.destroyed) return;
+        if (err) { this.destroy(err); return; }
+        const address = typeof addresses === "string" ? addresses : addresses[0]?.address;
+        this.emit("lookup", null, address, family || addresses[0]?.family, options.host);
+        if (!this.destroyed) this._dial(Object.assign({}, options, { host: address }), targetPort);
+      }
       _dial(options, targetPort) {
         const target = options.host || "localhost";
         const family = internal.require("net_address").isIP(target);
-        if (options.blockList?.check(target === "localhost" ? "127.0.0.1" : target, family === 6 ? "ipv6" : "ipv4")) {
-          internal.nextTick(() => this.destroy(error(Error, "ERR_IP_BLOCKED", "IP address is blocked")));
+        // The host ABI resolves names only after opening a connection. Deny names when a
+        // BlockList is present so DNS cannot bypass the address check.
+        if (options.blockList && (!family || options.blockList.check(target, family === 6 ? "ipv6" : "ipv4"))) {
+          internal.nextTick(() => this.destroy(error(Error, "ERR_IP_BLOCKED", family ? "IP address is blocked" : "Hostnames with a BlockList require a lookup that returns a literal IP address")));
           return;
         }
         const handle = native.hostConnect(target, targetPort);
@@ -132,33 +139,36 @@
           internal.nextTick(() => this.destroy(hostError(0, "connect failed")));
           return this;
         }
-        const conn = new Connection(handle);
+        this._conn = new Connection(handle);
         this._attempt = { address: target, port: targetPort, family: family || 4 };
         this.emit("connectionAttempt", target, targetPort, family || 4);
-        this._conn = conn;
-        this._connecting = addWaiter({ ref: this._referenced, step: () => {
-          if (this.destroyed) return true;
-          const ready = native.hostWrite(handle, new Uint8Array(0));
-          if (ready === -2) return false;
-          if (ready < 0) {
-            const err = hostError(handle, "connect failed");
-            err.syscall = err.syscall || "connect";
-            if (err.code === "ENOTFOUND") err.hostname = target;
-            else { err.address = target; err.port = targetPort; }
-            this.destroy(err);
-            return true;
-          }
-          this._connecting = null;
-          this._attempt = null;
-          this._attach(conn);
-          for (const item of this._writes.splice(0)) this._send(item);
-          this.emit("connect");
-          if (this.destroyed) return true;
-          this.emit("ready");
-          if (this.writableEnded) this._finishWrite();
-          return true;
-        }, fail: err => this.destroy(err) });
+        if (this.destroyed) return this;
+        this._connecting = addWaiter({ ref: this._referenced, step: () => this._connectStep(target, targetPort), fail: err => this.destroy(err) });
         return this;
+      }
+      _connectStep(target, targetPort) {
+        if (this.destroyed) return true;
+        const conn = this._conn;
+        const ready = native.hostWrite(conn.handle, new Uint8Array(0));
+        if (ready === -2) return false;
+        if (ready < 0) {
+          const err = hostError(conn.handle, "connect failed");
+          err.syscall = err.syscall || "connect";
+          if (err.code === "ENOTFOUND") err.hostname = target;
+          else { err.address = target; err.port = targetPort; }
+          this.destroy(err);
+          return true;
+        }
+        this._connecting = null;
+        this._attempt = null;
+        this._attach(conn);
+        while (this._writes.length && !this.destroyed) this._send(this._writes.shift());
+        if (this.destroyed) return true;
+        this.emit("connect");
+        if (this.destroyed) return true;
+        this.emit("ready");
+        if (this.writableEnded) this._finishWrite();
+        return true;
       }
       _receive(chunk) {
         this.bytesRead += chunk.length;
@@ -181,13 +191,61 @@
       }
       read(size) {
         if (size === 0) return null;
-        if (!this._buffer.length) { this._flush(); return null; }
-        const chunk = this._buffer.shift();
-        let result = chunk;
-        if (size > 0 && size < chunk.length) { result = chunk.slice(0, size); this._buffer.unshift(chunk.slice(size)); }
+        if (size > this._highWaterMark) {
+          this._highWaterMark = size;
+          if (native.wake) native.wake(0);
+        }
+        const available = this.readableLength;
+        if (!available || (size > available && !this._ended)) { this._flush(); return null; }
+        let remaining = size > 0 ? Math.min(size, available) : this._buffer[0].length;
+        const parts = [];
+        while (remaining > 0) {
+          const chunk = this._buffer.shift();
+          const count = Math.min(remaining, chunk.length);
+          parts.push(chunk.slice(0, count));
+          if (count < chunk.length) this._buffer.unshift(chunk.slice(count));
+          remaining -= count;
+        }
+        const result = this._decoder ? parts.join("") : Buffer.concat(parts);
         internal.nextTick(() => this._flush());
         if (native.wake) native.wake(0);
         return result;
+      }
+      pipe(destination, options = {}) {
+        const receive = chunk => { if (!destination.write(chunk)) this.pause(); };
+        const drain = () => this.resume();
+        const cleanup = () => {
+          this.removeListener("data", receive);
+          this.removeListener("end", end);
+          this.removeListener("close", cleanup);
+          this.removeListener("error", sourceError);
+          destination.removeListener("drain", drain);
+          destination.removeListener("close", cleanup);
+          destination.removeListener("finish", cleanup);
+          destination.removeListener("error", destinationError);
+        };
+        const sourceError = err => {
+          cleanup();
+          if (this.listenerCount("error") === 0) throw err;
+        };
+        const destinationError = err => {
+          cleanup();
+          if (destination.listenerCount("error") === 0) throw err;
+        };
+        const end = () => {
+          cleanup();
+          if (options.end !== false && destination !== globalThis.process.stdout && destination !== globalThis.process.stderr) destination.end();
+        };
+        this.on("data", receive);
+        this.once("end", end);
+        this.once("close", cleanup);
+        this.once("error", sourceError);
+        destination.on("drain", drain);
+        destination.once("close", cleanup);
+        destination.once("finish", cleanup);
+        destination.once("error", destinationError);
+        destination.emit("pipe", this);
+        return destination;
       }
       pause() { this._paused = true; this._flowing = false; return this; }
       resume() { this._paused = false; this._flowing = true; this._flush(); if (native.wake) native.wake(0); return this; }
@@ -220,9 +278,9 @@
       }
       _send(item) {
         this._touch();
-        this._conn.write(item.bytes, () => {
-          this.writableLength -= item.bytes.length;
-          if (item.callback) item.callback();
+        this._conn.write(item.bytes, err => {
+          if (!this.destroyed) this.writableLength -= item.bytes.length;
+          if (item.callback) item.callback(err);
           if (this.writableLength === 0 && this.writableNeedDrain && !this.destroyed) { this.writableNeedDrain = false; this.emit("drain"); }
         });
       }
@@ -248,6 +306,7 @@
       destroy(err) {
         if (this.destroyed) return this;
         const attempt = this.connecting ? this._attempt : null;
+        const writeError = err || error(Error, this.pending ? "ERR_SOCKET_CLOSED_BEFORE_CONNECTION" : "ERR_STREAM_DESTROYED", this.pending ? "Socket closed before the connection was established" : "Cannot call write after a stream was destroyed");
         this.destroyed = true;
         this._phase = "closed";
         this._attempt = null;
@@ -255,9 +314,14 @@
         this.readable = this.writable = false;
         clearTimeout(this._timeoutTimer);
         if (this._connecting) waiters.delete(this._connecting);
-        this._writes = [];
+        this._connecting = null;
+        this.writableNeedDrain = false;
+        this.writableLength = 0;
+        for (const item of this._writes.splice(0)) {
+          if (item.callback) internal.nextTick(() => item.callback(writeError));
+        }
+        if (this._conn) this._conn.destroy(writeError);
         internal.nextTick(() => { if (err) this.emit("error", err); this.emit("close", Boolean(err)); });
-        if (this._conn) this._conn.destroy();
         return this;
       }
       [Symbol.asyncDispose]() {
@@ -268,7 +332,8 @@
       resetAndDestroy() { return this.destroy(); }
       setTimeout(ms, callback) {
         if (!Number.isFinite(ms) || ms < 0) throw error(RangeError, "ERR_OUT_OF_RANGE", "Invalid timeout");
-        if (callback) this.once("timeout", callback);
+        if (callback && ms > 0) this.once("timeout", callback);
+        else if (callback) this.removeListener("timeout", callback);
         this.timeout = ms;
         this._touch();
         return this;

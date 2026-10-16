@@ -99,7 +99,10 @@ The other address helpers, `node_net.js`, `bun_tcp.js`, and the changes to
 `net.js`, the Rust host and the browser hosts are original adapters. They share
 one byte transport with fetch, Bun.serve, and WebSockets. The added host slots
 provide write-side shutdown and the local endpoint. HTTP upgrade listeners get
-a real Socket with the bytes received after the request header.
+a real Socket with the bytes received after the request header. The original
+adapters also own pipe backpressure, cancellation of queued writes, exact-size
+reads, timeout listener cancellation, and bounded HTTP upgrade handshakes.
+No additional upstream implementation was copied for these corrections.
 
 Bun's `src/js/node/net.ts` depends on native Bun sockets, private stream modules,
 and runtime intrinsics. Its BlockList and SocketAddress use native bindings.
