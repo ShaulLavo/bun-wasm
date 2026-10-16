@@ -205,3 +205,69 @@ are separate runtime API and module-linker work:
   The expected output is `ok`. The browser host reports the same syntax error.
   Retained diagnostics and the minimal source are in
   `/work/reports/bun-wasm-rollup/browser-diagnostic/`.
+
+## Console and Vitest rerun, 2026-10-16
+
+`node:console` now exports Bun's own `Console` constructor from
+`src/js/builtins/ConsoleObject.ts`. It supports positional and options-object
+construction, independent stdout/stderr streams, bound methods, color mode,
+inspect options, group indentation, counters, timers, tracing, and tables.
+`console.Console` is the same export. The global singleton retains its Bun
+formatter. The generated factory and original adapter run on all three engines;
+[the builtin notes](../bun-builtins.md#console-constructor) explain why this
+global-object builtin is loaded separately from Bun's module registry.
+
+The offline Vitest 3.2.4 fixture still installs on every engine. Its complete
+test command still fails, with these first blockers:
+
+| Engine | Before | After |
+| --- | --- | --- |
+| QuickJS | Missing `node:console.Console` export | `Cannot find package 'ws' from '/node_modules/vite/dist/node/chunks/config.js'` |
+| JSC | Missing `node:console.Console` export | Same missing `ws` builtin |
+| Browser engine | Import-method linker syntax error | Same linker error, `SyntaxError: Unexpected token '.'` |
+
+QuickJS and JSC now reach the same Vite builtin boundary described in the
+[Rollup rerun](#rollup-distribution-rerun-2026-10-16). Vite's config module
+selects `import.meta.require("ws").WebSocketServer` when `process.versions.bun`
+is set. This requires the real Bun WebSocket server adapter and is assigned to
+the separate WebSocket track. No package was injected into the app fixture to
+hide that missing builtin. PR #13 addresses the browser linker independently.
+
+The unchanged upstream `test/js/node/console/` slice contains three files.
+All engines start at zero fully passing files, zero passing tests, three failed
+tests, one collection error, and zero timeouts.
+
+| Engine | Fully passing files after | Passing tests | Failed tests | Collection errors | Timeouts |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| QuickJS | 2/3 | 8 | 1 | 0 | 0 |
+| JSC | 3/3 | 9 | 0 | 0 | 0 |
+| Browser engine | 3/3 | 9 | 0 | 0 | 0 |
+
+QuickJS's unchanged failure is the recursive child in
+`console-constructor-exception.test.ts`. It traps with `wasm trap: call stack
+exhausted` before JavaScript can catch a RangeError. Both the original runtime
+and the Console runtime exhibit the same trap. The
+[stack follow-up](../../plans/compatibility-followups.md#quickjs-recursion-traps-before-javascript-can-catch-the-error)
+records the command, backtrace, and engine policy to investigate. The new local
+fixtures pass on every engine, including asynchronous stream callbacks and the
+Writable destroy hook used by the upstream tests.
+
+Reproduce each engine's upstream slice and the app row through the heavy wrapper:
+
+```sh
+source env.sh
+scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 \
+  --launcher "$CARGO_TARGET_DIR/release/bun-wasm" \
+  --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" \
+  --output /work/tmp/bun-wasm-console-upstream.json js/node/console
+scripts/app-matrix.sh --apps=vitest --engines=quickjs,jsc,browser --hosts=native \
+  --output=/work/tmp/bun-wasm-console-vitest
+```
+
+Use fresh output paths, and substitute `jsc` or `browser` for the suite comparison.
+Raw records are retained in `/work/reports/bun-wasm-console/`, including
+`console-{before,after}-<engine>.json` and `vitest-{before,after}/`.
+The before artifacts embed the original main JavaScript through the build-time
+override directory. Before and after use the same vendor checkout and launcher;
+their hashes are recorded by both runners. The fixture and registry cache are
+unchanged between app runs, with no missing replay objects.
