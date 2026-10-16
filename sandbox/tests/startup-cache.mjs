@@ -99,8 +99,8 @@ async function checkEditedDependencies(page) {
     const { editor, fs } = globalThis.sandbox;
     await editor.open("package.json");
     editor.setText(new TextDecoder().decode(await fs.readFile("/home/user/app/package.json")) + "\n");
+    await editor.flush("package.json");
   });
-  await page.waitForFunction(() => Object.hasOwn(JSON.parse(sessionStorage.getItem("bun-wasm-sandbox:edits:react") ?? "{}"), "package.json"));
   await clearPhases(page);
   await page.click("#restart");
   await page.waitForFunction(() => performance.getEntriesByName("bunwasm:bundled-react").length > 0, null, { timeout: TIMEOUT });
