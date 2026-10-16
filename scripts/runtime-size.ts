@@ -32,9 +32,12 @@ export function checkCoreBudget(gzipBytes: number): void {
   if (gzipBytes > budget) throw new Error(`core exceeds ${budget} B gzip budget by ${gzipBytes - budget} B; inspect runtime/core imports and the layer report`);
 }
 
-/** Only the generic service is lazy; Bun's existing slot/pipe adapter stays separately visible. */
+/** Only the reservation primitives are eager; Bun's slot/pipe adapter is separately visible. */
 export function processServiceInputs(inputs: readonly string[]): string[] {
-  return inputs.filter(path => /(?:^|\/)runtime\/proc\/(?:index|supervisor|registry|table)\.ts$/.test(path));
+  return inputs.filter(path => {
+    const match = /(?:^|\/)runtime\/proc\/(.+)\.ts$/.exec(path);
+    return match !== null && !["identity", "stub", "outcome", "types"].includes(match[1]!);
+  });
 }
 export function checkLazyProcessService(inputs: readonly string[]): void {
   const eager = processServiceInputs(inputs);
@@ -120,7 +123,7 @@ export async function runtimeSizeReport() {
     layer("fs", ["runtime/fs/index.ts"], 6),
     layer("net", ["web/src/net/host.ts", "web/src/net/helper.ts", "web/src/preview.ts"], 14),
     layer("proc", ["runtime/proc/index.ts"], 8),
-    layer("proc-stub", ["runtime/proc/stub.ts"], 1),
+    layer("proc-stub", ["runtime/proc/stub.ts", "runtime/proc/outcome.ts"], 1),
     layer("bun-process-adapter", ["web/src/subprocess.ts", "web/src/subprocess-broker.ts"], 8),
   ]);
   // This separately linked preview client uses a source-wrapper plugin; measure its real build.

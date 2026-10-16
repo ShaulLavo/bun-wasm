@@ -2,6 +2,7 @@ import type { Stream } from "@bun-wasm/runtime/core";
 import type { EngineNet } from "./net/host";
 import type { SlotImpls } from "./net/trampoline";
 import { ProcessIdentityAllocator } from "../../runtime/proc/identity.ts";
+import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
 import { memoryViews } from "../../runtime/core/memory-views.js";
 
 export interface SpawnMeta {
@@ -21,6 +22,7 @@ export interface ChildTransport {
   identity: SharedArrayBuffer;
   interrupt: SharedArrayBuffer;
   requestedSignal: SharedArrayBuffer;
+  outcome: SharedArrayBuffer;
   budget: SharedArrayBuffer;
   slot: number;
   token: number;
@@ -41,6 +43,8 @@ export interface SubprocessOptions {
   slot?: number;
   token?: number;
   stdin?: SharedArrayBuffer;
+  /** Shared process capability revocation, including roots without a budget slot. */
+  revoked?(): boolean;
   onChildClose?(pid: number): void;
   launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): ChildWorker;
   /** Return false when the inherited reader has closed. */
@@ -206,10 +210,13 @@ export function childTransport(transport: ChildTransport) {
     stdin: new SharedPipe(transport.pipes[0], transport.budget),
     stdout: new SharedPipe(transport.pipes[1], transport.budget),
     stderr: new SharedPipe(transport.pipes[2], transport.budget),
-    finish(code: number) {
+    finish(code: number, signal?: number) {
+      const result = claimOutcome(outcomeWord(transport.outcome), signal === undefined
+        ? { kind: "exited", code }
+        : { kind: "signaled", code: signal });
       const cells = new Int32Array(transport.control, 0, 4);
       if (Atomics.load(cells, 0)) return;
-      Atomics.store(cells, 1, Atomics.load(new Int32Array(transport.requestedSignal), 0) === 9 ? 137 : code);
+      Atomics.store(cells, 1, result.status);
       for (const [fd, pipe] of transport.pipes.entries()) {
         if (fd === 0 && transport.inheritedStdin) continue;
         new SharedPipe(pipe, transport.budget).close();
@@ -246,6 +253,7 @@ export class SubprocessHost {
   memory: ReturnType<typeof memoryViews> | null;
   stdin: SharedPipe | null;
   stdinWaiting: boolean;
+  private detached = false;
   constructor(options: SubprocessOptions) {
     this.options = options;
     this.budget = options.budget || createProcessBudget();
@@ -270,6 +278,7 @@ export class SubprocessHost {
     return -1;
   }
   parentActive(cells: Int32Array) {
+    if (this.detached || this.options.revoked?.()) return false;
     const slot = this.options.slot;
     if (slot === undefined) return true;
     const state = Atomics.load(cells, slot + 2);
@@ -326,7 +335,7 @@ export class SubprocessHost {
     }
     const transport: ChildTransport = {
       pid: id, parentPid: this.options.pid ?? 1, jobId, identity: this.identity,
-      interrupt: new SharedArrayBuffer(4), requestedSignal: new SharedArrayBuffer(4),
+      interrupt: new SharedArrayBuffer(4), requestedSignal: new SharedArrayBuffer(4), outcome: new SharedArrayBuffer(8),
       budget: this.budget, slot, token, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16),
     };
     const pipes = transport.pipes.map((buffer) => new SharedPipe(buffer, this.budget));
@@ -381,7 +390,8 @@ export class SubprocessHost {
   }
   close(handle: number) {
     if (this.children.has(handle)) {
-      this.kill(handle, 9);
+      const result = this.kill(handle, 9);
+      if (result < 0) return result;
       this.release(handle);
       return 0;
     }
@@ -393,13 +403,17 @@ export class SubprocessHost {
     return 0;
   }
   wait(id: number) {
+    if (!this.parentActive(new Int32Array(this.budget))) return this.fail("wait: process is no longer active", "ESRCH");
+    return this.waitInternal(id);
+  }
+  private waitInternal(id: number) {
     const child = this.children.get(id);
     if (!child) return BADF;
     this.drainInherited(child);
     const cells = new Int32Array(child.transport.control, 0, 4);
     if (!Atomics.load(cells, 0)) return AGAIN;
     if (!child.ended) this.reap(child);
-    return Atomics.load(new Int32Array(child.transport.requestedSignal), 0) === 9 ? 137 : Atomics.load(cells, 1);
+    return readOutcome(outcomeWord(child.transport.outcome))!.status;
   }
   reap(child: Child) {
     child.ended = true;
@@ -417,11 +431,22 @@ export class SubprocessHost {
     this.options.onChildClose?.(child.transport.pid);
   }
   kill(id: number, signal = 15) {
+    if (!this.parentActive(new Int32Array(this.budget))) return this.fail("kill: process is no longer active", "ESRCH");
+    // This control operation was admitted alive; concurrent revocation may linearize afterward.
+    return this.killInternal(id, signal);
+  }
+  private killInternal(id: number, signal: number) {
     const child = this.children.get(id);
     if (!child) return BADF;
     if (![0, 2, 9, 13, 15].includes(signal)) return this.fail("kill: invalid signal", "EINVAL");
-    if (this.wait(id) !== AGAIN || signal === 0) return 0;
+    if (this.waitInternal(id) !== AGAIN || signal === 0) return 0;
     const transport = child.transport;
+    const outcome = outcomeWord(transport.outcome);
+    const terminal = signal === 9 ? claimOutcome(outcome, { kind: "signaled", code: 9 }) : readOutcome(outcome);
+    if (terminal) {
+      if (terminal.kind !== "signaled" || terminal.code !== 9) return 0;
+      signal = 9;
+    }
     const requested = new Int32Array(transport.requestedSignal);
     for (;;) {
       const previous = Atomics.load(requested, 0);
@@ -443,9 +468,9 @@ export class SubprocessHost {
     child.worker?.revoke?.();
     Atomics.store(new Int32Array(transport.control), 3, 1);
     // Close this process's endpoints before physical teardown; inherited stdin is not ours.
-    childTransport(transport).finish(128 + signal);
+    childTransport(transport).finish(128 + signal, signal);
     child.worker?.terminate();
-    this.wait(id);
+    this.waitInternal(id);
     return 0;
   }
   drainInherited(child: Child) {
@@ -473,7 +498,7 @@ export class SubprocessHost {
     return Atomics.load(cells, 1) !== seen ? 1 : 0;
   }
   watch() {
-    if (this.timer !== null) return;
+    if (this.detached || this.timer !== null) return;
     this.timer = nativeSetTimeout(() => {
       this.timer = null;
       this.poll();
@@ -482,6 +507,7 @@ export class SubprocessHost {
     }, 4);
   }
   detach() {
+    this.detached = true;
     this.stdinWaiting = false;
     if (this.timer !== null) nativeClearTimeout(this.timer);
     this.timer = null;
@@ -489,7 +515,8 @@ export class SubprocessHost {
   dispose() {
     this.detach();
     for (const id of this.children.keys()) {
-      this.kill(id, 9);
+      // Host-owned teardown is not a guest control entry and must also clean detached fixtures.
+      this.killInternal(id, 9);
       this.release(id);
     }
   }

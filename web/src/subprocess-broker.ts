@@ -2,6 +2,7 @@
 // blocked guest workers never have to activate a MessageChannel or a nested Worker.
 import type { ChildExitEvent, ProcessContext, ProcessExit, ProcessSupervisor, Signal } from "../../runtime/proc";
 import { isRevoked } from "../../runtime/fs/protocol";
+import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
 import type { SharedFilesystem } from "./shared-fs";
 import { childTransport } from "./subprocess.ts";
 import type { Engine, RunRequest, SpawnRequest, WorkerMessage } from "./worker";
@@ -54,7 +55,7 @@ export class SubprocessBroker {
   private exited(supervisor: ProcessSupervisor, event: ChildExitEvent): void {
     const child = this.children.get(event.pid);
     if (child) {
-      childTransport(child.spawn.child).finish(event.result.status);
+      childTransport(child.spawn.child).finish(event.result.status, event.result.kind === "signaled" ? event.result.code : undefined);
       if (!child.acknowledged) this.filesystem.revoke(child.spawn.filesystem);
       if (!child.worker) this.children.delete(event.pid);
     }
@@ -76,7 +77,7 @@ export class SubprocessBroker {
       supervisor.reserveSpawn(spawn.parentPid, {
         executable: spawn.executable, argv: spawn.argv, env: spawn.env, cwd: spawn.cwd,
         job: spawn.job ?? spawn.jobId, fds: [],
-      }, { pid: spawn.pid, job: spawn.jobId, interrupt: spawn.child.interrupt, requestedSignal: spawn.child.requestedSignal });
+      }, { pid: spawn.pid, job: spawn.jobId, interrupt: spawn.child.interrupt, requestedSignal: spawn.child.requestedSignal, outcome: spawn.child.outcome });
       const signal = Atomics.load(new Int32Array(spawn.child.requestedSignal), 0);
       if (signal) { child.signal = signal; supervisor.observeSignal(spawn.pid, signal); }
       return supervisor.start(spawn.pid);
@@ -214,10 +215,13 @@ export class SubprocessBroker {
   }
   private report(error: unknown): void { console.error("bun-wasm: process controller failed", error); }
   private cancel(spawn: SpawnRequest): void {
-    Atomics.store(new Int32Array(spawn.child.requestedSignal), 0, 9);
-    Atomics.store(new Int32Array(spawn.child.interrupt), 0, 9);
+    const result = claimOutcome(outcomeWord(spawn.child.outcome), { kind: "signaled", code: 9 });
+    if (result.kind === "signaled" && result.code === 9) {
+      Atomics.store(new Int32Array(spawn.child.requestedSignal), 0, 9);
+      Atomics.store(new Int32Array(spawn.child.interrupt), 0, 9);
+    }
     this.filesystem.revoke(spawn.filesystem);
-    childTransport(spawn.child).finish(137);
+    childTransport(spawn.child).finish(result.status, result.kind === "signaled" ? result.code : undefined);
   }
   private watch(): void {
     if (this.timer !== null || this.disposed) return;
@@ -225,8 +229,18 @@ export class SubprocessBroker {
       this.timer = null;
       void this.ready().then(supervisor => {
         for (const [pid, child] of this.children) {
+          const record = supervisor.get(pid);
+          if (!record || record.result) continue;
+          // A publisher can stop after the atomic decision but before writing the wake header.
+          // Adopt that decision; physical teardown still waits for filesystem quiescence.
+          const result = readOutcome(record.outcome);
+          if (result) {
+            if (result.kind === "signaled") supervisor.defaultSignal(pid, result.code);
+            else supervisor.exit(pid, result.code);
+            continue;
+          }
           const signal = Atomics.load(new Int32Array(child.spawn.child.requestedSignal), 0);
-          if (!signal || signal === child.signal || !supervisor.get(pid)) continue;
+          if (!signal || signal === child.signal) continue;
           child.signal = signal;
           supervisor.observeSignal(pid, signal);
         }

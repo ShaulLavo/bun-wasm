@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ExecutableRegistry, FirstSpawnStub, ProcessIdentityAllocator, ProcessSupervisor, Signal, type ProcessContext, type SpawnRequest } from "../proc";
+import { ExecutableRegistry, FirstSpawnStub, ProcessIdentityAllocator, ProcessSupervisor, Signal, claimOutcome, type ProcessContext, type SpawnRequest } from "../proc";
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
 function deferred<T>() {
@@ -500,4 +500,42 @@ test("persistent SIGKILL wins when its pending interrupt was consumed before a s
   expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: 9, status: 137 });
   expect(Atomics.load(context.requestedSignal, 0)).toBe(9);
   expect(Atomics.load(context.interrupt, 0)).toBe(9);
+});
+
+test("a terminal exit cannot be replaced by a later SIGKILL request", async () => {
+  const { supervisor, root, contexts } = fixture();
+  const pid = supervisor.spawn(root, request());
+  await supervisor.start(pid);
+  const context = contexts.get(pid)!;
+  context.exit(23);
+  supervisor.kill(pid, Signal.SIGKILL);
+  expect(supervisor.wait(root, pid)).toEqual({ kind: "exited", code: 23, status: 23 });
+  expect(Atomics.load(context.requestedSignal, 0)).toBe(0);
+});
+
+test("default action adopts a shared terminal winner even before its signal words are published", async () => {
+  const { supervisor, root, contexts } = fixture();
+  const pid = supervisor.spawn(root, request());
+  await supervisor.start(pid);
+  const context = contexts.get(pid)!;
+  claimOutcome(context.outcome, { kind: "signaled", code: 9 });
+  expect(() => context.defaultSignal()).not.toThrow();
+  expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: 9, status: 137 });
+  expect(Atomics.load(context.requestedSignal, 0)).toBe(9);
+  expect(Atomics.load(context.interrupt, 0)).toBe(9);
+});
+
+test("a shared terminal winner prevents launch even before pending signal publication", async () => {
+  const { supervisor, root, contexts } = fixture();
+  const pid = supervisor.reserveSpawn(root, request());
+  claimOutcome(supervisor.get(pid)!.outcome, { kind: "signaled", code: 9 });
+  await supervisor.start(pid);
+  expect(contexts.size).toBe(0);
+  expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: 9, status: 137 });
+});
+
+test("a parent with a sealed terminal outcome cannot reserve descendants before host finalization", () => {
+  const { supervisor, root } = fixture();
+  claimOutcome(supervisor.get(root)!.outcome, { kind: "signaled", code: 9 });
+  expect(() => supervisor.reserveSpawn(root, request())).toThrow();
 });

@@ -1,4 +1,5 @@
 export { ProcessIdentityAllocator } from "./identity";
+export { outcomeWord, readOutcome, claimOutcome } from "./outcome";
 export { ExecutableRegistry, ExecutableNotFound } from "./registry";
 export type { Executable, ResolvedExecutable } from "./registry";
 export { ProcessTable } from "./table";

@@ -114,7 +114,9 @@ instead of silently running Bun for an arbitrary executable.
 
 Catchable signals publish an interrupt without revoking capabilities; the guest explicitly
 reports a default action, or handles the signal and keeps its own status. SIGKILL immediately
-records 137 and revokes before physical termination. Filesystem revocation no longer claims
+records 137 and revokes before physical termination. A shared atomic terminal-result primitive
+arbitrates guest completion, startup failures and SIGKILL, preserving the winning status and
+whether it came from an ordinary exit or a signal. Filesystem revocation no longer claims
 that `Worker.terminate()` proves death: an original admission/critical-section guard in
 `runtime/fs/{protocol,client,shared,service}.ts` proves host operations quiescent before lock
 reaping and physical termination; an ordinary guest exit acknowledgement also proves quiescence.

@@ -3,7 +3,7 @@
 // program to engine-host.js, which runs it in this worker's own JS engine.
 
 import { startEngineHost } from "./engine-host.js";
-import { FilesystemClient, createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity, type FilesystemConnection } from "@bun-wasm/runtime/fs";
+import { FilesystemClient, createFilesystemIdentity, revokeFilesystem, sharedRevoked, type FilesystemIdentity, type FilesystemConnection } from "@bun-wasm/runtime/fs";
 import { NetHost } from "./net/host";
 import type { NetRequest } from "./net/protocol";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline";
@@ -155,6 +155,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     slot: req.child?.slot,
     token: req.child?.token,
     stdin: req.child?.pipes[0],
+    revoked: sharedRevoked(req.filesystem),
     onChildClose: pid => ctx.postMessage({ type: "child-close", pid, parentPid: req.child?.pid ?? req.pid ?? 1 } satisfies WorkerMessage),
     output: (fd, data) => post(fd === 2 ? "stderr" : "stdout", data),
     launch: (meta, transport) => {
@@ -214,7 +215,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
       const signal = "signal" in result ? result.signal : undefined;
       wasi.descriptors.dispose();
       fs.dispose();
-      child.finish(code);
+      child.finish(code, signal);
       // A completion word alone does not prove the worker released filesystem references.
       ctx.postMessage({ type: "exit", code, signal, sleep: sleepMode } satisfies WorkerMessage);
       return;

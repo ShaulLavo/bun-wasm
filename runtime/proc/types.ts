@@ -19,6 +19,7 @@ export interface SpawnReservation {
   job?: number;
   interrupt?: Int32Array | SharedArrayBuffer;
   requestedSignal?: Int32Array | SharedArrayBuffer;
+  outcome?: BigInt64Array | SharedArrayBuffer;
 }
 export interface ProcessHandle {
   /** Physical teardown only: revoked shared buffers are never reused, even after this returns. */
@@ -36,6 +37,8 @@ export interface ProcessContext {
   readonly interrupt: Int32Array;
   /** Unlike interrupt, this word preserves the last requested signal after a checkpoint. */
   readonly requestedSignal: Int32Array;
+  /** Shared immutable terminal outcome, atomically arbitrated with synchronous parent stubs. */
+  readonly outcome: BigInt64Array;
   exit(code: number): void;
   /** Ordinary startup/guest failure exits 126; default signal actions are explicit. */
   fail(error: unknown): void;

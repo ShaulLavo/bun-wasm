@@ -73,9 +73,11 @@ test("late completion cannot release a reused child slot or its descendants", ()
   const oldChild = stale.host.spawn(childCommand);
   try {
     root.host.kill(parent, 9);
-    // Killing one process does not free a descendant in another job.
-    expect(stale.host.wait(oldChild)).toBe(-2);
-    stale.host.kill(oldChild, 9);
+    // Killing one process neither frees its independent descendant nor leaves guest control authority.
+    expect(stale.host.wait(oldChild)).toBe(-1);
+    expect(Atomics.load(new Int32Array(stale.launched[0]!.control), 0)).toBe(0);
+    // Explicit host-owned teardown, unlike a new guest kill from the dead parent, may clean it up.
+    stale.host.dispose();
     root.host.spawn(childCommand);
     root.host.spawn(childCommand);
     const reused = root.launched[2];
@@ -87,7 +89,8 @@ test("late completion cannot release a reused child slot or its descendants", ()
       if (!old) throw new Error("old child was not launched");
       childTransport(old).finish(0);
       const before = Array.from(new Int32Array(budget));
-      expect(stale.host.wait(oldChild)).toBe(137);
+      expect(stale.host.wait(oldChild)).toBe(-1);
+      expect(Atomics.load(new Int32Array(old.control), 1)).toBe(137);
       expect(Array.from(new Int32Array(budget))).toEqual(before);
       expect(root.host.spawn(childCommand)).toBeGreaterThan(0);
       expect(root.host.spawn(childCommand)).toBe(-1);

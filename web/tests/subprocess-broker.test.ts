@@ -4,6 +4,7 @@ import { SubprocessHost, childTransport, type ChildTransport } from "../src/subp
 import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "../../runtime/fs";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { SpawnRequest } from "../src/worker";
+import { claimOutcome, outcomeWord } from "../../runtime/proc/outcome";
 
 function fixture(activate?: () => Promise<typeof import("../../runtime/proc")>) {
   const revoked: number[] = [];
@@ -347,3 +348,67 @@ test("close after guest completion waits for the worker acknowledgement without 
     expect(Atomics.load(new Int32Array(transport.control), 1)).toBe(23);
   } finally { state.dispose(); }
 });
+
+test("a parent SIGKILL racing page failure finalization has one shared terminal outcome", async () => {
+  const state = liveFixture();
+  try {
+    const supervisor = await state.started(state.pid);
+    const record = supervisor.get(state.pid)!;
+    const original = Atomics.load;
+    let raced = false;
+    Atomics.load = ((array: Int32Array, index: number) => {
+      const previous = original(array, index);
+      if (!raced && array === record.requestedSignal) {
+        raced = true;
+        state.host.kill(state.pid, 9);
+      }
+      return previous;
+    }) as typeof Atomics.load;
+    try { supervisor.failStart(state.pid, new Error("worker failed")); }
+    finally { Atomics.load = original; }
+    expect(raced).toBe(true);
+    expect(supervisor.wait(1, state.pid)).toEqual({ kind: "signaled", code: 9, status: 137 });
+    expect(state.host.wait(state.pid)).toBe(137);
+  } finally { state.dispose(); }
+});
+
+for (const kind of ["exited", "signaled"] as const) {
+  test(`watch completes a partially published ${kind} outcome without assuming worker quiescence`, async () => {
+    const barrier = quiescenceBarrier();
+    const state = liveFixture({ quiesce: () => barrier.promise });
+    try {
+      const supervisor = await state.started(state.pid);
+      const transport = state.transports.get(state.pid)!;
+      const code = kind === "signaled" ? 9 : 23;
+      claimOutcome(outcomeWord(transport.outcome), { kind, code });
+      expect(Atomics.load(new Int32Array(transport.requestedSignal), 0)).toBe(0);
+      expect(Atomics.load(new Int32Array(transport.control), 0)).toBe(0);
+      await timerTurn();
+      const status = kind === "signaled" ? 137 : 23;
+      expect(supervisor.wait(1, state.pid)).toEqual({ kind, code, status });
+      expect(Atomics.load(new Int32Array(transport.requestedSignal), 0)).toBe(kind === "signaled" ? 9 : 0);
+      expect(Atomics.load(new Int32Array(transport.interrupt), 0)).toBe(kind === "signaled" ? 9 : 0);
+      expect(state.host.wait(state.pid)).toBe(status);
+      expect(state.quiescences()).toBe(1);
+      expect(state.workers.get(state.pid)!.terminated).toBe(0);
+      barrier.release();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(state.workers.get(state.pid)!.terminated).toBe(1);
+    } finally { barrier.release(); state.dispose(); }
+  });
+}
+
+for (const kind of ["exited", "signaled"] as const) {
+  test(`broker wait retains ${kind} kind when the shared status is 143`, async () => {
+    const state = liveFixture();
+    try {
+      await state.started(state.pid);
+      const signal = kind === "signaled" ? 15 : undefined;
+      childTransport(state.transports.get(state.pid)!).finish(143, signal);
+      state.workers.get(state.pid)!.onmessage?.({ data: { type: "exit", code: 143, signal, sleep: "atomics" } } as MessageEvent);
+      expect(await state.broker.wait(state.pid)).toEqual({ kind, code: signal ?? 143, status: 143 });
+      expect(state.host.wait(state.pid)).toBe(143);
+    } finally { state.dispose(); }
+  });
+}

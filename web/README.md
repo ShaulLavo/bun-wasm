@@ -157,3 +157,27 @@ checks across all three engines. `bun test web/tests/subprocess.test.ts` checks
 pipe wrapping, live filesystem visibility, and the Node worker checks. The artifact-free
 `bun web/tests/browser-process.ts chromium|firefox|webkit` gate exercises the generic supervisor
 and real workers, including cooperative CPU-loop signal handling and background jobs.
+Add `--artifact` to use the existing Bun light WASM for orphan-lifetime and capacity checks;
+add `--benchmark` to compare cold and shared-module first output with the frozen pre-process
+baseline `c7f08312e2243d7e6e6c665aff178930b1285b12`. The benchmark checks that both revisions use
+identical WASM bytes and owns its browser profiles, servers and scratch cleanup.
+
+### Spawn measurements
+
+On 2026-10-17, an M1 MacBook Air (8 logical CPUs, AC power; initial load average 2.92) ran five
+starts per mode, browser and revision. Candidate source was `02218afd`; the baseline was
+`c7f08312`. Network transfer is excluded. Cold starts compile fresh bytes with a unique custom
+section; shared starts reuse a compiled module. First output uses the same 1 ms shared-memory
+poll in both revisions. The reused WASM was 12,607,668 bytes, SHA-256
+`db607962302070c6584005d6f43d33dee4296f79657912722bbecb3ee733bbf3`.
+
+| Browser | Cold median, candidate / baseline (ms) | Shared-module median, candidate / baseline (ms) |
+| --- | ---: | ---: |
+| Chromium 156 | 67.320 / 69.570 | 32.630 / 32.555 |
+| Firefox 157 | 184.440 / 183.720 | 48.340 / 48.780 |
+| WebKit 27.2 | 90.560 / 89.160 | 39.640 / 40.680 |
+
+Startup is roughly unchanged in this bounded comparison; these are not cross-machine results
+or a speedup claim. No worker pool is implemented or enabled, so there is no pool timing.
+Each browser also passed 15 process checks, including eight orphan-survival cycles that recover
+all child slots and supervisor records, with zero active process workers after cleanup.

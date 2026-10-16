@@ -1,6 +1,7 @@
 import { DescriptorTable } from "../core/descriptors";
 import { ExecutableNotFound, ExecutableRegistry } from "./registry";
 import { ProcessTable, type ProcessRecord } from "./table";
+import { claimOutcome, outcomeWord, readOutcome } from "./outcome";
 import { ProcessErrno, ProcessError, Signal, checkedSignal, type ChildExitEvent, type ProcessContext, type ProcessExit, type ProcessHandle, type SpawnRequest, type SpawnReservation } from "./types";
 
 export interface SupervisorOptions {
@@ -50,14 +51,14 @@ export class ProcessSupervisor {
     if (this.disposed) throw new ProcessError(ProcessErrno.SRCH, "supervisor is disposed");
     const pid = options.pid ?? this.table.identities.pid();
     this.table.checkPid(pid);
-    const interrupt = signalWord(options.interrupt), requestedSignal = signalWord(options.requestedSignal);
+    const interrupt = signalWord(options.interrupt), requestedSignal = signalWord(options.requestedSignal), outcome = outcomeWord(options.outcome);
     // Explicit root ids may share an existing job, as with an externally reserved guest root.
     const job = options.job !== undefined && this.table.job(options.job)
       ? this.table.job(options.job)!
       : this.table.createJob(pid, options.foreground ?? true, options.job);
     this.table.insert({
       pid, parentPid: 0, job: job.id, descriptors: options.descriptors ?? new DescriptorTable(),
-      interrupt, requestedSignal, request: null, state: "running", result: null, signal: 0, revoked: false,
+      interrupt, requestedSignal, outcome, request: null, state: "running", result: null, signal: 0, revoked: false,
       revocations: new Set(), waiters: new Set(),
     });
     return pid;
@@ -65,7 +66,7 @@ export class ProcessSupervisor {
   reserveSpawn(parentPid: number, spec: SpawnRequest, reservation: SpawnReservation = {}): number {
     if (this.disposed) throw new ProcessError(ProcessErrno.SRCH, "supervisor is disposed");
     const parent = this.table.require(parentPid);
-    if (parent.result || parent.signal === Signal.SIGKILL) throw new ProcessError(ProcessErrno.SRCH, "parent process has exited or is being killed");
+    if (parent.result || parent.signal === Signal.SIGKILL || readOutcome(parent.outcome)) throw new ProcessError(ProcessErrno.SRCH, "parent process has exited or is being killed");
     if (!Number.isInteger(spec.job) || spec.job < -1) throw new ProcessError(ProcessErrno.INVAL, "invalid job selection");
     const bindings = new Set<number>();
     for (const binding of spec.fds) {
@@ -75,7 +76,7 @@ export class ProcessSupervisor {
       if (!parent.descriptors.get(binding.parent)) throw new ProcessError(ProcessErrno.BADF, `missing parent descriptor ${binding.parent}`);
       bindings.add(binding.child);
     }
-    const interrupt = signalWord(reservation.interrupt), requestedSignal = signalWord(reservation.requestedSignal);
+    const interrupt = signalWord(reservation.interrupt), requestedSignal = signalWord(reservation.requestedSignal), outcome = outcomeWord(reservation.outcome);
     const request = snapshot(spec);
     const pid = reservation.pid ?? this.table.identities.pid();
     this.table.checkPid(pid);
@@ -90,7 +91,7 @@ export class ProcessSupervisor {
       for (const binding of request.fds) descriptors.inherit(binding.child, parent.descriptors.get(binding.parent)!);
       this.table.insert({
         pid, parentPid, job, descriptors,
-        interrupt, requestedSignal, request, state: "reserved", result: null, signal: 0, revoked: false,
+        interrupt, requestedSignal, outcome, request, state: "reserved", result: null, signal: 0, revoked: false,
         revocations: new Set(), waiters: new Set(),
       });
     } catch (error) { this.disposeDescriptors(descriptors); throw error; }
@@ -107,6 +108,8 @@ export class ProcessSupervisor {
     if (!record || record.request === null) return Promise.resolve();
     if (record.starting) return record.starting;
     if (record.result) return Promise.resolve();
+    const settled = readOutcome(record.outcome);
+    if (settled) { this.finish(pid, settled); return Promise.resolve(); }
     record.state = "starting";
     record.starting = this.launch(record);
     return record.starting;
@@ -115,10 +118,12 @@ export class ProcessSupervisor {
     try {
       const executable = await this.options.registry.resolve(record.request!.executable);
       if (record.result) return;
+      const settled = readOutcome(record.outcome);
+      if (settled) { this.finish(record.pid, settled); return; }
       const context: ProcessContext = {
         pid: record.pid, parentPid: record.parentPid, job: record.job, request: record.request!,
         module: executable.module, adapter: executable.adapter,
-        descriptors: record.descriptors, interrupt: record.interrupt, requestedSignal: record.requestedSignal,
+        descriptors: record.descriptors, interrupt: record.interrupt, requestedSignal: record.requestedSignal, outcome: record.outcome,
         exit: code => this.exit(record.pid, code), fail: error => this.failStart(record.pid, error),
         defaultSignal: signal => this.defaultSignal(record.pid, signal),
         registerRevocation: hook => this.registerRevocation(record.pid, hook),
@@ -140,7 +145,7 @@ export class ProcessSupervisor {
     const sig = checkedSignal(signal), record = this.table.require(pid);
     if (record.result) return;
     this.recordSignal(record, sig);
-    if (record.signal === Signal.SIGKILL) this.finish(pid, { kind: "signaled", code: Signal.SIGKILL });
+    if (record.signal === Signal.SIGKILL || readOutcome(record.outcome)) this.finish(pid, { kind: "signaled", code: Signal.SIGKILL });
   }
   /** Observe a request already published by a synchronous guest stub. Never redeliver a
    * catchable interrupt the guest may have consumed before this host notification arrived.
@@ -149,10 +154,19 @@ export class ProcessSupervisor {
     const sig = checkedSignal(signal), record = this.table.require(pid);
     if (record.result) return;
     if (record.signal !== Signal.SIGKILL) record.signal = Atomics.load(record.requestedSignal, 0) === Signal.SIGKILL ? Signal.SIGKILL : sig;
-    if (record.signal === Signal.SIGKILL) this.finish(pid, { kind: "signaled", code: Signal.SIGKILL });
+    if (record.signal === Signal.SIGKILL || readOutcome(record.outcome)) this.finish(pid, { kind: "signaled", code: Signal.SIGKILL });
   }
   private recordSignal(record: ProcessRecord, signal: number, interrupt = true): void {
     if (record.result) return;
+    const settled = readOutcome(record.outcome);
+    if (settled) {
+      if (settled.kind === "signaled" && settled.code === Signal.SIGKILL) this.publishKill(record);
+      return;
+    }
+    if (signal === Signal.SIGKILL || record.signal === Signal.SIGKILL) {
+      const winner = claimOutcome(record.outcome, { kind: "signaled", code: Signal.SIGKILL });
+      if (winner.kind !== "signaled" || winner.code !== Signal.SIGKILL) return;
+    }
     record.signal = publishSignal(record.requestedSignal, record.signal === Signal.SIGKILL ? record.signal : signal);
     if (!interrupt) return;
     if (Atomics.load(record.requestedSignal, 0) === Signal.SIGKILL) record.signal = Signal.SIGKILL;
@@ -166,10 +180,18 @@ export class ProcessSupervisor {
     }
     Atomics.notify(record.interrupt, 0);
   }
+  private publishKill(record: ProcessRecord): void {
+    record.signal = Signal.SIGKILL;
+    publishSignal(record.requestedSignal, Signal.SIGKILL);
+    publishSignal(record.interrupt, Signal.SIGKILL);
+    Atomics.notify(record.interrupt, 0);
+  }
   /** Explicit guest default action. A random trap after a handled signal is not a signal exit. */
   defaultSignal(pid: number, signal?: number): void {
     const record = this.table.get(pid);
     if (!record || record.result) return;
+    const settled = readOutcome(record.outcome);
+    if (settled) { this.finish(pid, settled); return; }
     const sig = checkedSignal(signal ?? (record.signal || Atomics.load(record.requestedSignal, 0)));
     this.recordSignal(record, sig, false);
     this.finish(pid, { kind: "signaled", code: record.signal });
@@ -184,7 +206,7 @@ export class ProcessSupervisor {
     // unmarked sibling, or replace that sibling's SIGKILL with a handled exit.
     for (const record of targets) this.recordSignal(record, sig);
     for (const record of targets) {
-      if (record.signal === Signal.SIGKILL && this.table.get(record.pid) === record) {
+      if ((record.signal === Signal.SIGKILL || readOutcome(record.outcome)) && this.table.get(record.pid) === record) {
         this.finish(record.pid, { kind: "signaled", code: Signal.SIGKILL });
       }
     }
@@ -235,7 +257,11 @@ export class ProcessSupervisor {
     // A synchronous guest-side kill publishes its word before the asynchronous broker message.
     if (Atomics.load(record.requestedSignal, 0) === Signal.SIGKILL) this.recordSignal(record, Signal.SIGKILL);
     if (record.signal === Signal.SIGKILL) result = { kind: "signaled", code: Signal.SIGKILL };
-    record.result = Object.freeze({ ...result, status: result.kind === "signaled" ? 128 + result.code : result.code });
+    // Parent kill, worker completion and page failure all choose the same immutable outcome.
+    // A signal published after our last read still competes at this atomic decision, rather
+    // than overriding one observer's already-final result after the fact.
+    record.result = claimOutcome(record.outcome, result);
+    if (record.result.kind === "signaled" && record.result.code === Signal.SIGKILL) this.publishKill(record);
     record.state = "exited";
     record.revoked = true;
     const hooks = Array.from(record.revocations);

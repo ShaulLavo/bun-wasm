@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { SubprocessHost, childTransport, type ChildTransport } from "../src/subprocess.ts";
+import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
 
 function fixture() {
   const launched: ChildTransport[] = [];
@@ -47,7 +48,54 @@ test("nested stubs share globally unique process ids and never reuse signal buff
     expect(replacement).not.toBe(first);
     expect(launched[1]?.interrupt).not.toBe(parent.interrupt);
     expect(launched[1]?.requestedSignal).not.toBe(parent.requestedSignal);
+    expect(launched[1]?.outcome).not.toBe(parent.outcome);
   } finally { nested.dispose(); host.dispose(); }
+});
+
+test("an atomically won own exit rejects a concurrent late SIGKILL before completion publication", () => {
+  const { host, launched, events } = fixture();
+  try {
+    const pid = host.spawn(command());
+    const transport = launched[0]!;
+    expect(transport.outcome.byteLength).toBe(8);
+    claimOutcome(outcomeWord(transport.outcome), { kind: "exited", code: 126 });
+    expect(host.wait(pid)).toBe(-2);
+    expect(host.kill(pid, 9)).toBe(0);
+    expect(Atomics.load(new Int32Array(transport.requestedSignal), 0)).toBe(0);
+    expect(Atomics.load(new Int32Array(transport.interrupt), 0)).toBe(0);
+    expect(events).toEqual([]);
+    childTransport(transport).finish(0);
+    expect(host.wait(pid)).toBe(126);
+    expect(readOutcome(outcomeWord(transport.outcome))).toEqual({ kind: "exited", code: 126, status: 126 });
+  } finally { host.dispose(); }
+});
+
+for (const signal of [undefined, 15]) test(`transport preserves explicit signal kind ${signal ?? "own exit"} for status 143`, () => {
+  const { host, launched } = fixture();
+  try {
+    const pid = host.spawn(command());
+    const transport = launched[0]!;
+    childTransport(transport).finish(143, signal);
+    expect(host.wait(pid)).toBe(143);
+    expect(readOutcome(outcomeWord(transport.outcome))).toEqual(signal === undefined
+      ? { kind: "exited", code: 143, status: 143 }
+      : { kind: "signaled", code: 15, status: 143 });
+  } finally { host.dispose(); }
+});
+
+test("a winning SIGKILL is adopted before its pending signal or completion header is published", () => {
+  const { host, launched } = fixture();
+  try {
+    const pid = host.spawn(command());
+    const transport = launched[0]!;
+    claimOutcome(outcomeWord(transport.outcome), { kind: "signaled", code: 9 });
+    expect(Atomics.load(new Int32Array(transport.requestedSignal), 0)).toBe(0);
+    expect(Atomics.load(new Int32Array(transport.interrupt), 0)).toBe(0);
+    expect(host.wait(pid)).toBe(-2);
+    childTransport(transport).finish(126);
+    expect(host.wait(pid)).toBe(137);
+    expect(readOutcome(outcomeWord(transport.outcome))).toEqual({ kind: "signaled", code: 9, status: 137 });
+  } finally { host.dispose(); }
 });
 
 test("SIGKILL revokes before termination and wins over a late success", () => {
@@ -88,6 +136,7 @@ test("a concurrent supervisor SIGKILL cannot be downgraded while publishing a ca
     if (!injected && array.buffer === transport.requestedSignal && Number(replacement) === 15) {
       injected = true;
       // The page wins SIGKILL after the stub's requested-signal CAS but before its interrupt write.
+      claimOutcome(outcomeWord(transport.outcome), { kind: "signaled", code: 9 });
       Atomics.store(requested, 0, 9);
       Atomics.store(interrupt, 0, 9);
       childTransport(transport).finish(137);
@@ -136,8 +185,10 @@ test("new job ids are separate from inherited job identity and survive parent de
     expect(first).not.toBe(second);
     host.detach();
     expect(events).toEqual([]);
-    expect(host.wait(first)).toBe(-2);
-    expect(host.wait(second)).toBe(-2);
+    expect(host.wait(first)).toBe(-1);
+    expect(host.wait(second)).toBe(-1);
+    expect(readOutcome(outcomeWord(launched[0]!.outcome))).toBeNull();
+    expect(readOutcome(outcomeWord(launched[1]!.outcome))).toBeNull();
   } finally { host.dispose(); }
 });
 
@@ -145,6 +196,7 @@ test("a previously recorded SIGKILL cannot be replaced by a catchable signal", (
   const { host, launched } = fixture();
   try {
     const pid = host.spawn(command());
+    claimOutcome(outcomeWord(launched[0]!.outcome), { kind: "signaled", code: 9 });
     Atomics.store(new Int32Array(launched[0]!.requestedSignal), 0, 9);
     host.kill(pid, 15);
     expect(Atomics.load(new Int32Array(launched[0]!.requestedSignal), 0)).toBe(9);
@@ -194,6 +246,42 @@ test("orphan background completion releases capacity after its parent detaches",
     }
   } finally { for (const nested of detached) nested.dispose(); host.dispose(); }
 });
+
+for (const state of ["detached root", "revoked root", "detached parent", "killed parent"]) {
+  for (const signal of [15, 9, "close", "wait"] as const) test(`${state} cannot publish child control ${signal}`, () => {
+    const root = fixture();
+    const launched: ChildTransport[] = [];
+    const events: string[] = [];
+    let revoked = false;
+    let parent: ChildTransport | undefined;
+    if (state.endsWith("parent")) { root.host.spawn(command()); parent = root.launched[0]!; }
+    const host = new SubprocessHost({
+      budget: parent?.budget, identity: parent?.identity, pid: parent?.pid, jobId: parent?.jobId,
+      slot: parent?.slot, token: parent?.token, revoked: () => revoked, output() {},
+      onChildClose() { events.push("close"); },
+      launch(_meta, transport) {
+        launched.push(transport);
+        return { revoke() { events.push("revoke"); }, terminate() { events.push("terminate"); } };
+      },
+    });
+    try {
+      const pid = host.spawn(JSON.stringify({ argv: ["fixture"], job: -1 }));
+      expect(pid).toBeGreaterThan(0);
+      const background = launched[0]!;
+      if (state === "killed parent") root.host.kill(parent!.pid, 9);
+      else if (state === "revoked root") revoked = true;
+      else host.detach();
+      const result = signal === "close" ? host.close(pid) : signal === "wait" ? host.wait(pid) : host.kill(pid, signal);
+      expect(result).toBeLessThan(0);
+      expect(readOutcome(outcomeWord(background.outcome))).toBeNull();
+      expect(Atomics.load(new Int32Array(background.requestedSignal), 0)).toBe(0);
+      expect(Atomics.load(new Int32Array(background.interrupt), 0)).toBe(0);
+      expect(host.wait(pid)).toBe(-1);
+      expect(Atomics.load(new Int32Array(background.control), 0)).toBe(0);
+      expect(events).toEqual([]);
+    } finally { host.dispose(); root.host.dispose(); }
+  });
+}
 
 test("closing a child reports its real PID once for supervisor metadata cleanup", () => {
   const closed: number[] = [];

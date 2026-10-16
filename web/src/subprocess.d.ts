@@ -18,6 +18,7 @@ export interface ChildTransport {
   identity: SharedArrayBuffer;
   interrupt: SharedArrayBuffer;
   requestedSignal: SharedArrayBuffer;
+  outcome: SharedArrayBuffer;
   budget: SharedArrayBuffer;
   slot: number;
   token: number;
@@ -38,6 +39,8 @@ export interface SubprocessOptions {
   slot?: number;
   token?: number;
   stdin?: SharedArrayBuffer;
+  /** Shared process capability revocation, including roots without a budget slot. */
+  revoked?(): boolean;
   onChildClose?(pid: number): void;
   launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): ChildWorker;
   /** Return false when the inherited reader has closed. */
@@ -62,7 +65,7 @@ export function childTransport(transport: ChildTransport): {
   stdin: SharedPipe;
   stdout: SharedPipe;
   stderr: SharedPipe;
-  finish(code: number): void;
+  finish(code: number, signal?: number): void;
 };
 export class SubprocessHost {
   constructor(options: SubprocessOptions);

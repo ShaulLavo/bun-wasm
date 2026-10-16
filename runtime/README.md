@@ -55,8 +55,11 @@ publishing it a second time. Checkpoints consume it with `Atomics.exchange`. A g
 retains its code; `defaultSignal` explicitly requests the default signaled outcome. The preview1
 worker exposes `runtime_proc.interrupted()` and `runtime_proc.default_signal(sig)` for these two
 paths. SIGKILL instead records 137 and revokes descriptors immediately, then requests termination. Late worker
-messages cannot change that outcome. There are no escalation timers. `killJob` addresses the job
-namespace, including descendants in that job but not unrelated background jobs.
+messages cannot change that outcome. Guest and supervisor completion compete for one shared atomic
+terminal result, so a startup failure racing SIGKILL cannot leave their waits with different statuses.
+The result also records whether 143 is an ordinary exit code or the default SIGTERM action.
+There are no escalation timers. `killJob` addresses the job namespace, including descendants in
+that job but not unrelated background jobs.
 
 Revocation hooks connect logical process death to host capabilities. Filesystem revocation is
 not proof of physical teardown: an exit acknowledgement or the filesystem's admission fence

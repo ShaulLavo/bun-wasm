@@ -30,7 +30,7 @@ test('unbundled headless hosts load in a dependency-free source checkout', async
   const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? (existsSync('/work/tmp') ? '/work/tmp' : tmpdir());
   const dir = await mkdtemp(join(base, 'bun-wasm-node-clean-'));
   try {
-    for (const path of ['web/package.json', 'runtime/package.json', 'runtime/core/memory-views.js', 'runtime/proc/identity.ts',
+    for (const path of ['web/package.json', 'runtime/package.json', 'runtime/core/memory-views.js', 'runtime/proc/identity.ts', 'runtime/proc/outcome.ts',
       'web/scripts/node-host.mjs', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-install-net.mjs', 'web/src/subprocess.ts', 'web/src/engine-host.js']) {
       const target = join(dir, path);
       await mkdir(dirname(target), { recursive: true });
