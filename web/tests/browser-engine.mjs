@@ -74,13 +74,12 @@ async function checkPage(name, page, visit, fixtureBase) {
   await writeFile(page, `${HOME}/throws.ts`, `console.log("before");\nthrow new Error("kaboom");\n`);
   await expectRun(page, `${name}: uncaught error`, "bun run throws.ts", 1, ["before", "kaboom"]);
 
-  for (const fixture of ["import-method", "import-syntax"]) {
+  for (const [fixture, entry] of [["import-method", "index.cjs"], ["import-syntax", "index.mjs"], ["import-classified", "index.js"]]) {
     const root = new URL(`../../tests/fixtures/${fixture}/`, import.meta.url);
     for (const file of readdirSync(root, { recursive: true })) {
-      if (!/\.(?:cjs|mjs|json)$/.test(file)) continue;
+      if (!/\.(?:js|cjs|mjs|json)$/.test(file)) continue;
       await writeFile(page, `${HOME}/${fixture}/${file}`, readFileSync(new URL(file, root), "utf8"));
     }
-    const entry = fixture === "import-method" ? "index.cjs" : "index.mjs";
     const expected = readFileSync(new URL("expected.txt", root), "utf8").trim().split("\n")
       .map(line => line.replace("meta /index.mjs true", `meta ${HOME}/${fixture}/index.mjs true`));
     await expectRun(page, `${name}: ${fixture}`, `bun run ${fixture}/${entry}`, 0, expected);
