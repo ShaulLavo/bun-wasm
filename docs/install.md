@@ -146,16 +146,23 @@ The checked-in upstream baseline remains unchanged.
 
 ## WebAssembly distributions
 
-On wasm32-wasip1, the installer selects Rollup 4's official `@rollup/wasm-node`
-distribution at the exact version selected for `rollup`. This policy applies to
-root and transitive dependencies. Projects keep their existing dependency names
-and imports. The package installs at the requested `node_modules/rollup` path;
-its original package name, files, tarball integrity, and version remain intact.
+On wasm32-wasip1, the installer selects official WebAssembly distributions at
+exactly the version selected for the requested dependency:
+
+| Requested package | Official distribution |
+| --- | --- |
+| `rollup` 4.x | `@rollup/wasm-node` |
+| `esbuild` | `esbuild-wasm` |
+
+This policy applies to root and transitive dependencies. Projects keep their
+existing dependency names and imports. Each distribution installs at the
+requested package path, such as `node_modules/esbuild`.
+The distribution's original package name, files, tarball integrity, and version remain intact.
 The lockfile records the actual distribution identity under that path. Frozen
 reinstalls use that identity. Rollup versions before 4 keep their original
 JavaScript distribution. A missing same-version wasm distribution fails install.
 
-QuickJS and JSC wasm execute the published parser through the Rust `wasmi`
+QuickJS and JSC wasm execute published guest wasm through the Rust `wasmi`
 interpreter. The browser engine uses its native WebAssembly implementation.
 The interpreter adapter supports numeric functions, JavaScript function imports,
 exported 32-bit memories, and exported globals. It supports reentrant function imports,
@@ -181,3 +188,17 @@ app-matrix mirror. It checks the parser on Unicode and invalid syntax, the three
 hash exports, a complete bundle generation, and a frozen reinstall on each engine. Set `BUN_WASM_LAUNCHER` to
 your launcher and `ENGINES` to a comma-separated subset. This check never
 records or contacts the public registry.
+
+The unchanged `esbuild-wasm` Node API starts its JavaScript CLI through
+`child_process.spawn("node", ...)`. Node commands use a fresh bun-wasm guest,
+with the same engine, filesystem, and environment. Go's published `wasm_exec.js`
+then runs `esbuild.wasm` through the guest WebAssembly API. The native launcher
+and browser subprocess host supply pipes. Plain wasmtime without a subprocess
+host cannot use this API.
+
+`MATRIX_CACHE=/path/to/mirror bun tests/esbuild/run.mjs` replays esbuild 0.25.12.
+It checks TypeScript and Unicode transforms, invalid syntax, file bundles,
+context rebuilds after a file change, plugin callbacks, the CLI, and frozen
+reinstalls across all three engines. `bun tests/esbuild/browser.mjs` runs the
+same API and CLI checks in the playground under Chromium and WebKit. Build
+`web/` first. Both tests use the app-matrix mirror without contacting npm.

@@ -62,6 +62,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-semver/src/lib.rs`](#portable-semver-host-functions) | Port | Compile Bun's semver host functions unchanged against a portable `bun_jsc` subset. |
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
+| [esbuild distribution and Node subprocess adapter](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution and run its Node service through guest subprocesses. |
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
@@ -657,3 +658,17 @@ console contract without changing the engine's global Error constructor.
 Bootstrap captures its default stack formatter identity for this adapter.
 An installed user formatter stays authoritative; the runtime's own default
 frame-only formatter still receives the Console Trace header.
+
+## esbuild WebAssembly distribution
+
+Class **Host feature**. The distribution selector in
+`crates/bunwasm-runtime/src/install/resolve.rs` maps `esbuild` to the matching
+`esbuild-wasm` version. The original subprocess adapter in
+`crates/bunwasm-runtime/src/js/spawn.js` accepts `node` as a guest runtime name.
+No upstream implementation is copied or patched. The published esbuild 0.25.12
+files `lib/main.js`, `bin/esbuild`, `wasm_exec_node.js`, `wasm_exec.js`, and
+`esbuild.wasm` install unchanged from the official npm tarball. Its source is
+`evanw/esbuild` tag `v0.25.12`, including `lib/npm/node.ts`,
+`lib/npm/node-platform.ts`, `npm/esbuild-wasm/bin/esbuild`, and the Go compiler runtime.
+The package owns that Go runtime revision. Our test fixtures and subprocess
+changes are original adapters, separate from those upstream files.

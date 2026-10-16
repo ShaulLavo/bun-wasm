@@ -372,6 +372,9 @@ impl Resolver {
 }
 
 fn platform_package<'a>(name: &'a str, version: &str) -> &'a str {
+    if name == "esbuild" {
+        return "esbuild-wasm";
+    }
     if name == "rollup" && version.starts_with("4.") {
         return "@rollup/wasm-node";
     }
