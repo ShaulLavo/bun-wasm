@@ -4,6 +4,8 @@ const child = spawn(process.execPath, ['-e', `
   const assert = require('node:assert/strict');
   const { AsyncLocalStorage } = require('node:async_hooks');
   const storage = new AsyncLocalStorage();
+  const empty = Buffer.alloc(0);
+  assert.equal(fs.readSync(0, empty, 0, 0, null), 0);
   setTimeout(() => console.log('ready'), 0);
   storage.run('stdin', () => fs.read(0, Buffer.alloc(10, 'a'), 3, 4, null, (error, count, buffer) => {
     if (error) throw error;

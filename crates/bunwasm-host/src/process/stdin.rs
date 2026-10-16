@@ -126,4 +126,12 @@ mod tests {
         assert!(input.poll_ready(&mut cx).is_ready());
         assert!(matches!(input.read(1), Err(StreamError::Closed)));
     }
+
+    #[test]
+    fn zero_length_host_read_does_not_poll_stdin() {
+        let input = input();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert_eq!(input.poll_ready(&mut cx), Poll::Ready(()));
+        assert_eq!(input.read(0).unwrap(), b""[..]);
+    }
 }
