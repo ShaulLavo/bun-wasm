@@ -102,7 +102,7 @@ async function observe() {
     assert.equal(exitCode, expectedCode);
     assert.deepEqual(exitSnapshot, { cursors: 0, descriptors: 0 }, "host exit notification observes no cursors or descriptors");
   } else assert.equal(code, expectedCode);
-  const expected = mode === "gc" ? 22 : ["natural", "explicit"].includes(mode) ? 11 : 10;
+  const expected = mode === "gc" ? 22 : ["natural", "explicit", "uncaught"].includes(mode) ? 11 : 10;
   assert.equal(opened, expected, "guest owners opened real WASI descriptors");
   if (mode === "gc") assert(collectedDescriptorsReleased);
   assert.equal(live.size, 0, "guest exit closes every descriptor while its wasm instance is retained");

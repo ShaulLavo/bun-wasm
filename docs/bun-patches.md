@@ -71,7 +71,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
 | [`crates/bunwasm-runtime/src/js/stack_trace.js`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
-| [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
+| [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, `web/src/engine-host.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
 
 | [`runtime/core/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, memory, path, descriptor and filesystem-boundary adapters extracted into a reusable package. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
@@ -801,7 +801,7 @@ frame-only formatter still receives the Console Trace header.
 ## Directory cursors
 
 Class **Host feature**. `crates/bunwasm-runtime/src/directory.rs` and the directory
-APIs in `src/js/node_fs.js` are original adapters. They implement Node's public
+APIs in `src/js/node_fs.js` and `web/src/engine-host.js` are original adapters. They implement Node's public
 `opendir`, `opendirSync`, `fs.promises.opendir` and `Dir` contract without copying
 an upstream implementation. Bun's `src/js/node/fs.ts` at pinned upstream revision
 `9510e74152073d850a18758ca41114d8f214ffa6` was read as a reference. Its `Dir` eagerly
@@ -816,7 +816,9 @@ Closing drops the active native cursor and pending traversal paths. `Finalizatio
 releases abandoned native IDs through an idempotent native release. Its unregister
 token is separate from the owner, because the pinned QuickJS stores tokens strongly.
 Runtime shutdown clears the remaining cursor table after user exit listeners, including when the host
-retains the wasm instance. Native exits also clear the table before skipping engine teardown.
+retains the wasm instance. The browser engine also clears it in `EngineHost.exit`
+before notifying the host. This covers `reallyExit`, abort, self-kill and fatal
+errors that bypass exit listeners. The release is idempotent across both paths. Native exits also clear the table before skipping engine teardown.
 The public path representation stays separate from the lookup string, so Buffer paths remain Buffers in `Dir.path` and
 `Dirent.parentPath`. The async queue keeps a refill operation active through its callback,
 while an already-buffered read does not block synchronous work. The fixture is original
