@@ -442,6 +442,11 @@
     },
   };
 
+  const forceColor = globalThis.process.env.FORCE_COLOR;
+  const enableANSIColors = forceColor !== undefined
+    ? forceColor !== "0"
+    : globalThis.process.env.NO_COLOR === undefined && native.isatty(2);
+
   const Bun = {
     ArrayBufferSink,
     semver,
@@ -489,7 +494,7 @@
     readableStreamToJSON: async (s) => JSON.parse(native.utf8Decode(await readableStreamToBytes(s))),
     readableStreamToBlob: async (s) => new Blob([await readableStreamToBytes(s)]),
     isMainThread: true,
-    enableANSIColors: false,
+    enableANSIColors,
     get stdout() {
       return file(1);
     },

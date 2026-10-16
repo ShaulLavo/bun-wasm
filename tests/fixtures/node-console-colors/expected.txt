@@ -1,0 +1,4 @@
+1 false auto true
+0 true auto false
+1 true false false
+0 false true true
