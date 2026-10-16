@@ -32,6 +32,8 @@ async function tls() {
   assert.equal(connected, false, "HTTPS upgrade must not establish a plaintext connection");
 }
 async function validation() {
+  assert.equal(http.validateHeaderName("X-Test"), undefined);
+  assert.equal(http.validateHeaderValue("X-Test", "yes"), undefined);
   const target = { host: "127.0.0.1", port: 1, headers };
   for (const method of ["GET\r\nInjected: yes", "GET x"]) {
     assert.throws(() => http.request({ ...target, method }), { code: "ERR_INVALID_HTTP_TOKEN" });
