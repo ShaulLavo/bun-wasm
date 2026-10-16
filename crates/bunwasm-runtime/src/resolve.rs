@@ -33,7 +33,7 @@ pub const NODE_BUILTINS: &[&str] = &[
     "events", "fs", "fs/promises", "http", "http2", "https", "inspector", "module", "net", "os",
     "path", "path/posix", "path/win32", "perf_hooks", "process", "punycode", "querystring",
     "readline", "readline/promises", "repl", "stream", "stream/promises", "stream/web",
-    "string_decoder", "sys", "timers", "timers/promises", "tls", "tty", "url", "util",
+    "string_decoder", "sys", "test", "timers", "timers/promises", "tls", "tty", "url", "util",
     "util/types", "v8", "vm", "wasi", "worker_threads", "zlib",
 ];
 

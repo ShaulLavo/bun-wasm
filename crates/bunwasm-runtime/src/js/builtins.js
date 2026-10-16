@@ -1079,6 +1079,20 @@
 
   // --- registry -------------------------------------------------------------
 
+  let autoSelectFamily = true;
+  let autoSelectFamilyAttemptTimeout = 250;
+  const netDefaults = {
+    getDefaultAutoSelectFamily: () => autoSelectFamily,
+    setDefaultAutoSelectFamily(value) {
+      if (typeof value !== "boolean") throw Object.assign(new TypeError("value must be a boolean"), { code: "ERR_INVALID_ARG_TYPE" });
+      autoSelectFamily = value;
+    },
+    getDefaultAutoSelectFamilyAttemptTimeout: () => autoSelectFamilyAttemptTimeout,
+    setDefaultAutoSelectFamilyAttemptTimeout(value) {
+      if (!Number.isInteger(value) || value < 1) throw Object.assign(new RangeError("value must be a positive integer"), { code: "ERR_OUT_OF_RANGE" });
+      autoSelectFamilyAttemptTimeout = Math.max(10, value);
+    },
+  };
   const entries = {
     "node:assert": lazy("assert"),
     "node:assert/strict": lazy("assert", (a) => a.strict),
@@ -1140,7 +1154,7 @@
       }),
     "node:child_process": () => internal.require("spawn").nodeChildProcess(),
     "node:cluster": () => unsupportedModule("cluster", NO_PROCESSES, ["fork", "setupPrimary", "setupMaster", "disconnect"], { isPrimary: true, isMaster: true, isWorker: false, workers: {} }),
-    "node:net": () => native.hostCaps.listen ? Object.assign(internal.require("net").nodeNet(), { isIP, isIPv4, isIPv6, getDefaultAutoSelectFamily: () => true, setDefaultAutoSelectFamily() {} }) : unsupportedModule("net", NO_NETWORK, ["createServer", "createConnection", "connect", "Socket", "Server", "Stream", "BlockList", "SocketAddress"], { isIP, isIPv4, isIPv6, getDefaultAutoSelectFamily: () => true, setDefaultAutoSelectFamily() {} }),
+    "node:net": () => native.hostCaps.listen ? Object.assign(internal.require("net").nodeNet(), { isIP, isIPv4, isIPv6, ...netDefaults }) : unsupportedModule("net", NO_NETWORK, ["createServer", "createConnection", "connect", "Socket", "Server", "Stream", "BlockList", "SocketAddress"], { isIP, isIPv4, isIPv6, ...netDefaults }),
     "node:tls": () => unsupportedModule("tls", NO_NETWORK, ["connect", "createServer", "createSecureContext", "TLSSocket", "Server", "checkServerIdentity"], { rootCertificates: [], DEFAULT_MIN_VERSION: "TLSv1.2", DEFAULT_MAX_VERSION: "TLSv1.3", DEFAULT_ECDH_CURVE: "auto" }),
     "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
     "node:dns": () => unsupportedModule("dns", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "resolveMx", "resolveTxt", "resolveSrv", "resolveNs", "resolveCname", "reverse", "lookupService", "Resolver"], { promises: internal.builtin("node:dns/promises"), getServers: () => [], setServers() {}, setDefaultResultOrder() {} }),
@@ -1212,6 +1226,7 @@
       isASANEnabled: () => false,
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
     }),
+    "node:test": () => internal.require("node_test"),
     "bun:test": () => internal.require("bun_test").exports,
     "bun:sqlite": () => internal.require("bun_sqlite"),
     "bun:ffi": () => unsupportedModule("bun:ffi", "no native libraries in wasm", ["dlopen", "CString", "ptr", "toArrayBuffer", "toBuffer", "linkSymbols", "cc"], { FFIType: {}, suffix: "so" }),
