@@ -108,6 +108,7 @@ select {
   font-size: 13px;
 }
 
+#reset,
 #restart {
   background: transparent;
   border: 1px solid var(--border);
@@ -118,6 +119,7 @@ select {
   white-space: nowrap;
 }
 
+#reset:hover,
 #restart:hover {
   border-color: var(--dim);
 }
@@ -355,7 +357,7 @@ main {
 
   header #status {
     display: block;
-    grid-column: 1 / -1;
+    grid-column: 1 / 3;
     grid-row: 3;
     width: 100%;
   }
@@ -381,6 +383,12 @@ main {
     grid-column: 3;
     grid-row: 2;
     min-height: 34px;
+  }
+
+  header #reset {
+    grid-column: 3;
+    grid-row: 3;
+    min-height: 30px;
   }
 
   #engine,
