@@ -103,7 +103,13 @@ packages. The adapter extends that frame prototype. Bun's WebKit fork at
 `3d3257150c40a1aabdc5f8b48d5b33d0413674cb` supplies captured stack text through
 `Source/JavaScriptCore/runtime/ErrorConstructor.cpp`. The adapter parses those
 frames through our existing inspector before invoking a custom capture formatter.
-Native Error constructors and ordinary stack formatting stay in place.
+JSC captures raw frames immediately and selects the formatter only when the stack
+is read. Parsed JSC CallSites carry already-mapped locations so their string and
+getter forms use the same coordinates. Ordinary JSC Error construction stays native.
+QuickJS's private native formatter collects raw CallSites. Its public formatter is
+selected lazily by the Error prototype accessor or capture accessor. Successful
+results, including non-string values, are memoized; formatter exceptions propagate
+at access and permit a later read to retry. No engine constructor is replaced.
 Receiver and method metadata unavailable from these engines returns undefined or
 null; eval-origin metadata is unavailable and returns undefined. Engine placeholders such
 as `<input>` are not reported as source origins.
