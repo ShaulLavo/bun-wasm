@@ -4,6 +4,7 @@
   const capture = Error.captureStackTrace;
   const defaultPrepare = Error.prepareStackTrace;
   const formatted = new WeakMap();
+  let formatting = false;
 
   function store(target, value) {
     formatted.set(target, value);
@@ -45,6 +46,26 @@
   }
   internal.defineHidden(CallSite.prototype, methods);
 
+  function defaultStack(target, raw) {
+    return native.engine === "quickjs" ? Reflect.apply(defaultPrepare, Error, [target, raw]) : raw;
+  }
+
+  function formatStack(target, raw) {
+    if (formatted.has(target)) return formatted.get(target);
+    if (formatting) return store(target, defaultStack(target, raw));
+    formatting = true;
+    try {
+      const prepare = Error.prepareStackTrace;
+      if (typeof prepare !== "function" || prepare === defaultPrepare) return store(target, defaultStack(target, raw));
+      const sites = native.engine === "jsc"
+        ? internal.require("inspect").parseStack(raw).map(frame => new CallSite(frame))
+        : raw;
+      return store(target, Reflect.apply(prepare, Error, [target, sites]));
+    } finally {
+      formatting = false;
+    }
+  }
+
   if (native.engine === "quickjs") {
     const holder = {};
     Error.prepareStackTrace = (error, sites) => sites;
@@ -57,45 +78,19 @@
     nativePrepare.set.call(Error, (_error, sites) => sites);
     Object.defineProperty(Error, "prepareStackTrace", { value: defaultPrepare, writable: true, configurable: true });
 
-    function format(target, sites) {
-      if (!Array.isArray(sites)) return sites;
-      const prepare = Error.prepareStackTrace;
-      return Reflect.apply(typeof prepare === "function" ? prepare : defaultPrepare, Error, [target, sites]);
-    }
     Object.defineProperty(Error.prototype, "stack", {
       configurable: true,
       get() {
         if (formatted.has(this)) return formatted.get(this);
         const sites = nativeStack.get.call(this);
         if (!Array.isArray(sites)) return sites;
-        const value = format(this, sites);
-        store(this, value);
-        return value;
+        return formatStack(this, sites);
       },
       set(value) { store(this, value); },
     });
-    internal.defineHidden(Error, {
-      captureStackTrace: function captureStackTrace(target, constructorOpt) {
-        validateCaptureTarget(target);
-        capture(target, typeof constructorOpt === "function" ? constructorOpt : captureStackTrace);
-        formatted.delete(target);
-        const sites = target.stack;
-        Object.defineProperty(target, "stack", {
-          configurable: true,
-          enumerable: false,
-          get() {
-            if (formatted.has(this)) return formatted.get(this);
-            const value = format(this, sites);
-            store(this, value);
-            return value;
-          },
-          set(value) { store(this, value); },
-        });
-      },
-    });
   }
 
-  if (native.engine === "jsc") {
+  if (native.engine === "quickjs" || native.engine === "jsc") {
     internal.defineHidden(Error, {
       captureStackTrace: function captureStackTrace(target, constructorOpt) {
         validateCaptureTarget(target);
@@ -105,14 +100,7 @@
         Object.defineProperty(target, "stack", {
           configurable: true,
           enumerable: false,
-          get() {
-            if (formatted.has(this)) return formatted.get(this);
-            const prepare = Error.prepareStackTrace;
-            const value = typeof prepare === "function" && prepare !== defaultPrepare
-              ? Reflect.apply(prepare, Error, [this, internal.require("inspect").parseStack(raw).map(frame => new CallSite(frame))])
-              : raw;
-            return store(this, value);
-          },
+          get() { return formatStack(this, raw); },
           set(value) { store(this, value); },
         });
       },
