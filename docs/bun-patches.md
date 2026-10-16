@@ -829,3 +829,10 @@ No package-specific environment override is installed.
 Idle filesystem synchronization retains byte-exact comparisons, including edits
 within one millisecond. A direct byte loop replaces the callback per byte when comparing the unchanged
 dependency wasm during host I/O polling.
+
+The runtime-core descriptor integration uses the original `wasiPipe` adapter's
+read/write hooks to apply queued filesystem changes after stdin and publish
+changes before stdout or stderr. The existing callback output path shares the
+same publisher. Snapshot replacement/removal uses MemFS's handle-lifetime APIs.
+The applications select hoisted native Bun installs to avoid the recorded build
+plugin path-validation bug; no upstream loader or global package state changes.

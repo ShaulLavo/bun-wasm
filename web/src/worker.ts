@@ -108,10 +108,14 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     const snapshot = child?.receiveFilesystem();
     if (snapshot) childFiles?.merge(snapshot);
   };
-  const post = (type: "stdout" | "stderr", data: Uint8Array) => {
-    if (!child) { ctx.postMessage({ type, data }, [data.buffer]); return; }
+  const publishFilesystem = () => {
+    if (!child) return;
     const snapshot = childFiles?.capture();
     if (snapshot && child.sendFilesystem(snapshot)) childFiles?.commit(snapshot);
+  };
+  const post = (type: "stdout" | "stderr", data: Uint8Array) => {
+    if (!child) { ctx.postMessage({ type, data }, [data.buffer]); return; }
+    publishFilesystem();
     child[type].writeAll(data);
   };
   const subprocess = ctx.crossOriginIsolated && typeof SharedArrayBuffer === "function" ? new SubprocessHost({
@@ -135,13 +139,18 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
       return { terminate: () => { Atomics.store(control, 3, 1); } };
     },
   }) : null;
+  const stdio = child ? {
+    0: wasiPipe(child.stdin, "read", { afterRead: syncFilesystem }),
+    1: wasiPipe(child.stdout, "write", { beforeWrite: publishFilesystem }),
+    2: wasiPipe(child.stderr, "write", { beforeWrite: publishFilesystem }),
+  } : undefined;
   const wasi = new Wasi({
     hostCallFd: HOST_CALL_FD,
     args: req.args,
     env: req.env,
     fs,
     preopens: { "/": "/" },
-    stdio: child ? { 0: wasiPipe(child.stdin, "read"), 1: wasiPipe(child.stdout, "write"), 2: wasiPipe(child.stderr, "write") } : undefined,
+    stdio,
     stdout: (data) => post("stdout", data),
     stderr: (data) => post("stderr", data),
     sleep,

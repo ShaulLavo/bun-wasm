@@ -35,7 +35,7 @@ export class SharedPipe {
   close(): void;
   readiness(): Readiness;
 }
-export function wasiPipe(pipe: SharedPipe, mode: "read" | "write"): Stream;
+export function wasiPipe(pipe: SharedPipe, mode: "read" | "write", hooks?: { afterRead?(): void; beforeWrite?(): void }): Stream;
 export function childTransport(transport: ChildTransport): {
   stdin: SharedPipe;
   stdout: SharedPipe;

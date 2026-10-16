@@ -134,7 +134,7 @@ class FilesystemMailbox {
 }
 
 /** Original adapter from the existing Bun pipe transport to runtime descriptors. */
-export function wasiPipe(pipe, mode) {
+export function wasiPipe(pipe, mode, hooks = {}) {
   return {
     kind: "pipe",
     read(chunks) {
@@ -142,6 +142,7 @@ export function wasiPipe(pipe, mode) {
       const size = chunks.reduce((n, chunk) => n + chunk.length, 0);
       if (size === 0) return 0;
       const value = pipe.readBlocking(size);
+      hooks.afterRead?.();
       if (typeof value === "number") return value;
       let at = 0;
       for (const chunk of chunks) {
@@ -153,6 +154,7 @@ export function wasiPipe(pipe, mode) {
     },
     write(chunks) {
       if (mode !== "write") return -8;
+      if (chunks.some(chunk => chunk.length > 0)) hooks.beforeWrite?.();
       let written = 0;
       for (const chunk of chunks) {
         let at = 0;
