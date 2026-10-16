@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import net from "node:net";
-import { Duplex } from "node:stream";
+import { Duplex, Readable } from "node:stream";
 
 assert.equal(typeof net.getDefaultAutoSelectFamilyAttemptTimeout, "function");
 const attemptTimeout = net.getDefaultAutoSelectFamilyAttemptTimeout();
@@ -53,7 +53,7 @@ const closed = once(client, "close");
 client.on("data", chunk => received.push(chunk));
 client.write(payload);
 client.end();
-await closed;
+assert.equal((await closed)[0], false, "successful socket close reports no error");
 assert.equal(Buffer.concat(received).toString(), "after-fin");
 assert.equal(client.bytesWritten, payload.length);
 assert.equal(client.bytesRead, 9);
@@ -67,7 +67,37 @@ let connected = false;
 refused.on("connect", () => { connected = true; });
 const refusedClosed = new Promise(resolve => refused.once("close", resolve));
 const error = await new Promise(resolve => refused.once("error", resolve));
-await refusedClosed;
+assert.equal(await refusedClosed, true, "failed socket close reports an error");
 assert.equal(connected, false);
 assert.equal(error.code, "ECONNREFUSED");
+const webServer = net.createServer(socket => socket.end("web-socket"));
+webServer.listen(0, "127.0.0.1");
+await once(webServer, "listening");
+const webSocket = net.connect({ port: webServer.address().port, host: "127.0.0.1" });
+const webReader = Readable.toWeb(webSocket).getReader();
+const webChunks = [];
+for (;;) {
+  const item = await webReader.read();
+  if (item.done) break;
+  webChunks.push(item.value);
+}
+assert.equal(Buffer.concat(webChunks).toString(), "web-socket");
+webReader.releaseLock();
+await new Promise(resolve => webServer.close(resolve));
+console.log("socket Readable.toWeb ok");
+
+let peerClosed;
+const peerDone = new Promise(resolve => { peerClosed = resolve; });
+const cancelServer = net.createServer(socket => { socket.on("close", peerClosed); socket.resume(); });
+cancelServer.listen(0, "127.0.0.1");
+await once(cancelServer, "listening");
+const cancelSocket = net.connect({ port: cancelServer.address().port, host: "127.0.0.1" });
+await once(cancelSocket, "connect");
+await Readable.toWeb(cancelSocket).cancel("finished with socket");
+assert.equal(cancelSocket.destroyed, true);
+assert.equal(cancelSocket._conn.closed, true);
+await peerDone;
+await new Promise(resolve => cancelServer.close(resolve));
+console.log("socket Readable.toWeb cancel ok");
+
 console.log("tcp helpers, queued writes, half-close, counters, refused connection ok");

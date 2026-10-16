@@ -485,6 +485,10 @@
       defineHidden(this, { parent });
     }
     require(spec) {
+      if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
+        const exposed = internal.require("node_stream_internals").modules;
+        if (Object.prototype.hasOwnProperty.call(exposed, spec)) return exposed[spec];
+      }
       return requireFrom(spec, this.filename);
     }
   }
@@ -577,7 +581,7 @@
 
   function makeRequire(fromPath, mod) {
     function require(spec) {
-      return requireFrom(spec, fromPath);
+      return mod ? mod.require(spec) : requireFrom(spec, fromPath);
     }
     require.resolve = function resolve(spec) {
       return resolveFrom(spec, fromPath);
@@ -588,7 +592,6 @@
     require.cache = moduleCache;
     require.main = mainModule;
     require.extensions = { ".js": null, ".json": null, ".node": null };
-    if (mod) mod.require = require;
     return require;
   }
   internal.makeRequire = makeRequire;

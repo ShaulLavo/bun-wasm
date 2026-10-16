@@ -1,3 +1,4 @@
+import { installNativeStreamState } from "./native-stream-state.ts";
 import { memoryViews } from "../../runtime/core/memory-views.js";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
@@ -268,6 +269,7 @@ class ExitSignal {
 export function startEngineHost(o) {
   return new Promise((resolve) => {
     const host = new EngineHost(o, resolve);
+    host.disposeNativeStreams = installNativeStreamState();
     host.start();
   });
 }
@@ -883,6 +885,7 @@ class EngineHost {
   exit(code) {
     if (this.exited) return;
     this.exited = true;
+    this.disposeNativeStreams?.();
     this.native.closeAllDirs();
     this.flush();
     if (this.timer !== null) nativeClearTimeout(this.timer);

@@ -1,0 +1,5 @@
+{
+  "core": { "package": "readable-stream", "version": "4.7.0", "node_base": "18.19.0", "entry": "lib/stream.js" },
+  "adapters": { "repository": "nodejs/node", "revision": "v26.7.0", "path": "lib/internal/webstreams/adapters.js", "sha256": "918e3382a8dc94fdd972f18b910807ae921754f3a6f714757f560559e15e2ec2" },
+  "eos": { "repository": "nodejs/node", "revision": "v26.7.0", "path": "lib/internal/streams/end-of-stream.js", "sha256": "a206f4206b803529910fec9fcf62569621adb5689f39ec82a47641383de42c09" }
+}

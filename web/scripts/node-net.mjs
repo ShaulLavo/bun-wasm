@@ -209,10 +209,12 @@ export function createNodeNet({ net, http, https, zlib }) {
       if (h.kind !== "conn") return UNSUPPORTED;
       if (h.error) return ERROR;
       if (h.socket.connecting) return AGAIN;
-      if (h.socket.writableLength > MAX_QUEUED) return AGAIN;
       if (bytes.length === 0) return 0;
-      h.socket.write(new Uint8Array(bytes));
-      return bytes.length;
+      const available = MAX_QUEUED - h.socket.writableLength;
+      if (available <= 0) return AGAIN;
+      const count = Math.min(bytes.length, available);
+      h.socket.write(new Uint8Array(bytes.subarray(0, count)));
+      return count;
     },
 
     hostShutdown(handle) {
