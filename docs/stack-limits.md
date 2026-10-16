@@ -31,8 +31,10 @@ JSC keeps a 128 KiB reserve below that. The playground runs bun.wasm in a worker
 Safari on macOS and iOS has the least host stack. Playwright's WebKit on Linux sizes
 threads from `RLIMIT_STACK` instead (8 MiB here), which overstates Safari about
 fourteenfold. Running the browser under `ulimit -s 512` gives its worker threads
-Darwin's default size. It is still x86-64 Linux WebKit, not an iOS device: no iOS
-Safari measurement exists.
+Darwin's default size. Playwright WebKit on the owner's M1 Mac runs on real Darwin
+worker stacks and ARM64, the same architecture and engine as iOS; it was the tighter
+of the two and sets the browser budget. Neither is an iOS device: no measurement on
+iOS Safari itself exists.
 
 JavaScriptCore first runs wasm in an interpreter whose frames are two to three
 times larger than its optimized code's, and a function keeps those frames until it
@@ -109,11 +111,13 @@ depths.
 `BUN_WASM_STACK_KIB` is clamped to 7 MiB in both engines, below the 8 MiB shadow
 stack, so no value can wrap to "no limit". Values that are not positive decimal
 numbers keep the default. The clamp keeps the guard alive, but it does not make a
-budget fit the host: a budget larger than the host stack allows traps as before. The browser worker (`web/src/worker.ts`) passes 40 KiB unless the
-page runs on V8. In WebKit with 512 KiB worker stacks and every function in its first
-tier, the tightest path (`JSON.stringify`) has room for 54 KiB of budget, so 40 KiB
-leaves 26% for iOS frame sizes, which cannot be measured here. Engines other than
-V8 and JavaScriptCore are unmeasured and get the smaller budget.
+budget fit the host: a budget larger than the host stack allows traps as before. The browser worker (`web/src/worker.ts`) passes 32 KiB unless the
+page runs on V8. In WebKit on the Mac with every function in its first tier, getters,
+`JSON.stringify` and `toString` reentry trap at 50 KiB, and the fixture's
+`JSON.stringify` traps at 45 KiB while building its RangeError, so the room there is
+about 43 to 47 KiB. At 40 KiB (1.25 times 32) every path and fixture still passes.
+Linux WebKit under `ulimit -s 512` has more room (54 KiB for its tightest path).
+Engines other than V8 and JavaScriptCore are unmeasured and get the smaller budget.
 
 ## JSC
 
@@ -126,9 +130,11 @@ shadow stack, or `BUN_WASM_STACK_KIB` when the host sets it, plus JSC's existing
 in the C-loop build it also sizes the separate JavaScript frame stack, and 448 KiB
 cut plain recursion from 63,887 calls to 4,085.
 
-In WebKit with 512 KiB worker stacks and cold code, getters have room for 57 levels
-and the default stops them at 56, leaving nothing for building the error. The
-browser worker therefore passes 224 KiB when the page is not on V8.
+With every function in its first tier, getters have room for 57 levels in Linux
+WebKit under `ulimit -s 512` and 45 in WebKit on the Mac, where 224 KiB stopped them at
+39 and 280 KiB let them trap. The browser worker therefore passes 192 KiB when the page
+is not on V8: getters stop at 34, and at 240 KiB (1.25 times) every reentry path and
+fixture still passes on the Mac.
 
 Known gap: JSC's parser (every nesting shape), regular-expression compiler,
 `Array.prototype.flat`, `JSON.parse` revivers, Proxy chains without traps and the
@@ -156,7 +162,8 @@ browser context per attempt.
 Measured on 2026-10-16. A number is the deepest nesting that completed; one level
 more threw `RangeError` unless marked "trap". "ok" means the console control (every
 level swallows the overflow and touches `console.Console`) finished. "WebKit 512" is
-Playwright WebKit under `ulimit -s 512`; "first run" uses a fresh page per attempt.
+Playwright WebKit under `ulimit -s 512` on Linux; "WebKit on macOS" is Playwright WebKit on
+an M1 Mac; "first run" uses a fresh page per attempt.
 
 Main paths, before and after:
 
@@ -166,14 +173,16 @@ Main paths, before and after:
 | QuickJS, native launcher | trap 873 → 13,786 | trap 598 → 10,477 | trap 577 → 6,236 | trap 2,010 → 37,413 | trap 882 → 13,797 | trap → ok |
 | QuickJS, Node host | trap 1,835 → 20,685 | trap 1,287 → 15,720 | trap 1,248 → 9,357 | trap 4,983 → 56,138 | trap 1,844 → 20,696 | trap → ok |
 | QuickJS, Chromium | trap 923 → 501 | trap 660 → 381 | trap 640 → 226 | trap 2,842 → 1,353 | → 512 | → ok |
-| QuickJS, WebKit 512 | trap 644 → 124 | trap 481 → 94 | trap 291 → 56 | trap 1,773 → 329 | → 135 | → ok |
-| QuickJS, WebKit 512 first run | trap 286 → 124 | trap 140 → 94 | trap 143 → 56 | trap 483 → 329 | → 135 | → ok |
+| QuickJS, WebKit 512 | trap 644 → 97 | trap 481 → 74 | trap 291 → 44 | trap 1,773 → 256 | → 108 | → ok |
+| QuickJS, WebKit 512 first run | trap 286 → 97 | trap 140 → 74 | trap 143 → 44 | trap 483 → 256 | → 108 | → ok |
+| QuickJS, WebKit on macOS first run | → 97 | → 74 | → 44 | → 256 | → 108 | → ok |
 | JSC, wasmtime CLI | 63,887 → 63,887 | trap 244 → 56 | trap 222 → 54 | 39,999 → 39,999 | 63,896 → 63,896 | ok → ok |
 | JSC, native launcher | 63,887 → 63,887 | trap 136 → 731 | trap 126 → 695 | 39,999 → 39,999 | 63,896 → 63,896 | ok → ok |
 | JSC, Node host | 63,887 → 63,887 | trap 783 → 892 | trap 737 → 847 | 39,999 → 39,999 | 63,896 → 63,896 | ok → ok |
 | JSC, Chromium | 63,887 → 63,887 | trap 389 → 56 | trap 361 → 54 | 39,999 → 39,999 | → 63,896 | → ok |
-| JSC, WebKit 512 | 63,887 → 63,887 | trap 82 → 39 | trap 71 → 37 | 39,999 → 39,999 | → 63,896 | → ok |
-| JSC, WebKit 512 first run | → 63,887 | trap 57 → 39 | trap 58 → 37 | → 39,999 | → 63,896 | → ok |
+| JSC, WebKit 512 | 63,887 → 63,887 | trap 82 → 34 | trap 71 → 32 | 39,999 → 39,999 | → 63,896 | → ok |
+| JSC, WebKit 512 first run | → 63,887 | trap 57 → 34 | trap 58 → 32 | → 39,999 | → 63,896 | → ok |
+| JSC, WebKit on macOS first run | → 63,887 | → 34 | → 32 | → 39,999 | → 63,896 | → ok |
 | Browser-native, Node host | 11,403 → over 200,000 | 2,986 → 99,264 | 2,917 → 96,956 | 5,667 → 189,472 | 11,422 → over 200,000 | ok |
 | Browser-native, Chromium | 7,811 | 2,959 | 1,692 | 2,611 | 8,519 | ok |
 | Browser-native, WebKit 512 | 3,410 | 1,654 | 277 | 39,999 | 3,420 | ok |
@@ -181,41 +190,41 @@ Main paths, before and after:
 Blank "before" cells were not measured. The QuickJS "first run" before row was
 measured on a build whose 152 KiB guard does not trip in that tier, so it shows where
 the host stack ran out. WebKit rows use the budgets the browser passes off V8
-(40 KiB QuickJS, 224 KiB JSC); Chromium uses the defaults. The launcher passes
+(32 KiB QuickJS, 192 KiB JSC); Chromium uses the defaults. The launcher passes
 4096 KiB, and the Node host 6144 KiB on its 32 MB Worker stack, which also deepens the
 browser-native engine there. JSC getters on the Node host stop at 892 at any larger
 budget: JSC's own `maxPerThreadStackUsage` (5 MB) bounds them there. Otherwise the
 browser-native engine does not change; its counts vary by a few percent between runs
 as the host JIT tiers up. WebKit on Linux with its default 8 MiB
-threads trapped QuickJS after 8,850 plain calls before and catches at 124 after: it
-gets the 40 KiB budget because it is JavaScriptCore.
+threads trapped QuickJS after 8,850 plain calls before and catches at 97 after: it
+gets the 32 KiB budget because it is JavaScriptCore.
 
-Other QuickJS paths. "Before" is the native launcher; the 152 and 40 KiB columns are
+Other QuickJS paths. "Before" is the native launcher; the 152 and 32 KiB columns are
 the same on every host with that budget:
 
-| Path | Before | After, 152 KiB | After, 40 KiB | After, launcher (4096 KiB) |
+| Path | Before | After, 152 KiB | After, 32 KiB | After, launcher (4096 KiB) |
 | --- | ---: | ---: | ---: | ---: |
-| `JSON.stringify` without replacer | trap 2,010 | 1,356 | 332 | 37,416 |
-| `JSON.parse` | trap 2,683 | 1,346 | 322 | 37,406 |
-| `JSON.parse` with reviver | trap 2,013 | 862 | 210 | 23,809 |
-| Nested array literals in source | trap 243 | 162 | 38 | 4,514 |
-| Nested blocks | trap 1,038 | 628 | 150 | 17,456 |
-| Nested arrow functions | trap 185 | 126 | 29 | 3,537 |
-| Unary operator chain | trap 2,911 | 1,560 | 365 | 43,629 |
-| `**` chain | trap 2,912 | 1,560 | 365 | 43,629 |
-| Conditional operator chain | trap 2,288 | 936 | 219 | 26,177 |
-| `if` chain | trap 1,457 | 781 | 183 | 21,815 |
-| Regexp groups (SyntaxError) | trap 1,536 | 452 | 110 | 12,472 |
-| Proxy chain without traps | trap 1,700 | 414 | 102 | 11,389 |
-| Bound function chain | trap 645 | 352 | 86 | completes at 2,000 |
-| Nested arrays to string | trap 222 | 134 | 32 | 3,740 |
-| `Array.prototype.flat` | trap 2,149 | 863 | 211 | 23,810 |
-| `toString` reentry | trap 258 | 156 | 38 | 4,294 |
-| Async recursion | trap 335 | 190 | 47 | 5,238 |
+| `JSON.stringify` without replacer | trap 2,010 | 1,356 | 259 | 37,416 |
+| `JSON.parse` | trap 2,683 | 1,346 | 249 | 37,406 |
+| `JSON.parse` with reviver | trap 2,013 | 862 | 164 | 23,809 |
+| Nested array literals in source | trap 243 | 162 | 29 | 4,514 |
+| Nested blocks | trap 1,038 | 628 | 116 | 17,456 |
+| Nested arrow functions | trap 185 | 126 | 22 | 3,537 |
+| Unary operator chain | trap 2,911 | 1,560 | 280 | 43,629 |
+| `**` chain | trap 2,912 | 1,560 | 280 | 43,629 |
+| Conditional operator chain | trap 2,288 | 936 | 168 | 26,177 |
+| `if` chain | trap 1,457 | 781 | 141 | 21,815 |
+| Regexp groups (SyntaxError) | trap 1,536 | 452 | 86 | 12,472 |
+| Proxy chain without traps | trap 1,700 | 414 | 80 | 11,389 |
+| Bound function chain | trap 645 | 352 | 67 | completes at 2,000 |
+| Nested arrays to string | trap 222 | 134 | 25 | 3,740 |
+| `Array.prototype.flat` | trap 2,149 | 863 | 165 | 23,810 |
+| `toString` reentry | trap 258 | 156 | 30 | 4,294 |
+| Async recursion | trap 335 | 190 | 36 | 5,238 |
 
 With the 152 KiB default, every path is still caught when wasmtime's stack is cut
-to 320 KiB; at 256 KiB plain calls trap. The QuickJS fixture suite passes with
-`BUN_WASM_STACK_KIB=40`.
+to 320 KiB; at 256 KiB plain calls trap. The fixture suites pass with the browser
+budgets: `BUN_WASM_STACK_KIB=32` for QuickJS and `192` for JSC.
 
 ## Reproduce
 
@@ -230,7 +239,7 @@ python3 scripts/measure-stack.py --engine quickjs --host launcher --launcher "$C
 python3 scripts/measure-stack.py --engine quickjs --host node
 python3 scripts/measure-stack.py --engine browser --host node plain getter proxy json promise console
 python3 scripts/measure-stack.py --engine quickjs --stack-kib 320   # margin: all paths must still be caught
-python3 scripts/measure-stack.py --engine quickjs --budget-kib 40     # the budget the browser passes off V8
+python3 scripts/measure-stack.py --engine quickjs --budget-kib 32     # the budget the browser passes off V8
 scripts/test.sh --no-build stack-overflow stack-overflow-console
 scripts/test.sh --no-build --engine jsc stack-overflow stack-overflow-console
 scripts/test.sh --no-build --engine browser stack-overflow stack-overflow-console
