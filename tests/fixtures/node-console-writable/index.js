@@ -49,3 +49,12 @@ retained.destroy();
 assert.equal(autoDestroyed, true);
 assert.equal(retained.destroyed, true);
 console.log("autoDestroy false and explicit destroy");
+
+for (const stream of [process.stdout, process.stderr]) {
+  assert.equal(await new Promise(resolve => stream.write("", resolve)), null);
+  const listeners = stream.listenerCount("error");
+  new Console(stream).log("stdio");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stream.listenerCount("error"), listeners);
+}
+console.log("stdio callbacks preserve listeners");
