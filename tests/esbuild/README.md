@@ -5,8 +5,8 @@ These checks run the published `esbuild-wasm@0.25.12` package unchanged. Install
 build the playground before running them through the machine's heavy wrapper.
 
 ```sh
-MATRIX_CACHE=/path/to/offline-mirror node tests/esbuild/run.mjs
-MATRIX_CACHE=/path/to/offline-mirror node tests/esbuild/browser.mjs
+MATRIX_CACHE=/path/to/offline-mirror bun tests/esbuild/run.mjs
+MATRIX_CACHE=/path/to/offline-mirror bun tests/esbuild/browser.mjs
 ```
 
 `BUN_WASM_LAUNCHER` selects a private native launcher. `ENGINES` selects a

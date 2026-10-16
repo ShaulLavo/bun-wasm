@@ -262,7 +262,7 @@ export class SubprocessHost {
   read(handle, cap) {
     if (handle === 0) {
       const value = this.stdin ? this.stdin.read(cap) : -4;
-      this.options.syncStdin?.();
+      this.options.syncFilesystem?.();
       this.stdinWaiting = value === AGAIN;
       if (this.stdinWaiting) this.watch();
       return value;
@@ -277,12 +277,10 @@ export class SubprocessHost {
     const h = this.handles.get(handle);
     if (!h || h.fd !== 0) return BADF;
     const child = this.children.get(h.child);
-    const snapshot = child.filesystem?.capture();
-    if (snapshot && !child.outgoing.send(snapshot, false)) {
+    if (!this.publishFilesystem(child)) {
       const control = new Int32Array(child.transport.control, 0, 4);
       return Atomics.load(control, 0) || Atomics.load(control, 3) ? -1 : AGAIN;
     }
-    if (snapshot) child.filesystem.commit(snapshot);
     return h.pipe.write(bytes);
   }
   close(handle) {
@@ -304,7 +302,10 @@ export class SubprocessHost {
     const cells = new Int32Array(child.transport.control, 0, 4);
     const done = Atomics.load(cells, 0);
     this.synchronize(child);
-    if (!done) return AGAIN;
+    if (!done) {
+      this.publishFilesystem(child);
+      return AGAIN;
+    }
     if (!child.ended) this.reap(child, cells);
     return Atomics.load(cells, 1);
   }
@@ -314,6 +315,13 @@ export class SubprocessHost {
     const size = Atomics.load(cells, 2);
     if (size && child.filesystem) child.filesystem.merge(decode.decode(new Uint8Array(child.transport.control, 16, size).slice()));
     child.worker?.terminate();
+  }
+  publishFilesystem(child) {
+    const snapshot = child.filesystem?.capture();
+    if (!snapshot) return true;
+    if (!child.outgoing.send(snapshot, false)) return false;
+    child.filesystem.commit(snapshot);
+    return true;
   }
   synchronize(child) {
     const snapshot = child?.incoming?.receive();
@@ -350,6 +358,7 @@ export class SubprocessHost {
     }
   }
   poll(timeout = 0) {
+    this.options.syncFilesystem?.();
     for (const id of this.children.keys()) this.wait(id);
     if (!timeout) return 0;
     const cells = new Int32Array(this.budget);

@@ -50,7 +50,7 @@ export class SubprocessHost {
     launch(meta: SpawnMeta, transport: ChildTransport, onError: (error: unknown) => void): { terminate(): unknown };
     output(fd: number, bytes: Uint8Array): void;
     filesystem?(): FilesystemSync;
-    syncStdin?(): void;
+    syncFilesystem?(): void;
   });
   budget: SharedArrayBuffer;
   attach(memory: WebAssembly.Memory): void;

@@ -104,7 +104,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   const initialRoot = req.child ? structuredClone(req.root) : null;
   const child = req.child ? childTransport(req.child) : null;
   const childFiles = initialRoot ? filesystemSync(fs, initialRoot) : null;
-  const syncStdin = () => {
+  const syncFilesystem = () => {
     const snapshot = child?.receiveFilesystem();
     if (snapshot) childFiles?.merge(snapshot);
   };
@@ -121,7 +121,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     stdin: req.child?.pipes[0],
     output: (fd, data) => post(fd === 2 ? "stderr" : "stdout", data),
     filesystem: () => filesystemSync(fs),
-    syncStdin,
+    syncFilesystem,
     launch: (meta, transport) => {
       const cwd = meta.cwd || req.env.PWD || "/";
       if (fs.lookup(cwd)?.kind !== "dir") throw Object.assign(new Error(`spawn: cwd does not exist: ${cwd}`), { code: "ENOENT" });
@@ -142,7 +142,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     preopens: { "/": "/" },
     stdin: child ? (cap) => {
       const data = child.stdin.readBlocking(cap);
-      syncStdin();
+      syncFilesystem();
       return data;
     } : undefined,
     stdout: (data) => post("stdout", data),
