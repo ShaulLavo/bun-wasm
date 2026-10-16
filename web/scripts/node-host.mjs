@@ -20,7 +20,7 @@ import { WASI } from "node:wasi";
 import { fileURLToPath } from "node:url";
 import { Worker, isMainThread, workerData } from "node:worker_threads";
 import { installCliFetch } from "./node-install-net.mjs";
-import { memoryViews } from "../src/memory-views.js";
+import { memoryViews } from "../../runtime/core/memory-views.js";
 import { SubprocessHost, childTransport } from "../src/subprocess.js";
 
 // V8's default stack limit (about 984 KB) also bounds wasm frames. Run once more with a larger

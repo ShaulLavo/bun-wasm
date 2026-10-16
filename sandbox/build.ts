@@ -4,6 +4,7 @@
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { previewWebsocketScript } from "../web/preview-build";
+import { buildBrowserEntries, buildClassicWorker } from "../scripts/browser-build";
 import { join, relative, resolve } from "node:path";
 
 const here = import.meta.dir;
@@ -21,21 +22,12 @@ async function bundle(config: Parameters<typeof Bun.build>[0]): Promise<Awaited<
   return result;
 }
 
-const page = await bundle({
-  entrypoints: [join(here, "src/main.ts"), join(web, "src/worker.ts")],
-  outdir: out,
-  target: "browser",
-  format: "esm",
-  minify: true,
-  sourcemap: "linked",
-  naming: "[name].[ext]",
+// Main and worker share chunks, also mirrored into the worker's controlling scope.
+const page = await buildBrowserEntries([join(here, "src/main.ts"), join(web, "src/worker.ts")], out);
+// The service worker stays standalone and classic for Safari.
+const sw = await buildClassicWorker(join(web, "src/sw.ts"), out, {
+  __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(await previewWebsocketScript()),
 });
-// The service worker is a classic script (module service workers are newer in Safari).
-const sw = await bundle({ define: { __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(await previewWebsocketScript()) }, entrypoints: [join(web, "src/sw.ts")], outdir: out, target: "browser", format: "iife", minify: true, naming: "[name].[ext]" });
-
-// Safari may fetch a dedicated worker's initial script from the network on its first visit.
-// Keep the script in its controlling scope without relying on fetch interception to bootstrap it.
-await Bun.write(join(out, "__bunwasm/worker.js"), Bun.file(join(out, "worker.js")));
 
 await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 await Bun.write(join(out, "_headers"), Bun.file(join(web, "_headers")));
