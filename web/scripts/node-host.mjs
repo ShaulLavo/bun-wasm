@@ -21,7 +21,6 @@ import { Worker, isMainThread, workerData } from "node:worker_threads";
 import { installCliFetch } from "./node-install-net.mjs";
 import { memoryViews } from "../../runtime/core/memory-views.js";
 import { SubprocessHost, childTransport, wasiPipe } from "../src/subprocess.ts";
-import { waitStatus } from "../../runtime/proc/wait-status.ts";
 import { launchNodeExecutable } from "./node-spawn.ts";
 import { forwardOutput, writeStdio } from "./node-stdio.ts";
 import { createNodeSignalController } from "./node-signals.ts";
@@ -33,6 +32,7 @@ import { installNodeProcess } from "./node-process.ts";
 // guest's stack budget fits it (docs/stack-limits.md). `--stack-mb` overrides it for measurements.
 const STACK_MB = 32;
 const GUEST_STACK_KIB = "6144";
+function waitStatus(result) { return result.kind === "start-failed" ? result.error === "ENOENT" ? 127 : 126 : result.status; }
 if (isMainThread) {
   const cli = process.argv.slice(2);
   const end = cli.indexOf("--");
