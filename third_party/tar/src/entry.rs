@@ -39,15 +39,14 @@ fn set_symlink_file_times(path: &Path, atime: FileTime, mtime: FileTime) -> io::
     }.map_err(|error| Error::from_raw_os_error(i32::from(error.raw())))
 }
 
+/// Largest GNU long-name/long-link or PAX extension body (libarchive's limit).
+pub(crate) const METADATA_LIMIT: u64 = 1024 * 1024;
+
 /// A read-only view into an entry of an archive.
 ///
 /// This structure is a window into a portion of a borrowed archive which can
 /// be inspected. It acts as a file handle by implementing the Reader trait. An
 /// entry cannot be rewritten once inserted into an archive.
-
-/// Largest GNU long-name/long-link or PAX extension body (libarchive's limit).
-pub(crate) const METADATA_LIMIT: u64 = 1024 * 1024;
-
 pub struct Entry<'a, R: 'a + Read> {
     fields: EntryFields<'a>,
     _ignored: marker::PhantomData<&'a Archive<R>>,
