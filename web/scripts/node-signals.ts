@@ -1,5 +1,5 @@
 import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
-import { createSignalState, requestSignal } from "waffle/proc/signals";
+import { createSignalState, requestSignal, type SignalTransport } from "waffle/proc/signals";
 
 /** The main Node thread and its root guest share the same signal and terminal-decision words. */
 export interface NodeSignalBuffers {
@@ -9,7 +9,7 @@ export interface NodeSignalBuffers {
   outcome: SharedArrayBuffer;
 }
 
-export function createNodeSignalController(source?: NodeSignalBuffers) {
+export function createNodeSignalController(source?: NodeSignalBuffers | SignalTransport) {
   const buffers = source ?? {
     signalState: new SharedArrayBuffer(65 * 4),
     interrupt: new SharedArrayBuffer(4),
@@ -18,8 +18,8 @@ export function createNodeSignalController(source?: NodeSignalBuffers) {
   };
   const transport = {
     signalState: createSignalState(buffers.signalState),
-    interrupt: new Int32Array(buffers.interrupt),
-    requestedSignal: new Int32Array(buffers.requestedSignal),
+    interrupt: buffers.interrupt instanceof Int32Array ? buffers.interrupt : new Int32Array(buffers.interrupt),
+    requestedSignal: buffers.requestedSignal instanceof Int32Array ? buffers.requestedSignal : new Int32Array(buffers.requestedSignal),
     outcome: outcomeWord(buffers.outcome),
   };
   return {

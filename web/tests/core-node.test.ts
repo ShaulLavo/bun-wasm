@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 
 test('plain Node can consume the JS memory helper through the existing host adapters', () => {
-  const source = `await import(${JSON.stringify(new URL('../src/subprocess.ts', import.meta.url).href)});`;
+  const source = `await import(${JSON.stringify(new URL('../scripts/node-process.ts', import.meta.url).href)});`;
   const result = spawnSync('node', ['--input-type=module', '-e', source], { encoding: 'utf8' });
   expect(result.stderr).toBe('');
   expect(result.status).toBe(0);
@@ -34,7 +34,7 @@ test('unbundled headless hosts load with their installed runtime package', async
   try {
     for (const path of ['web/package.json',
       'web/src/crypto-inputs.js', 'web/src/crypto-host.js', 'web/src/content-modules.ts', 'web/src/promise-reactions.ts',
-      'web/scripts/node-host.mjs', 'web/scripts/node-child.ts', 'web/scripts/node-child-supervisor.ts', 'web/scripts/node-signals.ts', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-process.ts', 'web/scripts/node-install-net.mjs', 'web/src/subprocess.ts', 'web/src/tool-command.ts', 'web/src/net/trampoline.ts', 'web/src/net/package-fetch.ts', 'web/src/worker-pipes.ts', 'web/src/buffer-transfer.ts', 'web/src/engine-host.js', 'web/src/native-stream-state.ts']) {
+      'web/src/tool-command.ts', 'web/scripts/node-host.mjs', 'web/scripts/node-host.ts', 'web/scripts/node-signals.ts', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-process.ts', 'web/scripts/node-install-net.mjs', 'web/src/net/trampoline.ts', 'web/src/net/package-fetch.ts', 'web/src/buffer-transfer.ts', 'web/src/engine-host.js', 'web/src/native-stream-state.ts']) {
       const target = join(dir, path);
       await mkdir(dirname(target), { recursive: true });
       await copyFile(new URL(`../../${path}`, import.meta.url), target);
@@ -48,7 +48,7 @@ test('unbundled headless hosts load with their installed runtime package', async
     });
     expect(existsSync(join(dir, 'runtime'))).toBe(false);
     expect(existsSync(join(dir, 'web/node_modules/waffle/dist/core/memory-views.js'))).toBe(true);
-    const imports = ['web/src/engine-host.js', 'web/src/subprocess.ts', 'web/src/tool-command.ts', 'web/scripts/node-install-net.mjs', 'web/scripts/node-stdio.ts', 'web/scripts/node-process.ts'];
+    const imports = ['web/src/engine-host.js', 'web/scripts/node-spawn.ts', 'web/scripts/node-install-net.mjs', 'web/scripts/node-stdio.ts', 'web/scripts/node-process.ts'];
     const load = spawnSync('node', ['--input-type=module', '-e', `for (const path of ${JSON.stringify(imports)}) await import('./' + path);`], { cwd: dir, encoding: 'utf8' });
     expect(load.stderr).toBe('');
     expect(load.status).toBe(0);
