@@ -39,7 +39,7 @@
     const value: unknown = JSON.parse(native.readFileUtf8(manifest));
     if (!value || typeof value !== "object" || !("scripts" in value)) return;
     const scripts = value.scripts;
-    if (!scripts || typeof scripts !== "object" || !(name in scripts)) return;
+    if (!scripts || typeof scripts !== "object" || !Object.prototype.hasOwnProperty.call(scripts, name)) return;
     const command: unknown = Reflect.get(scripts, name);
     if (typeof command !== "string") throw new TypeError(`Package script ${name} must be a string`);
     return command;
