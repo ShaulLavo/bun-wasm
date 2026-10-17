@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compare builtin artifact sizes and empty-program startup on the three engines."""
 import argparse
+import os
 import gzip
 import hashlib
 import json
@@ -14,7 +15,8 @@ ENGINES = {"quickjs": "bun.wasm", "jsc": "bun-jsc.wasm", "browser": "bun-browser
 
 
 def measure(engine, wasm, code):
-    command = ["wasmtime", "run", str(wasm), "-e", code]
+    launcher = os.environ.get("BUN_WASM_LAUNCHER", str(Path(os.environ.get("CARGO_TARGET_DIR", "/work/tmp/bun-wasm-target")) / "release/bun-wasm"))
+    command = [launcher, "--wasm", str(wasm), "--", "-e", code]
     if engine == "browser":
         command = ["node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm), "--", "-e", code]
     elapsed = []
@@ -33,7 +35,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--code", default="0")
     opts = parser.parse_args()
-    result = {"code": opts.code, "tools": {tool: subprocess.check_output([tool, "--version"], text=True).strip() for tool in ["wasmtime", "node"]}}
+    launcher = Path(os.environ.get("BUN_WASM_LAUNCHER", str(Path(os.environ.get("CARGO_TARGET_DIR", "/work/tmp/bun-wasm-target")) / "release/bun-wasm"))).resolve()
+    result = {"code": opts.code, "tools": {"node": subprocess.check_output(["node", "--version"], text=True).strip(), "launcher": str(launcher), "launcher_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest()}}
     for label, directory in [("before", opts.before.resolve()), ("after", opts.after.resolve())]:
         result[label] = {engine: measure(engine, directory / filename, opts.code) for engine, filename in ENGINES.items()}
     opts.output.parent.mkdir(parents=True, exist_ok=True)

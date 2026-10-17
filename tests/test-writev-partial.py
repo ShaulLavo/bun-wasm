@@ -1,5 +1,6 @@
 """Run bounded OS short writes without limiting the parent harness's files."""
 import argparse
+import os
 from pathlib import Path
 import resource
 import shutil
@@ -26,8 +27,10 @@ with tempfile.TemporaryDirectory(prefix='bun-wasm-next-review-partial-', dir='/w
     elif args.engine == 'browser':
         command = ['node', '--no-warnings', str(ROOT / 'web/scripts/node-host.mjs'), '--wasm', str(args.wasm.resolve()), '--dir', directory + '::/', '--env', 'PWD=/', '--', 'run', '/index.mjs']
     else:
-        command = ['wasmtime', 'run', '-C', 'cache=n', '-O', 'memory-init-cow=n', '--dir', directory + '::/', '--env', 'PWD=/', str(args.wasm.resolve()), 'run', '/index.mjs']
-    result = subprocess.run(command, cwd=work, text=True, capture_output=True, timeout=90, preexec_fn=limit_file)
+        launcher = os.environ.get("BUN_WASM_LAUNCHER", str(Path(os.environ.get("CARGO_TARGET_DIR", "/work/tmp/bun-wasm-target")) / "release/bun-wasm"))
+        command = [launcher, "--wasm", str(args.wasm.resolve()), "--dir", directory + "::/", "--env", "PWD=/", "--", "run", "/index.mjs"]
+    # RLIMIT_FSIZE also applies to Wasmtime's compiled artifacts and COW memfd.
+    result = subprocess.run(command, cwd=work, text=True, capture_output=True, timeout=90, preexec_fn=limit_file, env=dict(os.environ, BUN_WASM_CACHE_DIR="off", BUN_WASM_MEMORY_INIT_COW="0"))
     expected = (fixture / 'expected.txt').read_text()
     if result.returncode or result.stdout != expected or result.stderr:
         print('FAIL fs-writev-partial', args.engine, 'exit', result.returncode)
