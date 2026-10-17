@@ -43,7 +43,7 @@ declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
 
 declare namespace BunWasm {
-  interface Internal { web: { Response: { _withBody(response: Response, body: ReadableStream<Uint8Array>): Response; _setUrl(response: Response, url: string): void } } }
+  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void } } }
   type HTMLHandlerKind = "element" | "comments" | "text" | "doctype" | "end" | "endTag";
   interface HTMLStepEvent { handler: number; kind: HTMLHandlerKind }
   interface HTMLStep { output: Uint8Array; event?: HTMLStepEvent }

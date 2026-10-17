@@ -233,7 +233,15 @@
       if (input instanceof Response) {
         if (input.bodyUsed) throw new TypeError("Response body already used");
         const rewrite = new Rewrite(this.#registrations.slice());
-        return internal.web.Response._withBody(input, rewrite.stream(input));
+        const body = rewrite.stream(input);
+        const headers = new Headers(input.headers);
+        const output = input.type === "error" ? Response.error() : new Response(body, { status: input.status, statusText: input.statusText, headers });
+        if (input.type === "error") {
+          Reflect.set(output, "_stream", body);
+          for (const [name, value] of headers) output.headers.set(name, value);
+        }
+        internal.web.Response._setUrl(output, input.url);
+        return output;
       }
       if (typeof input === "string") return new TextDecoder().decode(new Rewrite(this.#registrations.slice()).sync(encoder.encode(input)));
       if (input instanceof ArrayBuffer) return new Rewrite(this.#registrations.slice()).sync(new Uint8Array(input)).buffer;

@@ -967,15 +967,6 @@
       res.#status = 0;
       return res;
     }
-    static _withBody(input, body) {
-      const res = new Response(body, { headers: input.headers });
-      res.#status = input.#status;
-      res.#statusText = input.#statusText;
-      res.#type = input.#type;
-      res.#url = input.#url;
-      res.#redirected = input.#redirected;
-      return res;
-    }
     static _setUrl(res, url) {
       res.#url = url;
     }
