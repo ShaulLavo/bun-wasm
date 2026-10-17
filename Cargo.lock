@@ -157,17 +157,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "brotli"
-version = "8.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cc91aac060a7a1e25823bdccbfb6af1875b88f17c6daac97894eed8207166b3"
-dependencies = [
- "alloc-no-stdlib",
- "alloc-stdlib",
- "brotli-decompressor",
-]
-
-[[package]]
 name = "brotli-decompressor"
 version = "5.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -269,6 +258,13 @@ name = "bun_boringssl_sys"
 version = "0.0.0"
 dependencies = [
  "bun_core",
+ "bun_opaque",
+]
+
+[[package]]
+name = "bun_brotli_sys"
+version = "0.0.0"
+dependencies = [
  "bun_opaque",
 ]
 
@@ -1133,6 +1129,7 @@ dependencies = [
  "tokio",
  "wasmtime",
  "wasmtime-wasi",
+ "zstd",
 ]
 
 [[package]]
@@ -1152,17 +1149,19 @@ version = "0.0.23"
 dependencies = [
  "aes",
  "aes-kw",
- "brotli",
+ "bun_brotli_sys",
  "bun_glob",
  "bun_semver",
  "bun_sys",
  "bun_wyhash",
+ "bun_zstd",
  "bunwasm-crypto-sys",
  "bunwasm-glue",
  "bunwasm-jsc",
  "bunwasm-posix",
  "bunwasm-semver",
  "cbc",
+ "cc",
  "ctr",
  "ed25519-dalek",
  "encoding_rs",
@@ -1175,7 +1174,6 @@ dependencies = [
  "libsqlite3-sys",
  "lol_html",
  "md-5",
- "miniz_oxide 0.8.9",
  "p256",
  "p384",
  "pbkdf2",
@@ -1192,6 +1190,7 @@ dependencies = [
  "url",
  "wasmi",
  "x25519-dalek",
+ "zstd-sys",
 ]
 
 [[package]]
@@ -3768,11 +3767,10 @@ dependencies = [
 [[package]]
 name = "tar"
 version = "0.4.46"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
 dependencies = [
  "filetime",
  "libc",
+ "wasi",
 ]
 
 [[package]]
@@ -5095,9 +5093,9 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "2.1.1+zstd.1.5.7"
+version = "2.0.16+zstd.1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aeec9eaf2dffbbd09201e23bd0ffcbaa33bb8e9266a10734fd7ed90a85eca078"
+checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
 dependencies = [
  "cc",
  "pkg-config",

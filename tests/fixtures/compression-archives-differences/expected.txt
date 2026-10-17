@@ -1,0 +1,3 @@
+no extraction through an existing destination symlink
+sparse members extract at their logical size
+base-256 timestamps

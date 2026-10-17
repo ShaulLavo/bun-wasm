@@ -1,131 +1,13 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::Write;
 use std::rc::Rc;
 
 use encoding_rs::{CoderResult, Decoder, DecoderResult, Encoding};
-use flate2::write::{DeflateEncoder, GzDecoder, GzEncoder, ZlibEncoder};
-use flate2::{Compression, Decompress, FlushDecompress, Status};
 
 use crate::engine::{NativeError, Record, Val};
 use crate::natives::Table;
 
-enum Codec {
-    Gzip(GzEncoder<Vec<u8>>),
-    Zlib(ZlibEncoder<Vec<u8>>),
-    Raw(DeflateEncoder<Vec<u8>>),
-    Brotli(Option<Box<brotli::CompressorWriter<Vec<u8>>>>),
-    Unbrotli(Box<brotli::DecompressorWriter<Vec<u8>>>),
-    Gunzip(GzDecoder<Vec<u8>>),
-    Inflate { decoder: Decompress, ended: bool },
-}
-
-impl Codec {
-    fn new(format: &str, decompress: bool) -> Result<Self, NativeError> {
-        let level = Compression::default();
-        match (format, decompress) {
-            ("gzip", false) => Ok(Self::Gzip(GzEncoder::new(Vec::new(), level))),
-            ("deflate", false) => Ok(Self::Zlib(ZlibEncoder::new(Vec::new(), level))),
-            ("deflate-raw", false) => Ok(Self::Raw(DeflateEncoder::new(Vec::new(), level))),
-            ("brotli", false) => Ok(Self::Brotli(Some(Box::new(brotli::CompressorWriter::new(
-                Vec::new(),
-                4096,
-                5,
-                22,
-            ))))),
-            ("brotli", true) => Ok(Self::Unbrotli(Box::new(brotli::DecompressorWriter::new(
-                Vec::new(),
-                4096,
-            )))),
-            ("gzip", true) => Ok(Self::Gunzip(GzDecoder::new(Vec::new()))),
-            ("deflate" | "deflate-raw", true) => Ok(Self::Inflate {
-                decoder: Decompress::new(format == "deflate"),
-                ended: false,
-            }),
-            _ => Err(NativeError::type_error("Unsupported compression format")),
-        }
-    }
-
-    fn push(&mut self, bytes: &[u8], last: bool) -> Result<Vec<u8>, NativeError> {
-        macro_rules! write_chunk {
-            ($writer:expr) => {{
-                let writer = $writer;
-                writer.write_all(bytes).map_err(compression_error)?;
-                if last {
-                    writer.try_finish().map_err(compression_error)?;
-                } else {
-                    writer.flush().map_err(compression_error)?;
-                }
-                Ok(std::mem::take(writer.get_mut()))
-            }};
-        }
-        match self {
-            Self::Gzip(w) => write_chunk!(w),
-            Self::Zlib(w) => write_chunk!(w),
-            Self::Raw(w) => write_chunk!(w),
-            Self::Gunzip(w) => write_chunk!(w),
-            Self::Brotli(writer) => {
-                let stream = writer
-                    .as_mut()
-                    .ok_or_else(|| compression_error("closed codec"))?;
-                stream.write_all(bytes).map_err(compression_error)?;
-                if last {
-                    Ok(writer
-                        .take()
-                        .ok_or_else(|| compression_error("closed codec"))?
-                        .into_inner())
-                } else {
-                    stream.flush().map_err(compression_error)?;
-                    Ok(std::mem::take(stream.get_mut()))
-                }
-            }
-            Self::Unbrotli(writer) => {
-                writer.write_all(bytes).map_err(compression_error)?;
-                if last {
-                    writer.close().map_err(compression_error)?;
-                }
-                Ok(std::mem::take(writer.get_mut()))
-            }
-            Self::Inflate { decoder, ended } => inflate_chunk(decoder, ended, bytes, last),
-        }
-    }
-}
-
-fn compression_error(error: impl std::fmt::Display) -> NativeError {
-    NativeError::type_error(format!("Invalid compressed stream: {error}"))
-}
-
-fn inflate_chunk(
-    decoder: &mut Decompress,
-    ended: &mut bool,
-    mut bytes: &[u8],
-    last: bool,
-) -> Result<Vec<u8>, NativeError> {
-    let mut output = Vec::new();
-    while !*ended {
-        let mut block = [0; 16384];
-        let before_in = decoder.total_in();
-        let before_out = decoder.total_out();
-        let status = decoder
-            .decompress(bytes, &mut block, FlushDecompress::None)
-            .map_err(compression_error)?;
-        let read = (decoder.total_in() - before_in) as usize;
-        let written = (decoder.total_out() - before_out) as usize;
-        bytes = &bytes[read..];
-        output.extend_from_slice(&block[..written]);
-        *ended = status == Status::StreamEnd;
-        if read == 0 && written == 0 {
-            break;
-        }
-    }
-    if !bytes.is_empty() {
-        return Err(compression_error("trailing data"));
-    }
-    if last && !*ended {
-        return Err(compression_error("unexpected end of input"));
-    }
-    Ok(output)
-}
+use crate::compression::{Handle, Mode, Options, WebCoder, WebFormat};
 
 struct TextDecoder {
     decoder: Decoder,
@@ -157,7 +39,10 @@ impl TextDecoder {
 }
 
 enum Resource {
-    Compression(Codec),
+    /// A node:zlib native handle.
+    Zlib(Handle),
+    /// A Web CompressionStream/DecompressionStream coder.
+    Web(WebCoder),
     Text(TextDecoder),
 }
 
@@ -178,9 +63,11 @@ impl Resources {
 pub fn install(table: &mut Table) {
     let resources = Rc::new(RefCell::new(Resources::default()));
     let r = resources.clone();
+    // node:zlib's `handle.init()`: (mode, options JSON, dictionary).
     table.add("streams.codec", move |a| {
-        let codec = Codec::new(a.str(0)?, a.bool(1))?;
-        Ok(r.borrow_mut().insert(Resource::Compression(codec)).into())
+        let options = Options::parse(a.opt_str(1), a.opt_bytes(2).unwrap_or(&[]))?;
+        let handle = Handle::new(Mode::parse(a.str(0)?)?, &options)?;
+        Ok(r.borrow_mut().insert(Resource::Zlib(handle)).into())
     });
     let r = resources.clone();
     table.add("streams.decoder", move |a| {
@@ -210,9 +97,52 @@ pub fn install(table: &mut Table) {
             .get_mut(&id)
             .ok_or_else(|| NativeError::type_error("Stream is closed"))?;
         match resource {
-            Resource::Compression(codec) => codec.push(a.bytes(1)?, a.bool(2)).map(Val::Bytes),
             Resource::Text(decoder) => decoder.push(a.bytes(1)?, a.bool(2)).map(Val::Str),
+            _ => Err(NativeError::type_error("Not a text decoder")),
         }
+    });
+    // node:zlib's `handle.write()`: one codec call into an `outLength` buffer.
+    // Returns the output and the input bytes left over.
+    let r = resources.clone();
+    table.add("streams.write", move |a| {
+        let mut resources = r.borrow_mut();
+        let Some(Resource::Zlib(handle)) = resources.values.get_mut(&a.u32(0)?) else {
+            return Err(NativeError::type_error("zlib binding closed"));
+        };
+        let mut output = Vec::new();
+        let size = a.u32(3)? as usize;
+        output.try_reserve_exact(size).map_err(|_| crate::compression::out_of_memory())?;
+        output.resize(size, 0);
+        let (available_in, available_out) = handle.write(a.bytes(1)?, a.i32(2)?, &mut output)?;
+        output.truncate(size - available_out);
+        Ok(Record::new().set("bytes", Val::Bytes(output)).set("availIn", available_in as f64).into())
+    });
+    let r = resources.clone();
+    table.add("streams.params", move |a| {
+        let mut resources = r.borrow_mut();
+        let Some(Resource::Zlib(handle)) = resources.values.get_mut(&a.u32(0)?) else {
+            return Err(NativeError::type_error("zlib binding closed"));
+        };
+        handle.params(a.i32(1)?, a.i32(2)?)?;
+        Ok(Val::Undefined)
+    });
+    // Bun's CompressionStreamCoder: (format, decompress, highWaterMark, level).
+    let r = resources.clone();
+    table.add("streams.webCodec", move |a| {
+        let format = WebFormat::parse(a.str(0)?).ok_or_else(|| NativeError::type_error("Unsupported compression format"))?;
+        let high_water_mark = a.opt_num(2).unwrap_or(65536.0) as usize;
+        let level = a.opt_num(3).map(|n| n as i32);
+        let coder = WebCoder::new(format, a.bool(1), high_water_mark, level)?;
+        Ok(r.borrow_mut().insert(Resource::Web(coder)).into())
+    });
+    let r = resources.clone();
+    table.add("streams.webStep", move |a| {
+        let mut resources = r.borrow_mut();
+        let Some(Resource::Web(coder)) = resources.values.get_mut(&a.u32(0)?) else {
+            return Err(NativeError::type_error("Compression stream is closed"));
+        };
+        let (bytes, more) = coder.step(a.bytes(1)?, a.bool(2))?;
+        Ok(Record::new().set("bytes", Val::Bytes(bytes)).set("more", more).into())
     });
     table.add("streams.release", move |a| {
         resources.borrow_mut().values.remove(&a.u32(0)?);

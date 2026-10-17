@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use super::error::{ErrorInfo, fetch_error};
 use super::{AGAIN, ByteQueue, ERROR, Notify, Output, READ_HIGH_WATER};
 
-const ACCEPT_ENCODING: &str = "gzip, deflate, br";
+const ACCEPT_ENCODING: &str = "gzip, deflate, br, zstd";
 const MAX_REDIRECTS: usize = 20;
 
 /// One HTTP client per redirect mode (reqwest sets the policy per client),
@@ -76,6 +76,8 @@ struct Head {
     status_text: String,
     url: String,
     redirected: bool,
+    #[serde(rename = "bodyEncoding")]
+    body_encoding: Option<String>,
     headers: Vec<(String, String)>,
 }
 
@@ -251,6 +253,7 @@ impl Job {
             status_text,
             url: response.url().to_string(),
             redirected: *response.url() != request.url,
+            body_encoding: None,
             // Bun reports the original content-encoding/-length even though
             // the body is decoded, so the headers pass through unchanged.
             headers: response
@@ -271,7 +274,10 @@ impl Job {
         if no_body {
             return self.finish_body(None);
         }
-        self.pump(decoder(encoding.as_deref(), response));
+        match decoder(encoding.as_deref(), response) {
+            Ok(reader) => self.pump(reader),
+            Err(error) => self.finish_body(Some(body_error(&error))),
+        }
     }
 
     /// Publishes the head. Returns false if the guest already aborted.
@@ -329,10 +335,11 @@ fn body_error(err: &io::Error) -> ErrorInfo {
 
 /// Wraps the raw body in a decoder for its `content-encoding`. Unknown or
 /// stacked encodings pass through undecoded.
-fn decoder(encoding: Option<&str>, raw: impl Read + Send + 'static) -> Box<dyn Read + Send> {
-    match encoding {
+fn decoder(encoding: Option<&str>, raw: impl Read + Send + 'static) -> io::Result<Box<dyn Read + Send>> {
+    Ok(match encoding {
         Some("gzip" | "x-gzip") => Box::new(flate2::read::MultiGzDecoder::new(raw)),
         Some("br") => Box::new(brotli_decompressor::Decompressor::new(raw, 64 * 1024)),
+        Some("zstd") => Box::new(zstd::stream::read::Decoder::new(raw)?),
         Some("deflate") => {
             // "deflate" is meant to be zlib-wrapped, but some servers send raw
             // deflate; browsers accept both, so sniff the zlib header.
@@ -348,5 +355,5 @@ fn decoder(encoding: Option<&str>, raw: impl Read + Send + 'static) -> Box<dyn R
             }
         }
         _ => Box::new(raw),
-    }
+    })
 }

@@ -95,7 +95,7 @@ export function createNodeNet({ net, http, https, zlib }) {
   function send(h, url, request, redirects, freshConnection = false) {
     const client = url.protocol === "https:" ? https : http;
     // An object (repeated names become arrays): with an array, Node sends no Host header.
-    const headers = { "accept-encoding": "gzip, deflate, br" };
+    const headers = { "accept-encoding": "gzip, deflate, br, zstd" };
     for (const [name, value] of request.headers) {
       const key = name.toLowerCase();
       if (key === "accept-encoding" || !Object.hasOwn(headers, key)) headers[key] = value;
@@ -134,8 +134,8 @@ export function createNodeNet({ net, http, https, zlib }) {
       }
       const pairs = [];
       for (let i = 0; i < res.rawHeaders.length; i += 2) pairs.push([res.rawHeaders[i].toLowerCase(), res.rawHeaders[i + 1]]);
-      h.head = json({ status, statusText: res.statusMessage || "", url: url.href, redirected: redirects > 0, headers: pairs });
       const encoding = String(res.headers["content-encoding"] || "").toLowerCase();
+      h.head = json({ status, statusText: res.statusMessage || "", url: url.href, redirected: redirects > 0, headers: pairs, bodyEncoding: encoding === "zstd" ? "zstd" : null });
       const decoder =
         encoding === "gzip" || encoding === "x-gzip" ? zlib.createGunzip() : encoding === "deflate" ? zlib.createInflate() : encoding === "br" ? zlib.createBrotliDecompress() : null;
       const body = decoder ? res.pipe(decoder) : res;
