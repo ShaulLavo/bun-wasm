@@ -230,70 +230,6 @@ code. Add exit/deadline provenance to the server measurement before assigning
 those rows a cause. Preserve the passing Vite production-build controls while
 investigating each failure.
 
-## Browser memory-growth gate after the shared filesystem merge
-
-### Intermittent HTML HMR gate observation, PR #35
-
-The first review gate run timed out at `web/tests/browser-net.mjs:259` while
-waiting for the edited HTML fixture's preview and iframe to update on
-Chromium/browser. Initial bundling and both HMR socket connections succeeded.
-The full web gate was rebuilt and rerun with the same guest WASMs and no HTTP
-source change. All four configured Chromium/WebKit and browser/QuickJS HTML HMR
-cases then passed. This is one timeout and one passing attempt, with no confirmed
-cause. The separate sandbox HMR gate passed all six engine/browser combinations.
-
-Reproduce from a built checkout with `source env.sh && scripts/test-web.sh`, or
-`cd web && bun run build && node tests/browser-net.mjs`, through the heavy wrapper.
-The failure and successful rerun are retained in
-`/work/reports/bun-wasm-http-pr35/web.log` and `web-recheck.log`. Inspect the
-`checkHtmlEntry` change notification and the polling/rebuild path in
-`crates/bunwasm-runtime/src/js/html_server.js:125` if it recurs. The coordinator
-owns this observation and its evidence cleanup with the HTTP review.
-
-### Memory-growth failure
-
-Status: Resolved by PR #36, merged as `73ae8124`. It fixes shared large-file storage
-and browser shell shutdown. The round-2 HTTP branch includes that main commit and
-runs and passes the complete web gate without the prior memory exemption. The evidence
-below records the original failure.
-
-On main `c7f08312` with the HTTP lane applied, `scripts/test.sh` passes 153 fixtures
-on every engine. `scripts/test-web.sh` reaches `web/tests/browser-memory.mjs:65`,
-then Chromium's first guest run times out after 120 seconds. The assertion reports
-`^C` and `null !== 0`. An isolated rerun of the same browser-memory command fails
-the same way, so this is two failures in two attempts on the HTTP lane. The wave
-log also records it while landing Web Crypto on main after the filesystem merge.
-
-```sh
-export PATH=$HOME/.local/share/mise/shims:$PATH
-source env.sh
-export PLAYWRIGHT=/home/shaul/.local/share/mise/installs/npm-playwright/1.63.0/node_modules/.mise/playwright@1.63.0/node_modules/playwright/index.mjs
-bash /work/tmp/wave-heavy/run.sh --class browser "browser memory gate" -- \
-  env PATH="$PATH" PLAYWRIGHT="$PLAYWRIGHT" node web/tests/browser-memory.mjs
-```
-
-The guest is `tests/fixtures/memory-grow/index.js`, which writes and reads a 48 MiB
-file after allocating its buffer. `runtime/fs/shared.ts:8` limits a file to 256
-pages and `runtime/fs/protocol.ts` defines 64 KiB pages, giving a 16 MiB per-file
-limit. `runtime/README.md` and `docs/install.md` document that limit and EFBIG.
-Investigate the failure/error completion around shared growth and reconcile the
-browser growth control with the documented file cap. Keep coverage that forces
-wasm memory growth and then verifies host I/O.
-
-The memory guest imports only `node:fs`; it does not exercise HTTP. Chromium's
-memory-view control itself passes before the guest timeout. No HTTP or filesystem
-workaround was added for this failure. An unchanged main-artifact control on main `4098772e` also reproduces the
-timeout. Its binaries were checked against main's original HTTP and builtin
-factory source; hashes are recorded in `main32-control-artifacts.json`. The final
-HTTP run on main `9c1e1709` passes 154 fixtures per engine and reproduces the same
-web-gate timeout. Raw logs
-are retained at
-`/work/reports/bun-wasm-http-20261016/after-web-tests.log` and
-`/work/reports/bun-wasm-http-20261016/memory-recheck.log`, plus
-`main32-memory.log` for the unchanged-main control. The coordinator owns
-follow-up and evidence cleanup after the gate is fixed.
-
-
 ## Node parallel tests after main-thread worker imports
 
 Status: Approved
@@ -315,10 +251,11 @@ existing module gaps. Keep these separate from guest-worker execution.
 - `test-async-local-storage-http-agent.js` times out with no stdout or stderr
   after five seconds on QuickJS and fifteen seconds on JSC. The test requires a
   response after `r2.write(payload)` before calling `r2.end('')` in that response
-  callback. `ClientRequest.write` at
-  `crates/bunwasm-runtime/src/js/net.js:1043` only appends chunks, and `end` at
-  line 1049 starts `_send()`. That buffered request path cannot satisfy this
-  exchange. The browser engine fails earlier at the first response callback,
+  callback. That census used a buffered `ClientRequest.write` path. PR #35 now
+  starts socket writes before `end()` through `_write`; repeat this test on the
+  HTTP integration before retaining the old client-buffering diagnosis. Inspect
+  incoming request-body dispatch and async-context propagation for any remaining
+  exchange failure. The browser engine fails earlier at the first response callback,
   with `actual: undefined`, `expected: "first"` for `cls.getStore()` at upstream
   line 39. Implement request streaming through the HTTP host contract and
   preserve async context across the response callbacks. The timeout is newly
@@ -464,6 +401,7 @@ hashes and all passing stage logs are retained in
 `/work/reports/bun-wasm-streams-round6-2026-10-16/`.
 The runtime-filesystem/crypto landing lane already has a separate candidate
 `fix/browser-memory-shared-fs` at `fae037bff367bca0f15be73b4d952207c885da6f`.
-That dependency has landed in PR #36. Its memory and full web gates pass without
-reducing the guest allocation, relaxing the timeout or removing assertions.
-The owning lane removes the historical evidence after independent acceptance.
+That dependency has landed in PR #36, and the branch reruns the memory
+and full web gates. Do not reduce the guest allocation, relax its timeout or
+remove assertions to call the gate passing. The owning lane removes retained
+evidence after reproduction, review and merge.

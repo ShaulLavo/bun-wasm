@@ -109,17 +109,24 @@ The retained WASMs contain the current HTTP JavaScript and erased TypeScript
 factories; `source-check.log` and `artifacts.json` record the checks and hashes.
 
 Round 2 initially passed 161 fixtures before the concurrent Streams merge.
-The final integrated branch passes all 178 fixtures on QuickJS, JSC and browser,
-including the Node close-order regression and the new main fixtures. Both framing fixtures
+The Streams/persistence integration passes 178 fixtures on every engine. After
+the subsequent main-thread worker merge, the final branch passes all 183 fixtures
+on QuickJS, JSC and browser, including close-order and new main fixtures. Both framing fixtures
 fail on each original artifact and pass on each rebuilt engine. The expanded
 twenty-file upstream selection adds `test-http-extra-response.js` and
 `test-http-response-multi-content-length.js`. Before/after counts remain identical
 on all engines: 0/20 fully passing files, 3 observed tests passing, 11 failing,
 2 skipped, one error and zero file timeouts. The Node shared harness remains the
-first blocker for its assertion scripts.
+first blocker for its assertion scripts before the worker-module merge.
 The Streams integration briefly lost two observed upgrade-body passes; the
 failing-first TCP close-order correction restores both on all engines. Final
 upstream summaries match the original round-2 baseline.
+Main-thread worker support then removes that shared-harness blocker. The final
+twenty-file selection passes 16/20 files on each engine with zero file timeouts.
+Observed Bun test counts remain 3 passing, 11 failing, 2 skipped and one error;
+the newly passing files are unmodified Node assertion scripts. The remaining
+files are blocked by `node:_http_common`, the `_http_agent` alias, existing
+upgrade-body/TLS differences and Bun's `rawHeaders` reassignment expectation.
 The complete round-2 web gate passes, including memory growth on Chromium and
 WebKit with all three engines. The framework matrix again passes 24/24 stages.
 
@@ -134,7 +141,9 @@ was applied.
 The first PR #35 web run also timed out waiting for an HTML HMR edit. A fresh
 web build and full rerun passed all configured `browser-net.mjs` cases with the
 same guest artifacts. No HTTP source change occurred between attempts. The
-intermittent observation is recorded in the same follow-up plan.
+intermittent observation is retained in this HTTP report and its raw evidence.
+The shared memory-growth follow-up remains in the owning plan, marked resolved;
+the duplicated HTTP copy was removed to keep concurrent plan additions independent.
 
 ## Reproduce
 
