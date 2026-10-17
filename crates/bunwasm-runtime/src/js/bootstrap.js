@@ -738,6 +738,10 @@
 
   // Plain messages like `Module not found "x"` print without a stack.
   function printFatal(err) {
+    if (err && err.name === "ResolveMessage" && Array.isArray(err.notes)) {
+      native.writeStderr(`${internal.require("resolve_message").format(err)}Bun v${native.platformInfo.version} (WASI ${native.platformInfo.arch})\n`);
+      return;
+    }
     if (err && typeof err.__bunwasmFormatted === "string") {
       native.writeStderr(`${err.__bunwasmFormatted}Bun v${native.platformInfo.version} (WASI ${native.platformInfo.arch})\n`);
       return;

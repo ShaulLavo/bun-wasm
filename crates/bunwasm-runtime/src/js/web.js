@@ -1285,6 +1285,8 @@
 
   // --- install ----------------------------------------------------------------
 
+  internal.require("web_brand")({ AbortController, AbortSignal, Event, EventTarget, CustomEvent, ErrorEvent, MessageEvent, CloseEvent });
+
   internal.web = { Blob, File, Headers, Request, Response, URL, URLSearchParams, Event, EventTarget, DOMException, AbortController, AbortSignal, TextEncoder, TextDecoder, ReadableStream, performance, crypto, fetch };
 
   return function install(defineGlobal, defineLazyGlobal) {

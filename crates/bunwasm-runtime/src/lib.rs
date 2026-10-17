@@ -263,7 +263,7 @@ impl<E: Engine> ModuleHost<E> for Core<E> {
         match self.state.resolver.resolve(specifier, &from, resolve::Kind::Import) {
             Ok(resolve::Resolved::Builtin(b)) => Ok(b),
             Ok(resolve::Resolved::File(f)) => Ok(f),
-            Err(msg) => Err(e.error_value(&modules::resolve_error(&msg, specifier, resolve::Kind::Import))),
+            Err(msg) => Err(e.error_value(&modules::resolve_error(&msg, specifier, &from, resolve::Kind::Import, self.state.resolver.notes()))),
         }
     }
 

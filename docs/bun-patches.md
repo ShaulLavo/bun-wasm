@@ -14,6 +14,10 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [Bun public transpiler adapter](#public-transpiler-adapter) | Port | Adapt the real Rust parse/print and scan paths to the engine-independent native boundary. |
+| [Generated `bun:wrap` helpers](#bun-wrap-helpers) | Host feature | Load Bun's unmodified runtime helpers through the builtin registry. |
+| [Partial strict comparison](#partial-strict-comparison) | Port | Translate Bun's native partial-comparison rules to TypeScript for all engines. |
+| [Small public runtime adapters](#small-public-runtime-adapters) | Host feature | Original matcher, version, web-brand and resolver-diagnostic adapters. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
@@ -1463,3 +1467,63 @@ count. Checking the queue only before accepting an entire large write allowed
 the first write to bypass the limit. The bounded host test fails with that
 implementation and passes with capacity-aware writes, including full-queue,
 zero-length and owned-copy cases. No upstream implementation is copied.
+
+## Public transpiler adapter
+
+Class **Port**. `crates/bunwasm-transpiler/src/lib.rs` adapts the parse/print,
+configuration and scan portions of Bun's `src/runtime/api/JSTranspiler.rs` at
+`9510e74152073d850a18758ca41114d8f214ffa6`, with the exported WASI patches at
+`cd95fa7a13b3f13be73e512b38ec111c1c228084`. Parsing, TypeScript lowering,
+JSX, tsconfig parsing, import kinds and export names come from Bun's Rust crates.
+The adapter removes JSC arguments, JS values, async task ownership and macro
+contexts. Each public request owns its parser configuration and arena.
+
+`src/js/bun_transpiler.ts`, the `Transpiler` trait method, CLI implementation
+and native registration are original bun-wasm adapters. They validate JS input
+and pass bytes and JSON options to the real parser. Public output is printed
+without the module loader's source-preserving and async-context rewrites.
+This does not implement Bun's macro callbacks or worker-pool scheduling.
+
+## Bun wrap helpers
+
+Class **Host feature**. `scripts/generate-bun-wrap.ts` and the embedding hook
+wrap `vendor/bun/src/runtime.js` from the same Bun revision in a factory.
+The generated body removes `export var` and returns those exported bindings.
+The helper implementations are unmodified Bun source, including decorator
+metadata, initializer order, accessors and private fields. No generated
+JavaScript is checked in. The builtin registry loads this factory as `bun:wrap`.
+The generator and registry wiring are original bun-wasm adapters.
+
+## Partial strict comparison
+
+Class **Port**. `src/js/partial_assert.ts` adapts the `PartialDeepEqual` rules
+in Bun's `src/jsc/modules/NodeUtilTypesModule.cpp` at the revision above.
+It retains ordered subsequence comparison, partial object and Map/Set contents,
+identity-key reservations and branch-local cycle tracking. TypeScript replaces
+JSC cell roots, property slots and typed-array storage access with engine-neutral
+objects, iterators and reflection. The existing assertion module supplies
+`AssertionError`, argument checks and diff rendering.
+Object prototypes are ignored, and boxed primitive slots use `Object.is`.
+
+Bun's `src/js/node/assert.ts` calls a native JSC function for this comparison,
+so loading that module alone cannot supply an engine-independent implementation.
+The existing assertion adapter gains the `partialDeepStrictEqual` diff header
+from `src/js/internal/assert/assertion_error.ts` at the same revision.
+
+## Small public runtime adapters
+
+Class **Host feature**. `src/js/test_matchers.ts`, `web_brand.ts` and
+`resolve_message.ts` are original bun-wasm implementations of public contracts.
+The test adapter handles returned promises and tracks assertions through test
+completion. An async `toThrow` returns a thenable; the runner waits for
+unawaited checks before completing the invocation.
+Web interface prototypes receive their standard `toStringTag`.
+`Bun.version_with_sha` uses the existing embedded version and revision.
+
+The resolver's module/package distinction follows `ResolveMessage::fmt` in
+Bun's `src/jsc/ResolveMessage.rs` at the revision above. This small adapted
+formatting rule distinguishes bare package names from specifiers containing a
+slash. Structured error properties and package JSON notes are original adapters
+around the local resolver and serde JSON parser. They retain diagnostic context
+without changing upstream tests or snapshots. Package JSON EOF notes use Bun's
+public wording; other JSON failures keep serde's diagnostic text.

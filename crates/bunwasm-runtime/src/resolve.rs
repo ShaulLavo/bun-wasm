@@ -123,6 +123,17 @@ pub fn percent_decode(s: &str) -> String {
 pub struct Resolver {
     /// package.json contents by directory (`None` = no package.json there).
     package_json: RefCell<HashMap<String, Option<Rc<Json>>>>,
+    package_errors: RefCell<HashMap<String, ResolveNote>>,
+    notes: RefCell<Vec<ResolveNote>>,
+}
+
+#[derive(Clone)]
+pub struct ResolveNote {
+    pub file: String,
+    pub line_text: String,
+    pub line: usize,
+    pub column: usize,
+    pub message: String,
 }
 
 impl Resolver {
@@ -133,6 +144,7 @@ impl Resolver {
     /// Resolve `spec` imported from the file `from` (or a directory path ending
     /// in `/` for the entry point / eval code).
     pub fn resolve(&self, spec: &str, from: &str, kind: Kind) -> Result<Resolved, String> {
+        self.notes.borrow_mut().clear();
         if let Some(name) = builtin_name(spec) {
             return Ok(Resolved::Builtin(name));
         }
@@ -141,6 +153,9 @@ impl Resolver {
         }
         if spec.starts_with("bun:") {
             return Err(format!("Cannot find module '{spec}' from '{from}'"));
+        }
+        if spec.starts_with("data:") && !spec[5..].contains(',') {
+            return Err(format!("Cannot resolve invalid data URL '{spec}' from '{from}'"));
         }
         let from_dir = if from.ends_with('/') { from.trim_end_matches('/') } else { dirname(from) };
         let from_dir = if from_dir.is_empty() { "/" } else { from_dir };
@@ -157,7 +172,15 @@ impl Resolver {
             return self.resolve_imports_field(spec, from_dir, kind).ok_or_else(|| not_found_module(spec, from));
         }
         self.resolve_package(spec, from_dir, kind)
-            .ok_or_else(|| format!("Cannot find package '{}' from '{from}'", package_name(spec).0))
+            .ok_or_else(|| if spec.contains('/') {
+                not_found_module(spec, from)
+            } else {
+                format!("Cannot find package '{spec}' from '{from}'")
+            })
+    }
+
+    pub fn notes(&self) -> Vec<ResolveNote> {
+        self.notes.borrow().clone()
     }
 
     /// Resolve an absolute path as a file or directory.
@@ -279,14 +302,33 @@ impl Resolver {
 
     pub fn package_json_in(&self, dir: &str) -> Option<Rc<Json>> {
         if let Some(cached) = self.package_json.borrow().get(dir) {
+            if let Some(note) = self.package_errors.borrow().get(dir) {
+                self.notes.borrow_mut().push(note.clone());
+            }
             return cached.clone();
         }
-        let parsed = fs::read_to_string(format!("{dir}/package.json"))
-            .ok()
-            .and_then(|text| serde_json::from_str::<Json>(&text).ok())
-            .map(Rc::new);
+        let parsed = self.read_package_json(dir).map(Rc::new);
         self.package_json.borrow_mut().insert(dir.to_owned(), parsed.clone());
         parsed
+    }
+
+    fn read_package_json(&self, dir: &str) -> Option<Json> {
+        let file = format!("{dir}/package.json");
+        let text = fs::read_to_string(&file).ok()?;
+        match serde_json::from_str::<Json>(&text) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                let prefix = if error.is_eof() { text.trim_end() } else { &text };
+                let line = if error.is_eof() { prefix.lines().count().max(1) } else { error.line() };
+                let line_text = prefix.lines().nth(line.saturating_sub(1)).unwrap_or("").to_owned();
+                let column = if error.is_eof() { line_text.len() + 1 } else { error.column() };
+                let message = if error.is_eof() { "Unexpected end of file".to_owned() } else { error.to_string() };
+                let note = ResolveNote { file, line_text, line, column, message };
+                self.notes.borrow_mut().push(note.clone());
+                self.package_errors.borrow_mut().insert(dir.to_owned(), note);
+                None
+            }
+        }
     }
 
     /// Nearest package.json at or above `dir`.

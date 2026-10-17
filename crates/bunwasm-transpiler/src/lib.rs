@@ -72,6 +72,8 @@ struct State {
     // Field order matters: `transpiler` borrows `arena` and drops first.
     transpiler: Transpiler<'static>,
     log: Box<bun_ast::Log>,
+    tsconfig: Option<Box<bun_resolver::tsconfig_json::TSConfigJSON>>,
+    public_api: bool,
     _arena: Box<Arena>,
 }
 
@@ -80,15 +82,20 @@ thread_local! {
 }
 
 fn init_state() -> Result<State, String> {
-    let arena = Box::new(Arena::new());
-    // SAFETY: the arena is boxed and lives as long as `State`, which owns it.
-    let arena_ref: &'static Arena = unsafe { &*(&*arena as *const Arena) };
-    let mut log = Box::new(bun_ast::Log::init());
-    let opts = api::TransformOptions {
+    init_with_options(api::TransformOptions {
         disable_hmr: true,
         target: Some(api::Target::Bun),
         ..Default::default()
-    };
+    })
+}
+
+fn init_with_options(opts: api::TransformOptions) -> Result<State, String> {
+    let arena = Box::new(Arena::new());
+    // SAFETY: the arena is boxed and lives as long as `State`, which owns it.
+    let arena_ref: &'static Arena = unsafe { &*(&*arena as *const Arena) };
+    let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(arena_ref);
+    let _ast_scope = ast_alloc.enter();
+    let mut log = Box::new(bun_ast::Log::init());
     let mut transpiler =
         Transpiler::init(arena_ref, &raw mut *log, opts, None).map_err(|e| format!("transpiler init: {e:?}"))?;
     transpiler.configure_linker_with_auto_jsx(false);
@@ -96,7 +103,65 @@ fn init_state() -> Result<State, String> {
     transpiler.configure_defines().map_err(|e| format!("transpiler defines: {e:?}"))?;
     transpiler.options.transform_only = true;
     transpiler.options.tree_shaking = false;
-    Ok(State { transpiler, log, _arena: arena })
+    Ok(State { transpiler, log, tsconfig: None, public_api: false, _arena: arena })
+}
+
+/// The public JS API uses the same Bun parser/printer with its own options,
+/// rather than the module loader's Bun target and source-preserving fast path.
+pub fn public_transpile(source: &[u8], options: &str, action: &str, name: &str) -> Result<String, String> {
+    let options: serde_json::Value = serde_json::from_str(options).map_err(|e| e.to_string())?;
+    let target = match options["target"].as_str().unwrap_or("browser") {
+        "bun" => api::Target::Bun,
+        "node" => api::Target::Node,
+        _ => api::Target::Browser,
+    };
+    let define = options["define"].as_object().map(|entries| {
+        let mut map = api::StringMap::EMPTY;
+        for (key, value) in entries {
+            map.keys.push(key.as_bytes().into());
+            map.values.push(value.as_str().unwrap_or("").as_bytes().into());
+        }
+        map
+    });
+    let tsconfig_bytes = match options["tsconfig"].as_str() {
+        Some(text) => text.as_bytes().to_vec(),
+        None => serde_json::to_vec(&options["tsconfig"]).map_err(|e| e.to_string())?,
+    };
+    let mut state = init_with_options(api::TransformOptions { target: Some(target), disable_hmr: true, define, ..Default::default() })?;
+    state.public_api = true;
+    configure_public(&mut state, &options, &tsconfig_bytes)?;
+    if action == "validate" { return Ok(String::new()); }
+    let loader = if name == "text" { Loader::Text } else { Loader::from_path(&format!("input.{name}")).ok_or_else(|| format!("Invalid loader: {name}"))? };
+    let source = String::from_utf8_lossy(source);
+    let path = format!("input.{}", options["loader"].as_str().unwrap_or("jsx"));
+    let out = run_with_scan(&mut state, &source, &path, loader, None, false, action != "transform")?;
+    if action == "scanImports" {
+        let scan: serde_json::Value = serde_json::from_str(&out.code).map_err(|e| e.to_string())?;
+        return Ok(scan["imports"].to_string());
+    }
+    Ok(out.code)
+}
+
+fn configure_public(state: &mut State, options: &serde_json::Value, tsconfig: &[u8]) -> Result<(), String> {
+    let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&state._arena);
+    let _ast_scope = ast_alloc.enter();
+    if !options["tsconfig"].is_null() {
+        let source = bun_ast::Source::init_path_string(b"tsconfig.json", tsconfig);
+        state.tsconfig = bun_resolver::tsconfig_json::TSConfigJSON::parse(&mut state.log, &source, &mut state.transpiler.resolver.caches.json)
+            .map_err(|e| format!("Invalid tsconfig: {e:?}"))?;
+        if state.log.errors > 0 { return Err(format_log(&state.log, "tsconfig.json")); }
+    }
+    let opts = &mut state.transpiler.options;
+    opts.repl_mode = options["replMode"].as_bool().unwrap_or(false);
+    opts.dead_code_elimination = options["deadCodeElimination"].as_bool().unwrap_or(true) && !opts.repl_mode;
+    opts.tree_shaking = options["treeShaking"].as_bool().unwrap_or(false);
+    opts.trim_unused_imports = options["trimUnusedImports"].as_bool();
+    opts.minify_whitespace = options["minifyWhitespace"].as_bool().unwrap_or(false);
+    opts.minify_syntax = options["minifySyntax"].as_bool().unwrap_or(false);
+    opts.minify_identifiers = options["minifyIdentifiers"].as_bool().unwrap_or(false);
+    opts.allow_runtime = options["allowBunRuntime"].as_bool().unwrap_or(false);
+    opts.auto_import_jsx = options["autoImportJSX"].as_bool().unwrap_or(false);
+    Ok(())
 }
 
 /// Locate import keywords in original generated-function arguments. The full
@@ -313,6 +378,18 @@ fn run(
     source_map: Option<&mut ChunkCollector>,
     preserve_source: bool,
 ) -> Result<Transpiled, String> {
+    run_with_scan(state, source, path, loader, source_map, preserve_source, false)
+}
+
+fn run_with_scan(
+    state: &mut State,
+    source: &str,
+    path: &str,
+    loader: Loader,
+    source_map: Option<&mut ChunkCollector>,
+    preserve_source: bool,
+    scan: bool,
+) -> Result<Transpiled, String> {
     let arena = Arena::new();
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&arena);
     let _ast_scope = ast_alloc.enter();
@@ -337,20 +414,20 @@ fn run(
         dirname_fd: bun_sys::Fd::INVALID,
         file_descriptor: None,
         loader: loader.to_bun(),
-        jsx: state.transpiler.options.jsx.clone(),
+        jsx: state.tsconfig.as_deref().map_or_else(|| state.transpiler.options.jsx.clone(), |ts| ts.merge_jsx(state.transpiler.options.jsx.clone())),
         path: src.path,
         virtual_source: Some(src),
         replace_exports: Default::default(),
         macro_js_ctx: bun_bundler::transpiler::default_macro_js_value(),
-        experimental_decorators: false,
-        emit_decorator_metadata: false,
-        use_define_for_class_fields: true,
+        experimental_decorators: state.tsconfig.as_deref().is_some_and(|ts| ts.experimental_decorators),
+        emit_decorator_metadata: state.tsconfig.as_deref().is_some_and(|ts| ts.emit_decorator_metadata),
+        use_define_for_class_fields: state.tsconfig.as_deref().and_then(|ts| ts.use_define_for_class_fields).unwrap_or(true),
         file_fd_ptr: None,
         inject_jest_globals: false,
         set_breakpoint_on_first_line: false,
         remove_cjs_module_wrapper: false,
         dont_bundle_twice: false,
-        allow_commonjs: true,
+        allow_commonjs: !state.public_api,
         module_type: Default::default(),
         runtime_transpiler_cache: None,
         keep_json_and_toml_as_one_statement: false,
@@ -367,8 +444,13 @@ fn run(
         restore(&mut state.transpiler, &mut state.log);
         return Err(if msg.is_empty() { format!("failed to parse {path}") } else { msg });
     }
-    let parsed = parsed.expect("checked above");
+    let mut parsed = parsed.expect("checked above");
     let module_kind = module_kind(&parsed.ast, loader);
+    if scan {
+        let code = scan_json(&mut parsed.ast, state.transpiler.options.trim_unused_imports.unwrap_or(false));
+        restore(&mut state.transpiler, &mut state.log);
+        return Ok(Transpiled { code, mappings: String::new(), imports: Vec::new(), module_kind });
+    }
     if preserve_source {
         let mut imports = static_imports(&parsed.ast.import_records);
         imports.extend(dynamic.into_iter().map(|start| ModuleImport { start, end: start + 6, specifier: None }));
@@ -378,7 +460,7 @@ fn run(
         return Ok(Transpiled { code: source.to_owned(), mappings: String::new(), imports, module_kind });
     }
     let mut printer = bun_js_printer::BufferPrinter::init(bun_js_printer::BufferWriter::init());
-    let format = bun_bundler::transpiler::PrintFormat::Esm;
+    let format = if state.public_api { bun_bundler::transpiler::PrintFormat::EsmAscii } else { bun_bundler::transpiler::PrintFormat::Esm };
     let printed = match source_map {
         Some(collector) => state.transpiler.print_with_source_map(
             &arena,
@@ -394,6 +476,21 @@ fn run(
     printed.map_err(|e| format!("failed to print {path}: {e:?}"))?;
     let code = String::from_utf8(printer.ctx.written().to_vec()).map_err(|e| e.to_string())?;
     Ok(Transpiled { code, mappings: String::new(), imports: Vec::new(), module_kind })
+}
+
+fn scan_json(ast: &mut bun_ast::Ast<'_>, trim_unused: bool) -> String {
+    use bun_ast::import_record::Flags;
+    let imports: Vec<_> = ast.import_records.as_slice().iter()
+        .filter(|record| !record.flags.contains(Flags::IS_INTERNAL) && !(trim_unused && record.flags.contains(Flags::IS_UNUSED)))
+        .map(|record| serde_json::json!({ "path": String::from_utf8_lossy(record.path.text), "kind": String::from_utf8_lossy(record.kind.label()) }))
+        .collect();
+    let mut exports = Vec::new();
+    let mut entries = ast.named_exports.iterator();
+    while let Some(entry) = entries.next() {
+        exports.push(String::from_utf8_lossy(&**entry.key_ptr).into_owned());
+    }
+    exports.sort();
+    serde_json::json!({ "exports": exports, "imports": imports }).to_string()
 }
 
 fn module_kind(ast: &bun_ast::Ast<'_>, loader: Loader) -> ModuleKind {

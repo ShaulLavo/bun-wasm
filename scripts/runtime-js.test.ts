@@ -20,6 +20,7 @@ beforeAll(() => {
   mkdirSync(source, { recursive: true });
   mkdirSync(out);
   symlinkSync(join(root, "scripts"), join(scratch, "scripts"));
+  symlinkSync(join(root, "vendor"), join(scratch, "vendor"));
   const harness = join(scratch, "embed.rs");
   writeFileSync(harness, `
 #[path = ${JSON.stringify(join(root, "crates/bunwasm-runtime/build/polyfills.rs"))}]
