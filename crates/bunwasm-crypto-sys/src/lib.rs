@@ -1,4 +1,4 @@
-//! RSA FFI and the native crypto archive shared by Bun tools and the JS runtime.
+//! Native crypto FFI and the archive shared by Bun tools and the JS runtime.
 
 unsafe extern "C" {
     pub fn bunwasm_rsa_generate(
@@ -56,3 +56,5 @@ unsafe extern "C" {
         capacity: usize,
     ) -> usize;
 }
+
+pub mod x509;
