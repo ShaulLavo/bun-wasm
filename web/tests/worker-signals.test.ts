@@ -1,4 +1,3 @@
-import { waitStatus } from "../../runtime/proc/wait-status.ts";
 import { expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -86,7 +85,7 @@ async function run(options: {
       }
     },
     childTransport, wasiPipe,
-    claimOutcome, outcomeWord, processOutcome, readOutcome, waitStatus,
+    claimOutcome, outcomeWord, processOutcome, readOutcome,
     HOST_CALL_FD: 3,
     WasiExit: TestWasiExit,
     Wasi: class {
