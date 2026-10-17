@@ -11,11 +11,11 @@ export interface BunRuntimeCommand {
 export interface BunRuntimeScenario {
   name: string;
   commands: BunRuntimeCommand[];
-  pipe?: "pipeline" | "input";
+  pipe?: "pipeline" | "input" | "signal";
   input?: string;
   stdout: string;
   stderr?: string;
-  action?: "kill" | "dispose";
+  action?: "kill" | "dispose" | "kill-detached";
 }
 const encoder = new TextEncoder();
 function uint(value: number): number[] {
@@ -77,6 +77,22 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
     const input = encoder.encode(scenario.input ?? ""); memory.set(input, 1024);
     body.push(...check(call(3, get(1), constant(1024), constant(input.length)), input.length, 203));
   }
+  if (scenario.pipe === "signal") {
+    // Three real generations each publish one R only after their nested spawn was accepted.
+    // Readiness is not a read reservation: retain byte checks across AGAIN and short reads.
+    body.push(...constant(0), ...set(2), 0x03, 0x40,
+      ...call(7, get(0), constant(1024).concat(get(2), [0x6a]), constant(3).concat(get(2), [0x6b])), ...set(3),
+      ...get(3), ...constant(-6), 0x46, 0x04, 0x40,
+      ...constant(320), ...constant(0), 0x36, 2, 0,
+      ...constant(324), ...get(0), 0x36, 2, 0,
+      ...constant(328), ...constant(0), 0x36, 2, 0,
+      ...constant(332), ...constant(0), 0x36, 2, 0,
+      ...call(8, constant(320), constant(1), constant(5000), constant(352)), 0x1a, 0x0c, 1, 0x0b,
+      ...check(get(3).concat(constant(0), [0x4c]), 0, 208),
+      ...get(2), ...get(3), 0x6a, ...set(2), ...get(2), ...constant(3), 0x49, 0x0d, 0, 0x0b);
+    for (let index = 0; index < 3; index++) body.push(...check(constant(1024 + index).concat([0x2d, 0, 0]), 82, 209));
+    body.push(...check(call(9, call(1, get(4)), constant(9)), 0, 210));
+  }
   if (scenario.pipe) body.push(...close(get(0)), ...close(get(1)));
   for (const [index, command] of scenario.commands.entries()) {
     body.push(...check(call(2, call(1, get(index + 4)), constant(0), constant(256)), 0, 205),
@@ -91,9 +107,10 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
     ["runtime_proc", "spawn", 1], ["runtime_proc", "job_of", 0], ["runtime_proc", "wait_job", 2],
     ["runtime_proc", "write", 2], ["wasi_snapshot_preview1", "proc_exit", 3],
     ["runtime_proc", "pipe", 0], ["wasi_snapshot_preview1", "fd_close", 0],
+    ["runtime_proc", "read", 2], ["runtime_proc", "poll", 5], ["runtime_proc", "kill_job", 1],
   ];
   return new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0].concat(
-    section(1, [5].concat(signature(1), signature(2), signature(3), signature(1, false), signature(0, false))),
+    section(1, [6].concat(signature(1), signature(2), signature(3), signature(1, false), signature(0, false), signature(4))),
     section(2, uint(imports.length).concat(imports.flatMap(([namespace, name, type]) => text(namespace).concat(text(name), [0], uint(type))))),
     section(3, [1, 4]), section(5, [1, 0, 1]),
     section(7, [2].concat(text("memory"), [2, 0], text("_start"), [0, imports.length])),
@@ -105,9 +122,14 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
 const nested = `const cp=require('node:child_process'); const p=cp.spawn('bun',['-e',"console.log('nested-node');console.error('nested-err')"],{stdio:'inherit'}); await new Promise((resolve,reject)=>{p.on('error',reject);p.on('exit',code=>code===0?resolve():reject(new Error('nested exit '+code)))});`;
 const childReader = `const f=require('node:fs'),b=Buffer.alloc(7);let n=0;while(n<7){const got=f.readSync(0,b,n,7-n,null);if(!got)throw Error('early EOF');n+=got}console.log(b.toString());`;
 const readerLifetime = `const child=Bun.spawn(['bun','-e',${JSON.stringify(childReader)}],{stdin:'inherit',stdout:'inherit',stderr:'inherit'});if(await child.exited!==0)throw Error('reader child failed');const f=require('node:fs'),b=Buffer.alloc(1);if(f.readSync(0,b,0,1,null)!==1||b[0]!==33)throw Error('parent reader closed');console.log('parent-reader-alive');`;
+const readyLeaf = `require('node:fs').writeSync(1,'R');setInterval(()=>{},1000);`;
+const readyChild = `const cp=require('node:child_process');cp.spawn('bun',['-e',${JSON.stringify(readyLeaf)}],{stdio:'inherit'});require('node:fs').writeSync(1,'R');setInterval(()=>{},1000);`;
+const readyTree = `Bun.spawn(['bun','-e',${JSON.stringify(readyChild)}],{stdin:'inherit',stdout:'inherit',stderr:'inherit'});require('node:fs').writeSync(1,'R');setInterval(()=>{},1000);`;
 const grandchild = `console.log('grandchild-ready');setInterval(()=>{},1000);`;
 const childTree = `const cp=require('node:child_process');cp.spawn('bun',['-e',${JSON.stringify(grandchild)}],{stdio:'inherit'});console.log('child-ready');setInterval(()=>{},1000);`;
 const tree = `Bun.spawn(['bun','-e',${JSON.stringify(childTree)}],{stdin:'inherit',stdout:'inherit',stderr:'inherit'});console.log('leader-ready');setInterval(()=>{},1000);`;
+const detachedLeaf = `console.log('detached-ready');setInterval(()=>{},1000);`;
+const detachedTree = `Bun.spawn(['bun','-e',${JSON.stringify(detachedLeaf)}],{detached:true,stdin:'inherit',stdout:'inherit',stderr:'inherit'});${tree}`;
 const grandchildNoControls = `if(process.env.BUNWASM_WORKER_CONTROL!==undefined)throw Error('worker control metadata leaked');const f=require('node:fs');for(const fd of [1000,1001]){let code;try{f.fstatSync(fd)}catch(error){code=error.code}if(code!=='EBADF')throw Error('grandchild inherited fd '+fd)}console.log('grandchild-no-controls');`;
 const workerHighFds = `const f=require('node:fs'),opened=[];if(process.env.BUNWASM_WORKER_CONTROL!==undefined)throw Error('worker control metadata visible');try{while(opened.length<1100){const fd=f.openSync('/home/user/high-fd-data','w+');opened.push(fd);if(fd>=1001)break}for(const fd of [1000,1001]){if(!opened.includes(fd))throw Error('reserved magic fd '+fd);f.writeSync(fd,'X',0);const b=Buffer.alloc(1);if(f.readSync(fd,b,0,1,0)!==1||b[0]!==88)throw Error('ordinary high fd unusable '+fd)}const child=Bun.spawn(['bun','-e',${JSON.stringify(grandchildNoControls)}],{stdin:'inherit',stdout:'inherit',stderr:'inherit'});if(await child.exited!==0)throw Error('grandchild fd isolation failed');require('node:worker_threads').parentPort.postMessage('worker-high-fds-ok');}finally{for(const fd of opened)f.closeSync(fd)}require('node:worker_threads').parentPort.close();`;
 const workerControls = `const {Worker}=require('node:worker_threads');const worker=new Worker(${JSON.stringify(workerHighFds)},{eval:true});let message;worker.on('message',value=>{message=value});await new Promise((resolve,reject)=>{worker.on('error',reject);worker.on('exit',code=>code===0?resolve():reject(Error('Worker exit '+code)))});if(message!=='worker-high-fds-ok')throw Error('missing Worker control roundtrip');console.log(message);`;
@@ -120,7 +142,10 @@ const mainScenarios: BunRuntimeScenario[] = [
   ], stdout: "pipeline-merged-ok\nexternal-root-ok\n" },
   { name: "stdin-reader-lifetime", pipe: "input", input: "payload!", commands: [{ source: readerLifetime, fds: [{ child: 0, parent: "reader" }, { child: 1, parent: 1 }, { child: 2, parent: 2 }] }], stdout: "payload\nparent-reader-alive\nexternal-root-ok\n" },
   { name: "postleader-job-wait", commands: [{ source: `Bun.spawn(['bun','-e',"await Bun.sleep(100);console.log('postleader-child');"],{stdin:'inherit',stdout:'inherit',stderr:'inherit'});process.exit(0);` }], stdout: "postleader-child\nexternal-root-ok\n" },
+  { name: "guest-kill-job-descendants", pipe: "signal", commands: [{ source: readyTree, status: 137,
+    fds: [{ child: 0, parent: 0 }, { child: 1, parent: "writer" }, { child: 2, parent: 2 }] }], stdout: "external-root-ok\n" },
   { name: "kill-descendants", commands: [{ source: tree, status: 137 }], action: "kill", stdout: "external-root-ok\n" },
+  { name: "detached-excluded-from-foreground-kill", commands: [{ source: detachedTree, status: 137 }], action: "kill-detached", stdout: "external-root-ok\n" },
   { name: "dispose-live-descendants", commands: [{ source: tree }], action: "dispose", stdout: "" },
   { name: "worker-control-fd-isolation", commands: [{ source: workerControls }], stdout: "grandchild-no-controls\nworker-high-fds-ok\nexternal-root-ok\n" },
   { name: "start-failed", commands: [{ executable: "broken-bun", source: "", status: 126 }], stdout: "external-root-ok\n" },
