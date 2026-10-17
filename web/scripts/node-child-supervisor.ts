@@ -13,7 +13,8 @@ function supervise() {
     return;
   }
   guest.on("error", error => {
-    child.stderr.write(new TextEncoder().encode(`bun-wasm: ${error.stack || error}\n`));
+    const message = error instanceof Error ? error.stack || error.message : String(error);
+    child.stderr.write(new TextEncoder().encode(`bun-wasm: ${message}\n`));
     if (Atomics.load(control, 2) === 0) child.startFailed("EACCES");
     else child.finish(1);
   });
