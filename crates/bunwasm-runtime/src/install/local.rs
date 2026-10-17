@@ -170,6 +170,9 @@ pub fn relative(target: &Path, base: &Path) -> PathBuf {
             path.push("..");
         }
         path.push(tail);
+        if path.as_os_str().is_empty() {
+            path.push(".");
+        }
         return path;
     }
     target.to_owned()

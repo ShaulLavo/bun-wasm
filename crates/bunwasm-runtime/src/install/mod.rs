@@ -431,7 +431,17 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> String {
         };
         let row = if let Some(local) = &package.local {
             let cwd = std::env::current_dir().unwrap();
-            let path = local.path.strip_prefix(&cwd).unwrap_or(&local.path).to_string_lossy();
+            let path = local::relative(&local.path, &cwd);
+            let path = if !local.workspace
+                && path
+                    .components()
+                    .next()
+                    .is_some_and(|part| matches!(part, std::path::Component::Normal(_)))
+            {
+                format!("./{}", path.display())
+            } else {
+                path.to_string_lossy().into_owned()
+            };
             json!([format!(
                 "{}@{}:{path}",
                 package.name,
