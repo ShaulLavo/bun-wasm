@@ -335,3 +335,57 @@ The focused fixture runs with `scripts/test.sh --no-build web-worker`, repeated
 with `--engine jsc` and `--engine browser`. The full web gate also runs
 `web/tests/browser-web-workers.ts` in
 Chromium and WebKit on all engines.
+
+### Global constructor measurement
+
+Measured 2026-10-17 with the exact eleven `web-worker` cause files in
+`scripts/measure-web-workers.sh`. Each engine uses one job, loopback-only
+networking, a fifteen-second file deadline, and the same dependencies.
+
+| Engine | Fully passing files before/after | Observed assertions before/after | File timeouts before/after |
+| --- | ---: | ---: | ---: |
+| QuickJS | 0/11 → 3/11 | 22 → 50 | 0 → 1 |
+| JSC | 0/11 → 3/11 | 20 → 48 | 0 → 1 |
+| Browser | 0/11 → 3/11 | 23 → 61 | 0 → 0 |
+
+The newly passing files check `Bun.isMainThread`, Comlink, and MessagePort context
+destruction. Passing these checks does not establish leak freedom; unavailable
+heap counters remain a limitation of the suite adapters.
+
+No previously passing assertion is observed failing afterward. Five later Node
+worker assertions per embedded engine are unobserved at the file deadline.
+`worker.test.ts` still times out at sixty seconds in separate QuickJS/JSC
+diagnostics after reaching unsupported `node:vm` cases. The browser run completes
+that file with 31 passes and 11 failures. Longer diagnostics do not replace the
+bounded comparison above.
+
+The baseline suite revision is `cd95fa7a13b3f13be73e512b38ec111c1c228084`; the final
+run uses `5e0baa66516f3af00b008cdf1521c681317741e8`. Their complete test trees are
+identical at `7d3cb10bd796680db5b458041eea9451944bdedf`; the intervening changes are
+Rust lint-driver edits. Dependency hashes and execution settings match. The
+runtime comparison also includes intervening main host changes through #56.
+
+Remaining failures include the four-child budget, cross-guest SharedArrayBuffer,
+environment-proxy cloning, unsupported execution flags and VM APIs, loader-error
+diagnostics, BroadcastChannel close/inspection behavior, and shared object-URL
+lifetime. [The follow-up plan](../plans/compatibility-followups.md#global-web-worker-census)
+records the reproduction and affected adapters.
+
+The full fixture gates pass 200/201 on each engine. The remaining `node-misc`
+expectation mismatch is listed in the coordinator's known-main-failures file.
+The full web gate, all six Chromium/WebKit global-Worker combinations, and all
+six sandbox HMR runs pass. The three lifetime assertions flagged by an earlier
+combined browser run also pass in a fresh, same-artifact filtered diagnostic.
+
+Raw results, source/dependency provenance, reproducer output, and exact gate
+scripts are retained at `/work/reports/bun-wasm-web-worker/` until coordinator
+acceptance. Build the launcher and all engines in private targets, then reproduce:
+
+```sh
+source env.sh
+export CARGO_TARGET_DIR=/work/tmp/bun-wasm-web-worker-check-target
+bash /work/tmp/wave-heavy/run.sh --class suite web-worker-census -- \
+  env PATH="$PATH" scripts/measure-web-workers.sh quickjs /work/tmp/bun-wasm-web-worker-quickjs.json
+```
+
+Repeat with `jsc` and `browser` and separate result paths.
