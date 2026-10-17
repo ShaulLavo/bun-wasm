@@ -27,6 +27,7 @@ type Driver = {
   navigate(url: string): Promise<void>;
   reload(): Promise<void>;
   back(expected: string): Promise<void>;
+  forward(expected: string): Promise<void>;
   current(): Promise<string>;
   open(): Promise<string>;
   select(handle: string): Promise<void>;
@@ -100,6 +101,7 @@ async function safari(): Promise<Driver> {
     async navigate(url) { await request(`${path}/url`, { url }); await barrier(url); },
     async reload() { await request(`${path}/refresh`, {}); await barrier(); },
     async back(expected) { await request(`${path}/back`, {}); await barrier(expected); },
+    async forward(expected) { await request(`${path}/forward`, {}); await barrier(expected); },
     async current() { return text(await request(`${path}/window`)); },
     async open() { const result = await request(`${path}/window/new`, { type: "tab" }); assert.ok(record(result)); return text(result.handle); },
     async select(handle) { await request(`${path}/window`, { handle }); },
@@ -121,9 +123,14 @@ async function playwright(): Promise<Driver> {
   } });
   const pw: typeof import("playwright") = await import(process.env.PLAYWRIGHT ?? "playwright");
   assert.ok(mode === "chromium" || mode === "webkit");
-  const browser = await pw[mode].launch({ headless: true });
-  stop = () => browser.close();
-  const context = await browser.newContext();
+  const context = mode === "webkit"
+    ? await pw.webkit.launchPersistentContext(resolve(scratch, "webkit-profile"), { headless: true })
+    : await (async () => {
+      const browser = await pw.chromium.launch({ headless: true });
+      stop = () => browser.close();
+      return browser.newContext();
+    })();
+  if (mode === "webkit") stop = () => context.close();
   let page = await context.newPage();
   const pages = new Map([["owner", page]]);
   return {
@@ -131,6 +138,7 @@ async function playwright(): Promise<Driver> {
     async navigate(url) { await page.goto(url); },
     async reload() { await page.reload(); },
     async back() { await page.goBack(); },
+    async forward() { await page.goForward(); },
     async current() { return Array.from(pages).find(([, value]) => value === page)![0]; },
     async open() { const id = crypto.randomUUID(); pages.set(id, await context.newPage()); return id; },
     async select(handle) { const selected = pages.get(handle); assert.ok(selected); page = selected; await page.bringToFront(); },
@@ -147,60 +155,101 @@ try {
     assert.ok(record(value) && typeof value.id === "string" && typeof value.ready === "boolean" && typeof value.error === "string" && Array.isArray(value.events));
     return { id: value.id, ready: value.ready, error: value.error, events: value.events.filter(record), locks: value.locks };
   }
-  for (const storage of ["indexeddb", "opfs"]) {
-    report.phase = `${storage} initial`;
-    const url = new URL(`?storage=${storage}&name=lifecycle-${crypto.randomUUID()}`, base).href;
-    await driver.navigate(url);
-    const first = await state();
-    assert.equal(first.ready, true, JSON.stringify(first));
-    // Persisted saves must survive the complete cached-page navigation cycle.
-    await driver.evaluate("await lifecycle.fs.writeFile('/saved','before navigation');await lifecycle.fs.flush();return true;");
-    await driver.navigate(new URL("away.html", base).href);
-    report.phase = `${storage} same-tab reopen`;
-    await driver.navigate(url);
-    let reopened = await state();
-    report.cases.push({ phase: report.phase, ...reopened });
-    assert.equal((await driver.handles()).length, 1);
-    assert.equal(reopened.ready, true, JSON.stringify(reopened));
-    assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "before navigation");
-    await driver.evaluate("await lifecycle.fs.writeFile('/saved','fresh page edit');await lifecycle.fs.flush();return true;");
-    report.phase = `${storage} Reload`;
-    await driver.reload(); reopened = await state();
-    assert.equal(reopened.ready, true, JSON.stringify(reopened));
-    assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "fresh page edit");
-    report.phase = `${storage} restore original cached document`;
-    await driver.back(new URL("away.html", base).href); await driver.back(url);
-    reopened = await state();
-    report.cases.push({ phase: report.phase, ...reopened });
-    assert.equal(reopened.ready, true, JSON.stringify(reopened));
-    assert.notEqual(reopened.id, first.id, "cached filesystem page must reinitialize before use");
-    assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "fresh page edit");
-    if (mode === "safari") assert.ok(reopened.events.some(event => event.type === "pageshow" && event.persisted && event.id === first.id), "real Safari must restore the original cached document");
-    report.phase = `${storage} two live tabs`;
-    const owner = await driver.current(), contender = await driver.open();
-    await driver.select(contender); await driver.navigate(url);
-    const refused = await state();
-    assert.equal(refused.ready, false);
-    assert.match(refused.error, /Filesystem already has a writer/);
-    report.cases.push({ phase: report.phase, ...refused });
-    if (process.env.SAFARI_SCREENSHOT) await driver.screenshot?.(`${process.env.SAFARI_SCREENSHOT}-${storage}.png`);
-    await driver.select(owner);
-    await driver.evaluate("await lifecycle.fs.writeFile('/saved','live owner edit');await lifecycle.fs.flush();return true;");
-    await driver.navigate(new URL("away.html", base).href);
-    await driver.select(contender); await driver.reload();
-    reopened = await state();
-    assert.equal(reopened.ready, true, JSON.stringify(reopened));
-    assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "live owner edit");
-    await driver.select(owner); await driver.close(); await driver.select(contender);
-    report.phase = `${storage} freeze admission`;
-    assert.equal(await driver.evaluate("document.dispatchEvent(new Event('freeze'));try{await lifecycle.fs.writeFile('/late','forbidden');return false}catch{return true}"), true);
-    await driver.navigate(new URL("away.html", base).href); await driver.navigate(url);
-    assert.equal((await state()).ready, true);
-    const replacement = await driver.open(), old = await driver.current();
-    await driver.close(); await driver.select(replacement);
-    assert.notEqual(replacement, old);
-    console.log(`ok ${mode} ${storage}: same-tab reopen, Reload, bfcache restore, two tabs, freeze, durable writes`);
+  const loss = "This workspace was opened in another tab. Reload to continue here.";
+  async function screenshot(name: string) {
+    if (!process.env.SAFARI_SCREENSHOT) return;
+    await driver.evaluate("await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return true;");
+    await driver.screenshot?.(`${process.env.SAFARI_SCREENSHOT}-${name}.png`);
   }
+  async function lost() {
+    await driver.evaluate("const end=Date.now()+15000;while(!lifecycle.fs.ownershipLost){if(Date.now()>end)throw Error('displaced worker did not stop');await new Promise(r=>setTimeout(r,25))}return true;");
+    const value = await state();
+    assert.equal(value.ready, false);
+    assert.ok(value.error.includes(loss), JSON.stringify(value));
+    assert.ok(value.error.includes("Unsaved changes in this tab weren't kept."));
+    assert.equal(await driver.evaluate("try{await lifecycle.fs.writeFile('/stale','must not persist');await lifecycle.fs.flush();return false}catch{return true}"), true);
+    return value;
+  }
+  const url = new URL(`?name=lifecycle-${crypto.randomUUID()}`, base).href;
+  report.phase = "indexeddb initial";
+  await driver.navigate(url);
+  const first = await state();
+  assert.equal(first.ready, true, JSON.stringify(first));
+  await driver.evaluate("await lifecycle.fs.writeFile('/saved','before navigation');await lifecycle.fs.flush();return true;");
+  await driver.navigate(new URL("away.html", base).href);
+  report.phase = "indexeddb same-tab reopen";
+  await driver.navigate(url);
+  let reopened = await state();
+  report.cases.push({ phase: report.phase, ...reopened });
+  assert.equal((await driver.handles()).length, 1);
+  assert.equal(reopened.ready, true, JSON.stringify(reopened));
+  assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "before navigation");
+  await driver.evaluate("await lifecycle.fs.writeFile('/saved','fresh page edit');await lifecycle.fs.flush();return true;");
+  report.phase = "indexeddb Reload";
+  await driver.reload(); reopened = await state();
+  assert.equal(reopened.ready, true, JSON.stringify(reopened));
+  assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "fresh page edit");
+  report.cases.push({ phase: report.phase, ...reopened });
+  report.phase = "indexeddb back/forward restore";
+  await driver.back(new URL("away.html", base).href); await driver.back(url);
+  reopened = await state();
+  if (reopened.id === first.id) {
+    reopened = await lost();
+    assert.ok(reopened.events.some(event => event.type === "pageshow" && event.persisted && event.id === first.id));
+  }
+  report.cases.push({ phase: report.phase, ...reopened });
+  report.phase = "indexeddb Forward restores the latest owner";
+  await driver.forward(new URL("away.html", base).href); await driver.forward(url);
+  reopened = await state();
+  if (!reopened.ready) { await lost(); await driver.reload(); reopened = await state(); }
+  assert.equal(reopened.ready, true, JSON.stringify(reopened));
+  assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "fresh page edit");
+  report.cases.push({ phase: report.phase, ...reopened });
+  await driver.back(new URL("away.html", base).href); await driver.back(url);
+  report.phase = "indexeddb Reload after back with no other tab";
+  assert.equal((await driver.handles()).length, 1);
+  await driver.reload(); reopened = await state();
+  assert.equal(reopened.ready, true, JSON.stringify(reopened));
+  assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "fresh page edit");
+  report.cases.push({ phase: report.phase, ...reopened });
+  report.phase = "indexeddb newest of two live tabs wins";
+  const owner = await driver.current(), contender = await driver.open();
+  await driver.evaluate("document.querySelector('textarea').value='visible unsaved edits';return true;");
+  await driver.select(contender); await driver.navigate(url);
+  assert.equal((await state()).ready, true);
+  assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "fresh page edit");
+  await driver.evaluate("await lifecycle.fs.writeFile('/saved','newest owner edit');await lifecycle.fs.flush();return true;");
+  await driver.select(owner);
+  const displaced = await lost();
+  assert.equal(await driver.evaluate("return document.querySelector('textarea').value;"), "visible unsaved edits");
+  report.cases.push({ phase: report.phase, ...displaced });
+  await screenshot("indexeddb");
+  await driver.select(contender); await driver.reload();
+  assert.equal((await state()).ready, true);
+  assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "newest owner edit");
+  assert.equal(await driver.evaluate("return await lifecycle.fs.lookup('/stale')===undefined;"), true);
+  await driver.select(owner); await driver.close(); await driver.select(contender);
+  const clean = await driver.open(); await driver.close(); await driver.select(clean);
+  console.log(`ok ${mode} indexeddb: same-tab reopen, Reload, bfcache displacement, Reload after back, newest tab wins, edits retained, acknowledged saves preserved`);
+
+  report.phase = "opfs no-steal refusal and recovery";
+  const opfsUrl = new URL(`?storage=opfs&name=lifecycle-${crypto.randomUUID()}`, base).href;
+  await driver.navigate(opfsUrl);
+  const opfsInitial = await state();
+  assert.equal(opfsInitial.ready, true, JSON.stringify(opfsInitial));
+  await driver.evaluate("await lifecycle.fs.writeFile('/saved','opfs durable');await lifecycle.fs.flush();return true;");
+  const opfsOwner = await driver.current(), blocked = await driver.open();
+  await driver.select(blocked); await driver.navigate(opfsUrl);
+  const refused = await state();
+  assert.equal(refused.ready, false);
+  assert.match(refused.error, /OPFS filesystem already has a writer.*browser history/);
+  assert.ok(refused.error.includes("Saved files are kept."));
+  report.cases.push({ phase: report.phase, ...refused });
+  await screenshot("opfs");
+  await driver.select(opfsOwner); await driver.close(); await driver.select(blocked); await driver.reload();
+  assert.equal((await state()).ready, true);
+  assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "opfs durable");
+  console.log(`ok ${mode} opfs: no-steal refusal, complete diagnostic, saved files preserved after owner closes`);
   report.ok = true;
 } catch (error) {
   report.error = String(error); throw error;

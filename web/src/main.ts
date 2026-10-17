@@ -10,7 +10,7 @@ import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
 import { decode, normalize } from "./fs";
-import { SharedFilesystem } from "./shared-fs";
+import { SharedFilesystem, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
 import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
 import { type Output, Shell } from "./shell";
@@ -55,6 +55,15 @@ const previews = new Previews();
 // ---------- filesystem ----------
 
 const fs = new SharedFilesystem({ storage });
+fs.onOwnershipLost = () => {
+  setStatus("", "error");
+  runButton.textContent = "Reload";
+  runButton.disabled = false;
+  runButton.title = "Open the latest saved workspace";
+  newFileButton.disabled = true;
+  engineSelect.disabled = true;
+  fileSelect.disabled = true;
+};
 try {
   await fs.mkdirp("/tmp");
   // Background persistence can save a prefix of startup. Publish completion only after
@@ -83,6 +92,10 @@ const pageReady = new Promise<void>((resolve) => { pageSetUp = resolve; });
 const wasmReady = loadWasm();
 
 function setStatus(text: string, kind: "" | "ok" | "error" = ""): void {
+  if (fs.ownershipLost) {
+    text = `${WORKSPACE_TAKEN_OVER} ${UNSAVED_CHANGES_LOST}`;
+    kind = "error";
+  }
   statusEl.textContent = text;
   statusEl.dataset.kind = kind;
 }
@@ -381,7 +394,10 @@ async function runCurrent(): Promise<void> {
   }
 }
 
-runButton.addEventListener("click", () => void runCurrent().catch(reportError));
+runButton.addEventListener("click", () => {
+  if (fs.ownershipLost) { location.reload(); return; }
+  void runCurrent().catch(reportError);
+});
 newFileButton.addEventListener("click", () => {
   const name = prompt("New file name (in ~):", "scratch.ts");
   if (!name) return;

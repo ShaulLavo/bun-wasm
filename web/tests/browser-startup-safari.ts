@@ -115,23 +115,24 @@ try {
   report.currentWindow = await request(`/session/${session}/window`);
   report.phase = "contender synchronous state";
   report.document = await request(`/session/${session}/execute/sync`, "POST", { script: "return {url:location.href,ready:document.readyState,status:document.querySelector('#status')?.textContent,kind:document.querySelector('#status')?.dataset.kind};", args: [] });
-  report.phase = "contender diagnostic";
-  const diagnostic = await evaluate("const end=Date.now()+15000; const status=document.querySelector('#status'); while(status?.dataset.kind!=='error'){if(Date.now()>end)throw Error('Writer contention was not reported');await new Promise(r=>setTimeout(r,25));}return {message:status.textContent,whiteSpace:getComputedStyle(status).whiteSpace,clipped:status.scrollWidth>status.clientWidth||status.scrollHeight>status.clientHeight,retry:document.querySelector('#run')?.textContent,editor:!!globalThis.playground};");
+  await ready();
+  assert.equal(await evaluate("return new TextDecoder().decode(await playground.fs.readFile('/safari-startup.txt'));"), "durable Safari edit");
+  await request(`/session/${session}/window`, "POST", { handle: owner });
+  report.phase = "displaced owner diagnostic";
+  const diagnostic = await evaluate("const end=Date.now()+15000;while(!playground.fs.ownershipLost){if(Date.now()>end)throw Error('Displacement was not reported');await new Promise(r=>setTimeout(r,25));}const status=document.querySelector('#status');return {message:status.textContent,whiteSpace:getComputedStyle(status).whiteSpace,clipped:status.scrollWidth>status.clientWidth||status.scrollHeight>status.clientHeight,retry:document.querySelector('#run')?.textContent,editor:!!globalThis.playground};");
   report.diagnostic = diagnostic;
   if (process.env.SAFARI_SCREENSHOT) {
     const screenshot = await request(`/session/${session}/screenshot`);
-    assert.equal(typeof screenshot, "string");
     if (typeof screenshot === "string") await Bun.write(process.env.SAFARI_SCREENSHOT, Buffer.from(screenshot, "base64"));
   }
   assert.ok(record(diagnostic) && typeof diagnostic.message === "string");
-  assert.match(diagnostic.message, /Filesystem already has a writer in another tab/);
-  assert.match(diagnostic.message, /Close that tab, then reload this page/);
+  assert.match(diagnostic.message, /This workspace was opened in another tab. Reload to continue here./);
+  assert.match(diagnostic.message, /Unsaved changes in this tab weren't kept./);
   assert.equal(diagnostic.whiteSpace, "pre-wrap"); assert.equal(diagnostic.clipped, false);
-  assert.equal(diagnostic.retry, "Reload"); assert.equal(diagnostic.editor, false);
-  await request(`/session/${session}/window`, "POST", { handle: owner });
-  report.phase = "close owner";
-  await request(`/session/${session}/window`, "DELETE");
+  assert.equal(diagnostic.retry, "Reload"); assert.equal(diagnostic.editor, true);
   await request(`/session/${session}/window`, "POST", { handle: contender.handle });
+  await request(`/session/${session}/window`, "DELETE");
+  await request(`/session/${session}/window`, "POST", { handle: owner });
   report.phase = "recovery";
   await request(`/session/${session}/refresh`, "POST", {});
   await ready();
@@ -139,7 +140,7 @@ try {
   await evaluate("await playground.fs.remove('/safari-startup.txt'); await playground.fs.flush(); return true;");
   report.recovered = true;
   report.ok = true;
-  console.log("Safari playground: fresh startup, three durable reloads, complete writer error and retry passed");
+  console.log("Safari playground: fresh startup, three durable reloads, newest writer wins, complete displacement diagnostic and retry passed");
 } catch (error) {
   report.error = error instanceof Error ? error.stack || String(error) : String(error);
   if (device && process.env.SAFARI_SCREENSHOT) {

@@ -63,8 +63,8 @@ export function storageContractCases(): StorageContractCase[] {
     await rejects(reopened.read("missing"), /Missing|ENOENT|NotFound/);
   });
 
-  test("single writer lifetime and close", async (_name, open) => {
-    const storage = await open(); await rejects(open(), "writer");
+  test("storage close is idempotent", async (_name, open) => {
+    const storage = await open();
     await storage.close(); await storage.close();
     await rejects(storage.load(), "closed"); await rejects(storage.persist(batch(1)), "closed");
     await rejects(storage.read("file:1"), "closed"); await rejects(storage.flush(), "closed");
@@ -129,7 +129,10 @@ function indexedDBCases(): StorageContractCase[] {
       const hashing = new Promise<void>(resolve => { entered = resolve; });
       const held = new Promise<void>(resolve => { resume = resolve; });
       crypto.subtle.digest = async (...args) => { entered(); await held; return original(...args); };
-      const pending = stale.persist(batch(2, "stale"));
+      const obsolete = batch(2, "stale");
+      obsolete.upserts[1]!.data = "stale-only";
+      obsolete.data = new Map([["stale-only", bytes("stale")]]);
+      const pending = stale.persist(obsolete);
       const rejected = rejects(pending, "opened in another tab");
       let newest: IndexedDBStorage | undefined;
       try {
@@ -142,12 +145,37 @@ function indexedDBCases(): StorageContractCase[] {
         await raw(database, async db => {
           const tx = db.transaction(["data", "metadata", "journal"], "readonly");
           const payload = await request(tx.objectStore("data").get("file:2"));
-          assert(new TextDecoder().decode(payload) === "newest", "stale payload never commits");
+          assert(new TextDecoder().decode(payload) === "newest", "latest payload remains durable");
+          assert(await request(tx.objectStore("data").get("stale-only")) === undefined, "stale payload never commits");
         });
         assert((await newest.load())?.generation === 2, "stale compaction cannot replace latest snapshot");
         await rejects(stale.persist(batch(3)), "opened in another tab");
-      } finally { crypto.subtle.digest = original; resume(); await stale.close(); await newest?.close(); }
+      } finally { crypto.subtle.digest = original; resume(); await stale.close(); await newest?.close(); await request(indexedDB.deleteDatabase(database)); }
     }
+  });
+
+  test("epoch fencing stops queued persistence when the lock is stolen", async (name) => {
+    let losses = 0;
+    const stale = await IndexedDBStorage.open(name, { onOwnershipLost() { losses++; } });
+    await stale.persist(batch(1));
+    const original = crypto.subtle.digest.bind(crypto.subtle);
+    let entered!: () => void, resume!: () => void;
+    const hashing = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { resume = resolve; });
+    crypto.subtle.digest = async (...args) => { entered(); await held; return original(...args); };
+    const pending = rejects(stale.persist(batch(2)), "opened in another tab");
+    const queued = rejects(stale.persist(batch(3)), "opened in another tab");
+    let newest: IndexedDBStorage | undefined;
+    try {
+      await hashing;
+      crypto.subtle.digest = original;
+      newest = await IndexedDBStorage.open(name);
+      assert(losses === 1, "lock loss is reported without waiting for queued writes");
+      assert((await newest.load())?.generation === 1, "new holder loads only acknowledged state");
+      await newest.persist(batch(2, "new owner"));
+      resume(); await Promise.all([pending, queued]);
+      assert(new TextDecoder().decode(await newest.read("file:2")) === "new owner", "queued old writes never replace new data");
+    } finally { crypto.subtle.digest = original; resume(); await stale.close(); await newest?.close(); }
   });
 
   test("epoch fencing serializes concurrent takeovers and stops displaced queues", async (name) => {

@@ -90,6 +90,9 @@ done
 if [[ $browser == 1 ]]; then
   bun tests/browser-editor.ts chromium || failed=1
   bun tests/browser-editor.ts webkit || failed=1
+  bun tests/browser-filesystem-lifecycle.ts chromium || failed=1
+  bun tests/browser-filesystem-lifecycle.ts webkit || failed=1
+  bun "$root/runtime/tests/storage-browser-runner.ts" chromium webkit || failed=1
   node "$root/scripts/test-native-stream-interop.mjs" || failed=1
   node tests/browser-install.mjs || failed=1
   node tests/browser-shell-stop.ts || failed=1

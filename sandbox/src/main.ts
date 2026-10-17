@@ -13,7 +13,7 @@ import { basicSetup } from "codemirror";
 import { decode } from "../../web/src/fs";
 import type { NetHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
-import { SharedFilesystem } from "../../web/src/shared-fs";
+import { SharedFilesystem, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../web/src/shared-fs";
 import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
 import { enableTerminalCopy } from "../../web/src/terminal-copy";
 import { linkLocalUrls } from "../../web/src/terminal-links";
@@ -79,6 +79,7 @@ engineSelect.addEventListener("change", () => {
 });
 
 function setStatus(text: string, kind: "" | "ok" | "error" = ""): void {
+  if (fs.ownershipLost) { text = `${WORKSPACE_TAKEN_OVER} ${UNSAVED_CHANGES_LOST}`; kind = "error"; }
   statusEl.textContent = text;
   statusEl.dataset.kind = kind;
 }
@@ -91,6 +92,13 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 // ---------- filesystem ----------
 
 const fs = new SharedFilesystem({ name: `bun-wasm-sandbox-${template}` });
+fs.onOwnershipLost = () => {
+  setStatus("", "error");
+  restartButton.textContent = "Reload";
+  restartButton.disabled = false;
+  restartButton.title = "Open the latest saved workspace";
+  resetButton.disabled = engineSelect.disabled = templateSelect.disabled = fileSelect.disabled = true;
+};
 await fs.mkdirp("/tmp").catch((error) => {
   setStatus(String(error), "error");
   throw error;
@@ -595,6 +603,7 @@ const editor = new Editor($<HTMLDivElement>("#editor"));
 fileSelect.addEventListener("change", () => void editor.open(fileSelect.value).catch(reportError));
 
 restartButton.addEventListener("click", () => {
+  if (fs.ownershipLost) { location.reload(); return; }
   term.write("\r\n");
   void startDevServer().catch(reportError);
 });

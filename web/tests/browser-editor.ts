@@ -186,32 +186,39 @@ try {
     return { text: new TextDecoder().decode(await fs.readFile("/home/user/index.ts")), deleted: await fs.lookup("/home/user/math.test.ts") };
   }), { text: "console.log('saved playground');", deleted: undefined });
 
+  await page.evaluate(() => {
+    const editor = (globalThis as any).playground.editor;
+    editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: "unsaved older tab" } });
+  });
   const contender = await context.newPage();
   const startupErrors: string[] = [];
   contender.on("pageerror", error => startupErrors.push(error.message));
-  await contender.setViewportSize({ width: 390, height: 844 });
   await contender.goto(`${base}/playground/`);
-  await contender.waitForFunction(() => document.querySelector("#status")?.getAttribute("data-kind") === "error");
-  assert.match(await contender.locator("#status").innerText(), /Filesystem already has a writer in another tab/);
-  assert.deepEqual(await contender.locator("#status").evaluate(element => ({
+  await contender.waitForFunction(() => (globalThis as any).playground?.editor.path === "/home/user/index.ts");
+  assert.equal(await contender.evaluate(async () => new TextDecoder().decode(await (globalThis as any).playground.fs.readFile("/home/user/index.ts"))), "console.log('saved playground');");
+  await page.bringToFront();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForFunction(() => (globalThis as any).playground.fs.ownershipLost);
+  assert.match(await page.locator("#status").innerText(), /This workspace was opened in another tab. Reload to continue here./);
+  assert.match(await page.locator("#status").innerText(), /Unsaved changes in this tab weren't kept./);
+  assert.equal(await page.evaluate(() => (globalThis as any).playground.editor.view.state.doc.toString()), "unsaved older tab");
+  assert.deepEqual(await page.locator("#status").evaluate(element => ({
     wrapping: getComputedStyle(element).whiteSpace,
     clipped: element.scrollWidth > element.clientWidth || element.scrollHeight > element.clientHeight,
   })), { wrapping: "pre-wrap", clipped: false });
-  assert.equal(await contender.locator("#run").innerText(), "Reload");
-  assert.equal(await contender.locator("#run").isEnabled(), true);
-  assert.equal(await contender.locator("#new-file").isDisabled(), true);
-  assert.equal(await contender.locator("#engine").isDisabled(), true);
-  assert.equal(await contender.locator("#file-select").isDisabled(), true);
+  assert.equal(await page.locator("#run").innerText(), "Reload");
+  assert.equal(await page.locator("#run").isEnabled(), true);
+  assert.equal(await page.locator("#new-file").isDisabled(), true);
+  assert.equal(await page.locator("#engine").isDisabled(), true);
+  assert.equal(await page.locator("#file-select").isDisabled(), true);
   assert.deepEqual(startupErrors, []);
-  if (process.env.STARTUP_ERROR_SCREENSHOT) await contender.screenshot({ path: process.env.STARTUP_ERROR_SCREENSHOT });
-  await page.close();
-  await contender.locator("#run").click();
-  await contender.waitForFunction(() => (globalThis as any).playground?.editor.path === "/home/user/index.ts");
-  assert.equal(await contender.evaluate(async () => new TextDecoder().decode(await (globalThis as any).playground.fs.readFile("/home/user/index.ts"))), "console.log('saved playground');");
-  assert.deepEqual(startupErrors, []);
+  if (process.env.STARTUP_ERROR_SCREENSHOT) await page.screenshot({ path: process.env.STARTUP_ERROR_SCREENSHOT });
   await contender.close();
+  await page.locator("#run").click();
+  await page.waitForFunction(() => (globalThis as any).playground?.editor.path === "/home/user/index.ts");
+  assert.equal(await page.evaluate(async () => new TextDecoder().decode(await (globalThis as any).playground.fs.readFile("/home/user/index.ts"))), "console.log('saved playground');");
   assert.deepEqual(errors, []);
-  console.log(`${engine} ${browser.version()}: durable saves, reload, seed/reset recovery, complete mobile startup errors, writer release and preserved edits passed`);
+  console.log(`${engine} ${browser.version()}: durable saves, reload, seed/reset recovery, complete mobile startup errors, newest writer wins and displaced edits remain visible passed`);
 } finally {
   clearTimeout(timeout);
   await cleanup();

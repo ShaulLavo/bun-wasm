@@ -91,22 +91,24 @@ runs it on another engine), or `scripts/test-web.sh` for everything. `node tests
 which examples pass).
 
 Build the playground on the PC, copy `web/dist` to a task directory on the Mac, and serve it with COOP/COEP headers.
-Run `bun web/tests/browser-startup-safari.ts <playground-url>` on the Mac to check fresh startup, three durable reloads, and recovery after closing a competing tab.
+Run `bun web/tests/browser-startup-safari.ts <playground-url>` on the Mac to check fresh startup, three durable reloads, newest-tab ownership, and recovery of the displaced tab.
 Set `SAFARI_IOS=1` for the iPhone 17 Pro simulator, `SAFARI_OUTPUT=<path>` for the JSON report, and `SAFARI_SCREENSHOT=<path>` for the error screenshot.
 If the simulator is shut down, run `xcrun simctl boot "iPhone 17 Pro"` and `xcrun simctl bootstatus "iPhone 17 Pro" -b` before starting the driver.
 Set `SAFARI_SEED_URL=https://bun.sprockt.dev/playground/` to import a workspace created by the live build before testing the candidate.
 The test uses a task-owned Safari automation session and driver. It preserves normal browser profiles.
 
-The filesystem lifecycle regression currently fails on real Safari when a cached page retains
-the writer lock. It needs no guest WASM. On the PC, run
-`bun web/tests/browser-filesystem-lifecycle.ts --build <directory>` through the heavy wrapper.
-Copy that directory and `web/tests/browser-filesystem-lifecycle.ts` into a task directory under
-`~/tmp` on the Mac. Serve the assets on an unused localhost port with COOP `same-origin` and
-COEP `require-corp`, then run `bun browser-filesystem-lifecycle.ts safari <url>` under the Mac lock.
-Repeat with `SAFARI_IOS=1` for the booted iPhone 17 Pro simulator. `SAFARI_OUTPUT=<file>` records
-the lifecycle events, writer locks and assertions. Both backends must preserve completed writes
-through same-tab navigation, Reload and restoration of the original cached document. A second
-live tab must be refused. This Mac regression is separate from the Linux web gate.
+The filesystem lifecycle regression uses the actual page adapter and persistence worker without
+guest WASM. `scripts/test-web.sh` runs its Chromium and WebKit cases, plus the storage fencing tests.
+For real Safari, build with `bun web/tests/browser-filesystem-lifecycle.ts --build <directory>`
+through the PC heavy wrapper. Copy the assets and runner to an owned directory under Mac `~/tmp`,
+then serve them on an unused localhost port with COOP `same-origin` and COEP `require-corp`.
+Under the Mac lock, run `bun browser-filesystem-lifecycle.ts safari <url>` and repeat with
+`SAFARI_IOS=1` for the booted iPhone 17 Pro simulator. `SAFARI_OUTPUT=<file>` records lifecycle
+and lock observations. Both Safari platforms cover same-tab reopen, Reload, cached-page
+restoration, Reload after Back with no other tab, newest-wins IndexedDB ownership, preserved
+visible edits and durable saves. OPFS keeps no-steal ownership and checks refusal and recovery
+after the owner closes. [The runtime plan](../plans/browser-runtime.md#safari-workspace-ownership)
+explains the epoch fence and the HTTPS no-store complement.
 
 ## Without a browser
 
