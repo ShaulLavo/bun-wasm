@@ -237,7 +237,7 @@
       settled = true;
       child.exitCode = signalCode === null ? code : null;
       child.signalCode = signalCode;
-      if (timer) clearTimeout(timer);
+      if (timer) internal.realTimers.clearTimeout(timer);
       if (abort) spec.options.signal.removeEventListener("abort", abort);
       resolveExit(code);
       if (typeof spec.options.onExit === "function") spec.options.onExit(child, child.exitCode, child.signalCode, null);
@@ -282,7 +282,7 @@
       close();
     } });
     initialInput(spec.input, sink);
-    if (spec.options.timeout > 0) timer = setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, spec.options.timeout);
+    if (spec.options.timeout > 0) timer = internal.realTimers.setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, spec.options.timeout);
     if (spec.options.signal) {
       abort = () => child.kill(spec.options.killSignal);
       spec.options.signal.addEventListener("abort", abort, { once: true });
@@ -443,7 +443,7 @@
       child.emit("exit", child.exitCode, child.signalCode);
       // Web stream completion schedules Node stream end callbacks as immediates.
       // Give those callbacks a turn before close, including unread output pipes.
-      Promise.all(child._drains).then(() => setImmediate(() => child.emit("close", child.exitCode, child.signalCode)));
+      Promise.all(child._drains).then(() => internal.realTimers.setImmediate(() => child.emit("close", child.exitCode, child.signalCode)));
     }
 
     function nodeSpawn(command, args, options) {

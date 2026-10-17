@@ -33,7 +33,7 @@ async function run(cwd: string, ...args: string[]) {
   const env = { ...process.env, HOME: cwd, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(cwd, "cache") };
   const options = ["--wasm", resolve(root, process.env.BUN_WASM || "dist/bun.wasm"), "--dir", `${cwd}::/`,
     "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache", "--"];
-  const executable = engine === "native" ? "bun" : engine === "browser" ? process.execPath : process.env.BUN_WASM_LAUNCHER!;
+  const executable = engine === "native" ? process.env.NATIVE_BUN || "bun" : engine === "browser" ? process.execPath : process.env.BUN_WASM_LAUNCHER!;
   const nativeArgs = args[0] === "x" ? ["x", "--bun"].concat(args.slice(1)) : args;
   const argv = engine === "native" ? nativeArgs : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(options, args) : options.concat(args);
   const child = spawn(executable, argv, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
@@ -81,7 +81,7 @@ const cases: Record<string, () => Promise<void>> = {
     const cwd = project("invalid-bin", { "package.json": '{"dependencies":{"invalid-cli":"1.0.0"}}' });
     await success(cwd, "install");
     rmSync(join(cwd, "node_modules/.bin"), { recursive: true });
-    assert.match(await success(cwd, "x", "--no-install", "invalid-cli"), /first-valid/);
+    assert.match(await success(cwd, "x", ...(process.env.INSTALL_ENGINE === "native" ? [] : ["--no-install"]), "invalid-cli"), /first-valid/);
   },
   async unsetExpansion() {
     const cwd = project("unset", { "package.json": JSON.stringify({ scripts: { check: 'bun args.ts $BUN_WASM_UNSET_VALUE "${BUN_WASM_UNSET_VALUE}"' } }), "args.ts": 'console.log(JSON.stringify(process.argv.slice(2)));' });
@@ -106,10 +106,6 @@ try {
     packageFixture("@fixture/string", "1.0.0", { bin: "cli.ts" }, undefined, [tarEntry("package/cli.ts", '#!/usr/bin/env bun\nconsole.log("string-bin");')]),
   ]);
   for (const [name, check] of Object.entries(cases)) {
-    if (name === "invalidBinEntries" && process.env.INSTALL_ENGINE === "native") {
-      console.log("SKIP invalidBinEntries: pinned Bun's first-valid selection is newer than native 1.4.2");
-      continue;
-    }
     try { await check(); console.log(`PASS ${name}`); }
     catch (error) { console.error(`FAIL ${name}`, error); process.exitCode = 1; }
   }
