@@ -202,19 +202,7 @@
   // Publish the runtime's JS-only startup default before user code can write to stdio.
   if (native.hostSignal(13, 1) < 0) throw new Error("Cannot set SIGPIPE disposition");
   dispositions.set(13, 1);
-  internal.pumpSignals = function pumpSignals() {
-    let progress = false;
-    for (;;) {
-      const number = native.hostSignal(0, 0);
-      if (number <= 0) return progress;
-      const name = signalNames.get(number);
-      if (!name) throw new Error(`Cannot dispatch signal ${number}`);
-      // The host clears pending first. A once listener can therefore restore DEFAULT before
-      // its callback runs without reclassifying this already delivered, handled signal.
-      process.emit(name, name);
-      progress = true;
-    }
-  };
+  internal.pumpSignals = internal.require("process_signals")(process, signalNames);
 
   const props = {
     title: "bun",

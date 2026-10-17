@@ -246,6 +246,11 @@ pub(crate) enum SignalAction {
 
 impl LocalSignals {
     pub(crate) fn signal(&mut self, signal: i32, operation: i32) -> SignalAction {
+        // Without a supervisor, default actions are returned by the operation
+        // that selects them. A fatal-only checkpoint leaves handled work here.
+        if signal == 0 && operation == 4 {
+            return SignalAction::Value(0);
+        }
         if signal == 0 && operation == 0 {
             if self.pending == 0 {
                 return SignalAction::Value(0);
@@ -346,6 +351,38 @@ mod signal_tests {
         }
         for signal in [2, 15, 64, 0] {
             assert_eq!(signals.signal(0, 0), SignalAction::Value(signal));
+        }
+    }
+
+    #[test]
+    fn plain_wasi_fatal_checkpoint_does_not_dequeue_handled_pending_signals() {
+        let mut signals = LocalSignals::default();
+        assert_eq!(signals.signal(0, 4), SignalAction::Value(0));
+        for signal in [64, 15, 2] {
+            assert_eq!(signals.signal(signal, 2), SignalAction::Value(0));
+            assert_eq!(signals.signal(signal, 3), SignalAction::Value(0));
+        }
+        for signal in [2, 15, 64, 0] {
+            for _ in 0..3 {
+                assert_eq!(signals.signal(0, 4), SignalAction::Value(0));
+            }
+            assert_eq!(signals.signal(0, 0), SignalAction::Value(signal));
+        }
+    }
+
+    #[test]
+    fn plain_wasi_fatal_checkpoint_leaves_pending_disposition_changes_authoritative() {
+        for disposition in [0, 1] {
+            let mut signals = LocalSignals::default();
+            assert_eq!(signals.signal(2, 2), SignalAction::Value(0));
+            assert_eq!(signals.signal(2, 3), SignalAction::Value(0));
+            for signal in [-1, 1, 9, 15, 64, 65] {
+                assert_eq!(signals.signal(signal, 4), SignalAction::Value(-22));
+            }
+            assert_eq!(signals.signal(0, 4), SignalAction::Value(0));
+            let expected = if disposition == 0 { SignalAction::Default(2) } else { SignalAction::Value(0) };
+            assert_eq!(signals.signal(2, disposition), expected);
+            assert_eq!(signals.signal(0, 0), SignalAction::Value(0));
         }
     }
 
