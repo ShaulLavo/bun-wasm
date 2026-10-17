@@ -723,6 +723,17 @@ fn link_bins(resolver: &Resolver) -> Result<()> {
     Ok(())
 }
 
+fn binary_entry(name: &str, file: &str) -> Option<(String, std::path::PathBuf)> {
+    let file = std::path::PathBuf::from(file);
+    if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+        return None;
+    }
+    if file.as_os_str().is_empty() || file.is_absolute() || file.components().any(|part| !matches!(part, std::path::Component::Normal(_) | std::path::Component::CurDir)) {
+        return None;
+    }
+    Some((name.to_owned(), file))
+}
+
 fn binary_entries(meta: &Value, base: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     let mut entries = Vec::new();
     if let Some(bin) = meta["bin"].as_str() {
@@ -730,39 +741,19 @@ fn binary_entries(meta: &Value, base: &Path) -> Result<Vec<(String, std::path::P
             .as_str()
             .and_then(|n| n.rsplit('/').next())
             .ok_or("Binary package needs a name")?;
-        entries.push((name.to_owned(), bin.into()));
+        entries.extend(binary_entry(name, bin));
     } else if let Some(bins) = meta["bin"].as_object() {
         for (name, file) in bins {
-            entries.push((
-                name.clone(),
-                file.as_str().ok_or("Package bin must be a string")?.into(),
-            ));
+            entries.extend(file.as_str().and_then(|file| binary_entry(name, file)));
         }
     } else if let Some(dir) = meta["directories"]["bin"].as_str() {
         let dir = std::path::PathBuf::from(dir);
         for entry in fs::read_dir(base.join(&dir)).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             if entry.file_type().map_err(|e| e.to_string())?.is_file() {
-                entries.push((
-                    entry.file_name().to_string_lossy().into_owned(),
-                    dir.join(entry.file_name()),
-                ));
+                entries.extend(binary_entry(&entry.file_name().to_string_lossy(), &dir.join(entry.file_name()).to_string_lossy()));
             }
         }
-    }
-    if entries.iter().any(|(_, file)| {
-        file.is_absolute()
-            || file
-                .components()
-                .any(|p| !matches!(p, std::path::Component::Normal(_) | std::path::Component::CurDir))
-    }) {
-        return Err("Invalid package bin path".into());
-    }
-    if entries
-        .iter()
-        .any(|(name, _)| name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\'))
-    {
-        return Err("Invalid package binary name".into());
     }
     Ok(entries)
 }
