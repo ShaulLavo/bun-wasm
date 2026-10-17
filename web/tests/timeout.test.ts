@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const script = new URL("../../scripts/run-with-timeout.mts", import.meta.url).pathname;
 for (const code of [0, 23]) {
@@ -7,6 +10,18 @@ for (const code of [0, 23]) {
     const result = spawnSync("node", [script, "5", "node", "-e", `process.exit(${code})`], { encoding: "utf8", timeout: 10000 });
     expect(result.status).toBe(code);
     expect(result.stderr).toBe("");
+  });
+}
+for (const [error, code] of [["ENOENT", 127], ["EACCES", 126]] as const) {
+  test(`portable command deadline preserves spawn ${error}`, () => {
+    const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-timeout-"));
+    try {
+      const command = join(scratch, "command");
+      if (error === "EACCES") writeFileSync(command, "not executable", { mode: 0o644 });
+      const result = spawnSync("node", [script, "5", command], { encoding: "utf8", timeout: 10000 });
+      expect(result.status).toBe(code);
+      expect(result.stderr).toContain(error);
+    } finally { rmSync(scratch, { recursive: true, force: true }); }
   });
 }
 for (const [signal, code] of [["SIGTERM", 143], ["SIGKILL", 137]] as const) {

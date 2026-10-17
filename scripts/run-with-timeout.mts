@@ -23,7 +23,7 @@ const handlers = ([ ["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129] ] as cons
 const timer = setTimeout(() => { timedOut = true; stop(); }, timeout);
 try {
   const status = await new Promise<number>(resolve => {
-    child.once("error", error => { console.error(error.message); resolve(1); });
+    child.once("error", (error: NodeJS.ErrnoException) => { console.error(error.message); resolve(error.code === "ENOENT" ? 127 : 126); });
     child.once("exit", (code, signal) => resolve(code ?? (signal ? 128 + constants.signals[signal] : 1)));
   });
   process.exitCode = timedOut ? 124 : interrupted ?? status;
