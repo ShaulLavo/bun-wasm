@@ -79,27 +79,34 @@ promises, explicit exits and empty-loop completion on all built engines.
 `bun test scripts/app-matrix/exit-provenance.test.ts` checks the retained
 framework error forms and host/guest provenance separation.
 
-## Final 90-second replay
+## Current integration replay
 
-Source `e4b4ea0fcd5e608fbf9eb98ad56fc9a31d56100c`, based on main `6e93c80c`.
-The six selected projects record 35 passing stages and 16 failures. All 2,709
-registry requests replay from the frozen mirror, with zero misses or errors.
-The runner reports cleanup complete. Raw reports and the exact scripts are in
-`/work/reports/bun-wasm-silent-exits-2026-10-17/`.
+Source `0c154d046f7160e73a1919b9039a1258ff5c9a0d` includes main through
+`390bda6d` and the process, pipe and signal changes from the runtime track.
+The six selected projects record 32 passing stages and 19 failures at a
+90-second bound. All 2,709 registry requests replay from the frozen mirror,
+with zero misses or errors. Raw reports and exact commands are retained in
+`/work/reports/bun-wasm-silent-exits-2026-10-17/landing-matrix/` and
+`landing-gates.sh` in the same report directory.
 
 | Check | QuickJS | JSC | Browser engine |
 | --- | --- | --- | --- |
-| Runtime fixtures | 205/205 | 205/205 | 205/205 |
+| Runtime fixtures | 206/206 | 206/206 | 206/206 |
 | Vanilla install, dev/reload, build | 3/3 | 3/3 | 3/3 |
-| Vue install, dev/reload, build | 3/3 | 3/3 | 3/3 |
+| Vue install, dev/reload, build | 2/3 | 1/3 | 3/3 |
 | React install, dev/reload, build | 2/3 | 1/3 | 3/3 |
-| SvelteKit dev render | Pass | Native module-loader fault | Exit 1 |
-| SvelteKit build output | Missing | Deadline | Pass |
+| SvelteKit dev render | Pass | Deadline | SSR transport disconnect, then deadline |
+| SvelteKit build output | Deadline | Deadline | Pass |
 
-The full web gate passes. Built-site HMR passes all six Chromium/WebKit engine
-runs. All 36 exit and parser checks pass. Generated watcher and scheduler code
-match the current TypeScript sources in every engine build. The retained wasm hashes match
-the matrix provenance.
+The full web gate passes. A fresh site build passes all six Chromium/WebKit HMR
+runs. All 36 exit/parser checks pass. Generated watcher and scheduler code match
+the current TypeScript sources in every engine build. Retained native wasm
+hashes match `provenance.artifacts` in the current matrix.
+
+The native replay also records older on-disk site hashes in `playground_builds`;
+those files are not used by native rows. `site-build-hashes.json` in the report
+checks the decompressed payloads from the final fresh site build. All three
+engines match the current native artifacts in both sandbox and playground.
 
 The selected upstream test files are `js/first_party/ws/ws-upgrade-events.test.ts`,
 `js/node/process/process-on.test.ts` and `js/node/process/process-nexttick.test.js`.
@@ -118,34 +125,51 @@ from 0/3 to 3/3 fully passing files on every engine. They run as scripts and do
 not add invented test counts. The baseline artifacts match the original replay
 hashes. The temporary baseline worktree is removed after measurement.
 
-### Remaining blockers
+### Remaining blockers on the current integration
 
-- React dev on QuickJS and JSC reaches a live server, then times out waiting for
-  `@id//node_modules/.vite/deps/react.js` and `react-dom_client.js`. Both requests
-  remain pending with no browser console or HTTP error at the 90-second bound.
-  The host is then killed by the harness. A five-minute replay on the earlier
-  source completes QuickJS dev/reload/build, while JSC receives HTTP 504
-  `Outdated Optimize Dep` responses. A later 180-second replay on the scheduler
-  source again completes QuickJS and browser; JSC still gets those 504 responses.
-  The scheduler regressions prove fairness; they do not establish the cause of
-  React's default-budget timeout or a startup-speed improvement.
-- React build on JSC repeats the documented `JSLock::unlock` trap through
-  `JSObjectSetProperty` and `engine_jsc::from_val`. QuickJS and browser builds pass.
+- React and Vue dev on QuickJS and JSC reach a live server, then time out
+  waiting for optimized dependency requests under `@id//node_modules/.vite/deps/`.
+  React leaves `react.js` and `react-dom_client.js` pending; Vue leaves `vue.js`
+  pending. No browser console or HTTP error is recorded. The harness kills the
+  hosts at the deadline; no guest exit is observed.
+- React and Vue builds on JSC hit the deadline after 22 and 8 transformed
+  modules respectively. Neither records a guest exit or the native traps seen
+  in the earlier checkpoint. QuickJS and browser builds pass.
 - Astro exits 1 on every engine. QuickJS reports an unresolved circular
   `Fragment` binding in `astro/dist/runtime/server/index.js`. JSC and browser
   report missing `node:http2.Http2ServerResponse`.
-- SvelteKit QuickJS renders its dev page, but build exits 0 after 179 modules and
-  `rendering chunks`, with no `build/index.html`. The exit record has no
-  referenced timers, message ports or I/O waiters. The final JSC dev run faults in
-  `JSRopeString::resolveToBufferSlow<char16_t>` through `resolveModule` with an
-  out-of-bounds Wasm access; earlier runs reached the deadline. JSC build still
-  reaches its deadline after SSR bundle rendering. Browser dev repeatedly
-  restarts config, loses the SSR transport, then exits 1 on an unhandled esbuild
-  `Error during dependency optimization: The service was stopped`. Its exit
-  record still has 128 referenced timers and two I/O waiters. Browser build passes.
+- SvelteKit QuickJS renders its dev page, but build hits the deadline after
+  `179 modules transformed` and `rendering chunks`. JSC dev restarts after
+  `vite.config.js changed`, then reaches the deadline. JSC build reaches the
+  deadline with no output. Browser dev repeatedly restarts config and reports
+  `transport was disconnected, cannot call "fetchModule"` while evaluating
+  `@sveltejs/kit/src/runtime/server/index.js`. It remains alive until harness
+  cleanup. No guest exit is recorded in these four failing rows. Browser build
+  passes.
 - Vitest's default and thread pools both fail during module loading on every
   engine because `node:events` lacks `EventEmitterAsyncResource`. The failure
   precedes worker-pool execution.
+
+### Earlier checkpoint and longer runs
+
+The earlier scheduler checkpoint at `e4b4ea0f`, based on main `6e93c80c`, records
+35/51 passing stages and 205/205 runtime fixtures per engine. Its raw results
+remain in `scheduler-matrix/`. Vanilla and Vue pass all engine stages there.
+Those Vue passes do not describe the current integration.
+
+A five-minute replay on earlier source completes QuickJS React dev/reload/build,
+while JSC receives HTTP 504 `Outdated Optimize Dep` responses. A 180-second
+scheduler replay again completes QuickJS and browser, while JSC receives those
+504 responses. The scheduler regressions prove fairness. These measurements
+do not establish React startup speed or the cause of the current timeout.
+
+Historical JSC React builds fault in `JSLock::unlock` through
+`JSObjectSetProperty` and `engine_jsc::from_val`. A historical SvelteKit JSC dev
+run faults in `JSRopeString::resolveToBufferSlow<char16_t>` through
+`resolveModule`. Earlier QuickJS SvelteKit builds drain the loop with no output,
+and browser dev exits with an esbuild rejection after config restarts. Keep
+these distinct observations for investigation; the current replay reaches
+deadlines instead and does not prove those faults fixed.
 
 The `networkHandles` counter is the referenced waiter count supplied by the
 networking module. It also includes worker and subprocess I/O waiters registered
@@ -162,7 +186,7 @@ completes. These cases are separate from the framework timeout observations.
 The ready immediate batch is now bounded. Recursively queued immediates wait
 until the next batch, which gives due timers a turn. A shared TypeScript
 scheduler steps I/O between callback turns. The two regressions and adjacent
-timer/process fixtures pass on every engine, followed by all 205 runtime
-fixtures per engine and the complete web/HMR gates. No Rust runtime behavior or
-host ABI slot is added. The existing Rust comment is updated to describe the
-scheduler return contract.
+timer/process fixtures pass on every engine, followed by all 206 current runtime
+fixtures per engine and complete web/HMR gates. No Rust runtime behavior or host
+ABI slot is added. The existing Rust comment describes the scheduler return
+contract.
