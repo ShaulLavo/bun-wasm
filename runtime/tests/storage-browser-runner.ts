@@ -169,7 +169,10 @@ try {
       for (const backend of ["indexeddb", "opfs"] as const) for (const label of listed[backend]) {
         if (process.env.STORAGE_TEST_FILTER && !label.includes(process.env.STORAGE_TEST_FILTER)) continue;
         selected++;
-        const persistent = name === "webkit" && backend === "opfs" && process.env.STORAGE_WEBKIT_OPFS_PERSISTENT === "1";
+        // Mac Playwright WebKit 27.2 reports native OPFS UnknownError in ephemeral stores,
+        // even with COOP/COEP. A fresh persistent profile passed the same case; keep a
+        // separate disposable profile per OPFS case, not the owner's browser data.
+        const persistent = name === "webkit" && backend === "opfs";
         const contextMode = persistent ? " [fresh persistent profile]" : "";
         try {
           await inWorker<string>(browser, { kind: "run", backend, label }, persistent);

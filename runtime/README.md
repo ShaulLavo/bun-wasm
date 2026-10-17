@@ -284,6 +284,14 @@ runtime, checksums, rollback snapshots and garbage collection. Against it, the a
 1.96x slower on Chromium and 1.46x on Safari, with no measured regression on Firefox. Firefox's
 native file operations serialize even for the raw parallel writer.
 
+The standalone storage runner uses a new temporary persistent profile for each WebKit OPFS case.
+On the tested Mac Playwright WebKit 27.2 build, an ephemeral context throws a native OPFS
+`UnknownError`, with or without cross-origin isolation; the same empty/atomic-save case passes
+with a fresh persistent profile. IndexedDB controls still use fresh ephemeral contexts. These are
+task-owned profiles, never the owner's Safari data. Real Safari 26.4 supplies the Safari corpus and
+crash-recovery evidence above; the artifact preserves the failed ephemeral trials and successful
+persistent-profile probe separately.
+
 The adapter serializes, validates and checksums a growing full index forty times, rather than one
 minimal manifest. Timed storage batches account for about 5.79 s of Chromium's 7.51 s, with about
 1.72 s outside storage (including 0.063 s generating contents). Native metadata calls alone account
