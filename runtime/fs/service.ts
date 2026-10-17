@@ -401,6 +401,7 @@ export function installFilesystemWorker(
       if (errorReported) return;
       errorReported = true;
       try { scope.postMessage(failureDiagnostic(error)); }
+      catch { /* The worker error below also covers a failed diagnostic transfer. */ }
       finally {
         // A rejected async message handler alone does not dispatch a worker error event.
         setTimeout(() => { throw error; }, 0);
