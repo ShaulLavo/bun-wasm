@@ -4,6 +4,11 @@ import { markAsUntransferable } from "node:worker_threads";
 type Sender = (value: unknown, transfer: unknown) => void;
 type InvalidTransfer = { make(): unknown[]; name: string; message: string };
 
+function memory() {
+  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 5, 3, 1, 0, 1, 7, 10, 1, 6, 109, 101, 109, 111, 114, 121, 2, 0]));
+  return new WebAssembly.Instance(module).exports.memory;
+}
+
 export function checkTransferValidation(send: Sender) {
   const cloneError = "The object can not be cloned.";
   const cases: InvalidTransfer[] = [];
@@ -11,7 +16,7 @@ export function checkTransferValidation(send: Sender) {
     cases.push({ make: () => [entry], name: "TypeError", message: "Type error" });
     cases.push({ make: () => [{}, entry], name: "TypeError", message: "Type error" });
   }
-  for (const make of [() => ({}), () => () => {}, () => new Uint8Array(1), () => new Blob(["x"]), () => Object.create(ArrayBuffer.prototype), () => new WebAssembly.Memory({ initial: 1 })]) {
+  for (const make of [() => ({}), () => () => {}, () => new Uint8Array(1), () => new Blob(["x"]), () => Object.create(ArrayBuffer.prototype), () => memory()]) {
     cases.push({ make: () => [make()], name: "DataCloneError", message: cloneError });
   }
   cases.push({
@@ -27,7 +32,7 @@ export function checkTransferValidation(send: Sender) {
     make() { const buffer = new ArrayBuffer(1); markAsUntransferable(buffer); return [buffer]; },
     name: "DataCloneError", message: "Cannot transfer object marked as untransferable",
   }, {
-    make: () => [new WebAssembly.Memory({ initial: 1 }).buffer],
+    make: () => [memory().buffer],
     name: "TypeError", message: "Cannot transfer a WebAssembly.Memory",
   });
   const channel = new MessageChannel();
