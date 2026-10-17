@@ -6,6 +6,8 @@ declare namespace BunWasm {
     globMatch(pattern: string, path: string): boolean;
     globScan(pattern: string, cwd: string, dot: boolean, absolute: boolean, followSymlinks: boolean,
       throwErrorOnBrokenSymlink: boolean, onlyFiles: boolean, followMatchedSymlinks?: boolean): string[];
+    getAsyncContext(): unknown;
+    runMicrotasks(): void;
   }
 
   type GlobScanOptions = Parameters<Native["globScan"]> extends [pattern: string, ...options: infer Options] ? Options : never;
@@ -13,6 +15,7 @@ declare namespace BunWasm {
   interface Internal {
     readonly native: Native;
     require(name: "path"): { resolve(...paths: string[]): string };
+    runInContext(context: unknown, callback: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]): unknown;
   }
   type EventListener = (...args: unknown[]) => void;
   interface NodeEmitter {

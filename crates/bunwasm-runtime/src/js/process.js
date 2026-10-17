@@ -45,7 +45,7 @@
   });
 
   function hrtime(previous) {
-    const ns = native.nanoseconds();
+    const ns = internal.fakeTimers?.elapsedNanoseconds ?? native.nanoseconds();
     let sec = Math.floor(ns / 1e9);
     let nsec = Math.floor(ns % 1e9);
     if (previous) {
@@ -58,7 +58,7 @@
     }
     return [sec, nsec];
   }
-  hrtime.bigint = () => BigInt(Math.floor(native.nanoseconds()));
+  hrtime.bigint = () => BigInt(Math.floor(internal.fakeTimers?.elapsedNanoseconds ?? native.nanoseconds()));
 
   function memoryUsage() {
     return native.memoryUsage();

@@ -309,6 +309,11 @@
 
   function setTimeout(callback, delay, ...args) {
     checkCallback(callback);
+    if (internal.fakeTimers?.active) return internal.fakeTimers.schedule(callback, delay, args, "timeout");
+    return realSetTimeout(callback, delay, ...args);
+  }
+
+  function realSetTimeout(callback, delay, ...args) {
     const timer = new Timeout(callback, normalizeDelay(delay), args, false);
     timersById.set(timer._id, timer);
     return timer;
@@ -316,6 +321,7 @@
 
   function setInterval(callback, delay, ...args) {
     checkCallback(callback);
+    if (internal.fakeTimers?.active) return internal.fakeTimers.schedule(callback, delay, args, "interval");
     const timer = new Timeout(callback, normalizeDelay(delay), args, true);
     timersById.set(timer._id, timer);
     return timer;
@@ -328,6 +334,7 @@
   }
 
   function clearTimeout(handle) {
+    if (internal.fakeTimers?.clear(handle)) return;
     const timer = lookupTimer(handle);
     if (!timer) return;
     cancelTimer(timer);
@@ -357,6 +364,7 @@
 
   function setImmediate(callback, ...args) {
     checkCallback(callback);
+    if (internal.fakeTimers?.active) return internal.fakeTimers.schedule(callback, 0, args, "immediate");
     const immediate = new Immediate(callback, args);
     immediates.push(immediate);
     if (native.wake) native.wake(0);
@@ -364,6 +372,7 @@
   }
 
   function clearImmediate(immediate) {
+    if (internal.fakeTimers?.clear(immediate)) return;
     if (immediate instanceof Immediate) immediate._active = false;
   }
 
@@ -452,6 +461,7 @@
   defineGlobal("setImmediate", setImmediate);
   defineGlobal("clearImmediate", clearImmediate);
   defineGlobal("queueMicrotask", queueMicrotask);
+  internal.realTimers = { setTimeout: realSetTimeout, clearTimeout };
   internal.timers = { setTimeout, setInterval, clearTimeout, clearInterval: clearTimeout, setImmediate, clearImmediate, Timeout, Immediate };
 
   // Short description of a value for ERR_INVALID_ARG_TYPE messages.
@@ -834,6 +844,7 @@
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
   internal.require("function");
+  internal.fakeTimers = internal.require("fake_timers");
   if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
 
   return internal;

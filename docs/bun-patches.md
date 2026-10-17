@@ -14,6 +14,7 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
@@ -178,6 +179,29 @@ reaping and physical termination; an ordinary guest exit acknowledgement also pr
 Children use independent process revocation identities while
 sharing the filesystem service's root revocation word. New browser fixtures and timing
 harnesses are original test programs, not copies of the spike implementations.
+
+## Test fake clock
+
+Class **Host feature**, **original adapter** in `crates/bunwasm-runtime/src/js/fake_timers.ts`,
+with routing in `bootstrap.js`, `bun_test.js`, `process.js` and `web.js`.
+No upstream implementation is copied. The reference contracts are Bun's
+`src/runtime/test_runner/timers/FakeTimers.rs` and
+`src/jsc/bindings/JSMockFunction.cpp` at `cd95fa7a13b3f13be73e512b38ec111c1c228084`.
+
+Bun's implementation calls its JSC global object, native timer heap and virtual machine.
+Those cannot run through the portable builtin loader. The adapter keeps fake timer handles
+in a separate queue, advances a nanosecond clock, and exposes the controls through `jest`
+and `vi`. Global timers and `node:timers` share scheduling and cancellation. Runner deadlines
+and timers created before fake-clock activation keep using the real clock.
+
+A stable Date constructor wrapper preserves references saved before activation, explicit
+constructor arguments, subclasses and Date instances. Its current time also supplies native
+Intl formatters when callers omit the date. `setSystemTime` rebases wall time without changing
+timer deadlines. Performance and process high-resolution time use the fake monotonic clock.
+`runOnlyPendingTimers` uses Bun's latest pending deadline as its horizon. Timer callbacks
+request the existing engine microtask checkpoint; the browser host retains its native
+checkpoint behavior. The portable scheduler bounds a single drain at 100,000 callbacks to
+reject an endless interval or recursive timer.
 
 ## Filesystem quiescence
 
