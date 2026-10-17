@@ -438,6 +438,49 @@ function focusedCases(): OpfsCase[] {
       },
     },
     {
+      label: "selective fsync preserves its file and namespace when an unrelated unsynced payload is lost",
+      async run(name, open) {
+        let observe = false;
+        const flushed: string[] = [];
+        const aName = `p-${encodedTestName("file:2")}`, bName = `p-${encodedTestName("file:3")}`;
+        await withSyncHandles(async counts => {
+          const storage = await open();
+          try {
+            // Keep a valid older namespace so recovery cannot pass by substituting that tree.
+            await storage.persist(batch(1)); await storage.flush();
+            await storage.persist({ ...manyFiles(2), generation: 2 });
+            observe = true;
+            await storage.flush(["file:2"]);
+          } finally { await storage.close(); observe = false; }
+          assert(flushed.includes(aName), "selective fsync flushes the requested real payload handle");
+          assert(!flushed.includes(bName), "selective fsync and close must not flush an unrelated dirty payload");
+          const snapshotFlush = flushed.findIndex(fileName => fileName.startsWith("snapshot-2-"));
+          assert(snapshotFlush > flushed.indexOf(aName), "selective fsync flushes the naming snapshot after the selected payload");
+          assert(counts.active === 0, "close releases both selected and unselected real handles");
+          // Explicit power-loss model: an unflushed payload may disappear independently.
+          const data = await (await workspaceDirectory(name)).getDirectoryHandle("data");
+          await data.removeEntry(bName);
+          const recovered = await open();
+          try {
+            const index = await recovered.load();
+            assert(index?.generation === 2, "loss of an unrelated unsynced payload must not erase or substitute the naming snapshot");
+            assert(index.nodes.some(node => node.data === "file:3"), "the current namespace retains the missing unrelated file rather than hiding it");
+            const a = await recovered.read("file:2");
+            assert(a.length === 1 && a[0] === 0, "fsynced payload bytes survive the modeled loss");
+            await rejectsCode(recovered.read("file:3"), "ENOENT");
+            await recovered.flush(["file:2"]);
+          } finally { await recovered.close(); }
+          assert(counts.active === 0, "selective recovery releases every real sync handle");
+        }, undefined, (file, access) => new Proxy(access, {
+          get(target, key) {
+            if (key === "flush") return () => { if (observe) flushed.push(file.name); target.flush(); };
+            const value = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        }));
+      },
+    },
+    {
       label: "all corrupt OPFS snapshots reject instead of resetting existing storage",
       async run(name, open) {
         const storage = await open();
