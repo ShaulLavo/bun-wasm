@@ -9,9 +9,6 @@ declare namespace BunWasm {
     getAsyncContext(): unknown;
     runMicrotasks(): void;
     exit(code?: number): never;
-    getAsyncContext(): unknown;
-    runMicrotasks(): void;
-    exit(code?: number): never;
   }
 
   type GlobScanOptions = Parameters<Native["globScan"]> extends [pattern: string, ...options: infer Options] ? Options : never;
