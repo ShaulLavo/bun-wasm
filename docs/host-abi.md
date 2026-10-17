@@ -264,8 +264,15 @@ The browser registers `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and
 `/usr/local/bin/node` with the page/root command's selected engine and compiled module.
 `bun-quickjs`, `bun-jsc` and `bun-browser` select an engine explicitly. Generic aliases keep
 using the page/root engine even when an explicitly selected child uses another engine.
-A browser start failure appears through `child_wait`: 127 for an
-unregistered executable, 126 for a registered executable that cannot start.
+An unregistered Bun or Node executable makes `spawn` return -1. The host error
+contains `code: "ENOENT"`, `errno: -2` and the executable in `path`. The page sends
+its registered names to each Bun worker so this rejection is synchronous, including
+for `Bun.spawnSync`. Bun's APIs throw this error. Node's `spawn` emits `error`
+followed by `close` without `spawn` or `exit`; `spawnSync` returns it in `.error`.
+Node errors also contain `syscall` and `spawnargs`.
+A registered executable that cannot start still reports status 126 through
+`child_wait`. The generic `runtime_proc` adapter used by the shell retains its
+missing-program status 127.
 `env` replaces the child environment; the host sets `PWD` to `cwd` because the
 WASI guest changes directory there at startup. Each stdio mode is `pipe`,
 `inherit`, or `ignore`. Inheritance refers to the immediate parent's stream,

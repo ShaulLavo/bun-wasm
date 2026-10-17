@@ -206,7 +206,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     net: ring,
     moduleCache,
     slots: slotsMode(),
-    spawnBroker: true,
     pid: 1,
     jobId: 1,
     interrupt: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
@@ -243,6 +242,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     : { module: moduleFor(options.engine), adapter: "bun" as const, engine: options.engine };
   for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, rootExecutable);
   for (const engine of ["quickjs", "jsc", "browser"] as const) subprocess.register(`bun-${engine}`, { module: moduleFor(engine), adapter: "bun", engine });
+  request.spawnBroker = { executables: subprocess.executableNames() };
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
   let settle: (result: RunResult) => void = () => {};

@@ -106,6 +106,7 @@ export class SubprocessBroker {
     if (this.activation) throw new Error("Register executables before the first spawn");
     this.registrations.set(name, entry);
   }
+  executableNames(): string[] { return Array.from(this.registrations.keys()); }
 
   ready(): Promise<ProcessSupervisor> {
     return this.activation ??= (this.options.activate?.() ?? import("../../runtime/proc")).then(proc => {
@@ -329,7 +330,7 @@ export class SubprocessBroker {
       filesystem: this.filesystem.connect(spawn.filesystem), child: spawn.child,
       pid: spawn.pid, jobId: spawn.jobId, identity: spawn.child.identity, interrupt: spawn.child.interrupt,
       signalState: spawn.child.signalState, requestedSignal: spawn.child.requestedSignal, outcome: spawn.child.outcome,
-      trace: spawn.trace, slots: spawn.slots, spawnBroker: true, net: null, moduleCache: null,
+      trace: spawn.trace, slots: spawn.slots, spawnBroker: { executables: this.executableNames() }, net: null, moduleCache: null,
     };
     if (!preview1 && engine === "browser" && new URL(this.workerUrl).pathname.endsWith("/__bunwasm/worker.js")) request.moduleCache = `bunwasm-m-${crypto.randomUUID()}`;
     child.request = request;
@@ -400,7 +401,7 @@ export class SubprocessBroker {
       adapter: preview1 ? "preview1" : "bun", interruptible, args: context.request.argv,
       env: { ...context.request.env, PWD: context.request.cwd },
       filesystem: this.filesystem.connect(filesystem), runtimeProcess: transport,
-      pid: context.pid, jobId: context.job, trace: false, spawnBroker: true, net: null, moduleCache: null,
+      pid: context.pid, jobId: context.job, trace: false, spawnBroker: { executables: this.executableNames() }, net: null, moduleCache: null,
     };
     if (!preview1 && request.engine === "browser" && new URL(this.workerUrl).pathname.endsWith("/__bunwasm/worker.js")) request.moduleCache = `bunwasm-m-${crypto.randomUUID()}`;
     let worker: Worker;
