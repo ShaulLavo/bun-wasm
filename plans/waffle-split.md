@@ -40,7 +40,7 @@ The root API is `createRuntime(options)`. A runtime exposes its borrowed filesys
 - Programs use the interruption admission rules: instrument source bytes, or require explicit trusted cooperative execution for a compiled module. No unrestricted compiled-module escape hatch.
 - Bun engine registrations are immutable and engine-qualified. Concurrent runs must not mutate a shared `bun` alias.
 - Closing one run or shell must not dispose the page runtime or kill unrelated jobs. Borrowed capabilities do not convey teardown ownership.
-- Disposal rejects new work, publishes outcomes/revocation, reaches filesystem quiescence, stops consumers/workers/relays, closes owned filesystem services last, then releases the guard. Logical exit and `Worker.terminate()` returning do not prove physical cleanup. Preserve the existing admission/quiescence fences; extraction does not claim the later 4c work is complete.
+- Disposal rejects new work, publishes outcomes/revocation, reaches filesystem quiescence, stops consumers/workers/relays, closes owned filesystem services last, then releases the guard. Logical exit and `Worker.terminate()` returning do not prove physical cleanup. If a quiescence fence rejects, disposal rejects without physically stopping unsafe consumers, closing their filesystem or releasing the ownership guard; destroying the page is the recovery boundary. Preserve the existing admission/quiescence fences; extraction does not claim the later 4c work is complete.
 
 ## Package and tooling
 
