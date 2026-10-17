@@ -106,8 +106,8 @@
       if (frame[0] === "disconnect") { beginClose(); return; }
       if (frame[0] !== "message") throw new Error("Invalid IPC message");
       const value = codec ? codec.decode(frame[1]) : frame[1];
-      if (receive) { receive(value); return; }
       const command = value && typeof value === "object" && "cmd" in value ? value.cmd : undefined;
+      if (receive && command !== "NODE_HANDLE") { receive(value); return; }
       const event = typeof command === "string" && command.startsWith("NODE_") ? "internalMessage" : "message";
       target.emit(event, value, undefined);
     }

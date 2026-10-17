@@ -187,7 +187,7 @@ test("inherited output published with exit is forwarded before wait succeeds", (
     const child = childTransport(transport);
     const stderr = transport.pipes[2];
     let injected = false;
-    SharedPipe.prototype.read = function(capacity) {
+    SharedPipe.prototype.read = function(this: SharedPipe, capacity?: number) {
       const value = read.call(this, capacity);
       if (this.buffer === stderr && value === -2 && !injected) {
         injected = true;
