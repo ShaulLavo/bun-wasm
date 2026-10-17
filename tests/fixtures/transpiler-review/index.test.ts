@@ -13,7 +13,8 @@ test("async transforms own the selected byte range", async () => {
   const other = new Bun.Transpiler().transform(view);
   new Uint8Array(view.buffer).fill(32);
   assert.equal(await other, "const y = 2;\n");
-  const detached = new TextEncoder().encode("const z=3");
+  const detached = new Uint8Array(new ArrayBuffer(9));
+  detached.set(new TextEncoder().encode("const z=3"));
   const last = new Bun.Transpiler().transform(detached);
   structuredClone(detached.buffer, { transfer: [detached.buffer] });
   assert.equal(detached.byteLength, 0);
