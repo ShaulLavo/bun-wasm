@@ -1683,7 +1683,9 @@ Ordinary frozen promises use the original operation after descriptor checks
 prove their constructor and species are safe. Non-configurable writable data
 constructors and existing configurable properties on non-extensible promises
 remain modifiable and supported. The public `then` method retains ordinary
-species behavior and async-context propagation.
+species behavior and async-context propagation. Native promise classification
+also uses a captured intrinsic has-instance operation, bypassing a replaced
+global Promise and patched public has-instance getters.
 
 Immutable throwing constructor accessors, immutable unsafe constructor/species
 combinations, and non-extensible promises with unsafe inherited constructors

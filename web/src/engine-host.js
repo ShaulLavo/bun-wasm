@@ -45,6 +45,7 @@ const NativeMessageChannel = globalThis.MessageChannel;
 const NativeAbortController = globalThis.AbortController;
 const NativePromise = globalThis.Promise;
 const nativePromiseThen = Function.prototype.call.bind(NativePromise.prototype.then);
+const nativePromiseHasInstance = Function.prototype.call.bind(Function.prototype[Symbol.hasInstance], NativePromise);
 const NativeString = globalThis.String;
 const PENDING = Object.freeze({ state: "pending", value: undefined });
 const nativeProcess = typeof process === "object" && process && process.versions && process.versions.node ? process : null;
@@ -459,7 +460,7 @@ class EngineHost {
       isProxy: () => false,
       transferArrayBuffers,
       getProxyTarget: () => undefined,
-      isPromise: (v) => v instanceof Promise,
+      isPromise: nativePromiseHasInstance,
       isError: (v) => (typeof Error.isError === "function" ? Error.isError(v) : v instanceof Error),
       iteratorEntries: () => undefined,
       ownKeysInOrder: () => undefined,

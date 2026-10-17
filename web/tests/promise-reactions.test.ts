@@ -95,3 +95,15 @@ test("constructor restoration also runs when native attachment rejects a receive
   assert.throws(() => observePromise(fake), TypeError);
   assert.equal(Object.hasOwn(fake, "constructor"), false);
 });
+
+test("immutable unsafe species and frozen inherited constructors report zero getter reads", () => {
+  let reads = 0;
+  const readOnly = Promise.resolve(1);
+  const constructor = Object.freeze({ get [Symbol.species]() { reads++; throw new Error("species"); } });
+  Object.defineProperty(readOnly, "constructor", { value: constructor });
+  assert.throws(() => observePromise(readOnly), /read-only constructor with unsafe species/);
+  const prototype = Object.freeze(Object.create(Promise.prototype, { constructor: { get() { reads++; throw new Error("inherited"); } } }));
+  const locked = Object.preventExtensions(Object.setPrototypeOf(Promise.resolve(1), prototype));
+  assert.throws(() => observePromise(locked), /non-extensible promise with unsafe constructor or species/);
+  assert.equal(reads, 0);
+});

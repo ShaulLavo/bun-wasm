@@ -109,3 +109,41 @@ test.skipIf(!process.versions.quickjs)("runtime matcher reactions preserve three
   await Promise.resolve();
   assert.deepEqual(order, [1, 2, 3, "matcher", 4]);
 });
+
+test.todoIf(browserHost)("non-extensible promises with frozen constructor prototypes (browser limitation)", async () => {
+  const reason = new Error("non-extensible prototype rejection");
+  const prototype = Object.freeze(Object.create(Promise.prototype, { constructor: { get() { throw new Error("locked inherited constructor"); } } }));
+  await expect(() => Object.preventExtensions(Object.setPrototypeOf(Promise.reject(reason), prototype))).toThrow(reason);
+});
+
+test("public then preserves custom species behavior", async () => {
+  class ResultPromise extends Promise<unknown> {}
+  let reads = 0;
+  const promise = Promise.resolve(1);
+  Object.defineProperty(promise, "constructor", { value: { get [Symbol.species]() { reads++; return ResultPromise; } } });
+  const result = promise.then(value => value + 1);
+  assert.equal(result instanceof ResultPromise, true);
+  assert.equal(reads, 1);
+  assert.equal(await result, 2);
+  assert.equal(reads, 1);
+});
+
+test("matcher promise classification uses startup intrinsics", async () => {
+  const NativePromise = Promise;
+  const key = Symbol.hasInstance;
+  const descriptor = Object.getOwnPropertyDescriptor(NativePromise, key);
+  const reason = new Error("startup promise");
+  let reads = 0;
+  let result: unknown;
+  try {
+    Object.defineProperty(globalThis, "Promise", { value: class Replacement {}, configurable: true, writable: true });
+    Object.defineProperty(NativePromise, key, { configurable: true, get() { reads++; throw new Error("public hasInstance"); } });
+    result = expect(() => NativePromise.reject(reason)).toThrow(reason);
+  } finally {
+    globalThis.Promise = NativePromise;
+    if (descriptor) Object.defineProperty(NativePromise, key, descriptor);
+    else Reflect.deleteProperty(NativePromise, key);
+  }
+  await result;
+  assert.equal(reads, 0);
+});
