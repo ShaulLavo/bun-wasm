@@ -1,5 +1,5 @@
 import { MemoryBackend, type FilesystemBackend } from "./backend";
-import { CAPABILITY_HEADER, CAPABILITY_SLOTS, CAPABILITY_WORDS, HEADER, TRANSIENT_HANDLES, State, FilesystemError, errno, isRevoked, pack, revokeFilesystem, waitForFilesystemQuiescence, unpack, wake, type FilesystemConnection, type RequestMessage } from "./protocol";
+import { CAPABILITY_HEADER, CAPABILITY_SLOTS, CAPABILITY_WORDS, HEADER, TRANSIENT_HANDLES, State, FilesystemError, errno, isRevoked, pack, revokeFilesystem, revokeFilesystemService, waitForFilesystemQuiescence, unpack, wake, type FilesystemConnection, type RequestMessage } from "./protocol";
 
 const mutations = new Set(["preopen", "release", "write", "append", "resize", "setMtime", "create", "link", "removePath", "rename", "writeFile", "mkdirp", "remove", "move"]);
 interface Session {
@@ -25,8 +25,15 @@ export class FilesystemService {
   private sessions = new Set<Session>();
   private queue = Promise.resolve();
   private sweeping = false;
+  private closing?: Promise<void>;
+  private active = new Set<Promise<void>>();
   constructor(private backend: FilesystemBackend) {}
   connect(connection: FilesystemConnection): void {
+    if (this.closing) {
+      revokeFilesystem(connection);
+      connection.port.close();
+      throw new FilesystemError(11);
+    }
     if (this.backend instanceof MemoryBackend) {
       this.backend.attachShared(connection.shared, connection.maxBytes, connection.segments);
       this.backend.shared.onContention = () => this.sweep();
@@ -91,8 +98,12 @@ export class FilesystemService {
     this.queue = this.queue.then(() => {
       const request = this.request(session, id, buffer, prepared);
       if (!barrier) return request;
-      void request;
+      this.track(request);
     });
+  }
+  private track(task: Promise<void>): void {
+    this.active.add(task);
+    void task.then(() => this.active.delete(task), () => this.active.delete(task));
   }
   private pin(session: Session, handle: number | undefined, preopen = false): void {
     if (handle === undefined) return;
@@ -257,10 +268,10 @@ export class FilesystemService {
           this.checkRequest(session, operation, args, continuation.handles);
           prepared = continuation;
           preparing = true;
-          void preparation.then(() => this.enqueue(session, id, buffer, continuation), error => {
+          this.track(preparation.then(() => this.enqueue(session, id, buffer, continuation), error => {
             continuation.failure = { error };
             this.enqueue(session, id, buffer, continuation);
-          });
+          }));
           return;
         }
       }
@@ -373,10 +384,36 @@ export class FilesystemService {
     };
   }
   dispose(): void { for (const session of this.sessions) this.close(session); }
+  /** Revoke first, drain admitted operations, then flush and release storage ownership. */
+  shutdown(): Promise<void> { return this.closing ??= this.finishShutdown(); }
+  private async finishShutdown(): Promise<void> {
+    const sessions = Array.from(this.sessions);
+    for (const session of sessions) revokeFilesystemService(session.connection);
+    await Promise.all(sessions.map(session => waitForFilesystemQuiescence(session.connection)));
+    this.sweep();
+    await this.queue;
+    while (this.active.size) {
+      await Promise.all(this.active);
+      await this.queue;
+    }
+    if (this.backend.close) await this.backend.close();
+    else await this.backend.flush?.();
+  }
+}
+
+function failureDiagnostic(error: unknown) {
+  let message = "Unknown filesystem worker error";
+  let stack: string | undefined;
+  try { message = String(error); } catch { /* Rejection reasons need not be printable. */ }
+  try {
+    const value = error && typeof error === "object" && "stack" in error ? error.stack : undefined;
+    if (typeof value === "string") stack = value;
+  } catch { /* A stack getter can throw too. */ }
+  return { type: "filesystem-error", message, stack };
 }
 /** Installs the service in a browser/Bun worker without importing any app code. */
 export function installFilesystemWorker(
-  scope: { onmessage: ((event: MessageEvent<any>) => void) | null; postMessage: (message: unknown) => void; },
+  scope: { onmessage: ((event: MessageEvent<any>) => void) | null; postMessage: (message: unknown) => void; close?: () => void; },
   backendFactory: (options: any) => FilesystemBackend | Promise<FilesystemBackend> = () => new MemoryBackend(),
 ): void {
   // Selection belongs to the controller, never to guest filesystem requests.
@@ -387,13 +424,15 @@ export function installFilesystemWorker(
     void service.then(owner => {
       if (data.connect) owner.connect(data.connect);
       else if (data.sweep) owner.sweep();
+      else if (data.shutdown) return owner.shutdown().then(() => { scope.postMessage({ type: "filesystem-closed" }); scope.close?.(); });
     }).catch(error => {
-      if (!errorReported) {
-        errorReported = true;
-        scope.postMessage({ type: "filesystem-error", message: String(error), stack: error instanceof Error ? error.stack : undefined });
+      if (errorReported) return;
+      errorReported = true;
+      try { scope.postMessage(failureDiagnostic(error)); }
+      finally {
+        // A rejected async message handler alone does not dispatch a worker error event.
+        setTimeout(() => { throw error; }, 0);
       }
-      // A rejected async message handler alone does not dispatch a worker error event.
-      setTimeout(() => { throw error; }, 0);
     });
   };
 }

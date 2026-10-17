@@ -8,7 +8,11 @@ const assets = process.argv[3];
 async function build(directory: string) {
   const root = resolve(import.meta.dir, "../..");
   for (const [entry, name] of [["web/tests/fixtures/filesystem-lifecycle.ts", "main"], ["web/src/fs-worker.ts", "fs-worker"]]) {
-    const result = await Bun.build({ entrypoints: [resolve(root, entry!)], outdir: directory, naming: `${name}.js`, target: "browser", format: "esm" });
+    const result = await Bun.build({ entrypoints: [resolve(root, entry!)], outdir: directory, naming: `${name}.js`, target: "browser", format: "esm",
+      plugins: [{ name: "source-runtime", setup(build) {
+        build.onResolve({ filter: /^@bun-wasm\/runtime\/fs$/ }, () => ({ path: resolve(root, "runtime/fs/index.ts") }));
+      } }],
+    });
     assert.equal(result.success, true, result.logs.map(String).join("\n"));
   }
   await Bun.write(resolve(directory, "index.html"), '<!doctype html><meta name="viewport" content="width=device-width"><body>Filesystem lifecycle check<script type="module" src="/main.js"></script>');
@@ -20,12 +24,13 @@ type Driver = {
   evaluate(script: string): Promise<any>;
   navigate(url: string): Promise<void>;
   reload(): Promise<void>;
-  back(): Promise<void>;
+  back(expected: string): Promise<void>;
   current(): Promise<string>;
   open(): Promise<string>;
   select(handle: string): Promise<void>;
   close(): Promise<void>;
   handles(): Promise<string[]>;
+  screenshot?(path: string): Promise<void>;
 };
 let stop: (() => Promise<void>) | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -87,12 +92,13 @@ async function safari(): Promise<Driver> {
     },
     async navigate(url) { await request(`${path}/url`, { url }); await barrier(url); },
     async reload() { await request(`${path}/refresh`, {}); await barrier(); },
-    async back() { await request(`${path}/back`, {}); await barrier(); },
+    async back(expected) { await request(`${path}/back`, {}); await barrier(expected); },
     current: () => request(`${path}/window`),
     async open() { return (await request(`${path}/window/new`, { type: "tab" })).handle; },
     async select(handle) { await request(`${path}/window`, { handle }); },
     async close() { await request(`${path}/window`, undefined, "DELETE"); },
     handles: () => request(`${path}/window/handles`),
+    async screenshot(file) { await Bun.write(file, Buffer.from(await request(`${path}/screenshot`), "base64")); },
   };
 }
 
@@ -152,7 +158,7 @@ try {
     assert.equal(reopened.ready, true, JSON.stringify(reopened));
     assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "fresh page edit");
     report.phase = `${storage} restore original cached document`;
-    await driver.back(); await driver.back();
+    await driver.back(new URL("away.html", base).href); await driver.back(url);
     reopened = await state();
     report.cases.push({ phase: report.phase, ...reopened });
     assert.equal(reopened.ready, true, JSON.stringify(reopened));
@@ -166,6 +172,7 @@ try {
     assert.equal(refused.ready, false);
     assert.match(refused.error, /Filesystem already has a writer/);
     report.cases.push({ phase: report.phase, ...refused });
+    if (process.env.SAFARI_SCREENSHOT) await driver.screenshot?.(`${process.env.SAFARI_SCREENSHOT}-${storage}.png`);
     await driver.select(owner);
     await driver.evaluate("await lifecycle.fs.writeFile('/saved','live owner edit');return true;");
     await driver.navigate(new URL("away.html", base).href);

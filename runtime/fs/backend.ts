@@ -16,6 +16,8 @@ export interface FilesystemBackend {
   prepare?(operation: string, args: any[], data: Uint8Array): void | Promise<void>;
   /** File identity/path limits explicit durability to that file; omitted flushes the workspace. */
   flush?(target?: FileHandle | string): Promise<void>;
+  /** Called only after service admission and all filesystem work have stopped. */
+  close?(): Promise<void>;
 }
 const namespaceOperations = new Set(["preopen", "create", "link", "removePath", "rename", "writeFile", "mkdirp", "remove", "move"]);
 export class MemoryBackend implements FilesystemBackend {

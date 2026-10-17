@@ -97,6 +97,16 @@ If the simulator is shut down, run `xcrun simctl boot "iPhone 17 Pro"` and `xcru
 Set `SAFARI_SEED_URL=https://bun.sprockt.dev/playground/` to import a workspace created by the live build before testing the candidate.
 The test uses a task-owned Safari automation session and driver. It preserves normal browser profiles.
 
+The filesystem lifecycle regression needs no guest WASM. On the PC, run
+`bun web/tests/browser-filesystem-lifecycle.ts --build <directory>` through the heavy wrapper.
+Copy that directory and `web/tests/browser-filesystem-lifecycle.ts` into a task directory under
+`~/tmp` on the Mac. Serve the assets on an unused localhost port with COOP `same-origin` and
+COEP `require-corp`, then run `bun browser-filesystem-lifecycle.ts safari <url>` under the Mac lock.
+Repeat with `SAFARI_IOS=1` for the booted iPhone 17 Pro simulator. `SAFARI_OUTPUT=<file>` records
+the lifecycle events, writer locks and assertions. Both backends must preserve completed writes
+through same-tab navigation, Reload and restoration of the original cached document. A second
+live tab must be refused. `scripts/test-web.sh` also runs this regression in Chromium and WebKit.
+
 ## Without a browser
 
 `bun scripts/run.ts <file.wasm> [args…]` runs a wasm binary under the same WASI shim and seeded

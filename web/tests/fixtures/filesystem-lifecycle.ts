@@ -13,4 +13,7 @@ addEventListener("pageshow", log);
 const fs = new SharedFilesystem({ storage, name: options.get("name") ?? "lifecycle" });
 const state = { fs, id, ready: false, error: "" };
 Object.assign(globalThis, { lifecycle: state });
-void fs.mkdirp("/").then(() => { state.ready = true; }, error => { state.error = String(error); });
+void fs.mkdirp("/").then(() => { state.ready = true; document.body.append(" Ready."); }, error => {
+  state.error = String(error);
+  document.body.append(Object.assign(document.createElement("pre"), { textContent: state.error }));
+});

@@ -61,3 +61,27 @@ test("shutdown drains a cold preparation before closing its backend", async () =
     expect(events).toEqual(["prepared", "closed"]);
   } finally { resume(); client.dispose(); service.dispose(); }
 });
+
+test("shutdown waits for a pending durability barrier before releasing storage", async () => {
+  let started!: () => void, resume!: () => void;
+  const flushing = new Promise<void>(resolve => { started = resolve; });
+  const durable = new Promise<void>(resolve => { resume = resolve; });
+  const events: string[] = [];
+  class Backend extends MemoryBackend {
+    async flush() { started(); await durable; events.push("durable"); }
+    async close() { events.push("unlock"); }
+  }
+  const service = new FilesystemService(new Backend());
+  const pair = createFilesystemConnection();
+  const client = new FilesystemClient(pair.client);
+  service.connect(pair.server);
+  const pending = client.asyncCall("flush").catch(() => undefined);
+  try {
+    await flushing;
+    const closing = service.shutdown();
+    await Promise.resolve();
+    expect(events).toEqual([]);
+    resume(); await closing; await pending;
+    expect(events).toEqual(["durable", "unlock"]);
+  } finally { resume(); client.dispose(); service.dispose(); }
+});
