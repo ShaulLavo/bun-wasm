@@ -287,11 +287,14 @@ mirror requirements and the retained official package recording.
 The fixed [25-file selection](bun-test-suite/installer-files.txt) covers every
 workspace, manifest-header, lock-migration, update and bunx cause assigned by PR #40.
 Each unchanged upstream file has a 15-second deadline and 2-second initial test
-timeout, one worker, with loopback-only networking. The before artifacts are main
-`390bda6d`; both sides use the same suite, launcher, runner, host sources,
-dependencies and deadlines. Only the wasm hash differs within each engine pair. This measurement predates
-the rebase onto main `63aae226` and the later selected-workspace update fix; it
-does not measure those subsequent changes.
+timeout, one worker, with loopback-only networking. The paired artifacts are main
+`2759d45b` before and installer commit `9651da83` after, including the selected
+workspace update fix. Both sides use the same suite, launcher, host sources,
+dependencies and deadlines. Only the wasm hash differs within each engine pair.
+
+The branch later integrates main `205ad909`. Installer sources, CLI wiring,
+package-command dispatch and installer regression fixtures are unchanged by that
+integration. The tables describe the frozen pair, including its artifact sizes.
 
 | Engine | Observed passes before / after | Fully passing files before / after | Timeouts before / after |
 |---|---|---|---|
@@ -309,9 +312,9 @@ does not measure those subsequent changes.
 
 | Artifact | Before bytes | After bytes | Change |
 |---|---|---|---|
-| bun.wasm | 14959264 | 15060266 | +101002 |
-| bun-jsc.wasm | 51459316 | 51629740 | +170424 |
-| bun-browser.wasm | 14246896 | 14350056 | +103160 |
+| bun.wasm | 14968707 | 15070118 | +101411 |
+| bun-jsc.wasm | 51468834 | 51639677 | +170843 |
+| bun-browser.wasm | 14256281 | 14359153 | +102872 |
 
 These are observed counts. They include only tests that registered before a
 collection error or deadline. The browser counts have one additional timeout
@@ -321,10 +324,10 @@ Security scanners, interactive update tables, global links, additional lockfile
 protocols and exact upstream diagnostics remain outside this adapter.
 
 At the measured revision, the focused synthetic checks passed on each engine:
-20 existing installer cases, the update-pruning regression, and seven
-installer/command scenarios. Standard runtime fixtures passed 201/201 per
-engine. The full web script passed, including 817 unit tests and Chromium/WebKit
-checks; HMR passed all six engine/browser combinations. The separate `browser-installer-links.ts` scenario checks the
+20 existing installer cases, both update regressions, and seven installer/command
+scenarios. Standard runtime fixtures passed 207/207 per engine. The full web
+script passed, including 859 unit tests and Chromium/WebKit checks; HMR passed all
+six engine/browser combinations. The separate `browser-installer-links.ts` scenario checks the
 browser-page filesystem prerequisite instead of treating headless results as
 proof of page support.
 
