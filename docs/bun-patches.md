@@ -1769,7 +1769,8 @@ hostname match. The BoringSSL source remains unchanged.
 Class **Host feature**, original adapters. `crates/bunwasm-runtime/src/js/web_worker.ts`
 implements the global `Worker` constructor and the worker-global message API.
 Its Web boundary converts transfer sequences before validating transferable objects,
-duplicates, detached buffers, marked objects and WebAssembly memory. Rejections
+duplicates, detached buffers, marked objects and WebAssembly memory. Callable
+iterables and callable options bags participate in WebIDL object conversion. Rejections
 match host Bun 1.4.2 error classes and messages before serialization or detachment.
 The host engine exposes the existing memory-buffer classifier from the original
 TypeScript adapter in `web/src/buffer-transfer.ts` for this boundary check.

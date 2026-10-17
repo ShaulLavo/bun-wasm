@@ -12,7 +12,7 @@
   }
   function transferList(value: unknown): unknown[] {
     if (value == null) return [];
-    if (typeof value !== "object") throw new TypeError("Type error");
+    if (typeof value !== "object" && typeof value !== "function") throw new TypeError("Type error");
     const sequence = Symbol.iterator in value ? value : "transfer" in value ? value.transfer : [];
     if (sequence === null || (typeof sequence !== "object" && typeof sequence !== "function") || !(Symbol.iterator in sequence)) {
       throw new TypeError("Value is not a sequence");
