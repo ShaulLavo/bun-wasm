@@ -1705,7 +1705,8 @@ shell dispatches its `bunx` alias through the same `bun x` command path.
 
 Default bunx bin-map selection follows Bun's first-valid-entry behavior in
 `src/runtime/cli/bunx_command.rs`, `get_bin_name_from_subpath`, at the Bun pin.
-Explicit bin names require an exact match. The local adapter preserves published
+Explicit bin names require an exact match. The host-engine import-meta hook
+reads the resolved main path after script expansion, matching the embedded engines. The local adapter preserves published
 cache use under `--no-install`. Member updates invalidate only the member's
 selected lock entries, leaving unrelated root pins intact.
 
