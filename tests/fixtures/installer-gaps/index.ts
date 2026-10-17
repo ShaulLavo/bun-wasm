@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 
 const accept = "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*";
@@ -98,6 +98,8 @@ const cases: Record<string, () => Promise<void>> = {
     require("node:fs").writeFileSync(join(cwd, "package.json"), JSON.stringify(pkg));
     check((await run(cwd, "run", "dev", "tail")).trim() === "fixture-1.1.0 two words|tail", "package script binary");
     check((await run(cwd, "run", "fixture-cli", "direct")).trim() === "fixture-1.1.0 direct", "direct binary");
+    symlinkSync("../fixture-cli/cli.ts", join(cwd, "node_modules/.bin/constructor"));
+    check((await run(cwd, "run", "constructor", "proto")).trim() === "fixture-1.1.0 proto", "inherited script property masked a binary");
   },
   async update() {
     const cwd = project("update", { "package.json": { dependencies: { "fixture-cli": "1.0.0" } } });
