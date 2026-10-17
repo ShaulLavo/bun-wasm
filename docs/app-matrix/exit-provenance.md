@@ -78,3 +78,69 @@ scripts/app-matrix.sh --apps=vite-vanilla,vite-react,vite-vue,sveltekit,astro,vi
 promises, explicit exits and empty-loop completion on all built engines.
 `bun test scripts/app-matrix/exit-provenance.test.ts` checks the retained
 framework error forms and host/guest provenance separation.
+
+## Final 90-second replay
+
+Source `eb67aa0fe9b189ef8ee861e82aaaa5b88cc4c955`, based on main `6e93c80c`.
+The six selected projects record 35 passing stages and 16 failures. All 2,709
+registry requests replay from the frozen mirror, with zero misses or errors.
+The runner reports cleanup complete. Raw reports and the exact scripts are in
+`/work/reports/bun-wasm-silent-exits-2026-10-17/`.
+
+| Check | QuickJS | JSC | Browser engine |
+| --- | --- | --- | --- |
+| Runtime fixtures | 203/203 | 203/203 | 203/203 |
+| Vanilla install, dev/reload, build | 3/3 | 3/3 | 3/3 |
+| Vue install, dev/reload, build | 3/3 | 3/3 | 3/3 |
+| React install, dev/reload, build | 2/3 | 1/3 | 3/3 |
+| SvelteKit dev render | Pass | Deadline | Exit 1 |
+| SvelteKit build output | Missing | Deadline | Pass |
+
+The full web gate passes. Built-site HMR passes all six Chromium/WebKit engine
+runs. All 36 exit and parser checks pass. Generated watcher code matches the
+current TypeScript source in every engine build. The retained wasm hashes match
+the matrix provenance.
+
+The selected upstream test files are `js/first_party/ws/ws-upgrade-events.test.ts`,
+`js/node/process/process-on.test.ts` and `js/node/process/process-nexttick.test.js`.
+Each engine observes 27 tests, with no timeout. None of these three files is
+fully passing before or after.
+
+| Engine | Observed passes before | Observed passes after |
+| --- | ---: | ---: |
+| QuickJS | 10 | 13 |
+| JSC | 8 | 11 |
+| Browser | 10 | 13 |
+
+The unchanged Node watcher assertion scripts `test-fs-watch-abort-signal.js`,
+`test-fs-watch-recursive-update-file.js` and `test-fs-watch-ref-unref.js` change
+from 0/3 to 3/3 fully passing files on every engine. They run as scripts and do
+not add invented test counts. The baseline artifacts match the original replay
+hashes. The temporary baseline worktree is removed after measurement.
+
+### Remaining blockers
+
+- React dev on QuickJS and JSC reaches a live server, then times out waiting for
+  `@id//node_modules/.vite/deps/react.js` and `react-dom_client.js`. Both requests
+  remain pending with no browser console or HTTP error. The host is then killed
+  by the harness. This is a deadline, not a guest exit. A separate five-minute
+  probe is queued to distinguish slow optimization from unfinished work.
+- React build on JSC repeats the documented `JSLock::unlock` trap through
+  `JSObjectSetProperty` and `engine_jsc::from_val`. QuickJS and browser builds pass.
+- Astro exits 1 on every engine. QuickJS reports an unresolved circular
+  `Fragment` binding in `astro/dist/runtime/server/index.js`. JSC and browser
+  report missing `node:http2.Http2ServerResponse`.
+- SvelteKit QuickJS renders its dev page, but build exits 0 after 179 modules and
+  `rendering chunks`, with no `build/index.html`. The exit record has no
+  referenced timers, message ports or I/O waiters. JSC dev and build reach their
+  deadlines after config restarts and SSR bundle rendering. Browser dev repeatedly
+  restarts config, loses the SSR transport, then exits 1 on an unhandled esbuild
+  `Error during dependency optimization: The service was stopped`. Its exit
+  record still has 128 referenced timers and two I/O waiters. Browser build passes.
+- Vitest's default and thread pools both fail during module loading on every
+  engine because `node:events` lacks `EventEmitterAsyncResource`. The failure
+  precedes worker-pool execution.
+
+The `networkHandles` counter is the referenced waiter count supplied by the
+networking module. It also includes worker and subprocess I/O waiters registered
+through that module.

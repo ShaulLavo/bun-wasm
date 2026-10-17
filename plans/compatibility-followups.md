@@ -506,3 +506,51 @@ That dependency has landed in PR #36, and the branch reruns the memory
 and full web gates. Do not reduce the guest allocation, relax its timeout or
 remove assertions to call the gate passing. The owning lane removes retained
 evidence after reproduction, review and merge.
+
+## Framework follow-ups after exit provenance, 2026-10-17
+
+Status: Approved.
+
+The shared `ws` require-dispatch failure and Vite's stdin-triggered shutdown are
+fixed. Vanilla and Vue now install, render, reload source edits and build on
+QuickJS, JSC and browser. [The exit report](../docs/app-matrix/exit-provenance.md)
+records the rebuilt artifacts, 35/51 stage results, upstream measurements and
+all remaining failures. Preserve the passing controls when following up.
+
+Reproduce with a rebuilt private launcher through the heavy wrapper:
+
+```sh
+scripts/app-matrix.sh --apps=vite-react,sveltekit,astro,vitest \
+  --engines=quickjs,jsc,browser --hosts=native --timeout=90 \
+  --cache=/work/cache/bun-wasm-app-matrix \
+  --launcher="$CARGO_TARGET_DIR/release/bun-wasm" --output=<fresh-directory>
+```
+
+The report destination is `/work/reports/bun-wasm-silent-exits-2026-10-17/`.
+`verified-matrix/results.json` retains exit codes, signals, deadlines, guest exit
+records and browser request failures. Source is `eb67aa0f` on main `6e93c80c`;
+runtime #33 is not integrated in this measurement.
+
+- **React optimizer requests.** QuickJS and JSC dev stay alive but leave the
+  optimized `react.js` and `react-dom_client.js` requests pending until the
+  deadline. No browser error or HTTP failure is recorded. Inspect the optimizer
+  context and esbuild service replies; a deadlock or a performance cause is not
+  established by this bounded observation. A longer probe is queued separately.
+- **JSC React build.** `vite-react-jsc-build.log` repeats `JSLock::unlock` through
+  `JSObjectSetProperty` and `engine_jsc::from_val`. This reproduces the earlier
+  native bridge failure above. Keep the real package sources unchanged and
+  investigate native value lifetime, lock ownership and GC during conversion.
+- **SvelteKit completion.** QuickJS build exits 0 after `179 modules transformed`
+  and `rendering chunks`, with all recorded loop reference counts zero and no
+  output. JSC dev/build hit the deadline. Browser dev repeatedly restarts config
+  and loses its SSR `fetchModule` transport, then has an unhandled esbuild
+  `The service was stopped` rejection with live handles. Trace which file or
+  config dependency causes the restart and why in-flight optimizer work survives
+  service shutdown. A temporary watcher trace saw no direct notification for
+  `vite.config.js` itself. Do not assume these engine outcomes have one cause.
+- **Astro module loading.** The original QuickJS circular `Fragment` binding and
+  JSC/browser missing `Http2ServerResponse` export are reached again after fixing
+  builtin dispatch. Their plain-message errors are now retained by classification.
+- **Vitest events adapter.** Both configured pools stop at the missing
+  `EventEmitterAsyncResource` export on every engine, before a worker pool starts.
+  Implement its async-context behavior rather than inferring another worker gap.
