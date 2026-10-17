@@ -843,6 +843,7 @@
   }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
   if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
+  defineLazyGlobal("HTMLRewriter", () => internal.require("html_rewriter").HTMLRewriter);
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
   internal.require("function");
