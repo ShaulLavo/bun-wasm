@@ -10,6 +10,37 @@
   function messageEvent(type: string, data: unknown, ports: readonly MessagePort[] = []) {
     return Object.assign(new MessageEvent(type, { data }), { data, ports });
   }
+  function transferList(value: unknown): unknown[] {
+    if (value == null) return [];
+    if (typeof value !== "object") throw new TypeError("Type error");
+    const sequence = Symbol.iterator in value ? value : "transfer" in value ? value.transfer : [];
+    if (sequence === null || (typeof sequence !== "object" && typeof sequence !== "function") || !(Symbol.iterator in sequence) || typeof sequence[Symbol.iterator] !== "function") {
+      throw new TypeError("Value is not a sequence");
+    }
+    // WebIDL converts the whole sequence before structured-clone validation begins.
+    const items = Array.from(sequence as Iterable<unknown>, item => {
+      if (item === null || (typeof item !== "object" && typeof item !== "function")) throw new TypeError("Type error");
+      return item;
+    });
+    const seen = new Set<unknown>();
+    for (const item of items) {
+      validateTransfer(item, seen);
+      seen.add(item);
+    }
+    return items;
+  }
+  function validateTransfer(item: unknown, seen: ReadonlySet<unknown>) {
+    const cloneError = (message = "The object can not be cloned.") => new DOMException(message, "DataCloneError");
+    if (internal.isMarkedAsUntransferable?.(item)) throw cloneError("Cannot transfer object marked as untransferable");
+    if (item instanceof ArrayBuffer) {
+      if (seen.has(item)) throw cloneError("Transfer list contains duplicate ArrayBuffer");
+      try { new DataView(item); } catch { throw cloneError(); }
+      if (internal.isWasmMemoryBuffer?.(item)) throw new TypeError("Cannot transfer a WebAssembly.Memory");
+      return;
+    }
+    if (!internal.isMessagePort?.(item)) throw cloneError();
+    if (seen.has(item)) throw cloneError("Transfer list contains duplicate MessagePort");
+  }
   function filePath(value: string) {
     if (!value.startsWith("file:")) return value;
     try { return internal.require("node_url").fileURLToPath(new URL(value)); }
@@ -85,7 +116,7 @@
     postMessage(value: unknown, transfer?: unknown) {
       if (this.#phase !== "running") return;
       if (!arguments.length) throw new TypeError("postMessage requires a message");
-      this.#worker.postMessage(value, transfer);
+      this.#worker.postMessage(value, transferList(transfer));
     }
     terminate() {
       if (this.#phase !== "running") return;
@@ -156,7 +187,7 @@
     Object.assign(globalThis, {
       postMessage(value: unknown, transfer?: unknown) {
         if (!arguments.length) throw new TypeError("postMessage requires a message");
-        port.postMessage(value, transfer);
+        port.postMessage(value, transferList(transfer));
       },
       close() { setImmediate(() => process.exit(0)); },
       addEventListener, removeEventListener,
