@@ -1692,7 +1692,12 @@ resolution pins before resolving the workspace graph. `bun x` prefers a local bi
 installs into an atomically published cache directory. Concurrent cold installs
 have separate staging directories. Download cache writes also use unique temporary
 files and publish complete bytes through an atomic rename. Installed binaries use relative links so a
-published cache directory remains movable.
+published cache directory remains movable. Only ENOTSUP and EPERM from bin-link
+creation degrade to a warning; preparation failures and other errno values
+remain fatal. Required workspace links retain their original failure behavior.
+When a bin link is absent, the command adapters select the real installed entry
+through its package manifest, including scoped packages. These are original
+adapter changes, with no additional upstream source or patch.
 
 The TypeScript package-script dispatcher runs JavaScript and TypeScript binaries
 inside the selected engine. It handles quoted arguments and environment

@@ -97,7 +97,7 @@ pub fn workspaces(root: &Path, manifest: &Value, parser: &dyn Transpiler) -> Res
     Ok(members)
 }
 
-pub fn link(target: &Path, path: &Path) -> Result<()> {
+fn prepare_link(target: &Path, path: &Path) -> Result<Option<PathBuf>> {
     let parent = path.parent().ok_or("Invalid link path")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let target = if target.is_absolute() {
@@ -107,7 +107,7 @@ pub fn link(target: &Path, path: &Path) -> Result<()> {
     };
     if let Ok(meta) = fs::symlink_metadata(path) {
         if meta.is_symlink() && fs::read_link(path).ok().as_deref() == Some(target.as_path()) {
-            return Ok(());
+            return Ok(None);
         }
         if meta.is_dir() && !meta.is_symlink() {
             fs::remove_dir_all(path)
@@ -116,7 +116,60 @@ pub fn link(target: &Path, path: &Path) -> Result<()> {
         }
         .map_err(|e| e.to_string())?;
     }
-    super::super::natives::symlink(&target.to_string_lossy(), &path.to_string_lossy()).map_err(|e| e.to_string())
+    Ok(Some(target))
+}
+
+pub fn link(target: &Path, path: &Path) -> Result<()> {
+    let Some(target) = prepare_link(target, path)? else {
+        return Ok(());
+    };
+    super::super::natives::symlink(&target.to_string_lossy(), &path.to_string_lossy())
+        .map_err(|e| e.to_string())
+}
+
+pub enum BinLink {
+    Linked,
+    Unsupported,
+}
+
+fn bin_link_result(result: std::io::Result<()>) -> Result<BinLink> {
+    match result {
+        Ok(()) => Ok(BinLink::Linked),
+        Err(error) if matches!(error.raw_os_error(), Some(libc::ENOTSUP | libc::EPERM)) => {
+            Ok(BinLink::Unsupported)
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+pub fn bin_link(target: &Path, path: &Path) -> Result<BinLink> {
+    let Some(target) = prepare_link(target, path)? else {
+        return Ok(BinLink::Linked);
+    };
+    bin_link_result(super::super::natives::symlink(
+        &target.to_string_lossy(),
+        &path.to_string_lossy(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bin_link_errors() {
+        for code in [libc::ENOTSUP, libc::EPERM] {
+            assert!(matches!(
+                bin_link_result(Err(std::io::Error::from_raw_os_error(code))),
+                Ok(BinLink::Unsupported)
+            ));
+        }
+        for code in [libc::EACCES, libc::ENOENT, libc::EIO, libc::EEXIST] {
+            assert!(bin_link_result(Err(std::io::Error::from_raw_os_error(code))).is_err());
+        }
+        assert!(bin_link_result(Err(std::io::ErrorKind::PermissionDenied.into())).is_err());
+        assert!(matches!(bin_link_result(Ok(())), Ok(BinLink::Linked)));
+    }
 }
 
 pub fn lock_meta(meta: &Value) -> Value {
@@ -148,8 +201,14 @@ pub fn physical(path: &Path) -> Result<PathBuf> {
                 continue;
             };
             let rest = path.strip_prefix(&prefix).map_err(|e| e.to_string())?;
-            let target = prefix.parent().ok_or("Invalid link parent")?.join(target).join(rest);
-            redirected = Some(PathBuf::from(crate::resolve::normalize(&target.to_string_lossy())));
+            let target = prefix
+                .parent()
+                .ok_or("Invalid link parent")?
+                .join(target)
+                .join(rest);
+            redirected = Some(PathBuf::from(crate::resolve::normalize(
+                &target.to_string_lossy(),
+            )));
             break;
         }
         let Some(next) = redirected else {

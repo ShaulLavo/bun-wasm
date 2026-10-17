@@ -718,7 +718,9 @@ fn link_bins(resolver: &Resolver) -> Result<()> {
                 continue;
             }
             let relative = Path::new("..").join(package.chain.last().unwrap()).join(file);
-            local::link(&relative, &modules.join(".bin").join(name))?;
+            if let local::BinLink::Unsupported = local::bin_link(&relative, &modules.join(".bin").join(&name))? {
+                eprintln!("warn: {} ({name}): bin link skipped: this filesystem does not support symbolic links", package.name);
+            }
         }
     }
     if let Ok(entries) = fs::read_dir("node_modules/.bin") {
@@ -785,7 +787,9 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
         match args.next().as_deref() {
             Some("--bun" | "--silent" | "--") => continue,
             Some("--no-install") => no_install = true,
-            Some("-p" | "--package") => package = Some(args.next().ok_or("--package requires a name")?),
+            Some("-p" | "--package") => {
+                package = Some(args.next().ok_or("--package requires a name")?)
+            }
             Some(flag) if flag.starts_with('-') => {
                 return Err(format!("Unknown bun x option: {flag}"));
             }
@@ -801,11 +805,19 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
     } else {
         name.rsplit('/').next().unwrap()
     };
-    if package.is_none() && input == name {
+    if input == name {
         for ancestor in cwd.ancestors() {
             let bin = ancestor.join("node_modules/.bin").join(bin_name);
             if bin.is_file() {
                 return Ok((bin.to_string_lossy().into_owned(), args.collect()));
+            }
+            let base = ancestor.join("node_modules").join(&name);
+            if !base.join("package.json").is_file() {
+                continue;
+            }
+            let meta = io::read(&base.join("package.json"), "JSON", parser)?;
+            if let Some(file) = package_binary(&meta, &base, bin_name)? {
+                return Ok((file.to_string_lossy().into_owned(), args.collect()));
             }
         }
     }
@@ -813,7 +825,10 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
         return Err(format!("Executable not found: {bin_name}"));
     }
     let registry = registry(&Options::default(), parser)?;
-    let hash = format!("{:x}", Sha256::digest(format!("{registry}/{name}@{range}").as_bytes()));
+    let hash = format!(
+        "{:x}",
+        Sha256::digest(format!("{registry}/{name}@{range}").as_bytes())
+    );
     let cache = cwd.join(io::cache_dir()).join("bunx");
     let destination = cache.join(hash);
     if !destination.join("bun.lock").exists() {
@@ -825,7 +840,9 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
         let result = (|| {
             io::write(
                 &staging.join("package.json"),
-                json!({"dependencies": {name.clone(): range}}).to_string().as_bytes(),
+                json!({"dependencies": {name.clone(): range}})
+                    .to_string()
+                    .as_bytes(),
             )?;
             std::env::set_current_dir(&staging).map_err(|e| e.to_string())?;
             let installed = execute(
@@ -848,11 +865,17 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
     }
     let base = destination.join("node_modules").join(&name);
     let meta = io::read(&base.join("package.json"), "JSON", parser)?;
-    let bins = binary_entries(&meta, &base)?;
-    let file = bins
+    let file = package_binary(&meta, &base, bin_name)?
+        .ok_or_else(|| format!("Could not determine executable for package {name}"))?;
+    Ok((file.to_string_lossy().into_owned(), args.collect()))
+}
+
+fn package_binary(meta: &Value, base: &Path, bin_name: &str) -> Result<Option<std::path::PathBuf>> {
+    let bins = binary_entries(meta, base)?;
+    Ok(bins
         .iter()
         .find(|(bin, _)| bin == bin_name)
         .or_else(|| if bins.len() == 1 { bins.first() } else { None })
-        .ok_or_else(|| format!("Could not determine executable for package {name}"))?;
-    Ok((base.join(&file.1).to_string_lossy().into_owned(), args.collect()))
+        .map(|(_, file)| base.join(file))
+        .filter(|file| file.is_file()))
 }

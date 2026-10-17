@@ -344,15 +344,19 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
 
 ## Installer filesystem link prerequisite
 
-Status: Approved. Coordinate with the waffle extraction before landing the installer changes.
+Status: Approved. Runtime track bun-wasm-a8 owns this after the waffle extraction.
 
-Workspace installs and package command entries need symbolic links. The native
-installer and root-preopen Node-host fixtures pass, but the page filesystem only
-models files and directories (`runtime/fs/memory.ts`, `Node`). Its preview1
-adapter explicitly returns `ENOTSUP` from `path_symlink` and rejects readlink
-because the filesystem has no links (`runtime/core/wasi.ts:633`, `:619`). Enabling
-package binary creation before this prerequisite makes a browser-page install
-fail after extracting an otherwise valid package.
+Workspace installs and local package links need symbolic links. The page
+filesystem only models files and directories (`runtime/fs/memory.ts`, `Node`).
+Its preview1 adapter returns `ENOTSUP` from `path_symlink` and rejects readlink
+because the filesystem has no links. Native installer and root-preopen Node-host
+fixtures support them.
+
+Package bin links no longer block page installs. The installer warns per link
+when creation returns ENOTSUP or EPERM, continues installation and writes the
+lockfile. `bun run` and `bunx` read installed package manifests when their bin
+entry is absent. Other link errors stay fatal. This permits the native installer
+gains to land before the runtime track adds page filesystem links.
 
 Run the focused page scenario after building the web app and all wasm artifacts:
 
@@ -363,9 +367,9 @@ PLAYWRIGHT=/home/shaul/.local/share/mise/installs/npm-playwright/1.63.0/node_mod
 ```
 
 Use the heavy wrapper's browser class on this host. The scenario serves only a
-local fixture registry, installs a package successfully, adds a valid `bin` entry
-to its manifest, checks that entry from the guest, then reinstalls and requires
-success. Its session owns browser, listener and scratch cleanup.
+local fixture registry and installs a scoped package with two bin entries. It
+checks per-link warnings, a lockfile, `bun run`, package scripts, `bunx`, and a
+fatal non-link error on Chromium and WebKit with all three engines. Its session owns browser, listener and scratch cleanup.
 
 Implement relative symbolic links through the filesystem model, service protocol,
 shared metadata, persistence and preview1 operations. Preserve the raw link target

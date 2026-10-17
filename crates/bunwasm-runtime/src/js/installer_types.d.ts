@@ -2,6 +2,7 @@ declare namespace BunWasm {
   interface Native {
     exists(path: string): boolean;
     readFileUtf8(path: string): string;
+    readdir(path: string): [string, "dir" | "symlink" | "file" | "other"][];
     readlink(path: string): string;
     stat(path: string, lstat?: boolean): { mode: number };
     mainArg(): string;

@@ -61,14 +61,13 @@ the graph is limited to 10,000 packages and 128 nesting levels.
 
 ## Workspaces, commands and migration
 
-These additions are verified on the native hosts and Node's headless engine host
-with a root preopen. Browser-page delivery is blocked by the shared filesystem's
-missing symbolic-link support. Packages with `bin` entries now need that capability
-when installation creates their command links. Do not enable this change in the
-page until the [filesystem prerequisite](../plans/browser-runtime.md#installer-filesystem-link-prerequisite)
-is complete. Node's native WASI also rejects some relative links under non-root
-preopens; the bounded upstream comparison records that limit.
-
+Native hosts create workspace and package-bin links. The page filesystem does
+not yet support symbolic links, so workspace and local-link installs still need
+the [filesystem prerequisite](../plans/browser-runtime.md#installer-filesystem-link-prerequisite).
+For package bins, ENOTSUP or EPERM from link creation produces a warning naming
+the package and bin. Installation continues and writes its lockfile. Other
+errors remain fatal. Node's native WASI also rejects some relative links under
+non-root preopens; the bounded upstream comparison records that separate limit.
 
 The installer discovers `workspaces` arrays and object-form `packages` patterns.
 Members are linked into `node_modules`. Local `link:` and directory `file:`
@@ -76,14 +75,16 @@ dependencies resolve relative to the declaring manifest. Running `bun add` from
 a member updates its manifest and the root lockfile.
 
 Declared `bin` entries and `directories.bin` files get links under
-`node_modules/.bin`. `bun run dev` resolves a package script and executes its
+`node_modules/.bin`. When an entry is absent, `bun run <bin>` resolves installed
+package manifests, including scoped packages. `bun run dev` resolves a package script and executes its
 JavaScript or TypeScript binary in the selected engine. Quoted arguments,
 environment assignments and extra command arguments are supported. Shell
 pipelines, redirections and native commands remain unsupported.
 
 `bun update` refreshes selected dependencies within their declared ranges.
 `--latest` selects the latest tag. `bun x` and the `bunx` executable alias prefer an installed
-binary for an unversioned request, then use an isolated cache installation.
+binary for an unversioned request, reading the installed package manifest when
+its bin link is absent, then use an isolated cache installation.
 They leave the project's manifest and lockfile unchanged. Concurrent installs
 publish complete cache directories through an atomic rename.
 
@@ -331,9 +332,10 @@ six engine/browser combinations. The separate `browser-installer-links.ts` scena
 browser-page filesystem prerequisite instead of treating headless results as
 proof of page support.
 
-The focused Chromium page probe confirmed the prerequisite: installing a plain
-fixture package succeeds; adding a valid `bin` entry and reinstalling exits 1
-with `error: Not supported (os error 58)`. The guest reads back the edited manifest
-before the failing install, and every network request stays on the local fixture
-origins. This change is not ready for browser-page delivery until the shared
-filesystem supports those links.
+The original Chromium page probe reproduced a plain package install succeeding,
+then a valid bin entry causing `error: Not supported (os error 58)`. The page
+regression now installs a scoped package with two bin entries from fixture
+tarballs. It requires warnings for both skipped links, a written lockfile,
+execution through `bun run`, a package script and `bunx --no-install`, and a
+fatal result for a broken `.bin` directory. Chromium and WebKit run the same
+scenario on all three engines. No filesystem-link implementation is changed.

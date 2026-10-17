@@ -45,11 +45,50 @@
     return command;
   }
 
+  function binPath(base: string, file: unknown): string {
+    if (typeof file !== "string") throw new TypeError("Package bin must be a string");
+    if (file.startsWith("/") || file.split("/").includes("..")) throw new Error("Invalid package bin path");
+    return path.resolve(base, file);
+  }
+
+  function manifestBinary(base: string, name: string): string | undefined {
+    const manifest = path.resolve(base, "package.json");
+    if (!native.exists(manifest)) return;
+    const meta: unknown = JSON.parse(native.readFileUtf8(manifest));
+    if (!meta || typeof meta !== "object") return;
+    let file: string | undefined;
+    if ("bin" in meta && typeof meta.bin === "string") {
+      if ("name" in meta && typeof meta.name === "string" && meta.name.split("/").pop() === name) file = binPath(base, meta.bin);
+    } else if ("bin" in meta && meta.bin && typeof meta.bin === "object") {
+      if (Object.prototype.hasOwnProperty.call(meta.bin, name)) file = binPath(base, Reflect.get(meta.bin, name));
+    } else if ("directories" in meta && meta.directories && typeof meta.directories === "object" && "bin" in meta.directories) {
+      file = path.resolve(binPath(base, meta.directories.bin), name);
+    }
+    if (file && native.exists(file) && (native.stat(file).mode & 0o170000) === 0o100000) return file;
+  }
+
+  function packageDirectories(modules: string): string[] {
+    if (!native.exists(modules)) return [];
+    const packages: string[] = [];
+    for (const [name, kind] of native.readdir(modules)) {
+      if (name.startsWith(".") || (kind !== "dir" && kind !== "symlink")) continue;
+      const base = path.resolve(modules, name);
+      if (!name.startsWith("@")) { packages.push(base); continue; }
+      for (const [child] of native.readdir(base)) packages.push(path.resolve(base, child));
+    }
+    return packages.sort();
+  }
+
   function binary(cwd: string, name: string): string | undefined {
-    if (name.includes("/")) return;
+    if (!name || name === "." || name === ".." || /[/\\]/.test(name)) return;
     for (;;) {
-      const bin = path.resolve(cwd, "node_modules", ".bin", name);
+      const modules = path.resolve(cwd, "node_modules");
+      const bin = path.resolve(modules, ".bin", name);
       if (native.exists(bin)) return bin;
+      for (const base of packageDirectories(modules)) {
+        const file = manifestBinary(base, name);
+        if (file) return file;
+      }
       const parent = path.dirname(cwd);
       if (parent === cwd) return;
       cwd = parent;
