@@ -42,7 +42,9 @@ serve a response. A killed process can have a host signal without a guest exit
 record. Install and build commands keep their host exit information too.
 
 The classifier recognizes system error codes, Astro's message-only missing
-exports and Vite's timestamped SSR errors. If no application diagnostic exists,
+exports and Vite's timestamped SSR errors. Page failures also retain pending request URLs, failed requests, HTTP errors and
+browser console errors. Source revision is captured before execution, alongside
+the runner source hashes. If no application diagnostic exists,
 it uses the recorded guest exit reason.
 
 ## Reload assertion

@@ -214,7 +214,11 @@ function report(provenance) {
 }
 
 let infrastructureError;
+let revision;
 try {
+  const git = await capture(["git", "rev-parse", "HEAD"], root, join(options.output, "revision.log"));
+  if (git.code !== 0) throw new Error(`Cannot record source revision: ${git.output}`);
+  revision = git.output.trim();
   artifacts = Object.fromEntries(options.engines.map(engine => {
     const path = join(scratch, wasmName[engine]);
     copyFileSync(join(root, "dist", wasmName[engine]), path);
@@ -240,8 +244,7 @@ try {
   console.error(infrastructureError);
 } finally {
   try {
-    const revision = await capture(["git", "rev-parse", "HEAD"], root, join(options.output, "revision.log"));
-    report({ date: new Date().toISOString(), revision: revision.output.trim(), nativeBun: Bun.version, options,
+    report({ date: new Date().toISOString(), revision, nativeBun: Bun.version, options,
       fixtures_sha256: runnerSources["apps.mjs"],
       artifacts: Object.fromEntries(Object.entries(artifacts).map(([engine, artifact]) => [engine, artifact.sha256])),
       runner_sources: runnerSources,
