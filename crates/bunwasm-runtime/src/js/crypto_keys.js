@@ -440,7 +440,7 @@
     function generateKey(type, options, callback) {
       if (typeof callback !== "function")
         throw error("Callback must be a function");
-      setImmediate(() => {
+      internal.realTimers.setImmediate(() => {
         let key;
         try {
           key = generateKeySync(type, options);
@@ -513,7 +513,7 @@
       }
       if (typeof callback !== "function")
         throw error("Callback must be a function");
-      setImmediate(() => {
+      internal.realTimers.setImmediate(() => {
         let pair;
         try {
           pair = generateKeyPairSync(type, options);
@@ -601,7 +601,7 @@
     function sign(algorithm, data, key, callback) {
       if (typeof callback !== "function")
         return signVerify(false, algorithm, data, key);
-      setImmediate(() => {
+      internal.realTimers.setImmediate(() => {
         let value;
         try {
           value = signVerify(false, algorithm, data, key);
@@ -615,7 +615,7 @@
     function verify(algorithm, data, key, signature, callback) {
       if (typeof callback !== "function")
         return signVerify(true, algorithm, data, key, signature);
-      setImmediate(() => {
+      internal.realTimers.setImmediate(() => {
         let value;
         try {
           value = signVerify(true, algorithm, data, key, signature);
@@ -717,7 +717,7 @@
         const callback = args.pop();
         if (typeof callback !== "function")
           throw error("Callback must be a function");
-        setImmediate(() => {
+        internal.realTimers.setImmediate(() => {
           let value;
           try {
             value = fn(...args);

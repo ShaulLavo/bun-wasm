@@ -85,8 +85,12 @@
       const value = "now" in options ? options.now : undefined;
       if (value !== undefined) initial = timestamp(value, "'now'");
     }
-    if (clock) clock.timers.clear();
-    clock = { elapsed: 0, origin: Math.floor(initial), firing: 0, timers: new Map() };
+    if (clock) {
+      clock.elapsed = 0;
+      clock.origin = Math.floor(initial);
+    } else {
+      clock = { elapsed: 0, origin: Math.floor(initial), firing: 0, timers: new Map() };
+    }
     wallTime = Math.floor(initial);
     marker(true);
     return this;
@@ -119,7 +123,7 @@
     readonly args: unknown[];
     readonly delay: number;
     private refed = true;
-    private cancelled = false;
+    cancelled = false;
 
     constructor(
       owner: Clock,
@@ -180,20 +184,25 @@
   }
 
   function fire(current: Clock, timer: FakeTimeout) {
-    updateTime(current, Math.max(current.elapsed, timer.due));
+    const nextDue = timer.due;
+    updateTime(current, Math.max(current.elapsed, nextDue));
     current.timers.delete(timer.id);
-    if (timer.kind === "interval") {
-      timer.due = current.elapsed + Math.max(timer.delay, 1e6);
-      timer.order = sequence--;
-      current.timers.set(timer.id, timer);
-    }
     current.firing++;
     try {
       internal.runInContext(timer.context, timer.callback, timer, timer.args);
+      internal.runTicks();
+      // The runtime-owned nextTick queue is synchronous here. Native Promise jobs
+      // keep each engine's existing checkpoint behavior.
       internal.native.runMicrotasks();
+    } catch (error) {
+      if (!internal.handleUncaught(error)) internal.native.exit(1);
     } finally {
       current.firing--;
     }
+    if (timer.kind !== "interval" || clock !== current || current.timers.has(timer.id) || timer.cancelled) return;
+    timer.due = nextDue + timer.delay;
+    timer.order = sequence--;
+    current.timers.set(timer.id, timer);
   }
 
   function drain(current: Clock, until: number) {

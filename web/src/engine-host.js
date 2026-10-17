@@ -38,6 +38,7 @@ const NativeBlob = globalThis.Blob;
 const nativeCreateObjectURL = globalThis.URL && globalThis.URL.createObjectURL ? globalThis.URL.createObjectURL.bind(globalThis.URL) : null;
 const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
+const nativeDateNow = globalThis.Date.now.bind(globalThis.Date);
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
 const nativeGc = typeof globalThis.gc === "function" ? globalThis.gc.bind(globalThis) : null;
 const NativeMessageChannel = globalThis.MessageChannel;
@@ -425,7 +426,9 @@ class EngineHost {
         host.tickQueued = true;
         nativeQueueMicrotask(() => host.drainTicks());
       },
-      runMicrotasks() {},
+      runMicrotasks() {
+        host.drainTicks();
+      },
       // A timer or immediate was added, maybe while the loop waits on a
       // promise (top-level await) with nothing armed.
       wake(ms) {
@@ -848,7 +851,7 @@ class EngineHost {
     // wake would land just before the timer is due, and the sub-millisecond retry
     // that follows gets the browser's 4ms nested-timer clamp.
     ms = Math.ceil(ms);
-    const at = Date.now() + ms;
+    const at = nativeDateNow() + ms;
     if (this.timer !== null && this.timerAt <= at) return;
     if (this.timer !== null) nativeClearTimeout(this.timer);
     this.timerAt = at;

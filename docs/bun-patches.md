@@ -235,16 +235,18 @@ No upstream implementation is copied. The reference contracts are Bun's
 Bun's implementation calls its JSC global object, native timer heap and virtual machine.
 Those cannot run through the portable builtin loader. The adapter keeps fake timer handles
 in a separate queue, advances a nanosecond clock, and exposes the controls through `jest`
-and `vi`. Global timers and `node:timers` share scheduling and cancellation. Runner deadlines
-and timers created before fake-clock activation keep using the real clock.
+and `vi`. Global timers and `node:timers` share scheduling and cancellation. Runtime-owned callbacks use
+the real timer interface, so filesystem, worker, crypto, compression, readline, and subprocess
+work survives fake-clock restoration. Host wakeups use the captured native clock. Timers
+created before fake-clock activation keep their real ownership.
 
 A stable Date constructor wrapper preserves references saved before activation, explicit
 constructor arguments, subclasses and Date instances. Its current time also supplies native
 Intl formatters when callers omit the date. `setSystemTime` rebases wall time without changing
 timer deadlines. Performance and process high-resolution time use the fake monotonic clock.
 `runOnlyPendingTimers` uses Bun's latest pending deadline as its horizon. Timer callbacks
-request the existing engine microtask checkpoint; the browser host retains its native
-checkpoint behavior. The portable scheduler bounds a single drain at 100,000 callbacks to
+drain the runtime-owned `process.nextTick` queue synchronously. Browser native Promise jobs
+remain deferred until the synchronous host drain returns. The portable scheduler bounds a single drain at 100,000 callbacks to
 reject an endless interval or recursive timer.
 
 ## OPFS storage adapter
@@ -255,7 +257,6 @@ handle retry loop for `NotReadableError`/`InvalidStateError` and its `QuotaExcee
 `ENOSPC` mapping are adapted here. The layout, snapshot recovery, Web Lock lifetime, lazy payload
 reads, browser-specific create concurrency and 64-handle cache are original bun-wasm behavior;
 no SLICC code is copied verbatim.
->>>>>>> origin/main
 
 ## Filesystem quiescence
 

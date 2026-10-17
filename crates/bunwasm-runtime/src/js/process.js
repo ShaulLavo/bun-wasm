@@ -136,7 +136,7 @@
     function start() {
       if (started) return;
       started = true;
-      setImmediate(() => {
+      internal.realTimers.setImmediate(() => {
         const bytes = native.readStdin();
         if (bytes.length > 0) stream.emit("data", encoding ? native.utf8Decode(bytes) : internal.require("buffer").Buffer.from(bytes));
         stream.emit("end");
