@@ -1,6 +1,36 @@
 import { expect, test } from "bun:test";
 import { runtimeProcFixture } from "./runtime-proc-fixtures";
 
+test("failed spawn reports its exact negative return and request without changing stage48", () => {
+  let memory: WebAssembly.Memory, nextFd = 123;
+  const diagnostics: string[] = [];
+  let request = "";
+  class Exit extends Error { constructor(readonly code: number) { super(`exit ${code}`); } }
+  const unused = () => { throw new Error("rejected spawn continued guest execution"); };
+  const instance = new WebAssembly.Instance(new WebAssembly.Module(runtimeProcFixture()), {
+    runtime_proc: {
+      read: () => -6,
+      write(fd: number, ptr: number, length: number) {
+        expect(fd).toBe(2); diagnostics.push(new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, length))); return length;
+      },
+      pipe(ptr: number) { const view = new DataView(memory.buffer); view.setUint32(ptr, nextFd++, true); view.setUint32(ptr + 4, nextFd++, true); return 0; },
+      dup: (fd: number) => fd + 1000,
+      spawn(ptr: number, length: number) { request = new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, length)); return -28; },
+      wait: unused, job_of: unused, poll: unused,
+    },
+    wasi_snapshot_preview1: {
+      args_sizes_get(ptr: number) { new DataView(memory.buffer).setUint32(ptr, 2, true); return 0; },
+      fd_close: () => 0, proc_exit(code: number) { throw new Exit(code); },
+    },
+  });
+  memory = instance.exports.memory as WebAssembly.Memory;
+  try { (instance.exports._start as () => void)(); throw new Error("bad spawn was accepted"); }
+  catch (error) { expect(error).toBeInstanceOf(Exit); expect((error as Exit).code).toBe(48); }
+  expect(diagnostics).toEqual(["runtime-proc-spawn-return: -0000000028\nrequest: ", request]);
+  expect(JSON.parse(request).fds).toEqual([{ child: 0, parent: 123 }, { child: 1, parent: 126 },
+    { child: 10, parent: 126 }, { child: 2, parent: 2 }, { child: 11, parent: 1 }]);
+});
+
 test("artifact-free process guest has only generic ABI and preview1 imports", () => {
   const bytes = runtimeProcFixture();
   expect(WebAssembly.validate(bytes)).toBe(true);

@@ -83,13 +83,20 @@ export function runtimeProcFixture(): Uint8Array<ArrayBuffer> {
   const memory = new Uint8Array(2048), encoder = new TextEncoder();
   memory.set(encoder.encode(request), 1024);
   memory.set(encoder.encode("Rpingpongruntime-proc-ok\nchild-stdout\nchild-stderr\n"), 768);
+  const spawnError = "runtime-proc-spawn-return: -0000000000\nrequest: ";
+  memory.set(encoder.encode(spawnError), 840);
+  const errnoEnd = 840 + spawnError.indexOf("\n") - 1;
   const parent = check(call(2, c(128)), 0, 41).concat(load(128), set(0), load(132), set(1),
     check(call(2, c(136)), 0, 42), load(136), set(2), load(140), set(3),
     call(3, get(1)), set(4), check(get(4).concat(c(0), [0x48]), 0, 43),
     call(3, get(2)), set(5), check(get(5).concat(c(0), [0x48]), 0, 44),
     check(read(get(5), 1), -6, 45), close(get(1), 46), close(get(2), 47),
     jsonNumber(0, positions[0]!), jsonNumber(3, positions[1]!), jsonNumber(3, positions[2]!),
-    call(4, c(1024), c(encoder.encode(request).length)), set(6), check(get(6).concat(c(0), [0x48]), 0, 48),
+    call(4, c(1024), c(encoder.encode(request).length)), set(6),
+    // Failure-only diagnostics: preserve the original stage48 assertion and returned errno.
+    get(6), c(0), [0x48, 0x04, 0x40], c(0), get(6), [0x6b], set(6), jsonNumber(6, errnoEnd),
+    write(c(2), 840, encoder.encode(spawnError).length), [0x1a], write(c(2), 1024, encoder.encode(request).length), [0x1a],
+    c(0), get(6), [0x6b], set(6), [0x0b], check(get(6).concat(c(0), [0x48]), 0, 48),
     check(call(5, get(6), c(640)), -6, 49), close(get(0), 50), close(get(3), 51),
     poll(get(5), 0, 52), readExact(get(5), 1, 53), check(c(4096).concat([0x2d, 0, 0]), 82, 54),
     check(write(get(4), 769, 4), 4, 55), close(get(4), 56),
