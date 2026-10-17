@@ -130,9 +130,10 @@ def dependency_digest(deps):
 
 def provenance(opts, wasm):
     return {"schema": 1, "engine": opts.engine, "suite_commit": git(opts.suite, "rev-parse", "HEAD"),
-            "wasm_sha256": digest(wasm), "runner_sha256": digest(Path(__file__)),
+            "wasm_sha256": digest(wasm),
+            "tools_sha256": digest(wasm.with_name("bun-tools.wasm")) if wasm.with_name("bun-tools.wasm").is_file() else None, "runner_sha256": digest(Path(__file__)),
             "launcher_sha256": digest(opts.launcher) if opts.engine != "browser" else digest(ROOT / "web/scripts/node-host.mjs"),
-            "host_sources": {path: digest(ROOT / path) for path in ["web/src/engine-host.js", "runtime/core/memory-views.js", "web/scripts/node-net.mjs", "web/scripts/node-stdio.ts", "web/scripts/node-spawn.ts", "web/src/subprocess.ts", "runtime/proc/identity.ts", "runtime/proc/outcome.ts", "web/src/fs.ts", "runtime/fs/memory.ts", "runtime/fs/backend.ts", "runtime/fs/client.ts", "runtime/fs/service.ts", "runtime/fs/protocol.ts", "runtime/fs/index.ts", "runtime/core/wasi.ts", "runtime/core/descriptors.ts", "runtime/core/filesystem.ts", "runtime/core/path.ts", "runtime/core/index.ts", "runtime/package.json"]} if opts.engine == "browser" else {},
+            "host_sources": {path: digest(ROOT / path) for path in ["web/src/engine-host.js", "runtime/core/memory-views.js", "web/scripts/node-net.mjs", "web/scripts/node-stdio.ts", "web/scripts/node-spawn.ts", "web/src/tool-command.ts", "web/src/subprocess.ts", "runtime/proc/identity.ts", "runtime/proc/outcome.ts", "web/src/fs.ts", "runtime/fs/memory.ts", "runtime/fs/backend.ts", "runtime/fs/client.ts", "runtime/fs/service.ts", "runtime/fs/protocol.ts", "runtime/fs/index.ts", "runtime/core/wasi.ts", "runtime/core/descriptors.ts", "runtime/core/filesystem.ts", "runtime/core/path.ts", "runtime/core/index.ts", "runtime/package.json"]} if opts.engine == "browser" else {},
             "dependencies": dependency_digest(opts.suite / "node_modules"),
             "test_dependencies": dependency_digest(opts.dependencies or opts.suite / "test/node_modules"),
             "node_parallel": opts.node_parallel, "network": opts.network, "timeout_seconds": opts.timeout, "test_timeout_ms": opts.test_timeout}
@@ -342,6 +343,11 @@ def main():
             shutil.copyfile(wasm, frozen_wasm)
             if digest(frozen_wasm) != meta["wasm_sha256"]:
                 raise RuntimeError("Wasm changed during suite setup; rerun with a stable artifact")
+            if meta["tools_sha256"] is not None:
+                frozen_tools = scratch / "bun-tools.wasm"
+                shutil.copyfile(wasm.with_name("bun-tools.wasm"), frozen_tools)
+                if digest(frozen_tools) != meta["tools_sha256"]:
+                    raise RuntimeError("Tools changed during suite setup; rerun with stable artifacts")
             run_workers(opts, frozen_wasm, source, scratch, preloads, records, selected)
     finally:
         write_results(opts, meta, records, selected)

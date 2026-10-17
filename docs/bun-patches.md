@@ -38,6 +38,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [0008](#0008-await-context-hooks) | Host feature | Add optional printer hooks to preserve browser async context. |
 | [0009](#0009-bake-completion) | Port | Complete bake bundles through the synchronous WASI event loop. |
 | [0010](#0010-semantic-import-locations) | Host feature | Collect semantic import locations in Bun's scan and print passes for host module linking. |
+| [0011](#0011-lint-layout-assertions) | Port | Make semantic type-argument and lint-message size assertions pointer-width aware. |
+| [0012](#0012-wasi-lint-rule-docs) | Port | Generate and embed Bun's compressed lint rule docs in WASI artifacts. |
 | [`jsc/webkit-wasi.patch`, platform hunks](#webkit-platform-hunks) | Port | Compile the C-loop interpreter and WTF for WASI. |
 | [`jsc/webkit-wasi.patch`, module slots](#webkit-module-import-slots) | Upstream bug | Give import slots a full JSValue stride and initialize the whole slot. |
 | [`jsc/webkit-wasi.patch`, non-JIT declarations](#webkit-non-jit-declarations) | Upstream bug | Expose a required enum without DFG and add two missing includes. |
@@ -57,6 +59,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`vendor/bun/vendor/rust-argon2`, inherited patch](#nested-bun-dependencies) | Host feature | Preserve Bun's low-memory Argon2 hash verification behavior. |
 | [`crates/bunwasm-glue/src/bun_native.rs`](#copied-and-generated-bun-source) | Port | Replace standalone parser base64 and zlib stubs with working Rust implementations. |
 | [`crates/bunwasm-build/src/lib.rs`](#build-command) | Port | Extract Bun's build command from its JSC runtime. |
+| [Lint and format command adapters](#lint-and-format-commands) | Port | Compile Bun's native linter, formatter, CLI parsers, and Yarr regex bindings for WASI. |
+| [Lint process environment](#lint-process-environment) | Host feature | Original adapters bound configuration workers and their output, reserve internal capacity, and register object modules. |
 | [`crates/bunwasm-build/src/dev_server/facade.rs`, `crates/bunwasm-build/src/dev_server/graph.rs`, `crates/bunwasm-build/src/dev_server/finalize.rs`](#bake-graph-adaptations) | Port | Adapt bake's graph owner, context types, and bundle finalization to synchronous WASI. |
 | [`crates/bunwasm-build/generated/bake.client.js`, `crates/bunwasm-build/generated/bake.error.js`](#generated-bake-clients) | Port | Embed Bun's generated browser HMR client and error overlay. |
 | [`crates/bunwasm-transpiler/src/lib.rs`, source-map collector](#transpiler-source-map-collector) | Port | Retain Bun's small printer callback outside its runtime crate. |
@@ -1602,6 +1606,151 @@ the first write to bypass the limit. The bounded host test fails with that
 implementation and passes with capacity-aware writes, including full-queue,
 zero-length and owned-copy cases. No upstream implementation is copied.
 
+## Lint and format commands
+
+Class **Port**. Bun revision `9510e74152073d850a18758ca41114d8f214ffa6`.
+
+`crates/bunwasm-tools/src/lint_command.rs` calls `src/lint/driver` for both commands.
+Bun's native rule registry, parsers, semantic analysis, formatter, file discovery,
+configuration resolution, fix application, and report formats use the vendored
+implementations, with the WASI layout and docs-embedding adjustments listed below.
+The adapter follows `src/runtime/cli/{lint_command,format_command}.rs` and
+retains their help wording from `src/runtime/cli/mod.rs`. It parses
+CLI options, loading `[lint]` and `[fmt]` defaults through the driver's bunfig
+reader, applying flags over those defaults, then printing the driver's `Outcome`.
+Parallel regions stay on the calling thread because WASI preview 1 has no threads.
+`src/runtime/cli/typescript_libs.rs` is compiled directly from the pinned tree,
+including its `typescript_libs.bin`, without copying or changing either file.
+
+The command adapter also follows `src/runtime/cli/lint_command.rs::run_and_exit`
+for the two directory changes: top-level `--cwd` first, then the tool's `--cwd`.
+Its bunfig search adapts `src/bunfig/arguments.rs::Above` and
+`load_config_above_for_tool`. Missing required sections keep the search needed,
+a local lint section makes an unused formatter search optional, and either the
+local rules or CLI can require `bun/format`. An unusable optional ancestor ends
+the search. Named and required configs retain their diagnostics.
+
+`crates/bunwasm-lint-native/build.rs` extracts the `RegularExpression` struct and
+compile/execute/deinit bindings from `src/jsc/bindings/RegularExpression.cpp`.
+It omits the BunString entry points and replaces the runtime headers with JSC's
+headers. It also compiles `src/jsc/bindings/NumberConversions.cpp`, replacing
+`root.h` with `config.h` and removing the Bun-specific export annotation, to
+retain Bun's fixed, precision, and exponential number formatting. The original
+initialization shim initializes WTF and the options read by Yarr's bytecode
+interpreter, without starting the VM. The build reads those option names from
+WebKit's Yarr sources and their default values from `runtime/OptionsList.h`.
+Calling the full options initializer also retains the VM through its validation
+and notification code, so this interpreter-only entry point avoids it.
+Only `dist/bun-tools.wasm` links these bindings against the prebuilt WebKit
+WTF/ICU archives. The tools build compiles WebKit's Yarr sources and its generated
+Unicode canonicalization table as separate objects, using the prebuilt engine's
+compiler flags and headers. It does not link `libJavaScriptCore.a`. Pulling Yarr
+from that unified archive also retained unrelated VM code and ICU data. This
+change removes that archive dependency without changing Yarr's source.
+WebKit revision is `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`. Direct sources are
+`Source/JavaScriptCore/yarr/{YarrPattern,YarrInterpreter,YarrCanonicalizeUCS2,YarrUnicodeProperties,YarrErrorCode,YarrFlags}.cpp`.
+`YarrCanonicalizeUnicode.cpp` comes from the same build's generated sources.
+Default engines do not link the tools or their native dependencies. This keeps
+Bun's Yarr regex semantics for native lint rules. The build flag selection follows `crates/bunwasm-jsc/build.rs`. `zstd-sys` supplies the zstd
+symbols used to read Bun's bundled TypeScript libraries and rule data.
+
+JavaScript lint plugins require `src/jsc/bindings/Lint*.cpp`, whose node, token,
+scope, and rule-report objects depend on Bun's JSC runtime. They currently produce
+an explicit unsupported-binding error. Native rules remain Bun's own code.
+Git-based file selection requires an external git executable, which the guest's
+subprocess ABI does not provide. Canary-only conformance command flags are not
+part of the release CLI adapter.
+
+The host selects the tools artifact before instantiating a lint or format command.
+`crates/bunwasm-cli/src/tool_args.rs` retains the CLI command-prefix parser for
+both the native host and tools entry point. `web/src/tool-command.ts` mirrors that
+small selection rule for browser and Node hosts. Eval source, script arguments,
+and build/test arguments cannot select a tool. The tools process uses the same
+pid, streams, cwd, signal state, filesystem identity and child admission as the
+command it replaces. This is an original host adapter. It adds no forwarding
+child and does not change the public four-child limit.
+
+The single tools artifact has no JavaScript engine. Config evaluation self-spawns
+through slot 12 into the selected default engine. Browser hosts download and
+compile tools on the first tool command, reuse the compiled module within the
+page, and use the fingerprinted engine cache across page loads. The cached
+response header is the single publication state, without a separate localStorage
+marker. The site ships a
+gzip artifact and build hash in both sandbox and playground. The module service
+worker can serve and cache versioned tools requests without precaching it.
+
+## Lint process environment
+
+Class **Host feature**, **original adapters** in
+`crates/bunwasm-tools/src/lint_command.rs`, `crates/bunwasm-host/src/process/`,
+and `web/src/subprocess.ts`.
+
+The driver supplies Bun's existing config-evaluation programs as source parts.
+The adapter runs them through the host subprocess ABI in a fresh instance of the
+selected default engine artifact, passing the requested cwd and filtered process environment.
+It drains both output pipes while waiting and closes owned handles on every
+return path. It invokes no host executable or model provider.
+
+Bun serializes these evaluations with the guard in its pinned
+`src/runtime/cli/lint_command.rs::run_and_exit` and starts an isolated process
+with `--no-orphans`. The WASI callback is synchronous and also permits one
+evaluation per owner. Its `purpose: "configuration"` spawn metadata reserves
+one internal helper for the root and each of the four public children. Internal
+helpers cannot reserve another helper. The public child limit stays four, and
+there are at most five internal helpers. Ordinary `Bun.spawn` does not forward
+this metadata. Native admission leases and browser/Node shared slots release
+capacity on startup failure, completion, kill, and close.
+
+Pinned Bun does not impose a time or output limit here. The wasm adapter adds
+a five-second elapsed-time limit and an eight-MiB combined stdout/stderr budget
+for the memory-limited host. It kills, reaps, and closes the child and its pipes
+on either refusal, returning the error through the driver's existing config
+diagnostic path. Host spawn errors retain their code and message, including
+EAGAIN, instead of being reported as missing subprocess support.
+
+
+The original `src/js/bun_plugin.ts` adapter implements synchronous runtime
+`Bun.plugin` setup and the `build.module(name, factory)` object loader used by
+Bun's config programs. Resolver aliases point to unique builtin-module keys,
+so ESM and CommonJS share the same lazily created exports object on every
+engine. Clearing registrations removes future resolution without reusing keys.
+No upstream plugin implementation is copied. Other runtime plugin hooks and
+async setup are not implemented.
+
+
+## 0011 lint layout assertions
+
+Class **Port**. Upstream `src/sema/types.rs` at Bun revision
+`9510e74152073d850a18758ca41114d8f214ffa6` asserts that `TypeArguments` is
+16 bytes. The enum occupies two pointer-sized words, so it is 8 bytes on
+wasm32. The patch retains the size guard as `2 * size_of::<usize>()`.
+It changes no representation or type-checking behavior. Compiling the unchanged
+semantic checker for wasm32 reproduced the original constant-evaluation failure;
+its dependent linter crates compile after the assertion is made portable.
+
+
+The same patch updates the size assertion for `src/lint/rule.rs::Message`.
+Its two strings occupy four pointer-sized words, followed by eight bytes for the
+flag, key, and padding. That is 40 bytes on 64-bit targets and 24 on wasm32,
+rather than five words on every target. The original assertion failed during
+the wasm32 linter check; all native rule crates, formatter, and driver pass
+`cargo check` after both size guards are made portable.
+
+
+## 0012 WASI lint rule docs
+
+Class **Port**. Upstream `src/lint/driver/{Cargo.toml,explain.rs}` at Bun
+revision `9510e74152073d850a18758ca41114d8f214ffa6`, with an original WASI
+build adapter in `src/lint/driver/build.rs`.
+
+Bun's ordinary debug embedding mode reads `lint-rule-pages.txt` from a path
+on the build machine. `bun lint --rules` reproduced a panic when that path was
+not preopened in WASI. For the WASI target, the adapter runs Bun's unchanged
+`src/codegen/generate-lint-docs.ts` and `compress-embed.ts` over its existing
+`docs/lint/rules` pages. It writes both outputs into Cargo's owned `OUT_DIR`.
+The WASI arm in `explain.rs` embeds the compressed output and inflates it with
+Bun's existing `bun_zstd::inflate_embedded`, like its normal release build.
+Native Bun's code generation and embedding behavior is unchanged.
 ## Cross-worker descriptor ownership
 
 `runtime/proc/{worker-client,worker-broker,filesystem-codec}.ts` and

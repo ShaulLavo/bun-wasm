@@ -1,5 +1,6 @@
 // Runnable page-side adapter. The generic process service is loaded only on first spawn;
 // blocked guest workers never have to activate a MessageChannel or a nested Worker.
+import { isToolCommand } from "./tool-command";
 import type { ChildExitEvent, ProcessContext, ProcessExit, ProcessSupervisor, RootProcessOptions, Signal } from "../../runtime/proc";
 import { checkedSignal } from "../../runtime/proc/types";
 import { createSignalState, requestSignal, type SignalTransport } from "../../runtime/proc/signals";
@@ -86,6 +87,7 @@ export class SubprocessBroker {
       output?(fd: 1 | 2, data: Uint8Array): void;
       /** The runner owns root execution, including its filesystem acknowledgement/fence. */
       quiesceRoot?(): void | Promise<void>;
+      tools?: () => Promise<WebAssembly.Module>;
     } = {}) {
     // Root control is available before the optional process service is imported. Non-isolated
     // runs never supply shared root words and never allocate them unless they activate spawning.
@@ -312,7 +314,17 @@ export class SubprocessBroker {
     this.watch();
   }
 
-  private launch(context: ProcessContext) {
+  private async launch(context: ProcessContext) {
+    if (context.adapter.startsWith("bun:") && this.options.tools && isToolCommand(context.request.argv.slice(1))) {
+      try {
+        context = { ...context, module: await this.options.tools() };
+        this.loaderErrors.delete(context.request.executable);
+      } catch (error) {
+        this.loaderErrors.set(context.request.executable, String(error));
+        throw error;
+      }
+      if (this.disposed || readOutcome(context.outcome)) throw new Error("Process exited while loading tools");
+    }
     const runtime = this.runtime?.get(context.pid);
     if (runtime) return this.launchRuntime(context, runtime);
     const child = this.children.get(context.pid);

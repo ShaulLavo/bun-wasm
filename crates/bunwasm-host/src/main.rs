@@ -1,6 +1,9 @@
 //! `bun-wasm`: runs bun.wasm on wasmtime with WASI preview1 and the
 //! `bun_wasm` networking host ABI (docs/host-abi.md).
 
+#[path = "../../bunwasm-cli/src/tool_args.rs"]
+mod tool_args;
+
 mod net;
 mod process;
 mod slots;
@@ -162,7 +165,8 @@ fn run(options: Options) -> Result<i32> {
     let explicit_pwd = options.env.iter().any(|(k, _)| k == "PWD");
     if !explicit_pwd && let Some(pwd) = guest_pwd(&cwd, &dirs) { env.push(("PWD".into(), pwd)); }
     env.extend(options.env);
-    let runtime = process::Runtime::new(engine.clone(), module, dirs);
+    let mut runtime = process::Runtime::new(engine.clone(), module, dirs);
+    Arc::get_mut(&mut runtime).unwrap().tools_path = Some(wasm.with_file_name("bun-tools.wasm"));
     let running = Arc::new(AtomicBool::new(true));
     let tick = running.clone();
     let ticker = std::thread::spawn(move || {
@@ -229,7 +233,7 @@ fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<
     })?;
     linker.allow_shadowing(false);
     slots::add_import(&mut linker)?;
-    let instance = linker.instantiate(&mut store, &runtime.module)?;
+    let instance = linker.instantiate(&mut store, runtime.module_for(&argv)?)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");
     slots::install(&mut store, &instance)?;
 

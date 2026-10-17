@@ -1,0 +1,25 @@
+[package]
+name = "bunwasm-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "On-demand Bun lint and format drivers for wasm32-wasip1"
+
+[[bin]]
+name = "bun-tools"
+path = "src/main.rs"
+
+[dependencies]
+bun_lint_driver = { path = "../../vendor/bun/src/lint/driver" }
+bun_sema_driver = { path = "../../vendor/bun/src/sema/driver" }
+bun_alloc = { path = "../../vendor/bun/src/bun_alloc" }
+bun_ast = { path = "../../vendor/bun/src/ast" }
+bun_parsers = { path = "../../vendor/bun/src/parsers" }
+bun_paths = { path = "../../vendor/bun/src/paths" }
+bun_clap = { path = "../../vendor/bun/src/clap" }
+bun_core = { path = "../../vendor/bun/src/bun_core" }
+bun_zstd = { path = "../../vendor/bun/src/zstd" }
+serde_json = "1"
+bunwasm-lint-native = { path = "../bunwasm-lint-native" }
+bunwasm-glue = { path = "../bunwasm-glue" }
+bunwasm-posix = { path = "../bunwasm-posix" }
