@@ -335,10 +335,11 @@ bash /work/tmp/wave-heavy/run.sh --class light "MessagePort compatibility follow
 
 ## Guest worker follow-ups
 
-The guest-worker implementation at `9f780ca411096b1bdae995d729982aaa9160b521`
-passes 67/120 selected Node parallel files on each engine, compared with 21/120
-at Step 1 revision `8596b11a`. These are clean script exits, including early
-skips; observed assertion counters remain zero. No previously passing file fails.
+The initial run at `9f780ca411096b1bdae995d729982aaa9160b521` recorded 67/120
+clean exits on each engine, compared with 21/120 at Step 1 revision `8596b11a`.
+The review fixes below expose five earlier false passes and add two real passes,
+leaving 64/120 on every engine. Repeating the census after Streams and persistence
+integration gives the same result. Observed assertion counters remain zero.
 [The worker report](../docs/worker-threads.md#guest-worker-measurement) contains
 the exact selection and full gate results. Raw records are retained under
 `/work/reports/bun-wasm-worker-execution/` until coordinator acceptance.

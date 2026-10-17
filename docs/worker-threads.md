@@ -18,7 +18,8 @@ flags are `--require`, `-r`, `--require=`, `--no-warnings`, `--expose-gc`, and
 `ERR_WORKER_INVALID_EXEC_ARGV`.
 
 Workers emit `online`, `message`, `messageerror`, `error`, and `exit`.
-`terminate()` cancels the child guest and resolves with its exit code. `ref()`
+`terminate()` cancels the child guest and keeps it referenced until completion.
+It resolves with the termination code, or `undefined` if it has already exited. `ref()`
 and `unref()` control whether the child keeps its parent alive. A worker's
 `process.exit()` ends that guest without ending its parent. Output goes to the
 parent by default. With `stdout: true` or `stderr: true`, the corresponding Node
@@ -124,14 +125,30 @@ Observed assertion counters remain zero for these standalone Node scripts.
 QuickJS/JSC have no timeouts. The browser retains the one known 10,000-round-trip
 timeout at the unchanged fifteen-second deadline.
 
-The 16 process-level review cases pass on Node, native guests and Node-hosted
-guests. The browser gate runs the same cases on all three engines. Before the fixes, the three
-retained artifacts pass 2/16 each. The constructor-only case keeps the parent
+The 16 process-level review cases pass on Node, native guests, Node-hosted guests,
+and all six Chromium/WebKit and engine combinations. Before the fixes, the three
+retained artifacts pass 2/16 each. The constructor-only case kept the parent
 alive until its external ten-second cutoff. Sender buffer and port ownership,
 two-million-byte exit messages, lifecycle listener exceptions, unref termination,
 both 70 MiB output streams and termination after exit are checked directly.
 Raw review evidence is retained at `/work/reports/bun-wasm-worker-r37/` until
 coordinator acceptance.
+
+After integrating main's Streams and persistence changes and the merged Step 1
+PR, the full fixture gates pass 175/175 per engine. The full web gate passes 266
+unit tests and all browser checks. Runtime units pass 212 tests; the runtime
+factory/type gate passes 24. Sandbox HMR passes all six browser/engine runs.
+The worker census remains 64/120 on every engine. Repeated Vite/React and Vitest
+rows retain six passing installs and twelve failed commands at Vite's bare `ws`
+lookup. The official esbuild synchronous worker check remains 0/3 because shared
+buffers cannot cross guest boundaries.
+
+Chromium's native structured clone can partially detach a transfer list before
+rejecting a WebAssembly memory buffer. The browser adapter tracks those buffers
+through the native getter and rejects the complete list before native transfer.
+The same mixed-buffer and constructor-rollback cases pass in Chromium and WebKit.
+
+### Initial guest execution measurement
 
 Measured 2026-10-17. The same 120 tracked `.js` files under Node's parallel
 suite contain a `new Worker` or namespaced Worker construction. The upstream
@@ -146,7 +163,8 @@ also includes those intervening port-close and shared-filesystem fixes.
 | JSC | 21/120 | 67/120 | 0/0 | 0/0 |
 | Browser | 21/120 | 67/120 | 0/0 | 0/1 |
 
-Forty-six additional files pass on each engine. No previously passing file fails.
+That initial run reported forty-six additional clean exits on each engine. The
+review-fix measurement above corrects five false passes and adds two real passes.
 These are Node assertion scripts. A clean script exit counts as fully passing,
 including files which skip before constructing a worker. They report no individual
 assertion counts, so observed test passes remain zero. The browser timeout is
