@@ -9,6 +9,7 @@ const source = readFileSync(modulePath, 'utf8')
   .replace('import { installNativeStreamState } from "./native-stream-state.ts";', 'const installNativeStreamState = () => () => {};')
   .replace('"../../runtime/core/memory-views.js"', JSON.stringify(pathToFileURL(resolve(root, 'runtime/core/memory-views.js')).href))
   .replace('"./buffer-transfer.ts"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/buffer-transfer.ts')).href))
+  .replace('"./content-modules.ts"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/content-modules.ts')).href))
   .replace('"./crypto-inputs.js"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/crypto-inputs.js')).href))
   .replace('"./crypto-host.js"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/crypto-host.js')).href))
   .concat('\nexport { wasmCaller };\n');
