@@ -565,7 +565,7 @@
       this.#child = child;
       let control: BunWasm.WorkerChannel | null = null;
       try {
-        control = internal.require("worker_channel").open(native.hostChildPipe(child.pid, 4), native.hostChildPipe(child.pid, 3));
+        control = internal.require("worker_channel").open(native.hostChildPipe(child.pid, 5), native.hostChildPipe(child.pid, 4));
         this.#channel = control;
         transferPlan.commit();
         children.set(this.#id, { ref: true, send: frame => { if (!this.#exited) this.#channel.send(frame); }, pump: () => this.#pump(), event: frame => this.#event(frame) });
@@ -640,7 +640,7 @@
       this.#port.close(); this.#channel.close(); this.#child._finishWorker(); children.delete(this.#id);
       root({ kind: "gone", path: this.#path });
       const code = this.#termination ? 1 : this.#code ?? 1;
-      if (code !== 0 && !this.#termination && !this.#error && !this.#graceful) this.emit("error", new Error(`Worker exited with code ${code}`));
+      if (code !== 0 && this.#child.signalCode === null && !this.#termination && !this.#error && !this.#graceful) this.emit("error", new Error(`Worker exited with code ${code}`));
       this.emit("exit", code);
     }
   }
@@ -660,7 +660,7 @@
     if (!config || initialized) return;
     initialized = true;
     delete process.env.BUNWASM_WORKER_INIT;
-    parentChannel = internal.require("worker_channel").open(native.hostChildPipe(0, 3), native.hostChildPipe(0, 4));
+    parentChannel = internal.require("worker_channel").open(native.hostChildPipe(0, 4), native.hostChildPipe(0, 5));
     const initial = codec.decode(config.graph);
     if (!Array.isArray(initial) || initial.length !== 3 || !(initial[2] instanceof MessagePort) || !Array.isArray(initial[1])) throw new Error("Invalid worker initial data");
     exports.workerData = initial[0]; parentPort = initial[2]; exports.parentPort = parentPort;
