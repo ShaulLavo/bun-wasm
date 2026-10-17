@@ -8,12 +8,16 @@ import { NetHost } from "./net/host";
 import type { NetRequest } from "./net/protocol";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline";
 import { Wasi, WasiExit, type Stream } from "@bun-wasm/runtime/core";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
+import { claimOutcome, outcomeWord, processOutcome, readOutcome } from "../../runtime/proc/outcome.ts";
 import type { ProcessExit } from "../../runtime/proc/types.ts";
 import { fatalInterrupt } from "../../runtime/interrupt/check";
 import type { WorkerProcessClient, WorkerProcessMessage, WorkerProcessTransport } from "../../runtime/proc/worker-client";
 import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.ts";
 import { DefaultSignal } from "./default-signal";
+
+function waitStatus(result: ProcessExit): number {
+  return result.kind === "start-failed" ? result.error === "ENOENT" ? 127 : 126 : result.status;
+}
 
 export type Engine = "quickjs" | "jsc" | "browser";
 
@@ -30,7 +34,7 @@ export interface RunRequest {
   budget?: SharedArrayBuffer;
   requestedSignal?: SharedArrayBuffer;
   signalState?: SharedArrayBuffer;
-  outcome?: SharedArrayBuffer;
+  outcome?: SharedArrayBuffer | BigInt64Array;
   module: WebAssembly.Module;
   args: string[];
   env: Record<string, string>;
@@ -167,7 +171,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   let localOutcome: ProcessExit | null = null;
   const claim = (result: Pick<ProcessExit, "kind" | "code">): ProcessExit => outcome
     ? claimOutcome(outcome, result)
-    : localOutcome ??= { ...result, status: result.kind === "signaled" ? 128 + result.code : result.code };
+    : localOutcome ??= processOutcome(result);
   const defaultSignal = (signal: number): never => {
     if (!Number.isInteger(signal) || signal < 1 || signal > 64) throw new Error(`Invalid default signal: ${signal}`);
     const killed = requestedSignal && Atomics.load(requestedSignal, 0) === 9;
@@ -184,7 +188,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   const checkActive = () => {
     const winner = outcome ? readOutcome(outcome) : localOutcome;
     if (winner?.kind === "signaled") defaultSignal(winner.code);
-    if (winner) throw new WasiExit(winner.status);
+    if (winner) throw new WasiExit(waitStatus(winner));
     if (revoked()) throw new WasiExit(1);
   };
   let subprocess: SubprocessHost | null = null;
@@ -198,21 +202,23 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     const settled = outcome ? readOutcome(outcome) : localOutcome;
     const ownCode = "code" in result ? result.code : started ? 1 : 126;
     const ownSignal = "signal" in result ? result.signal : undefined;
+    const startupFailure = "error" in result && !started;
     subprocess?.detach();
     if (child) {
       // A broker may close pipes as soon as it observes ordinary completion. Buffer host-owned
       // crash diagnostics first; fatal callbacks have already claimed their outcome and skip this.
       if ("error" in result && !settled) child.stderr.writeAll(new TextEncoder().encode(`${describeError(result.error)}\n`));
+      if (startupFailure) claim({ kind: "start-failed", code: 13 });
       wasi?.descriptors.dispose();
       fs.dispose();
       child.finish(ownCode, ownSignal);
       const winner = readOutcome(outcome!)!;
       // A completion word alone does not prove the worker released filesystem references.
-      ctx.postMessage({ type: "exit", code: winner.status, signal: winner.kind === "signaled" ? winner.code : undefined, sleep: sleepMode } satisfies WorkerMessage);
+      ctx.postMessage({ type: "exit", code: waitStatus(winner), signal: winner.kind === "signaled" ? winner.code : undefined, sleep: sleepMode } satisfies WorkerMessage);
       return;
     }
-    const winner = claim(ownSignal === undefined ? { kind: "exited", code: ownCode } : { kind: "signaled", code: ownSignal });
-    const code = winner.status;
+    const winner = claim(startupFailure ? { kind: "start-failed", code: 13 } : ownSignal === undefined ? { kind: "exited", code: ownCode } : { kind: "signaled", code: ownSignal });
+    const code = waitStatus(winner);
     const signal = winner.kind === "signaled" ? winner.code : undefined;
     wasi?.descriptors.dispose();
     fs.dispose();
@@ -271,10 +277,11 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
         const cwd = meta.cwd || req.env.PWD || "/";
         if (fs.lookup(cwd)?.kind !== "dir") throw Object.assign(new Error(`spawn: cwd does not exist: ${cwd}`), { code: "ENOENT" });
         if (!req.spawnBroker) throw Object.assign(new Error("spawn: this worker has no page subprocess broker"), { code: "ENOTSUP" });
+        const executable = meta.executable ?? meta.argv[0]!;
         // Process ancestry is not capability ancestry: another job may outlive this parent.
         const filesystem = createFilesystemIdentity({ ...fs.connection, revocations: fs.connection.revocations.slice(-1) });
         const request: SpawnRequest = {
-          executable: meta.executable ?? meta.argv[0]!, argv: meta.argv, cwd,
+          executable, argv: meta.argv, cwd,
           pid: transport.pid, parentPid: transport.parentPid, jobId: transport.jobId, job: meta.job ?? transport.jobId,
           env: { ...meta.env, PWD: cwd }, filesystem, child: transport,
           trace: req.trace, slots: req.slots, spawnBroker: true,
@@ -282,6 +289,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
         ctx.postMessage({ type: "spawn", request } satisfies WorkerMessage);
         const control = new Int32Array(transport.control, 0, 4);
         return {
+          starting: true,
           revoke: () => { revokeFilesystem(filesystem); fs.sweep(); },
           terminate: () => { Atomics.store(control, 3, 1); },
         };
@@ -354,7 +362,6 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     }
     const instantiating = perfNow();
     instance = new WebAssembly.Instance(req.module, wasi.imports(req.module));
-    ctx.postMessage({ type: "phase", name: "instantiate", duration: perfNow() - instantiating } satisfies WorkerMessage);
     const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
     const netHost = req.net ? new NetHost(req.net, sendNet, (path, bytes) => fs.writeFile(path, bytes)) : null;
     if (slots !== "off") {
@@ -368,7 +375,9 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     }
     if (typeof instance.exports._start !== "function") throw new TypeError("guest has no _start entry point");
     if (!(instance.exports.memory instanceof WebAssembly.Memory)) throw new TypeError("guest has no memory");
+    ctx.postMessage({ type: "phase", name: "instantiate", duration: perfNow() - instantiating } satisfies WorkerMessage);
     started = true;
+    child?.started();
     const exited = wasi.launch(instance);
     const ready = instance.exports.bunwasm_ready as (() => number) | undefined;
     if (exited !== null || req.adapter === "preview1" || req.engine !== "browser" || ready?.() !== 1) {

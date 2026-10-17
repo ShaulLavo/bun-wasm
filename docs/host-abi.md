@@ -280,8 +280,26 @@ The browser registers `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and
 `/usr/local/bin/node` with the page/root command's selected engine and compiled module.
 `bun-quickjs`, `bun-jsc` and `bun-browser` select an engine explicitly. Generic aliases keep
 using the page/root engine even when an explicitly selected child uses another engine.
-A browser start failure appears through `child_wait`: 127 for an
-unregistered executable, 126 for a registered executable that cannot start.
+Process outcomes distinguish an ordinary exit, signal death and a startup failure.
+The shared int64 uses low-bit tags 1, 2 and 3 respectively. A startup failure carries
+positive POSIX errno 2 for ENOENT or 13 for EACCES and has no exit status.
+The supervisor records this outcome without choosing a guest API's error policy.
+
+The Bun slot adapter waits for the execution worker's startup acknowledgement
+before returning a child. The transport's control int32 at index 2 is zero while
+startup is pending and one after successful instantiation or confirmed completion;
+publication wakes that cell. Failure completion still follows filesystem quiescence.
+The Node host uses a separate supervisor worker to publish pre-bootstrap failures
+and early exits while the spawning thread waits. Generic roots and children share
+their authoritative outcome in the initial request, before dynamic adapter imports.
+A failed start returns -1 and a host error containing code, negative errno and path.
+Bun's spawn APIs throw ENOENT or EACCES. Node's spawn emits error then close without
+spawn or exit, and its synchronous API returns the error with null status and signal.
+Node errors also contain syscall and spawnargs. No exit-127 child is returned.
+
+The shell and `runtime_proc` wait adapters map the same typed startup failure to
+an ordinary wait status 127 for ENOENT or 126 for EACCES. Ordinary program exits
+of 127 or 126 retain their own exit kind.
 `env` replaces the child environment; the host sets `PWD` to `cwd` because the
 WASI guest changes directory there at startup. Each stdio mode is `pipe`,
 `inherit`, or `ignore`. Inheritance refers to the immediate parent's stream,

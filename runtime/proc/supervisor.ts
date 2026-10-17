@@ -253,7 +253,8 @@ export class ProcessSupervisor {
         pid: record.pid, parentPid: record.parentPid, job: record.job, request: record.request!,
         module: executable.module, adapter: executable.adapter,
         descriptors: record.descriptors, interrupt: record.interrupt, requestedSignal: record.requestedSignal, signalState: record.signalState, outcome: record.outcome,
-        exit: code => this.exit(record.pid, code), fail: error => this.failStart(record.pid, error),
+        exit: code => this.exit(record.pid, code), fail: () => this.exit(record.pid, 126),
+        startFailed: error => this.failStart(record.pid, error),
         defaultSignal: signal => this.defaultSignal(record.pid, signal),
         registerRevocation: hook => this.registerRevocation(record.pid, hook),
       };
@@ -263,7 +264,10 @@ export class ProcessSupervisor {
     } catch (error) { this.failStart(record.pid, error); }
   }
   failStart(pid: number, error: unknown): void {
-    this.finish(pid, { kind: "exited", code: error instanceof ExecutableNotFound ? 127 : 126 });
+    const record = this.table.get(pid);
+    if (!record) return;
+    const missing = error instanceof ExecutableNotFound || error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT";
+    this.finish(pid, { kind: "start-failed", code: missing ? 2 : 13 });
   }
   exit(pid: number, code: number): void {
     if (!Number.isInteger(code)) throw new ProcessError(ProcessErrno.INVAL, "exit code must be an integer");
@@ -408,7 +412,7 @@ export class ProcessSupervisor {
     const winner = claimOutcome(record.outcome, result);
     // Check the immutable winner, not an earlier read: a worker may ordinary-exit while a
     // signal observer is entering this function. Its queued output must still drain first.
-    if (winner.kind === "exited" && !this.disposed) {
+    if (winner.kind !== "signaled" && !this.disposed) {
       let canConfirm: boolean;
       try { canConfirm = this.options.canConfirmExit?.(pid) !== false; }
       catch (error) { this.finishing.delete(pid); throw error; }

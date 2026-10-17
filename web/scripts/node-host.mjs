@@ -22,6 +22,7 @@ import { installCliFetch } from "./node-install-net.mjs";
 import { memoryViews } from "../../runtime/core/memory-views.js";
 import { SubprocessHost, childTransport, wasiPipe } from "../src/subprocess.ts";
 import { launchNodeExecutable } from "./node-spawn.ts";
+import { launchNodeChild } from "./node-child.ts";
 import { forwardOutput, writeStdio } from "./node-stdio.ts";
 import { createNodeSignalController } from "./node-signals.ts";
 import { installNodeProcess } from "./node-process.ts";
@@ -32,6 +33,7 @@ import { installNodeProcess } from "./node-process.ts";
 // guest's stack budget fits it (docs/stack-limits.md). `--stack-mb` overrides it for measurements.
 const STACK_MB = 32;
 const GUEST_STACK_KIB = "6144";
+function waitStatus(result) { return result.kind === "start-failed" ? result.error === "ENOENT" ? 127 : 126 : result.status; }
 if (isMainThread) {
   const cli = process.argv.slice(2);
   const end = cli.indexOf("--");
@@ -47,7 +49,7 @@ if (isMainThread) {
     process.stderr.write(`node-host: ${error.stack || error}\n`);
     process.exitCode = 1;
   });
-  guest.on("exit", (code) => process.exit(signals.finish(process.exitCode || code).status));
+  guest.on("exit", (code) => process.exit(waitStatus(signals.finish(process.exitCode || code))));
   for (const [name, number] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]]) process.on(name, () => {
     const result = signals.request(number);
     if (result.action === "default") void guest.terminate();
@@ -106,8 +108,8 @@ function finish(code, signal) {
   const selected = signals.finish(code, signal);
   cliFetch?.dispose();
   subprocess?.dispose();
-  child?.finish(selected.status, selected.kind === "signaled" ? selected.code : undefined);
-  nodeProcess.exit(selected.status);
+  child?.finish(waitStatus(selected), selected.kind === "signaled" ? selected.code : undefined);
+  nodeProcess.exit(waitStatus(selected));
 }
 
 function installStdio(imports, getInstance) {
@@ -178,14 +180,12 @@ async function run() {
       if (child) return wasiPipe(child[fd === 2 ? "stderr" : "stdout"], "write").write([bytes]) === bytes.length;
       return forwardOutput(fd === 2 ? 2 : 1, bytes);
     },
-    launch: (meta, transport, onError) => launchNodeExecutable(meta, transport, () => {
+    launch: (meta, transport) => launchNodeExecutable(meta, transport, () => {
       validateCwd(meta.cwd);
-      const worker = new Worker(new URL(import.meta.url), {
+      return launchNodeChild(new URL(import.meta.url), {
         workerData: { bunwasmChild: true, module, preopens, meta, transport, withNet, stackMb: workerData.stackMb },
         resourceLimits: { maxOldGenerationSizeMb: 128, ...meta.worker?.resourceLimits, stackSizeMb: Math.max(workerData.stackMb, meta.worker?.resourceLimits?.stackSizeMb || 0) },
-      });
-      worker.on("error", onError);
-      return worker;
+      }, transport);
     }),
   });
   const wasi = new WASI({ version: "preview1", args: ["bun"].concat(args), env, preopens, returnOnExit: true });
@@ -198,6 +198,7 @@ async function run() {
   cliFetch?.install();
   // Process, worker, fetch, and signal slots share this host's state and dispatch.
   hostCalls.install();
+  child?.started();
   const code = wasi.start(instance);
   if (!instance.exports.bunwasm_ready || instance.exports.bunwasm_ready() !== 1) finish(code);
 
@@ -234,7 +235,7 @@ async function run() {
 // The main thread only hosts the guest's Worker (above).
 if (!isMainThread) run().catch((error) => {
   const message = new TextEncoder().encode(`${error.stack || error}\n`);
-  if (child) child.stderr.writeAll(message);
+  if (child) { child.stderr.writeAll(message); if (Atomics.load(new Int32Array(workerData.transport.control), 2) === 0) child.startFailed("EACCES"); }
   else writeSync(2, message);
   finish(1);
 });

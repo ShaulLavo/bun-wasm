@@ -244,3 +244,25 @@ test("a launch resolving during quiescence cannot restore the revoked worker han
     expect(supervisor.wait(shell, leader)?.status).toBe(137);
   } finally { releaseFence(); supervisor.dispose(); }
 });
+
+for (const [executable, code, status] of [["missing", 2, 127], ["broken", 13, 126]] as const) {
+  test(`runtime_proc maps ${executable} startup failure to ${status} for process and job waits`, async () => {
+    const registry = new ExecutableRegistry();
+    registry.register("broken", { adapter: "preview1", module: async () => { throw new Error("invalid executable"); } });
+    const supervisor = new ProcessSupervisor({ registry, launch() { throw new Error("unexpected launch"); } });
+    const descriptors = new DescriptorTable();
+    const root = supervisor.createRoot({ descriptors });
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const abi = new ProcessABI({ memory, descriptors, fs: new MemFS(), pid: root, service: supervisor, signals: supervisor.get(root)! });
+    try {
+      const child = supervisor.spawn(root, { ...request(), executable });
+      const result = await supervisor.waitForExit(root, child);
+      expect(result).toMatchObject({ kind: "start-failed", code, status: null });
+      expect(abi.imports.wait!(child, 64)).toBe(0);
+      expect(new DataView(memory.buffer).getUint32(64, true)).toBe(0);
+      expect(new DataView(memory.buffer).getInt32(68, true)).toBe(status);
+      expect(abi.imports.wait_job!(supervisor.jobOf(child), 1, 80)).toBe(0);
+      expect(new DataView(memory.buffer).getInt32(80, true)).toBe(status);
+    } finally { supervisor.dispose(); descriptors.dispose(); }
+  });
+}

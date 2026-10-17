@@ -3,7 +3,10 @@ import type { DescriptorTable } from "../core/descriptors";
 export const Signal = Object.freeze({ SIGINT: 2, SIGKILL: 9, SIGPIPE: 13, SIGTERM: 15 });
 export type ProcessSignal = 2 | 9 | 13 | 15;
 export type Signal = ProcessSignal;
-export type ProcessExit = Readonly<{ kind: "exited" | "signaled"; code: number; status: number }>;
+export type ProcessExit = Readonly<
+  | { kind: "exited" | "signaled"; code: number; status: number }
+  | { kind: "start-failed"; code: number; error: "ENOENT" | "EACCES"; status: null }
+>;
 export interface DescriptorBinding { child: number; parent: number }
 export interface SpawnRequest {
   executable: string;
@@ -50,8 +53,9 @@ export interface ProcessContext {
   /** Shared immutable terminal outcome, atomically arbitrated with synchronous parent stubs. */
   readonly outcome: BigInt64Array;
   exit(code: number): void;
-  /** Ordinary startup/guest failure exits 126; default signal actions are explicit. */
+  /** An execution failure after startup keeps the existing ordinary status 126. */
   fail(error: unknown): void;
+  startFailed(error: unknown): void;
   defaultSignal(signal?: number): void;
   registerRevocation(hook: () => void): () => void;
 }

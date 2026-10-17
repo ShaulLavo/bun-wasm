@@ -82,8 +82,8 @@ try {
   assert.equal(spawn("1"), -1);
   for (const id of ids) { host.kill(id, 9); assert.equal(collect(id).code, 137); }
   const missing = host.spawn(JSON.stringify({ argv: ["/bin/sh", "-c", "true"] }));
-  assert.ok(missing > 1);
-  assert.equal(collect(missing).code, 127);
+  assert.equal(missing, -1);
+  assert.deepEqual(JSON.parse(host.lastError), { name: "Error", message: 'Executable not found in $PATH: "/bin/sh"', code: "ENOENT", errno: -2, path: "/bin/sh" });
   console.log("9 subprocess worker checks passed");
 } finally {
   host.dispose();

@@ -2,8 +2,6 @@ import { spawn, spawnSync, exec, execSync, execFile, execFileSync, fork } from "
 import { promisify } from "node:util";
 import { readFileSync, mkdirSync } from "node:fs";
 
-// The harness names its adapter only for executable-registry error behavior.
-const nodeHost = process.env.BUNWASM_TEST_HOST === "node";
 const stopSignal = "SIGTERM";
 const stopStatus = 143;
 const command = [process.execPath, "-e"];
@@ -37,10 +35,12 @@ console.log("execFile", (await promisify(execFile)("bun", ["-e", "console.log(45
 const sleeper = Bun.spawn(command.concat(["setInterval(() => {}, 1000)"]), { stdout: "pipe", stderr: "pipe" });
 sleeper.kill(stopSignal);
 console.log("kill", await sleeper.exited === stopStatus, sleeper.signalCode === stopSignal);
-const unsupported = Bun.spawnSync(["not-a-bun-command"]);
-console.log("unsupported", nodeHost
-  ? unsupported.exitCode === 127 && unsupported.error === undefined && unsupported.signalCode === null
-  : unsupported.error?.code === "ENOENT");
+try {
+  Bun.spawnSync(["not-a-bun-command"]);
+  console.log("unsupported", false);
+} catch (error) {
+  console.log("unsupported", error.code === "ENOENT");
+}
 const forked = fork("./fork-child.js", ["fork-arg"], { silent: true });
 let forkText = "";
 forked.stdout.on("data", (chunk) => { forkText += chunk; });
@@ -49,6 +49,6 @@ console.log("fork", forkText.trim(), forked.exitCode);
 try { forked.send("hello"); } catch (error) { console.log("ipc", error.code); }
 for (const execute of [execSync, execFileSync]) {
   try { execute("not-a-bun-command"); } catch (error) {
-    console.log("exec error", error.code === (nodeHost ? 127 : "ENOENT"), error.error !== error && typeof JSON.stringify(error) === "string");
+    console.log("exec error", error.code === "ENOENT", error.error !== error && typeof JSON.stringify(error) === "string");
   }
 }
