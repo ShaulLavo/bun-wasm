@@ -48,7 +48,7 @@ const server = Bun.serve({ port: 0, fetch(req) {
 } });
 async function run(cwd: string, ...args: string[]) {
   const child = Bun.spawn([process.execPath, ...args], { cwd, env: { ...process.env,
-    NPM_CONFIG_REGISTRY: String(server.url), BUN_INSTALL_CACHE_DIR: join(process.cwd(), "cache"),
+    NPM_CONFIG_REGISTRY: String(server.url), BUN_INSTALL_CACHE_DIR: join(cwd, ".cache"),
   }, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([child.stdout.text(), child.stderr.text(), child.exited]);
   if (code) throw new Error(`${args.join(" ")} exited ${code}: ${stderr}`);
