@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-const source = 'require("node:fs").writevSync(1, [Buffer.from("ready")]); Bun.sleepSync(20); process.exit(0)';
+// Ready is not proof of liveness: stdout may be drained after child completion.
+// Hold the child at a real input barrier until the parent's continuation runs.
+const source = 'const fs = require("node:fs"); fs.writevSync(1, [Buffer.from("ready")]); const release = Buffer.alloc(1); if (fs.readSync(0, release, 0, 1, null) !== 1 || release[0] !== 33) throw new Error("missing parent release"); process.exit(0)';
 const properties = error => ({ code: error.code, errno: error.errno, syscall: error.syscall });
 const expected = { code: "EPIPE", errno: -32, syscall: "write" };
 
@@ -9,6 +11,7 @@ const bun = Bun.spawn([process.execPath, "-e", source], { stdin: "pipe", stdout:
 try {
   const reader = bun.stdout.getReader();
   assert.equal((await reader.read()).done, false);
+  bun.stdin.write("!");
   Bun.sleepSync(250);
   assert.equal(bun.exitCode, null);
   let failure;
@@ -24,6 +27,7 @@ const node = spawn(process.execPath, ["-e", source], { stdio: ["pipe", "pipe", "
 const closed = new Promise(resolve => node.once("close", resolve));
 try {
   await new Promise(resolve => node.stdout.once("data", resolve));
+  node.stdin.write("!");
   Bun.sleepSync(250);
   assert.equal(node.exitCode, null);
   const order = [];
