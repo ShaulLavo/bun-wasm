@@ -233,8 +233,8 @@
       if (input instanceof Response) {
         if (input.bodyUsed) throw new TypeError("Response body already used");
         const rewrite = new Rewrite(this.#registrations.slice());
-        const body = rewrite.stream(input);
         const headers = new Headers(input.headers);
+        const body = rewrite.stream(input);
         const output = input.type === "error" ? Response.error() : new Response(body, { status: input.status, statusText: input.statusText, headers });
         if (input.type === "error") {
           Reflect.set(output, "_stream", body);
