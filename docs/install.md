@@ -59,7 +59,7 @@ are not implemented. Symlinks and hardlinks inside npm
 tarballs are rejected. Downloads and expanded packages are limited to 256 MiB;
 the graph is limited to 10,000 packages and 128 nesting levels.
 
-## Workspaces, commands and migration
+## Workspaces and commands
 
 Native hosts create workspace and package-bin links. The page filesystem does
 not yet support symbolic links, so workspace and local-link installs still need
@@ -88,18 +88,8 @@ its bin link is absent, then use an isolated cache installation.
 They leave the project's manifest and lockfile unchanged. Concurrent installs
 publish complete cache directories through an atomic rename.
 
-Without `bun.lock`, the installer reads npm `package-lock.json`, pnpm
-`pnpm-lock.yaml`, Yarn classic or Yarn Berry `yarn.lock` before resolution.
-Migrated registry versions remain pinned. `bun pm migrate` writes the converted
-lock without installing packages. Unsupported dependency protocols produce an
-error rather than silently replacing a lockfile pin. `--lockfile-only` skips
-package extraction. Registries may omit integrity, but supplied SHA-512 or
-SHA-1 hashes are checked.
-
-The [installer selection](bun-test-suite/installer-files.txt) lists the 25
-upstream files assigned to this change. The `installer-gaps` runtime fixture
-checks a synthetic registry, all four lockfile formats, workspace imports,
-member changes, binaries, updates, and concurrent package execution.
+Lockfile migration is split into a follow-up PR based on this command/workspace
+change. Existing foreign lockfiles are not imported by this PR.
 
 ## Real Bun installer spike
 

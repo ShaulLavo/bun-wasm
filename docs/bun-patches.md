@@ -1686,9 +1686,8 @@ Cache-Control header, so it does not change content negotiation.
 
 Workspace discovery reads declared member manifests, resolves local dependencies
 relative to their declaring package, and creates filesystem links. The native
-installer retains its hoisted graph and tarball validation. Lockfile migration
-parses npm package locks, pnpm YAML, Yarn classic entries, and Yarn Berry YAML
-into that graph before resolution, so migrated versions remain pinned.
+installer retains its hoisted graph and tarball validation. Foreign lockfile
+migration is kept in a separate follow-up PR using this workspace graph.
 
 `bun update` resolves selected dependencies again, within their declared ranges
 unless `--latest` is supplied. Selected member updates clear their nested
@@ -1712,7 +1711,7 @@ scanner execution retain their existing limitations.
 
 `tests/fixtures/installer-gaps/` uses an in-process fixture registry and synthetic
 tarballs. It checks the header, workspace imports, a frozen reinstall, binary
-links, script argument forwarding, update ranges, migration pins, and `bun x`
+links, script argument forwarding, update ranges and `bun x`
 without public-registry access.
 
 The original `node-misc` fixture checks current process-provider failure paths.

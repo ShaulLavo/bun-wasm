@@ -1,7 +1,6 @@
 //! Hoisted npm installs over the optional fetch ABI. No JS engine or OS processes.
 mod io;
 mod local;
-mod migration;
 mod resolve;
 
 use std::{collections::BTreeSet, fs, path::Path, time::Instant};
@@ -117,15 +116,7 @@ fn execute(command: &str, args: Vec<String>, parser: &dyn Transpiler) -> Result<
     let locked = if Path::new("bun.lock").exists() {
         io::read(Path::new("bun.lock"), "JSONC", parser)?
     } else {
-        migration::read(
-            if member.is_some() {
-                &root_manifest
-            } else {
-                &old_manifest
-            },
-            parser,
-        )?
-        .unwrap_or_else(|| json!({}))
+        json!({})
     };
     let mut resolution_lock = locked.clone();
     if command == "update" {
@@ -565,14 +556,6 @@ fn report_added(input: &str, resolver: &Resolver, member: Option<&Path>) {
 }
 
 fn pm(opts: &Options, parser: &dyn Transpiler) -> Result<()> {
-    if opts.names.first().map(String::as_str) == Some("migrate") {
-        let manifest = manifest("install", parser)?;
-        let lock = migration::read(&manifest, parser)?.ok_or("No lockfile found to migrate")?;
-        return io::write(
-            Path::new("bun.lock"),
-            format!("{}\n", serde_json::to_string_pretty(&lock).unwrap()).as_bytes(),
-        );
-    }
     if opts.names.first().map(String::as_str) != Some("ls") {
         return Err("Only bun pm ls is supported in bun-wasm".into());
     }
