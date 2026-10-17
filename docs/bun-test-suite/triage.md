@@ -107,22 +107,92 @@ Every row has a 15-second wall deadline. A completed report can also come from a
 
 This analysis uses PR #39's immutable run at runtime commit `6e93c80c6f9bccc879990bedb999c3efdcd3166f` and suite revision `cd95fa7a13b3f13be73e512b38ec111c1c228084`. The source references below refer to that runtime revision. No runtime, suite fixture, scoreboard count, or category assignment in `failures.tsv` changes here.
 
-The input is the 792 files in the two old catch-all topics, plus the 23 files classified as engine differences. 248 concrete causes account for 536 distinct files in this 815-file selection. All 424 files in the six requested buckets have a cause below. Counts describe observed blockers, not files guaranteed to pass after one fix. A file can have later independent failures.
+The input is the 792 files in the two old catch-all topics, plus the 23 files classified as engine differences. 250 concrete causes account for 536 distinct files in this 815-file selection. All 424 files in the six requested buckets have a cause below. Counts describe observed blockers, not files guaranteed to pass after one fix. A file can have later independent failures.
 
 The six bucket counts are regenerated from the committed TSV membership and the raw JSON's first diagnostic. They are 150, 80, 66, 65, 37, and 26. PR #39's prose quoted 151 for toBe and 68 for toContain. Those two numbers do not match this exact selection, so the named member lists below are the counting authority.
 
 | Old first diagnostic | Files | Distinct causes | Files assigned below |
 |---|---|---|---|
-| `error: expect(received).toBe(expected)` | 150 | 109 | 150 |
+| `error: expect(received).toBe(expected)` | 150 | 110 | 150 |
 | `TypeError: not a function` | 80 | 29 | 80 |
-| `error: expect(received).toContain(expected)` | 66 | 50 | 66 |
+| `error: expect(received).toContain(expected)` | 66 | 49 | 66 |
 | `error: expect(received).toEqual(expected)` | 65 | 52 | 65 |
 | `error: expect(received).toMatchInlineSnapshot(expected)` | 37 | 19 | 37 |
 | `error: expect(received).toThrow(expected)` | 26 | 19 | 26 |
 
 Category `a` needs an OS capability outside the present host ABI. Category `b` needs a missing child-process capability. Category `c` is a bounded helper, validation, setup, or diagnostic change. Category `d` needs a larger implementation. Category `e` records an intentional exclusion with its reason. Category `f` has a measured engine comparison; its cause may be an engine builtin, the embedded polyfill, or the host backend. An `f` assignment alone does not identify which of those owns the defect.
 
-Public error codes, argument-validation messages, report labels, stable class names, and version normalization are compatibility work under `c`. Native JSC parser prose, allocation-limit prose, private GC counters, and native profiling invariants are explicitly identified under `e`. A wording-only mismatch is not automatically an exclusion. The `f` parser and disposal entries record both the measured difference and the recommended wording exclusion. These are triage decisions; the measured scoreboard remains intact.
+Public error codes, argument validation, report labels, stable class names, and version normalization are compatibility work under `c`. Category `a` requires evidence of a missing capability needed by the tested operation. Category `e` requires an explicit capability or cost reason. Native wording, a private test helper, and an absent API do not automatically qualify. The `f` parser and disposal entries record measured differences without an automatic exclusion. These triage labels do not change the measured scoreboard.
+
+### Platform and cost exclusions audited after review
+
+All 25 ranked causes originally labelled `a` or `e` were checked against every member's complete raw log and the pinned suite/runtime source. That covers 51 original member files. The reviewed echo case adds one file from category `c`. 22 file labels changed. The revised ranking retains 30 excluded files across 13 causes, each with a missing tested capability or an explicit portability/maintenance cost below.
+
+An absent export, a private-looking name, a test title mentioning GC or TTY, and a missing output marker do not establish an exclusion. Public argument validation and result-shape assertions remain fixable even when later parts of the file require OS facilities. The first failing operation controls the assigned label; later failures remain separate work.
+
+The complete audit with full-log hashes is retained in `review-r1/exclusion-audit.json` in the analysis report directory. Regeneration verifies every source citation and raw-log hash, checks that every current `a`/`e` member has an audited capability/cost reason, and rejects classification drift. The source-level probe executes the pinned spawn factory against a mock host. It confirms ENOENT and zero host calls for bash and echo, null signalCode for a normal unsignalled return, and the pinned matcher's acceptance of an empty string for expect.any(String). The tested commands start no real OS child executable. Actual WASI observations remain in the unchanged baseline logs.
+
+<details>
+<summary>All 52 file decisions, including the three review corrections</summary>
+
+| File | Label before → after | Raw observation and decision | Pinned evidence |
+|---|---|---|---|
+| `js/bun/util/heap-snapshot.test.ts` | e → e | `SyntaxError: Could not find export 'estimateShallowMemoryUsageOf' in module 'bun:jsc'`. Truthful shallow-cell size needs private object-layout/backing-store instrumentation on JSC, QuickJS and browser engines. Engine exposes aggregate memory only; standard browser workers expose no per-object size API. Maintain no fabricated size adapter solely for private assertions. | [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335); [crates/bunwasm-runtime/src/js/builtins.js:837](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L837) |
+| `js/node/zlib/zlib-estimated-size-gc.test.ts` | e → e | `SyntaxError: Could not find export 'estimateShallowMemoryUsageOf' in module 'bun:jsc'`. Truthful shallow-cell size needs private object-layout/backing-store instrumentation on JSC, QuickJS and browser engines. Engine exposes aggregate memory only; standard browser workers expose no per-object size API. Maintain no fabricated size adapter solely for private assertions. | [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335); [crates/bunwasm-runtime/src/js/builtins.js:837](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L837) |
+| `js/web/abort/abort-signal-event-listener-leak.test.ts` | e → e | `SyntaxError: Could not find export 'estimateShallowMemoryUsageOf' in module 'bun:jsc'`. Truthful shallow-cell size needs private object-layout/backing-store instrumentation on JSC, QuickJS and browser engines. Engine exposes aggregate memory only; standard browser workers expose no per-object size API. Maintain no fabricated size adapter solely for private assertions. | [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335); [crates/bunwasm-runtime/src/js/builtins.js:837](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L837) |
+| `js/web/timers/performance-entries.test.ts` | e → e | `SyntaxError: Could not find export 'estimateShallowMemoryUsageOf' in module 'bun:jsc'`. Truthful shallow-cell size needs private object-layout/backing-store instrumentation on JSC, QuickJS and browser engines. Engine exposes aggregate memory only; standard browser workers expose no per-object size API. Maintain no fabricated size adapter solely for private assertions. | [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335); [crates/bunwasm-runtime/src/js/builtins.js:837](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L837) |
+| `js/web/websocket/websocket-pong-fragmented.test.ts` | e → e | `SyntaxError: Could not find export 'estimateShallowMemoryUsageOf' in module 'bun:jsc'`. Truthful shallow-cell size needs private object-layout/backing-store instrumentation on JSC, QuickJS and browser engines. Engine exposes aggregate memory only; standard browser workers expose no per-object size API. Maintain no fabricated size adapter solely for private assertions. | [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335); [crates/bunwasm-runtime/src/js/builtins.js:837](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L837) |
+| `js/bun/terminal/terminal-platform-gaps.test.ts` | a → a | `TypeError: not a function`. PTY master/slave descriptors and termios/ioctl control are not supplied by WASI preview1 or this host ABI. These tests request a real terminal transport, not a shell pipe. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [docs/host-abi.md:224](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L224); `test/js/bun/terminal/terminal-platform-gaps.test.ts:80 @cd95fa7a` |
+| `js/bun/terminal/terminal-spawn.test.ts` | a → a | `TypeError: not a function`. PTY master/slave descriptors and termios/ioctl control are not supplied by WASI preview1 or this host ABI. These tests request a real terminal transport, not a shell pipe. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [docs/host-abi.md:224](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L224); `test/js/bun/terminal/terminal-spawn.test.ts:11 @cd95fa7a` |
+| `js/bun/terminal/terminal.test.ts` | a → a | `TypeError: not a function`. PTY master/slave descriptors and termios/ioctl control are not supplied by WASI preview1 or this host ABI. These tests request a real terminal transport, not a shell pipe. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [docs/host-abi.md:224](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L224); `test/js/bun/terminal/terminal.test.ts:15 @cd95fa7a` |
+| `js/node/tty.test.ts` | a → a | `  ^ this test timed out after 2000ms.`. The first timed-out test requests Bun.spawn terminal options and waits for PTY RESULT data. Its source explicitly requires openpty/ConPTY stdin; the later absent Bun.Terminal error corroborates missing terminal transport. Ordinary pipes do not implement termios/raw mode. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [docs/host-abi.md:224](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L224); `test/js/node/tty.test.ts:17 @cd95fa7a`; `test/js/node/tty.test.ts:70 @cd95fa7a` |
+| `regression/issue/26286.test.ts` | a → a | `TypeError: not a function`. PTY master/slave descriptors and termios/ioctl control are not supplied by WASI preview1 or this host ABI. These tests request a real terminal transport, not a shell pipe. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [docs/host-abi.md:224](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L224); `test/regression/issue/26286.test.ts:15 @cd95fa7a` |
+| `js/bun/udp/udp_socket.test.ts` | a → a | `error: expect(received).toBe(expected)`. The host exposes TCP stream/listen/address operations, not UDP bind/send/receive. The member source requires Bun.udpSocket or dgram.createSocket before its intended assertion. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [crates/bunwasm-runtime/src/js/builtins.js:789](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L789); [crates/bunwasm-runtime/src/js/bun.js:519](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L519) |
+| `js/node/dns/dns-resolver-concurrent-timeout.test.ts` | a → a | `error: expect(received).toBe(expected)`. The host exposes TCP stream/listen/address operations, not UDP bind/send/receive. The member source requires Bun.udpSocket or dgram.createSocket before its intended assertion. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [crates/bunwasm-runtime/src/js/builtins.js:789](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L789); [crates/bunwasm-runtime/src/js/bun.js:519](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L519) |
+| `js/node/dns/dns-tcp-bidirectional-poll.test.ts` | a → a | `error: expect(received).toBe(expected)`. The host exposes TCP stream/listen/address operations, not UDP bind/send/receive. The member source requires Bun.udpSocket or dgram.createSocket before its intended assertion. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [crates/bunwasm-runtime/src/js/builtins.js:789](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L789); [crates/bunwasm-runtime/src/js/bun.js:519](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L519) |
+| `regression/issue/24157.test.ts` | a → a | `error: expect(received).toContain(expected)`. The host exposes TCP stream/listen/address operations, not UDP bind/send/receive. The member source requires Bun.udpSocket or dgram.createSocket before its intended assertion. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [crates/bunwasm-runtime/src/js/builtins.js:789](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L789); [crates/bunwasm-runtime/src/js/bun.js:519](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L519) |
+| `regression/issue/28083.test.ts` | a → a | `error: expect(received).toContain(expected)`. The host exposes TCP stream/listen/address operations, not UDP bind/send/receive. The member source requires Bun.udpSocket or dgram.createSocket before its intended assertion. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [crates/bunwasm-runtime/src/js/builtins.js:789](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L789); [crates/bunwasm-runtime/src/js/bun.js:519](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L519) |
+| `js/bun/webview/webview-chrome-disconnect.test.ts` | a → d | `error: expect(received).toEndWith(expected)`. The first failures are missing constructor or option validation. The disconnect fixture uses a local Bun.serve WebSocket CDP mock, and the pipe fixture substitutes a Bun script for Chrome. These controls do not require a native GUI or installed browser. Implement the public WebView API before attributing a later transport failure to the host. | [crates/bunwasm-runtime/src/js/bun.js:449](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L449); `test/js/bun/webview/webview-chrome-disconnect.test.ts:92 @cd95fa7a` |
+| `js/bun/webview/webview-chrome-pipe.test.ts` | a → d | `error: expect(received).toBe(expected)`. The first failures are missing constructor or option validation. The disconnect fixture uses a local Bun.serve WebSocket CDP mock, and the pipe fixture substitutes a Bun script for Chrome. These controls do not require a native GUI or installed browser. Implement the public WebView API before attributing a later transport failure to the host. | [crates/bunwasm-runtime/src/js/bun.js:449](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L449); `test/js/bun/webview/webview-chrome-pipe.test.ts:27 @cd95fa7a` |
+| `js/bun/webview/webview-chrome.test.ts` | a → d | `error: expect(received).toThrow(expected)`. The first failures are missing constructor or option validation. The disconnect fixture uses a local Bun.serve WebSocket CDP mock, and the pipe fixture substitutes a Bun script for Chrome. These controls do not require a native GUI or installed browser. Implement the public WebView API before attributing a later transport failure to the host. | [crates/bunwasm-runtime/src/js/bun.js:449](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L449); `test/js/bun/webview/webview-chrome.test.ts:338 @cd95fa7a` |
+| `js/bun/webview/webview.test.ts` | a → d | `error: expect(received).toThrow(expected)`. The first failures are missing constructor or option validation. The disconnect fixture uses a local Bun.serve WebSocket CDP mock, and the pipe fixture substitutes a Bun script for Chrome. These controls do not require a native GUI or installed browser. Implement the public WebView API before attributing a later transport failure to the host. | [crates/bunwasm-runtime/src/js/bun.js:449](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L449); `test/js/bun/webview/webview.test.ts:69 @cd95fa7a` |
+| `js/bun/spawn/spawn-pipe-read-error-leak.test.ts` | a → a | `error: expect(received).toEqual(expected)`. The tested libc dlopen/mmap or compile-and-call needs executable host machine code and a native foreign-call bridge. No host-library/foreign-call operation exists in the wasm32 guest ABI. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [crates/bunwasm-runtime/src/js/builtins.js:863](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L863) |
+| `js/bun/transpiler/transpiler-truncated-utf8.test.ts` | a → a | `error: expect(received).toEqual(expected)`. The tested libc dlopen/mmap or compile-and-call needs executable host machine code and a native foreign-call bridge. No host-library/foreign-call operation exists in the wasm32 guest ABI. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [crates/bunwasm-runtime/src/js/builtins.js:863](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L863) |
+| `regression/issue/15753.test.ts` | a → c | `error: expect(received).toContain(expected)`. All five raw failures already reject the input, but print CODE:undefined instead of ERR_DLOPEN_FAILED. Reporting the public rejection code needs no successful native addon load. The native ELF guard and library execution paths remain unmeasured. | `test/regression/issue/15753.test.ts:116 @cd95fa7a`; [crates/bunwasm-runtime/src/js/process.js:253](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/process.js#L253) |
+| `regression/issue/26249.test.ts` | a → a | `error: expect(received).toBe(expected)`. The tested libc dlopen/mmap or compile-and-call needs executable host machine code and a native foreign-call bridge. No host-library/foreign-call operation exists in the wasm32 guest ABI. | [docs/host-abi.md:76](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L76); [crates/bunwasm-runtime/src/js/builtins.js:863](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L863) |
+| `js/bun/glob/scan.test.ts` | e → e | `TypeError: not a function`. Collector aggressiveness is JSC-private policy. Engine exposes gc and aggregate memory, and browser workers expose no collector-policy controls. Cross-engine policy/tuning instrumentation would maintain a private stress facility rather than public behavior. | [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335); [web/src/engine-host.js:462](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/web/src/engine-host.js#L462); [crates/bunwasm-runtime/src/js/bun.js:511](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L511) |
+| `js/bun/resolve/load-same-js-file-a-lot.test.ts` | e → e | `TypeError: not a function`. Collector aggressiveness is JSC-private policy. Engine exposes gc and aggregate memory, and browser workers expose no collector-policy controls. Cross-engine policy/tuning instrumentation would maintain a private stress facility rather than public behavior. | [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335); [web/src/engine-host.js:462](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/web/src/engine-host.js#L462); [crates/bunwasm-runtime/src/js/bun.js:511](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L511) |
+| `js/node/v8/v8-date-parser.test.js` | e → e | `TypeError: not a function`. Collector aggressiveness is JSC-private policy. Engine exposes gc and aggregate memory, and browser workers expose no collector-policy controls. Cross-engine policy/tuning instrumentation would maintain a private stress facility rather than public behavior. | [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335); [web/src/engine-host.js:462](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/web/src/engine-host.js#L462); [crates/bunwasm-runtime/src/js/bun.js:511](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L511) |
+| `js/bun/css/angle-serialization-hang.test.ts` | e → c | `error: expect(received).toBe(expected)`. The angle fixture cannot destructure minifyTest from undefined cssInternals. The nesting fixture catches the same missing helper and prints its TypeError instead of a nesting-limit diagnostic. Bun's CSS parser is already portable Rust in this project. No OS limitation or exclusion cost is established for exposing the test adapter. | `test/js/bun/css/angle-serialization-hang.test.ts:37 @cd95fa7a`; [crates/bunwasm-runtime/src/js/builtins.js:856](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L856) |
+| `js/bun/css/atan2-backtracking-hang.test.ts` | e → d | `error: expect(received).toBe(expected)`. The child calls public Bun.color and throws not a function. It never reaches color parsing or the nested atan2 complexity check. The Rust color/CSS implementation is portable; this is an API implementation gap, not a private-hook exclusion. | `test/js/bun/css/atan2-backtracking-hang.test.ts:36 @cd95fa7a`; [crates/bunwasm-runtime/src/js/bun.js:449](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L449) |
+| `js/bun/css/nested-selector-expansion.test.ts` | e → c | `error: expect(received).toContain(expected)`. The angle fixture cannot destructure minifyTest from undefined cssInternals. The nesting fixture catches the same missing helper and prints its TypeError instead of a nesting-limit diagnostic. Bun's CSS parser is already portable Rust in this project. No OS limitation or exclusion cost is established for exposing the test adapter. | `test/js/bun/css/nested-selector-expansion.test.ts:47 @cd95fa7a`; [crates/bunwasm-runtime/src/js/builtins.js:856](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L856) |
+| `js/bun/test/expect-stack-overflow-crash.test.ts` | e → c | `error: expect(received).toBe(expected)`. The child reports the expected RangeError class, but its message lacks the final period in Bun's expected text. The record demonstrates a bounded public diagnostic mismatch. No host limitation or cost reason for excluding this assertion is established. | `test/js/bun/test/expect-stack-overflow-crash.test.ts:55 @cd95fa7a`; [crates/bunwasm-runtime/src/engine_quickjs.rs:243](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine_quickjs.rs#L243) |
+| `regression/issue/30963.test.ts` | e → d | `error: expect(received).toContain(expected)`. The child rejects the malformed source with QuickJS Unexpected token instead of the expected Bun parser message. The eval entry is registered as source directly. No host capability prevents using the already compiled Bun parser, so this is eval parsing and diagnostic integration work. | `test/regression/issue/30963.test.ts:47 @cd95fa7a`; [crates/bunwasm-runtime/src/modules.rs:414](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/modules.rs#L414) |
+| `regression/issue/jsx-template-string-crash.test.ts` | e → d | `error: expect(received).toMatchInlineSnapshot(expected)`. Eval does not provide Bun's JSX parsing path. The valid React/TSX fixture emits no expected output, while the malformed JSX fixture receives QuickJS's unexpected less-than-token message instead of Bun's JSX lexer diagnostics. This needs eval loader and transpilation work; the invalid JSX record alone does not establish an unavoidable engine-wording exclusion. | `test/regression/issue/jsx-template-string-crash.test.ts:18 @cd95fa7a`; [crates/bunwasm-runtime/src/modules.rs:414](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/modules.rs#L414) |
+| `cli/heap-prof.test.ts` | e → e | `error: expect(received).toBe(expected)`. The first blocker is the rejected flag. Full truthful support needs allocation/CPU sampling hooks and native profile writers per engine, absent from Engine and standard browser-worker APIs. A flag stub cannot produce the requested profile artifacts. | [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335); [crates/bunwasm-cli/src/main.rs:416](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-cli/src/main.rs#L416) |
+| `regression/issue/29240.test.ts` | e → e | `error: expect(received).toBe(expected)`. The first blocker is the rejected flag. Full truthful support needs allocation/CPU sampling hooks and native profile writers per engine, absent from Engine and standard browser-worker APIs. A flag stub cannot produce the requested profile artifacts. | [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335); [crates/bunwasm-cli/src/main.rs:416](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-cli/src/main.rs#L416) |
+| `js/node/process/process-array-accessor-crash.test.ts` | a → c | `error: expect(received).toThrow(expected)`. The accessor test expects its getter error to propagate and receives not a function because setgroups is absent. Reading and validating an input array needs no host credential change. A valid setgroups operation may need a future host capability, but this first failure is argument validation. | `test/js/node/process/process-array-accessor-crash.test.ts:22 @cd95fa7a`; [crates/bunwasm-runtime/src/js/process.js:231](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/process.js#L231) |
+| `regression/issue/isArray-proxy-crash.test.ts` | a → c | `error: expect(received).toThrow()`. The process.setgroups Proxy check passes. The first failing assertion is vm.compileFunction with Proxy params, which returns a function instead of throwing. Its implementation joins params without the expected validation and ignores contextExtensions. No group-management syscall is implicated. | `test/regression/issue/isArray-proxy-crash.test.ts:57 @cd95fa7a`; [crates/bunwasm-runtime/src/js/builtins.js:322](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L322) |
+| `js/bun/jsc/temporal-global.test.ts` | e → c | `error: expect(received).toEqual(expected)`. The child sees a Temporal object instead of undefined. The portable shim is lazily installed whenever the global is absent and does not check the opt-out environment flag. Honoring that installation choice does not require changing native JSC internals. | `test/js/bun/jsc/temporal-global.test.ts:20 @cd95fa7a`; [crates/bunwasm-runtime/src/js/bootstrap.js:799](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bootstrap.js#L799) |
+| `js/node/process/process-memory-pressure.test.ts` | e → c | `error: expect(received).toEqual(expected)`. The fixture explicitly injects warning and critical through a missing test helper and observes no process events. Synthetic injection can validate and emit those events without causing real OS memory pressure. No native capability or high-cost instrumentation requirement is established by this test. | [crates/bunwasm-runtime/src/js/builtins.js:856](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L856); `test/js/node/process/process-memory-pressure.test.ts:1 @cd95fa7a` |
+| `js/bun/module-graph/module-graph-gc.test.ts` | e → e | `SyntaxError: Could not find export 'generateHeapSnapshotForDebugging' in module 'bun:jsc'`. The private expected graph requires per-collector cells, edges and roots with Bun/JSC metadata. Engine and standard browser workers expose no heap graph; reproducing this private format needs separate collector instrumentation for each engine. | [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335); [crates/bunwasm-runtime/src/js/builtins.js:813](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L813) |
+| `js/node/buffer-jit.test.ts` | e → e | `error: expect(received).toBe(expected)`. QuickJS interprets, JSC in wasm does not JIT, and unprivileged browser workers expose no no-inline or DFG compile-count control. Emulating JSC tiering state would fabricate the subject instead of measuring it. | [crates/bunwasm-runtime/src/engine_quickjs.rs:138](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine_quickjs.rs#L138); [jsc/README.md:25](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/jsc/README.md#L25); [crates/bunwasm-runtime/src/engine.rs:335](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine.rs#L335) |
+| `js/bun/spawn/spawn-pipe-stale-fd-unregister.test.ts` | a → a | `error: expect(received).toEqual(expected)`. Raw ENOENT occurs at /proc/self/fd. The runner preopens only suite/tmp, and WASI guest descriptor numbers are not the launcher native fd table. No native descriptor-table/fcntl/poll introspection bridge exists. | [scripts/bun-suite.py:175](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/scripts/bun-suite.py#L175); [docs/host-abi.md:224](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L224) |
+| `js/node/buffer-concat.test.ts` | e → e | `error: expect(received).toThrow(expected)`. The request exceeds the wasm32 buffer/address range and correctly throws RangeError. JSC-specific typed-array wording would falsely attribute that wasm32 guard to JSC, adding a diagnostic special case without changing behavior. | [crates/bunwasm-runtime/src/js/buffer.js:7](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/buffer.js#L7); [crates/bunwasm-runtime/src/js/buffer.js:524](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/buffer.js#L524) |
+| `cli/run/commonjs-invalid.test.ts` | e → c | `error: expect(received).toContain(expected)`. The fixture is ordinary text headed @bun @bun-cjs, without the required function wrapper. It executes as CommonJS instead of producing the wrapper diagnostic. This check needs text-format validation, not native machine-code or bytecode execution, so it is a bounded loader gap. | `test/cli/run/cjs-fixture-bad.cjs:1 @cd95fa7a`; [crates/bunwasm-runtime/src/modules.rs:30](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/modules.rs#L30) |
+| `js/node/os/os.test.js` | a → a | `error: expect(received).toBe(expected)`. The artifact is wasm32-wasip1, while the upstream allowlist contains only native CPU architectures. Returning a native launcher CPU would misreport the guest address model. | [crates/bunwasm-runtime/src/js/builtins.js:43](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L43); [crates/bunwasm-runtime/src/js/process.js:181](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/process.js#L181) |
+| `js/node/process/process-execve.test.ts` | a → a | `error: expect(received).toBe(expected)`. The full operation replaces the calling OS process image while preserving identity/fds. WASI preview1 has no execve; child guests are stores on launcher threads, and spawn only starts a fresh copy of Bun. | [docs/host-abi.md:206](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L206); [docs/host-abi.md:239](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L239) |
+| `regression/issue/29169.test.ts` | a → c | `error: expect(received).toBe(expected)`. The first assertion checks the property descriptor and receives no getter. Installing an accessor requires no OS parent-process lookup. A later test independently fails to open /proc/self/stat; that later platform dependency does not explain the first descriptor mismatch. | `test/regression/issue/29169.test.ts:35 @cd95fa7a`; [crates/bunwasm-runtime/src/js/process.js:197](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/process.js#L197) |
+| `regression/issue/29519.test.ts` | e → d | `error: expect(received).toBe(expected)`. The failing child constructs ShadowRealm and prints no ok marker. This is an absent realm API, not evidence that concurrent GC failed. A portable realm implementation would be substantial work, but the record supplies no platform impossibility or explicit reason to exclude it. | `test/regression/issue/29519.test.ts:69 @cd95fa7a`; [crates/bunwasm-runtime/src/engine_quickjs.rs:138](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine_quickjs.rs#L138) |
+| `regression/issue/18239/18239.test.ts` | a → b | `error: expect(received).toContain(expected)`. The dispatcher accepts only the guest Bun executable. The delayed-pipe fixture invokes bash, and the isolated-event-loop case invokes echo. Both are rejected with ENOENT and empty child stdout before their intended checks. BEFORE and AFTER remain visible in the echo case, so parent stdout damage is not established. Other members invoke fake rustc/rustup, yes, chmod, or another native executable. | `test/regression/issue/18239/18239.test.ts:13 @cd95fa7a`; [crates/bunwasm-runtime/src/js/spawn.js:61](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/spawn.js#L61) |
+| `js/node/process/process-stdio-stack-overflow.test.ts` | e → c | `error: expect(received).toEqual(expected)`. All four raw failures expect signalCode undefined and receive null. The normal spawnSync return supplies null for an unsignalled child. Empty stderr satisfies expect.any(String), as matchesConstructor explicitly accepts primitive strings. This result-shape assertion establishes no stack-exhaustion or stdio initialization failure. | `test/js/node/process/process-stdio-stack-overflow.test.ts:16 @cd95fa7a`; [crates/bunwasm-runtime/src/js/spawn.js:321](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/spawn.js#L321); [crates/bunwasm-runtime/src/js/bun_test.js:88](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun_test.js#L88) |
+| `js/web/workers/worker-terminate-funnels.test.ts` | a → a | `error: expect(received).toEqual(expected)`. workerData contains a SharedArrayBuffer control block. The codec rejects it; independent guest stores and the worker wire protocol have no shared-JS-buffer backing-store identity/handle. | [crates/bunwasm-runtime/src/js/worker_codec.ts:66](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/worker_codec.ts#L66); [docs/host-abi.md:239](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/docs/host-abi.md#L239); `test/js/web/workers/worker-terminate-funnels-fixture.ts:744 @cd95fa7a` |
+| `js/node/zlib/zlib-handle-bounds-check.test.ts` | e → d | `error: expect(received).toThrow(expected)`. The fixture calls _handle.writeSync before its bounds assertion, but that private object is absent. Compression itself already runs through portable Rust natives. Providing the handle contract and its buffer/lifetime rules is implementation work that can also support upstream Node/Bun zlib code. The raw record establishes no host impossibility or sufficient cost reason to exclude it. | [crates/bunwasm-runtime/src/js/builtins.js:607](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L607); `test/js/node/zlib/zlib-handle-bounds-check.test.ts:16 @cd95fa7a` |
+| `js/bun/spawn/spawnsync-isolated-event-loop.test.ts` | c → b | `error: expect(received).toContain(expected)`. The dispatcher accepts only the guest Bun executable. The delayed-pipe fixture invokes bash, and the isolated-event-loop case invokes echo. Both are rejected with ENOENT and empty child stdout before their intended checks. BEFORE and AFTER remain visible in the echo case, so parent stdout damage is not established. Other members invoke fake rustc/rustup, yes, chmod, or another native executable. | `test/js/bun/spawn/spawnsync-isolated-event-loop.test.ts:91 @cd95fa7a`; [crates/bunwasm-runtime/src/js/spawn.js:61](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/spawn.js#L61) |
+
+</details>
+
+
 
 ### Reproduce one cause
 
@@ -168,13 +238,13 @@ The rank uses file count, then cause title. A high rank measures coverage in thi
 | 11 | [HTMLRewriter is absent](#cause-htmlrewriter) | 8 | d |
 | 12 | [Bun.$ has no cwd, throws, nothrow or execution implementation](#cause-shell-config) | 7 | d |
 | 13 | [process.stdin lacks pipe and live Node readable behavior](#cause-stdin-pipe) | 7 | d |
-| 14 | [toThrow does not await a returned rejecting promise](#cause-async-tothrow) | 7 | c |
-| 15 | [Zstd stream constructors and compression functions are absent](#cause-zlib-zstd) | 7 | d |
-| 16 | [bun:jsc.estimateShallowMemoryUsageOf has no engine-independent implementation](#cause-shallow-memory) | 5 | e |
-| 17 | [Bun.Terminal needs a PTY and termios host capability](#cause-terminal) | 5 | a |
-| 18 | [node:crypto.X509Certificate is not exported](#cause-x509) | 5 | d |
-| 19 | [Registry requests send the wrong npm Accept header](#cause-manifest-accept) | 5 | c |
-| 20 | [Subprocess dispatch only supports the wasm Bun executable](#cause-external-program) | 5 | b |
+| 14 | [Subprocess dispatch only supports the wasm Bun executable](#cause-external-program) | 7 | b |
+| 15 | [toThrow does not await a returned rejecting promise](#cause-async-tothrow) | 7 | c |
+| 16 | [Zstd stream constructors and compression functions are absent](#cause-zlib-zstd) | 7 | d |
+| 17 | [bun:jsc.estimateShallowMemoryUsageOf has no engine-independent implementation](#cause-shallow-memory) | 5 | e |
+| 18 | [Bun.Terminal needs a PTY and termios host capability](#cause-terminal) | 5 | a |
+| 19 | [node:crypto.X509Certificate is not exported](#cause-x509) | 5 | d |
+| 20 | [Registry requests send the wrong npm Accept header](#cause-manifest-accept) | 5 | c |
 | 21 | [UDP and resolver datagram sockets have no host ABI](#cause-udp) | 5 | a |
 | 22 | [Brotli compression and decompression are stubbed](#cause-zlib-brotli) | 4 | d |
 | 23 | [bun run treats following runtime options as a filename](#cause-post-run-flags) | 4 | c |
@@ -182,45 +252,45 @@ The rank uses file count, then cause title. A high rank measures coverage in thi
 | 25 | [bun:wrap has no __decorateElement export](#cause-decorator-helper) | 4 | c |
 | 26 | [Bun.cron and Bun.cron.parse are absent](#cause-cron) | 4 | d |
 | 27 | [Bun.markdown is absent](#cause-markdown) | 4 | d |
-| 28 | [Bun.WebView needs an external browser process or native WebKit](#cause-webview) | 4 | a |
+| 28 | [Bun.WebView constructor and CDP client are absent](#cause-webview) | 4 | d |
 | 29 | [expect.toBeWithin is absent](#cause-within) | 4 | c |
-| 30 | [Native FFI libraries and addon loading are unavailable](#cause-ffi) | 4 | a |
-| 31 | [Resolver errors say package instead of module and omit structured diagnostics](#cause-resolve-wording) | 4 | c |
-| 32 | [S3Client and Bun.s3 are absent](#cause-s3-api) | 4 | d |
-| 33 | [The installer ignores existing npm, pnpm and Yarn lockfile migration](#cause-lock-migration) | 4 | d |
-| 34 | [AbortController, EventTarget and CustomEvent lack their web toStringTag](#cause-web-brand) | 3 | c |
-| 35 | [assert.partialDeepStrictEqual is absent](#cause-partial-assert) | 3 | c |
-| 36 | [Body and Node stream consumers release locks that Bun retains](#cause-stream-lock) | 3 | d |
-| 37 | [bun x and bunx execution are absent](#cause-x-command) | 3 | d |
-| 38 | [Bun.Image codec and resize API is absent](#cause-archive-api-image) | 3 | d |
-| 39 | [Bun.ModuleGraph is absent](#cause-module-graph) | 3 | d |
-| 40 | [Bun.unsafe.gcAggressionLevel is native GC test control](#cause-unsafe-gc) | 3 | e |
-| 41 | [Bun's private CSS minifyTest hook is absent](#cause-css-test-hook) | 3 | e |
-| 42 | [bunfig preloads and preload-defined extensions are not applied](#cause-preload) | 3 | d |
-| 43 | [Child IPC and process.send are unsupported](#cause-child-ipc) | 3 | b |
-| 44 | [Conditional and each test builders lose their modifier methods](#cause-conditional-tests) | 3 | c |
-| 45 | [Engine parser and stack-overflow diagnostics use their native wording](#cause-parser-native-wording) | 3 | e |
-| 46 | [Filesystem wrappers lose Node error code and path fields](#cause-fs-error-fields) | 3 | c |
-| 47 | [HTTP and WebSocket serializers lowercase caller-visible header names](#cause-http-header-case) | 3 | c |
-| 48 | [Installer lacks --lockfile-only mode](#cause-install-lockfile-only) | 3 | c |
-| 49 | [Installer resolution does not handle local file dependency graphs](#cause-file-dependencies) | 3 | d |
-| 50 | [Package resolution requires dist.integrity or dist.shasum](#cause-install-integrity) | 3 | c |
-| 51 | [process.stdout end, drain and async iteration contracts are incomplete](#cause-stdout-lifecycle) | 3 | d |
-| 52 | [Runtime resolution does not auto-install package specifiers](#cause-autoinstall) | 3 | d |
-| 53 | [The installer rejects --linker=hoisted while accepting the spaced form](#cause-install-equals-linker) | 3 | c |
-| 54 | [BuildError diagnostics do not expose line and column positions](#cause-source-map-diagnostic) | 2 | d |
-| 55 | [bun info and why are absent](#cause-info-why-command) | 2 | d |
-| 56 | [bun patch and prune commands are absent](#cause-patch-command) | 2 | d |
-| 57 | [bun pm migrate is absent](#cause-pm-migrate) | 2 | d |
-| 58 | [bun:test.onTestFinished is absent](#cause-runner-onfinished) | 2 | c |
-| 59 | [Bun.sliceAnsi is absent](#cause-slice-ansi) | 2 | c |
-| 60 | [Bun.wrapAnsi is absent](#cause-wrap-ansi) | 2 | c |
-| 61 | [CI detection does not reject test.only](#cause-ci-only) | 2 | c |
-| 62 | [CommonJS namespace interop exposes the wrong default and __esModule shape](#cause-cjs-interop) | 2 | d |
-| 63 | [domainToASCII and domainToUnicode accept invalid domain input](#cause-url-idna) | 2 | c |
-| 64 | [Dynamic data URL modules are resolved as package names](#cause-eval-data-url) | 2 | d |
-| 65 | [Error frames and diff printing diverge from Bun's assertion report](#cause-runner-format) | 2 | c |
-| 66 | [Error stacks are not remapped through the expected source maps](#cause-stack-map) | 2 | d |
+| 30 | [Resolver errors say package instead of module and omit structured diagnostics](#cause-resolve-wording) | 4 | c |
+| 31 | [S3Client and Bun.s3 are absent](#cause-s3-api) | 4 | d |
+| 32 | [The installer ignores existing npm, pnpm and Yarn lockfile migration](#cause-lock-migration) | 4 | d |
+| 33 | [AbortController, EventTarget and CustomEvent lack their web toStringTag](#cause-web-brand) | 3 | c |
+| 34 | [assert.partialDeepStrictEqual is absent](#cause-partial-assert) | 3 | c |
+| 35 | [Body and Node stream consumers release locks that Bun retains](#cause-stream-lock) | 3 | d |
+| 36 | [bun x and bunx execution are absent](#cause-x-command) | 3 | d |
+| 37 | [Bun.Image codec and resize API is absent](#cause-archive-api-image) | 3 | d |
+| 38 | [Bun.ModuleGraph is absent](#cause-module-graph) | 3 | d |
+| 39 | [Bun.unsafe.gcAggressionLevel is native GC test control](#cause-unsafe-gc) | 3 | e |
+| 40 | [bunfig preloads and preload-defined extensions are not applied](#cause-preload) | 3 | d |
+| 41 | [Child IPC and process.send are unsupported](#cause-child-ipc) | 3 | b |
+| 42 | [Conditional and each test builders lose their modifier methods](#cause-conditional-tests) | 3 | c |
+| 43 | [Filesystem wrappers lose Node error code and path fields](#cause-fs-error-fields) | 3 | c |
+| 44 | [HTTP and WebSocket serializers lowercase caller-visible header names](#cause-http-header-case) | 3 | c |
+| 45 | [Installer lacks --lockfile-only mode](#cause-install-lockfile-only) | 3 | c |
+| 46 | [Installer resolution does not handle local file dependency graphs](#cause-file-dependencies) | 3 | d |
+| 47 | [Native FFI libraries and addon loading are unavailable](#cause-ffi) | 3 | a |
+| 48 | [Package resolution requires dist.integrity or dist.shasum](#cause-install-integrity) | 3 | c |
+| 49 | [process.stdout end, drain and async iteration contracts are incomplete](#cause-stdout-lifecycle) | 3 | d |
+| 50 | [Runtime resolution does not auto-install package specifiers](#cause-autoinstall) | 3 | d |
+| 51 | [The installer rejects --linker=hoisted while accepting the spaced form](#cause-install-equals-linker) | 3 | c |
+| 52 | [BuildError diagnostics do not expose line and column positions](#cause-source-map-diagnostic) | 2 | d |
+| 53 | [bun info and why are absent](#cause-info-why-command) | 2 | d |
+| 54 | [bun patch and prune commands are absent](#cause-patch-command) | 2 | d |
+| 55 | [bun pm migrate is absent](#cause-pm-migrate) | 2 | d |
+| 56 | [bun:internal-for-testing.cssInternals.minifyTest is absent](#cause-css-test-hook) | 2 | c |
+| 57 | [bun:test.onTestFinished is absent](#cause-runner-onfinished) | 2 | c |
+| 58 | [Bun.sliceAnsi is absent](#cause-slice-ansi) | 2 | c |
+| 59 | [Bun.wrapAnsi is absent](#cause-wrap-ansi) | 2 | c |
+| 60 | [CI detection does not reject test.only](#cause-ci-only) | 2 | c |
+| 61 | [CommonJS namespace interop exposes the wrong default and __esModule shape](#cause-cjs-interop) | 2 | d |
+| 62 | [domainToASCII and domainToUnicode accept invalid domain input](#cause-url-idna) | 2 | c |
+| 63 | [Dynamic data URL modules are resolved as package names](#cause-eval-data-url) | 2 | d |
+| 64 | [Error frames and diff printing diverge from Bun's assertion report](#cause-runner-format) | 2 | c |
+| 65 | [Error stacks are not remapped through the expected source maps](#cause-stack-map) | 2 | d |
+| 66 | [Eval mode does not provide native Bun's TSX and React evaluation behavior](#cause-eval-jsx) | 2 | d |
 | 67 | [expect.extend silently accepts non-callable entries](#cause-extend-validation) | 2 | c |
 | 68 | [expect.pass and expect.fail are absent](#cause-pass-fail-matchers) | 2 | c |
 | 69 | [Installer does not honor scoped npmrc registry URL paths](#cause-install-registry-config) | 2 | c |
@@ -230,179 +300,181 @@ The rank uses file count, then cause title. A high rank measures coverage in thi
 | 73 | [Native CPU and heap profiler CLI output is unavailable](#cause-profiler-flags) | 2 | e |
 | 74 | [Native fetch does not recover a closed pooled connection](#cause-f-fetch-retry) | 2 | f |
 | 75 | [Native fetch ignores explicit proxy selection](#cause-fetch-proxy) | 2 | d |
-| 76 | [process.setgroups has no host credential-management API](#cause-setgroups) | 2 | a |
-| 77 | [QuickJS is built without Atomics](#cause-f-atomics) | 2 | f |
-| 78 | [QuickJS parser and builtin messages differ from JSC](#cause-f-parser-wording) | 2 | f |
-| 79 | [Request body normalization stringifies FormData instead of encoding multipart data](#cause-formdata-body) | 2 | d |
-| 80 | [Runtime TypeScript loading does not emit the requested legacy decorator behavior](#cause-decorators) | 2 | d |
-| 81 | [Standalone compilation and native bytecode tooling are absent](#cause-compiled-bytecode) | 2 | d |
-| 82 | [Startup does not load the requested dotenv files](#cause-dotenv) | 2 | d |
-| 83 | [Subprocess.resourceUsage returns undefined](#cause-subprocess-resource) | 2 | c |
-| 84 | [The installer only implements the hoisted linker](#cause-install-isolated) | 2 | d |
-| 85 | [The test runner ignores retry and rerun-each flags](#cause-retry-rerun) | 2 | d |
-| 86 | [vm.SourceTextModule is absent](#cause-vm-module) | 2 | d |
-| 87 | [--minimum-release-age is rejected by the install parser](#cause-install-release-age) | 1 | c |
-| 88 | [--no-addons is rejected before the worker can report ERR_DLOPEN_DISABLED](#cause-no-addons-flag) | 1 | c |
-| 89 | [--pass-with-no-tests does not change the empty-suite exit code](#cause-no-tests) | 1 | c |
-| 90 | [--yarn lockfile output and workspace protocol serialization are absent](#cause-yarn-workspace) | 1 | d |
-| 91 | [A renamed current directory is not preserved as a usable child cwd](#cause-spawn-renamed-cwd) | 1 | c |
-| 92 | [AbortSignal.any does not reject a non-AbortSignal iterator result](#cause-abort-any-validation) | 1 | c |
-| 93 | [Adding explicit packages reports install instead of add](#cause-install-add-header) | 1 | c |
-| 94 | [afterAll hooks are skipped after a failing beforeAll](#cause-runner-failure-hooks) | 1 | c |
-| 95 | [Already-aborted spawn forwards signal.reason without Node's ABORT_ERR fields](#cause-spawn-abort-code) | 1 | c |
-| 96 | [An empty imported text file returns an object instead of a string](#cause-empty-text-loader) | 1 | c |
-| 97 | [An empty install writes a lockfile instead of deleting it](#cause-install-empty-lock) | 1 | c |
-| 98 | [Async macro expansion emits a pending Promise instead of its resolved value](#cause-macro-promise) | 1 | d |
-| 99 | [AsyncLocalStorage ignores its defaultValue option](#cause-als-default) | 1 | c |
-| 100 | [Buffer.from creates a fixed-length view over a resizable ArrayBuffer](#cause-buffer-resize) | 1 | c |
-| 101 | [bun check is absent](#cause-check-command) | 1 | d |
-| 102 | [bun create is absent](#cause-create-init-command) | 1 | d |
-| 103 | [bun init is absent](#cause-init-command) | 1 | d |
-| 104 | [bun link is absent](#cause-link-command) | 1 | d |
-| 105 | [bun pm fetch is absent](#cause-pm-fetch) | 1 | d |
-| 106 | [bun pm ls fails on an unresolved optional peer entry](#cause-pm-optional-peer) | 1 | c |
-| 107 | [bun pm pkg is absent](#cause-pm-pkg) | 1 | d |
-| 108 | [bun pm version is absent](#cause-pm-version) | 1 | d |
-| 109 | [bun publish help is absent](#cause-publish-command) | 1 | d |
-| 110 | [bun repl is absent](#cause-repl-command) | 1 | d |
-| 111 | [bun run does not resolve package.json script names](#cause-package-run-script) | 1 | d |
-| 112 | [bun run opens a directory instead of resolving its package entry](#cause-entry-directory) | 1 | c |
-| 113 | [BUN_CONFIG_VERBOSE_FETCH=curl produces no request trace](#cause-fetch-verbose) | 1 | c |
-| 114 | [BUN_JSC_useTemporal does not control the portable Temporal shim](#cause-temporal-toggle) | 1 | e |
-| 115 | [BUN_OPTIONS is not parsed before CLI dispatch](#cause-bun-options) | 1 | c |
-| 116 | [bun:internal-for-testing.emitMemoryPressure is absent](#cause-emit-memory-pressure) | 1 | e |
-| 117 | [bun:jsc.generateHeapSnapshotForDebugging is absent](#cause-native-heap-snapshot) | 1 | e |
-| 118 | [bun:jsc.noInline is absent](#cause-noinline) | 1 | e |
-| 119 | [bun:main is not a registered builtin module](#cause-bun-main) | 1 | d |
-| 120 | [bun:test lacks xit, xtest and xdescribe aliases](#cause-skip-aliases) | 1 | c |
-| 121 | [Bun.build called from a macro does not reach the expected rejection handler](#cause-macro-build) | 1 | d |
-| 122 | [Bun.deepEquals accepts one argument instead of rejecting it](#cause-deep-equals-arity) | 1 | c |
-| 123 | [Bun.deepEquals drops its fourth ignore-class-name argument](#cause-deep-equals-fourth) | 1 | c |
-| 124 | [Bun.deepMatch passes the wrong partial-match semantics](#cause-deep-match) | 1 | c |
-| 125 | [Bun.escapeHTML accepts Symbol instead of throwing](#cause-escape-html-symbol) | 1 | c |
-| 126 | [Bun.escapeRegExp is absent](#cause-escape-regexp) | 1 | c |
-| 127 | [Bun.file appends charset to an explicitly supplied MIME type](#cause-file-mime) | 1 | c |
-| 128 | [Bun.file rejection stacks omit async frame markers](#cause-async-stack-wording) | 1 | c |
-| 129 | [Bun.file.exists reports directories as existing files](#cause-bun-file-exists-dir) | 1 | c |
-| 130 | [Bun.highlighter is absent](#cause-highlighter) | 1 | c |
-| 131 | [Bun.inspect leaks internal BuildError formatting properties](#cause-inspect-build-error) | 1 | c |
-| 132 | [Bun.openInEditor cannot launch an external editor](#cause-open-editor) | 1 | b |
-| 133 | [Bun.plugin and its runtime build.module registry are absent](#cause-plugin-loader) | 1 | d |
-| 134 | [Bun.randomUUIDv5 is absent](#cause-uuid5) | 1 | c |
-| 135 | [Bun.secrets is absent, so argument errors have no Bun code](#cause-secrets-validation) | 1 | c |
-| 136 | [Bun.spawn NUL validation uses a different public message](#cause-null-argument-wording) | 1 | c |
-| 137 | [Bun.stdin.slice applies an offset that Bun ignores for stream stdin](#cause-file-stdin-slice) | 1 | c |
-| 138 | [Bun.stripANSI does not consume a complete OSC title sequence](#cause-strip-ansi) | 1 | c |
-| 139 | [Bun.write drops the requested filesystem mode](#cause-bun-write-mode) | 1 | c |
-| 140 | [bunfig runtime option types are not validated](#cause-bunfig-validation) | 1 | c |
-| 141 | [ChildProcess instances have no spawn method](#cause-child-instance-spawn) | 1 | c |
-| 142 | [ClientRequest.setHeaders is absent](#cause-http-setheaders) | 1 | c |
-| 143 | [CommonJS loading ignores user overrides of Module._extensions](#cause-require-extensions) | 1 | c |
-| 144 | [console has no async line iterator](#cause-console-iterator) | 1 | d |
-| 145 | [console.timeEnd writes to stdout instead of Bun's stderr](#cause-console-time-stream) | 1 | c |
-| 146 | [crypto.createHash does not support SHAKE256 outputLength](#cause-shake256) | 1 | c |
-| 147 | [crypto.createPublicKey rejects certificate PEMs](#cause-jwt-key-classification) | 1 | c |
-| 148 | [CSS module imports return source text instead of an empty object](#cause-css-default) | 1 | c |
-| 149 | [diagnostics_channel.channel accepts null names](#cause-diagnostic-channel) | 1 | c |
-| 150 | [DOMException does not accept Bun's name-and-cause options object](#cause-domexception-name) | 1 | c |
-| 151 | [Dots and only-failures reporters are not implemented](#cause-runner-reporters) | 1 | d |
-| 152 | [Dynamic import in a top-level-await cycle exits before its continuation](#cause-tla-cycle) | 1 | d |
-| 153 | [Embedded crypto key generation rejects P-521](#cause-f-p521) | 1 | f |
-| 154 | [Embedded Web Streams expose minified constructor names](#cause-f-stream-class-name) | 1 | f |
-| 155 | [Embedded WebCrypto rejects a valid noncanonical JWK oct encoding](#cause-f-jwk-octets) | 1 | f |
-| 156 | [Embedded WebCrypto rejects X25519 deriveBits lengths that are not byte-aligned](#cause-f-x25519-bits) | 1 | f |
-| 157 | [Embedded-engine require of ESM pumps user microtasks too early](#cause-f-require-microtasks) | 1 | f |
-| 158 | [Error.prepareStackTrace has no default callable implementation](#cause-prepare-stack) | 1 | c |
-| 159 | [Error.stackTraceLimit does not expose Bun's default property descriptor](#cause-stacktrace-limit) | 1 | c |
-| 160 | [Eval mode does not provide native Bun's TSX and React evaluation behavior](#cause-eval-jsx) | 1 | d |
-| 161 | [Eval skips Bun's dead-branch destructuring-var lowering](#cause-raw-js-parser) | 1 | d |
-| 162 | [EventEmitter.once is a normal function instead of an AsyncFunction](#cause-event-once-constructor) | 1 | c |
-| 163 | [expect.toBeArrayOfSize is absent](#cause-array-size) | 1 | c |
-| 164 | [expect.unreachable stringifies Error instead of preserving its message](#cause-unreachable-message) | 1 | c |
-| 165 | [Fetch exposes the host backend's ConnectionRefused code](#cause-fetch-refused-code) | 1 | c |
-| 166 | [Filesystem timestamps do not preserve the requested utimes values](#cause-mtime-write) | 1 | c |
-| 167 | [fs.constants lacks UV_DIRENT_UNKNOWN and UV_DIRENT_FIFO](#cause-dirent-unknown) | 1 | c |
-| 168 | [fs.mkdir callback adapter defers invalid path errors](#cause-mkdir-validation) | 1 | c |
-| 169 | [fs.ReadStream has no close method](#cause-fs-readstream-close) | 1 | c |
-| 170 | [Guest /proc/self/fd is not the native process descriptor table](#cause-procfs-descriptors) | 1 | a |
-| 171 | [Immediate handles do not coerce to increasing numeric identifiers](#cause-immediate-id) | 1 | c |
-| 172 | [Install progress output omits resolving and migration status](#cause-install-patch-progress) | 1 | c |
-| 173 | [Installer does not execute package lifecycle scripts](#cause-install-lifecycle) | 1 | d |
-| 174 | [Installer does not parse --filter workspace selection](#cause-install-filter) | 1 | c |
-| 175 | [Installer ignores packageExtensions metadata](#cause-package-extensions) | 1 | d |
-| 176 | [Installer rejects --destination before workspace migration](#cause-install-destination) | 1 | c |
-| 177 | [Installer rejects an unresolved optional dependency with an empty name](#cause-install-optional-empty) | 1 | c |
-| 178 | [Large Buffer allocation uses the wasm limit rather than JSC's wording](#cause-large-buffer-wording) | 1 | e |
-| 179 | [Legacy url.parse retains IPv6 brackets in hostname](#cause-url-legacy-ipv6) | 1 | c |
-| 180 | [Legacy url.parse swallows primitive exceptions during argument description](#cause-legacy-url-coercion) | 1 | c |
+| 76 | [QuickJS is built without Atomics](#cause-f-atomics) | 2 | f |
+| 77 | [QuickJS parser and builtin messages differ from JSC](#cause-f-parser-wording) | 2 | f |
+| 78 | [Request body normalization stringifies FormData instead of encoding multipart data](#cause-formdata-body) | 2 | d |
+| 79 | [Runtime TypeScript loading does not emit the requested legacy decorator behavior](#cause-decorators) | 2 | d |
+| 80 | [Standalone compilation and native bytecode tooling are absent](#cause-compiled-bytecode) | 2 | d |
+| 81 | [Startup does not load the requested dotenv files](#cause-dotenv) | 2 | d |
+| 82 | [Subprocess.resourceUsage returns undefined](#cause-subprocess-resource) | 2 | c |
+| 83 | [The installer only implements the hoisted linker](#cause-install-isolated) | 2 | d |
+| 84 | [The test runner ignores retry and rerun-each flags](#cause-retry-rerun) | 2 | d |
+| 85 | [vm.SourceTextModule is absent](#cause-vm-module) | 2 | d |
+| 86 | [--minimum-release-age is rejected by the install parser](#cause-install-release-age) | 1 | c |
+| 87 | [--no-addons is rejected before the worker can report ERR_DLOPEN_DISABLED](#cause-no-addons-flag) | 1 | c |
+| 88 | [--pass-with-no-tests does not change the empty-suite exit code](#cause-no-tests) | 1 | c |
+| 89 | [--yarn lockfile output and workspace protocol serialization are absent](#cause-yarn-workspace) | 1 | d |
+| 90 | [A renamed current directory is not preserved as a usable child cwd](#cause-spawn-renamed-cwd) | 1 | c |
+| 91 | [AbortSignal.any does not reject a non-AbortSignal iterator result](#cause-abort-any-validation) | 1 | c |
+| 92 | [Adding explicit packages reports install instead of add](#cause-install-add-header) | 1 | c |
+| 93 | [afterAll hooks are skipped after a failing beforeAll](#cause-runner-failure-hooks) | 1 | c |
+| 94 | [Already-aborted spawn forwards signal.reason without Node's ABORT_ERR fields](#cause-spawn-abort-code) | 1 | c |
+| 95 | [An empty imported text file returns an object instead of a string](#cause-empty-text-loader) | 1 | c |
+| 96 | [An empty install writes a lockfile instead of deleting it](#cause-install-empty-lock) | 1 | c |
+| 97 | [Async macro expansion emits a pending Promise instead of its resolved value](#cause-macro-promise) | 1 | d |
+| 98 | [AsyncLocalStorage ignores its defaultValue option](#cause-als-default) | 1 | c |
+| 99 | [Buffer.from creates a fixed-length view over a resizable ArrayBuffer](#cause-buffer-resize) | 1 | c |
+| 100 | [bun check is absent](#cause-check-command) | 1 | d |
+| 101 | [bun create is absent](#cause-create-init-command) | 1 | d |
+| 102 | [bun init is absent](#cause-init-command) | 1 | d |
+| 103 | [bun link is absent](#cause-link-command) | 1 | d |
+| 104 | [bun pm fetch is absent](#cause-pm-fetch) | 1 | d |
+| 105 | [bun pm ls fails on an unresolved optional peer entry](#cause-pm-optional-peer) | 1 | c |
+| 106 | [bun pm pkg is absent](#cause-pm-pkg) | 1 | d |
+| 107 | [bun pm version is absent](#cause-pm-version) | 1 | d |
+| 108 | [bun publish help is absent](#cause-publish-command) | 1 | d |
+| 109 | [bun repl is absent](#cause-repl-command) | 1 | d |
+| 110 | [bun run does not resolve package.json script names](#cause-package-run-script) | 1 | d |
+| 111 | [bun run opens a directory instead of resolving its package entry](#cause-entry-directory) | 1 | c |
+| 112 | [BUN_CONFIG_VERBOSE_FETCH=curl produces no request trace](#cause-fetch-verbose) | 1 | c |
+| 113 | [BUN_OPTIONS is not parsed before CLI dispatch](#cause-bun-options) | 1 | c |
+| 114 | [bun:internal-for-testing.emitMemoryPressure is absent](#cause-emit-memory-pressure) | 1 | c |
+| 115 | [bun:jsc.generateHeapSnapshotForDebugging is absent](#cause-native-heap-snapshot) | 1 | e |
+| 116 | [bun:jsc.noInline is absent](#cause-noinline) | 1 | e |
+| 117 | [bun:main is not a registered builtin module](#cause-bun-main) | 1 | d |
+| 118 | [bun:test lacks xit, xtest and xdescribe aliases](#cause-skip-aliases) | 1 | c |
+| 119 | [Bun.build called from a macro does not reach the expected rejection handler](#cause-macro-build) | 1 | d |
+| 120 | [Bun.color is absent](#cause-public-color) | 1 | d |
+| 121 | [Bun.deepEquals accepts one argument instead of rejecting it](#cause-deep-equals-arity) | 1 | c |
+| 122 | [Bun.deepEquals drops its fourth ignore-class-name argument](#cause-deep-equals-fourth) | 1 | c |
+| 123 | [Bun.deepMatch passes the wrong partial-match semantics](#cause-deep-match) | 1 | c |
+| 124 | [Bun.escapeHTML accepts Symbol instead of throwing](#cause-escape-html-symbol) | 1 | c |
+| 125 | [Bun.escapeRegExp is absent](#cause-escape-regexp) | 1 | c |
+| 126 | [Bun.file appends charset to an explicitly supplied MIME type](#cause-file-mime) | 1 | c |
+| 127 | [Bun.file rejection stacks omit async frame markers](#cause-async-stack-wording) | 1 | c |
+| 128 | [Bun.file.exists reports directories as existing files](#cause-bun-file-exists-dir) | 1 | c |
+| 129 | [Bun.highlighter is absent](#cause-highlighter) | 1 | c |
+| 130 | [Bun.inspect leaks internal BuildError formatting properties](#cause-inspect-build-error) | 1 | c |
+| 131 | [Bun.openInEditor cannot launch an external editor](#cause-open-editor) | 1 | b |
+| 132 | [Bun.plugin and its runtime build.module registry are absent](#cause-plugin-loader) | 1 | d |
+| 133 | [Bun.randomUUIDv5 is absent](#cause-uuid5) | 1 | c |
+| 134 | [Bun.secrets is absent, so argument errors have no Bun code](#cause-secrets-validation) | 1 | c |
+| 135 | [Bun.spawn NUL validation uses a different public message](#cause-null-argument-wording) | 1 | c |
+| 136 | [Bun.stdin.slice applies an offset that Bun ignores for stream stdin](#cause-file-stdin-slice) | 1 | c |
+| 137 | [Bun.stripANSI does not consume a complete OSC title sequence](#cause-strip-ansi) | 1 | c |
+| 138 | [Bun.write drops the requested filesystem mode](#cause-bun-write-mode) | 1 | c |
+| 139 | [bunfig runtime option types are not validated](#cause-bunfig-validation) | 1 | c |
+| 140 | [ChildProcess instances have no spawn method](#cause-child-instance-spawn) | 1 | c |
+| 141 | [ClientRequest.setHeaders is absent](#cause-http-setheaders) | 1 | c |
+| 142 | [CommonJS loading ignores user overrides of Module._extensions](#cause-require-extensions) | 1 | c |
+| 143 | [console has no async line iterator](#cause-console-iterator) | 1 | d |
+| 144 | [console.timeEnd writes to stdout instead of Bun's stderr](#cause-console-time-stream) | 1 | c |
+| 145 | [crypto.createHash does not support SHAKE256 outputLength](#cause-shake256) | 1 | c |
+| 146 | [crypto.createPublicKey rejects certificate PEMs](#cause-jwt-key-classification) | 1 | c |
+| 147 | [CSS module imports return source text instead of an empty object](#cause-css-default) | 1 | c |
+| 148 | [diagnostics_channel.channel accepts null names](#cause-diagnostic-channel) | 1 | c |
+| 149 | [DOMException does not accept Bun's name-and-cause options object](#cause-domexception-name) | 1 | c |
+| 150 | [Dots and only-failures reporters are not implemented](#cause-runner-reporters) | 1 | d |
+| 151 | [Dynamic import in a top-level-await cycle exits before its continuation](#cause-tla-cycle) | 1 | d |
+| 152 | [Embedded crypto key generation rejects P-521](#cause-f-p521) | 1 | f |
+| 153 | [Embedded Web Streams expose minified constructor names](#cause-f-stream-class-name) | 1 | f |
+| 154 | [Embedded WebCrypto rejects a valid noncanonical JWK oct encoding](#cause-f-jwk-octets) | 1 | f |
+| 155 | [Embedded WebCrypto rejects X25519 deriveBits lengths that are not byte-aligned](#cause-f-x25519-bits) | 1 | f |
+| 156 | [Embedded-engine require of ESM pumps user microtasks too early](#cause-f-require-microtasks) | 1 | f |
+| 157 | [Error.prepareStackTrace has no default callable implementation](#cause-prepare-stack) | 1 | c |
+| 158 | [Error.stackTraceLimit does not expose Bun's default property descriptor](#cause-stacktrace-limit) | 1 | c |
+| 159 | [Eval skips Bun's dead-branch destructuring-var lowering](#cause-raw-js-parser) | 1 | d |
+| 160 | [Eval uses engine syntax diagnostics instead of Bun parser diagnostics](#cause-eval-parser-diagnostic) | 1 | d |
+| 161 | [EventEmitter.once is a normal function instead of an AsyncFunction](#cause-event-once-constructor) | 1 | c |
+| 162 | [expect.toBeArrayOfSize is absent](#cause-array-size) | 1 | c |
+| 163 | [expect.unreachable stringifies Error instead of preserving its message](#cause-unreachable-message) | 1 | c |
+| 164 | [Fetch exposes the host backend's ConnectionRefused code](#cause-fetch-refused-code) | 1 | c |
+| 165 | [Filesystem timestamps do not preserve the requested utimes values](#cause-mtime-write) | 1 | c |
+| 166 | [fs.constants lacks UV_DIRENT_UNKNOWN and UV_DIRENT_FIFO](#cause-dirent-unknown) | 1 | c |
+| 167 | [fs.mkdir callback adapter defers invalid path errors](#cause-mkdir-validation) | 1 | c |
+| 168 | [fs.ReadStream has no close method](#cause-fs-readstream-close) | 1 | c |
+| 169 | [Guest /proc/self/fd is not the native process descriptor table](#cause-procfs-descriptors) | 1 | a |
+| 170 | [Immediate handles do not coerce to increasing numeric identifiers](#cause-immediate-id) | 1 | c |
+| 171 | [Install progress output omits resolving and migration status](#cause-install-patch-progress) | 1 | c |
+| 172 | [Installer does not execute package lifecycle scripts](#cause-install-lifecycle) | 1 | d |
+| 173 | [Installer does not parse --filter workspace selection](#cause-install-filter) | 1 | c |
+| 174 | [Installer ignores packageExtensions metadata](#cause-package-extensions) | 1 | d |
+| 175 | [Installer rejects --destination before workspace migration](#cause-install-destination) | 1 | c |
+| 176 | [Installer rejects an unresolved optional dependency with an empty name](#cause-install-optional-empty) | 1 | c |
+| 177 | [Large Buffer allocation uses the wasm limit rather than JSC's wording](#cause-large-buffer-wording) | 1 | e |
+| 178 | [Legacy url.parse retains IPv6 brackets in hostname](#cause-url-legacy-ipv6) | 1 | c |
+| 179 | [Legacy url.parse swallows primitive exceptions during argument description](#cause-legacy-url-coercion) | 1 | c |
+| 180 | [Malformed @bun-cjs text wrappers are not rejected](#cause-compiled-cjs-marker) | 1 | c |
 | 181 | [Matcher formatting omits FormData's non-callable toJSON property](#cause-formdata-inspect) | 1 | c |
 | 182 | [MessageEvent.initMessageEvent is absent](#cause-messageevent-init) | 1 | c |
 | 183 | [mkdir recursive accepts an existing file as a directory](#cause-mkdir-existing) | 1 | c |
 | 184 | [Native error translation loses stable Node error codes](#cause-error-code-mirror) | 1 | c |
 | 185 | [Native fetch omits its default Connection header](#cause-f-fetch-keepalive) | 1 | f |
-| 186 | [Native precompiled CJS header validation is not emulated](#cause-compiled-cjs-marker) | 1 | e |
-| 187 | [Node error toString omits the bracketed error code](#cause-node-error-tostring) | 1 | c |
-| 188 | [Node Worker lacks Symbol.asyncDispose](#cause-worker-dispose) | 1 | c |
-| 189 | [node:dns lacks getDefaultResultOrder](#cause-dns-order) | 1 | c |
-| 190 | [node:module.SourceMap is an empty class](#cause-module-source-map) | 1 | c |
-| 191 | [Non-TTY stdin reports false instead of undefined](#cause-process-tty) | 1 | c |
-| 192 | [os.arch truthfully reports wasm32 rather than a native CPU](#cause-os-arch) | 1 | a |
-| 193 | [Package packing setup rejects --quiet](#cause-install-quiet) | 1 | c |
-| 194 | [Path helpers reject boxed String values used by the fixture](#cause-boxed-paths) | 1 | c |
-| 195 | [path.win32.dirname delegates to POSIX behavior](#cause-path-win32) | 1 | c |
-| 196 | [performance.clearResourceTimings is absent](#cause-performance-resource) | 1 | c |
-| 197 | [performance.toJSON returns only timeOrigin](#cause-performance-json) | 1 | c |
-| 198 | [process.argv omits the leading --bun argument expected by parseArgs](#cause-argv-bun-flag) | 1 | c |
+| 186 | [Node error toString omits the bracketed error code](#cause-node-error-tostring) | 1 | c |
+| 187 | [Node Worker lacks Symbol.asyncDispose](#cause-worker-dispose) | 1 | c |
+| 188 | [node:dns lacks getDefaultResultOrder](#cause-dns-order) | 1 | c |
+| 189 | [node:module.SourceMap is an empty class](#cause-module-source-map) | 1 | c |
+| 190 | [Non-TTY stdin reports false instead of undefined](#cause-process-tty) | 1 | c |
+| 191 | [os.arch truthfully reports wasm32 rather than a native CPU](#cause-os-arch) | 1 | a |
+| 192 | [Package packing setup rejects --quiet](#cause-install-quiet) | 1 | c |
+| 193 | [Path helpers reject boxed String values used by the fixture](#cause-boxed-paths) | 1 | c |
+| 194 | [path.win32.dirname delegates to POSIX behavior](#cause-path-win32) | 1 | c |
+| 195 | [performance.clearResourceTimings is absent](#cause-performance-resource) | 1 | c |
+| 196 | [performance.toJSON returns only timeOrigin](#cause-performance-json) | 1 | c |
+| 197 | [process.argv omits the leading --bun argument expected by parseArgs](#cause-argv-bun-flag) | 1 | c |
+| 198 | [process.dlopen rejection omits ERR_DLOPEN_FAILED](#cause-dlopen-rejection-code) | 1 | c |
 | 199 | [process.execve has no host process-replacement capability](#cause-process-execve) | 1 | a |
 | 200 | [process.nextTick drains before the engine finishes the current microtask queue](#cause-nexttick-order) | 1 | d |
-| 201 | [process.ppid is a fixed WASI placeholder rather than a live OS accessor](#cause-process-ppid) | 1 | a |
-| 202 | [process.stdin exposes ref for file input where Bun leaves it undefined](#cause-stdin-ref-type) | 1 | c |
-| 203 | [process.title is fixed to bun instead of the executable path](#cause-process-title) | 1 | c |
-| 204 | [QuickJS Intl shim has no DurationFormat](#cause-f-duration) | 1 | f |
-| 205 | [QuickJS loses AsyncLocalStorage context across custom thenable assimilation](#cause-f-als-thenable) | 1 | f |
-| 206 | [QuickJS Promise.try wraps a returned promise instead of preserving identity](#cause-f-promise-try) | 1 | f |
-| 207 | [QuickJS receives import defer syntax without a lowering pass](#cause-import-defer) | 1 | d |
-| 208 | [QuickJS says disposable where the fixture searches for dispose](#cause-f-disposal-wording) | 1 | f |
-| 209 | [QuickJS source loading truncates or rejects NUL in template literals](#cause-f-nul-source) | 1 | f |
-| 210 | [readableStreamToArrayBuffer calls a patched Promise.prototype.then](#cause-public-promise-then) | 1 | c |
-| 211 | [readdir recursive skips symlink error traversal](#cause-fs-recursive-links) | 1 | c |
-| 212 | [RedisClient and Bun.redis are absent](#cause-redis) | 1 | d |
-| 213 | [reportError output and stack columns differ from Bun's public formatter](#cause-report-error) | 1 | c |
-| 214 | [Request.cache is absent](#cause-request-cache) | 1 | c |
-| 215 | [Request.formData receiver validation omits ERR_INVALID_THIS](#cause-invalid-this) | 1 | c |
-| 216 | [require does not deliver the expected transitive-TLA TypeError](#cause-require-async-module) | 1 | d |
-| 217 | [require leaves CommonJS module.children empty](#cause-module-children) | 1 | c |
-| 218 | [Response.json accepts values JSON.stringify cannot serialize](#cause-response-json-validation) | 1 | c |
-| 219 | [Runtime resolution ignores inherited tsconfig path mappings](#cause-tsconfig-paths) | 1 | d |
-| 220 | [ShadowRealm native VM and concurrent-GC fixture has no portable implementation](#cause-shadowrealm) | 1 | e |
-| 221 | [spawnSync does not preserve the parent stdin/stdout while driving the child](#cause-spawn-sync-stdio) | 1 | c |
+| 201 | [process.ppid is a data property instead of an accessor](#cause-process-ppid) | 1 | c |
+| 202 | [process.setgroups input validation is absent](#cause-setgroups) | 1 | c |
+| 203 | [process.stdin exposes ref for file input where Bun leaves it undefined](#cause-stdin-ref-type) | 1 | c |
+| 204 | [process.title is fixed to bun instead of the executable path](#cause-process-title) | 1 | c |
+| 205 | [QuickJS Intl shim has no DurationFormat](#cause-f-duration) | 1 | f |
+| 206 | [QuickJS loses AsyncLocalStorage context across custom thenable assimilation](#cause-f-als-thenable) | 1 | f |
+| 207 | [QuickJS Promise.try wraps a returned promise instead of preserving identity](#cause-f-promise-try) | 1 | f |
+| 208 | [QuickJS receives import defer syntax without a lowering pass](#cause-import-defer) | 1 | d |
+| 209 | [QuickJS says disposable where the fixture searches for dispose](#cause-f-disposal-wording) | 1 | f |
+| 210 | [QuickJS source loading truncates or rejects NUL in template literals](#cause-f-nul-source) | 1 | f |
+| 211 | [readableStreamToArrayBuffer calls a patched Promise.prototype.then](#cause-public-promise-then) | 1 | c |
+| 212 | [readdir recursive skips symlink error traversal](#cause-fs-recursive-links) | 1 | c |
+| 213 | [RedisClient and Bun.redis are absent](#cause-redis) | 1 | d |
+| 214 | [reportError output and stack columns differ from Bun's public formatter](#cause-report-error) | 1 | c |
+| 215 | [Request.cache is absent](#cause-request-cache) | 1 | c |
+| 216 | [Request.formData receiver validation omits ERR_INVALID_THIS](#cause-invalid-this) | 1 | c |
+| 217 | [require does not deliver the expected transitive-TLA TypeError](#cause-require-async-module) | 1 | d |
+| 218 | [require leaves CommonJS module.children empty](#cause-module-children) | 1 | c |
+| 219 | [Response.json accepts values JSON.stringify cannot serialize](#cause-response-json-validation) | 1 | c |
+| 220 | [Runtime resolution ignores inherited tsconfig path mappings](#cause-tsconfig-paths) | 1 | d |
+| 221 | [ShadowRealm constructor is absent](#cause-shadowrealm) | 1 | d |
 | 222 | [Stack mapping does not report invalid source-map VLQ column values](#cause-negative-vlq) | 1 | c |
-| 223 | [Static Bun.file routes ignore If-Modified-Since](#cause-static-conditional) | 1 | c |
-| 224 | [test.failing reports collection state before validating its callback](#cause-failing-validation) | 1 | c |
-| 225 | [TextDecoder ASCII labels do not use Windows-1252 mappings](#cause-encoding-ascii) | 1 | c |
-| 226 | [The CLI accepts a CSS entry instead of rejecting an unsupported run target](#cause-css-entry-diagnostic) | 1 | c |
-| 227 | [The CLI rejects --conditions before resolving conditional exports](#cause-custom-conditions) | 1 | c |
-| 228 | [The CLI treats a .wasm program as JavaScript source](#cause-wasm-entry) | 1 | d |
-| 229 | [The runner ignores shard arguments and validation](#cause-shard) | 1 | c |
-| 230 | [The test runner ignores a preload flag passed in equals form](#cause-async-preload) | 1 | c |
-| 231 | [The URL host parser serializes an opaque scheme origin as null](#cause-url-opaque-origin) | 1 | c |
-| 232 | [Timeout objects have no _idleStart field](#cause-timer-idlestart) | 1 | c |
-| 233 | [Timer functions lack util.promisify.custom hooks](#cause-timer-promisify) | 1 | c |
-| 234 | [Top-level await in CJS dynamic-import fixtures is not lowered correctly](#cause-cjs-dynamic-import) | 1 | d |
-| 235 | [TTY chunking fixtures require native terminal descriptors](#cause-pty-stdio) | 1 | a |
-| 236 | [Unknown node builtins use ERR_MODULE_NOT_FOUND instead of ERR_UNKNOWN_BUILTIN_MODULE](#cause-unknown-builtin-code) | 1 | c |
-| 237 | [Unsettled worker top-level await exits 0 instead of 13](#cause-worker-tla-exit) | 1 | c |
-| 238 | [URL parsing collapses repeated leading file path slashes](#cause-url-file-slashes) | 1 | c |
-| 239 | [URL.createObjectURL is absent](#cause-blob-url) | 1 | d |
-| 240 | [URLSearchParams methods do not validate missing arguments](#cause-urlsearchparams-arity) | 1 | c |
-| 241 | [URLSearchParams.toJSON is absent](#cause-urlsearchparams-json) | 1 | c |
-| 242 | [util.inspect passes a different function identity to inspect.custom](#cause-custom-inspect) | 1 | c |
-| 243 | [WASI stdio initialization does not reproduce native near-stack-limit failure](#cause-stdio-stack-control) | 1 | e |
-| 244 | [WebSocket handshake rejection omits Mismatch client protocol close reason](#cause-ws-protocol-error) | 1 | c |
-| 245 | [Worker data cannot share the fixture's SharedArrayBuffer](#cause-worker-terminate-clone) | 1 | a |
-| 246 | [Worker transfer validation throws DOMException instead of TypeError](#cause-transfer-error) | 1 | c |
-| 247 | [zlib transform streams have no flush method](#cause-zlib-flush) | 1 | d |
-| 248 | [zlib._handle.writeSync is private native binding state](#cause-zlib-native-handle) | 1 | e |
+| 223 | [Stack-overflow message parity omits a trailing period](#cause-parser-native-wording) | 1 | c |
+| 224 | [Static Bun.file routes ignore If-Modified-Since](#cause-static-conditional) | 1 | c |
+| 225 | [Temporal installation ignores BUN_JSC_useTemporal=0](#cause-temporal-toggle) | 1 | c |
+| 226 | [test.failing reports collection state before validating its callback](#cause-failing-validation) | 1 | c |
+| 227 | [TextDecoder ASCII labels do not use Windows-1252 mappings](#cause-encoding-ascii) | 1 | c |
+| 228 | [The CLI accepts a CSS entry instead of rejecting an unsupported run target](#cause-css-entry-diagnostic) | 1 | c |
+| 229 | [The CLI rejects --conditions before resolving conditional exports](#cause-custom-conditions) | 1 | c |
+| 230 | [The CLI treats a .wasm program as JavaScript source](#cause-wasm-entry) | 1 | d |
+| 231 | [The runner ignores shard arguments and validation](#cause-shard) | 1 | c |
+| 232 | [The test runner ignores a preload flag passed in equals form](#cause-async-preload) | 1 | c |
+| 233 | [The URL host parser serializes an opaque scheme origin as null](#cause-url-opaque-origin) | 1 | c |
+| 234 | [Timeout objects have no _idleStart field](#cause-timer-idlestart) | 1 | c |
+| 235 | [Timer functions lack util.promisify.custom hooks](#cause-timer-promisify) | 1 | c |
+| 236 | [Top-level await in CJS dynamic-import fixtures is not lowered correctly](#cause-cjs-dynamic-import) | 1 | d |
+| 237 | [Unknown node builtins use ERR_MODULE_NOT_FOUND instead of ERR_UNKNOWN_BUILTIN_MODULE](#cause-unknown-builtin-code) | 1 | c |
+| 238 | [Unsettled worker top-level await exits 0 instead of 13](#cause-worker-tla-exit) | 1 | c |
+| 239 | [Unsignalled Bun.spawnSync returns signalCode null instead of undefined](#cause-spawn-sync-signal-code) | 1 | c |
+| 240 | [URL parsing collapses repeated leading file path slashes](#cause-url-file-slashes) | 1 | c |
+| 241 | [URL.createObjectURL is absent](#cause-blob-url) | 1 | d |
+| 242 | [URLSearchParams methods do not validate missing arguments](#cause-urlsearchparams-arity) | 1 | c |
+| 243 | [URLSearchParams.toJSON is absent](#cause-urlsearchparams-json) | 1 | c |
+| 244 | [util.inspect passes a different function identity to inspect.custom](#cause-custom-inspect) | 1 | c |
+| 245 | [vm.compileFunction accepts Proxy parameter lists](#cause-vm-proxy-validation) | 1 | c |
+| 246 | [WebSocket handshake rejection omits Mismatch client protocol close reason](#cause-ws-protocol-error) | 1 | c |
+| 247 | [Worker data cannot share the fixture's SharedArrayBuffer](#cause-worker-terminate-clone) | 1 | a |
+| 248 | [Worker transfer validation throws DOMException instead of TypeError](#cause-transfer-error) | 1 | c |
+| 249 | [zlib transform streams have no flush method](#cause-zlib-flush) | 1 | d |
+| 250 | [zlib._handle.writeSync is absent](#cause-zlib-native-handle) | 1 | d |
 
 <a id="cause-linter"></a>
 
@@ -864,9 +936,43 @@ Suspected implementation [crates/bunwasm-runtime/src/js/process.js:125](https://
 
 </details>
 
+<a id="cause-external-program"></a>
+
+### 14. Subprocess dispatch only supports the wasm Bun executable
+
+7 files. Category `b`. The dispatcher accepts only the guest Bun executable. The delayed-pipe fixture invokes bash, and the isolated-event-loop case invokes echo. Both are rejected with ENOENT and empty child stdout before their intended checks. BEFORE and AFTER remain visible in the echo case, so parent stdout damage is not established. Other members invoke fake rustc/rustup, yes, chmod, or another native executable.
+
+Test subject `the configure-time rustc probe pins the rustup proxy to the pinned channel`. Throwing frame `at <anonymous> (/bun/test/internal/build-rust-toolchain-probe.test.ts:48:39)`.
+
+Observed diagnostic:
+
+```text
+-   "rustHostTriple": "host-for-nightly-2026-09-15",
+-   "rustLlvmVersion": "23.1.1",
+-   "rustSysroot": "/tmp/build-rustc-probe_JZuxhd/sysroot-for-nightly-2026-09-15",
++   "rustHostTriple": undefined,
++   "rustLlvmVersion": undefined,
++   "rustSysroot": undefined,
+```
+
+Suspected implementation [crates/bunwasm-runtime/src/js/spawn.js:62](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/spawn.js#L62). Reproducer `suite quickjs 'internal/build-rust-toolchain-probe.test.ts'`.
+
+<details>
+<summary>All 7 member files</summary>
+
+- `internal/build-rust-toolchain-probe.test.ts`
+- `internal/rust-check-all.test.ts`
+- `js/bun/spawn/spawn-maxbuf.test.ts`
+- `js/bun/spawn/spawnsync-isolated-event-loop.test.ts`
+- `regression/issue/18239/18239.test.ts`
+- `regression/issue/20753.test.js`
+- `regression/issue/24329.test.ts`
+
+</details>
+
 <a id="cause-async-tothrow"></a>
 
-### 14. toThrow does not await a returned rejecting promise
+### 15. toThrow does not await a returned rejecting promise
 
 7 files. Category `c`. throwOutcome records a returned Promise as a successful return. Bun's fixtures expect async callback rejection to satisfy toThrow. Fix the matcher before assigning these cases to filesystem, JSON, encoding or fetch.
 
@@ -896,7 +1002,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:1099](https:
 
 <a id="cause-zlib-zstd"></a>
 
-### 15. Zstd stream constructors and compression functions are absent
+### 16. Zstd stream constructors and compression functions are absent
 
 7 files. Category `d`. The factory is undefined or explicitly unsupported before reset-race and compressed-data assertions.
 
@@ -926,9 +1032,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:674](https:/
 
 <a id="cause-shallow-memory"></a>
 
-### 16. bun:jsc.estimateShallowMemoryUsageOf has no engine-independent implementation
+### 17. bun:jsc.estimateShallowMemoryUsageOf has no engine-independent implementation
 
-5 files. Category `e`. The named import is absent. Intentionally exclude private shallow-cell-size assertions instead of supplying fabricated sizes or pretending the leak test ran.
+5 files. Category `e`. All five files fail at the missing named export. Retain e because truthful parity needs per-engine object-layout and backing-store accounting, beyond the Engine memory_usage aggregate. Standard browser JavaScript exposes no per-object shallow size. Maintaining private JSC, QuickJS and browser heap-layout adapters solely for these internal size assertions has no portable consumer contract; fabricated sizes would invalidate the tests.
 
 Test subject `<collection>`. Throwing frame `collection or native failure; no JavaScript frame captured`.
 
@@ -954,9 +1060,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:813](https:/
 
 <a id="cause-terminal"></a>
 
-### 17. Bun.Terminal needs a PTY and termios host capability
+### 18. Bun.Terminal needs a PTY and termios host capability
 
-5 files. Category `a`. The constructor is absent. The tested behavior requires a pseudoterminal, terminal descriptors and termios beyond the current WASI host ABI.
+5 files. Category `a`. All five members construct Bun.Terminal or require its PTY transport. WASI preview1 supplies no openpty, terminal-master/slave descriptors, termios or ioctl, and the host ABI exposes only ordinary child stdio pipes. The absent constructor is observed before PTY behavior can run. The delayed bash-pipe fixture is excluded from this cause because it creates no PTY.
 
 Test subject `Bun.Terminal platform behaviour > GAP: termios flag accessors`. Throwing frame `at <anonymous> (/bun/test/js/bun/terminal/terminal-platform-gaps.test.ts:80:32)`.
 
@@ -982,7 +1088,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-x509"></a>
 
-### 18. node:crypto.X509Certificate is not exported
+### 19. node:crypto.X509Certificate is not exported
 
 5 files. Category `d`. Collection stops on the missing certificate class. This is earlier than the WebSocket, structured-clone or regression behavior named by the affected files.
 
@@ -1010,7 +1116,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:181](https:/
 
 <a id="cause-manifest-accept"></a>
 
-### 19. Registry requests send the wrong npm Accept header
+### 20. Registry requests send the wrong npm Accept header
 
 5 files. Category `c`. Requests send application/vnd.npm.install-v1+json without the q=1.0, application/json;q=0.8 and wildcard alternatives expected by the fixture registry. The server assertion fails before package installation.
 
@@ -1038,43 +1144,11 @@ Suspected implementation [crates/bunwasm-runtime/src/install/io.rs:111](https://
 
 </details>
 
-<a id="cause-external-program"></a>
-
-### 20. Subprocess dispatch only supports the wasm Bun executable
-
-5 files. Category `b`. Fixtures attempt to invoke fake rustc or rustup, yes, chmod or another native executable. The dispatcher returns an executable error instead of the requested process result. No real compiler or package CLI needs to run to reproduce this limitation.
-
-Test subject `the configure-time rustc probe pins the rustup proxy to the pinned channel`. Throwing frame `at <anonymous> (/bun/test/internal/build-rust-toolchain-probe.test.ts:48:39)`.
-
-Observed diagnostic:
-
-```text
--   "rustHostTriple": "host-for-nightly-2026-09-15",
--   "rustLlvmVersion": "23.1.1",
--   "rustSysroot": "/tmp/build-rustc-probe_JZuxhd/sysroot-for-nightly-2026-09-15",
-+   "rustHostTriple": undefined,
-+   "rustLlvmVersion": undefined,
-+   "rustSysroot": undefined,
-```
-
-Suspected implementation [crates/bunwasm-runtime/src/js/spawn.js:62](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/spawn.js#L62). Reproducer `suite quickjs 'internal/build-rust-toolchain-probe.test.ts'`.
-
-<details>
-<summary>All 5 member files</summary>
-
-- `internal/build-rust-toolchain-probe.test.ts`
-- `internal/rust-check-all.test.ts`
-- `js/bun/spawn/spawn-maxbuf.test.ts`
-- `regression/issue/20753.test.js`
-- `regression/issue/24329.test.ts`
-
-</details>
-
 <a id="cause-udp"></a>
 
 ### 21. UDP and resolver datagram sockets have no host ABI
 
-5 files. Category `a`. The required datagram factory is absent or explicitly unsupported. Empty child markers are earlier than TTL, reusePort and DNS poll tests. TCP support does not imply UDP support.
+5 files. Category `a`. The raw child errors identify Bun.udpSocket or dgram.createSocket; the other members create UDP sockets in their child source. Slots 6-9 and 16-17 implement TCP listen/connect/addresses/half-close, with no datagram bind/send/receive operations. Missing UDP host transport is the capability gap. General WASI networking is not absent.
 
 Test subject `udpSocket() > setTTL does not crash when socket is closed during argument coercion`. Throwing frame `at <anonymous> (/bun/test/js/bun/udp/udp_socket.test.ts:51:22)`.
 
@@ -1269,9 +1343,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:455](https://gith
 
 <a id="cause-webview"></a>
 
-### 28. Bun.WebView needs an external browser process or native WebKit
+### 28. Bun.WebView constructor and CDP client are absent
 
-4 files. Category `a`. The constructor is absent. Pipe, process-launch and platform backend tests depend on host GUI and browser-process facilities outside the present ABI.
+4 files. Category `d`. The first failures are missing constructor or option validation. The disconnect fixture uses a local Bun.serve WebSocket CDP mock, and the pipe fixture substitutes a Bun script for Chrome. These controls do not require a native GUI or installed browser. Implement the public WebView API before attributing a later transport failure to the host.
 
 Test subject `navigate() rejects when the connection drops after the document committed`. Throwing frame `at runScenario (/bun/test/js/bun/webview/webview-chrome-disconnect.test.ts:112:26)`.
 
@@ -1321,38 +1395,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:851](https:/
 
 </details>
 
-<a id="cause-ffi"></a>
-
-### 30. Native FFI libraries and addon loading are unavailable
-
-4 files. Category `a`. The fixture cannot load or compile a host shared library inside the wasm guest. A later assertion about the library's return value is not a runtime arithmetic failure.
-
-Test subject `PipeReader is freed when a subprocess stdout read fails`. Throwing frame `at <anonymous> (/bun/test/js/bun/spawn/spawn-pipe-read-error-leak.test.ts:141:25)`.
-
-Observed diagnostic:
-
-```text
-- []
-+ [
-+   "2 | const { dlopen, FFIType } = require("bun:ffi");",
-+   "3 | const { readdirSync, readlinkSync, openSync, closeSync, writeFileSync, rmSync } = require("fs");",
-```
-
-Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:808](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L808). Reproducer `suite quickjs 'js/bun/spawn/spawn-pipe-read-error-leak.test.ts'`.
-
-<details>
-<summary>All 4 member files</summary>
-
-- `js/bun/spawn/spawn-pipe-read-error-leak.test.ts`
-- `js/bun/transpiler/transpiler-truncated-utf8.test.ts`
-- `regression/issue/15753.test.ts`
-- `regression/issue/26249.test.ts`
-
-</details>
-
 <a id="cause-resolve-wording"></a>
 
-### 31. Resolver errors say package instead of module and omit structured diagnostics
+### 30. Resolver errors say package instead of module and omit structured diagnostics
 
 4 files. Category `c`. Public module resolution diagnostics lack ResolveMessage identity and package.json parser notes. Match these structured errors rather than changing expected assertion strings.
 
@@ -1379,7 +1424,7 @@ Suspected implementation [crates/bunwasm-runtime/src/modules.rs:83](https://gith
 
 <a id="cause-s3-api"></a>
 
-### 32. S3Client and Bun.s3 are absent
+### 31. S3Client and Bun.s3 are absent
 
 4 files. Category `d`. S3 operations fail at API construction or with TypeError before connection-close and stream assertions. This does not establish a network FIN handling defect.
 
@@ -1408,7 +1453,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-lock-migration"></a>
 
-### 33. The installer ignores existing npm, pnpm and Yarn lockfile migration
+### 32. The installer ignores existing npm, pnpm and Yarn lockfile migration
 
 4 files. Category `d`. The installer resolves package.json and prints Saved lockfile without reading or reporting the old-format lockfile. Yarn fixtures may exit 1 before their expected migrated resolution.
 
@@ -1437,7 +1482,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:80](https://
 
 <a id="cause-web-brand"></a>
 
-### 34. AbortController, EventTarget and CustomEvent lack their web toStringTag
+### 33. AbortController, EventTarget and CustomEvent lack their web toStringTag
 
 3 files. Category `c`. Object.prototype.toString receives [object Object] instead of the appropriate branded web type.
 
@@ -1463,7 +1508,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:499](https://gith
 
 <a id="cause-partial-assert"></a>
 
-### 35. assert.partialDeepStrictEqual is absent
+### 34. assert.partialDeepStrictEqual is absent
 
 3 files. Category `c`. The assertion module has no partialDeepStrictEqual function. This is distinct from a deep equality algorithm returning the wrong value.
 
@@ -1489,7 +1534,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/assert.js:661](https://g
 
 <a id="cause-stream-lock"></a>
 
-### 36. Body and Node stream consumers release locks that Bun retains
+### 35. Body and Node stream consumers release locks that Bun retains
 
 3 files. Category `d`. After consumption body.locked is false while Bun's native-consumer contract expects true. Content equality alone does not cover this ownership contract.
 
@@ -1515,7 +1560,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:890](https://gith
 
 <a id="cause-x-command"></a>
 
-### 37. bun x and bunx execution are absent
+### 36. bun x and bunx execution are absent
 
 3 files. Category `d`. The external-package runner exits before executing the package. This differs from an installed dependency failing inside its entry point.
 
@@ -1541,7 +1586,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:400](https://github.com
 
 <a id="cause-archive-api-image"></a>
 
-### 38. Bun.Image codec and resize API is absent
+### 37. Bun.Image codec and resize API is absent
 
 3 files. Category `d`. Image kernel and codec tests call an absent constructor. This does not establish that an implemented resize filter gives incorrect pixels.
 
@@ -1567,7 +1612,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-module-graph"></a>
 
-### 39. Bun.ModuleGraph is absent
+### 38. Bun.ModuleGraph is absent
 
 3 files. Category `d`. The constructor is undefined, including inside worker fixtures. Graph isolation, import and disposal assertions are not reached.
 
@@ -1593,9 +1638,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-unsafe-gc"></a>
 
-### 40. Bun.unsafe.gcAggressionLevel is native GC test control
+### 39. Bun.unsafe.gcAggressionLevel is native GC test control
 
-3 files. Category `e`. The fixture cannot select Bun's native GC aggressiveness. Intentionally exclude this private GC policy control instead of inventing a working counter.
+3 files. Category `e`. All three files call the absent gcAggressionLevel control before their subject runs. Retain e because this selects JSC-private collector policy, while the portable Engine interface supplies only gc and aggregate memory_usage. Standard browser workers expose no collector-policy control. Per-engine collector tuning plus tests of equivalent policy would maintain a private stress facility rather than public runtime behavior.
 
 Test subject `<collection>`. Throwing frame `at /bun/test/js/bun/glob/scan.test.ts:32:35`.
 
@@ -1617,37 +1662,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:511](https://gith
 
 </details>
 
-<a id="cause-css-test-hook"></a>
-
-### 41. Bun's private CSS minifyTest hook is absent
-
-3 files. Category `e`. The fixture calls Bun's internal CSS parser test entry point, not Bun.build. Intentionally exclude the private test hook rather than label these as CSS parser failures.
-
-Test subject `huge and non-finite radian angle values serialize instead of hanging`. Throwing frame `at <anonymous> (/bun/test/js/bun/css/angle-serialization-hang.test.ts:54:18)`.
-
-Observed diagnostic:
-
-```text
-- ""
-+ "TypeError: Cannot convert undefined or null to object
-+       at /bun/test/[eval]:1:1
-+
-```
-
-Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:840](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L840). Reproducer `suite quickjs 'js/bun/css/angle-serialization-hang.test.ts'`.
-
-<details>
-<summary>All 3 member files</summary>
-
-- `js/bun/css/angle-serialization-hang.test.ts`
-- `js/bun/css/atan2-backtracking-hang.test.ts`
-- `js/bun/css/nested-selector-expansion.test.ts`
-
-</details>
-
 <a id="cause-preload"></a>
 
-### 42. bunfig preloads and preload-defined extensions are not applied
+### 40. bunfig preloads and preload-defined extensions are not applied
 
 3 files. Category `d`. Preloaded code does not run in the required startup phase. The observed symptoms are missing custom matcher, missing text loader and missing preload stdout.
 
@@ -1673,7 +1690,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:2341](https:
 
 <a id="cause-child-ipc"></a>
 
-### 43. Child IPC and process.send are unsupported
+### 41. Child IPC and process.send are unsupported
 
 3 files. Category `b`. Fresh guests cannot exchange the requested IPC messages or send callbacks. node:worker_threads messaging is a separate capability.
 
@@ -1700,7 +1717,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/spawn.js:69](https://git
 
 <a id="cause-conditional-tests"></a>
 
-### 44. Conditional and each test builders lose their modifier methods
+### 42. Conditional and each test builders lose their modifier methods
 
 3 files. Category `c`. Bound test builders do not retain every conditional or each modifier. Collection can fail before the file registers its tests.
 
@@ -1724,35 +1741,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:1810](https:
 
 </details>
 
-<a id="cause-parser-native-wording"></a>
-
-### 45. Engine parser and stack-overflow diagnostics use their native wording
-
-3 files. Category `e`. Examples are Maximum call stack size exceeded without JSC's final period and Unexpected token instead of Bun's parser diagnostic. Intentionally keep native-engine wording where no public error code or behavior differs.
-
-Test subject `expect().toMatchObject() throws RangeError on deeply nested objects instead of crashing`. Throwing frame `at <anonymous> (/bun/test/js/bun/test/expect-stack-overflow-crash.test.ts:55:18)`.
-
-Observed diagnostic:
-
-```text
-- "true Maximum call stack size exceeded.
-+ "true Maximum call stack size exceeded
-```
-
-Suspected implementation [crates/bunwasm-runtime/src/engine_quickjs.rs:243](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine_quickjs.rs#L243). Reproducer `suite quickjs 'js/bun/test/expect-stack-overflow-crash.test.ts'`.
-
-<details>
-<summary>All 3 member files</summary>
-
-- `js/bun/test/expect-stack-overflow-crash.test.ts`
-- `regression/issue/30963.test.ts`
-- `regression/issue/jsx-template-string-crash.test.ts`
-
-</details>
-
 <a id="cause-fs-error-fields"></a>
 
-### 46. Filesystem wrappers lose Node error code and path fields
+### 43. Filesystem wrappers lose Node error code and path fields
 
 3 files. Category `c`. Examples receive undefined for ENOENT, EEXIST or error.path. Preserve structured syscall errors through the callback and promise adapters.
 
@@ -1778,7 +1769,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/node_fs.js:30](https://g
 
 <a id="cause-http-header-case"></a>
 
-### 47. HTTP and WebSocket serializers lowercase caller-visible header names
+### 44. HTTP and WebSocket serializers lowercase caller-visible header names
 
 3 files. Category `c`. The bytes contain date, upgrade or x-latin1 while fixtures expect Date, Upgrade or X-Latin1. Values are present. Preserve observable raw spelling where Bun's APIs promise it.
 
@@ -1804,7 +1795,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/net.js:1](https://github
 
 <a id="cause-install-lockfile-only"></a>
 
-### 48. Installer lacks --lockfile-only mode
+### 45. Installer lacks --lockfile-only mode
 
 3 files. Category `c`. The flag is rejected before metadata-only resolution. These are not evidence of downloading too many tarballs or a semver intersection bug.
 
@@ -1830,7 +1821,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:54](https://
 
 <a id="cause-file-dependencies"></a>
 
-### 49. Installer resolution does not handle local file dependency graphs
+### 46. Installer resolution does not handle local file dependency graphs
 
 3 files. Category `d`. The initial add of file:pkg fails before remove is reached. Other fixtures stop before local scoped dependencies or catalog peers are installed. Inspect local-spec parsing and resolution, not remove's output formatting.
 
@@ -1854,9 +1845,37 @@ Suspected implementation [crates/bunwasm-runtime/src/install/resolve.rs:56](http
 
 </details>
 
+<a id="cause-ffi"></a>
+
+### 47. Native FFI libraries and addon loading are unavailable
+
+3 files. Category `a`. These members require dlopen of host libc for raw descriptors or mmap, or compile-and-call of a native C function. The wasm32-wasip1 guest cannot load an ELF/Mach-O/DLL into its linear memory and execute host machine code. The host ABI has no native-library or foreign-call operation. This is separate from reporting the right code when a load is rejected.
+
+Test subject `PipeReader is freed when a subprocess stdout read fails`. Throwing frame `at <anonymous> (/bun/test/js/bun/spawn/spawn-pipe-read-error-leak.test.ts:141:25)`.
+
+Observed diagnostic:
+
+```text
+- []
++ [
++   "2 | const { dlopen, FFIType } = require("bun:ffi");",
++   "3 | const { readdirSync, readlinkSync, openSync, closeSync, writeFileSync, rmSync } = require("fs");",
+```
+
+Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:808](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L808). Reproducer `suite quickjs 'js/bun/spawn/spawn-pipe-read-error-leak.test.ts'`.
+
+<details>
+<summary>All 3 member files</summary>
+
+- `js/bun/spawn/spawn-pipe-read-error-leak.test.ts`
+- `js/bun/transpiler/transpiler-truncated-utf8.test.ts`
+- `regression/issue/26249.test.ts`
+
+</details>
+
 <a id="cause-install-integrity"></a>
 
-### 50. Package resolution requires dist.integrity or dist.shasum
+### 48. Package resolution requires dist.integrity or dist.shasum
 
 3 files. Category `c`. A fixture manifest without either integrity field is rejected before tarball processing. Inspect the selected registry metadata contract rather than security-scanner assertions.
 
@@ -1882,7 +1901,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/resolve.rs:409](htt
 
 <a id="cause-stdout-lifecycle"></a>
 
-### 51. process.stdout end, drain and async iteration contracts are incomplete
+### 49. process.stdout end, drain and async iteration contracts are incomplete
 
 3 files. Category `d`. A write after end succeeds with null callback error and writable true. Other fixtures find no async iterator or cannot observe the expected final byte count.
 
@@ -1912,7 +1931,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/process.js:68](https://g
 
 <a id="cause-autoinstall"></a>
 
-### 52. Runtime resolution does not auto-install package specifiers
+### 50. Runtime resolution does not auto-install package specifiers
 
 3 files. Category `d`. A versioned uglify-js specifier is sent to ordinary node_modules resolution and rejected. Cached-manifest and invalid-name controls also fail to reach their child marker. Inspect auto-install entry selection before package execution.
 
@@ -1940,7 +1959,7 @@ Suspected implementation [crates/bunwasm-runtime/src/resolve.rs:160](https://git
 
 <a id="cause-install-equals-linker"></a>
 
-### 53. The installer rejects --linker=hoisted while accepting the spaced form
+### 51. The installer rejects --linker=hoisted while accepting the spaced form
 
 3 files. Category `c`. The equals-form flag reaches the unknown-option arm. This is CLI parsing, not a backend copy or patch-application failure.
 
@@ -1966,7 +1985,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:54](https://
 
 <a id="cause-source-map-diagnostic"></a>
 
-### 54. BuildError diagnostics do not expose line and column positions
+### 52. BuildError diagnostics do not expose line and column positions
 
 2 files. Category `d`. The child reads line and column from the build error position, but JSON serialization produces {}. Keep this missing structured position data separate from parser wording and stack remapping.
 
@@ -1991,7 +2010,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:366](https://gith
 
 <a id="cause-info-why-command"></a>
 
-### 55. bun info and why are absent
+### 53. bun info and why are absent
 
 2 files. Category `d`. Metadata and dependency-explanation commands are rejected before their output can be produced.
 
@@ -2016,7 +2035,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:401](https://github.com
 
 <a id="cause-patch-command"></a>
 
-### 56. bun patch and prune commands are absent
+### 54. bun patch and prune commands are absent
 
 2 files. Category `d`. The commands exit before patch validation or pruning. Empty stdout is not a snapshot serializer defect.
 
@@ -2043,7 +2062,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:404](https://github.com
 
 <a id="cause-pm-migrate"></a>
 
-### 57. bun pm migrate is absent
+### 55. bun pm migrate is absent
 
 2 files. Category `d`. The requested migration subcommand is rejected before importing the lockfile. This is separate from implicit install-time lockfile migration.
 
@@ -2069,9 +2088,36 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:451](https:/
 
 </details>
 
+<a id="cause-css-test-hook"></a>
+
+### 56. bun:internal-for-testing.cssInternals.minifyTest is absent
+
+2 files. Category `c`. The angle fixture cannot destructure minifyTest from undefined cssInternals. The nesting fixture catches the same missing helper and prints its TypeError instead of a nesting-limit diagnostic. Bun's CSS parser is already portable Rust in this project. No OS limitation or exclusion cost is established for exposing the test adapter.
+
+Test subject `huge and non-finite radian angle values serialize instead of hanging`. Throwing frame `at <anonymous> (/bun/test/js/bun/css/angle-serialization-hang.test.ts:54:18)`.
+
+Observed diagnostic:
+
+```text
+- ""
++ "TypeError: Cannot convert undefined or null to object
++       at /bun/test/[eval]:1:1
++
+```
+
+Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:840](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L840). Reproducer `suite quickjs 'js/bun/css/angle-serialization-hang.test.ts'`.
+
+<details>
+<summary>All 2 member files</summary>
+
+- `js/bun/css/angle-serialization-hang.test.ts`
+- `js/bun/css/nested-selector-expansion.test.ts`
+
+</details>
+
 <a id="cause-runner-onfinished"></a>
 
-### 58. bun:test.onTestFinished is absent
+### 57. bun:test.onTestFinished is absent
 
 2 files. Category `c`. The fixture fails during import, so its expected repeated pass count cannot be measured.
 
@@ -2096,7 +2142,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:2385](https:
 
 <a id="cause-slice-ansi"></a>
 
-### 59. Bun.sliceAnsi is absent
+### 58. Bun.sliceAnsi is absent
 
 2 files. Category `c`. The missing exported function prevents width and ANSI-preserving slice assertions from running.
 
@@ -2121,7 +2167,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-wrap-ansi"></a>
 
-### 60. Bun.wrapAnsi is absent
+### 59. Bun.wrapAnsi is absent
 
 2 files. Category `c`. The missing exported function prevents word wrapping assertions from running.
 
@@ -2146,7 +2192,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-ci-only"></a>
 
-### 61. CI detection does not reject test.only
+### 60. CI detection does not reject test.only
 
 2 files. Category `c`. CI-only fixtures execute and pass .only tests instead of exiting 1 with the restriction diagnostic.
 
@@ -2171,7 +2217,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:1840](https:
 
 <a id="cause-cjs-interop"></a>
 
-### 62. CommonJS namespace interop exposes the wrong default and __esModule shape
+### 61. CommonJS namespace interop exposes the wrong default and __esModule shape
 
 2 files. Category `d`. The __esModule object becomes undefined in one direction. require of the ESM wrapper adds an extra default object in the other. Inspect namespace conversion boundaries.
 
@@ -2198,7 +2244,7 @@ Suspected implementation [crates/bunwasm-runtime/src/modules.rs:383](https://git
 
 <a id="cause-url-idna"></a>
 
-### 63. domainToASCII and domainToUnicode accept invalid domain input
+### 62. domainToASCII and domainToUnicode accept invalid domain input
 
 2 files. Category `c`. Invalid a@b becomes b and malformed punycode is returned as text instead of the required empty string.
 
@@ -2223,7 +2269,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/node_url.js:167](https:/
 
 <a id="cause-eval-data-url"></a>
 
-### 64. Dynamic data URL modules are resolved as package names
+### 63. Dynamic data URL modules are resolved as package names
 
 2 files. Category `d`. The generated syntax fixture reports Cannot find package data:text for a data URL import. The ESM registry stress fixture also imports data URLs before its completion marker. The resolver lacks data-module handling; the GC-oriented test name does not establish a GC failure.
 
@@ -2250,7 +2296,7 @@ Suspected implementation [crates/bunwasm-runtime/src/resolve.rs:160](https://git
 
 <a id="cause-runner-format"></a>
 
-### 65. Error frames and diff printing diverge from Bun's assertion report
+### 64. Error frames and diff printing diverge from Bun's assertion report
 
 2 files. Category `c`. Error source columns, stack frame suppression and rendered diffs differ. The diffexample snapshot grows from 436 to 20,420 lines, so a trailing-newline fix would not address it.
 
@@ -2279,7 +2325,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:2018](https:
 
 <a id="cause-stack-map"></a>
 
-### 66. Error stacks are not remapped through the expected source maps
+### 65. Error stacks are not remapped through the expected source maps
 
 2 files. Category `d`. The external-map fixture finds zero remapped frames instead of 17000. The internal-map fixture also exposes generated positions that native Bun hides. Inspect map registration and stack formatting together.
 
@@ -2299,6 +2345,33 @@ Suspected implementation [crates/bunwasm-runtime/src/js/stack_trace.js:57](https
 
 - `js/bun/sourcemap/external-sourcemap-stack-leak.test.ts`
 - `js/bun/sourcemap/internal-sourcemap.test.ts`
+
+</details>
+
+<a id="cause-eval-jsx"></a>
+
+### 66. Eval mode does not provide native Bun's TSX and React evaluation behavior
+
+2 files. Category `d`. Eval does not provide Bun's JSX parsing path. The valid React/TSX fixture emits no expected output, while the malformed JSX fixture receives QuickJS's unexpected less-than-token message instead of Bun's JSX lexer diagnostics. This needs eval loader and transpilation work; the invalid JSX record alone does not establish an unavoidable engine-wording exclusion.
+
+Test subject `bun -e > import, tsx, require in esm, import.meta`. Throwing frame `at <anonymous> (/bun/test/cli/run/run-eval.test.ts:35:39)`.
+
+Observed diagnostic:
+
+```text
+- "{"version":"18.3.1","file":"/bun/test/[eval]","require":"18.3.1"}
+- <hello>world</hello>
+- "
++ ""
+```
+
+Suspected implementation [crates/bunwasm-cli/src/main.rs:87](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-cli/src/main.rs#L87). Reproducer `suite quickjs 'cli/run/run-eval.test.ts'`.
+
+<details>
+<summary>All 2 member files</summary>
+
+- `cli/run/run-eval.test.ts`
+- `regression/issue/jsx-template-string-crash.test.ts`
 
 </details>
 
@@ -2459,7 +2532,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:726](https:/
 
 ### 73. Native CPU and heap profiler CLI output is unavailable
 
-2 files. Category `e`. The CLI rejects the profiler flag before printing done or creating native profile artifacts. Intentionally exclude native-engine profiling until a portable profiling product is chosen.
+2 files. Category `e`. The observed first blocker is CLI rejection of the profiling flag. Retain e for the full feature cost: separate allocation/CPU sampling hooks and native profile writers for every engine. The Engine interface supplies aggregate memory and GC only, not samples, and browser workers have no standard allocation-profile or CPU-profile export. Adding a flag stub would not produce the requested truthful profile artifacts.
 
 Test subject `--heap-prof writes a .heapprofile with node's filename format on exit`. Throwing frame `at <anonymous> (/bun/test/cli/heap-prof.test.ts:39:25)`.
 
@@ -2530,34 +2603,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/net.js:150](https://gith
 
 </details>
 
-<a id="cause-setgroups"></a>
-
-### 76. process.setgroups has no host credential-management API
-
-2 files. Category `a`. The method is absent. Accessor exception propagation cannot be tested without an OS group-management capability.
-
-Test subject `process.setgroups > propagates exceptions thrown from an accessor`. Throwing frame `at <anonymous> (/bun/test/js/node/process/process-array-accessor-crash.test.ts:22:46)`.
-
-Observed diagnostic:
-
-```text
-Expected substring: "getter threw"
-Received message: "not a function"
-```
-
-Suspected implementation [crates/bunwasm-runtime/src/js/process.js:178](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/process.js#L178). Reproducer `suite quickjs 'js/node/process/process-array-accessor-crash.test.ts'`.
-
-<details>
-<summary>All 2 member files</summary>
-
-- `js/node/process/process-array-accessor-crash.test.ts`
-- `regression/issue/isArray-proxy-crash.test.ts`
-
-</details>
-
 <a id="cause-f-atomics"></a>
 
-### 77. QuickJS is built without Atomics
+### 76. QuickJS is built without Atomics
 
 2 files. Category `f`. Atomics is undefined on QuickJS. The WebKit-upgrade file fully passes on both JSC and browser; the waitAsync fixture fully passes on browser. Keep RegExp.escape's later supplementary-character failure separate from the first blocker.
 
@@ -2582,9 +2630,9 @@ Suspected implementation [crates/bunwasm-runtime/src/engine_quickjs.rs:138](http
 
 <a id="cause-f-parser-wording"></a>
 
-### 78. QuickJS parser and builtin messages differ from JSC
+### 77. QuickJS parser and builtin messages differ from JSC
 
-2 files. Category `f`. The regex error is duplicate group name instead of Invalid regular expression: duplicate group specifier name. JSON.parse has V8-style wording instead of JSON Parse error. JSC fully passes both files. Treat engine-native wording as intentionally excluded e, while retaining any separate behavioral failure such as recursive array join.
+2 files. Category `f`. The regex error is duplicate group name instead of Invalid regular expression: duplicate group specifier name. JSON.parse has V8-style wording instead of JSON Parse error. JSC fully passes both files. These are measured differences, not automatic cost exclusions; keep the separate recursive-array-join behavior failure visible.
 
 Test subject `a SyntaxError from JavaScriptCore's parser with no JS frame on the stack has the parser's line and sourceURL`. Throwing frame `at <anonymous> (/bun/test/js/bun/jsc/webkit-upgrade-9b02218df6.test.ts:26:25)`.
 
@@ -2607,7 +2655,7 @@ Suspected implementation [crates/bunwasm-runtime/src/engine_quickjs.rs:243](http
 
 <a id="cause-formdata-body"></a>
 
-### 79. Request body normalization stringifies FormData instead of encoding multipart data
+### 78. Request body normalization stringifies FormData instead of encoding multipart data
 
 2 files. Category `d`. Content-Type becomes text/plain;charset=utf-8 instead of multipart/form-data with a boundary. Inspect FormData body serialization and Node stream interoperability together.
 
@@ -2632,7 +2680,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:881](https://gith
 
 <a id="cause-decorators"></a>
 
-### 80. Runtime TypeScript loading does not emit the requested legacy decorator behavior
+### 79. Runtime TypeScript loading does not emit the requested legacy decorator behavior
 
 2 files. Category `d`. The computed decorated property fixture emits invalid JavaScript that QuickJS rejects with Unexpected token before any decorator marker. The metadata fixture also prints no decorated:world marker. Inspect tsconfig selection and decorator lowering in runtime TypeScript loading.
 
@@ -2659,7 +2707,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:87](https://github.com/
 
 <a id="cause-compiled-bytecode"></a>
 
-### 81. Standalone compilation and native bytecode tooling are absent
+### 80. Standalone compilation and native bytecode tooling are absent
 
 2 files. Category `d`. The child compile command exits 1 before bytecode tooling or embedded-file paths can be checked. This is missing CLI compilation support, not a source-map assertion bug.
 
@@ -2684,7 +2732,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:259](https://github.com
 
 <a id="cause-dotenv"></a>
 
-### 82. Startup does not load the requested dotenv files
+### 81. Startup does not load the requested dotenv files
 
 2 files. Category `d`. The child sees undefined instead of bar or hello_world. The CLI does not implement Bun's dotenv initialization or --no-env-file behavior.
 
@@ -2709,7 +2757,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:439](https://github.com
 
 <a id="cause-subprocess-resource"></a>
 
-### 83. Subprocess.resourceUsage returns undefined
+### 82. Subprocess.resourceUsage returns undefined
 
 2 files. Category `c`. The harness child reads resourceUsage().maxRSS and throws before returning its measurement. Do not interpret the assertion as measured child RSS.
 
@@ -2734,7 +2782,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/spawn.js:228](https://gi
 
 <a id="cause-install-isolated"></a>
 
-### 84. The installer only implements the hoisted linker
+### 83. The installer only implements the hoisted linker
 
 2 files. Category `d`. Isolated layout tests receive hoisted node_modules entries or an explicit unsupported-linker error instead of a .bun store.
 
@@ -2760,7 +2808,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:50](https://
 
 <a id="cause-retry-rerun"></a>
 
-### 85. The test runner ignores retry and rerun-each flags
+### 84. The test runner ignores retry and rerun-each flags
 
 2 files. Category `d`. The flaky fixture stops after fail attempt 1 and the rerun fixture prints only Run #1. Scheduling the requested extra invocations is missing.
 
@@ -2785,7 +2833,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:2301](https:
 
 <a id="cause-vm-module"></a>
 
-### 86. vm.SourceTextModule is absent
+### 85. vm.SourceTextModule is absent
 
 2 files. Category `d`. The vm module exposes evaluation helpers without the source-module constructor and linking lifecycle required by these fixtures.
 
@@ -2810,7 +2858,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:293](https:/
 
 <a id="cause-install-release-age"></a>
 
-### 87. --minimum-release-age is rejected by the install parser
+### 86. --minimum-release-age is rejected by the install parser
 
 1 file. Category `c`. The first test invokes install --minimum-release-age followed by --no-verify. Neither option is in the parser, so it exits 1 before selecting an age-qualified version.
 
@@ -2827,7 +2875,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:54](https://
 
 <a id="cause-no-addons-flag"></a>
 
-### 88. --no-addons is rejected before the worker can report ERR_DLOPEN_DISABLED
+### 87. --no-addons is rejected before the worker can report ERR_DLOPEN_DISABLED
 
 1 file. Category `c`. The child has no expected stdout marker. The CLI has no no-addons option handling, so this is earlier than addon load policy in workers.
 
@@ -2844,7 +2892,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:416](https://github.com
 
 <a id="cause-no-tests"></a>
 
-### 89. --pass-with-no-tests does not change the empty-suite exit code
+### 88. --pass-with-no-tests does not change the empty-suite exit code
 
 1 file. Category `c`. The runner always exits 1 when discovery returns no files, even with the pass-with-no-tests option.
 
@@ -2861,7 +2909,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:2376](https:
 
 <a id="cause-yarn-workspace"></a>
 
-### 90. --yarn lockfile output and workspace protocol serialization are absent
+### 89. --yarn lockfile output and workspace protocol serialization are absent
 
 1 file. Category `d`. The initial install exits 1 before a Yarn lockfile can quote workspace:* correctly. The install parser does not support --yarn.
 
@@ -2878,7 +2926,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:54](https://
 
 <a id="cause-spawn-renamed-cwd"></a>
 
-### 91. A renamed current directory is not preserved as a usable child cwd
+### 90. A renamed current directory is not preserved as a usable child cwd
 
 1 file. Category `c`. All expected sync and async success markers are absent. Child startup reconstructs cwd from a pathname instead of retaining the current directory capability.
 
@@ -2897,7 +2945,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/spawn.js:72](https://git
 
 <a id="cause-abort-any-validation"></a>
 
-### 92. AbortSignal.any does not reject a non-AbortSignal iterator result
+### 91. AbortSignal.any does not reject a non-AbortSignal iterator result
 
 1 file. Category `c`. The adversarial iterator expected 256 TypeErrors and observes zero. Validate each yielded signal before registering listeners.
 
@@ -2914,7 +2962,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:593](https://gith
 
 <a id="cause-install-add-header"></a>
 
-### 93. Adding explicit packages reports install instead of add
+### 92. Adding explicit packages reports install instead of add
 
 1 file. Category `c`. The output begins bun install rather than bun add and lists bare plus entries rather than installed entries. Match the public command output before evaluating later override resolution differences.
 
@@ -2935,7 +2983,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:71](https://
 
 <a id="cause-runner-failure-hooks"></a>
 
-### 94. afterAll hooks are skipped after a failing beforeAll
+### 93. afterAll hooks are skipped after a failing beforeAll
 
 1 file. Category `c`. The hook log is beforeall1 instead of beforeall1,afterall1,afterall2. The scope returns immediately after beforeAll failure.
 
@@ -2952,7 +3000,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:1946](https:
 
 <a id="cause-spawn-abort-code"></a>
 
-### 95. Already-aborted spawn forwards signal.reason without Node's ABORT_ERR fields
+### 94. Already-aborted spawn forwards signal.reason without Node's ABORT_ERR fields
 
 1 file. Category `c`. The received AbortError has the right name and message but no code ABORT_ERR. The start function directly throws signal.reason.
 
@@ -2971,7 +3019,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/spawn.js:85](https://git
 
 <a id="cause-empty-text-loader"></a>
 
-### 96. An empty imported text file returns an object instead of a string
+### 95. An empty imported text file returns an object instead of a string
 
 1 file. Category `c`. The expected empty string becomes an empty object. Check extension-based text-loader selection and default export construction.
 
@@ -2988,7 +3036,7 @@ Suspected implementation [crates/bunwasm-runtime/src/modules.rs:407](https://git
 
 <a id="cause-install-empty-lock"></a>
 
-### 97. An empty install writes a lockfile instead of deleting it
+### 96. An empty install writes a lockfile instead of deleting it
 
 1 file. Category `c`. The fixture expects No packages! Deleted empty lockfile and receives Saved lockfile. This is empty dependency-set handling.
 
@@ -3005,7 +3053,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:80](https://
 
 <a id="cause-macro-promise"></a>
 
-### 98. Async macro expansion emits a pending Promise instead of its resolved value
+### 97. Async macro expansion emits a pending Promise instead of its resolved value
 
 1 file. Category `d`. The child prints Promise { <pending> } instead of the SHA-256 base64url digest returned by the awaited macro. Inspect macro evaluation completion before printing or substitution.
 
@@ -3022,7 +3070,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:114](https://github.com
 
 <a id="cause-als-default"></a>
 
-### 99. AsyncLocalStorage ignores its defaultValue option
+### 98. AsyncLocalStorage ignores its defaultValue option
 
 1 file. Category `c`. After run restores the prior context, getStore returns undefined instead of the supplied default def.
 
@@ -3039,7 +3087,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:344](https:/
 
 <a id="cause-buffer-resize"></a>
 
-### 100. Buffer.from creates a fixed-length view over a resizable ArrayBuffer
+### 99. Buffer.from creates a fixed-length view over a resizable ArrayBuffer
 
 1 file. Category `c`. fromArrayBuffer always passes an explicit length to FastBuffer. After the backing buffer shrinks, that fixed 1024-byte view becomes out of bounds and reports length zero. Bun expects a length-tracking Buffer with length ten when the caller omitted length; copy consequently returns zero instead of ten.
 
@@ -3060,7 +3108,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/buffer.js:456](https://g
 
 <a id="cause-check-command"></a>
 
-### 101. bun check is absent
+### 100. bun check is absent
 
 1 file. Category `d`. The typecheck command is rejected before producing diagnostics or ANSI colors. Empty colored stdout is a consequence of missing command dispatch.
 
@@ -3077,7 +3125,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:403](https://github.com
 
 <a id="cause-create-init-command"></a>
 
-### 102. bun create is absent
+### 101. bun create is absent
 
 1 file. Category `d`. The project scaffolding command reaches the explicit unsupported-command arm and exits before creating its template.
 
@@ -3094,7 +3142,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:400](https://github.com
 
 <a id="cause-init-command"></a>
 
-### 103. bun init is absent
+### 102. bun init is absent
 
 1 file. Category `d`. The project initializer exits at CLI dispatch before generating any project files.
 
@@ -3111,7 +3159,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:400](https://github.com
 
 <a id="cause-link-command"></a>
 
-### 104. bun link is absent
+### 103. bun link is absent
 
 1 file. Category `d`. The fixture's first child runs bun link and exits 1. CRLF normalization and executable bit checks are later assertions and have not been reached.
 
@@ -3128,7 +3176,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:400](https://github.com
 
 <a id="cause-pm-fetch"></a>
 
-### 105. bun pm fetch is absent
+### 104. bun pm fetch is absent
 
 1 file. Category `d`. The pm dispatcher only implements ls. Fetch exits before populating the cache or printing the expected fetched-package summary.
 
@@ -3147,7 +3195,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:451](https:/
 
 <a id="cause-pm-optional-peer"></a>
 
-### 106. bun pm ls fails on an unresolved optional peer entry
+### 105. bun pm ls fails on an unresolved optional peer entry
 
 1 file. Category `c`. The first pm listing exits 1 rather than zero for an optional peer lacking a resolved package id. Inspect the lockfile traversal before output formatting.
 
@@ -3164,7 +3212,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:449](https:/
 
 <a id="cause-pm-pkg"></a>
 
-### 107. bun pm pkg is absent
+### 106. bun pm pkg is absent
 
 1 file. Category `d`. Reading or updating package manifest fields is rejected with Only bun pm ls is supported in bun-wasm.
 
@@ -3181,7 +3229,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:451](https:/
 
 <a id="cause-pm-version"></a>
 
-### 108. bun pm version is absent
+### 107. bun pm version is absent
 
 1 file. Category `d`. The version-management subcommand exits 1 before printing help or previewing package version changes.
 
@@ -3198,7 +3246,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:451](https:/
 
 <a id="cause-publish-command"></a>
 
-### 109. bun publish help is absent
+### 108. bun publish help is absent
 
 1 file. Category `d`. The publishing command is rejected before producing its --dry-run help text. The fixture does not publish a package.
 
@@ -3215,7 +3263,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:401](https://github.com
 
 <a id="cause-repl-command"></a>
 
-### 110. bun repl is absent
+### 109. bun repl is absent
 
 1 file. Category `d`. The REPL command is rejected before emitting the Welcome to Bun banner. This is independent of terminal input handling.
 
@@ -3232,7 +3280,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:401](https://github.com
 
 <a id="cause-package-run-script"></a>
 
-### 111. bun run does not resolve package.json script names
+### 110. bun run does not resolve package.json script names
 
 1 file. Category `d`. The go script is loaded as a module path and fails Module not found go. No child shell script runs, so the fixture has not reached SIGKILL propagation.
 
@@ -3249,7 +3297,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:408](https://github.com
 
 <a id="cause-entry-directory"></a>
 
-### 112. bun run opens a directory instead of resolving its package entry
+### 111. bun run opens a directory instead of resolving its package entry
 
 1 file. Category `c`. The dot entry produces EIO opening the directory itself instead of honoring package.json main and running the entry file.
 
@@ -3268,7 +3316,7 @@ Suspected implementation [crates/bunwasm-runtime/src/lib.rs:321](https://github.
 
 <a id="cause-fetch-verbose"></a>
 
-### 113. BUN_CONFIG_VERBOSE_FETCH=curl produces no request trace
+### 112. BUN_CONFIG_VERBOSE_FETCH=curl produces no request trace
 
 1 file. Category `c`. The request completes without the expected --data-raw command-line trace. Verbose-fetch logging is absent, not the form-urlencoded body itself.
 
@@ -3283,28 +3331,9 @@ Received: ""
 
 Suspected implementation [crates/bunwasm-runtime/src/js/net.js:150](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/net.js#L150). Reproducer `suite quickjs 'regression/issue/12042.test.ts'`.
 
-<a id="cause-temporal-toggle"></a>
-
-### 114. BUN_JSC_useTemporal does not control the portable Temporal shim
-
-1 file. Category `e`. The environment flag is a JSC engine setting. The guest still installs a Temporal object. Intentionally keep the portable shim independent of native JSC configuration flags.
-
-Test subject `BUN_JSC_useTemporal=0 disables Temporal`. Throwing frame `at <anonymous> (/bun/test/js/bun/jsc/temporal-global.test.ts:24:40)`.
-
-Observed diagnostic:
-
-```text
--   "stderr": Any<String>,
--   "stdout": "undefined",
-+   "stderr": "",
-+   "stdout": "object",
-```
-
-Suspected implementation [crates/bunwasm-runtime/src/js/web.js:1288](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/web.js#L1288). Reproducer `suite quickjs 'js/bun/jsc/temporal-global.test.ts'`.
-
 <a id="cause-bun-options"></a>
 
-### 115. BUN_OPTIONS is not parsed before CLI dispatch
+### 113. BUN_OPTIONS is not parsed before CLI dispatch
 
 1 file. Category `c`. The environment-supplied eval option is ignored and the child prints usage instead of the success marker.
 
@@ -3321,9 +3350,9 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:371](https://github.com
 
 <a id="cause-emit-memory-pressure"></a>
 
-### 116. bun:internal-for-testing.emitMemoryPressure is absent
+### 114. bun:internal-for-testing.emitMemoryPressure is absent
 
-1 file. Category `e`. The child calls the missing native pressure-injection hook and emits no warning/critical events. Intentionally exclude this engine control rather than fabricate memory-pressure notifications.
+1 file. Category `c`. The fixture explicitly injects warning and critical through a missing test helper and observes no process events. Synthetic injection can validate and emit those events without causing real OS memory pressure. No native capability or high-cost instrumentation requirement is established by this test.
 
 Test subject `process.on('memoryPressure') > listener receives level argument`. Throwing frame `at <anonymous> (/bun/test/js/node/process/process-memory-pressure.test.ts:69:47)`.
 
@@ -3341,9 +3370,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:840](https:/
 
 <a id="cause-native-heap-snapshot"></a>
 
-### 117. bun:jsc.generateHeapSnapshotForDebugging is absent
+### 115. bun:jsc.generateHeapSnapshotForDebugging is absent
 
-1 file. Category `e`. The module-graph GC fixture fails during collection on the missing private heap-snapshot export. It has not reached ModuleGraph construction or GC assertions.
+1 file. Category `e`. Collection fails on the missing private snapshot export. Retain e because producing the expected native heap graph would require instrumenting each collector and reproducing Bun/JSC cell, edge and root metadata. The Engine interface exposes no heap graph and browser workers have no standard heap-snapshot API. That private-format instrumentation cost is separate from implementing public ModuleGraph behavior.
 
 Test subject `<collection>`. Throwing frame `collection or native failure; no JavaScript frame captured`.
 
@@ -3358,9 +3387,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:813](https:/
 
 <a id="cause-noinline"></a>
 
-### 118. bun:jsc.noInline is absent
+### 116. bun:jsc.noInline is absent
 
-1 file. Category `e`. The child calls noInline(read) and throws not a function before measuring any compilation count. Intentionally exclude the private JSC JIT control on other engines.
+1 file. Category `e`. The raw child calls noInline before reading compilation counts. Retain e because JSC in wasm cannot JIT and QuickJS is an interpreter, while an unprivileged browser worker exposes neither no-inline controls nor DFG compile counts. Reproducing JSC tiering controls across those engines would fabricate a native compiler state rather than test Buffer behavior.
 
 Test subject `Buffer accessor JIT > the JIT path is actually taken, and compile counts converge`. Throwing frame `at <anonymous> (/bun/test/js/node/buffer-jit.test.ts:62:20)`.
 
@@ -3377,7 +3406,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:813](https:/
 
 <a id="cause-bun-main"></a>
 
-### 119. bun:main is not a registered builtin module
+### 117. bun:main is not a registered builtin module
 
 1 file. Category `d`. Dynamic import of bun:main rejects as a missing module. The module wrapper cannot be returned because the builtin registry has no entry.
 
@@ -3398,7 +3427,7 @@ Suspected implementation [crates/bunwasm-runtime/src/resolve.rs:44](https://gith
 
 <a id="cause-skip-aliases"></a>
 
-### 120. bun:test lacks xit, xtest and xdescribe aliases
+### 118. bun:test lacks xit, xtest and xdescribe aliases
 
 1 file. Category `c`. The child exits 1 instead of running the skip aliases. The exports object contains test, it and describe without those aliases.
 
@@ -3415,7 +3444,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:2385](https:
 
 <a id="cause-macro-build"></a>
 
-### 121. Bun.build called from a macro does not reach the expected rejection handler
+### 119. Bun.build called from a macro does not reach the expected rejection handler
 
 1 file. Category `d`. The child prints no BUILD_SUCCESS marker. Inspect macro reentrancy and the async build return path rather than reducing this to stdout equality.
 
@@ -3430,9 +3459,28 @@ Received: ""
 
 Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:369](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L369). Reproducer `suite quickjs 'regression/issue/26360.test.ts'`.
 
+<a id="cause-public-color"></a>
+
+### 120. Bun.color is absent
+
+1 file. Category `d`. The child calls public Bun.color and throws not a function. It never reaches color parsing or the nested atan2 complexity check. The Rust color/CSS implementation is portable; this is an API implementation gap, not a private-hook exclusion.
+
+Test subject `deeply nested atan2() color values parse in linear time instead of hanging`. Throwing frame `at <anonymous> (/bun/test/js/bun/css/atan2-backtracking-hang.test.ts:50:18)`.
+
+Observed diagnostic:
+
+```text
+- ""
++ "1 |
++ 2 |     const inputs = ["hsl(sin(2\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan2(9\n-(atan
++ 3 |     console.log(JSON.stringify(inputs.map(css => Bun.color(css, "css"))));
+```
+
+Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bun.js#L449). Reproducer `suite quickjs 'js/bun/css/atan2-backtracking-hang.test.ts'`.
+
 <a id="cause-deep-equals-arity"></a>
 
-### 122. Bun.deepEquals accepts one argument instead of rejecting it
+### 121. Bun.deepEquals accepts one argument instead of rejecting it
 
 1 file. Category `c`. The child expects TypeError: Expected 2 values to compare and prints nothing. The wrapper forwards missing arguments without an arity check.
 
@@ -3449,7 +3497,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:473](https://gith
 
 <a id="cause-deep-equals-fourth"></a>
 
-### 123. Bun.deepEquals drops its fourth ignore-class-name argument
+### 122. Bun.deepEquals drops its fourth ignore-class-name argument
 
 1 file. Category `c`. The wrapper forwards only three arguments. deepEquals(new Foo(),new Bar(),true,true) receives false where true is required.
 
@@ -3466,7 +3514,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:473](https://gith
 
 <a id="cause-deep-match"></a>
 
-### 124. Bun.deepMatch passes the wrong partial-match semantics
+### 123. Bun.deepMatch passes the wrong partial-match semantics
 
 1 file. Category `c`. The wrapper supplies a fourth argument to bunDeepEquals, which accepts only three. Partial object matching returns false instead of true.
 
@@ -3483,7 +3531,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:474](https://gith
 
 <a id="cause-escape-html-symbol"></a>
 
-### 125. Bun.escapeHTML accepts Symbol instead of throwing
+### 124. Bun.escapeHTML accepts Symbol instead of throwing
 
 1 file. Category `c`. String coercion returns Symbol(Symbol.iterator) where implicit symbol-to-string conversion must throw TypeError.
 
@@ -3501,7 +3549,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:163](https://gith
 
 <a id="cause-escape-regexp"></a>
 
-### 126. Bun.escapeRegExp is absent
+### 125. Bun.escapeRegExp is absent
 
 1 file. Category `c`. The named import resolves to an undefined property of Bun and throws on the first call.
 
@@ -3518,7 +3566,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-file-mime"></a>
 
-### 127. Bun.file appends charset to an explicitly supplied MIME type
+### 126. Bun.file appends charset to an explicitly supplied MIME type
 
 1 file. Category `c`. The expected text/markdown becomes text/markdown;charset=utf-8. Preserve the caller's explicit type.
 
@@ -3535,7 +3583,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:128](https://gith
 
 <a id="cause-async-stack-wording"></a>
 
-### 128. Bun.file rejection stacks omit async frame markers
+### 127. Bun.file rejection stacks omit async frame markers
 
 1 file. Category `c`. The stack contains level2 and level1 but not at async level2. The filesystem operation and ENOENT code occur; the first remaining mismatch is stack presentation.
 
@@ -3552,7 +3600,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:57](https://githu
 
 <a id="cause-bun-file-exists-dir"></a>
 
-### 129. Bun.file.exists reports directories as existing files
+### 128. Bun.file.exists reports directories as existing files
 
 1 file. Category `c`. The directory path returns true where Bun.file.exists expects false. Inspect the file-type check rather than filesystem path existence alone.
 
@@ -3568,7 +3616,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:88](https://githu
 
 <a id="cause-highlighter"></a>
 
-### 130. Bun.highlighter is absent
+### 129. Bun.highlighter is absent
 
 1 file. Category `c`. The named import is not callable. The highlighted output and ANSI length have not been evaluated.
 
@@ -3585,7 +3633,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-inspect-build-error"></a>
 
-### 131. Bun.inspect leaks internal BuildError formatting properties
+### 130. Bun.inspect leaks internal BuildError formatting properties
 
 1 file. Category `c`. The snapshot receives BuildError and its enumerable __bunwasmFormatted string instead of Bun's rendered code-frame diagnostic. Hide internal formatting metadata and use the public error formatter.
 
@@ -3606,7 +3654,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/inspect.js:206](https://
 
 <a id="cause-open-editor"></a>
 
-### 132. Bun.openInEditor cannot launch an external editor
+### 131. Bun.openInEditor cannot launch an external editor
 
 1 file. Category `b`. The fake editor records no code or subl invocation. External executable spawning is unavailable, so the fixture has not measured editor argument lifetime.
 
@@ -3624,7 +3672,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:521](https://gith
 
 <a id="cause-plugin-loader"></a>
 
-### 133. Bun.plugin and its runtime build.module registry are absent
+### 132. Bun.plugin and its runtime build.module registry are absent
 
 1 file. Category `d`. The child calls Bun.plugin before registering its virtual TypeScript module. The public Bun object has no plugin function. Loader-specific parsing has not yet been reached.
 
@@ -3641,7 +3689,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-uuid5"></a>
 
-### 134. Bun.randomUUIDv5 is absent
+### 133. Bun.randomUUIDv5 is absent
 
 1 file. Category `c`. The first deterministic namespace UUID calculation calls an absent API.
 
@@ -3658,7 +3706,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-secrets-validation"></a>
 
-### 135. Bun.secrets is absent, so argument errors have no Bun code
+### 134. Bun.secrets is absent, so argument errors have no Bun code
 
 1 file. Category `c`. The NUL argument test catches a TypeError from calling the absent API, with code undefined rather than ERR_INVALID_ARG_VALUE.
 
@@ -3675,7 +3723,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-null-argument-wording"></a>
 
-### 136. Bun.spawn NUL validation uses a different public message
+### 135. Bun.spawn NUL validation uses a different public message
 
 1 file. Category `c`. The call correctly rejects a NUL argument but says Command arguments cannot contain null bytes instead of matching must be a string without null bytes. Match this argument-validation diagnostic.
 
@@ -3692,7 +3740,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/spawn.js:42](https://git
 
 <a id="cause-file-stdin-slice"></a>
 
-### 137. Bun.stdin.slice applies an offset that Bun ignores for stream stdin
+### 136. Bun.stdin.slice applies an offset that Bun ignores for stream stdin
 
 1 file. Category `c`. The first byte is removed, yielding ello world instead of hello world. Investigate descriptor-backed stream slicing separately from ordinary file slicing.
 
@@ -3709,7 +3757,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:506](https://gith
 
 <a id="cause-strip-ansi"></a>
 
-### 138. Bun.stripANSI does not consume a complete OSC title sequence
+### 137. Bun.stripANSI does not consume a complete OSC title sequence
 
 1 file. Category `c`. ESC ] 0 ; window title BEL text leaves ;window title followed by BEL and text instead of text. The CSI-oriented regex is insufficient for OSC.
 
@@ -3726,7 +3774,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:172](https://gith
 
 <a id="cause-bun-write-mode"></a>
 
-### 139. Bun.write drops the requested filesystem mode
+### 138. Bun.write drops the requested filesystem mode
 
 1 file. Category `c`. Copy mode is 420 decimal, or 0644, instead of the requested 384 decimal, or 0600. Forward the mode option to file creation.
 
@@ -3743,7 +3791,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:135](https://gith
 
 <a id="cause-bunfig-validation"></a>
 
-### 140. bunfig runtime option types are not validated
+### 139. bunfig runtime option types are not validated
 
 1 file. Category `c`. A string-valued smol config does not produce expected boolean but received string. The CLI startup path has no corresponding bunfig validation stage.
 
@@ -3760,7 +3808,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:371](https://github.com
 
 <a id="cause-child-instance-spawn"></a>
 
-### 141. ChildProcess instances have no spawn method
+### 140. ChildProcess instances have no spawn method
 
 1 file. Category `c`. The function-level child_process wrappers do not supply the constructor instance method exercised by this file.
 
@@ -3777,7 +3825,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/spawn.js:364](https://gi
 
 <a id="cause-http-setheaders"></a>
 
-### 142. ClientRequest.setHeaders is absent
+### 141. ClientRequest.setHeaders is absent
 
 1 file. Category `c`. The request wrapper has no bulk Headers setter. No ERR_HTTP_HEADERS_SENT check is reached.
 
@@ -3794,7 +3842,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/net.js:1242](https://git
 
 <a id="cause-require-extensions"></a>
 
-### 143. CommonJS loading ignores user overrides of Module._extensions
+### 142. CommonJS loading ignores user overrides of Module._extensions
 
 1 file. Category `c`. The file executes with its built-in loader, but the .js loader called marker is absent. The source suffix still determines parsing; the user registry is bypassed.
 
@@ -3811,7 +3859,7 @@ Suspected implementation [crates/bunwasm-runtime/src/modules.rs:1](https://githu
 
 <a id="cause-console-iterator"></a>
 
-### 144. console has no async line iterator
+### 143. console has no async line iterator
 
 1 file. Category `d`. The child executes for-await over console and produces no input lines. Console.write exists, but the Bun console async iterator is absent.
 
@@ -3828,7 +3876,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/console.js:35](https://g
 
 <a id="cause-console-time-stream"></a>
 
-### 145. console.timeEnd writes to stdout instead of Bun's stderr
+### 144. console.timeEnd writes to stdout instead of Bun's stderr
 
 1 file. Category `c`. The expected stdout is empty, but it contains a duration and trailing newline. The first mismatch is output stream selection, not an extra newline.
 
@@ -3846,7 +3894,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/console.js:86](https://g
 
 <a id="cause-shake256"></a>
 
-### 146. crypto.createHash does not support SHAKE256 outputLength
+### 145. crypto.createHash does not support SHAKE256 outputLength
 
 1 file. Category `c`. The leak fixture rejects createHash shake256 with Digest method not supported before making any deflate call. Add the digest capability before interpreting the file as a zlib memory failure.
 
@@ -3865,7 +3913,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:70](https://
 
 <a id="cause-jwt-key-classification"></a>
 
-### 147. crypto.createPublicKey rejects certificate PEMs
+### 146. crypto.createPublicKey rejects certificate PEMs
 
 1 file. Category `c`. The fixture file named pub.pem contains a BEGIN CERTIFICATE block. readPem accepts only private/public key blocks, so createPublicKey throws Invalid PEM key. jsonwebtoken catches that failure and treats the certificate bytes as a symmetric key, allowing HS256 instead of rejecting invalid algorithm. A direct guest probe confirmed ERR_INVALID_ARG_TYPE:Invalid PEM key.
 
@@ -3883,7 +3931,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/crypto_keys.js:309](http
 
 <a id="cause-css-default"></a>
 
-### 148. CSS module imports return source text instead of an empty object
+### 147. CSS module imports return source text instead of an empty object
 
 1 file. Category `c`. The default import is the CSS source string. Bun's runtime CSS loader contract returns an object for side-effect imports.
 
@@ -3900,7 +3948,7 @@ Suspected implementation [crates/bunwasm-runtime/src/modules.rs:407](https://git
 
 <a id="cause-diagnostic-channel"></a>
 
-### 149. diagnostics_channel.channel accepts null names
+### 148. diagnostics_channel.channel accepts null names
 
 1 file. Category `c`. channel(null) returns normally instead of throwing for a name that is neither string nor symbol.
 
@@ -3918,7 +3966,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:433](https:/
 
 <a id="cause-domexception-name"></a>
 
-### 150. DOMException does not accept Bun's name-and-cause options object
+### 149. DOMException does not accept Bun's name-and-cause options object
 
 1 file. Category `c`. The constructor stringifies the options object into [object Object] instead of setting name to CauseError.
 
@@ -3935,7 +3983,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:17](https://githu
 
 <a id="cause-runner-reporters"></a>
 
-### 151. Dots and only-failures reporters are not implemented
+### 150. Dots and only-failures reporters are not implemented
 
 1 file. Category `d`. The runner prints passing status lines instead of dots or suppressed passing tests. This is reporter selection, not snapshot whitespace.
 
@@ -3956,7 +4004,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:2301](https:
 
 <a id="cause-tla-cycle"></a>
 
-### 152. Dynamic import in a top-level-await cycle exits before its continuation
+### 151. Dynamic import in a top-level-await cycle exits before its continuation
 
 1 file. Category `d`. The child exits without chunk loaded:43. Inspect module evaluation completion and lifecycle for the cycle instead of attributing empty stdout to console output.
 
@@ -3973,7 +4021,7 @@ Suspected implementation [crates/bunwasm-runtime/src/modules.rs:407](https://git
 
 <a id="cause-f-p521"></a>
 
-### 153. Embedded crypto key generation rejects P-521
+### 152. Embedded crypto key generation rejects P-521
 
 1 file. Category `f`. ECDSA and ECDH P-521 generation reject with Crypto generate failed before exported JWK widths can be tested. Browser fully passes. This is the embedded key backend, not proof of malformed export padding.
 
@@ -3990,7 +4038,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/crypto.js:476](https://g
 
 <a id="cause-f-stream-class-name"></a>
 
-### 154. Embedded Web Streams expose minified constructor names
+### 153. Embedded Web Streams expose minified constructor names
 
 1 file. Category `f`. ByteLengthQueuingStrategy inspects as class xe instead of its public class name. Browser fully passes with native streams. Match public constructor names when loading the embedded polyfill.
 
@@ -4007,7 +4055,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/streams.js:7](https://gi
 
 <a id="cause-f-jwk-octets"></a>
 
-### 155. Embedded WebCrypto rejects a valid noncanonical JWK oct encoding
+### 154. Embedded WebCrypto rejects a valid noncanonical JWK oct encoding
 
 1 file. Category `f`. importKey rejects with Invalid JWK octets in the base64url fixture. Browser fully passes. Inspect the explicit octets validation in the embedded crypto implementation.
 
@@ -4024,7 +4072,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/crypto.js:264](https://g
 
 <a id="cause-f-x25519-bits"></a>
 
-### 156. Embedded WebCrypto rejects X25519 deriveBits lengths that are not byte-aligned
+### 155. Embedded WebCrypto rejects X25519 deriveBits lengths that are not byte-aligned
 
 1 file. Category `f`. Lengths 3 and 251 should mask unused trailing bits. The implementation rejects with Derived length must be a multiple of eight. Browser fully passes. A second assertion also exposes a usage-error wording mismatch.
 
@@ -4041,7 +4089,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/crypto.js:448](https://g
 
 <a id="cause-f-require-microtasks"></a>
 
-### 157. Embedded-engine require of ESM pumps user microtasks too early
+### 156. Embedded-engine require of ESM pumps user microtasks too early
 
 1 file. Category `f`. The then and await callbacks precede after-require. Browser fully passes. Inspect synchronous ESM evaluation and pending-job draining in the embedded-engine loader.
 
@@ -4058,7 +4106,7 @@ Suspected implementation [crates/bunwasm-runtime/src/modules.rs:407](https://git
 
 <a id="cause-prepare-stack"></a>
 
-### 158. Error.prepareStackTrace has no default callable implementation
+### 157. Error.prepareStackTrace has no default callable implementation
 
 1 file. Category `c`. The crash regression directly invokes the absent default function with a non-array second argument.
 
@@ -4075,7 +4123,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/stack_trace.js:57](https
 
 <a id="cause-stacktrace-limit"></a>
 
-### 159. Error.stackTraceLimit does not expose Bun's default property descriptor
+### 158. Error.stackTraceLimit does not expose Bun's default property descriptor
 
 1 file. Category `c`. The Error constructor descriptor value is undefined instead of 10. Inspect installation of the public stack-limit property, not assertion equality.
 
@@ -4090,28 +4138,9 @@ Received: undefined
 
 Suspected implementation [crates/bunwasm-runtime/src/js/stack_trace.js:57](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/stack_trace.js#L57). Reproducer `suite quickjs 'js/bun/jsc/webkit-upgrade-7b485a76e9.test.ts'`.
 
-<a id="cause-eval-jsx"></a>
-
-### 160. Eval mode does not provide native Bun's TSX and React evaluation behavior
-
-1 file. Category `d`. The child emits no JSON or JSX output although the parent resolves React. Inspect the eval loader and JSX runtime mode before changing a snapshot.
-
-Test subject `bun -e > import, tsx, require in esm, import.meta`. Throwing frame `at <anonymous> (/bun/test/cli/run/run-eval.test.ts:35:39)`.
-
-Observed diagnostic:
-
-```text
-- "{"version":"18.3.1","file":"/bun/test/[eval]","require":"18.3.1"}
-- <hello>world</hello>
-- "
-+ ""
-```
-
-Suspected implementation [crates/bunwasm-cli/src/main.rs:87](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-cli/src/main.rs#L87). Reproducer `suite quickjs 'cli/run/run-eval.test.ts'`.
-
 <a id="cause-raw-js-parser"></a>
 
-### 161. Eval skips Bun's dead-branch destructuring-var lowering
+### 159. Eval skips Bun's dead-branch destructuring-var lowering
 
 1 file. Category `d`. QuickJS receives if(0)var[] and rejects it as variable name expected. Native Bun first lowers this dead declaration away. Inspect eval loader selection and transpilation before changing the engine parser.
 
@@ -4128,9 +4157,26 @@ Observed diagnostic:
 
 Suspected implementation [crates/bunwasm-runtime/src/modules.rs:414](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/modules.rs#L414). Reproducer `suite quickjs 'regression/issue/31002.test.ts'`.
 
+<a id="cause-eval-parser-diagnostic"></a>
+
+### 160. Eval uses engine syntax diagnostics instead of Bun parser diagnostics
+
+1 file. Category `d`. The child rejects the malformed source with QuickJS Unexpected token instead of the expected Bun parser message. The eval entry is registered as source directly. No host capability prevents using the already compiled Bun parser, so this is eval parsing and diagnostic integration work.
+
+Test subject `'static { ... }' in an object-literal position ([{static{}) is a syntax error, not a parser crash`. Throwing frame `at <anonymous> (/bun/test/regression/issue/30963.test.ts:47:20)`.
+
+Observed diagnostic:
+
+```text
+Expected to contain: "Expected \"}\" but found \"{\""
+Received: "1 | [{static{}\n            ^\nSyntaxError: Unexpected token '{'\n      at <anonymous> (/bun/test/[eval]:1:9)\n\nBun v1.4.4 (WASI wasm32)\n"
+```
+
+Suspected implementation [crates/bunwasm-runtime/src/modules.rs:414](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/modules.rs#L414). Reproducer `suite quickjs 'regression/issue/30963.test.ts'`.
+
 <a id="cause-event-once-constructor"></a>
 
-### 162. EventEmitter.once is a normal function instead of an AsyncFunction
+### 161. EventEmitter.once is a normal function instead of an AsyncFunction
 
 1 file. Category `c`. The result may be a Promise, but constructor.name is Function rather than AsyncFunction. The fixture tests the function's observable identity.
 
@@ -4147,7 +4193,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/events.js:209](https://g
 
 <a id="cause-array-size"></a>
 
-### 163. expect.toBeArrayOfSize is absent
+### 162. expect.toBeArrayOfSize is absent
 
 1 file. Category `c`. The assertion calls a missing matcher. Inspect the child result separately after this bounded test-runner gap is fixed.
 
@@ -4164,7 +4210,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:851](https:/
 
 <a id="cause-unreachable-message"></a>
 
-### 164. expect.unreachable stringifies Error instead of preserving its message
+### 163. expect.unreachable stringifies Error instead of preserving its message
 
 1 file. Category `c`. The assertion expects message here and receives Error: message here. Match Bun's public assertion diagnostic.
 
@@ -4181,7 +4227,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:780](https:/
 
 <a id="cause-fetch-refused-code"></a>
 
-### 165. Fetch exposes the host backend's ConnectionRefused code
+### 164. Fetch exposes the host backend's ConnectionRefused code
 
 1 file. Category `c`. The expected ECONNREFUSED becomes ConnectionRefused, and the message omits the ECONNREFUSED prefix. Match the public Node/Bun error contract at the host boundary.
 
@@ -4200,7 +4246,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/net.js:150](https://gith
 
 <a id="cause-mtime-write"></a>
 
-### 166. Filesystem timestamps do not preserve the requested utimes values
+### 165. Filesystem timestamps do not preserve the requested utimes values
 
 1 file. Category `c`. The fixture stamps early outputs with utimesSync, but this wrapper only calls statSync and never updates timestamps. The early-output list therefore remains empty. The failure is filesystem timestamp mutation, not build graph analysis.
 
@@ -4219,7 +4265,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/node_fs.js:619](https://
 
 <a id="cause-dirent-unknown"></a>
 
-### 167. fs.constants lacks UV_DIRENT_UNKNOWN and UV_DIRENT_FIFO
+### 166. fs.constants lacks UV_DIRENT_UNKNOWN and UV_DIRENT_FIFO
 
 1 file. Category `c`. The first assertion reads fs.constants.UV_DIRENT_UNKNOWN and receives undefined instead of zero. The fixture has not yet constructed a Dirent or exercised its type predicates.
 
@@ -4236,7 +4282,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/node_fs.js:9](https://gi
 
 <a id="cause-mkdir-validation"></a>
 
-### 168. fs.mkdir callback adapter defers invalid path errors
+### 167. fs.mkdir callback adapter defers invalid path errors
 
 1 file. Category `c`. Invalid argument types should throw before the callback is scheduled. The adapter returns undefined without a synchronous TypeError.
 
@@ -4254,7 +4300,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/node_fs.js:658](https://
 
 <a id="cause-fs-readstream-close"></a>
 
-### 169. fs.ReadStream has no close method
+### 168. fs.ReadStream has no close method
 
 1 file. Category `c`. The cleanup call rs.close throws. This is not evidence that O_CLOEXEC flags were measured successfully on WASI descriptors.
 
@@ -4271,9 +4317,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/node_fs.js:758](https://
 
 <a id="cause-procfs-descriptors"></a>
 
-### 170. Guest /proc/self/fd is not the native process descriptor table
+### 169. Guest /proc/self/fd is not the native process descriptor table
 
-1 file. Category `a`. The fixture cannot enumerate the native descriptors it intends to close. This OS poll-registration test needs host descriptor introspection beyond the preopened guest filesystem.
+1 file. Category `a`. The raw child fails with ENOENT scanning /proc/self/fd before touching poll registration. The runner preopens only its suite and temporary directories. The guest descriptor table is distinct from the launcher's native descriptor table, and no ABI operation exposes that table or native fcntl/poll handles. Adding a directory path alone would not make native fd numbers become guest handles.
 
 Test subject `FilePoll teardown tolerates an fd closed while still registered`. Throwing frame `at <anonymous> (/bun/test/js/bun/spawn/spawn-pipe-stale-fd-unregister.test.ts:103:23)`.
 
@@ -4290,7 +4336,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/node_fs.js:374](https://
 
 <a id="cause-immediate-id"></a>
 
-### 171. Immediate handles do not coerce to increasing numeric identifiers
+### 170. Immediate handles do not coerce to increasing numeric identifiers
 
 1 file. Category `c`. The id > lastID check is false because Immediate has no numeric id or Symbol.toPrimitive. It is a handle-coercion gap, not callback ordering.
 
@@ -4307,7 +4353,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bootstrap.js:337](https:
 
 <a id="cause-install-patch-progress"></a>
 
-### 172. Install progress output omits resolving and migration status
+### 171. Install progress output omits resolving and migration status
 
 1 file. Category `c`. The first snapshot expects Resolving dependencies followed by Saved lockfile. It receives only Saved lockfile. This first mismatch is cosmetic and should match; it does not prove patch application works.
 
@@ -4326,7 +4372,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:80](https://
 
 <a id="cause-install-lifecycle"></a>
 
-### 173. Installer does not execute package lifecycle scripts
+### 172. Installer does not execute package lifecycle scripts
 
 1 file. Category `d`. The marker indicating the lifecycle script ran is false. The install option parser ignores script controls and the installer has no lifecycle execution stage.
 
@@ -4343,7 +4389,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:40](https://
 
 <a id="cause-install-filter"></a>
 
-### 174. Installer does not parse --filter workspace selection
+### 173. Installer does not parse --filter workspace selection
 
 1 file. Category `c`. The first add command exits with Unknown install option --filter instead of changing the selected workspace. Parsing is the first blocker; workspace-targeted resolution is later work.
 
@@ -4360,7 +4406,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:54](https://
 
 <a id="cause-package-extensions"></a>
 
-### 175. Installer ignores packageExtensions metadata
+### 174. Installer ignores packageExtensions metadata
 
 1 file. Category `d`. The installed package manifest has no injected dependencies object. packageExtensions are not merged into metadata before dependency traversal.
 
@@ -4379,7 +4425,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/resolve.rs:89](http
 
 <a id="cause-install-destination"></a>
 
-### 176. Installer rejects --destination before workspace migration
+### 175. Installer rejects --destination before workspace migration
 
 1 file. Category `c`. The complex-workspace setup command exits at flag parsing rather than migrating its dependency graph.
 
@@ -4396,7 +4442,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:54](https://
 
 <a id="cause-install-optional-empty"></a>
 
-### 177. Installer rejects an unresolved optional dependency with an empty name
+### 176. Installer rejects an unresolved optional dependency with an empty name
 
 1 file. Category `c`. The install success marker is false. Spec-name validation runs before the optional dependency can be skipped.
 
@@ -4413,9 +4459,9 @@ Suspected implementation [crates/bunwasm-runtime/src/install/resolve.rs:56](http
 
 <a id="cause-large-buffer-wording"></a>
 
-### 178. Large Buffer allocation uses the wasm limit rather than JSC's wording
+### 177. Large Buffer allocation uses the wasm limit rather than JSC's wording
 
-1 file. Category `e`. The operation does throw RangeError for the 64-GiB request. Intentionally retain a truthful wasm allocation-limit diagnostic instead of claiming JavaScriptCore's typed-array limit.
+1 file. Category `e`. The 64-GiB request already throws RangeError at the wasm32 buffer limit. Retain e because the guest cannot represent that native address range. Copying JSC's typed-array-limit wording would falsely attribute a wasm32 allocation guard to JSC and add an engine-specific diagnostic special case without changing the correct rejection behavior.
 
 Test subject `Buffer.concat throws RangeError for too large buffers`. Throwing frame `at <anonymous> (/bun/test/js/node/buffer-concat.test.ts:10:40)`.
 
@@ -4430,7 +4476,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/buffer.js:524](https://g
 
 <a id="cause-url-legacy-ipv6"></a>
 
-### 179. Legacy url.parse retains IPv6 brackets in hostname
+### 178. Legacy url.parse retains IPv6 brackets in hostname
 
 1 file. Category `c`. The expected hostname is ::1 and the actual hostname is [::1]. Host retains brackets, but hostname must not.
 
@@ -4449,7 +4495,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/node_url.js:49](https://
 
 <a id="cause-legacy-url-coercion"></a>
 
-### 180. Legacy url.parse swallows primitive exceptions during argument description
+### 179. Legacy url.parse swallows primitive exceptions during argument description
 
 1 file. Category `c`. The fixture prints did not throw for several primitive exceptions instead of rethrown followed by the original primitive. Inspect invalid-argument formatting and coercion order.
 
@@ -4467,6 +4513,23 @@ Observed diagnostic:
 ```
 
 Suspected implementation [crates/bunwasm-runtime/src/js/node_url.js:49](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/node_url.js#L49). Reproducer `suite quickjs 'js/node/url/url-parse-invalid-input.test.js'`.
+
+<a id="cause-compiled-cjs-marker"></a>
+
+### 180. Malformed @bun-cjs text wrappers are not rejected
+
+1 file. Category `c`. The fixture is ordinary text headed @bun @bun-cjs, without the required function wrapper. It executes as CommonJS instead of producing the wrapper diagnostic. This check needs text-format validation, not native machine-code or bytecode execution, so it is a bounded loader gap.
+
+Test subject `commonjs-invalid > Loading an invalid commonjs module`. Throwing frame `at <anonymous> (/bun/test/cli/run/commonjs-invalid.test.ts:17:27)`.
+
+Observed diagnostic:
+
+```text
+Expected to contain: "Expected CommonJS module to have a function wrapper"
+Received: ""
+```
+
+Suspected implementation [crates/bunwasm-runtime/src/modules.rs:30](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/modules.rs#L30). Reproducer `suite quickjs 'cli/run/commonjs-invalid.test.ts'`.
 
 <a id="cause-formdata-inspect"></a>
 
@@ -4560,26 +4623,9 @@ Received: undefined
 
 Suspected implementation [crates/bunwasm-runtime/src/js/net.js:150](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/net.js#L150). Reproducer `suite quickjs 'js/web/fetch/fetch-connection-header.test.ts'`.
 
-<a id="cause-compiled-cjs-marker"></a>
-
-### 186. Native precompiled CJS header validation is not emulated
-
-1 file. Category `e`. The malformed @bun-cjs file executes as ordinary CommonJS instead of rejecting its missing precompiled wrapper. Intentionally exclude native precompiled-file invariants until that file format is supported.
-
-Test subject `commonjs-invalid > Loading an invalid commonjs module`. Throwing frame `at <anonymous> (/bun/test/cli/run/commonjs-invalid.test.ts:17:27)`.
-
-Observed diagnostic:
-
-```text
-Expected to contain: "Expected CommonJS module to have a function wrapper"
-Received: ""
-```
-
-Suspected implementation [crates/bunwasm-runtime/src/modules.rs:30](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/modules.rs#L30). Reproducer `suite quickjs 'cli/run/commonjs-invalid.test.ts'`.
-
 <a id="cause-node-error-tostring"></a>
 
-### 187. Node error toString omits the bracketed error code
+### 186. Node error toString omits the bracketed error code
 
 1 file. Category `c`. The error has code ERR_INVALID_ARG_TYPE, but String(error) is TypeError:message instead of TypeError [ERR_INVALID_ARG_TYPE]:message.
 
@@ -4596,7 +4642,7 @@ Suspected implementation [crates/bunwasm-runtime/src/natives.rs:59](https://gith
 
 <a id="cause-worker-dispose"></a>
 
-### 188. Node Worker lacks Symbol.asyncDispose
+### 187. Node Worker lacks Symbol.asyncDispose
 
 1 file. Category `c`. The disposal property is undefined rather than a function that terminates the worker.
 
@@ -4613,7 +4659,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/worker_threads.ts:526](h
 
 <a id="cause-dns-order"></a>
 
-### 189. node:dns lacks getDefaultResultOrder
+### 188. node:dns lacks getDefaultResultOrder
 
 1 file. Category `c`. The child cannot report a function for getDefaultResultOrder. The DNS module is a stub rather than a complete compatibility wrapper.
 
@@ -4630,7 +4676,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:789](https:/
 
 <a id="cause-module-source-map"></a>
 
-### 190. node:module.SourceMap is an empty class
+### 189. node:module.SourceMap is an empty class
 
 1 file. Category `c`. The instance has no payload property. It receives undefined rather than the constructor's source-map payload object.
 
@@ -4647,7 +4693,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:287](https:/
 
 <a id="cause-process-tty"></a>
 
-### 191. Non-TTY stdin reports false instead of undefined
+### 190. Non-TTY stdin reports false instead of undefined
 
 1 file. Category `c`. The Node compatibility fixture expects an absent isTTY property on a non-terminal stream. The adapter supplies false.
 
@@ -4664,9 +4710,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/process.js:125](https://
 
 <a id="cause-os-arch"></a>
 
-### 192. os.arch truthfully reports wasm32 rather than a native CPU
+### 191. os.arch truthfully reports wasm32 rather than a native CPU
 
-1 file. Category `a`. The upstream list accepts x64, x86 or arm64. Intentionally retain wasm32 for the WASI guest instead of lying about its architecture.
+1 file. Category `a`. The fixture accepts only x64, x86 or arm64 and receives false for the wasm32 guest architecture. os.arch delegates to process.arch. A wasm32-wasip1 artifact has a wasm32 address model regardless of the launcher's CPU. The platform gap is the upstream native-CPU allowlist, not an absent getter.
 
 Test subject `arch`. Throwing frame `at <anonymous> (/bun/test/js/node/os/os.test.js:8:68)`.
 
@@ -4681,7 +4727,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:40](https://
 
 <a id="cause-install-quiet"></a>
 
-### 193. Package packing setup rejects --quiet
+### 192. Package packing setup rejects --quiet
 
 1 file. Category `c`. The pm diff fixture cannot create its input package because its setup command rejects quiet. This is earlier than comparing package contents.
 
@@ -4698,7 +4744,7 @@ Suspected implementation [crates/bunwasm-runtime/src/install/mod.rs:54](https://
 
 <a id="cause-boxed-paths"></a>
 
-### 194. Path helpers reject boxed String values used by the fixture
+### 193. Path helpers reject boxed String values used by the fixture
 
 1 file. Category `c`. The coercion-and-GC fixture receives validation errors instead of its OK lines. The path wrapper accepts only primitive strings before invoking coercion hooks.
 
@@ -4719,7 +4765,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/path.js:15](https://gith
 
 <a id="cause-path-win32"></a>
 
-### 195. path.win32.dirname delegates to POSIX behavior
+### 194. path.win32.dirname delegates to POSIX behavior
 
 1 file. Category `c`. dirname of a Windows drive root returns dot instead of c backslash. This is a path algorithm gap, not a host-platform limitation.
 
@@ -4736,7 +4782,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/path.js:355](https://git
 
 <a id="cause-performance-resource"></a>
 
-### 196. performance.clearResourceTimings is absent
+### 195. performance.clearResourceTimings is absent
 
 1 file. Category `c`. Resource timing cleanup is not implemented on the performance object.
 
@@ -4753,7 +4799,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:1150](https://git
 
 <a id="cause-performance-json"></a>
 
-### 197. performance.toJSON returns only timeOrigin
+### 196. performance.toJSON returns only timeOrigin
 
 1 file. Category `c`. The fixture expects two serialized keys and receives one. The implementation explicitly returns only timeOrigin. The fixture does not name its expected second property, so do not infer one from this assertion alone.
 
@@ -4770,7 +4816,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:1181](https://git
 
 <a id="cause-argv-bun-flag"></a>
 
-### 198. process.argv omits the leading --bun argument expected by parseArgs
+### 197. process.argv omits the leading --bun argument expected by parseArgs
 
 1 file. Category `c`. The default-args helper receives an empty option list instead of --bun. The CLI consumes the flag without exposing the expected argument vector.
 
@@ -4787,11 +4833,28 @@ Observed diagnostic:
 
 Suspected implementation [crates/bunwasm-runtime/src/js/process.js:178](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/process.js#L178). Reproducer `suite quickjs 'js/node/util/parse_args/default-args.test.mjs'`.
 
+<a id="cause-dlopen-rejection-code"></a>
+
+### 198. process.dlopen rejection omits ERR_DLOPEN_FAILED
+
+1 file. Category `c`. All five raw failures already reject the input, but print CODE:undefined instead of ERR_DLOPEN_FAILED. Reporting the public rejection code needs no successful native addon load. The native ELF guard and library execution paths remain unmeasured.
+
+Test subject `issue #15753: glibc addon on musl throws instead of segfaulting > glibc-linked addon (libc.so.6) is rejected with ERR_DLOPEN_FAILED`. Throwing frame `at <anonymous> (/bun/test/regression/issue/15753.test.ts:116:22)`.
+
+Observed diagnostic:
+
+```text
+Expected to contain: "CODE:ERR_DLOPEN_FAILED"
+Received: "CODE:undefined\nMSG:process.dlopen is not supported in bun-wasm\n"
+```
+
+Suspected implementation [crates/bunwasm-runtime/src/js/process.js:253](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/process.js#L253). Reproducer `suite quickjs 'regression/issue/15753.test.ts'`.
+
 <a id="cause-process-execve"></a>
 
 ### 199. process.execve has no host process-replacement capability
 
-1 file. Category `a`. The method is undefined. WASI guest replacement and native execve are not the same operation.
+1 file. Category `a`. The first assertion sees an absent function. The file also requires native execve behavior: replace the calling process image while preserving its process identity and inherited descriptors. WASI preview1 has no execve, and this host runs child guests as independent stores on threads in one launcher. Its spawn ABI starts a new Bun instance and cannot replace a native process image.
 
 Test subject `process.execve > is a function`. Throwing frame `at <anonymous> (/bun/test/js/node/process/process-execve.test.ts:7:35)`.
 
@@ -4823,9 +4886,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bootstrap.js:389](https:
 
 <a id="cause-process-ppid"></a>
 
-### 201. process.ppid is a fixed WASI placeholder rather than a live OS accessor
+### 201. process.ppid is a data property instead of an accessor
 
-1 file. Category `a`. The property descriptor has no getter. The guest has no native parent process identity to observe.
+1 file. Category `c`. The first assertion checks the property descriptor and receives no getter. Installing an accessor requires no OS parent-process lookup. A later test independently fails to open /proc/self/stat; that later platform dependency does not explain the first descriptor mismatch.
 
 Test subject `process.ppid is a live accessor (#29169)`. Throwing frame `at <anonymous> (/bun/test/regression/issue/29169.test.ts:35:30)`.
 
@@ -4838,9 +4901,26 @@ Received: "undefined"
 
 Suspected implementation [crates/bunwasm-runtime/src/js/process.js:197](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/process.js#L197). Reproducer `suite quickjs 'regression/issue/29169.test.ts'`.
 
+<a id="cause-setgroups"></a>
+
+### 202. process.setgroups input validation is absent
+
+1 file. Category `c`. The accessor test expects its getter error to propagate and receives not a function because setgroups is absent. Reading and validating an input array needs no host credential change. A valid setgroups operation may need a future host capability, but this first failure is argument validation.
+
+Test subject `process.setgroups > propagates exceptions thrown from an accessor`. Throwing frame `at <anonymous> (/bun/test/js/node/process/process-array-accessor-crash.test.ts:22:46)`.
+
+Observed diagnostic:
+
+```text
+Expected substring: "getter threw"
+Received message: "not a function"
+```
+
+Suspected implementation [crates/bunwasm-runtime/src/js/process.js:178](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/process.js#L178). Reproducer `suite quickjs 'js/node/process/process-array-accessor-crash.test.ts'`.
+
 <a id="cause-stdin-ref-type"></a>
 
-### 202. process.stdin exposes ref for file input where Bun leaves it undefined
+### 203. process.stdin exposes ref for file input where Bun leaves it undefined
 
 1 file. Category `c`. The snapshot receives function instead of undefined for a file-backed stdin ref member.
 
@@ -4857,7 +4937,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/process.js:125](https://
 
 <a id="cause-process-title"></a>
 
-### 203. process.title is fixed to bun instead of the executable path
+### 204. process.title is fixed to bun instead of the executable path
 
 1 file. Category `c`. The title is bun while the fixture expects process.execPath. This is a public process property mismatch.
 
@@ -4874,7 +4954,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/process.js:178](https://
 
 <a id="cause-f-duration"></a>
 
-### 204. QuickJS Intl shim has no DurationFormat
+### 205. QuickJS Intl shim has no DurationFormat
 
 1 file. Category `f`. Intl.DurationFormat is not callable in the English-only shim. The same upstream file fully passes on JSC and browser.
 
@@ -4891,7 +4971,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/intl.js:9](https://githu
 
 <a id="cause-f-als-thenable"></a>
 
-### 205. QuickJS loses AsyncLocalStorage context across custom thenable assimilation
+### 206. QuickJS loses AsyncLocalStorage context across custom thenable assimilation
 
 1 file. Category `f`. The thenable sees undefined instead of the stored verifier symbol. JSC fully passes. This is promise-context propagation rather than the separate defaultValue option gap.
 
@@ -4909,7 +4989,7 @@ Suspected implementation [crates/bunwasm-runtime/src/engine_quickjs.rs:259](http
 
 <a id="cause-f-promise-try"></a>
 
-### 206. QuickJS Promise.try wraps a returned promise instead of preserving identity
+### 207. QuickJS Promise.try wraps a returned promise instead of preserving identity
 
 1 file. Category `f`. Expected and received both inspect as resolved Promise objects, but identity differs. JSC fully passes. Suspect the engine's Promise.try implementation, not the inspector.
 
@@ -4926,7 +5006,7 @@ Suspected implementation [crates/bunwasm-runtime/src/engine_quickjs.rs:138](http
 
 <a id="cause-import-defer"></a>
 
-### 207. QuickJS receives import defer syntax without a lowering pass
+### 208. QuickJS receives import defer syntax without a lowering pass
 
 1 file. Category `d`. The child reports from clause expected at import defer. The syntax is not supported by the engine and is not transformed by the guest loader.
 
@@ -4945,9 +5025,9 @@ Suspected implementation [crates/bunwasm-runtime/src/engine_quickjs.rs:251](http
 
 <a id="cause-f-disposal-wording"></a>
 
-### 208. QuickJS says disposable where the fixture searches for dispose
+### 209. QuickJS says disposable where the fixture searches for dispose
 
-1 file. Category `f`. The expected TypeError is thrown, but its message value is not disposable does not contain dispose. JSC and browser fully pass. Intentionally retain native engine wording under e.
+1 file. Category `f`. The expected TypeError is thrown, but value is not disposable does not contain dispose. JSC and browser fully pass. This is a measured message mismatch; no platform or cost exclusion is established by it.
 
 Test subject `'using' in a CommonJS module does not emit an ESM import inside the CJS wrapper`. Throwing frame `at <anonymous> (/bun/test/regression/issue/11100.test.ts:39:32)`.
 
@@ -4962,7 +5042,7 @@ Suspected implementation [crates/bunwasm-runtime/src/engine_quickjs.rs:243](http
 
 <a id="cause-f-nul-source"></a>
 
-### 209. QuickJS source loading truncates or rejects NUL in template literals
+### 210. QuickJS source loading truncates or rejects NUL in template literals
 
 1 file. Category `f`. The child prints no string lengths instead of 1 and 0. Browser fully passes. The observed difference is source containing NUL across the engine boundary; byte-length handling is the suspected cause and still needs a native adapter trace.
 
@@ -4981,7 +5061,7 @@ Suspected implementation [crates/bunwasm-runtime/src/engine_quickjs.rs:243](http
 
 <a id="cause-public-promise-then"></a>
 
-### 210. readableStreamToArrayBuffer calls a patched Promise.prototype.then
+### 211. readableStreamToArrayBuffer calls a patched Promise.prototype.then
 
 1 file. Category `c`. The fixture observes five public then calls rather than zero. Internal stream conversion must use the engine's promise operations or a captured intrinsic.
 
@@ -4998,7 +5078,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:492](https://gith
 
 <a id="cause-fs-recursive-links"></a>
 
-### 211. readdir recursive skips symlink error traversal
+### 212. readdir recursive skips symlink error traversal
 
 1 file. Category `c`. The child reports that readdirSync did not throw when the symlink-loop fixture expected its error path. Do not claim a leak measurement from the untriggered path.
 
@@ -5017,7 +5097,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/node_fs.js:386](https://
 
 <a id="cause-redis"></a>
 
-### 212. RedisClient and Bun.redis are absent
+### 213. RedisClient and Bun.redis are absent
 
 1 file. Category `d`. The child cannot print its loaded Redis URL marker because the API is missing. This is earlier than URL parsing or Redis network access.
 
@@ -5034,7 +5114,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun.js:449](https://gith
 
 <a id="cause-report-error"></a>
 
-### 213. reportError output and stack columns differ from Bun's public formatter
+### 214. reportError output and stack columns differ from Bun's public formatter
 
 1 file. Category `c`. The error stack points to column 1 instead of 17, and primitive-value output lacks Bun's repeated error labels. Match this public formatter instead of normalizing the test snapshot.
 
@@ -5055,7 +5135,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:2018](https:
 
 <a id="cause-request-cache"></a>
 
-### 214. Request.cache is absent
+### 215. Request.cache is absent
 
 1 file. Category `c`. A default Request exposes undefined instead of default for its cache mode.
 
@@ -5072,7 +5152,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:1029](https://git
 
 <a id="cause-invalid-this"></a>
 
-### 215. Request.formData receiver validation omits ERR_INVALID_THIS
+### 216. Request.formData receiver validation omits ERR_INVALID_THIS
 
 1 file. Category `c`. formData is an async unsupported stub with no synchronous receiver brand check. The call returns a rejected Promise, so the fixture reaches expect.unreachable and catches an Error with code undefined instead of the required synchronous ERR_INVALID_THIS TypeError.
 
@@ -5089,7 +5169,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:922](https://gith
 
 <a id="cause-require-async-module"></a>
 
-### 216. require does not deliver the expected transitive-TLA TypeError
+### 217. require does not deliver the expected transitive-TLA TypeError
 
 1 file. Category `d`. The child's guard never sees both a TypeError and an async module message for its transitive top-level-await dependency. Inspect transitive asynchronous module state; the guard alone does not distinguish a normal return from a different thrown error.
 
@@ -5108,7 +5188,7 @@ Suspected implementation [crates/bunwasm-runtime/src/modules.rs:139](https://git
 
 <a id="cause-module-children"></a>
 
-### 217. require leaves CommonJS module.children empty
+### 218. require leaves CommonJS module.children empty
 
 1 file. Category `c`. Module constructs children as an empty array, but loadModule creates every child with parent undefined and does not attach it to the referrer. The fixture throws children missing before its completion marker. This is module relationship tracking, not concurrent GC.
 
@@ -5125,7 +5205,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bootstrap.js:482](https:
 
 <a id="cause-response-json-validation"></a>
 
-### 218. Response.json accepts values JSON.stringify cannot serialize
+### 219. Response.json accepts values JSON.stringify cannot serialize
 
 1 file. Category `c`. A Symbol produces a Response with a null body instead of throwing Value is not JSON serializable.
 
@@ -5143,7 +5223,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:874](https://gith
 
 <a id="cause-tsconfig-paths"></a>
 
-### 219. Runtime resolution ignores inherited tsconfig path mappings
+### 220. Runtime resolution ignores inherited tsconfig path mappings
 
 1 file. Category `d`. The child cannot find @leaf/thing after the extends merge. Runtime package lookup has no corresponding paths mapping stage.
 
@@ -5162,9 +5242,9 @@ Suspected implementation [crates/bunwasm-runtime/src/resolve.rs:160](https://git
 
 <a id="cause-shadowrealm"></a>
 
-### 220. ShadowRealm native VM and concurrent-GC fixture has no portable implementation
+### 221. ShadowRealm constructor is absent
 
-1 file. Category `e`. The child prints no ok marker when constructing native realms in a warm VM. Intentionally exclude the JSC VM/GC control unless ShadowRealm becomes a supported public guest feature.
+1 file. Category `d`. The failing child constructs ShadowRealm and prints no ok marker. This is an absent realm API, not evidence that concurrent GC failed. A portable realm implementation would be substantial work, but the record supplies no platform impossibility or explicit reason to exclude it.
 
 Test subject `Zig::GlobalObject creation on a warm VM under concurrent GC > ShadowRealm creation survives concurrent GC`. Throwing frame `at <anonymous> (/bun/test/regression/issue/29519.test.ts:89:27)`.
 
@@ -5176,23 +5256,6 @@ Received: ""
 ```
 
 Suspected implementation [crates/bunwasm-runtime/src/engine_quickjs.rs:138](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine_quickjs.rs#L138). Reproducer `suite quickjs 'regression/issue/29519.test.ts'`.
-
-<a id="cause-spawn-sync-stdio"></a>
-
-### 221. spawnSync does not preserve the parent stdin/stdout while driving the child
-
-1 file. Category `c`. The fixture prints BEFORE and AFTER but FAIL: Subprocess output missing instead of SUCCESS. Inspect synchronous input-pipe draining and restoration.
-
-Test subject `spawnSync isolated event loop > stdin/stdout from main process should not be affected by spawnSync`. Throwing frame `at <anonymous> (/bun/test/js/bun/spawn/spawnsync-isolated-event-loop.test.ts:118:20)`.
-
-Observed diagnostic:
-
-```text
-Expected to contain: "SUCCESS"
-Received: "BEFORE\nAFTER\nFAIL: Subprocess output missing\n"
-```
-
-Suspected implementation [crates/bunwasm-runtime/src/js/spawn.js:288](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/spawn.js#L288). Reproducer `suite quickjs 'js/bun/spawn/spawnsync-isolated-event-loop.test.ts'`.
 
 <a id="cause-negative-vlq"></a>
 
@@ -5211,9 +5274,26 @@ Received: ""
 
 Suspected implementation [crates/bunwasm-runtime/src/js/stack_trace.js:1](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/stack_trace.js#L1). Reproducer `suite quickjs 'js/bun/sourcemap/negative-vlq-mapping.test.ts'`.
 
+<a id="cause-parser-native-wording"></a>
+
+### 223. Stack-overflow message parity omits a trailing period
+
+1 file. Category `c`. The child reports the expected RangeError class, but its message lacks the final period in Bun's expected text. The record demonstrates a bounded public diagnostic mismatch. No host limitation or cost reason for excluding this assertion is established.
+
+Test subject `expect().toMatchObject() throws RangeError on deeply nested objects instead of crashing`. Throwing frame `at <anonymous> (/bun/test/js/bun/test/expect-stack-overflow-crash.test.ts:55:18)`.
+
+Observed diagnostic:
+
+```text
+- "true Maximum call stack size exceeded.
++ "true Maximum call stack size exceeded
+```
+
+Suspected implementation [crates/bunwasm-runtime/src/engine_quickjs.rs:243](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/engine_quickjs.rs#L243). Reproducer `suite quickjs 'js/bun/test/expect-stack-overflow-crash.test.ts'`.
+
 <a id="cause-static-conditional"></a>
 
-### 223. Static Bun.file routes ignore If-Modified-Since
+### 224. Static Bun.file routes ignore If-Modified-Since
 
 1 file. Category `c`. The fixture sends an If-Modified-Since date in the future and receives 200 instead of 304. Conditional response handling is missing before any descriptor-leak measurement can be interpreted.
 
@@ -5228,9 +5308,28 @@ Received: 200
 
 Suspected implementation [crates/bunwasm-runtime/src/js/net.js:591](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/net.js#L591). Reproducer `suite quickjs 'regression/issue/29181.test.ts'`.
 
+<a id="cause-temporal-toggle"></a>
+
+### 225. Temporal installation ignores BUN_JSC_useTemporal=0
+
+1 file. Category `c`. The child sees a Temporal object instead of undefined. The portable shim is lazily installed whenever the global is absent and does not check the opt-out environment flag. Honoring that installation choice does not require changing native JSC internals.
+
+Test subject `BUN_JSC_useTemporal=0 disables Temporal`. Throwing frame `at <anonymous> (/bun/test/js/bun/jsc/temporal-global.test.ts:24:40)`.
+
+Observed diagnostic:
+
+```text
+-   "stderr": Any<String>,
+-   "stdout": "undefined",
++   "stderr": "",
++   "stdout": "object",
+```
+
+Suspected implementation [crates/bunwasm-runtime/src/js/bootstrap.js:799](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/bootstrap.js#L799). Reproducer `suite quickjs 'js/bun/jsc/temporal-global.test.ts'`.
+
 <a id="cause-failing-validation"></a>
 
-### 224. test.failing reports collection state before validating its callback
+### 226. test.failing reports collection state before validating its callback
 
 1 file. Category `c`. The missing callback should report test.failing expects a function as the second argument. It instead reports that test or describe was called outside a test file.
 
@@ -5247,7 +5346,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:1707](https:
 
 <a id="cause-encoding-ascii"></a>
 
-### 225. TextDecoder ASCII labels do not use Windows-1252 mappings
+### 227. TextDecoder ASCII labels do not use Windows-1252 mappings
 
 1 file. Category `c`. Bytes 0x89,0x95,0x9f become C1 controls rather than the expected per-mille, bullet and Y-diaeresis characters.
 
@@ -5264,7 +5363,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:62](https://githu
 
 <a id="cause-css-entry-diagnostic"></a>
 
-### 226. The CLI accepts a CSS entry instead of rejecting an unsupported run target
+### 228. The CLI accepts a CSS entry instead of rejecting an unsupported run target
 
 1 file. Category `c`. Running an existing CSS file produces no Cannot run diagnostic. Distinguish executable entry loader validation from importing CSS as a module.
 
@@ -5281,7 +5380,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:408](https://github.com
 
 <a id="cause-custom-conditions"></a>
 
-### 227. The CLI rejects --conditions before resolving conditional exports
+### 229. The CLI rejects --conditions before resolving conditional exports
 
 1 file. Category `c`. The first child uses --conditions=first, which reaches the unknown-flag arm and exits 1. The resolver also has a fixed condition list, but that is a later gap after CLI parsing.
 
@@ -5298,7 +5397,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:416](https://github.com
 
 <a id="cause-wasm-entry"></a>
 
-### 228. The CLI treats a .wasm program as JavaScript source
+### 230. The CLI treats a .wasm program as JavaScript source
 
 1 file. Category `d`. A hello-world wasm executable fails SyntaxError: source contains NUL rather than invoking a WASI instance. WebAssembly JS API support is a separate path.
 
@@ -5319,7 +5418,7 @@ Suspected implementation [crates/bunwasm-cli/src/main.rs:408](https://github.com
 
 <a id="cause-shard"></a>
 
-### 229. The runner ignores shard arguments and validation
+### 231. The runner ignores shard arguments and validation
 
 1 file. Category `c`. An invalid shard invocation runs all ten fixture tests instead of emitting the expected --shard diagnostic.
 
@@ -5336,7 +5435,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:2301](https:
 
 <a id="cause-async-preload"></a>
 
-### 230. The test runner ignores a preload flag passed in equals form
+### 232. The test runner ignores a preload flag passed in equals form
 
 1 file. Category `c`. The fixture passes --preload=<path>. The runner only handles the separate --preload value form, leaving MY_ENV undefined before the test begins.
 
@@ -5353,7 +5452,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bun_test.js:2308](https:
 
 <a id="cause-url-opaque-origin"></a>
 
-### 231. The URL host parser serializes an opaque scheme origin as null
+### 233. The URL host parser serializes an opaque scheme origin as null
 
 1 file. Category `c`. For ftps:/example.com the hostname is empty and href matches, but origin is null instead of ftps:. The first WPT section differs only in this scheme-origin field.
 
@@ -5372,7 +5471,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:388](https://gith
 
 <a id="cause-timer-idlestart"></a>
 
-### 232. Timeout objects have no _idleStart field
+### 234. Timeout objects have no _idleStart field
 
 1 file. Category `c`. The property-presence check returns false. The native-compatible Node timer metadata is missing.
 
@@ -5389,7 +5488,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/bootstrap.js:267](https:
 
 <a id="cause-timer-promisify"></a>
 
-### 233. Timer functions lack util.promisify.custom hooks
+### 235. Timer functions lack util.promisify.custom hooks
 
 1 file. Category `c`. Reading fn[promisify.custom].name throws because the per-timer custom function is undefined. This is earlier than the warmed property-read behavior.
 
@@ -5408,7 +5507,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:250](https:/
 
 <a id="cause-cjs-dynamic-import"></a>
 
-### 234. Top-level await in CJS dynamic-import fixtures is not lowered correctly
+### 236. Top-level await in CJS dynamic-import fixtures is not lowered correctly
 
 1 file. Category `d`. A .cjs file containing await import bun:test reaches QuickJS with unexpected top-level await and fails expecting semicolon. Collection fails before test #1 runs.
 
@@ -5423,26 +5522,9 @@ Received: "\ntest.test.cjs:\n\n# Unhandled error between tests\n----------------
 
 Suspected implementation [crates/bunwasm-runtime/src/modules.rs:362](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/modules.rs#L362). Reproducer `suite quickjs 'cli/test/bun-test.test.ts'`.
 
-<a id="cause-pty-stdio"></a>
-
-### 235. TTY chunking fixtures require native terminal descriptors
-
-1 file. Category `a`. The child never reports its three terminal chunks. The tested setup needs a native PTY or terminal stdin, which the present ABI does not expose.
-
-Test subject `TTY stdin buffering should work correctly`. Throwing frame `at <anonymous> (/bun/test/regression/issue/18239/18239.test.ts:26:18)`.
-
-Observed diagnostic:
-
-```text
-Expected to contain: "Received 3 chunks, exiting..."
-Received: ""
-```
-
-Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:779](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L779). Reproducer `suite quickjs 'regression/issue/18239/18239.test.ts'`.
-
 <a id="cause-unknown-builtin-code"></a>
 
-### 236. Unknown node builtins use ERR_MODULE_NOT_FOUND instead of ERR_UNKNOWN_BUILTIN_MODULE
+### 237. Unknown node builtins use ERR_MODULE_NOT_FOUND instead of ERR_UNKNOWN_BUILTIN_MODULE
 
 1 file. Category `c`. Dynamic CJS import reaches the rejection handler, but its stable public code is wrong. Match the Node code without copying an engine-specific message.
 
@@ -5459,7 +5541,7 @@ Suspected implementation [crates/bunwasm-runtime/src/modules.rs:83](https://gith
 
 <a id="cause-worker-tla-exit"></a>
 
-### 237. Unsettled worker top-level await exits 0 instead of 13
+### 238. Unsettled worker top-level await exits 0 instead of 13
 
 1 file. Category `c`. The worker lifecycle adapter publishes success while the entry module remains unresolved.
 
@@ -5474,9 +5556,28 @@ Received: 0
 
 Suspected implementation [crates/bunwasm-runtime/src/js/worker_threads.ts:526](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/worker_threads.ts#L526). Reproducer `suite quickjs 'js/node/worker_threads/worker-top-level-await.test.ts'`.
 
+<a id="cause-spawn-sync-signal-code"></a>
+
+### 239. Unsignalled Bun.spawnSync returns signalCode null instead of undefined
+
+1 file. Category `c`. All four raw failures expect signalCode undefined and receive null. The normal spawnSync return supplies null for an unsignalled child. Empty stderr satisfies expect.any(String), as matchesConstructor explicitly accepts primitive strings. This result-shape assertion establishes no stack-exhaustion or stdio initialization failure.
+
+Test subject `process.stdin lazy init near stack limit does not assert`. Throwing frame `at <anonymous> (/bun/test/js/node/process/process-stdio-stack-overflow.test.ts:16:55)`.
+
+Observed diagnostic:
+
+```text
+-   "signalCode": undefined,
+-   "stderr": Any<String>,
++   "signalCode": null,
++   "stderr": "",
+```
+
+Suspected implementation [crates/bunwasm-runtime/src/js/spawn.js:321](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/spawn.js#L321). Reproducer `suite quickjs 'js/node/process/process-stdio-stack-overflow.test.ts'`.
+
 <a id="cause-url-file-slashes"></a>
 
-### 238. URL parsing collapses repeated leading file path slashes
+### 240. URL parsing collapses repeated leading file path slashes
 
 1 file. Category `c`. The expected pathname ///bar// becomes /bar//. Inspect file-URL path normalization rather than generic object equality.
 
@@ -5493,7 +5594,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:292](https://gith
 
 <a id="cause-blob-url"></a>
 
-### 239. URL.createObjectURL is absent
+### 241. URL.createObjectURL is absent
 
 1 file. Category `d`. Worker fixture setup cannot create a blob URL. This is earlier than worker execution or transfer-list behavior.
 
@@ -5510,7 +5611,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:292](https://gith
 
 <a id="cause-urlsearchparams-arity"></a>
 
-### 240. URLSearchParams methods do not validate missing arguments
+### 242. URLSearchParams methods do not validate missing arguments
 
 1 file. Category `c`. The first no-argument method call returns normally, producing the fixture sentinel 1 instead of TypeError sentinel 2. delete, get, getAll, has, forEach, append and set share the missing arity checks.
 
@@ -5527,7 +5628,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:187](https://gith
 
 <a id="cause-urlsearchparams-json"></a>
 
-### 241. URLSearchParams.toJSON is absent
+### 243. URLSearchParams.toJSON is absent
 
 1 file. Category `c`. The large-parameter fixture calls an absent method instead of receiving the expected property object.
 
@@ -5544,7 +5645,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/web.js:187](https://gith
 
 <a id="cause-custom-inspect"></a>
 
-### 242. util.inspect passes a different function identity to inspect.custom
+### 244. util.inspect passes a different function identity to inspect.custom
 
 1 file. Category `c`. Both values print as [Function: inspect], but Object.is is false. This is callback identity, not an inspect string-format mismatch.
 
@@ -5559,28 +5660,26 @@ Received: [Function: inspect]
 
 Suspected implementation [crates/bunwasm-runtime/src/js/inspect.js:2719](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/inspect.js#L2719). Reproducer `suite quickjs 'js/node/util/custom-inspect.test.js'`.
 
-<a id="cause-stdio-stack-control"></a>
+<a id="cause-vm-proxy-validation"></a>
 
-### 243. WASI stdio initialization does not reproduce native near-stack-limit failure
+### 245. vm.compileFunction accepts Proxy parameter lists
 
-1 file. Category `e`. The fixture expects native initialization to produce stderr and an undefined signalCode. The guest completes normally with empty stderr and null signalCode. Intentionally exclude the native stack-exhaustion control case.
+1 file. Category `c`. The process.setgroups Proxy check passes. The first failing assertion is vm.compileFunction with Proxy params, which returns a function instead of throwing. Its implementation joins params without the expected validation and ignores contextExtensions. No group-management syscall is implicated.
 
-Test subject `process.stdin lazy init near stack limit does not assert`. Throwing frame `at <anonymous> (/bun/test/js/node/process/process-stdio-stack-overflow.test.ts:16:55)`.
+Test subject `isArray + Proxy crash fixes > vm.compileFunction throws for Proxy params (no crash)`. Throwing frame `at <anonymous> (/bun/test/regression/issue/isArray-proxy-crash.test.ts:57:69)`.
 
 Observed diagnostic:
 
 ```text
--   "signalCode": undefined,
--   "stderr": Any<String>,
-+   "signalCode": null,
-+   "stderr": "",
+Received function did not throw
+Received value: [Function]
 ```
 
-Suspected implementation [crates/bunwasm-runtime/src/js/process.js:125](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/process.js#L125). Reproducer `suite quickjs 'js/node/process/process-stdio-stack-overflow.test.ts'`.
+Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:322](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L322). Reproducer `suite quickjs 'regression/issue/isArray-proxy-crash.test.ts'`.
 
 <a id="cause-ws-protocol-error"></a>
 
-### 244. WebSocket handshake rejection omits Mismatch client protocol close reason
+### 246. WebSocket handshake rejection omits Mismatch client protocol close reason
 
 1 file. Category `c`. The close reason is empty after rejecting multiple server subprotocols. The fixture expects Mismatch client protocol.
 
@@ -5597,9 +5696,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/websocket.js:8](https://
 
 <a id="cause-worker-terminate-clone"></a>
 
-### 245. Worker data cannot share the fixture's SharedArrayBuffer
+### 247. Worker data cannot share the fixture's SharedArrayBuffer
 
-1 file. Category `a`. Every termination case constructs workerData containing an Int32Array over a SharedArrayBuffer control block. The codec explicitly rejects SharedArrayBuffer, so construction throws DataCloneError before the worker is armed. These are not sixteen demonstrated termination failures.
+1 file. Category `a`. Every termination case passes an Int32Array over a SharedArrayBuffer in workerData. The codec rejects that buffer before starting the worker. Guest stores have independent linear memories and the host worker protocol has no shared-JS-buffer identity or shared-backing-store handle. The private network SharedArrayBuffer ring is not a guest workerData transfer API. This establishes a current host-ABI gap, not sixteen termination failures.
 
 Test subject `terminate() at every native→JS entry point > timers`. Throwing frame `at <anonymous> (/bun/test/js/web/workers/worker-terminate-funnels.test.ts:40:91)`.
 
@@ -5617,7 +5716,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/worker_codec.ts:66](http
 
 <a id="cause-transfer-error"></a>
 
-### 246. Worker transfer validation throws DOMException instead of TypeError
+### 248. Worker transfer validation throws DOMException instead of TypeError
 
 1 file. Category `c`. An invalid transfer entry is rejected, but the thrown constructor is DOMException. Match the Node Worker API's TypeError contract while keeping transfer validation before detachment.
 
@@ -5635,7 +5734,7 @@ Suspected implementation [crates/bunwasm-runtime/src/js/worker_codec.ts:27](http
 
 <a id="cause-zlib-flush"></a>
 
-### 247. zlib transform streams have no flush method
+### 249. zlib transform streams have no flush method
 
 1 file. Category `d`. The gzip/gunzip fixture stops at target.flush rather than an incorrect compressed byte count.
 
@@ -5652,9 +5751,9 @@ Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:607](https:/
 
 <a id="cause-zlib-native-handle"></a>
 
-### 248. zlib._handle.writeSync is private native binding state
+### 250. zlib._handle.writeSync is absent
 
-1 file. Category `e`. The public stream wrapper has no native _handle object. Intentionally exclude direct binding-handle bounds tests rather than fabricate one.
+1 file. Category `d`. The fixture calls _handle.writeSync before its bounds assertion, but that private object is absent. Compression itself already runs through portable Rust natives. Providing the handle contract and its buffer/lifetime rules is implementation work that can also support upstream Node/Bun zlib code. The raw record establishes no host impossibility or sufficient cost reason to exclude it.
 
 Test subject `zlib native handle bounds checking > writeSync rejects in_len exceeding input buffer`. Throwing frame `at <anonymous> (/bun/test/js/node/zlib/zlib-handle-bounds-check.test.ts:23:8)`.
 
@@ -5665,7 +5764,7 @@ Expected pattern: /exceeds input buffer length/
 Received message: "cannot read property 'writeSync' of undefined"
 ```
 
-Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:581](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L581). Reproducer `suite quickjs 'js/node/zlib/zlib-handle-bounds-check.test.ts'`.
+Suspected implementation [crates/bunwasm-runtime/src/js/builtins.js:607](https://github.com/ShaulLavo/bun-wasm/blob/6e93c80c6f9bccc879990bedb999c3efdcd3166f/crates/bunwasm-runtime/src/js/builtins.js#L607). Reproducer `suite quickjs 'js/node/zlib/zlib-handle-bounds-check.test.ts'`.
 
 
 ### Selected reproductions on 2026-10-17
