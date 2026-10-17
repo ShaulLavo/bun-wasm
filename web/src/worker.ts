@@ -13,6 +13,7 @@ import type { ProcessExit } from "../../runtime/proc/types.ts";
 import { fatalInterrupt } from "../../runtime/interrupt/check";
 import type { WorkerProcessClient, WorkerProcessMessage, WorkerProcessTransport } from "../../runtime/proc/worker-client";
 import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.ts";
+import { DefaultSignal } from "./default-signal";
 
 function waitStatus(result: ProcessExit): number {
   return result.kind === "start-failed" ? result.error === "ENOENT" ? 127 : 126 : result.status;
@@ -29,6 +30,8 @@ export interface RunRequest {
   jobId?: number;
   identity?: SharedArrayBuffer;
   interrupt?: SharedArrayBuffer;
+  /** Page-visible legacy host-poll readiness word, including generic Bun workers. */
+  budget?: SharedArrayBuffer;
   requestedSignal?: SharedArrayBuffer;
   signalState?: SharedArrayBuffer;
   outcome?: SharedArrayBuffer | BigInt64Array;
@@ -92,11 +95,6 @@ export interface SpawnRequest {
   trace: boolean;
   slots?: RunRequest["slots"];
   spawnBroker: true;
-}
-
-/** A guest explicitly choosing the default action, not an unrelated guest trap. */
-class DefaultSignal extends Error {
-  constructor(readonly signal: number) { super(`Process stopped by signal ${signal}`); }
 }
 
 export type WorkerMessage =
@@ -236,6 +234,8 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   try {
     const runtime = req.runtimeProcess ? await import("../../runtime/proc/worker-client") : null;
     const runtimeState = req.runtimeProcess ? runtime!.workerProcessState(req.runtimeProcess) : null;
+    const interruptBuffer = req.child?.interrupt ?? req.interrupt;
+    const interrupt = runtimeState?.signals.interrupt ?? (interruptBuffer ? new Int32Array(interruptBuffer) : undefined);
     if (runtimeState) {
       outcome = runtimeState.signals.outcome;
       requestedSignal = runtimeState.signals.requestedSignal;
@@ -259,9 +259,10 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     };
     subprocess = isolated ? new SubprocessHost({
       signalState: runtimeState?.signals.signalState ?? req.child?.signalState ?? req.signalState,
+      interrupt,
       outcome: outcome ?? undefined,
       defaultSignal,
-      budget: req.child?.budget,
+      budget: req.child?.budget ?? req.budget,
       identity: req.runtimeProcess?.identity ?? req.child?.identity ?? req.identity,
       pid: runtimeState?.pid ?? req.child?.pid ?? req.pid,
       jobId: runtimeState?.job ?? req.child?.jobId ?? req.jobId,
@@ -310,7 +311,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
       stdout: (data) => post("stdout", data),
       stderr: (data) => post("stderr", data),
       sleep: ms => { checkActive(); sleep(ms); checkActive(); },
-      interrupt: runtimeState?.signals.interrupt,
+      interrupt,
       wait: (word, expected, ms) => { checkActive(); Atomics.wait(word, 0, expected, ms); checkActive(); },
       namespaces: { runtime_proc: processImports },
       trace: req.trace ? (line) => console.debug(`[wasi] ${line}`) : undefined,
