@@ -1,0 +1,764 @@
+{
+  "method": "Headless real-browser IndexedDB durability, page termination, exclusive-writer and lazy-data gates. Original spike 3 corpus geometry: 10,000 package-sized files plus three 8 MiB files; synthetic deterministic contents, no upstream code/content. One corpus sample per engine, timings diagnostic not performance thresholds. Browser profiles, workers, server and build scratch owned by this process.",
+  "platform": "darwin",
+  "arch": "arm64",
+  "browsers": [
+    {
+      "browser": "chromium",
+      "version": "156.0.8078.4",
+      "reload": true,
+      "checks": [
+        "durable-page-reload-bytes-inode-mtime-rename-unlink",
+        "second-tab-writer-refused-then-open-after-owner-close",
+        "page-close-midcommit-old-or-new-never-empty",
+        "10003-files-persist-index-only-reload-first-payload-full-read"
+      ],
+      "storageTests": [
+        "empty, atomic save, reload, payload copies",
+        "incremental journal without full metadata rewrites",
+        "single writer lifetime and close",
+        "immutable keys, missing payloads, monotonic generations, and flush errors",
+        "corrupt journal recovers previous generation, never an empty tree",
+        "generation reuse cannot resurrect abandoned journal successors",
+        "runtime payload pins survive collection but expire without a new pin",
+        "both corrupt base snapshots reject instead of erasing existing storage",
+        "compaction keeps both snapshots and collects only unreachable old data",
+        "missing latest snapshot payload recovers older valid copy",
+        "strict write transactions abort payload and metadata together",
+        "incremental removals and directory validation"
+      ],
+      "interrupted": [
+        {
+          "state": "new",
+          "files": [
+            "/new-only",
+            "/renamed"
+          ],
+          "size": 8388608,
+          "metadata": [
+            {
+              "path": "/new-only",
+              "kind": "file",
+              "ino": 4,
+              "mtime": 1792194154926
+            },
+            {
+              "path": "/renamed",
+              "kind": "file",
+              "ino": 2,
+              "mtime": 1792194154925
+            }
+          ]
+        },
+        {
+          "state": "new",
+          "files": [
+            "/new-only",
+            "/renamed"
+          ],
+          "size": 8388608,
+          "metadata": [
+            {
+              "path": "/new-only",
+              "kind": "file",
+              "ino": 4,
+              "mtime": 1792194155194
+            },
+            {
+              "path": "/renamed",
+              "kind": "file",
+              "ino": 2,
+              "mtime": 1792194155193
+            }
+          ]
+        },
+        {
+          "state": "new",
+          "files": [
+            "/new-only",
+            "/renamed"
+          ],
+          "size": 8388608,
+          "metadata": [
+            {
+              "path": "/new-only",
+              "kind": "file",
+              "ino": 4,
+              "mtime": 1792194155460
+            },
+            {
+              "path": "/renamed",
+              "kind": "file",
+              "ino": 2,
+              "mtime": 1792194155460
+            }
+          ]
+        }
+      ],
+      "corpus": {
+        "files": 10003,
+        "bytes": 92687646,
+        "persistMs": 1844.5899996757507,
+        "finalFlushMs": 24.65500020980835,
+        "checkpointMs": 328.3449993133545,
+        "payloadPrepareMs": 52.87499713897705,
+        "commits": 40,
+        "batchFiles": 256,
+        "sourceArtifactSha256": "c2df4f49a4e7d27772209e6df7f92ad323a6c1d0b682b28cd153aaf5c79ee2c8",
+        "resources": {
+          "bytes": 89473344,
+          "poolBytes": 83886080,
+          "metadataBytes": 5587264,
+          "usedBytes": 77463552,
+          "freeBytes": 6422528,
+          "maxBytes": 1073741824,
+          "files": 787
+        }
+      },
+      "indexReload": {
+        "ms": 48.63000011444092,
+        "reads": 0,
+        "readBytes": 0,
+        "nativePayloadRequests": 0
+      },
+      "metadataOnly": {
+        "ms": 1363.4500002861023,
+        "files": 10003,
+        "reads": 0,
+        "readBytes": 0,
+        "nativePayloadRequests": 0,
+        "resources": {
+          "bytes": 22364480,
+          "poolBytes": 16777216,
+          "metadataBytes": 5587264,
+          "usedBytes": 0,
+          "freeBytes": 16777216,
+          "maxBytes": 1073741824,
+          "files": 778
+        }
+      },
+      "firstData": {
+        "ms": 1.255000114440918,
+        "path": "/node_modules/pkg000/lib/d0/f01.js",
+        "bytes": 8209,
+        "reads": 1,
+        "readBytes": 8209,
+        "nativePayloadRequests": 1
+      },
+      "fullRead": {
+        "ms": 3087.8200001716614,
+        "bytes": 92687646,
+        "files": 10003,
+        "bad": 0,
+        "fullByteValidation": true,
+        "reads": 9987,
+        "readBytes": 92687646,
+        "nativePayloadRequests": 9987,
+        "resources": {
+          "bytes": 89473344,
+          "poolBytes": 83886080,
+          "metadataBytes": 5587264,
+          "usedBytes": 60424192,
+          "freeBytes": 23461888,
+          "maxBytes": 1073741824,
+          "files": 531
+        }
+      },
+      "cleanup": {
+        "contextClosed": true,
+        "databaseNames": [
+          "bunwasm-step3b-chromium-463971b6-6ddf-4022-a039-bb3a379bd849",
+          "bunwasm-step3b-chromium-463971b6-6ddf-4022-a039-bb3a379bd849-interrupt-0",
+          "bunwasm-step3b-chromium-463971b6-6ddf-4022-a039-bb3a379bd849-interrupt-1",
+          "bunwasm-step3b-chromium-463971b6-6ddf-4022-a039-bb3a379bd849-interrupt-2",
+          "bunwasm-step3b-chromium-463971b6-6ddf-4022-a039-bb3a379bd849-corpus"
+        ]
+      }
+    },
+    {
+      "browser": "firefox",
+      "version": "157.0",
+      "reload": true,
+      "checks": [
+        "durable-page-reload-bytes-inode-mtime-rename-unlink",
+        "second-tab-writer-refused-then-open-after-owner-close",
+        "page-close-midcommit-old-or-new-never-empty",
+        "10003-files-persist-index-only-reload-first-payload-full-read"
+      ],
+      "storageTests": [
+        "empty, atomic save, reload, payload copies",
+        "incremental journal without full metadata rewrites",
+        "single writer lifetime and close",
+        "immutable keys, missing payloads, monotonic generations, and flush errors",
+        "corrupt journal recovers previous generation, never an empty tree",
+        "generation reuse cannot resurrect abandoned journal successors",
+        "runtime payload pins survive collection but expire without a new pin",
+        "both corrupt base snapshots reject instead of erasing existing storage",
+        "compaction keeps both snapshots and collects only unreachable old data",
+        "missing latest snapshot payload recovers older valid copy",
+        "strict write transactions abort payload and metadata together",
+        "incremental removals and directory validation"
+      ],
+      "interrupted": [
+        {
+          "state": "old",
+          "files": [
+            "/old-only",
+            "/victim"
+          ],
+          "size": 1048576,
+          "metadata": [
+            {
+              "path": "/old-only",
+              "kind": "file",
+              "ino": 3,
+              "mtime": 1792194164058
+            },
+            {
+              "path": "/victim",
+              "kind": "file",
+              "ino": 2,
+              "mtime": 1792194164058
+            }
+          ]
+        },
+        {
+          "state": "old",
+          "files": [
+            "/old-only",
+            "/victim"
+          ],
+          "size": 1048576,
+          "metadata": [
+            {
+              "path": "/old-only",
+              "kind": "file",
+              "ino": 3,
+              "mtime": 1792194164453
+            },
+            {
+              "path": "/victim",
+              "kind": "file",
+              "ino": 2,
+              "mtime": 1792194164453
+            }
+          ]
+        },
+        {
+          "state": "old",
+          "files": [
+            "/old-only",
+            "/victim"
+          ],
+          "size": 1048576,
+          "metadata": [
+            {
+              "path": "/old-only",
+              "kind": "file",
+              "ino": 3,
+              "mtime": 1792194164848
+            },
+            {
+              "path": "/victim",
+              "kind": "file",
+              "ino": 2,
+              "mtime": 1792194164847
+            }
+          ]
+        }
+      ],
+      "corpus": {
+        "files": 10003,
+        "bytes": 92687646,
+        "persistMs": 1594.5600000000002,
+        "finalFlushMs": 119.39999999999986,
+        "checkpointMs": 1048.48,
+        "payloadPrepareMs": 135.32000000000397,
+        "commits": 40,
+        "batchFiles": 256,
+        "sourceArtifactSha256": "c2df4f49a4e7d27772209e6df7f92ad323a6c1d0b682b28cd153aaf5c79ee2c8",
+        "resources": {
+          "bytes": 89473344,
+          "poolBytes": 83886080,
+          "metadataBytes": 5587264,
+          "usedBytes": 77463552,
+          "freeBytes": 6422528,
+          "maxBytes": 1073741824,
+          "files": 787
+        }
+      },
+      "indexReload": {
+        "ms": 71.74000000000001,
+        "reads": 0,
+        "readBytes": 0,
+        "nativePayloadRequests": 0
+      },
+      "metadataOnly": {
+        "ms": 346.88,
+        "files": 10003,
+        "reads": 0,
+        "readBytes": 0,
+        "nativePayloadRequests": 0,
+        "resources": {
+          "bytes": 22364480,
+          "poolBytes": 16777216,
+          "metadataBytes": 5587264,
+          "usedBytes": 0,
+          "freeBytes": 16777216,
+          "maxBytes": 1073741824,
+          "files": 778
+        }
+      },
+      "firstData": {
+        "ms": 0.8000000000000114,
+        "path": "/node_modules/pkg000/lib/d0/f01.js",
+        "bytes": 8209,
+        "reads": 1,
+        "readBytes": 8209,
+        "nativePayloadRequests": 1
+      },
+      "fullRead": {
+        "ms": 2177.98,
+        "bytes": 92687646,
+        "files": 10003,
+        "bad": 0,
+        "fullByteValidation": true,
+        "reads": 9987,
+        "readBytes": 92687646,
+        "nativePayloadRequests": 9987,
+        "resources": {
+          "bytes": 89473344,
+          "poolBytes": 83886080,
+          "metadataBytes": 5587264,
+          "usedBytes": 60424192,
+          "freeBytes": 23461888,
+          "maxBytes": 1073741824,
+          "files": 531
+        }
+      },
+      "cleanup": {
+        "contextClosed": true,
+        "databaseNames": [
+          "bunwasm-step3b-firefox-35d9b68a-9426-4245-9df5-87b449af3289",
+          "bunwasm-step3b-firefox-35d9b68a-9426-4245-9df5-87b449af3289-interrupt-0",
+          "bunwasm-step3b-firefox-35d9b68a-9426-4245-9df5-87b449af3289-interrupt-1",
+          "bunwasm-step3b-firefox-35d9b68a-9426-4245-9df5-87b449af3289-interrupt-2",
+          "bunwasm-step3b-firefox-35d9b68a-9426-4245-9df5-87b449af3289-corpus"
+        ]
+      }
+    },
+    {
+      "browser": "webkit",
+      "version": "27.2",
+      "reload": true,
+      "checks": [
+        "durable-page-reload-bytes-inode-mtime-rename-unlink",
+        "second-tab-writer-refused-then-open-after-owner-close",
+        "page-close-midcommit-old-or-new-never-empty",
+        "10003-files-persist-index-only-reload-first-payload-full-read"
+      ],
+      "storageTests": [
+        "empty, atomic save, reload, payload copies",
+        "incremental journal without full metadata rewrites",
+        "single writer lifetime and close",
+        "immutable keys, missing payloads, monotonic generations, and flush errors",
+        "corrupt journal recovers previous generation, never an empty tree",
+        "generation reuse cannot resurrect abandoned journal successors",
+        "runtime payload pins survive collection but expire without a new pin",
+        "both corrupt base snapshots reject instead of erasing existing storage",
+        "compaction keeps both snapshots and collects only unreachable old data",
+        "missing latest snapshot payload recovers older valid copy",
+        "strict write transactions abort payload and metadata together",
+        "incremental removals and directory validation"
+      ],
+      "interrupted": [
+        {
+          "state": "new",
+          "files": [
+            "/new-only",
+            "/renamed"
+          ],
+          "size": 8388608,
+          "metadata": [
+            {
+              "path": "/new-only",
+              "kind": "file",
+              "ino": 4,
+              "mtime": 1792194171309
+            },
+            {
+              "path": "/renamed",
+              "kind": "file",
+              "ino": 2,
+              "mtime": 1792194171309
+            }
+          ]
+        },
+        {
+          "state": "new",
+          "files": [
+            "/new-only",
+            "/renamed"
+          ],
+          "size": 8388608,
+          "metadata": [
+            {
+              "path": "/new-only",
+              "kind": "file",
+              "ino": 4,
+              "mtime": 1792194172067
+            },
+            {
+              "path": "/renamed",
+              "kind": "file",
+              "ino": 2,
+              "mtime": 1792194172066
+            }
+          ]
+        },
+        {
+          "state": "new",
+          "files": [
+            "/new-only",
+            "/renamed"
+          ],
+          "size": 8388608,
+          "metadata": [
+            {
+              "path": "/new-only",
+              "kind": "file",
+              "ino": 4,
+              "mtime": 1792194172814
+            },
+            {
+              "path": "/renamed",
+              "kind": "file",
+              "ino": 2,
+              "mtime": 1792194172813
+            }
+          ]
+        }
+      ],
+      "corpus": {
+        "files": 10003,
+        "bytes": 92687646,
+        "persistMs": 1090.24,
+        "finalFlushMs": 19.460000000000036,
+        "checkpointMs": 607.8199999999999,
+        "payloadPrepareMs": 49.16000000000147,
+        "commits": 40,
+        "batchFiles": 256,
+        "sourceArtifactSha256": "c2df4f49a4e7d27772209e6df7f92ad323a6c1d0b682b28cd153aaf5c79ee2c8",
+        "resources": {
+          "bytes": 89473344,
+          "poolBytes": 83886080,
+          "metadataBytes": 5587264,
+          "usedBytes": 77463552,
+          "freeBytes": 6422528,
+          "maxBytes": 1073741824,
+          "files": 787
+        }
+      },
+      "indexReload": {
+        "ms": 44.78,
+        "reads": 0,
+        "readBytes": 0,
+        "nativePayloadRequests": 0
+      },
+      "metadataOnly": {
+        "ms": 379.36,
+        "files": 10003,
+        "reads": 0,
+        "readBytes": 0,
+        "nativePayloadRequests": 0,
+        "resources": {
+          "bytes": 22364480,
+          "poolBytes": 16777216,
+          "metadataBytes": 5587264,
+          "usedBytes": 0,
+          "freeBytes": 16777216,
+          "maxBytes": 1073741824,
+          "files": 778
+        }
+      },
+      "firstData": {
+        "ms": 1.420000000000016,
+        "path": "/node_modules/pkg000/lib/d0/f01.js",
+        "bytes": 8209,
+        "reads": 1,
+        "readBytes": 8209,
+        "nativePayloadRequests": 1
+      },
+      "fullRead": {
+        "ms": 2679.1,
+        "bytes": 92687646,
+        "files": 10003,
+        "bad": 0,
+        "fullByteValidation": true,
+        "reads": 9987,
+        "readBytes": 92687646,
+        "nativePayloadRequests": 9987,
+        "resources": {
+          "bytes": 89473344,
+          "poolBytes": 83886080,
+          "metadataBytes": 5587264,
+          "usedBytes": 60424192,
+          "freeBytes": 23461888,
+          "maxBytes": 1073741824,
+          "files": 531
+        }
+      },
+      "cleanup": {
+        "contextClosed": true,
+        "databaseNames": [
+          "bunwasm-step3b-webkit-08104ff2-a7d4-42e1-adff-55a400d23f66",
+          "bunwasm-step3b-webkit-08104ff2-a7d4-42e1-adff-55a400d23f66-interrupt-0",
+          "bunwasm-step3b-webkit-08104ff2-a7d4-42e1-adff-55a400d23f66-interrupt-1",
+          "bunwasm-step3b-webkit-08104ff2-a7d4-42e1-adff-55a400d23f66-interrupt-2",
+          "bunwasm-step3b-webkit-08104ff2-a7d4-42e1-adff-55a400d23f66-corpus"
+        ]
+      }
+    }
+  ],
+  "status": "final",
+  "provenance": {
+    "baseline": "73ae8124bdcb7ea8a843cb865a56174465be587a4",
+    "head": "591e1582108a800319bda220af56247abd5c39dc"
+  },
+  "host": {
+    "hardware": "Apple M1 MacBook Air, arm64, 16GiB RAM",
+    "os": "macOS 26.4 (25E246)",
+    "power": "AC Power, battery 100%",
+    "hostObservation": [
+      "Fri Oct 16 23:42:04 UTC 2026",
+      "ProductName:\t\tmacOS",
+      "ProductVersion:\t\t26.4",
+      "BuildVersion:\t\t25E246",
+      "Apple M1",
+      "17179869184",
+      "8"
+    ]
+  },
+  "strictSmoke": {
+    "method": "Headless real-browser IndexedDB durability, page termination, exclusive-writer and lazy-data gates. Original spike 3 corpus geometry: 10,000 package-sized files plus three 8 MiB files; synthetic deterministic contents, no upstream code/content. One corpus sample per engine, timings diagnostic not performance thresholds. Browser profiles, workers, server and build scratch owned by this process.",
+    "platform": "darwin",
+    "arch": "arm64",
+    "browsers": [
+      {
+        "browser": "chromium",
+        "version": "156.0.8078.4",
+        "reload": true,
+        "checks": [
+          "durable-page-reload-bytes-inode-mtime-rename-unlink",
+          "second-tab-writer-refused-then-open-after-owner-close",
+          "page-close-midcommit-old-or-new-never-empty"
+        ],
+        "storageTests": [
+          "empty, atomic save, reload, payload copies",
+          "incremental journal without full metadata rewrites",
+          "single writer lifetime and close",
+          "immutable keys, missing payloads, monotonic generations, and flush errors",
+          "corrupt journal recovers previous generation, never an empty tree",
+          "generation reuse cannot resurrect abandoned journal successors",
+          "runtime payload pins survive collection but expire without a new pin",
+          "both corrupt base snapshots reject instead of erasing existing storage",
+          "compaction keeps both snapshots and collects only unreachable old data",
+          "missing latest snapshot payload recovers older valid copy",
+          "strict write transactions abort payload and metadata together",
+          "incremental removals and directory validation"
+        ],
+        "interrupted": [
+          {
+            "state": "new",
+            "files": [
+              "/new-only",
+              "/renamed"
+            ],
+            "size": 8388608,
+            "metadata": [
+              {
+                "path": "/new-only",
+                "kind": "file",
+                "ino": 4,
+                "mtime": 1792194178451
+              },
+              {
+                "path": "/renamed",
+                "kind": "file",
+                "ino": 2,
+                "mtime": 1792194178451
+              }
+            ]
+          },
+          {
+            "state": "new",
+            "files": [
+              "/new-only",
+              "/renamed"
+            ],
+            "size": 8388608,
+            "metadata": [
+              {
+                "path": "/new-only",
+                "kind": "file",
+                "ino": 4,
+                "mtime": 1792194178719
+              },
+              {
+                "path": "/renamed",
+                "kind": "file",
+                "ino": 2,
+                "mtime": 1792194178718
+              }
+            ]
+          },
+          {
+            "state": "new",
+            "files": [
+              "/new-only",
+              "/renamed"
+            ],
+            "size": 8388608,
+            "metadata": [
+              {
+                "path": "/new-only",
+                "kind": "file",
+                "ino": 4,
+                "mtime": 1792194178988
+              },
+              {
+                "path": "/renamed",
+                "kind": "file",
+                "ino": 2,
+                "mtime": 1792194178988
+              }
+            ]
+          }
+        ],
+        "cleanup": {
+          "contextClosed": true,
+          "databaseNames": [
+            "bunwasm-step3b-chromium-0dcb4913-47e4-4bea-a3a7-c0ace9f744a5",
+            "bunwasm-step3b-chromium-0dcb4913-47e4-4bea-a3a7-c0ace9f744a5-interrupt-0",
+            "bunwasm-step3b-chromium-0dcb4913-47e4-4bea-a3a7-c0ace9f744a5-interrupt-1",
+            "bunwasm-step3b-chromium-0dcb4913-47e4-4bea-a3a7-c0ace9f744a5-interrupt-2"
+          ]
+        }
+      }
+    ]
+  },
+  "optionalSafari": {
+    "browser": "Safari",
+    "platform": "darwin",
+    "arch": "arm64",
+    "method": "Existing Safari WebDriver permission, task-owned automation session and driver. Same bundled storage/corpus worker as the three-engine gate. Single-page storage, durable corpus reload, native payload-read counters and all-byte validation. No second-tab/page-kill claims from this optional runner.",
+    "version": "26.4",
+    "storageTests": [
+      "empty, atomic save, reload, payload copies",
+      "incremental journal without full metadata rewrites",
+      "single writer lifetime and close",
+      "immutable keys, missing payloads, monotonic generations, and flush errors",
+      "corrupt journal recovers previous generation, never an empty tree",
+      "generation reuse cannot resurrect abandoned journal successors",
+      "runtime payload pins survive collection but expire without a new pin",
+      "both corrupt base snapshots reject instead of erasing existing storage",
+      "compaction keeps both snapshots and collects only unreachable old data",
+      "missing latest snapshot payload recovers older valid copy",
+      "strict write transactions abort payload and metadata together",
+      "incremental removals and directory validation"
+    ],
+    "corpus": {
+      "finalFlushMs": 180.76,
+      "batchFiles": 256,
+      "resources": {
+        "metadataBytes": 5587264,
+        "maxBytes": 1073741824,
+        "bytes": 89473344,
+        "usedBytes": 77463552,
+        "poolBytes": 83886080,
+        "files": 787,
+        "freeBytes": 6422528
+      },
+      "persistMs": 1563.1200000000003,
+      "bytes": 92687646,
+      "checkpointMs": 1060.92,
+      "commits": 40,
+      "payloadPrepareMs": 52.279999999998665,
+      "sourceArtifactSha256": "c2df4f49a4e7d27772209e6df7f92ad323a6c1d0b682b28cd153aaf5c79ee2c8",
+      "files": 10003
+    },
+    "indexReload": {
+      "ms": 82.76,
+      "readBytes": 0,
+      "reads": 0,
+      "nativePayloadRequests": 0
+    },
+    "metadataOnly": {
+      "ms": 404.2800000000001,
+      "readBytes": 0,
+      "files": 10003,
+      "reads": 0,
+      "nativePayloadRequests": 0,
+      "resources": {
+        "metadataBytes": 5587264,
+        "maxBytes": 1073741824,
+        "bytes": 22364480,
+        "usedBytes": 0,
+        "poolBytes": 16777216,
+        "files": 778,
+        "freeBytes": 16777216
+      }
+    },
+    "firstData": {
+      "path": "/node_modules/pkg000/lib/d0/f01.js",
+      "ms": 1.480000000000075,
+      "bytes": 8209,
+      "reads": 1,
+      "readBytes": 8209,
+      "nativePayloadRequests": 1
+    },
+    "fullRead": {
+      "nativePayloadRequests": 9987,
+      "readBytes": 92687646,
+      "bad": 0,
+      "ms": 2640.1600000000003,
+      "fullByteValidation": true,
+      "bytes": 92687646,
+      "resources": {
+        "metadataBytes": 5587264,
+        "maxBytes": 1073741824,
+        "bytes": 89473344,
+        "usedBytes": 60424192,
+        "poolBytes": 83886080,
+        "files": 531,
+        "freeBytes": 23461888
+      },
+      "reads": 9987,
+      "files": 10003
+    },
+    "ok": true,
+    "cleanup": {
+      "driverStopped": true,
+      "listenerClosed": true,
+      "buildScratchRemoved": true,
+      "databaseDeleted": true
+    }
+  },
+  "cleanup": {
+    "sourceRemoved": true,
+    "lockReleased": true,
+    "taskChildrenStopped": true
+  },
+  "artifacts": {
+    "macEvidence": "/work/tmp/bun-wasm-step3b-browser-LPg3dL/final-mac",
+    "exactCorpusSourceArtifactSha256": "c2df4f49a4e7d27772209e6df7f92ad323a6c1d0b682b28cd153aaf5c79ee2c8"
+  },
+  "corpusGenerator": {
+    "description": "Exact original local spike seeded-word generator and corpus geometry; words are little-endian with matching trailing-byte shifts. No package source contents or upstream implementation copied.",
+    "sourceArtifactSha256": "c2df4f49a4e7d27772209e6df7f92ad323a6c1d0b682b28cd153aaf5c79ee2c8",
+    "smallFiles": 10000,
+    "largeFiles": 3,
+    "largeFileBytes": 8388608,
+    "totalBytes": 92687646
+  }
+}
