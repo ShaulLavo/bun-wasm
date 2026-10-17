@@ -63,12 +63,15 @@ failed=0
 for slots in table imports; do
   for fixture in net-fetch net-serve net-node-http net-tcp net-bun-tcp net-http-upgrade net-ws-builtin; do
     dir="$root/tests/fixtures/$fixture"
-    if SLOTS=$slots timeout 60 bun scripts/run.ts "$root/dist/bun.wasm" -e "$(cat "$dir/index.js")" >"$scratch/$fixture.out" 2>&1 &&
-      diff -u "$dir/expected.txt" "$scratch/$fixture.out" >"$scratch/$fixture.diff"; then
+    output="$scratch/$fixture-$slots.out"
+    comparison="$scratch/$fixture-$slots.diff"
+    if SLOTS=$slots timeout 60 bun scripts/run.ts "$root/dist/bun.wasm" -e "$(cat "$dir/index.js")" >"$output" 2>&1 &&
+      diff -u "$dir/expected.txt" "$output" >"$comparison"; then
       echo "ok   cli $fixture ($slots)"
     else
       echo "FAIL cli $fixture ($slots)"
-      cat "$scratch/$fixture.diff" 2>/dev/null || tail -20 "$scratch/$fixture.out"
+      cat "$output"
+      if [[ -s "$comparison" ]]; then cat "$comparison"; fi
       failed=1
     fi
   done
