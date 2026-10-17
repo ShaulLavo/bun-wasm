@@ -67,13 +67,14 @@ function check(value: unknown, message: string) { if (!value) throw new Error(me
 const cases: Record<string, () => Promise<void>> = {
   async workspaces() {
     const cwd = project("workspace", { "package.json": { name: "root", workspaces: ["packages/*"], dependencies: { a: "workspace:*", "fixture-cli": "1.0.0" } },
-      "packages/a/package.json": { name: "a", version: "1.0.0", main: "index.ts", dependencies: { b: "workspace:^" } },
-      "packages/a/index.ts": 'import { value } from "b"; console.log(value);',
+      "packages/a/package.json": { name: "a", version: "1.0.0", main: "index.ts", dependencies: { b: "workspace:^", plain: "link:./plain" } },
+      "packages/a/index.ts": 'import { value } from "b"; import plain from "plain"; console.log(value + plain);',
+      "packages/a/plain/index.js": 'module.exports = "-linked";',
       "packages/b/package.json": { name: "b", version: "1.0.0", main: "index.ts" },
       "packages/b/index.ts": 'export const value = "workspace-ok";',
     });
     await run(cwd, "install");
-    check((await run(cwd, "run", "packages/a/index.ts")).trim() === "workspace-ok", "workspace graph");
+    check((await run(cwd, "run", "packages/a/index.ts")).trim() === "workspace-ok-linked", "workspace graph");
     await run(cwd, "install", "--frozen-lockfile");
     await run(join(cwd, "packages/a"), "install", "--frozen-lockfile");
     latest = "2.0.0";
