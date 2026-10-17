@@ -20,8 +20,8 @@ bun run check
 bun test tests/
 bun run build >/dev/null
 
-scratch="$(mktemp -d /work/tmp/bun-wasm-web-net-XXXXXX)"
-isolated_scratch="$(mktemp -d /work/tmp/bun-wasm-web-isolated-XXXXXX)"
+scratch="$(mktemp -d "${BUN_WASM_TEST_TMP:-/work/tmp}/bun-wasm-web-net-XXXXXX")"
+isolated_scratch="$(mktemp -d "${BUN_WASM_TEST_TMP:-/work/tmp}/bun-wasm-web-isolated-XXXXXX")"
 isolated_backups=()
 server_pid=""
 cleanup() {
