@@ -8,7 +8,7 @@ const vite = (id, dependencies, source, extra = {}) => ({
   id, dependencies: { vite: "7.1.12", ...dependencies },
   files: { "index.html": html, "src/main.js": source, ...extra },
   commands: [
-    { name: "dev", args: ["run", "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "{port}"], check: { kind: "page", selector: "#app", text: marker } },
+    { name: "dev", args: ["run", "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "{port}"], check: { kind: "page", selector: "#app", text: marker, hmr: { path: "src/main.js", search: marker, replacement: `${marker} updated` } } },
     { name: "build", args: ["run", "node_modules/vite/bin/vite.js", "build"], check: { kind: "files", paths: ["dist/index.html"], text: marker } },
   ],
 });

@@ -837,6 +837,7 @@
     throw Object.assign(new Error("fs.watch is not supported in bun-wasm"), { code: "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM" });
   }
 
+  const { watch, FSWatcher } = internal.require("fs_watch")({ statSync, lstatSync, readdirSync, toPath, absolute });
   const fs = Object.assign({}, sync, callbackApi, {
     promises,
     constants,
@@ -845,7 +846,8 @@
     Dir,
     createReadStream,
     createWriteStream,
-    watch: watchUnsupported,
+    watch,
+    FSWatcher,
     watchFile: watchUnsupported,
     unwatchFile: () => {},
     F_OK: 0,
