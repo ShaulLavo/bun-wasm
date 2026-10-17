@@ -18,6 +18,7 @@ use std::time::Instant;
 mod directory;
 mod encoding;
 mod streams;
+mod archive;
 mod crypto;
 mod glob;
 pub mod engine;

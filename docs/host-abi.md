@@ -130,7 +130,8 @@ immediately (malformed URL, unsupported scheme) may be returned as `-1` with
 
 ```json
 { "status": 200, "statusText": "OK", "url": "https://example.com/x",
-  "redirected": false, "headers": [["content-type", "text/html"]] }
+  "redirected": false, "bodyEncoding": null,
+  "headers": [["content-type", "text/html"]] }
 ```
 
 and returns its length. If the JSON is longer than `buf_cap`, nothing is
@@ -138,6 +139,12 @@ written and the needed length is returned (the guest retries with a bigger
 buffer). Network failures (DNS, refused, TLS, CORS in browsers) return `-1`;
 `error(handle, …)` then gives the reason. Headers keep their order; names are
 lower-case; repeated headers appear as separate pairs.
+
+`bodyEncoding` is null when the guest should expose the host bytes as-is. A host that forwards
+compressed bytes sets it to the compression name, and the guest decodes them
+with its Rust stream codec before exposing the fetch body. The Node host uses
+this for Zstd. Browser loopback responses use it for their raw compressed bodies.
+The original content-encoding and content-length headers remain visible.
 
 ### `read(handle, buf_ptr, buf_cap) -> n`
 

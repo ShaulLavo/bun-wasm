@@ -1040,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-build"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "bitflags",
  "bstr",
@@ -1069,14 +1069,14 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-bun-jsc"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "bunwasm-bun-jsc-macros",
 ]
 
 [[package]]
 name = "bunwasm-bun-jsc-macros"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -1084,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-cli"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "bunwasm-build",
  "bunwasm-glue",
@@ -1094,14 +1094,14 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-crypto-sys"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "bunwasm-glue"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "bstr",
  "bun_ast",
@@ -1117,7 +1117,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-host"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1133,22 +1133,23 @@ dependencies = [
  "tokio",
  "wasmtime",
  "wasmtime-wasi",
+ "zstd",
 ]
 
 [[package]]
 name = "bunwasm-jsc"
-version = "0.0.21"
+version = "0.0.22"
 
 [[package]]
 name = "bunwasm-posix"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "bunwasm-runtime"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "aes",
  "aes-kw",
@@ -1157,6 +1158,7 @@ dependencies = [
  "bun_semver",
  "bun_sys",
  "bun_wyhash",
+ "bun_zstd",
  "bunwasm-crypto-sys",
  "bunwasm-glue",
  "bunwasm-jsc",
@@ -1191,11 +1193,12 @@ dependencies = [
  "url",
  "wasmi",
  "x25519-dalek",
+ "zstd",
 ]
 
 [[package]]
 name = "bunwasm-semver"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "bstr",
  "bun_core",
@@ -1205,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-transpiler"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "bun_alloc",
  "bun_ast",
@@ -3767,11 +3770,10 @@ dependencies = [
 [[package]]
 name = "tar"
 version = "0.4.46"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
 dependencies = [
  "filetime",
  "libc",
+ "wasi",
 ]
 
 [[package]]

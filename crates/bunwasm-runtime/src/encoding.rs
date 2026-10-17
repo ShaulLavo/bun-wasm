@@ -148,26 +148,18 @@ fn gunzip(data: &[u8]) -> Result<Vec<u8>, String> {
     if data.len() < 18 || data[0] != 0x1f || data[1] != 0x8b || data[2] != 8 {
         return Err("incorrect header check".to_owned());
     }
-    let flags = data[3];
-    let mut pos = 10;
-    if flags & 4 != 0 {
-        let extra = usize::from(u16::from_le_bytes([data[pos], data[pos + 1]]));
-        pos += 2 + extra;
-    }
-    for bit in [8u8, 16] {
-        if flags & bit != 0 {
-            pos += data[pos..].iter().position(|&b| b == 0).ok_or("truncated header")? + 1;
-        }
-    }
-    if flags & 2 != 0 {
-        pos += 2;
-    }
-    let body = data.get(pos..data.len() - 8).ok_or("truncated data")?;
-    miniz_oxide::inflate::decompress_to_vec(body).map_err(|e| format!("{:?}", e.status))
+    use std::io::Read;
+    let mut output = Vec::new();
+    flate2::read::MultiGzDecoder::new(data).read_to_end(&mut output).map_err(|e| e.to_string())?;
+    Ok(output)
 }
 
 pub fn crc32(data: &[u8]) -> u32 {
-    let mut crc = 0xFFFF_FFFFu32;
+    crc32_seed(data, 0)
+}
+
+pub fn crc32_seed(data: &[u8], seed: u32) -> u32 {
+    let mut crc = !seed;
     for &b in data {
         crc ^= u32::from(b);
         for _ in 0..8 {
