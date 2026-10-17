@@ -14,7 +14,6 @@
 #include "JSObjectRef.h"
 #include "JSValueRef.h"
 #include "Completion.h"
-#include "CatchScope.h"
 #include "ErrorInstance.h"
 #include "DeferredWorkTimer.h"
 #include <wtf/Threading.h>
@@ -297,7 +296,7 @@ JSValueRef bunjsc_promise_then(JSContextRef ctx, JSValueRef value, JSValueRef fu
     JSGlobalObject* global = toJS(ctx);
     VM& vm = global->vm();
     JSLockHolder lock(vm);
-    auto scope = DECLARE_CATCH_SCOPE(vm);
+    auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
     auto* promise = dynamicDowncast<JSPromise>(toJS(global, value));
     if (!promise) {
         *exception = toRef(global, createTypeError(global, "Expected a promise"_s));
