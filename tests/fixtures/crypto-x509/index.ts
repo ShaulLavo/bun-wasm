@@ -66,3 +66,7 @@ const escaped = new X509Certificate(readFileSync(import.meta.dir + "/escaped-san
 assert.equal(escaped.subjectAltName, 'DNS:"good.example.com\\u002c DNS:evil.example.com"');
 assert.equal(escaped.toLegacyObject().subjectaltname, escaped.subjectAltName);
 console.log("alternative name escaping passes");
+const unknownAccess = new X509Certificate(readFileSync(import.meta.dir + "/unknown-access.pem"));
+assert.equal(unknownAccess.infoAccess, "1.3.9999.12.34 - URI:http://ca.example.com/\n");
+assert.deepEqual(unknownAccess.toLegacyObject().infoAccess["1.3.9999.12.34 - URI"], ["http://ca.example.com/"]);
+console.log("unknown access method OIDs pass");

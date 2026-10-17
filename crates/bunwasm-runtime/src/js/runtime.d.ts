@@ -49,7 +49,7 @@ declare namespace BunWasm {
     tagName: string; setTagName: void; selfClosing: boolean; canHaveContent: boolean; namespaceURI: string;
     removed: boolean; attributes: [string, string][]; getAttribute: string | null; hasAttribute: boolean;
     setAttribute: void; removeAttribute: void; before: void; after: void; replace: void; prepend: void;
-    append: void; setInnerContent: void; remove: void; removeAndKeepContent: void; onEndTag: void;
+    append: void; setInnerContent: void; remove: void; removeAndKeepContent: void; onEndTag: number | undefined;
     text: string; setText: void; lastInTextNode: boolean; name: string | null; setName: void;
     publicId: string | null; systemId: string | null;
   }

@@ -3,3 +3,4 @@ async handlers, order, and response metadata pass
 handler rejection identity passes
 incremental output and cancellation pass
 async document handlers and token lifetimes pass
+buffered response startup and end-tag replacement pass

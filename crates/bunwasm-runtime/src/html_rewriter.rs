@@ -255,11 +255,15 @@ fn element_token(
         "onEndTag" => {
             let index = a.u32(4)? as usize;
             let event = event.clone();
+            let previous = token.user_data().downcast_ref::<usize>().copied();
+            token.set_user_data(index);
             if let Some(handlers) = token.end_tag_handlers() {
+                handlers.clear();
                 handlers.push(Box::new(move |_: &mut EndTag<'_>| {
                     suspend(&event, index, "endTag")
                 }));
             }
+            return Ok(previous.map(|id| Val::from(id as u32)).into());
         }
         _ => return Err(error("Invalid element operation")),
     }

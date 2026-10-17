@@ -71,7 +71,8 @@
       if (typeof callback !== "function") throw new TypeError("Expected a function");
       if (!this.canHaveContent) return this;
       const index = this.#rewrite.registerEndTag(callback, this);
-      this.call("onEndTag", "", undefined, index);
+      const replaced = this.call("onEndTag", "", undefined, index);
+      if (replaced !== undefined) this.#rewrite.unregisterEndTag(replaced);
       return this;
     }
   }
@@ -103,6 +104,7 @@
       this.#endTags.set(id, { selector: null, receiver, handlers: { endTag: callback } });
       return id;
     }
+    unregisterEndTag(id: number) { this.#endTags.delete(id); }
     invoke(event: BunWasm.HTMLStepEvent) {
       const registration = event.kind === "endTag" ? this.#endTags.get(event.handler) : this.registrations[event.handler];
       if (event.kind === "endTag") this.#endTags.delete(event.handler);
@@ -153,20 +155,39 @@
     }
     stream(input: Response) {
       if (input.bodyUsed) { this.close(); throw new TypeError("Response body already used"); }
-      const reader = input.body?.getReader();
+      const buffered: unknown = Reflect.get(input, "_stream") ? undefined : Reflect.get(input, "_body");
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      try { reader = input.body?.getReader(); }
+      catch (error) { this.close(); throw error; }
       if (reader) Reflect.set(input, "_bodyUsed", true);
       const rewrite = this;
       return new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (buffered instanceof Uint8Array) return rewrite.buffered(buffered, reader, controller).catch(error => rewrite.fail(reader, controller, error));
+        },
         async pull(controller) {
+          if (buffered instanceof Uint8Array) return;
           try { await rewrite.pull(reader, controller); }
           catch (error) {
-            rewrite.close();
-            controller.error(error);
-            try { await reader?.cancel(error); } catch {}
+            await rewrite.fail(reader, controller, error);
           }
         },
         async cancel(reason) { rewrite.close(); await reader?.cancel(reason); },
       });
+    }
+    async fail(reader: ReadableStreamDefaultReader<Uint8Array> | undefined, controller: ReadableStreamDefaultController<Uint8Array>, error: unknown) {
+      this.close();
+      controller.error(error);
+      try { await reader?.cancel(error); } catch {}
+    }
+    async buffered(bytes: Uint8Array, reader: ReadableStreamDefaultReader<Uint8Array> | undefined, controller: ReadableStreamDefaultController<Uint8Array>) {
+      reader?.read().catch(error => this.fail(reader, controller, error));
+      await this.asyncStep(native.htmlStep(this.id, "write", bytes), controller);
+      if (this.closed) return;
+      await this.asyncStep(native.htmlStep(this.id, "end", empty), controller);
+      if (this.closed) return;
+      this.close();
+      controller.close();
     }
     async pull(reader: ReadableStreamDefaultReader<Uint8Array> | undefined, controller: ReadableStreamDefaultController<Uint8Array>) {
       if (this.closed) return;

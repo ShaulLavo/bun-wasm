@@ -410,7 +410,11 @@ fn name(name: *const ffi::Name) -> Result<Option<String>> {
 }
 
 fn signature_name(object: *const ffi::Asn1Object) -> String {
-    let name = unsafe { ffi::OBJ_nid2ln(ffi::OBJ_obj2nid(object)) };
+    let nid = unsafe { ffi::OBJ_obj2nid(object) };
+    if nid == 0 {
+        return oid_text(object);
+    }
+    let name = unsafe { ffi::OBJ_nid2ln(nid) };
     if name.is_null() {
         return oid_text(object);
     }

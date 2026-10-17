@@ -101,3 +101,15 @@ const thenable = new HTMLRewriter().on("p", {
 assert.equal(await thenable.transform(new Response("<p>x</p>")).text(), "<p>thenable</p>");
 assert.equal(reads, 1);
 console.log("async document handlers and token lifetimes pass");
+let immediateCalls = 0;
+const immediate = new HTMLRewriter().on("p", { element() { immediateCalls++; } }).transform(new Response("<p>buffered</p>"));
+assert.equal(immediateCalls, 1);
+assert.equal(await immediate.text(), "<p>buffered</p>");
+let oldEnds = 0, newEnds = 0;
+const replacing = new HTMLRewriter().on("p", {
+  element(token) { token.onEndTag(() => { oldEnds++; }); token.onEndTag(() => { newEnds++; }); },
+});
+assert.equal(replacing.transform("<p>replace</p>"), "<p>replace</p>");
+assert.equal(oldEnds, 0);
+assert.equal(newEnds, 1);
+console.log("buffered response startup and end-tag replacement pass");
