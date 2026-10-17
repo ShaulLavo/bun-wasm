@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { allocateSafariDriverPort, assertSafariDriverOwnership, ownSafariDriver, parseSafariProcessTable, stopSafariDriver,
   type SafariDriverIdentity, type SafariInspection, type SafariProcessIdentity } from "./engine-interruption-safari";
 
@@ -8,6 +9,42 @@ function inspect(listeners: number[], processes = [row()]): SafariInspection {
   return { listeners: async () => listeners, processes: async () => processes };
 }
 function scope() { return ownSafariDriver(driver(), 1_000); }
+
+function fixtureSpawnThreshold(wallTime: number, linux?: { stat: string; uptime: string }): number {
+  if (!linux) return wallTime;
+  // Linux ps uses integer btime + integer elapsed seconds, not floor(wall time).
+  // Capture that same independent clock BEFORE spawning; no candidate birth or
+  // arbitrary grace period is used. Darwin retains the wall-clock boundary.
+  const boot = /^btime (\d+)$/m.exec(linux.stat);
+  const bootSeconds = boot ? Number(boot[1]) : NaN;
+  const elapsed = Number(linux.uptime.trim().split(/\s+/)[0]);
+  const threshold = (bootSeconds + Math.floor(elapsed)) * 1_000;
+  if (!Number.isSafeInteger(bootSeconds) || !linux.uptime.trim() || !Number.isFinite(elapsed)
+    || elapsed < 0 || !Number.isSafeInteger(threshold)) throw new Error("invalid Linux fixture process clock");
+  return threshold;
+}
+
+test("Linux listener fixture aligns its pre-spawn threshold with ps rather than relaxing Safari birth checks", async () => {
+  // Boot epoch 1000.800s + elapsed 10.300s is wall time 1011.100s, but
+  // Linux ps reconstructs lstart as 1000s + floor(10.300s) = 1010s.
+  const wallTime = 1_011_050;
+  const threshold = fixtureSpawnThreshold(wallTime, { stat: "cpu 1 2 3\nbtime 1000\n", uptime: "10.25 100.00\n" });
+  expect(threshold).toBe(1_010_000);
+  expect(fixtureSpawnThreshold(wallTime)).toBe(wallTime);
+  const processes = [row(41, 1, 7, 1_010_000), row(42, 41, 7, 1_010_000)];
+  await expect(assertSafariDriverOwnership(ownSafariDriver(driver(), threshold), 43186, inspect([42], processes))).resolves.toBeUndefined();
+  await expect(assertSafariDriverOwnership(ownSafariDriver(driver(), wallTime), 43186, inspect([42], processes))).rejects.toThrow("process identity changed");
+  await expect(assertSafariDriverOwnership(ownSafariDriver(driver(), threshold), 43186, inspect([42], [row(41, 1, 7, threshold - 1_000)]))).rejects.toThrow("process identity changed");
+});
+test("Linux listener fixture rejects malformed boot clocks rather than silently widening ownership", () => {
+  for (const linux of [
+    { stat: "cpu 1 2 3\n", uptime: "10.25 100.00\n" },
+    { stat: "btime 1000\n", uptime: "" },
+    { stat: "btime 1000\n", uptime: "NaN 100.00\n" },
+    { stat: "btime 1000\n", uptime: "-1.25 100.00\n" },
+  ]) expect(() => fixtureSpawnThreshold(1_011_050, linux)).toThrow("invalid Linux fixture process clock");
+});
+
 const appleHttpService = "/System/Library/PrivateFrameworks/WebDriver.framework/Versions/A/XPCServices/com.apple.WebDriver.HTTPService.xpc/Contents/MacOS/com.apple.WebDriver.HTTPService";
 
 function darwinProbe() {
@@ -326,7 +363,9 @@ test("Safari owns a real parent-spawned child listener and tears down both witho
     catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error; }
   }
   try {
-    const spawnedAfter = Date.now();
+    const spawnedAfter = fixtureSpawnThreshold(Date.now(), process.platform === "linux" ? {
+      stat: readFileSync("/proc/stat", "utf8"), uptime: readFileSync("/proc/uptime", "utf8"),
+    } : undefined);
     const spawned = Bun.spawn([process.execPath, `${import.meta.dir}/fixtures/safari-driver-listener.ts`], { stdout: "pipe", stderr: "inherit" });
     parent = spawned;
     deadline = setTimeout(() => { kill(childPid); if (parent?.exitCode === null) parent.kill("SIGKILL"); }, 7_000);
