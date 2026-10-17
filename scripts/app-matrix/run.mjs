@@ -7,6 +7,7 @@ import { apps, browserSubset, projectFiles } from "./apps.mjs";
 import { registry, sha256 } from "./registry.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
 import { failure, compareEngines } from "./classify.mjs";
+import { exitProvenance } from "./exit-provenance.ts";
 import { earlyServerExit } from "./browser.mjs";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
@@ -110,7 +111,7 @@ async function freePort() {
 }
 
 function guestCommand(engine, project, args, port) {
-  const env = { PWD: "/", HOME: "/", TMPDIR: "/tmp", PORT: String(port), NO_COLOR: "1", CI: "1", NEXT_TELEMETRY_DISABLED: "1", ASTRO_TELEMETRY_DISABLED: "1", PRISMA_HIDE_UPDATE_MESSAGE: "1", PRISMA_ENGINES_MIRROR: `${mirror.base}/blocked-prisma-engines`, BUN_INSTALL_CACHE_DIR: "/.cache" };
+  const env = { PWD: "/", HOME: "/", TMPDIR: "/tmp", PORT: String(port), NO_COLOR: "1", CI: "1", NEXT_TELEMETRY_DISABLED: "1", ASTRO_TELEMETRY_DISABLED: "1", PRISMA_HIDE_UPDATE_MESSAGE: "1", PRISMA_ENGINES_MIRROR: `${mirror.base}/blocked-prisma-engines`, BUN_INSTALL_CACHE_DIR: "/.cache", BUN_WASM_TRACE_EXIT: "1" };
   const dirs = ["--dir", `${project}::/`];
   const vars = Object.entries(env).flatMap(([key, value]) => ["--env", `${key}=${value}`]);
   const wasm = artifacts[engine].path;
@@ -136,26 +137,27 @@ function prepare(app, name) {
   return project;
 }
 
-async function checkPage(url, check) {
-  try { return await browserSession.checkPage(url, check); }
-  catch (error) { return { status: "fail", ...failure(String(error), "server") }; }
+async function checkPage(url, check, project, timeout) {
+  try { return await browserSession.checkPage(url, check, project, timeout); }
+  catch (error) { return { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server") }; }
 }
 
-async function checkServer(proc, url, check, logfile) {
+async function checkServer(proc, url, check, logfile, project) {
   const deadline = Date.now() + options.timeout;
   while (Date.now() < deadline && proc.child.exitCode === null && proc.child.signalCode === null) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(500) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       let result;
-      if (check.kind === "page") result = await checkPage(url, check);
+      if (check.kind === "page") result = await checkPage(url, check, project, Math.max(1, deadline - Date.now()));
       else if ((await response.text()).includes(check.text)) result = { status: "pass", assertion: `HTTP ${response.status}, body contains ${JSON.stringify(check.text)}` };
-      if (proc.child.exitCode !== null || proc.child.signalCode !== null) return earlyServerExit({ code: proc.child.exitCode ?? proc.child.signalCode, output: text(logfile) }, "server");
+      if (proc.child.exitCode !== null || proc.child.signalCode !== null) return earlyServerExit({ code: proc.child.exitCode, signal: proc.child.signalCode, output: text(logfile) }, "server");
       if (result) return result;
     } catch { /* The server may still be starting. */ }
     await sleep(100);
   }
-  return { status: "fail", ...failure(text(logfile), "server"), output: text(logfile) };
+  const result = { code: proc.child.exitCode, signal: proc.child.signalCode, timedOut: proc.child.exitCode === null && proc.child.signalCode === null, output: text(logfile) };
+  return { status: "fail", ...failure(result.output, "server"), ...exitProvenance(result) };
 }
 
 async function execute(app, engine, project, command, native = false) {
@@ -166,11 +168,16 @@ async function execute(app, engine, project, command, native = false) {
   const env = { PORT: String(port), CI: "1", NEXT_TELEMETRY_DISABLED: "1", ASTRO_TELEMETRY_DISABLED: "1", PRISMA_ENGINES_MIRROR: `${mirror.base}/blocked-prisma-engines` };
   if (["http", "page"].includes(command.check.kind)) {
     const proc = launch(argv, project, logfile, env);
-    try { return await checkServer(proc, `http://127.0.0.1:${port}/`, command.check, logfile); }
-    finally { stop(proc.child); await proc.done; }
+    let checked;
+    let stoppedByHarness;
+    try {
+      checked = await checkServer(proc, `http://127.0.0.1:${port}/`, command.check, logfile, project);
+      stoppedByHarness = proc.child.exitCode === null && proc.child.signalCode === null;
+    } finally { stop(proc.child); await proc.done; }
+    return { ...checked, stoppedByHarness, ...exitProvenance({ ...await proc.done, timedOut: checked.timedOut, output: text(logfile) }) };
   }
   const result = await capture(argv, project, logfile, env);
-  return checkCommand(command, result, path => text(join(project, path)));
+  return { ...await checkCommand(command, result, path => text(join(project, path))), ...exitProvenance(result) };
 }
 
 async function nativeApp(app, engine, reference = false) {
@@ -179,7 +186,7 @@ async function nativeApp(app, engine, reference = false) {
   const args = ["install"];
   const argv = reference ? ["bun", "install", "--ignore-scripts", "--linker", "hoisted", "--registry", mirror.base] : guestCommand(engine, project, args, 0);
   const installed = await capture(argv, project, logfile, { BUN_INSTALL_CACHE_DIR: join(project, ".native-cache"), DO_NOT_TRACK: "1" });
-  const install = record(app, engine, "native", "install", ["bun"].concat(args), await checkInstall(app, installed, path => text(join(project, path))));
+  const install = record(app, engine, "native", "install", ["bun"].concat(args), { ...await checkInstall(app, installed, path => text(join(project, path))), ...exitProvenance(installed) });
   const outcomes = new Map();
   for (const command of app.commands) {
     const prerequisite = command.after && outcomes.get(command.after);
@@ -207,7 +214,11 @@ function report(provenance) {
 }
 
 let infrastructureError;
+let revision;
 try {
+  const git = await capture(["git", "rev-parse", "HEAD"], root, join(options.output, "revision.log"));
+  if (git.code !== 0) throw new Error(`Cannot record source revision: ${git.output}`);
+  revision = git.output.trim();
   artifacts = Object.fromEntries(options.engines.map(engine => {
     const path = join(scratch, wasmName[engine]);
     copyFileSync(join(root, "dist", wasmName[engine]), path);
@@ -216,7 +227,7 @@ try {
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.mjs", "isolate.mjs"].map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.mjs", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts"].map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
   mirror = await registry({ directory: options.cache, record: options.record });
   const { browserHost } = await import("./browser.mjs");
@@ -233,8 +244,7 @@ try {
   console.error(infrastructureError);
 } finally {
   try {
-    const revision = await capture(["git", "rev-parse", "HEAD"], root, join(options.output, "revision.log"));
-    report({ date: new Date().toISOString(), revision: revision.output.trim(), nativeBun: Bun.version, options,
+    report({ date: new Date().toISOString(), revision, nativeBun: Bun.version, options,
       fixtures_sha256: runnerSources["apps.mjs"],
       artifacts: Object.fromEntries(Object.entries(artifacts).map(([engine, artifact]) => [engine, artifact.sha256])),
       runner_sources: runnerSources,
