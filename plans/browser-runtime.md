@@ -342,6 +342,7 @@ queue on another host). The command creates only in-memory transports and releas
 
 ```sh
 source env.sh
+cd web # Resolve bare waffle imports from the installed consumer.
 bun /work/platform-production/heavy/current/run.js --class light waffle-empty-subtrees -- timeout 7200 bun -e "$(cat <<'TS'
 import { DescriptorTable } from 'waffle/core/descriptors';
 import { ProcessIdentityAllocator } from 'waffle/proc/identity';

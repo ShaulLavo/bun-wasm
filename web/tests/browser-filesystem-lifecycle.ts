@@ -1,6 +1,8 @@
 // PC build: bun web/tests/browser-filesystem-lifecycle.ts --build <directory>
 // Mac: bun browser-filesystem-lifecycle.ts safari http://127.0.0.1:<port>/
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const mode = process.argv[2] ?? "chromium";
@@ -109,7 +111,8 @@ async function safari(): Promise<Driver> {
 
 async function playwright(): Promise<Driver> {
   const { mkdtemp } = await import("node:fs/promises");
-  scratch = await mkdtemp(join(process.env.BUN_WASM_TEST_TMP ?? process.env.TMPDIR ?? "/tmp", "bun-wasm-fs-lifecycle-"));
+  const scratchRoot = process.env.BUN_WASM_TEST_TMP ?? process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  scratch = await mkdtemp(join(scratchRoot, "bun-wasm-fs-lifecycle-"));
   await build(scratch);
   const directory = scratch;
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
