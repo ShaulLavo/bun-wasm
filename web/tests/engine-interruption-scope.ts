@@ -1,12 +1,15 @@
 import { DescriptorTable } from "waffle/core/descriptors";
-import type { FilesystemIdentity } from "waffle/fs";
+import { FilesystemClient, createProcessFilesystemIdentity, type FilesystemIdentity } from "waffle/fs";
+import { ProcessABI } from "waffle/proc/abi";
 import { readOutcome } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from "waffle/proc/worker-client";
-import { createRuntimeTerminalCodec } from "../src/runtime-terminals";
-import { SubprocessBroker } from "../src/subprocess-broker";
-import type { Runtime } from "waffle";
+import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
+import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
+import type { ProcessExit } from "waffle/proc";
+import type { Runtime, ProcessService } from "waffle";
 import type { Engine } from "../src/bun-executor";
 
+// The case families retain their names/counters; both now use the generic transport.
 export type EngineInterruptionRoute = "legacy" | "runtimeProcess";
 export type EngineSignalDelivery = "host" | "page-kill" | "page-killJob";
 export interface EngineInterruptionChild {
@@ -19,19 +22,19 @@ export interface EngineInterruptionChild {
 }
 
 export interface EngineInterruptionScope {
-  broker: SubprocessBroker;
+  service: ProcessService;
   children: ReadonlyMap<number, EngineInterruptionChild>;
   spawn(source: string): EngineInterruptionChild;
   drain(child: EngineInterruptionChild): void;
   wait(child: EngineInterruptionChild): number;
+  outcome(child: EngineInterruptionChild): Promise<ProcessExit>;
   kill(child: EngineInterruptionChild, signal: 2 | 15, delivery?: EngineSignalDelivery): Promise<number>;
-  dispose(): void;
+  dispose(): Promise<void>;
 }
 
-/** Original test adapter. Admission, descriptor tokens and launchRuntime are the
- * production path; no RunRequest is manufactured. Preview1 here is only our byte-encoded
- * signal-clock fixture, which handles and dequeues signals through poll_oneoff, not an
- * untrusted guest upload. */
+/** Original controller fixture over real generic admission and launchWorker. Only its root
+ * controller is page-local: the child always executes in the production Bun/preview1 worker.
+ * Preview1 is our cooperative byte-encoded signal-clock guest, not an untrusted upload. */
 export async function createRuntimeEngineScope(module: WebAssembly.Module, engine: Engine, runtime: Runtime,
   workerUrl = new URL("./engine-interruption-worker.js", location.href).href, adapter: "bun" | "preview1" = "bun") {
   const filesystem = runtime.filesystem;
@@ -39,30 +42,30 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
   const identities: FilesystemIdentity[] = [];
   const children = new Map<number, EngineInterruptionChild>();
   const outcomes = new Map<number, BigInt64Array>();
-  let broker: SubprocessBroker | undefined;
+  let service: ProcessService | undefined;
+  let rootPid: number | undefined;
+  let fs: FilesystemClient | undefined;
   let active: EngineInterruptionChild | undefined;
   let failure: unknown;
-  let disposed = false;
-  function dispose() {
-    if (disposed) return;
-    disposed = true;
-    try { broker?.dispose(); }
-    finally {
-      try { descriptors.dispose(); }
-      finally { for (const identity of identities) filesystem.revoke(identity); }
-    }
+  let disposal: Promise<void> | undefined;
+  function dispose(): Promise<void> {
+    return disposal ??= (async () => {
+      const errors: unknown[] = [];
+      try { if (rootPid !== undefined) await service?.rootExit(rootPid, 0); } catch (error) { errors.push(error); }
+      try { descriptors.dispose(); } catch (error) { errors.push(error); }
+      try { fs?.dispose(); } catch (error) { errors.push(error); }
+      for (const identity of identities) try { filesystem.revoke(identity); } catch (error) { errors.push(error); }
+      if (errors.length) throw new AggregateError(errors, "engine controller cleanup failed");
+    })();
   }
   try {
     const root = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
+    rootPid = workerProcessState(root).pid;
     const identity = filesystem.createIdentity(); identities.push(identity);
     root.data = { filesystem: identity };
     const decoder = new TextDecoder();
-    broker = new SubprocessBroker(workerUrl, runtime, {
-      output(fd, bytes) {
-        if (!active) throw new Error("generic output has no test-owned child");
-        if (fd === 2) active.stderr += decoder.decode(bytes); else active.stdout += decoder.decode(bytes);
-      },
-    });
+    runtime.registerAdapter(adapter === "preview1" ? "preview1" : `bun:${engine}`,
+      adapter === "preview1" ? preview1Launcher({ workerUrl }) : bunLauncher(engine, { workerUrl }));
     runtime.registerProgram("bun", { module, adapter: adapter === "preview1" ? "preview1" : `bun:${engine}`, cooperative: true });
     for (const fd of [0, 1, 2]) {
       const installed = descriptors.open({ kind: "terminal", read: () => 0,
@@ -75,41 +78,53 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
       import() { throw new Error("unexpected non-terminal test token"); },
       discard() { throw new Error("unexpected non-terminal test token"); },
     } });
-    await broker.adoptRuntimeRoot(root);
-    const pageBroker = broker;
+    service = await runtime.processes();
+    await service.adoptRuntimeRoot(root, { output(fd, bytes) {
+      if (!active) throw new Error("generic output has no test-owned child");
+      if (fd === 2) active.stderr += decoder.decode(bytes); else active.stdout += decoder.decode(bytes);
+    } });
+    const pageService = service;
     const client = new WorkerProcessClient({ transport: root, descriptors, codec,
       prepareSpawn() {
-        const filesystemIdentity = filesystem.createIdentity(); identities.push(filesystemIdentity);
+        const filesystemIdentity = createProcessFilesystemIdentity(identity); identities.push(filesystemIdentity);
         return { data: { filesystem: filesystemIdentity,
           pipeRegistry: (root.data as { pipeRegistry: unknown }).pipeRegistry } };
       },
       postMessage(message) {
-        if (message.operation !== "spawn") throw new Error("unexpected generic test controller operation");
-        const state = workerProcessState(message.transport);
-        active = { pid: state.pid, jobId: state.job, requestedSignal: state.signals.requestedSignal,
-          signalState: state.signals.signalState, stdout: "", stderr: "" };
-        children.set(active.pid, active); outcomes.set(active.pid, state.signals.outcome);
-        void pageBroker.runtimeMessage(message, client.pid).catch(error => { failure = error; });
+        if (message.operation === "spawn") {
+          const state = workerProcessState(message.transport);
+          active = { pid: state.pid, jobId: state.job, requestedSignal: state.signals.requestedSignal,
+            signalState: state.signals.signalState, stdout: "", stderr: "" };
+          children.set(active.pid, active); outcomes.set(active.pid, state.signals.outcome);
+        }
+        void pageService.runtimeMessage(message, client.pid).catch(error => { failure = error; });
       },
     });
+    fs = new FilesystemClient(filesystem.connect(identity));
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const abi = new ProcessABI({ memory, descriptors, fs, pid: client.pid, service: client, signals: client.signals, wake: client.wake });
     return {
-      broker: pageBroker, children,
+      service: pageService, children,
       spawn(source: string) {
         if (children.size) throw new Error("one generic guest per interruption scope");
-        const pid = client.spawn(client.pid, { executable: "bun", argv: ["bun", "-e", source], cwd: "/home/user", env: {}, job: -1,
-          fds: [0, 1, 2].map(fd => ({ parent: fd, child: fd })) });
+        const request = new TextEncoder().encode(JSON.stringify({ executable: "bun", argv: ["bun", "-e", source], cwd: "/home/user", env: {}, job: -1,
+          fds: [0, 1, 2].map(fd => ({ parent: fd, child: fd })) }));
+        new Uint8Array(memory.buffer, 64, request.length).set(request);
+        const pid = abi.imports.spawn!(64, request.length);
         const child = children.get(pid);
-        if (!child) throw new Error("generic admission did not publish child state");
+        if (!child) throw new Error(`generic admission did not publish child state (${pid})`);
         return child;
       },
       drain(_child: EngineInterruptionChild) { if (failure) throw failure; },
       wait(child: EngineInterruptionChild) { return readOutcome(outcomes.get(child.pid)!)?.status ?? -2; },
-      async kill(child: EngineInterruptionChild, signal: 2 | 15, delivery: EngineSignalDelivery = "page-kill") {
-        if (delivery === "page-killJob") await pageBroker.killJob(child.jobId, signal);
-        else await pageBroker.kill(child.pid, signal);
+      async outcome(child: EngineInterruptionChild) { return (await pageService.ready()).waitForExit(client.pid, child.pid); },
+      async kill(child: EngineInterruptionChild, signal: 2 | 15, delivery: EngineSignalDelivery = "host") {
+        if (delivery === "host") return abi.imports.kill!(child.pid, signal);
+        if (delivery === "page-killJob") await pageService.killJob(child.jobId, signal);
+        else await pageService.kill(child.pid, signal);
         return 0;
       },
       dispose,
     };
-  } catch (error) { dispose(); throw error; }
+  } catch (error) { await dispose(); throw error; }
 }

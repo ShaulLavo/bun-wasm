@@ -1,13 +1,15 @@
 // Test bootstrap only: run the unmodified production worker with observed imports.
-import type { RunRequest } from "../src/worker";
+import type { RunRequest } from "../src/bun-executor";
+import type { RuntimeWorkerRequest } from "waffle/browser/worker";
 import { observeEngineImports, observeEventLoopWait, observedEngineStart, probeCell, type EngineInterruptionOptions } from "./engine-interruption-probe";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
 
 const context = self as unknown as DedicatedWorkerGlobalScope;
-context.onmessage = async (event: MessageEvent<RunRequest & { engineInterruption: EngineInterruptionOptions }>) => {
+context.onmessage = async (event: MessageEvent<RuntimeWorkerRequest & Partial<RunRequest> & { engineInterruption: EngineInterruptionOptions }>) => {
   const options = event.data.engineInterruption;
   const probe = new Int32Array(options.evidence);
   const transport = engineInterruptionTransport(event.data);
+  const preview1 = event.data.engine === undefined || event.data.adapter === "preview1";
   const NativeInstance = WebAssembly.Instance;
   const Instance = new Proxy(NativeInstance, {
     construct(Target, args: ConstructorParameters<typeof WebAssembly.Instance>) {
@@ -15,7 +17,7 @@ context.onmessage = async (event: MessageEvent<RunRequest & { engineInterruption
       const imports = args[1];
       if (!imports) throw new Error("interruption probe requires the production imports");
       let instance: WebAssembly.Instance;
-      if (event.data.adapter !== "preview1") observeEngineImports(imports, probe, () => instance.exports.memory as WebAssembly.Memory, transport.requestedSignal, transport.signalState, options.observeCheckpoints);
+      if (!preview1) observeEngineImports(imports, probe, () => instance.exports.memory as WebAssembly.Memory, transport.signalState, options.observeCheckpoints);
       instance = new Target(...args);
       const exports = { ...instance.exports, _start: observedEngineStart(instance.exports, probe, options.hooks) };
       // Wasm exports are non-configurable; a proxy of the exports object itself cannot
@@ -27,7 +29,8 @@ context.onmessage = async (event: MessageEvent<RunRequest & { engineInterruption
   const restoreWait = options.observeCheckpoints
     ? observeEventLoopWait(probe, transport.waitWord, Atomics, options.idleWaitTimeoutMs) : () => {};
   try {
-    await import("../src/worker");
+    if (event.data.engine === undefined) await import("waffle/browser/preview1-worker");
+    else await import("../src/worker");
     const run = context.onmessage;
     if (!run) throw new Error("production worker did not install its entry point");
     await run.call(context, event);
