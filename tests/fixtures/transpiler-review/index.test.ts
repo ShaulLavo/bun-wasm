@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 
 test("async transforms own the selected byte range", async () => {
+  const direct = new TextEncoder().encode("const w=0");
+  const first = new Bun.Transpiler().transform(direct);
+  direct.fill(32);
+  assert.equal(await first, "const w = 0;\n");
   const source = new TextEncoder().encode("const x=1");
   const storage = new Uint8Array(source.length + 6);
   storage.fill(32);
