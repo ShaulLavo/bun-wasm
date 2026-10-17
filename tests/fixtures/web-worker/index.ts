@@ -10,6 +10,10 @@ function message(worker: Worker) {
   });
 }
 
+assert.throws(() => new Worker("data:text/javascript,console.log('unexpected getter worker')", {
+  get ref() { throw new Error("ref getter failure"); },
+}), /ref getter failure/);
+
 const initialData = { value: 17 };
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { name: "echo", argv: ["arg"], env: { WORKER_ONLY: "yes" }, type: "module", smol: true, data: initialData });
 initialData.value = 99;

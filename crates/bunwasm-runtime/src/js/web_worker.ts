@@ -57,6 +57,7 @@
       const preload = preloadPaths("preload" in options ? options.preload : undefined);
       const name = "name" in options && options.name !== undefined ? String(options.name) : "";
       const entry = target(url);
+      const unref = "ref" in options && options.ref === false;
       this.#worker = new threads.Worker(entry.filename, {
         argv: "argv" in options ? options.argv : undefined,
         env: "env" in options ? options.env : undefined,
@@ -78,7 +79,7 @@
         this.#phase = "closed";
         this.dispatchEvent(new CloseEvent("close", { code: Number(code), wasClean: Number(code) === 0 }));
       });
-      if ("ref" in options && options.ref === false) this.#worker.unref();
+      if (unref) this.#worker.unref();
       setImmediate(() => process.emit("worker", this));
     }
     postMessage(value: unknown, transfer?: unknown) {
