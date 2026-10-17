@@ -167,6 +167,8 @@ pub struct Stdio {
     pub stdin: SharedInput,
     pub stdout: Arc<dyn StdoutStream + Sync>,
     pub stderr: Arc<dyn StdoutStream + Sync>,
+    pub worker: Option<[super::pipe::Pipe; 2]>,
+    pub memory_limit: usize,
 }
 
 impl Stdio {
@@ -175,6 +177,8 @@ impl Stdio {
             stdin: SharedInput::new(Arc::new(wasmtime_wasi::cli::stdin())),
             stdout: Arc::new(std::io::stdout()),
             stderr: Arc::new(std::io::stderr()),
+            worker: None,
+            memory_limit: 512 << 20,
         }
     }
     pub fn install(&self, wasi: &mut wasmtime_wasi::WasiCtxBuilder, cancel: Arc<Cancellation>) {

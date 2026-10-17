@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { playwright, session, ready, writeFile, run } from "./playground.mjs";
+import { checkWorkers } from "./browser-workers.ts";
 const closedOutput = readFileSync(new URL("../../tests/fixtures/pipe-closed-child/index.ts", import.meta.url), "utf8");
 const orderedOutput = readFileSync(new URL("../../tests/fixtures/pipe-write-order/index.ts", import.meta.url), "utf8");
 const orderedChild = readFileSync(new URL("../../tests/fixtures/pipe-write-order/child.ts", import.meta.url), "utf8");
@@ -105,7 +106,7 @@ const apiExpected = [
 ]));
 process.env.BUN_WASM_TEST_PORT ??= "4183";
 const s = session("bun-wasm-self-spawn-browser-");
-const deadline = setTimeout(() => { console.error("subprocess browser gate timed out"); void s.cleanup().finally(() => process.exit(1)); }, 240_000);
+const deadline = setTimeout(() => { console.error("subprocess browser gate timed out"); void s.cleanup().finally(() => process.exit(1)); }, 900_000);
 try {
   const url = await s.serve();
   for (const browserName of process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "webkit"]) {
@@ -139,6 +140,7 @@ try {
         assert.equal(checked.code, 0, checked.output);
         console.log(`ok ${browserName} ${engine}: ${name}`);
       }
+      await checkWorkers(page, `${browserName} ${engine}`);
     }
     await browser.close();
   }

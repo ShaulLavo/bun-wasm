@@ -201,6 +201,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     identity: req.child?.identity ?? req.identity,
     pid: req.child?.pid ?? req.pid,
     jobId: req.child?.jobId ?? req.jobId,
+    workerTransport: req.child,
     slot: req.child?.slot,
     token: req.child?.token,
     stdin: req.child?.pipes[0],

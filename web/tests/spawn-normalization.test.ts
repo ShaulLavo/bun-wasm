@@ -203,3 +203,40 @@ test("sync timeout request is a no-op while own143 awaits publication", () => {
   expect(result.signalCode).toBeNull();
   expect(requests).toBe(1);
 });
+
+for (const [status, signal, name] of [[137, 9, "SIGKILL"], [137, 0, null], [143, 0, null], [23, 0, null], [0, 0, null]] as const) {
+  test(`spawnSync maxBuffer error observes delayed selected ${name ?? `exit ${status}`} before close`, () => {
+    let polls = 0;
+    let metadataQueries = 0;
+    let earlyClose = false;
+    const requests: number[] = [];
+    const closed: number[] = [];
+    const api = runInNewContext(source, { process: { env: {} }, URL })({
+      require, concatBytes: () => new Uint8Array(),
+      native: {
+        cwd: () => "/", hostCaps: { spawn: true }, hostSpawn: () => 2, now: () => 0,
+        hostRead: () => new Uint8Array([1, 2]),
+        hostChildPipe(_pid: number, selector: number) {
+          if (selector === 1) return 11;
+          expect(selector).toBe(3);
+          expect(polls).toBe(3);
+          metadataQueries++;
+          return signal;
+        },
+        hostChildKill(_pid: number, requested: number) { requests.push(requested); return 0; },
+        hostChildWait: () => polls < 3 ? -2 : status,
+        hostPoll() { expect(++polls).toBeLessThanOrEqual(3); },
+        hostClose(handle: number) { earlyClose ||= polls < 3; closed.push(handle); },
+      },
+    });
+    const result = api.spawnSync(["fixture"], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 });
+    expect(result.error.code).toBe("ENOBUFS");
+    expect(result.success).toBe(false);
+    expect(result.signalCode).toBe(name);
+    expect(result.exitCode).toBe(signal ? null : status);
+    expect(requests).toEqual([9]);
+    expect(metadataQueries).toBe(1);
+    expect(earlyClose).toBe(false);
+    expect(closed).toEqual([11, 2]);
+  });
+}

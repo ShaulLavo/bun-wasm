@@ -94,7 +94,10 @@ export const apps = [
   {
     id: "vitest", dependencies: { vitest: "3.2.4" },
     files: { "sum.test.js": "import { test, expect } from 'vitest'; test('matrix', () => expect(2 + 2).toBe(4));" },
-    commands: [{ name: "test", args: ["run", "node_modules/vitest/vitest.mjs", "run", "--maxWorkers=1", "--no-file-parallelism"], check: { kind: "stdout", text: "1 passed" } }],
+    commands: [
+      { name: "test", args: ["run", "node_modules/vitest/vitest.mjs", "run", "--maxWorkers=1", "--no-file-parallelism"], check: { kind: "stdout", text: "1 passed" } },
+      { name: "threads", args: ["run", "node_modules/vitest/vitest.mjs", "run", "--pool=threads", "--maxWorkers=1", "--no-file-parallelism"], check: { kind: "stdout", text: "1 passed" } },
+    ],
   },
 ];
 

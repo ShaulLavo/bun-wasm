@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
 import { createSignalState, publishSignal, setSignalDisposition } from "../../runtime/proc/signals.ts";
-import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "../src/subprocess.ts";
+import { SharedPipe, SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "../src/subprocess.ts";
 import type { RunRequest, WorkerMessage } from "../src/worker.ts";
 import type { Stream } from "../../runtime/core/descriptors.ts";
 
@@ -23,6 +23,7 @@ async function run(options: {
   adapter?: RunRequest["adapter"];
   instantiateError?: boolean;
   onMessage?(message: WorkerMessage): void;
+  onSubprocess?(host: SubprocessHost): void;
   child?: ChildTransport;
   isolated?: boolean;
   signalState?: SharedArrayBuffer;
@@ -77,7 +78,13 @@ async function run(options: {
     revokeFilesystem() { revoked = true; events.push("revoke"); },
     sharedRevoked: () => () => revoked,
     createFilesystemIdentity() { throw new Error("unexpected spawn"); },
-    SubprocessHost, childTransport, wasiPipe,
+    SubprocessHost: class extends SubprocessHost {
+      constructor(hostOptions: ConstructorParameters<typeof SubprocessHost>[0]) {
+        super(hostOptions);
+        options.onSubprocess?.(this);
+      }
+    },
+    childTransport, wasiPipe,
     claimOutcome, outcomeWord, readOutcome,
     HOST_CALL_FD: 3,
     WasiExit: TestWasiExit,
@@ -431,6 +438,70 @@ test("caught non-isolated fatal defaults notify logical death before the guest r
   const result = await running;
   expect(result.revoked).toBe(true);
   expect(exits(result.messages)).toEqual([{ type: "exit", code: 143, signal: 15, sleep: "busy-wait" }]);
+});
+
+test("a separate guest Worker adopts its message pipes without losing its signal queue or ordinary outcome", async () => {
+  let transport!: ChildTransport;
+  let current!: SubprocessHost;
+  const parent = new SubprocessHost({ output() {}, launch(_meta, child) { transport = child; return { terminate() {} }; } });
+  try {
+    const pid = parent.spawn(JSON.stringify({ argv: ["fixture"], worker: {} }));
+    expect(transport.pipes).toHaveLength(5);
+    expect(parent.pipe(pid, 3)).toBe(-2);
+    const incoming = parent.pipe(pid, 4);
+    const outgoing = parent.pipe(pid, 5);
+    expect(parent.write(incoming, new Uint8Array([1, 2, 3]))).toBe(3);
+    const state = createSignalState(transport.signalState);
+    setSignalDisposition(state, 2, 2);
+    publishSignal(state, 2);
+    const result = await run({
+      child: transport, adapter: "preview1", onSubprocess(host) { current = host; },
+      launch(proc) {
+        expect(current.read(current.pipe(0, 4), 3)).toEqual(new Uint8Array([1, 2, 3]));
+        expect(current.write(current.pipe(0, 5), new Uint8Array([4, 5]))).toBe(2);
+        expect(proc.interrupted()).toBe(2);
+        expect(proc.interrupted()).toBe(0);
+        return 23;
+      },
+    });
+    expect(parent.read(outgoing, 2)).toEqual(new Uint8Array([4, 5]));
+    expect(parent.pipe(pid, 3)).toBe(0);
+    expect(readOutcome(outcomeWord(transport.outcome))).toMatchObject({ kind: "exited", code: 23 });
+    expect(exits(result.messages)).toEqual([{ type: "exit", code: 23, signal: undefined, sleep: "atomics" }]);
+  } finally { parent.dispose(); }
+});
+
+test("a separate guest Worker cannot use message pipes after catching its fatal unwind", async () => {
+  let transport!: ChildTransport;
+  let current!: SubprocessHost;
+  const blocked: string[] = [];
+  const parent = new SubprocessHost({ output() {}, launch(_meta, child) { transport = child; return { terminate() {} }; } });
+  try {
+    const pid = parent.spawn(JSON.stringify({ argv: ["fixture"], worker: {} }));
+    expect(transport.pipes).toHaveLength(5);
+    const incoming = parent.pipe(pid, 4);
+    const outgoing = parent.pipe(pid, 5);
+    expect(parent.write(incoming, new Uint8Array([1, 2, 3]))).toBe(3);
+    const result = await run({
+      child: transport, adapter: "preview1", onSubprocess(host) { current = host; },
+      launch(proc) {
+        const read = current.pipe(0, 4);
+        const write = current.pipe(0, 5);
+        try { proc.default_signal(15); } catch {}
+        for (const operation of [() => current.read(read, 3), () => current.write(write, new Uint8Array([4, 5])), () => current.close(write)]) {
+          try { operation(); } catch (error) { blocked.push(error instanceof Error ? error.message : String(error)); }
+        }
+        return 0;
+      },
+    });
+    expect(blocked).toEqual(new Array(3).fill("Process stopped by signal 15"));
+    expect(new SharedPipe(transport.pipes[3]!, transport.budget).read(3)).toEqual(new Uint8Array([1, 2, 3]));
+    expect(parent.read(outgoing, 2)).toBe(0);
+    expect(parent.pipe(pid, 3)).toBe(15);
+    expect(readOutcome(outcomeWord(transport.outcome))).toMatchObject({ kind: "signaled", code: 15 });
+    expect(result.revoked).toBe(true);
+    expect(exits(result.messages)).toEqual([{ type: "exit", code: 143, signal: 15, sleep: "atomics" }]);
+  } finally { parent.dispose(); }
 });
 
 test("ordinary numeric signal-like exit remains an ordinary exit", async () => {

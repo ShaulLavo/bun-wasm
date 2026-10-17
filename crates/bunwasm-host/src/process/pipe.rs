@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -18,6 +18,7 @@ struct State {
     reader_closed: bool,
     reader: Option<Waker>,
     writer: Option<Waker>,
+    observers: Vec<Weak<Notify>>,
 }
 
 #[derive(Clone)]
@@ -34,6 +35,15 @@ impl Pipe {
         }
     }
 
+    pub fn observe(&self, notify: &Arc<Notify>) {
+        self.state.lock().unwrap().observers.push(Arc::downgrade(notify));
+    }
+
+    fn notify(&self, state: &State) {
+        self.notify.bump();
+        for observer in state.observers.iter().filter_map(Weak::upgrade) { observer.bump(); }
+    }
+
     pub fn read(&self, buf: &mut [u8]) -> i32 {
         let mut state = self.state.lock().unwrap();
         if state.bytes.is_empty() && !state.eof {
@@ -46,6 +56,7 @@ impl Pipe {
         if let Some(waker) = state.writer.take() {
             waker.wake();
         }
+        if count > 0 { self.notify(&state); }
         count as i32
     }
 
@@ -62,7 +73,7 @@ impl Pipe {
         if let Some(waker) = state.reader.take() {
             waker.wake();
         }
-        self.notify.bump();
+        self.notify(&state);
         count as i32
     }
 
@@ -72,7 +83,7 @@ impl Pipe {
         if let Some(waker) = state.reader.take() {
             waker.wake();
         }
-        self.notify.bump();
+        self.notify(&state);
     }
 
     pub fn close_reader(&self) {
@@ -82,7 +93,7 @@ impl Pipe {
         if let Some(waker) = state.writer.take() {
             waker.wake();
         }
-        self.notify.bump();
+        self.notify(&state);
     }
 }
 
@@ -116,6 +127,7 @@ impl AsyncRead for Pipe {
         if let Some(waker) = state.writer.take() {
             waker.wake();
         }
+        if count > 0 { self.notify(&state); }
         Poll::Ready(Ok(()))
     }
 }
@@ -135,7 +147,7 @@ impl AsyncWrite for Pipe {
         if let Some(waker) = state.reader.take() {
             waker.wake();
         }
-        self.notify.bump();
+        self.notify(&state);
         Poll::Ready(Ok(count))
     }
     fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {

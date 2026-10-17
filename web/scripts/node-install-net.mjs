@@ -12,7 +12,7 @@ const LIMIT = 256 * 1024 * 1024;
 if (workerData?.installFetch) serve(workerData);
 
 function serve({ port, wake }) {
-  const signal = new Int32Array(wake);
+  const signal = wake;
   const requests = new Map();
   function reply(message, transfer = []) {
     port.postMessage(message, transfer);
@@ -51,8 +51,7 @@ function serve({ port, wake }) {
 }
 
 /** Installs only the synchronous fetch slots; the JS engine keeps node-net.mjs. */
-export function installCliFetch(imports, getInstance) {
-  const wake = new Int32Array(new SharedArrayBuffer(4));
+export function installCliFetch(imports, getInstance, wake = new Int32Array(new SharedArrayBuffer(4))) {
   const { port1, port2 } = new MessageChannel();
   let worker;
   let next = 1;
@@ -70,7 +69,7 @@ export function installCliFetch(imports, getInstance) {
     return changed;
   }
   function start(meta, body) {
-    worker ??= new Worker(new URL(import.meta.url), { workerData: { installFetch: true, port: port2, wake: wake.buffer }, transferList: [port2] });
+    worker ??= new Worker(new URL(import.meta.url), { workerData: { installFetch: true, port: port2, wake }, transferList: [port2] });
     const id = next++;
     handles.set(id, { offset: 0 });
     port1.postMessage({ id, meta, body });
@@ -116,6 +115,7 @@ export function installCliFetch(imports, getInstance) {
     return 0;
   };
   return {
+    call,
     install() {
       const pointer = getInstance().exports.bun_wasm_host_slots();
       const view = views().view();

@@ -24,7 +24,7 @@ import { SubprocessHost, childTransport, wasiPipe } from "../src/subprocess.ts";
 import { launchNodeExecutable } from "./node-spawn.ts";
 import { forwardOutput, writeStdio } from "./node-stdio.ts";
 import { createNodeSignalController } from "./node-signals.ts";
-import { installHostSlots } from "../src/net/trampoline.ts";
+import { installNodeProcess } from "./node-process.ts";
 
 // V8's stack limit also bounds wasm frames, and the main thread's (about 984 KB) is small. Every
 // guest, the top-level one included, runs in a Worker whose thread Node creates with this stack,
@@ -169,6 +169,7 @@ async function run() {
     identity: workerData?.transport?.identity,
     pid: workerData?.transport?.pid,
     jobId: workerData?.transport?.jobId,
+    workerTransport: workerData?.transport,
     slot: workerData?.transport?.slot,
     token: workerData?.transport?.token,
     stdin: child && (workerData.meta.stdin !== "inherit" || workerData.transport.inheritedStdin) ? workerData.transport.pipes[0] : undefined,
@@ -181,7 +182,7 @@ async function run() {
       validateCwd(meta.cwd);
       const worker = new Worker(new URL(import.meta.url), {
         workerData: { bunwasmChild: true, module, preopens, meta, transport, withNet, stackMb: workerData.stackMb },
-        resourceLimits: { maxOldGenerationSizeMb: 128, stackSizeMb: workerData.stackMb },
+        resourceLimits: { maxOldGenerationSizeMb: 128, ...meta.worker?.resourceLimits, stackSizeMb: Math.max(workerData.stackMb, meta.worker?.resourceLimits?.stackSizeMb || 0) },
       });
       worker.on("error", onError);
       return worker;
@@ -191,11 +192,12 @@ async function run() {
   const imports = wasi.getImportObject();
   let instance;
   installStdio(imports, () => instance);
-  if (withNet) cliFetch = installCliFetch(imports, () => instance);
+  if (withNet) cliFetch = installCliFetch(imports, () => instance, new Int32Array(subprocess.budget, 4, 1));
+  const hostCalls = installNodeProcess(imports, () => instance, subprocess, cliFetch?.call);
   instance = await WebAssembly.instantiate(module, imports);
-  // Rust natives and host-engine JS must observe one current-process disposition/queue.
-  installHostSlots(instance, { signal: (signal, mode) => subprocess.signal(signal, mode) });
   cliFetch?.install();
+  // Process, worker, fetch, and signal slots share this host's state and dispatch.
+  hostCalls.install();
   const code = wasi.start(instance);
   if (!instance.exports.bunwasm_ready || instance.exports.bunwasm_ready() !== 1) finish(code);
 

@@ -96,6 +96,20 @@ fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str, ValueFn<E>
     })));
     list.push(("promiseResult", Rc::new(|e: &E, args: &[E::Value]| Ok(e.promise_result(&arg(e, args, 0))))));
     list.push(("isProxy", Rc::new(|e: &E, args: &[E::Value]| Ok(e.from_val(e.is_proxy(&arg(e, args, 0)).into())))));
+    list.push(("transferArrayBuffers", Rc::new(|e: &E, args: &[E::Value]| {
+        let array = arg(e, args, 0);
+        let Val::Num(length) = e.to_val(&e.get(&array, "length")?) else {
+            return Err(e.error_value(&NativeError::type_error("Expected a buffer list")));
+        };
+        let buffers = (0..length as usize).map(|i| e.get(&array, &i.to_string())).collect::<Result<Vec<_>, _>>()?;
+        if buffers.iter().any(|buffer| !e.is_detachable_buffer(buffer)) {
+            return Err(e.error_value(&NativeError::type_error("ArrayBuffer is not detachable").named("DataCloneError")));
+        }
+        for buffer in &buffers {
+            e.detach_buffer(buffer);
+        }
+        Ok(e.undefined())
+    })));
     list.push(("isPromise", Rc::new(|e: &E, args: &[E::Value]| Ok(e.from_val(e.is_promise(&arg(e, args, 0)).into())))));
     list.push(("isError", Rc::new(|e: &E, args: &[E::Value]| Ok(e.from_val(e.is_error(&arg(e, args, 0)).into())))));
     list.push(("getProxyTarget", Rc::new(|e: &E, args: &[E::Value]| Ok(e.proxy_target(&arg(e, args, 0))))));

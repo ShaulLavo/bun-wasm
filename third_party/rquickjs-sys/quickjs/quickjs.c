@@ -59398,6 +59398,11 @@ bool JS_bunwasm_IsArrayBufferLike(JSValueConst obj) {
     return id == JS_CLASS_ARRAY_BUFFER || id == JS_CLASS_SHARED_ARRAY_BUFFER;
 }
 
+bool JS_bunwasm_IsDetachableArrayBuffer(JSValueConst obj) {
+    JSArrayBuffer *buffer = JS_GetOpaque(obj, JS_CLASS_ARRAY_BUFFER);
+    return buffer && !buffer->detached;
+}
+
 /* create a new ArrayBuffer of length 'len' and copy 'buf' to it */
 JSValue JS_NewArrayBufferCopy(JSContext *ctx, const uint8_t *buf, size_t len)
 {

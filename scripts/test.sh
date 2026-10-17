@@ -123,6 +123,15 @@ pass=0
 fail=0
 failed=()
 for name in "${names[@]}"; do
+  if [[ $update == 0 && "$name" == worker-review ]]; then
+    if node "$root/tests/check-worker-regressions.ts" --engine "$engine" --wasm "$wasm"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      failed+=("$name")
+    fi
+    continue
+  fi
   if [[ $update == 0 && "$name" == fs-empty-read ]]; then
     if python3 "$root/tests/test-empty-stdin.py" --engine "$engine" --wasm "$wasm"; then
       pass=$((pass + 1))

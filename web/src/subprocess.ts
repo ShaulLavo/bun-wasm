@@ -5,9 +5,11 @@ import { ProcessIdentityAllocator } from "../../runtime/proc/identity.ts";
 import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
 import { createSignalState, publishSignal, requestSignal, setSignalDisposition, takeSignal } from "../../runtime/proc/signals.ts";
 import { memoryViews } from "../../runtime/core/memory-views.js";
+import { InheritedWorkerPipes, workerBuffers } from "./worker-pipes.ts";
 
 export interface SpawnMeta {
   executable?: string;
+  worker?: { memoryLimitMb?: number; resourceLimits?: { maxOldGenerationSizeMb?: number; maxYoungGenerationSizeMb?: number; codeRangeSizeMb?: number; stackSizeMb?: number } };
   argv: string[];
   cwd?: string;
   env?: Record<string, string>;
@@ -45,6 +47,7 @@ export interface SubprocessOptions {
   slot?: number;
   token?: number;
   stdin?: SharedArrayBuffer;
+  workerTransport?: ChildTransport;
   /** Current process dispositions and pending signals; never inherited by a new child. */
   signalState?: SharedArrayBuffer;
   /** Adopt the current process's existing terminal decision for signal-entry checkpoints. */
@@ -73,8 +76,10 @@ const PIPE_SIZE = 1 << 20;
 // pipe handles in disjoint high ranges; generic runtime_proc identities have no such restriction.
 const FIRST_PROCESS = 0x60000000;
 const FIRST_HANDLE = 0x70000000;
+// Higher handles are reserved for the current worker's inherited message channels.
+const HANDLE_LIMIT = 0x7fff0000;
 export const MAX_CHILDREN = 4;
-// Slot 14 keeps fd 0..2 for pipes; selector 3 queries the immutable final signal kind.
+// Slot 14 selectors: 0..2 stdio, 3 immutable final signal, 4/5 worker message channels.
 export const CHILD_FINAL_SIGNAL = 3;
 
 export function createProcessBudget() {
@@ -263,12 +268,14 @@ export class SubprocessHost {
   notify: () => void;
   memory: ReturnType<typeof memoryViews> | null;
   stdin: SharedPipe | null;
+  workerPipes: InheritedWorkerPipes;
   stdinWaiting: boolean;
   private detached = false;
   constructor(options: SubprocessOptions) {
     this.options = options;
     this.signalState = createSignalState(options.signalState);
     this.budget = options.budget || createProcessBudget();
+    this.workerPipes = new InheritedWorkerPipes(options.workerTransport);
     this.identities = new ProcessIdentityAllocator(options.identity);
     this.identity = this.identities.buffer;
     this.identities.observePid(Math.max(FIRST_PROCESS, options.pid ?? 1));
@@ -342,11 +349,12 @@ export class SubprocessHost {
     if (meta.env !== undefined && (!meta.env || typeof meta.env !== "object" || Array.isArray(meta.env) || Object.values(meta.env).some((v) => typeof v !== "string"))) return this.fail("spawn: invalid env", "EINVAL");
     const modes = [meta.stdin || "pipe", meta.stdout || "pipe", meta.stderr || "pipe"];
     if (modes.some((mode) => !["pipe", "inherit", "ignore"].includes(mode))) return this.fail("spawn: invalid stdio", "EINVAL");
-    if (this.nextHandle + modes.filter(mode => mode === "pipe").length > 0x80000000) return this.fail("spawn: pipe handle space exhausted", "EAGAIN");
+    const channels = workerBuffers(meta);
+    if (this.nextHandle + modes.filter(mode => mode === "pipe").length + channels.length > HANDLE_LIMIT) return this.fail("spawn: pipe handle space exhausted", "EAGAIN");
     const reservation = this.reserve();
     if (!reservation) return this.fail("spawn: at most four bun-wasm child instances may run", "EAGAIN");
     const { slot, token } = reservation;
-    const buffers = modes.map(() => new SharedArrayBuffer(16 + PIPE_SIZE));
+    const buffers = modes.map(() => new SharedArrayBuffer(16 + PIPE_SIZE)).concat(channels);
     const inheritedStdin = modes[0] === "inherit" && Boolean(this.options.stdin);
     if (inheritedStdin) buffers[0] = this.options.stdin!;
     let id: number;
@@ -367,7 +375,7 @@ export class SubprocessHost {
     };
     const pipes = transport.pipes.map((buffer) => new SharedPipe(buffer, this.budget));
     const handles = pipes.map((pipe, fd) => {
-      if (modes[fd] !== "pipe") return 0;
+      if (fd < 3 && modes[fd] !== "pipe") return 0;
       const handle = this.nextHandle++;
       this.handles.set(handle, { pipe, fd, child: id });
       return handle;
@@ -393,6 +401,7 @@ export class SubprocessHost {
   }
   pipe(id: number, fd: number) {
     if (!this.admit()) return -1;
+    if (id === 0) return this.workerPipes.handle(fd);
     if (fd === CHILD_FINAL_SIGNAL && !this.parentActive(new Int32Array(this.budget))) return this.fail("child outcome: process is no longer active", "ESRCH");
     const child = this.children.get(id);
     if (!child) return BADF;
@@ -401,10 +410,12 @@ export class SubprocessHost {
       const result = readOutcome(outcomeWord(child.transport.outcome))!;
       return result.kind === "signaled" ? result.code : 0;
     }
+    if (fd === 4 || fd === 5) return child.handles[fd - 1] ?? BADF;
     return fd >= 0 && fd <= 2 ? (child.handles[fd] ?? BADF) : BADF;
   }
   read(handle: number, cap = 65536) {
     if (!this.admit()) return -1;
+    if (this.workerPipes.owns(handle)) { this.watch(); return this.workerPipes.read(handle, cap); }
     if (handle === 0) {
       const value = this.stdin ? this.stdin.read(cap) : -4;
       this.stdinWaiting = value === AGAIN;
@@ -412,12 +423,16 @@ export class SubprocessHost {
       return value;
     }
     const h = this.handles.get(handle);
-    return h && h.fd !== 0 ? h.pipe.read(cap) : BADF;
+    return h && h.fd !== 0 && h.fd !== 3 ? h.pipe.read(cap) : BADF;
   }
   write(handle: number, bytes: Uint8Array) {
     if (!this.admit()) return -1;
+    if (this.workerPipes.owns(handle)) {
+      const result = this.workerPipes.write(handle, bytes);
+      return result === -1 ? this.closedPipe(handle) : result;
+    }
     const h = this.handles.get(handle);
-    if (!h || h.fd !== 0) return BADF;
+    if (!h || h.fd !== 0 && h.fd !== 3) return BADF;
     const result = h.pipe.write(bytes);
     return result === -1 ? this.closedPipe(handle) : result;
   }
@@ -427,6 +442,7 @@ export class SubprocessHost {
   }
   close(handle: number) {
     if (!this.admit()) return -1;
+    if (this.workerPipes.owns(handle)) return this.workerPipes.close(handle);
     if (this.children.has(handle)) {
       const result = this.kill(handle, 9);
       if (result < 0) return result;
@@ -554,7 +570,7 @@ export class SubprocessHost {
       if (this.fatalSignal() !== 0) return;
       this.pollAdmitted();
       this.notify();
-      if (this.stdinWaiting || Array.from(this.children.values()).some((child) => !child.ended)) this.watch();
+      if (this.workerPipes.active || this.stdinWaiting || Array.from(this.children.values()).some((child) => !child.ended)) this.watch();
     }, 4);
   }
   detach() {

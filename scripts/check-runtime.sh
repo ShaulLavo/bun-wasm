@@ -7,4 +7,4 @@ if [[ ! -x "$root/web/node_modules/.bin/tsc" ]]; then
   exit 1
 fi
 "$root/web/node_modules/.bin/tsc" -p "$root/crates/bunwasm-runtime/tsconfig.json"
-bun test "$root/scripts/runtime-js.test.ts" "$root/scripts/runtime-emission.test.ts" "$root/scripts/runtime-types.test.ts"
+bun test "$root/scripts/runtime-js.test.ts" "$root/scripts/runtime-emission.test.ts" "$root/scripts/runtime-types.test.ts" "$root/scripts/worker-codec.test.ts" "$root/scripts/worker-selectors.test.ts" "$root/scripts/worker-outcome.test.ts"

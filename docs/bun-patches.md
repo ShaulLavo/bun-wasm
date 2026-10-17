@@ -17,7 +17,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
-| [`crates/bunwasm-runtime/src/js/worker_threads.ts`](#worker-threads-adapter) | Host feature | Original adapter for main-thread worker metadata, endpoint-local closure, and same-guest message channels. |
+| [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing and stream adapters over separate host guest instances, with distinct control-pipe and final-signal selectors. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
 | [0003](#0003-transpiler-dependencies) | Port | Supply WASI wakers, CPU features, crash, and resolver implementations. |
@@ -94,7 +94,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/crypto_keys.js` and `crypto_host_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters and `web/src/engine-host.js` provider capture`](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 | [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
-| [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets and write-side shutdown over the existing host ABI. |
+| [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, write-side shutdown and bounded native handle allocation over the existing host ABI. |
+| [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming, Agent pool and upgrade response adapters shared by all engines. |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
 | [`scripts/generate-ws.sh` and builtin resolution](#portable-ws-builtin) | Host feature | Original module wrapper supplies Bun's builtin ws import on every engine. |
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
@@ -110,7 +111,7 @@ Each row has one class. A file with independent changes has separate rows.
 Class **Host feature**, **original adapters** in `runtime/proc/`,
 `web/src/{subprocess,subprocess-broker,worker,runner,shared-fs}.ts`,
 `web/src/engine-host.js`, `web/src/net/{host,trampoline}.ts`,
-`web/scripts/{node-spawn,node-signals}.ts`, `web/scripts/node-host.mjs`, `runtime/core/wasi.ts`,
+`web/scripts/{node-spawn,node-signals,node-process}.ts`, `web/scripts/node-host.mjs`, `runtime/core/wasi.ts`,
 `crates/bunwasm-host/src/{main,slots}.rs`,
 `crates/bunwasm-host/src/process/{mod,stdio}.rs`, and
 `crates/bunwasm-runtime/src/{host,natives,lib}.rs` plus `src/js/{spawn,process,bootstrap}.js`
@@ -136,6 +137,9 @@ signals and clearing pending before once-listener removal. Slot 18 supplies regi
 dequeue and self-signals without mandatory Wasm imports. Cooperative guest event-loop turns
 pump handlers without keeping an otherwise idle program alive. EPIPE remains catchable by the
 guest; only an escaping EPIPE raises SIGPIPE through the same disposition logic.
+That decision precedes worker error hooks, which must not relabel default signal death
+as an ordinary worker error. The Node import dispatcher composes process, worker,
+network and optional signal slots through the same guarded subprocess adapter.
 SIGKILL immediately records 137 and revokes before physical termination; it cannot be caught
 or ignored. A shared atomic terminal-result primitive arbitrates guest completion, startup
 failures and default actions, preserving the winning status and whether it came from an ordinary
@@ -143,8 +147,18 @@ exit or a signal. The native Wasmtime adapter also retains an immutable typed ou
 actions select immediately, while handled signals do not take the fatal cancellation path.
 The original slot-14 metadata
 selector `CHILD_FINAL_SIGNAL = 3` exposes the completed signal kind on every host without
-changing slots 12–15 or pipe selectors 0–2. The shared Bun facade reads that selected kind
-rather than guessing from status 143 or a prior kill request. The native linker's original
+changing slots 12–15 or pipe selectors 0–2. The worker adapters use selectors 4/5
+for their two directional control pipes on every host, leaving selector 3 exclusively
+for final signal metadata. Native worker completion closes the incoming reader and
+outgoing writer before publication, preserving EPIPE/EOF at the correct endpoints.
+The shared Bun facade reads that selected kind
+rather than guessing from status 143 or a prior kill request. Synchronous spawn error
+paths also observe completion before reading the final kind; a forced-stop request is not
+proof that signal death won. Worker receivers consult that typed kind before synthesizing
+an ordinary uncaught-worker error. Native process, pipe and network allocations check
+their disjoint handle ranges before creating resources, returning EAGAIN at exhaustion
+instead of wrapping or routing a handle into another service.
+The native linker's original
 `wasi_snapshot_preview1::proc_exit` adapter preserves ordinary exit codes 126–255, which
 Wasmtime 39.0.2's standard preview-1 implementation rejects as traps. The upstream reference
 is `bytecodealliance/wasmtime`, `crates/wasi/src/p1.rs` at
@@ -262,6 +276,9 @@ provide write-side shutdown and the local endpoint. HTTP upgrade listeners get
 a real Socket with the bytes received after the request header. The original
 adapters also own pipe backpressure across multiple destinations, cancellation of queued writes, exact-size
 reads, timeout listener cancellation, and bounded HTTP upgrade handshakes.
+The native network allocator also rejects handle exhaustion before starting an
+operation or consuming an accepted socket, preserving the separate process/pipe
+handle range and returning EAGAIN without partial resource creation.
 No additional upstream implementation was copied for these corrections.
 
 Bun's `src/js/node/net.ts` depends on native Bun sockets, private stream modules,
@@ -272,7 +289,7 @@ The upstream comparisons are recorded in [TCP support](tcp.md).
 
 ## Browser runtime core
 
-Class **Host feature**, **original adapters** in `runtime/core/`, `web/src/fs.ts`, `runtime/fs/`, and the `wasiPipe` adapter in `web/src/subprocess.js`.
+Class **Host feature**, **original adapters** in `runtime/core/`, `web/src/fs.ts`, `runtime/fs/`, and the `wasiPipe` adapter in `web/src/subprocess.ts`.
 The extraction starts from bun-wasm's own
 `web/src/{wasi.ts,memory-views.js,fs.ts}` at `8716f92`; there is no copied Bun, Node, WebKit,
 brush-web, or browser_wasi_shim implementation in this layer. The preview1 adapter now uses
@@ -468,6 +485,9 @@ The original helper added to `third_party/rquickjs-sys/quickjs/quickjs.c` checks
 both ArrayBuffer and SharedArrayBuffer class tags without invoking a getter.
 QuickJS's existing `JS_IsArrayBuffer` recognizes only the first class, so using it
 alone would lose the shared-buffer conversion that the getter already supports.
+`JS_bunwasm_IsDetachableArrayBuffer` is another original inspection helper. It
+checks the ordinary-buffer class and detached flag before a transfer mutates any
+buffer. It copies no upstream implementation.
 
 ## Generated function imports
 
@@ -1170,7 +1190,7 @@ The original stdin adapters in `crates/bunwasm-runtime/src/js/node_fs.js`,
 `crates/bunwasm-runtime/src/natives.rs`,
 `crates/bunwasm-host/src/process/mod.rs`, `process/stdin.rs`, `process/stdio.rs`,
 its slot and notification hooks,
-and `web/src/subprocess.js` let callback reads wait through the host I/O loop.
+and `web/src/subprocess.ts` let callback reads wait through the host I/O loop.
 The original browser filesystem service in `runtime/fs/`, connected by
 `web/src/fs-worker.ts` and `web/src/worker.ts`, gives parents and descendants
 one live filesystem identity. Changes are visible before stdin, stdout, or exit
@@ -1200,12 +1220,9 @@ files `lib/main.js`, `bin/esbuild`, `wasm_exec_node.js`, `wasm_exec.js`, and
 The package owns that Go runtime revision. Our test fixtures and subprocess
 changes are original adapters, separate from those upstream files.
 
-The original builtin registry in `crates/bunwasm-runtime/src/js/builtins.js`
-rejects loading `worker_threads` because the guest engines cannot create Node
-workers. Packages can detect its absence with their ordinary `require` guard.
-The official esbuild package then uses its synchronous subprocess backend for
-`buildSync`, `transformSync`, `formatMessagesSync`, and `analyzeMetafileSync`.
-No package-specific environment override is installed.
+The worker-thread adapter now loads and starts separate guests. SharedArrayBuffer
+cannot cross those guest boundaries yet, so esbuild's synchronous worker backend
+still needs that follow-up. No package-specific environment override is installed.
 
 Filesystem visibility does not depend on timestamp comparisons or host I/O
 polling: the shared service owns namespace changes and the allocator, and shared
@@ -1280,26 +1297,103 @@ invocation from `scripts/build.sh` remain unchanged.
 
 ## Worker threads adapter
 
-`crates/bunwasm-runtime/src/js/worker_threads.ts` is an original implementation of
-the Node worker-thread main-thread contract and same-guest messaging. It uses the
-existing event loop, EventTarget, EventEmitter and structured clone on every engine.
-It replaces the web-only message channel stub. No upstream source was copied.
+`crates/bunwasm-runtime/src/js/worker_threads.ts` implements worker metadata,
+guest lifecycle and routed port ownership. `worker_codec.ts` serializes cyclic
+object graphs and transferable buffers and ports. `worker_channel.ts` frames
+control messages over two private host pipes. `worker_stdio.ts` adapts the existing
+subprocess streams to Node streams. These are original TypeScript implementations.
+
+The original Rust adapters in `crates/bunwasm-host/src/process/` give each worker
+its own Wasmtime instance and control pipes. The original Node host adapter in
+`web/scripts/node-host.mjs` starts another physical Node worker. The browser host
+adapters in `web/src/{worker.ts,worker-pipes.ts,subprocess.ts}` use Web Workers and
+shared pipe buffers. Nested guests share a root port broker and the existing child
+budget. Bootstrap, process, spawn and structured-clone hooks connect those
+adapters to the guest event loop. No upstream source was copied.
 
 The inspected upstream implementation is `src/js/node/worker_threads.ts` at Bun
 revision `9510e74152073d850a18758ca41114d8f214ffa6`. Its module initialization needs
 `Worker.cpp` native bindings and the native web-worker constructor, so it cannot
 run through the builtin loader with the hooks currently available.
-[Worker threads](worker-threads.md) records the supported operations and remaining
-guest-worker work. No vendor patch is needed for this adapter.
+[Worker threads](worker-threads.md) records supported operations and host limits.
 
-The PR #31 review correction cancels future delivery tasks when a receiver closes,
-drops its pending messages, and asynchronously disentangles the pair and notifies its
-peer. Already-sent messages stay queued for an unstarted peer until synchronous
-receive or later delivery drains them, or the peer closes itself. The null peer
-link records a pending remote close. Queue consumers complete it without polling.
-`receiveMessageOnPort` accepts BroadcastChannel and returns `undefined` without
-consuming its messages, matching native Bun 1.4.2. Node 26.7.0 accepts the same
-argument but returns a queued message. No upstream implementation was copied.
+`web/scripts/node-process.ts` is an original adapter that installs the same
+subprocess slots through Node WASI for embedded QuickJS and JSC guests. It
+composes them with the existing CLI fetch slots and registered signal slot 18 through
+one import dispatcher, and shares their wake signal.
+The host slot installer uses the runtime memory helper by a relative source
+path so unbundled Node hosts still load without installed packages.
+
+The original atomic-transfer native checks the complete buffer list before
+detachment. QuickJS uses its public detach operation plus the inspection helper
+above. The JSC adapter adds original `JSArrayBuffer` inspection and detach hooks
+in `crates/bunwasm-jsc/cpp/helpers.cpp`, against the same pinned WebKit headers as
+the existing helpers. The browser adapter in `web/src/buffer-transfer.ts` captures the host's structured
+clone operation and tracks native WebAssembly memory buffers through their
+buffer getter. It rejects the whole list before Chromium can partially detach
+it. WebKit and Node already preserve earlier buffers in this case. Copied
+WebAssembly memory buffers are tracked by the original runtime adapter and
+rejected as transfers.
+No Bun vendor patch is needed for these adapters.
+
+The PR #31 close fixes are retained in the routed adapter. A pending peer-close
+sequence preserves an unstarted peer's queue until it drains, without polling.
+Local closure suppresses future delivery while selected messages finish, with
+promise continuations between messages. BroadcastChannel receive returns
+`undefined` without consuming its messages, matching native Bun 1.4.2.
+
+## HTTP framing
+
+Class **Host feature**, **original adapters** in `src/js/net.js`,
+`src/js/http_common.ts`, `src/js/http_body.ts`, `src/js/http_agent.ts`, socket-close
+completion in `src/js/node_net.js`, and the `node:http` registry
+in `src/js/builtins.js`. No upstream implementation is copied or patched.
+Bun's `src/js/node/http.ts` depends on native HTTP bindings, so this change keeps
+the existing portable adapter over the socket ABI.
+
+The Node v26.7.0 control and Bun's Node test files at
+`9510e74152073d850a18758ca41114d8f214ffa6` supply behavioral references.
+Header commitment is distinct from flushing bytes. Response framing preserves
+explicit length and transfer encoding, streams chunked bodies, omits bodies
+for HEAD and bodyless status codes, and writes trailers. HTTP clients use the
+same socket transport for ordinary and upgraded responses to preserve raw
+header names and trailers. A typed incremental body decoder handles fixed,
+chunked, and EOF framing. Header, method, path and status validation occurs
+before protocol bytes are written. A 100 Continue response can precede the
+request body. Server upgrades expose the parsed request body and its EOF before
+handing later bytes to the upgraded socket.
+
+The PR #35 revision checks header coercion and path/method/header validation order
+against native Node. Response parsing rejects duplicate lengths, invalid lengths
+and transfer-encoding/length conflicts in wire order. Only a final `chunked`
+transfer coding selects chunk decoding. Lengths must fit a safe JavaScript integer.
+The Agent pool retains framed keep-alive responses after consumption, removes
+request parser listeners, unreferences idle sockets, guards unsolicited idle data,
+and closes sockets on timeout, remote close or Agent destruction. Requests without
+an Agent advertise close. GET, HEAD, DELETE, OPTIONS, TRACE and CONNECT do not get
+automatic body framing, including when headers flush before `end()`.
+
+Round 2 uses Node's `test/parallel/test-http-extra-response.js` at the same
+upstream revision as a behavioral reference. The decoder returns consumed output
+and unconsumed remainder separately. A remainder retires the connection before
+pool release, preserves the first response body/end, and reports invalid prefixes
+with `HPE_INVALID_CONSTANT`. Bytes after a nonpersistent response produce
+`HPE_CLOSED_CONNECTION`. A completed response enters a draining state so incoming
+data cannot disappear between parser removal and stream consumption. Empty or
+whitespace-only transfer-encoding fields produce `HPE_INVALID_TRANSFER_ENCODING`
+before informational, upgrade or bodyless-response dispatch.
+
+The Streams main integration keeps HTTP transport work in Writable lifecycle
+hooks. The original TCP adapter defers socket-destroy completion to the check
+phase so the completed request stream closes before its socket, as in Node.
+`net-http-close-order` compares this order unchanged on Node and all engines.
+
+HTTPS requests continue to use the host's TLS fetch transport. The raw socket
+ABI has no TLS capability, so HTTPS upgrades without a caller-supplied connection
+fail with `ERR_TLS_NOT_SUPPORTED` instead of opening a plaintext connection.
+The caller-supplied connection path retains caller ownership of TLS setup.
+
+[The HTTP compatibility report](http-compatibility.md) records the controls and measurements.
 
 ### Round-5 native stream reflection and abort cleanup
 

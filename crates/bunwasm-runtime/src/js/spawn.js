@@ -79,6 +79,7 @@
       stdin: stdioMode(input, 0, "ignore"),
       stdout: stdioMode(output, 1, "pipe"),
       stderr: stdioMode(error, 2, sync ? "pipe" : "inherit") };
+    if (options._worker) meta.worker = options._worker;
     return { meta, options, input };
   }
 
@@ -248,13 +249,14 @@
       native.hostClose(spec.handle);
     }
     function step() {
+      if (closed) return true;
       const code = settled ? 0 : native.hostChildWait(spec.handle);
       if (code < 0 && code !== AGAIN) throw hostError(spec.handle);
       if (code >= 0 && !settled) { sink.destroy(); finish(code); }
       if (!settled) sink.flush();
       let progress = false;
       for (const state of states) if (readPipe(state, state.consume)) progress = true;
-      if (settled && states.every((state) => !state.handle)) { close(); return true; }
+      if (settled && states.every((state) => !state.handle)) { if (!spec.options._worker) close(); return true; }
       return progress ? "progress" : false;
     }
     function fail(error) {
@@ -266,7 +268,19 @@
       close();
       rejectExit(error);
     }
+    Object.defineProperty(child, "_finishWorker", { value: close });
     const waiter = internal.addIoWaiter({ step, fail, ref: true });
+    Object.defineProperty(child, "_abortWorker", { value() {
+      child.kill(9);
+      for (const state of states) {
+        if (state.handle) native.hostClose(state.handle);
+        state.handle = 0;
+        state.end();
+      }
+      settled = true;
+      resolveExit(1);
+      close();
+    } });
     initialInput(spec.input, sink);
     if (spec.options.timeout > 0) timer = setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, spec.options.timeout);
     if (spec.options.signal) {
@@ -315,8 +329,11 @@
         exitedDueToTimeout: timedOut, stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])) };
     } catch (error) {
       native.hostChildKill(spec.handle, 9);
-      const signalCode = native.hostChildWait(spec.handle) >= 0 ? finalSignal(spec.handle) : null;
-      return { pid: spec.handle, success: false, exitCode: signalCode === null ? 1 : null, signalCode,
+      // Selection can precede completion publication. Observe the winner before closing it.
+      while ((exitCode = native.hostChildWait(spec.handle)) === AGAIN) native.hostPoll(1);
+      if (exitCode < 0) throw hostError(spec.handle);
+      const signalCode = finalSignal(spec.handle);
+      return { pid: spec.handle, success: false, exitCode: signalCode === null ? exitCode : null, signalCode,
         stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])), error };
     } finally {
       for (const pipe of spec.pipes) if (pipe > 0) native.hostClose(pipe);

@@ -31,7 +31,7 @@ declare namespace BunWasm {
     setMaxListeners(this: object, count: number): unknown;
   }
   interface Internal {
-    require(name: "events"): { call(target: object): void; prototype: NodeEmitter };
+    require(name: "events"): { new(): NodeEmitter; call(target: object): void; prototype: NodeEmitter };
     require(name: "structured_clone"): { structuredClone(value: unknown, options?: unknown): unknown };
     messagePortRefs: number;
     isMarkedAsUntransferable?: (value: unknown) => boolean;

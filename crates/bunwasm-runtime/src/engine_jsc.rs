@@ -525,6 +525,16 @@ impl Engine for Jsc {
         !unsafe { bunjsc_proxy_target(ctx(), v.raw()) }.is_null()
     }
 
+    fn is_detachable_buffer(&self, v: &JsVal) -> bool {
+        // SAFETY: the helper only inspects the buffer under the VM lock.
+        unsafe { bunjsc_is_detachable_buffer(ctx(), v.raw()) }
+    }
+
+    fn detach_buffer(&self, v: &JsVal) {
+        // SAFETY: the transfer native validated every buffer before detaching any.
+        unsafe { bunjsc_detach_buffer(ctx(), v.raw()) }
+    }
+
     fn proxy_target(&self, v: &JsVal) -> JsVal {
         let t = unsafe { bunjsc_proxy_target(ctx(), v.raw()) };
         if t.is_null() { self.undefined() } else { JsVal::new(t) }

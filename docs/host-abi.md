@@ -277,7 +277,7 @@ on the native launcher and apply backpressure.
 Slot 14 also reserves the named selector `CHILD_FINAL_SIGNAL = 3`:
 `child_pipe(child, 3)` returns `AGAIN` until completion is published, then 0 for
 an ordinary exit or the signal number for a selected signal death. An unknown
-child or another selector returns `BADF`. This is a metadata query, not a pipe
+child or unsupported selector returns `BADF`. This is a metadata query, not a pipe
 handle, and does not allocate or close a descriptor. Slots 12–15 retain their
 numbers and integer signatures; selectors 0–2 retain their existing meaning.
 The guest reads the final signal after `child_wait` completes and before closing
@@ -285,6 +285,16 @@ the child. Both queries remain repeatable. Status 143 alone never implies SIGTER
 ordinary `process.exit(143)` reports `exitCode: 143, signalCode: null`, whereas
 selected SIGTERM reports `exitCode: null, signalCode: "SIGTERM"`. Signal requests
 and timeout flags do not classify the final outcome.
+
+Separate-guest workers use two additional control-pipe selectors, without reusing
+signal metadata selector 3. Selector 4 is parent-to-worker input (parent writes,
+worker reads); selector 5 is worker-to-parent output (worker writes, parent reads).
+The parent queries these with the worker's child handle; a worker queries its own
+endpoints with child handle 0. Handle 0 does not turn selector 3 into a pipe or
+provide root completion metadata. These private channels do not change stdio
+selectors 0–2 or their inheritance modes. Native worker completion closes its incoming
+reader and outgoing writer before publishing completion, so pending parent writes
+observe EPIPE and readers can reach EOF.
 
 `child_wait` is nonblocking and repeatable: `AGAIN` while running, then the exit
 code. Waiting does not close the child or its pipes. Drain and close the pipes,
@@ -304,8 +314,10 @@ most four active children, including descendants; another spawn fails `EAGAIN`.
 Each store's linear memory is limited to 512 MiB. A 10 ms epoch ticker interrupts
 CPU-bound children; cancellation also wakes blocked WASI stdio and host polling.
 Parent teardown kills and joins its remaining children, including descendants.
-Handles are virtual identifiers, not host process IDs. Guest timer waits and
-`Bun.sleepSync` use host polling so cancellation also interrupts long sleeps.
+Handles are virtual identifiers, not host process IDs. Native process/pipe and
+network handle ranges are disjoint and bounded; exhaustion returns `EAGAIN` before
+creating a child, pipe or network operation, never a wrapped or misrouted handle.
+Guest timer waits and `Bun.sleepSync` use host polling so cancellation also interrupts long sleeps.
 A native unhandled signal selects typed signal death immediately; epoch, poll and stdio
 checkpoints observe that selected cancellation to stop execution. A handled request instead
 queues delivery without fatal cancellation, so an ordinary guest exit keeps its code.

@@ -1,0 +1,5 @@
+local close suppresses queued delivery
+disentanglement happens after the current turn
+unstarted peer keeps its queue until drained
+closing inside a delivery preserves its current batch
+promise continuations run between selected messages

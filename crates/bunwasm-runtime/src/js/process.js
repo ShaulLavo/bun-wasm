@@ -28,11 +28,19 @@
   const env = new Proxy(native.env(), {
     set(target, key, value) {
       target[key] = typeof key === "symbol" ? value : String(value);
+      if (typeof key === "string" && internal.workerEnvChange) internal.workerEnvChange(key, target[key]);
+      return true;
+    },
+    deleteProperty(target, key) {
+      delete target[key];
+      if (typeof key === "string" && internal.workerEnvChange) internal.workerEnvChange(key, undefined);
       return true;
     },
     defineProperty(target, key, descriptor) {
       if ("value" in descriptor && typeof key !== "symbol") descriptor = Object.assign({}, descriptor, { value: String(descriptor.value) });
-      return Reflect.defineProperty(target, key, descriptor);
+      const result = Reflect.defineProperty(target, key, descriptor);
+      if (result && typeof key === "string" && internal.workerEnvChange) internal.workerEnvChange(key, target[key]);
+      return result;
     },
   });
 
@@ -265,6 +273,7 @@
     setuid() {},
     setgid() {},
     emitWarning(warning, type, code) {
+      if (internal.workerNoWarnings) return;
       const opts = type !== null && typeof type === "object" ? type : { type, code };
       const name = warning instanceof Error ? warning.name : opts.type || "Warning";
       const message = warning instanceof Error ? warning.message : String(warning);
