@@ -1,5 +1,6 @@
-import { expect, test } from "bun:test";
-import { startRun } from "../src/runner";
+import { expect, spyOn, test } from "bun:test";
+import { ENGINES, startRun, type Engine } from "../src/runner";
+import { SubprocessBroker } from "../src/subprocess-broker";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { RunRequest } from "../src/worker";
 import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
@@ -49,7 +50,7 @@ test.each([{ signal: undefined, code: 130 }, { signal: 9 as const, code: 137 }])
   }
 });
 
-function isolatedRoot(isolated = true) {
+function isolatedRoot(isolated = true, engine: Engine = "browser") {
   const originalWorker = globalThis.Worker;
   const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
@@ -80,7 +81,7 @@ function isolatedRoot(isolated = true) {
     async quiesce() { revoked++; await quiescence; },
   } as unknown as SharedFilesystem;
   const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-  const run = startRun({ engine: "browser", module, args: ["-e", "0"], env: {}, filesystem, moduleScope: false }, {
+  const run = startRun({ engine, module, args: ["-e", "0"], env: {}, filesystem, moduleScope: false }, {
     stdout(data) { output.push(new TextDecoder().decode(data)); }, stderr() {}, phase(name) { phases.push(name); },
   });
   return {
@@ -97,6 +98,67 @@ function isolatedRoot(isolated = true) {
       channel.port1.close(); channel.port2.close();
     },
   };
+}
+
+const engines: Engine[] = ["quickjs", "jsc", "browser"];
+
+for (const engine of engines) {
+  test(`${engine} roots register bun/node aliases with their selected engine and existing module`, async () => {
+    const register = spyOn(SubprocessBroker.prototype, "register");
+    const fetch = spyOn(globalThis, "fetch").mockRejectedValue(new Error("Root engine aliases must not download another guest"));
+    const state = isolatedRoot(false, engine);
+    try {
+      const entries = new Map(register.mock.calls);
+      for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) {
+        const entry = entries.get(name);
+        if (!entry) throw new Error(`Missing executable registration: ${name}`);
+        expect(entry.engine).toBe(engine);
+        expect(entry.adapter).toBe("bun");
+        const module = typeof entry.module === "function" ? await entry.module() : entry.module;
+        expect(module).toBe(state.request.module);
+      }
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      try { await state.dispose(); }
+      finally { register.mockRestore(); fetch.mockRestore(); }
+    }
+  });
+
+  test(`${engine} roots retain explicit engine overrides and cache each guest module`, async () => {
+    const register = spyOn(SubprocessBroker.prototype, "register");
+    const urls: string[] = [];
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith(".gz")) return new Response(null, { status: 404 });
+      return new Response(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]), { headers: { "content-type": "application/wasm" } });
+    }, { preconnect: globalThis.fetch.preconnect }));
+    const state = isolatedRoot(false, engine);
+    try {
+      const entries = new Map(register.mock.calls);
+      const loaded = new Set<WebAssembly.Module>();
+      for (const selected of engines) {
+        const entry = entries.get(`bun-${selected}`);
+        if (!entry) throw new Error(`Missing explicit engine registration: ${selected}`);
+        expect(entry.engine).toBe(selected);
+        expect(entry.adapter).toBe("bun");
+        const module = typeof entry.module === "function" ? await entry.module() : entry.module;
+        const again = typeof entry.module === "function" ? await entry.module() : entry.module;
+        expect(module).toBeInstanceOf(WebAssembly.Module);
+        expect(again).toBe(module);
+        if (selected === engine) expect(module).toBe(state.request.module);
+        else expect(module).not.toBe(state.request.module);
+        loaded.add(module);
+      }
+      expect(loaded.size).toBe(3);
+      expect(urls).toEqual(engines.filter(selected => selected !== engine).flatMap(selected => [
+        `http://localhost/${ENGINES[selected].wasm}.gz`, `http://localhost/${ENGINES[selected].wasm}`,
+      ]));
+    } finally {
+      try { await state.dispose(); }
+      finally { register.mockRestore(); fetch.mockRestore(); }
+    }
+  });
 }
 
 test("one isolated Ctrl-C claims DEFAULT 130 immediately before quiescent physical stop", async () => {

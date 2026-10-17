@@ -212,8 +212,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     pid: 1, job: 1, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
     signalState: request.signalState, outcome: request.outcome,
   } : undefined });
-  // Executable selection belongs to the registry, not the spawning guest's engine.
-  // `bun` is Bun light; named executables select the interpreter engines explicitly.
+  // Generic aliases use the page/root engine; named executables select an engine explicitly.
   const modules = new Map<Engine, Promise<WebAssembly.Module>>();
   modules.set(options.engine, Promise.resolve(options.module));
   const moduleFor = (engine: Engine) => () => {
@@ -224,7 +223,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
     return module;
   };
-  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, { module: moduleFor("browser"), adapter: "bun", engine: "browser" });
+  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, { module: moduleFor(options.engine), adapter: "bun", engine: options.engine });
   for (const engine of ["quickjs", "jsc", "browser"] as const) subprocess.register(`bun-${engine}`, { module: moduleFor(engine), adapter: "bun", engine });
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });

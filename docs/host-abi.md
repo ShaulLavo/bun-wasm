@@ -257,9 +257,10 @@ The native launcher and Node adapter support their configured Bun executables. M
 
 The guest preserves `argv[0]`; executable selection belongs to the host's registry.
 The browser registers `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and
-`/usr/local/bin/node` as Bun light;
-`bun-quickjs`, `bun-jsc` and `bun-browser` select an engine explicitly. Children do not inherit
-their parent's engine. A browser start failure appears through `child_wait`: 127 for an
+`/usr/local/bin/node` with the page/root command's selected engine and compiled module.
+`bun-quickjs`, `bun-jsc` and `bun-browser` select an engine explicitly. Generic aliases keep
+using the page/root engine even when an explicitly selected child uses another engine.
+A browser start failure appears through `child_wait`: 127 for an
 unregistered executable, 126 for a registered executable that cannot start.
 `env` replaces the child environment; the host sets `PWD` to `cwd` because the
 WASI guest changes directory there at startup. Each stdio mode is `pipe`,
