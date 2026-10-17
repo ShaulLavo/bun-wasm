@@ -44,11 +44,12 @@ Each row has one class. A file with independent changes has separate rows.
 | [Compression constants](#compression-and-archive-adapters) | Port | Public Brotli and Zstd constant names and integer values for the Node adapter. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
 | [Global Web Worker adapter](#web-worker-adapter) | Host feature | Original TypeScript EventTarget and worker-global adapters over the existing thread transport. |
-| [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, browser module loading and stream adapters over separate host guest instances, with distinct control-pipe and final-signal selectors. |
+| [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, browser module loading and stream adapters over separate host guest instances, with dynamically bound control pipes and typed wait outcomes. |
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
 | [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun and Node spawn adapters map Waffle startup failures to ENOENT/EACCES and preserve failed Node streams. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
-| [Guest process ABI](#guest-process-abi) | Host feature | Original runtime_proc imports, nonblocking filesystem preparation, preview1 notification waits and lazy browser process integration. |
+| [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
+| [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
 | [0003](#0003-transpiler-dependencies) | Port | Supply WASI wakers, CPU features, crash, and resolver implementations. |
@@ -157,7 +158,7 @@ Waffle's page filesystem and terminal adapters live in `waffle/browser/`. Their 
 configuration injects worker URLs and storage settings, retains Bun's workspace namespace in the
 web wrapper, and removes outward runtime imports. Terminal destinations remain callback codecs,
 not interactive terminal discipline. Generic tests live with the framing and terminal code;
-legacy subprocess assertions stay in web tests.
+Bun-specific process assertions stay in web tests.
 
 Waffle's ring, protocol and HTTP/1 framing live in `waffle/browser/net/`. Generic `helper.ts`
 requires an injected fetch function instead of importing Bun's installation cache. Generic
@@ -172,10 +173,11 @@ service-worker implementation.
 
 Waffle's generic worker bootstrap/protocol and process admission, descriptor transport,
 finalization and supervision live in `waffle/proc/` and `waffle/browser/`; injected executors
-keep Bun engines, slots, cache policy and legacy `SubprocessHost`/Worker-channel transports in
-`web/`. The process-owned generic pipes and Bun's legacy pipes retain distinct ownership/EOF
-contracts. Existing upstream-derived pipe fragments and interruption provenance remain classified
-in their sections below.
+keep only Bun engine, networking-slot and cache policy in `web/src/{bun-executor,bun-launcher}.ts`.
+The guest imports `runtime_proc` directly; browser Bun processes use Waffle's process-owned
+descriptors, pipes and typed outcomes rather than a separate `SubprocessHost` transport.
+`web/src/subprocess-broker.ts` registers Bun executables and roots each run in that shared service.
+Existing pipe provenance and interruption adapters remain classified in their sections below.
 
 Waffle's `build.ts`, explicit conditional exports, trusted-Git install check and installed
 package/source-asset/provenance tooling are original build/test adapters. They emit ignored
@@ -194,13 +196,13 @@ therefore polls the host every 1,024 ordinary C-loop trap points, including loop
 backedges and function entries. The existing trap slow path saves the interpreter
 PC and stack before polling; generic exception/unwind checks do not poll the host.
 A true callback result requests JSC's distinguished uncatchable termination
-exception. Polling is disabled for hosts without optional signal slot 18. This is
-a host extension, not an upstream bug.
+exception. Fatal polling uses the same mandatory `runtime_proc.signal` import as
+cooperative signal handling. This is a host extension, not an upstream bug.
 
 Original adapters in `crates/bunwasm-runtime/src/{engine,engine_quickjs,engine_jsc,lib,host}.rs`,
 `crates/bunwasm-jsc/{cpp/helpers.cpp,src/sys.rs}`,
-`crates/bunwasm-host/src/{slots,process/stdio}.rs`, and `web/src/subprocess.ts`
-add `(signal=0, mode=4)` to existing slot 18. It observes fatal cancellation
+`crates/bunwasm-host/src/{slots,process/stdio}.rs`, and `waffle/proc/abi.ts`
+implement `(signal=0, mode=4)` through `runtime_proc.signal`. It observes fatal cancellation
 without consuming the authoritative per-signal handled pending set. QuickJS
 installs its public `JS_SetInterruptHandler` through rquickjs's interrupt API,
 without changing upstream QuickJS, amortizing host calls across eight ordinary
@@ -220,12 +222,11 @@ browser-native engine needs no new hook and remains covered by worker terminatio
 The original `waffle/proc/abi.ts` adapter implements the same fatal-only mode 4
 for generic process imports. The original `waffle/proc/signals.ts` helper preserves
 pending-signal wake hints during cooperative dequeue. The original
-`web/src/{runner,worker,subprocess-broker,subprocess}.ts`
-adapters share each process's existing budget with its page-side broker. Signal delivery
-notifies that budget's wait word and, for generic process polling, the directory wake word;
-short timeout rescans are not the signal notification mechanism. Legacy preview1 guests
-also receive their root or child's interrupt channel, with cooperative dequeue consuming
-its wake hint without consuming another pending signal.
+`web/src/{runner,bun-executor,subprocess-broker}.ts` adapters use the process's
+shared signal state and Waffle worker transport. Signal delivery wakes the process client
+and the directory used by process polling; short timeout rescans are not the signal
+notification mechanism. Cooperative dequeue consumes its wake hint without consuming
+another pending signal.
 
 These adapters and the browser proof/benchmark harness are original implementations,
 not copied source. JSC polling covers JS safe points, not a single uninterrupted
@@ -265,21 +266,23 @@ bundled only into the disposable measurement app, never into the shipped runtime
 ## Browser process service
 
 Class **Host feature**, **original adapters** in `waffle/proc/`,
-`web/src/{subprocess,subprocess-broker,worker,runner,shared-fs}.ts`,
+`web/src/{bun-executor,bun-launcher,subprocess-broker,worker,runner,shared-fs}.ts`,
 `web/src/engine-host.js`, `web/src/net/{host,trampoline}.ts`,
-`web/scripts/{node-spawn,node-signals,node-process}.ts`, `web/scripts/node-host.mjs`, `waffle/core/wasi.ts`,
+`web/scripts/{node-host,node-spawn,node-signals,node-process}.ts`, the `node-host.mjs` entry, `waffle/core/wasi.ts`,
 `crates/bunwasm-host/src/{main,slots}.rs`,
-`crates/bunwasm-host/src/process/{mod,stdio}.rs`, and
-`crates/bunwasm-runtime/src/{host,natives,lib}.rs` plus `src/js/{spawn,process,bootstrap}.js`
+`crates/bunwasm-host/src/process/{mod,descriptors,pipe,stdin,stdio,wasi}.rs`, and
+`crates/bunwasm-runtime/src/{host,natives,lib}.rs` plus `src/js/spawn.ts` and `src/js/{process,bootstrap}.js`
 and their runtime types. These implement this project's process contract; no upstream
 implementation is copied into these original adapters. The separate original mutation hook in
 the already-ported EventEmitter is classified under [Node event emitter](#node-event-emitter).
-The process slots retain Bun host ABI version 1 and slots 12–15, appending optional signal
-slot 18 after the existing networking slots (`docs/host-abi.md`).
+Child creation, pipes, waits, jobs, kills and signals use mandatory `runtime_proc` imports,
+not Bun process slots or an optional capability probe. Only the 14 networking slots remain,
+at indices 0–13 (`docs/host-abi.md`); there is no separate signal slot.
 The generic service shares compiled modules and keeps process ids separate from job ids.
 The browser launcher selects an executable's guest adapter instead of inheriting the
 spawning process's engine. A small reservation/activation bridge is separate from the
-first-spawn-loaded supervisor. The existing Bun pipe transport remains until step 4b.
+lazily loaded supervisor. All Bun process I/O uses the same process-owned descriptors and
+pipe endpoints as other guests; no Bun-only pipe implementation remains.
 The shared guest keeps executable names intact; native and Node host registries explicitly
 recognize `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and `/usr/local/bin/node`
 instead of silently running Bun for an arbitrary executable.
@@ -289,8 +292,8 @@ SIGTERM or SIGPIPE immediately selects its typed default outcome and revokes; on
 signals queue for guest delivery and retain the guest's own exit status. Registration/removal
 publish synchronously, and removing a pending handler to default takes that action immediately.
 A 65-cell signal table couples disposition with a per-signal pending bit, preserving distinct
-signals and clearing pending before once-listener removal. Slot 18 supplies registration,
-dequeue and self-signals without mandatory Wasm imports. Cooperative guest event-loop turns
+signals and clearing pending before once-listener removal. The mandatory `runtime_proc.signal`
+import supplies registration, dequeue, fatal polling and self-signals. Cooperative guest event-loop turns
 pump handlers without keeping an otherwise idle program alive. The original JS process adapter
 initializes SIGPIPE as ignored to match observed Node 26.7.0 and Bun 1.4.2 behavior, with no upstream
 implementation copied. Registering a SIGPIPE listener selects handled delivery and removing the
@@ -301,26 +304,25 @@ EPIPE remains catchable by the guest; an escaping EPIPE follows the ordinary unc
 prints the error and exits 1. It does not synthesize SIGPIPE or consume pending signals, even when
 a SIGPIPE listener exists. Physical host signals are forwarded separately. Plain preview1 guests retain default
 SIGPIPE and its status 141. Typed signal decisions precede worker error hooks, which must not
-relabel default signal death as an ordinary worker error. The Node import dispatcher composes process, worker,
-network and optional signal slots through the same guarded subprocess adapter.
+relabel default signal death as an ordinary worker error. The Node host installs generic process
+and signal imports alongside the networking slot dispatcher, guarded by process lifetime.
 SIGKILL immediately records 137 and revokes before physical termination; it cannot be caught
 or ignored. A shared atomic terminal-result primitive arbitrates guest completion, startup
 failures and default actions, preserving the winning status and whether it came from an ordinary
 exit or a signal. The native Wasmtime adapter also retains an immutable typed outcome: default
 actions select immediately, while handled signals do not take the fatal cancellation path.
-The original slot-14 metadata
-selector `CHILD_FINAL_SIGNAL = 3` exposes the completed signal kind on every host without
-changing slots 12–15 or pipe selectors 0–2. The worker adapters use selectors 4/5
-for their two directional control pipes on every host, leaving selector 3 exclusively
-for final signal metadata. Native worker completion closes the incoming reader and
+The original `runtime_proc.wait` adapter returns the immutable outcome kind and code on
+every host; no child-pipe metadata selector remains. The guest allocates its two directional
+worker control pipes through `runtime_proc.pipe` and binds their dynamically assigned child fds
+in the spawn request. Native worker completion closes the incoming reader and
 outgoing writer before publication, preserving EPIPE/EOF at the correct endpoints.
 The shared Bun facade reads that selected kind
 rather than guessing from status 143 or a prior kill request. Synchronous spawn error
 paths also observe completion before reading the final kind; a forced-stop request is not
 proof that signal death won. Worker receivers consult that typed kind before synthesizing
-an ordinary uncaught-worker error. Native process, pipe and network allocations check
-their disjoint handle ranges before creating resources, returning EAGAIN at exhaustion
-instead of wrapping or routing a handle into another service.
+an ordinary uncaught-worker error. Native descriptor and network allocations check their handle ranges before creating
+resources, returning EAGAIN at exhaustion instead of wrapping or routing a handle into
+another service.
 The native linker's original
 `wasi_snapshot_preview1::proc_exit` adapter preserves ordinary exit codes 126–255, which
 Wasmtime 39.0.2's standard preview-1 implementation rejects as traps. The upstream reference
@@ -407,8 +409,8 @@ worker paused inside a locked write followed by a rejected late write.
 ## Standard output errors
 
 Class **Host feature**, **original adapters** in `crates/bunwasm-runtime/src/lib.rs`,
-`src/natives.rs`, `src/js/{process,spawn,web}.js`, `web/scripts/node-host.mjs`,
-`web/scripts/node-stdio.ts`, `web/src/{subprocess.js,worker.ts}`, and
+`src/natives.rs`, `src/js/spawn.ts`, `src/js/{process,web}.js`, `web/scripts/node-host.ts`,
+`web/scripts/node-stdio.ts`, `web/src/{bun-executor,worker}.ts`, and
 `crates/bunwasm-host/src/process/{mod,pipe,stdio}.rs`, and its original `net/error.rs` error record.
 No Bun or Node implementation is copied or adapted for this change.
 Rust output natives return write errors with Node-style `EPIPE`, errno `-32`, and
@@ -539,7 +541,7 @@ The upstream comparisons are recorded in [TCP support](tcp.md).
 
 ## Browser runtime core
 
-Class **Host feature**, **original adapters** in `waffle/core/`, `web/src/fs.ts`, `waffle/fs/`, and the `wasiPipe` adapter in `web/src/subprocess.ts`.
+Class **Host feature**, **original adapters** in `waffle/core/`, `web/src/fs.ts`, `waffle/fs/`, and `waffle/proc/{pipes,worker-pipes}.ts`.
 Waffle's `core/` and `fs/` sources provide the WASI, descriptor, shared-filesystem and memory
 backend adapters consumed by `web/`; there is no copied Bun, Node, WebKit, brush-web or
 browser_wasi_shim implementation in this layer. The preview1 adapter uses opaque filesystem
@@ -1448,7 +1450,7 @@ The original stdin adapters in `crates/bunwasm-runtime/src/js/node_fs.js`,
 `crates/bunwasm-runtime/src/natives.rs`,
 `crates/bunwasm-host/src/process/mod.rs`, `process/stdin.rs`, `process/stdio.rs`,
 its slot and notification hooks,
-and `web/src/subprocess.ts` let callback reads wait through the host I/O loop.
+and the Waffle process ABI let callback reads wait through the host I/O loop.
 The original browser filesystem service in `waffle/fs/`, connected by
 `web/src/fs-worker.ts` and `web/src/worker.ts`, gives parents and descendants
 one live filesystem identity. Changes are visible before stdin, stdout, or exit
@@ -1563,9 +1565,9 @@ subprocess streams to Node streams. These are original TypeScript implementation
 
 The original Rust adapters in `crates/bunwasm-host/src/process/` give each worker
 its own Wasmtime instance and control pipes. The original Node host adapter in
-`web/scripts/node-host.mjs` starts another physical Node worker. The browser host
-adapters in `web/src/{worker.ts,worker-pipes.ts,subprocess.ts}` use Web Workers and
-shared pipe buffers. Nested guests share a root port broker and the existing child
+`web/scripts/node-host.ts` starts another physical Node worker. The browser host
+adapters in `web/src/{worker,bun-executor,bun-launcher}.ts` use Web Workers and
+Waffle's process-owned pipe buffers. Nested guests share a root port broker and the existing child
 budget. Bootstrap, process, spawn and structured-clone hooks connect those
 adapters to the guest event loop. No upstream source was copied.
 
@@ -1585,12 +1587,16 @@ revision `9510e74152073d850a18758ca41114d8f214ffa6`. Its module initialization n
 run through the builtin loader with the hooks currently available.
 [Worker threads](worker-threads.md) records supported operations and host limits.
 
-`web/scripts/node-process.ts` is an original adapter that installs the same
-subprocess slots through Node WASI for embedded QuickJS and JSC guests. It
-composes them with the existing CLI fetch slots and registered signal slot 18 through
-one import dispatcher, and shares their wake signal.
-The host slot installer uses the runtime memory helper by a relative source
-path so unbundled Node hosts still load without installed packages.
+`web/scripts/node-process.ts` is an original adapter that installs Waffle's `ProcessABI`
+under the `runtime_proc` namespace for browser-native, embedded QuickJS and JSC guests.
+Its descriptor table bridges pipe/terminal fd calls alongside Node WASI's filesystem fds;
+`node-spawn.ts` owns the shared supervisor and worker/pipe brokers. The TypeScript
+`node-host.ts` runs the root guest in a worker as well as its children, keeping that
+supervisor responsive while guest code makes synchronous process calls. The existing
+`node-host.mjs` is only a TypeScript-entry shim. CLI fetch uses the networking import
+dispatcher; signal handling uses `runtime_proc.signal`, sharing the process wake signal. The slot installer
+loads Waffle's exported memory helper, whose source and generated Node modules are
+fingerprinted with every local host module by the upstream-suite resume gate.
 
 The original atomic-transfer native checks the complete buffer list before
 detachment. QuickJS uses its public detach operation plus the inspection helper
@@ -1914,7 +1920,7 @@ blocking preview1 I/O contract.
 `9d072068` with nonblocking lock admission and asynchronous preparation for cold reads and
 file growth. Preparing an operation never consumes input or commits a write behind EAGAIN.
 The browser runner, worker and subprocess broker compose these original adapters lazily,
-share one fd table with preview1 and preserve the existing Bun host slots.
+share one fd table with preview1; Bun's separate child-process slots have been removed.
 `web/src/runtime-terminals.ts` is an original callback-destination codec: it preserves stdout
 versus stderr across dup and remapped inherited fds, forwards generic child output to the run's
 hooks, and represents this runner's default EOF stdin explicitly. After selecting the immutable
@@ -2006,6 +2012,27 @@ admission fails, or status 127 with the missing-program diagnostic when the host
 completes an unregistered program. Both asynchronous completion and synchronous
 failure are checked. Its source is TypeScript. The spawn-facade unit harness loads
 the real TypeScript command dispatcher with an explicitly empty filesystem.
+
+## Native process descriptor bridge
+
+Class **Host feature**, **original adapters** in `crates/bunwasm-host/src/process/{mod,descriptors,wasi}.rs`
+and the `runtime_proc` linker in `crates/bunwasm-host/src/slots.rs`. They implement the same
+spawn request and packed wait/poll records as Waffle's `proc/{types,abi}.ts`, whose exact
+revision is pinned by the consuming package. The Rust supervisor owns process/job ancestry,
+typed outcomes and child threads; shared open descriptions preserve inherited and duplicate
+pipe endpoint lifetimes. Weak Wasmtime stdio wrappers do not retain an endpoint after the
+last process descriptor closes, so EOF/EPIPE is published by descriptor ownership rather
+than by eventual `WasiCtx` destruction.
+
+The preview1 bridge intercepts process-owned `fd_read`, `fd_write`, `fd_close`, `fd_renumber`,
+`fd_fdstat_get` and `fd_filestat_get`. It keeps preview1's blocking I/O and positive errno
+contract while `runtime_proc` operations remain immediate and return negative errnos.
+Filesystem descriptors remain owned by Wasmtime and are not transferable through this
+spawn adapter. The bridge validates guest iovecs before observable I/O and delegates
+non-process descriptors to the existing Wasmtime functions. WASI record layouts and
+constants are interface definitions, not copied wasi-libc code. No Bun, wasi-libc or
+Wasmtime implementation is copied or patched by these new modules; the previously documented
+Wasmtime `proc_exit` behavior and upstream revision remain in [Browser process service](#browser-process-service).
 
 ## Compression and archive adapters
 
