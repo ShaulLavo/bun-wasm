@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { prepareBaselineSource } from "./process-baseline-source";
 
 const directories = new Set<string>();
@@ -13,7 +14,7 @@ afterEach(async () => {
 
 for (const full of [false, true]) {
   test(`baseline setup accepts ${full ? "a full archive with existing tests" : "a narrow source archive"}`, async () => {
-    const snapshot = await mkdtemp(join(process.env.BUN_WASM_TEST_TMP ?? "/work/tmp", "bun-wasm-baseline-source-"));
+    const snapshot = await mkdtemp(join(process.env.BUN_WASM_TEST_TMP ?? tmpdir(), "bun-wasm-baseline-source-"));
     directories.add(snapshot);
     await mkdir(join(snapshot, "runtime"));
     await mkdir(join(snapshot, "web/src"), { recursive: true });
