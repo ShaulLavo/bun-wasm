@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { claimOutcome, outcomeWord, readOutcome } from "../proc/outcome";
 
-for (const code of [0, 23, 143, -1, -2147483648, 2147483647, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER]) {
+for (const code of [0, 23, 126, 127, 143, -1, -2147483648, 2147483647, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER]) {
   test(`terminal exit ${code} round-trips without truncation and wins against later kill`, () => {
     const word = outcomeWord();
     expect(readOutcome(word)).toBeNull();

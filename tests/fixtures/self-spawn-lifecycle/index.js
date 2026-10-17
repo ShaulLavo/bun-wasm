@@ -36,7 +36,7 @@ const done = Bun.spawn(cmd(""), { stdout: "pipe", stderr: "pipe" });
 Bun.sleepSync(150);
 done.kill();
 console.log("late kill", await done.exited, done.signalCode);
-for (const code of [23, 143]) {
+for (const code of [23, 126, 127, 143]) {
   const own = Bun.spawnSync(cmd(`process.exit(${code})`));
   console.log("own exit", own.exitCode, own.signalCode);
 }
