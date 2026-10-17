@@ -1,2 +1,2 @@
-raw listener true
-listeners 0
+two arguments preserve listener identity, once, off and counts
+three arguments preserve listener identity, once, off and counts

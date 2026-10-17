@@ -1,11 +1,25 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { observeHmr } from "./hmr.ts";
 
-test("waits for Vite's connected message before editing and captures evidence before restore", async () => {
+async function withProject(run: (project: string) => Promise<void>) {
   const project = mkdtempSync("/work/tmp/bun-wasm-hmr-test-");
-  try {
+  try { await run(project); }
+  finally { rmSync(project, { recursive: true, force: true }); }
+}
+
+test("project cleanup runs when an assertion or verification fails", async () => {
+  let directory = "";
+  await expect(withProject(async project => {
+    directory = project;
+    throw new Error("injected verification failure");
+  })).rejects.toThrow("injected verification failure");
+  expect(existsSync(directory)).toBe(false);
+});
+
+test("waits for Vite's connected message before editing and captures evidence before restore", async () => {
+  await withProject(async project => {
     const source = join(project, "main.js");
     writeFileSync(source, "const text = 'before';\n");
     let websocketListener: ((socket: { on(event: "framereceived", listener: (event: { payload: unknown }) => void): void }) => void) | undefined;
@@ -32,7 +46,5 @@ test("waits for Vite's connected message before editing and captures evidence be
     expect(observedDuringWait).toBe("const text = 'after';\n");
     expect(captured).toBe("const text = 'after';\n");
     expect(readFileSync(source, "utf8")).toBe("const text = 'before';\n");
-  } finally {
-    rmSync(project, { recursive: true, force: true });
-  }
+  });
 });
