@@ -30,26 +30,48 @@ for (const [name, fn] of [
   }
 }
 
-const missingChild = childProcess.spawn("ls");
-const missing = await new Promise<boolean>((resolve) => {
-  missingChild.once("error", (error) => resolve(error.code === "ERR_NOT_SUPPORTED_IN_WASM"));
-  missingChild.once("exit", (code) => resolve(code === 127));
-});
-console.log("child_process unavailable:", missing);
-
-console.log("Bun.which:", Bun.which("ls"));
-const spawned = Bun.spawnSync({ cmd: ["ls"] });
-console.log("Bun.spawnSync unavailable:", !spawned.success &&
-  (spawned.error?.code === "ERR_NOT_SUPPORTED_IN_WASM" || spawned.exitCode === 127));
-let spawnUnavailable = false;
-try {
-  const child = Bun.spawn({ cmd: ["ls"], stdout: "ignore", stderr: "pipe" });
-  await new Response(child.stderr).text();
-  spawnUnavailable = await child.exited === 127;
-} catch (error) {
-  spawnUnavailable = error.code === "ERR_NOT_SUPPORTED_IN_WASM";
+const processHost = process.env.BUNWASM_TEST_HOST === "node";
+const missingCode = processHost ? "ENOENT" : "ERR_NOT_SUPPORTED_IN_WASM";
+function validError(error, syscall) {
+  if (!(error instanceof Error) || error.code !== missingCode) return false;
+  if (!processHost) return true;
+  return error.errno === -2 && error.path === "ls" && error.syscall === syscall &&
+    JSON.stringify(error.spawnargs) === '["argument"]';
 }
-console.log("Bun.spawn unavailable:", spawnUnavailable);
+const missingChild = childProcess.spawn("ls", ["argument"]);
+const failedSpawn = await new Promise((resolve) => {
+  let error;
+  const events = [];
+  const timer = setTimeout(() => { missingChild.kill(); resolve(false); }, 1000);
+  missingChild.on("spawn", () => events.push("spawn"));
+  missingChild.on("exit", () => events.push("exit"));
+  missingChild.on("error", (value) => { error = value; events.push("error"); });
+  missingChild.on("close", (code, signal) => {
+    clearTimeout(timer);
+    events.push("close");
+    resolve(validError(error, "spawn ls") && missingChild.pid === undefined && code === -2 && signal === null &&
+      JSON.stringify(events) === '["error","close"]');
+  });
+});
+console.log("child_process.spawn failure:", failedSpawn);
+const nodeSync = childProcess.spawnSync("ls", ["argument"]);
+console.log("child_process.spawnSync failure:", validError(nodeSync.error, "spawnSync ls") && nodeSync.status === null && nodeSync.signal === null);
+console.log("Bun.which:", Bun.which("ls"));
+let syncFailure = false;
+try {
+  const spawned = Bun.spawnSync({ cmd: ["ls"] });
+  syncFailure = !processHost && !spawned.success && spawned.exitCode !== 0 && spawned.error?.code === missingCode;
+} catch (error) {
+  syncFailure = processHost && error instanceof Error && error.code === "ENOENT" && error.errno === -2 && error.path === "ls";
+}
+console.log("Bun.spawnSync failure:", syncFailure);
+try {
+  const child = Bun.spawn({ cmd: ["ls"] });
+  child.kill();
+  console.log("Bun.spawn throws:", false);
+} catch (error) {
+  console.log("Bun.spawn throws:", error.code === missingCode && (!processHost || error.errno === -2 && error.path === "ls"));
+}
 try {
   Bun.serve({ fetch() {} });
   console.log("Bun.serve ran");
