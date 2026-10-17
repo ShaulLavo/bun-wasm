@@ -273,7 +273,11 @@ explicit rebuild request on every engine, including Chromium and WebKit pages.
 See [the package-check instructions](../tests/esbuild/README.md) for offline
 mirror requirements and the retained official package recording.
 
-## Installer command measurement, 2026-10-17
+## Historical combined installer measurement, 2026-10-17
+
+This frozen comparison predates the split into command/workspace and migration
+PRs. Its migration counts describe the implementation moved to the follow-up,
+not the remaining command/workspace PR.
 
 The fixed [25-file selection](bun-test-suite/installer-files.txt) covers every
 workspace, manifest-header, lock-migration, update and bunx cause assigned by PR #40.
