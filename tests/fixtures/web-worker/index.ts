@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { checkTransferValidation } from "./transfer-validation.ts";
 
 function closed(worker: Worker) {
   return new Promise<Event>(resolve => worker.addEventListener("close", resolve, { once: true }));
@@ -222,3 +223,11 @@ assert.equal(await lateReply, "late message");
 lateGate.close();
 await lateClose;
 console.log("started workers drop messages without a handler");
+
+const transferWorker = new Worker(new URL("./transfer-worker.ts", import.meta.url));
+const transferClose = closed(transferWorker);
+const transferResult = message(transferWorker);
+await checkTransferValidation(transferWorker.postMessage.bind(transferWorker));
+assert.equal(await transferResult, "worker transfer validation");
+await transferClose;
+console.log("Web transfer validation is atomic and matches Bun errors");

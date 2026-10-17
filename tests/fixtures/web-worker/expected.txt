@@ -12,3 +12,4 @@ data and blob workers resume messages after preload
 messages wait for worker entry evaluation
 message delivery starts before top-level await settles
 started workers drop messages without a handler
+Web transfer validation is atomic and matches Bun errors
