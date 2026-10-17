@@ -1,9 +1,11 @@
-import { mkdirSync, readFileSync, existsSync, symlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 const accept = "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*";
 const requests: string[] = [];
 let latest = "1.0.0";
+let checkAccept = false;
+let omitIntegrity = false;
 function tar(files: Record<string, string>) {
   const chunks: Uint8Array[] = [];
   for (const [name, text] of Object.entries(files)) {
@@ -38,10 +40,10 @@ const server = Bun.serve({ port: 0, fetch(req) {
   const archive = archives.get(path.slice(1).replace(/\.tgz$/, ""));
   if (archive) return new Response(archive);
   if (path !== "/fixture-cli") return new Response("missing", { status: 404 });
-  if (req.headers.get("accept") !== accept) return new Response("wrong Accept", { status: 400 });
+  if (checkAccept && req.headers.get("accept") !== accept) return new Response("wrong Accept", { status: 400 });
   return Response.json({ name: "fixture-cli", "dist-tags": { latest }, versions: Object.fromEntries(
     Array.from(archives, ([version, bytes]) => [version, { name: "fixture-cli", version, bin: { "fixture-cli": "cli.ts" },
-      dist: { tarball: `${server.url}${version}.tgz`, integrity: `sha512-${new Bun.CryptoHasher("sha512").update(bytes).digest("base64")}` } }]),
+      dist: { tarball: `${server.url}${version}.tgz`, ...(omitIntegrity ? {} : { integrity: `sha512-${new Bun.CryptoHasher("sha512").update(bytes).digest("base64")}` }) } }]),
   ) });
 } });
 async function run(cwd: string, ...args: string[]) {
@@ -74,14 +76,19 @@ const cases: Record<string, () => Promise<void>> = {
     check((await run(cwd, "run", "packages/a/index.ts")).trim() === "workspace-ok", "workspace graph");
     await run(cwd, "install", "--frozen-lockfile");
     await run(join(cwd, "packages/a"), "install", "--frozen-lockfile");
+    await run(join(cwd, "packages/a"), "add", "fixture-cli@1.0.0");
+    check(JSON.parse(readFileSync(join(cwd, "packages/a/package.json"), "utf8")).dependencies["fixture-cli"] === "1.0.0", "workspace add writes member");
+    check(!JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).dependencies["fixture-cli"], "workspace add changed root");
   },
   async registry() {
     const cwd = project("registry", { "package.json": { dependencies: { "fixture-cli": "^1.0.0" } } });
-    await run(cwd, "install");
+    checkAccept = true;
+    try { await run(cwd, "install"); } finally { checkAccept = false; }
     check(JSON.parse(readFileSync(join(cwd, "node_modules/fixture-cli/package.json"), "utf8")).version === "1.1.0", "registry install");
   },
   async binaries() {
-    const cwd = join(process.cwd(), "registry");
+    const cwd = project("binary", { "package.json": { dependencies: { "fixture-cli": "^1.0.0" } } });
+    await run(cwd, "install");
     check(existsSync(join(cwd, "node_modules/.bin/fixture-cli")), "binary link missing");
     const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
     pkg.scripts = { dev: 'fixture-cli "two words"' };
@@ -90,8 +97,9 @@ const cases: Record<string, () => Promise<void>> = {
     check((await run(cwd, "run", "fixture-cli", "direct")).trim() === "fixture-1.1.0 direct", "direct binary");
   },
   async update() {
-    const cwd = project("update", { "package.json": { dependencies: { "fixture-cli": "^1.0.0" } } });
+    const cwd = project("update", { "package.json": { dependencies: { "fixture-cli": "1.0.0" } } });
     await run(cwd, "install");
+    require("node:fs").writeFileSync(join(cwd, "package.json"), JSON.stringify({ dependencies: { "fixture-cli": "^1.0.0" } }));
     latest = "2.0.0";
     await run(cwd, "update");
     check(JSON.parse(readFileSync(join(cwd, "node_modules/fixture-cli/package.json"), "utf8")).version === "1.1.0", "update range");
@@ -99,16 +107,28 @@ const cases: Record<string, () => Promise<void>> = {
     check(JSON.parse(readFileSync(join(cwd, "node_modules/fixture-cli/package.json"), "utf8")).version === "2.0.0", "update latest");
   },
   async migration() {
-    const cwd = project("migrate", { "package.json": { dependencies: { "fixture-cli": "^1.0.0" } },
-      "package-lock.json": { lockfileVersion: 3, packages: { "": { dependencies: { "fixture-cli": "^1.0.0" } },
-        "node_modules/fixture-cli": { version: "1.0.0", resolved: `${server.url}1.0.0.tgz`,
-          integrity: `sha512-${new Bun.CryptoHasher("sha512").update(archives.get("1.0.0")!).digest("base64")}`, bin: { "fixture-cli": "cli.ts" } } } },
-    });
-    await run(cwd, "install");
-    check(JSON.parse(readFileSync(join(cwd, "node_modules/fixture-cli/package.json"), "utf8")).version === "1.0.0", "migration must retain pin");
+    const integrity = `sha512-${new Bun.CryptoHasher("sha512").update(archives.get("1.0.0")!).digest("base64")}`;
+    const dep = { version: "1.0.0", resolved: `${server.url}1.0.0.tgz`, integrity, bin: { "fixture-cli": "cli.ts" } };
+    const locks: Record<string, unknown> = {
+      "package-lock.json": { lockfileVersion: 3, packages: { "": { dependencies: { "fixture-cli": "^1.0.0" } }, "node_modules/fixture-cli": dep } },
+      "yarn.lock": `"fixture-cli@^1.0.0":\n  version "1.0.0"\n  resolved "${server.url}1.0.0.tgz"\n  integrity ${integrity}\n`,
+      "pnpm-lock.yaml": `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      fixture-cli:\n        specifier: ^1.0.0\n        version: 1.0.0\npackages:\n  fixture-cli@1.0.0:\n    resolution:\n      integrity: ${integrity}\n      tarball: ${server.url}1.0.0.tgz\nsnapshots:\n  fixture-cli@1.0.0: {}\n`,
+      "berry/yarn.lock": `__metadata:\n  version: 8\n"fixture-cli@npm:^1.0.0":\n  version: 1.0.0\n  resolution: "fixture-cli@npm:1.0.0"\n`,
+    };
+    for (const [lockfile, data] of Object.entries(locks)) {
+      const cwd = project(`migrate-${lockfile.split("/")[0]}`, { "package.json": { dependencies: { "fixture-cli": "^1.0.0" } }, [lockfile.replace("berry/", "")]: data });
+      if (lockfile.startsWith("berry/")) {
+        await run(cwd, "install", "--lockfile-only");
+        check(readFileSync(join(cwd, "bun.lock"), "utf8").includes("fixture-cli@1.0.0"), "berry migration pin");
+      } else {
+        await run(cwd, "install");
+        check(JSON.parse(readFileSync(join(cwd, "node_modules/fixture-cli/package.json"), "utf8")).version === "1.0.0", "migration must retain pin");
+      }
+    }
   },
   async bunx() {
-    const cwd = join(process.cwd(), "registry");
+    const cwd = join(process.cwd(), "binary");
+    omitIntegrity = true;
     check((await run(cwd, "x", "fixture-cli", "local")).trim() === "fixture-1.1.0 local", "bun x local");
     const empty = project("bunx", { "package.json": {} });
     check((await run(empty, "x", "fixture-cli@1.0.0", "remote")).trim() === "fixture-1.0.0 remote", "bun x install");
