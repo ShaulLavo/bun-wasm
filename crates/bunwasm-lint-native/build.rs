@@ -24,9 +24,13 @@ fn main() {
         .split_once("extern \"C\" Bun::RegularExpression* Yarr__RegularExpression__compile")
         .unwrap()
         .1;
+    let jsc = PathBuf::from(
+        env::var("JSC_BUILD_DIR").unwrap_or_else(|_| "/work/tmp/bun-wasm-jsc".into()),
+    );
+    let options = yarr_options(&jsc.join("webkit/Source/JavaScriptCore"));
     let mut source = format!(
         r#"#include "config.h"
-#include "InitializeThreading.h"
+#include <wtf/Threading.h>
 #include <JavaScriptCore/Options.h>
 #include <JavaScriptCore/YarrInterpreter.h>
 #include <wtf/BumpPointerAllocator.h>
@@ -34,7 +38,7 @@ namespace Bun {{
 {structure}
 extern "C" Bun::RegularExpression* Yarr__RegularExpression__compile{bindings}
 extern "C" void Yarr__RegularExpression__deinit(Bun::RegularExpression* re) {{ delete re; }}
-extern "C" void bunwasm_yarr_initialize() {{ JSC::initialize(); }}
+extern "C" void bunwasm_yarr_initialize() {{ WTF::initialize(); using namespace WTF; JSC::Options::AllowUnfinalizedAccessScope scope; {options} g_jscConfig.options.isFinalized = true; }}
 "#
     );
     let conversions = manifest.join("../../vendor/bun/src/jsc/bindings/NumberConversions.cpp");
@@ -46,9 +50,7 @@ extern "C" void bunwasm_yarr_initialize() {{ JSC::initialize(); }}
     source.push_str(&conversions);
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     fs::write(out.join("yarr.cpp"), source).unwrap();
-    let jsc = PathBuf::from(
-        env::var("JSC_BUILD_DIR").unwrap_or_else(|_| "/work/tmp/bun-wasm-jsc".into()),
-    );
+
     let obj = jsc.join("build/jsc");
     let sdk = PathBuf::from(env::var("WASI_SDK_PATH").expect("source env.sh"));
     let database = obj.join("compile_commands.json");
@@ -67,24 +69,82 @@ extern "C" void bunwasm_yarr_initialize() {{ JSC::initialize(); }}
         .unwrap();
     let command = entry["command"].as_str().unwrap();
     let flags = compiler_flags(command);
-    let status = Command::new(sdk.join("bin/clang++"))
-        .args(flags)
-        .arg("-c")
-        .arg(out.join("yarr.cpp"))
-        .arg("-o")
-        .arg(out.join("yarr.o"))
-        .current_dir(&obj)
-        .status()
-        .unwrap();
-    assert!(status.success(), "compiling Bun's Yarr bindings");
+    let mut objects = Vec::new();
+    let yarr = jsc.join("webkit/Source/JavaScriptCore/yarr");
+    let sources = [
+        "YarrPattern.cpp",
+        "YarrInterpreter.cpp",
+        "YarrCanonicalizeUCS2.cpp",
+        "YarrErrorCode.cpp",
+        "YarrFlags.cpp",
+        "YarrUnicodeProperties.cpp",
+    ];
+    let paths = std::iter::once(out.join("yarr.cpp"))
+        .chain(sources.map(|name| yarr.join(name)))
+        .chain(std::iter::once(obj.join(
+            "JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp",
+        )));
+    for (index, path) in paths.enumerate() {
+        println!("cargo:rerun-if-changed={}", path.display());
+        let object = out.join(format!("yarr-{index}.o"));
+        let status = Command::new(sdk.join("bin/clang++"))
+            .args(&flags)
+            .arg("-c")
+            .arg(path)
+            .arg("-o")
+            .arg(&object)
+            .current_dir(&obj)
+            .status()
+            .unwrap();
+        assert!(status.success(), "compiling Bun's Yarr interpreter");
+        objects.push(object);
+    }
+    let archive = out.join("libbunwasm_yarr.a");
+    let _ = fs::remove_file(&archive);
     let status = Command::new(sdk.join("bin/llvm-ar"))
         .arg("rcs")
-        .arg(out.join("libbunwasm_yarr.a"))
-        .arg(out.join("yarr.o"))
+        .arg(&archive)
+        .args(objects)
         .status()
         .unwrap();
     assert!(status.success());
     link(&out, &obj, &jsc, &sdk);
+}
+
+// Yarr's VM-free interpreter reads three options. Initialize the defaults from
+// the same WebKit checkout, without Options.cpp's VM/JIT initialization graph.
+fn yarr_options(jsc: &Path) -> String {
+    let mut names = std::collections::BTreeSet::new();
+    for file in [
+        "yarr/YarrInterpreter.cpp",
+        "yarr/YarrPattern.cpp",
+        "yarr/YarrParser.h",
+    ] {
+        let path = jsc.join(file);
+        println!("cargo:rerun-if-changed={}", path.display());
+        let source = fs::read_to_string(path).unwrap();
+        for call in source.split("Options::").skip(1) {
+            let Some((name, rest)) = call.split_once('(') else {
+                continue;
+            };
+            if rest.starts_with(')') && name.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+                names.insert(name.to_owned());
+            }
+        }
+    }
+    let path = jsc.join("runtime/OptionsList.h");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(path).unwrap();
+    let mut output = String::new();
+    for name in names {
+        let line = source
+            .lines()
+            .find(|line| line.contains(&format!(", {name},")))
+            .unwrap();
+        let default = line.split(',').nth(2).unwrap().trim();
+        output.push_str(&format!("JSC::Options::{name}() = {default}; "));
+    }
+    output
 }
 
 fn compiler_flags(command: &str) -> Vec<String> {
@@ -119,7 +179,6 @@ fn link(out: &Path, obj: &Path, jsc: &Path, sdk: &Path) {
     }
     for library in [
         "bunwasm_yarr",
-        "JavaScriptCore",
         "WTF",
         "bmalloc",
         "icui18n",

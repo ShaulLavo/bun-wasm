@@ -1610,7 +1610,7 @@ zero-length and owned-copy cases. No upstream implementation is copied.
 
 Class **Port**. Bun revision `9510e74152073d850a18758ca41114d8f214ffa6`.
 
-`crates/bunwasm-cli/src/lint_command.rs` calls `src/lint/driver` for both commands.
+`crates/bunwasm-tools/src/lint_command.rs` calls `src/lint/driver` for both commands.
 Bun's native rule registry, parsers, semantic analysis, formatter, file discovery,
 configuration resolution, fix application, and report formats use the vendored
 implementations, with the WASI layout and docs-embedding adjustments listed below.
@@ -1635,10 +1635,23 @@ compile/execute/deinit bindings from `src/jsc/bindings/RegularExpression.cpp`.
 It omits the BunString entry points and replaces the runtime headers with JSC's
 headers. It also compiles `src/jsc/bindings/NumberConversions.cpp`, replacing
 `root.h` with `config.h` and removing the Bun-specific export annotation, to
-retain Bun's fixed, precision, and exponential number formatting. An original initialization shim calls `JSC::initialize()`. All engines
-link these bindings against the same prebuilt WebKit archives used by the JSC
-engine. This keeps Bun's Yarr regex semantics for native lint rules. The build
-flag selection follows `crates/bunwasm-jsc/build.rs`. `zstd-sys` supplies the zstd
+retain Bun's fixed, precision, and exponential number formatting. The original
+initialization shim initializes WTF and the options read by Yarr's bytecode
+interpreter, without starting the VM. The build reads those option names from
+WebKit's Yarr sources and their default values from `runtime/OptionsList.h`.
+Calling the full options initializer also retains the VM through its validation
+and notification code, so this interpreter-only entry point avoids it.
+Only `dist/bun-tools.wasm` links these bindings against the prebuilt WebKit
+WTF/ICU archives. The tools build compiles WebKit's Yarr sources and its generated
+Unicode canonicalization table as separate objects, using the prebuilt engine's
+compiler flags and headers. It does not link `libJavaScriptCore.a`. Pulling Yarr
+from that unified archive also retained unrelated VM code and ICU data. This
+change removes that archive dependency without changing Yarr's source.
+WebKit revision is `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`. Direct sources are
+`Source/JavaScriptCore/yarr/{YarrPattern,YarrInterpreter,YarrCanonicalizeUCS2,YarrUnicodeProperties,YarrErrorCode,YarrFlags}.cpp`.
+`YarrCanonicalizeUnicode.cpp` comes from the same build's generated sources.
+Default engines do not link the tools or their native dependencies. This keeps
+Bun's Yarr regex semantics for native lint rules. The build flag selection follows `crates/bunwasm-jsc/build.rs`. `zstd-sys` supplies the zstd
 symbols used to read Bun's bundled TypeScript libraries and rule data.
 
 JavaScript lint plugins require `src/jsc/bindings/Lint*.cpp`, whose node, token,
@@ -1648,15 +1661,33 @@ Git-based file selection requires an external git executable, which the guest's
 subprocess ABI does not provide. Canary-only conformance command flags are not
 part of the release CLI adapter.
 
+The host selects the tools artifact before instantiating a lint or format command.
+`crates/bunwasm-cli/src/tool_args.rs` retains the CLI command-prefix parser for
+both the native host and tools entry point. `web/src/tool-command.ts` mirrors that
+small selection rule for browser and Node hosts. Eval source, script arguments,
+and build/test arguments cannot select a tool. The tools process uses the same
+pid, streams, cwd, signal state, filesystem identity and child admission as the
+command it replaces. This is an original host adapter. It adds no forwarding
+child and does not change the public four-child limit.
+
+The single tools artifact has no JavaScript engine. Config evaluation self-spawns
+through slot 12 into the selected default engine. Browser hosts download and
+compile tools on the first tool command, reuse the compiled module within the
+page, and use the fingerprinted engine cache across page loads. The cached
+response header is the single publication state, without a separate localStorage
+marker. The site ships a
+gzip artifact and build hash in both sandbox and playground. The module service
+worker can serve and cache versioned tools requests without precaching it.
+
 ## Lint process environment
 
 Class **Host feature**, **original adapters** in
-`crates/bunwasm-cli/src/lint_command.rs`, `crates/bunwasm-host/src/process/`,
+`crates/bunwasm-tools/src/lint_command.rs`, `crates/bunwasm-host/src/process/`,
 and `web/src/subprocess.ts`.
 
 The driver supplies Bun's existing config-evaluation programs as source parts.
 The adapter runs them through the host subprocess ABI in a fresh instance of the
-same wasm artifact, passing the requested cwd and filtered process environment.
+selected default engine artifact, passing the requested cwd and filtered process environment.
 It drains both output pipes while waiting and closes owned handles on every
 return path. It invokes no host executable or model provider.
 

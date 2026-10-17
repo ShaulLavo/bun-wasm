@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { isToolCommand } from "../src/tool-command.ts";
 import { childTransport, type ChildTransport, type ChildWorker, type SpawnMeta } from "../src/subprocess.ts";
 
 /** The headless host registers these guest runtime names, not arbitrary native commands. */
@@ -12,4 +15,9 @@ export function launchNodeExecutable(meta: SpawnMeta, transport: ChildTransport,
   // synchronous guest is polling spawnSync, so a known-missing entry completes here.
   child.finish(127);
   return { terminate() {} };
+}
+
+export async function nodeModule(options: { args: readonly string[]; baseModule: WebAssembly.Module; wasmPath: string }): Promise<WebAssembly.Module> {
+  if (!isToolCommand(options.args)) return options.baseModule;
+  return WebAssembly.compile(readFileSync(join(dirname(options.wasmPath), "bun-tools.wasm")));
 }

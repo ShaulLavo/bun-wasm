@@ -2,6 +2,7 @@
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
 // and the sandbox (../sandbox/).
 
+import { isToolCommand } from "./tool-command";
 import type { SharedFilesystem } from "./shared-fs";
 import { NetHelper } from "./net/helper";
 import { createRing } from "./net/ring";
@@ -21,6 +22,12 @@ export const ENGINES: Record<Engine, { name: string; wasm: string; script: strin
   jsc: { name: "JavaScriptCore", wasm: "bun-jsc.wasm", script: "scripts/build-bun-jsc.sh" },
   browser: { name: "Browser (native)", wasm: "bun-browser.wasm", script: "scripts/build-bun-browser.sh" },
 };
+
+let toolsModule: Promise<WebAssembly.Module> | undefined;
+function loadTools(): Promise<WebAssembly.Module> {
+  return toolsModule ??= loadWasm("bun-tools.wasm", () => {})
+    .then(result => result.module).catch(error => { toolsModule = undefined; throw error; });
+}
 
 export function isEngine(name: string | null): name is Engine {
   return name !== null && Object.hasOwn(ENGINES, name);
@@ -223,7 +230,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (rootAcknowledged) return;
     return rootQuiescence ??= options.filesystem.quiesce(request.filesystem);
   };
-  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { quiesceRoot, output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
+  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { quiesceRoot, tools: loadTools, output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
     pid: 1, job: 1, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
     signalState: request.signalState, outcome: request.outcome,
   } : undefined });
@@ -337,7 +344,14 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     finish({ code: 1, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
   let prepared = !generic;
-  const preparation = generic ? (async () => {
+  const tooling = options.adapter !== "preview1" && isToolCommand(options.args);
+  const preparation = (generic || tooling) ? (async () => {
+    if (tooling) request.module = await loadTools();
+    if (!generic) {
+      prepared = true;
+      if (!finished) worker.postMessage(request, [request.filesystem.port]);
+      return;
+    }
     const { workerProcessState, createWorkerProcessTransport } = await import("../../runtime/proc/worker-client");
     const transport = request.runtimeProcess ??= createWorkerProcessTransport();
     const state = workerProcessState(transport);

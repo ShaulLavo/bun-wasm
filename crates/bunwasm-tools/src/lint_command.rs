@@ -8,40 +8,11 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use bun_lint_driver::{Environment, Outcome, Script, Stream, bunfig, cli, fmt, git, js_plugin};
-use bunwasm_runtime::host;
+use crate::host;
 
 #[path = "../../../vendor/bun/src/runtime/cli/typescript_libs.rs"]
 mod typescript_libs;
 
-pub(super) fn before_command(args: &[String]) -> Option<super::Command> {
-    let mut forwarded = Vec::new();
-    let mut globals = super::ToolGlobals::default();
-    let mut at = 0;
-    while let Some(arg) = args.get(at) {
-        match arg.as_str() {
-            "lint" | "fmt" => {
-                forwarded.extend_from_slice(&args[at + 1..]);
-                return Some(super::Command::Lint(arg.clone(), forwarded, globals));
-            }
-            "--cwd" => {
-                at += 1;
-                globals.cwd_before = Some(args.get(at)?.clone());
-            }
-            flag if flag.starts_with("--cwd=") => {
-                globals.cwd_before = Some(flag.split_once('=')?.1.to_owned());
-            }
-            "--smol" | "--silent" | "--no-install" | "--bun" => {}
-            "-e" | "--eval" | "-p" | "--print" | "-v" | "--version" | "--revision" => return None,
-            flag if flag.starts_with("--config=") || flag.starts_with("-c=") => {
-                globals.bunfig = Some(flag.split_once('=')?.1.to_owned());
-            }
-            flag if flag.starts_with('-') => forwarded.push(arg.clone()),
-            _ => return None,
-        }
-        at += 1;
-    }
-    None
-}
 
 enum CommandError {
     Usage(Vec<u8>),
@@ -74,7 +45,7 @@ fn configure_output() {
         .store(color.unwrap_or(Output::is_stderr_tty()), Ordering::Relaxed);
 }
 
-pub(super) fn run(command: &str, args: Vec<String>, globals: super::ToolGlobals) -> i32 {
+pub(super) fn run(command: &str, args: Vec<String>, globals: crate::tool_args::ToolGlobals) -> i32 {
     configure_output();
     let argv: Vec<&[u8]> = args.iter().map(|arg| arg.as_bytes()).collect();
     match execute(command, &argv, &globals) {
@@ -98,7 +69,7 @@ pub(super) fn run(command: &str, args: Vec<String>, globals: super::ToolGlobals)
 fn execute(
     command: &str,
     args: &[&[u8]],
-    globals: &super::ToolGlobals,
+    globals: &crate::tool_args::ToolGlobals,
 ) -> Result<Outcome, CommandError> {
     let (cwd, help, all, format_required) = match command {
         "lint" => {
@@ -147,7 +118,7 @@ fn execute(
         run_git: &|_| Err(git::NotRun::NotFound),
         command_line: &command_line,
         js_engine: &NativeRules,
-        version: bunwasm_runtime::BUN_VERSION.as_bytes(),
+        version: env!("BUNWASM_BUN_VERSION").as_bytes(),
         memory: 0,
     };
     let (lint, format) = read_bunfigs(

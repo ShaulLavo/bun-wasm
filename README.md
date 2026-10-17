@@ -16,8 +16,14 @@ fill the gaps. We measure compatibility against [Bun's own test suite](docs/bun-
 ```sh
 source env.sh && scripts/sync-bun.sh
 scripts/build-jsc.sh                  # native Yarr/WTF archives for lint and fmt
+scripts/build-bun-tools.sh            # dist/bun-tools.wasm, loaded only by lint/fmt
 scripts/build.sh                      # dist/bun.wasm
 wasmtime run --dir .::/ dist/bun.wasm run /index.ts
 ```
+
+`bun lint` and `bun fmt` use the on-demand `dist/bun-tools.wasm`. Keep it beside
+the default engine artifacts. The native launcher and browser/Node hosts select
+it for those commands. Configuration programs run in the selected default
+engine. Ordinary page loads, scripts, tests and builds do not load the tools.
 
 [Changes to Bun and vendored dependencies](docs/bun-patches.md) lists each patch and distinguishes port work, host features, and upstream bugs.

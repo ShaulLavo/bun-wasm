@@ -52,12 +52,32 @@ sw.addEventListener("fetch", (event) => {
 /** `m/<run>/<key>`: a module the worker stored; anything else: the app file of that name. */
 async function moduleScope(request: Request, rest: string): Promise<Response> {
   if (rest.startsWith("m/")) return (await caches.match(request)) ?? text(404, `bun.wasm: no such module ${rest}\n`);
-  const upstream = await fetch(new URL(rest, new URL("..", sw.registration.scope)).href);
+  const target = new URL(rest, new URL("..", sw.registration.scope));
+  target.search = new URL(request.url).search;
+  const upstream = rest === "bun-tools.wasm" || rest === "bun-tools.wasm.gz"
+    ? await toolsAsset(target) : await fetch(target);
   // The page is cross-origin isolated: a worker script needs COEP of its own.
   const headers = new Headers(upstream.headers);
   headers.set("cross-origin-embedder-policy", "require-corp");
   headers.set("cross-origin-resource-policy", "same-origin");
   return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers });
+}
+
+async function toolsAsset(target: URL): Promise<Response> {
+  let cache: Cache | undefined;
+  try {
+    cache = await caches.open("bunwasm-tools");
+    const hit = await cache.match(target);
+    if (hit) return hit;
+  } catch { /* Cache Storage can be disabled. */ }
+  const response = await fetch(target);
+  if (!cache || !response.ok || !target.searchParams.has("v")) return response;
+  try {
+    await cache.put(target, response.clone());
+    const stale = (await cache.keys()).filter(key => new URL(key.url).pathname === target.pathname && key.url !== target.href);
+    await Promise.all(stale.map(key => cache.delete(key)));
+  } catch { /* Full storage must not prevent a tools command. */ }
+  return response;
 }
 
 async function fromPreviewClient(request: Request, clientId: string, target: string): Promise<Response> {

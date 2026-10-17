@@ -356,19 +356,12 @@ fn build(_: Vec<String>) -> i32 {
     1
 }
 
-#[cfg(feature = "bun-transpiler")]
-mod lint_command;
-
-#[derive(Default)]
-struct ToolGlobals {
-    cwd_before: Option<String>,
-    bunfig: Option<String>,
-}
+mod tool_args;
 
 enum Command {
     Run(Entry, Vec<String>),
     Build(Vec<String>),
-    Lint(String, Vec<String>, ToolGlobals),
+    Lint,
     Install(String, Vec<String>),
     Print(String),
     Exit(i32),
@@ -381,9 +374,8 @@ fn usage_error(message: &str) -> Command {
 }
 
 fn parse(args: Vec<String>) -> Command {
-    #[cfg(feature = "bun-transpiler")]
-    if let Some(command) = lint_command::before_command(&args) {
-        return command;
+    if tool_args::before_command(&args).is_some() {
+        return Command::Lint;
     }
     let mut rest = args.into_iter();
     while let Some(arg) = rest.next() {
@@ -409,7 +401,7 @@ fn parse(args: Vec<String>) -> Command {
                 let Some(code) = rest.next() else { return usage_error("--print requires code") };
                 return Command::Print(code);
             }
-            "lint" | "fmt" => return Command::Lint(arg, rest.collect(), ToolGlobals::default()),
+            "lint" | "fmt" => return Command::Lint,
             "test" => return Command::Run(Entry::Test(rest.collect()), Vec::new()),
             "build" | "bun" => return Command::Build(rest.collect()),
             "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm" =>
@@ -467,15 +459,9 @@ fn main() {
     let command = parse(std::env::args().skip(1).collect());
     let (entry, args) = match command {
         Command::Exit(code) => std::process::exit(code),
-        Command::Lint(command, args, globals) => {
-            #[cfg(feature = "bun-transpiler")]
-            std::process::exit(lint_command::run(&command, args, globals));
-            #[cfg(not(feature = "bun-transpiler"))]
-            {
-                let _ = (args, globals);
-                eprintln!("error: bun {command} requires the bun-transpiler feature");
-                std::process::exit(1);
-            }
+        Command::Lint => {
+            eprintln!("error: bun lint/fmt requires a host that loads dist/bun-tools.wasm");
+            std::process::exit(1);
         }
         Command::Build(args) => std::process::exit(build(args)),
         Command::Install(command, args) => std::process::exit(

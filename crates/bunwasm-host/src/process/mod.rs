@@ -36,6 +36,8 @@ const BUN_EXECUTABLE_ALIASES: [&str; 6] = [
 pub struct Runtime {
     pub engine: wasmtime::Engine,
     pub module: wasmtime::Module,
+    pub tools_path: Option<std::path::PathBuf>,
+    tools: std::sync::OnceLock<Result<wasmtime::Module, String>>,
     pub dirs: Vec<(std::path::PathBuf, String)>,
     active: AtomicUsize,
 }
@@ -50,9 +52,22 @@ impl Runtime {
             engine,
             module,
             dirs,
+            tools_path: None,
+            tools: std::sync::OnceLock::new(),
             active: AtomicUsize::new(0),
         })
     }
+    pub fn module_for(&self, argv: &[String]) -> anyhow::Result<&wasmtime::Module> {
+        if crate::tool_args::before_command(argv.get(1..).unwrap_or_default()).is_none() {
+            return Ok(&self.module);
+        }
+        let tools = self.tools.get_or_init(|| {
+            let path = self.tools_path.as_ref().ok_or("tools artifact path is unavailable")?;
+            wasmtime::Module::from_file(&self.engine, path).map_err(|error| format!("loading {}: {error}", path.display()))
+        });
+        tools.as_ref().map_err(|message| anyhow::anyhow!("{message}"))
+    }
+
 }
 
 #[derive(Deserialize)]
@@ -852,5 +867,25 @@ mod configuration_tests {
             assert!(root.pipes.is_empty());
         }
         root.runtime.active.store(0, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tools_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_commands_never_load_tools() {
+        let engine = wasmtime::Engine::default();
+        let module = wasmtime::Module::new(&engine, b"\0asm\x01\0\0\0").unwrap();
+        let runtime = Runtime::new(engine, module, Vec::new());
+        for args in [vec!["bun", "run", "lint"], vec!["bun", "-e", "fmt"], vec!["bun", "build", "lint"]] {
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            assert!(runtime.module_for(&args).is_ok());
+            assert!(runtime.tools.get().is_none());
+        }
+        let args = ["bun", "--cwd", "project", "lint"].into_iter().map(String::from).collect::<Vec<_>>();
+        assert!(runtime.module_for(&args).is_err());
+        assert!(runtime.tools.get().is_some());
     }
 }

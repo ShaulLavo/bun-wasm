@@ -2,6 +2,7 @@
 // service worker from web/src, each engine's wasm (gzipped), and the React and vanilla template sources.
 // The React template includes the dependency sources Bun bundles in the browser.
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
+// BUN_TOOLS_WASM overrides ../dist/bun-tools.wasm.
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { previewWebsocketScript } from "../web/preview-build";
 import { buildBrowserEntries, buildClassicWorker } from "../scripts/browser-build";
@@ -50,6 +51,8 @@ async function copyWasm(source: string, name: string): Promise<void> {
 await copyWasm(resolve(here, process.env.BUN_WASM ?? "../dist/bun.wasm"), "bun.wasm");
 await copyWasm(resolve(here, process.env.JSC_WASM ?? "../dist/bun-jsc.wasm"), "bun-jsc.wasm");
 await copyWasm(resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun-browser.wasm"), "bun-browser.wasm");
+
+await copyWasm(resolve(here, process.env.BUN_TOOLS_WASM ?? "../dist/bun-tools.wasm"), "bun-tools.wasm");
 
 // ---------- the starter project ----------
 
