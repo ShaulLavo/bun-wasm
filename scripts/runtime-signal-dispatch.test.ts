@@ -6,12 +6,13 @@ import { join } from "node:path";
 
 const sources = join(import.meta.dir, "../crates/bunwasm-runtime/src/js");
 
-function runtime(pending: number[]) {
+function runtime(pending: number[], reject: Record<number, number> = {}) {
   let dequeues = 0;
   const internal: any = {
     native: {
       platformInfo: {}, env: () => ({}), argv: () => [],
       hostSignal(signal: number, mode: number) {
+        if (signal in reject) return reject[signal];
         if (signal !== 0 || mode !== 0) return 0;
         dequeues++;
         return pending.shift() ?? 0;
@@ -64,4 +65,15 @@ test("throwing handler propagates to the runtime's ordinary uncaught-error path"
   expect(() => internal.pumpSignals()).toThrow(expected);
   expect(internal.pumpSignals()).toBe(true);
   expect(calls).toEqual(["after-error"]);
+});
+
+test("registration and self-kill failures carry the canonical WASI errno as Node errors", () => {
+  const { internal, process } = runtime([], { 1: -58, 2: -28, 19: -58, 32: -28, 15: -5 });
+  const failure = (run: () => void) => { try { run(); } catch (error) { return error; } };
+  expect(failure(() => { process.on("SIGHUP", () => {}); internal.listenerChanged(process, "SIGHUP"); })).toMatchObject({ code: "ENOTSUP", errno: -95, syscall: "uv_signal_start", message: "uv_signal_start ENOTSUP" });
+  expect(failure(() => { process.on("SIGINT", () => {}); internal.listenerChanged(process, "SIGINT"); })).toMatchObject({ code: "EINVAL", errno: -22, syscall: "uv_signal_start" });
+  expect(failure(() => process.kill(process.pid, 32))).toMatchObject({ code: "EINVAL", errno: -22, syscall: "kill", message: "kill EINVAL" });
+  expect(failure(() => process.kill(process.pid, 19))).toMatchObject({ code: "ENOTSUP", errno: -95, syscall: "kill" });
+  // Any other negative result is an I/O failure, never a generic message.
+  expect(failure(() => process.kill(process.pid, 15))).toMatchObject({ code: "EIO", syscall: "kill" });
 });
