@@ -10,6 +10,7 @@
 //
 // PLAYWRIGHT=<path to playwright's index.mjs> when `playwright` isn't resolvable from here.
 
+import { installHmrConnection, waitForHmrConnection } from "./hmr-connection.ts";
 import { checkPhoneUI } from "../../web/tests/phone-ui.mjs";
 import { firstVisit } from "../../web/tests/first-visit.mjs";
 import { mkdirSync } from "node:fs";
@@ -35,6 +36,7 @@ const STEP_MS = 20_000;
 async function check(browserName, engine) {
   const browser = await (browserName === "webkit" ? webkit : chromium).launch();
   const context = await browser.newContext(browserName === "webkit" ? { ...devices["iPhone 15"] } : { viewport: { width: 1440, height: 900 } });
+  await installHmrConnection(context);
   const url = new URL(base);
   url.searchParams.set("engine", engine);
   const visit = await firstVisit(context, url.href);
@@ -60,6 +62,7 @@ async function check(browserName, engine) {
   };
   const app = page.frameLocator("#preview");
   const setFile = async (path, edit) => {
+    await waitForHmrConnection(page, "#preview");
     await page.evaluate(async ([path, edit]) => {
       const { editor, fs } = globalThis.sandbox;
       await editor.open(path);
@@ -120,9 +123,15 @@ async function check(browserName, engine) {
       try {
         await tab.goto(new URL(href, page.url()).href);
         await tab.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
+        await Promise.all([waitForHmrConnection(page, "#preview"), waitForHmrConnection(tab)]);
+        const documentId = await tab.evaluate(() => {
+          globalThis.__hmrDocumentId = crypto.randomUUID();
+          return globalThis.__hmrDocumentId;
+        });
         await setFile("src/App.tsx", [["Fixed it", "From another tab"]]);
         await tab.locator("h1", { hasText: "From another tab" }).waitFor({ timeout: STEP_MS });
         await app.locator("h1", { hasText: "From another tab" }).waitFor({ timeout: STEP_MS });
+        if (await tab.evaluate(() => globalThis.__hmrDocumentId) !== documentId) throw new Error("Preview tab replaced its document instead of applying HMR");
         await setFile("src/App.tsx", [["From another tab", "Fixed it"]]);
         await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
       } finally {

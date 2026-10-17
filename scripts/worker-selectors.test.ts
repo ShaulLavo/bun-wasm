@@ -12,7 +12,6 @@ function workerModule(self: boolean) {
   const stop = new Error("channel opened");
   const factory = runInNewContext(source, {
     EventTarget, Event, MessageEvent, DOMException, URL, structuredClone,
-    setImmediate() {},
   });
   const process = {
     env: self ? { BUNWASM_WORKER_INIT: JSON.stringify({
@@ -30,6 +29,7 @@ function workerModule(self: boolean) {
     } },
   };
   const implementation = factory({
+    realTimers: { setImmediate() {} },
     native: { hostChildPipe: (pid: number, selector: number) => {
       calls.push([pid, selector]);
       return selector + 100;
