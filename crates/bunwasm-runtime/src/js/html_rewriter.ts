@@ -69,7 +69,6 @@
     onEndTag(callback: Callback) {
       if (!this.#rewrite) return this;
       if (typeof callback !== "function") throw new TypeError("Expected a function");
-      if (!this.canHaveContent) return this;
       const index = this.#rewrite.registerEndTag(callback, this);
       const replaced = this.call("onEndTag", "", undefined, index);
       if (replaced !== undefined) this.#rewrite.unregisterEndTag(replaced);
@@ -223,6 +222,7 @@
   class HTMLRewriter {
     #registrations: Registration[] = [];
     on(selector: unknown, handlers: unknown) {
+      if (selector == null) throw new TypeError("Expected string");
       const pattern = domString(selector);
       native.htmlValidateSelector(pattern);
       this.#registrations.push(registration(pattern, handlers));
@@ -233,10 +233,7 @@
       if (input instanceof Response) {
         if (input.bodyUsed) throw new TypeError("Response body already used");
         const rewrite = new Rewrite(this.#registrations.slice());
-        const headers = new Headers(input.headers);
-        const output = new Response(rewrite.stream(input), { status: input.status, statusText: input.statusText, headers });
-        internal.web.Response._setUrl(output, input.url);
-        return output;
+        return internal.web.Response._withBody(input, rewrite.stream(input));
       }
       if (typeof input === "string") return new TextDecoder().decode(new Rewrite(this.#registrations.slice()).sync(encoder.encode(input)));
       if (input instanceof ArrayBuffer) return new Rewrite(this.#registrations.slice()).sync(new Uint8Array(input)).buffer;

@@ -17,11 +17,13 @@
       const subject: unknown = Reflect.get(value, "subject");
       if (subject !== undefined && typeof subject !== "string") throw typeError("options.subject");
       if (subject !== undefined && subject !== "default" && subject !== "always" && subject !== "never") throw valueError("options.subject");
+      if (subject === "always") result |= 0x01;
       if (subject === "never") result |= 0x20;
-      for (const name of ["wildcards", "partialWildcards", "multiLabelWildcards", "singleLabelSubdomains"]) {
+      const options: [string, boolean, number][] = [["wildcards", false, 0x02], ["partialWildcards", false, 0x04], ["multiLabelWildcards", true, 0x08], ["singleLabelSubdomains", true, 0x10]];
+      for (const [name, enabled, bit] of options) {
         const flag: unknown = Reflect.get(value, name);
         if (flag !== undefined && typeof flag !== "boolean") throw typeError(`options.${name}`);
-        if (name === "wildcards" && flag === false) result |= 2;
+        if (flag === enabled) result |= bit;
       }
       return result;
     }
@@ -69,7 +71,7 @@
         this.#publicKey ??= keys.createPublicKey({ key: native.x509("publicKey", this.#data.raw), type: "spki", format: "der" });
         return this.#publicKey;
       }
-      get issuerCertificate(): X509Certificate | undefined { return this.checkIssued(this) ? this : undefined; }
+      get issuerCertificate(): X509Certificate | undefined { return undefined; }
       checkHost(name: unknown, options?: unknown) {
         if (typeof name !== "string") throw typeError("name");
         return native.x509("checkHost", this.#data.raw, name, flags(options));

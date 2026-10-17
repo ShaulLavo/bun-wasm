@@ -5,6 +5,9 @@ use crate::engine::{Args, NativeError, NativeResult, Record, Val};
 use crate::natives::Table;
 use bunwasm_crypto_sys::x509 as ffi;
 
+#[path = "x509_hostname.rs"]
+mod hostname;
+
 type Result<T> = std::result::Result<T, NativeError>;
 
 struct ErrorQueue;
@@ -210,36 +213,50 @@ impl Certificate {
         Ok(serial)
     }
 
+    fn check_host(&self, host: &[u8], flags: u32) -> Result<Option<String>> {
+        let mut critical = -1;
+        let decoded =
+            unsafe { ffi::X509_get_ext_d2i(self.p(), 85, &mut critical, ptr::null_mut()) };
+        let mut has_dns = false;
+        if let Some(value) = NonNull::new(decoded) {
+            let extension = DecodedExtension { nid: 85, value };
+            let stack = extension.value.as_ptr().cast::<ffi::Stack>();
+            for index in 0..unsafe { ffi::OPENSSL_sk_num(stack) } {
+                let entry =
+                    unsafe { ffi::OPENSSL_sk_value(stack, index) }.cast::<ffi::GeneralName>();
+                let mut kind = -1;
+                let name = unsafe { ffi::GENERAL_NAME_get0_value(entry, &mut kind) };
+                if kind != 2 {
+                    continue;
+                }
+                has_dns = true;
+                let bytes = asn1_bytes(name.cast());
+                if hostname::matches(&bytes, host, flags) {
+                    return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
+                }
+            }
+        } else if critical != -1 {
+            return Ok(None);
+        }
+        if flags & 0x20 != 0 || (has_dns && flags & 0x01 == 0) {
+            return Ok(None);
+        }
+        let subject = unsafe { ffi::X509_get_subject_name(self.p()) };
+        for (name, value) in name_pairs(subject)? {
+            if name == "CN" && hostname::matches(value.as_bytes(), host, flags) {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
+    }
+
     fn check_name(&self, kind: &str, value: &str, flags: u32) -> NativeResult {
         if value.contains('\0') {
             return Err(NativeError::type_error("Invalid certificate name")
                 .prop("code", "ERR_INVALID_ARG_VALUE"));
         }
         if kind == "checkHost" {
-            let mut peer = ptr::null_mut();
-            let result = unsafe {
-                ffi::X509_check_host(
-                    self.p(),
-                    value.as_ptr().cast(),
-                    value.len(),
-                    flags,
-                    &mut peer,
-                )
-            };
-            if result != 1 {
-                return Ok(Val::Undefined);
-            }
-            let matched = if peer.is_null() {
-                value.to_owned()
-            } else {
-                unsafe { CStr::from_ptr(peer) }
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            unsafe {
-                ffi::OPENSSL_free(peer.cast());
-            }
-            return Ok(matched.into());
+            return Ok(self.check_host(value.as_bytes(), flags)?.into());
         }
         if kind == "checkEmail" {
             let matched = unsafe {
@@ -451,6 +468,14 @@ fn oid_text(object: *const ffi::Asn1Object) -> String {
 }
 
 fn name_entries(name: *const ffi::Name) -> Result<Val> {
+    Ok(name_pairs(name)?
+        .into_iter()
+        .map(|(name, value)| Val::Array(vec![name.into(), value.into()]))
+        .collect::<Vec<_>>()
+        .into())
+}
+
+fn name_pairs(name: *const ffi::Name) -> Result<Vec<(String, String)>> {
     let mut entries = Vec::new();
     for index in 0..unsafe { ffi::X509_NAME_entry_count(name) } {
         let entry = unsafe { ffi::X509_NAME_get_entry(name, index) };
@@ -470,9 +495,9 @@ fn name_entries(name: *const ffi::Name) -> Result<Val> {
         unsafe {
             ffi::OPENSSL_free(utf8.cast());
         }
-        entries.push(Val::Array(vec![object_name(object).into(), value.into()]));
+        entries.push((object_name(object), value));
     }
-    Ok(entries.into())
+    Ok(entries)
 }
 
 fn verify(cert: &Certificate, bytes: &[u8]) -> NativeResult {
