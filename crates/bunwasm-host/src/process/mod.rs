@@ -462,6 +462,7 @@ mod tests {
         assert_eq!(processes.wait(id), AGAIN);
         assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
 
+        assert_eq!(cancel.signal(15, 2), 0);
         assert!(cancel.kill(15));
         let outcome = cancel.select(FinalOutcome::Exit(143));
         for signal in [15, 9] {

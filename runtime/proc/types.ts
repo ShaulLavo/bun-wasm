@@ -19,6 +19,7 @@ export interface SpawnReservation {
   job?: number;
   interrupt?: Int32Array | SharedArrayBuffer;
   requestedSignal?: Int32Array | SharedArrayBuffer;
+  signalState?: Int32Array | SharedArrayBuffer;
   outcome?: BigInt64Array | SharedArrayBuffer;
 }
 export interface ProcessHandle {
@@ -33,10 +34,12 @@ export interface ProcessContext {
   readonly module: WebAssembly.Module;
   readonly adapter: string;
   readonly descriptors: DescriptorTable;
-  /** Guest checkpoints consume this word with Atomics.exchange(word, 0, 0). */
+  /** Wake hint only; signal identity and pending delivery live in signalState. */
   readonly interrupt: Int32Array;
   /** Unlike interrupt, this word preserves the last requested signal after a checkpoint. */
   readonly requestedSignal: Int32Array;
+  /** Shared per-signal disposition and pending cells, indexed by signal number. */
+  readonly signalState: Int32Array;
   /** Shared immutable terminal outcome, atomically arbitrated with synchronous parent stubs. */
   readonly outcome: BigInt64Array;
   exit(code: number): void;
@@ -52,7 +55,8 @@ export interface ChildExitEvent {
   readonly result: ProcessExit;
 }
 export class ProcessError extends Error {
-  constructor(public readonly errno: number, message: string) { super(message); this.name = "ProcessError"; }
+  readonly errno: number;
+  constructor(errno: number, message: string) { super(message); this.errno = errno; this.name = "ProcessError"; }
 }
 export const ProcessErrno = Object.freeze({ AGAIN: 6, BADF: 8, CHILD: 12, INVAL: 28, SRCH: 71 });
 export function checkedSignal(signal: number): ProcessSignal {

@@ -4,7 +4,8 @@ import { SubprocessHost, childTransport, type ChildTransport } from "../src/subp
 import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "../../runtime/fs";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { SpawnRequest } from "../src/worker";
-import { claimOutcome, outcomeWord } from "../../runtime/proc/outcome";
+import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
+import { createSignalState, setSignalDisposition, takeSignal } from "../../runtime/proc/signals";
 
 function fixture(activate?: () => Promise<typeof import("../../runtime/proc")>) {
   const revoked: number[] = [];
@@ -62,7 +63,7 @@ test("disposing during delayed activation revokes pending children without start
 });
 
 const fixtureModule = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-function liveFixture(options: { quiesce?: () => Promise<void>; postFailure?: boolean } = {}) {
+function liveFixture(options: { quiesce?: () => Promise<void>; postFailure?: boolean; activate?: () => Promise<typeof import("../../runtime/proc")>; root?: import("../../runtime/proc").RootProcessOptions } = {}) {
   const originalWorker = globalThis.Worker;
   const workers = new Map<number, FakeWorker>();
   class FakeWorker {
@@ -83,22 +84,23 @@ function liveFixture(options: { quiesce?: () => Promise<void>; postFailure?: boo
     revoke(identity: FilesystemIdentity) { revokeFilesystem(identity); }, reap() {},
     async quiesce(identity: FilesystemIdentity) { quiescences++; revokeFilesystem(identity); await options.quiesce?.(); },
   } as unknown as SharedFilesystem;
-  const broker = new SubprocessBroker("http://localhost/worker.js", filesystem);
+  const broker = new SubprocessBroker("http://localhost/worker.js", filesystem, { activate: options.activate, root: options.root });
   broker.register("fixture", { module: fixtureModule, adapter: "preview1" });
   const transports = new Map<number, ChildTransport>();
   const hosts: SubprocessHost[] = [];
-  function hostFor(parent?: ChildTransport) {
+  function hostFor(parent?: ChildTransport, capture?: (request: SpawnRequest) => void) {
     const host = new SubprocessHost({
       budget: parent?.budget, identity: parent?.identity, pid: parent?.pid, jobId: parent?.jobId,
       slot: parent?.slot, token: parent?.token, output() {},
       onChildClose: (pid: number) => broker.close(parent?.pid ?? 1, pid),
       launch(meta, value) {
         transports.set(value.pid, value);
-        broker.spawn({
+        const request: SpawnRequest = {
           executable: "fixture", argv: meta.argv, cwd: "/", env: meta.env ?? {},
           pid: value.pid, parentPid: value.parentPid, jobId: value.jobId, job: meta.job,
           filesystem: createFilesystemIdentity(), child: value, trace: false, spawnBroker: true,
-        });
+        };
+        if (capture) capture(request); else broker.spawn(request);
         return { terminate() {} };
       },
     });
@@ -128,12 +130,17 @@ test("broker observes each guest signal without replaying an interrupt consumed 
   const state = liveFixture();
   try {
     await state.started(state.pid);
-    const interrupt = new Int32Array(state.transports.get(state.pid)!.interrupt);
+    const transport = state.transports.get(state.pid)!;
+    const signalState = createSignalState(transport.signalState);
+    setSignalDisposition(signalState, 2, 2);
+    const interrupt = new Int32Array(transport.interrupt);
     for (let request = 0; request < 2; request++) {
       expect(state.host.kill(state.pid, 2)).toBe(0);
       expect(Atomics.exchange(interrupt, 0, 0)).toBe(2);
+      expect(takeSignal(signalState)).toBe(2);
       await timerTurn();
       expect(Atomics.exchange(interrupt, 0, 0)).toBe(0);
+      expect(takeSignal(signalState)).toBe(0);
       expect(state.host.wait(state.pid)).toBe(-2);
     }
     state.workers.get(state.pid)!.exit(0);
@@ -146,6 +153,9 @@ test("direct broker kill and job kill publish once without a later watcher repla
   try {
     await state.started(state.pid);
     const transport = state.transports.get(state.pid)!;
+    const signalState = createSignalState(transport.signalState);
+    setSignalDisposition(signalState, 2, 2);
+    setSignalDisposition(signalState, 15, 2);
     const interrupt = new Int32Array(transport.interrupt);
     await state.broker.kill(state.pid, 2);
     expect(Atomics.exchange(interrupt, 0, 0)).toBe(2);
@@ -412,3 +422,162 @@ for (const kind of ["exited", "signaled"] as const) {
     } finally { state.dispose(); }
   });
 }
+
+function rootWords() {
+  return { pid: 1, job: 1, signalState: createSignalState().buffer as SharedArrayBuffer,
+    interrupt: new SharedArrayBuffer(4), requestedSignal: new SharedArrayBuffer(4), outcome: new SharedArrayBuffer(8) };
+}
+
+test("root job signaling is synchronous without activating the lazy process service", async () => {
+  const root = rootWords();
+  let activated = 0;
+  const broker = new SubprocessBroker("http://localhost/worker.js", {} as SharedFilesystem, {
+    root, activate: async () => { activated++; return import("../../runtime/proc"); },
+  });
+  try {
+    const delivered = broker.killJob(1, 2);
+    expect(readOutcome(outcomeWord(root.outcome))).toEqual({ kind: "signaled", code: 2, status: 130 });
+    expect(activated).toBe(0);
+    await delivered;
+    expect(activated).toBe(0);
+  } finally { broker.dispose(); }
+});
+
+test("lazy activation adopts the root words without resetting or replaying consumed HANDLE", async () => {
+  const root = rootWords();
+  const signalState = createSignalState(root.signalState);
+  setSignalDisposition(signalState, 2, 2);
+  const broker = new SubprocessBroker("http://localhost/worker.js", {} as SharedFilesystem, { root });
+  try {
+    await broker.killJob(1, 2);
+    expect(takeSignal(signalState)).toBe(2);
+    const supervisor = await broker.ready();
+    const record = supervisor.get(1)!;
+    expect(record.signalState.buffer).toBe(root.signalState);
+    expect(record.interrupt.buffer).toBe(root.interrupt);
+    expect(record.requestedSignal.buffer).toBe(root.requestedSignal);
+    expect(record.outcome.buffer).toBe(root.outcome);
+    expect(takeSignal(record.signalState)).toBe(0);
+    expect(readOutcome(record.outcome)).toBeNull();
+  } finally { broker.dispose(); }
+});
+
+test("job signaling preclaims every default member before revocation and leaves HANDLE/IGNORE alive", async () => {
+  let state!: ReturnType<typeof liveFixture>;
+  let secondDefault = 0;
+  let reentered = false;
+  state = liveFixture({ quiesce: async () => {
+    if (reentered || !secondDefault) return;
+    reentered = true;
+    expect(readOutcome(outcomeWord(state.transports.get(secondDefault)!.outcome))).toEqual({ kind: "signaled", code: 2, status: 130 });
+    state.workers.get(secondDefault)!.exit(0);
+  } });
+  try {
+    const supervisor = await state.started(state.pid);
+    const job = state.transports.get(state.pid)!.jobId;
+    const handled = state.host.spawn(JSON.stringify({ argv: ["fixture"], job }));
+    const ignored = state.host.spawn(JSON.stringify({ argv: ["fixture"], job }));
+    secondDefault = state.host.spawn(JSON.stringify({ argv: ["fixture"], job }));
+    for (const pid of [handled, ignored, secondDefault]) await state.started(pid);
+    const handledState = createSignalState(state.transports.get(handled)!.signalState);
+    const ignoredState = createSignalState(state.transports.get(ignored)!.signalState);
+    setSignalDisposition(handledState, 2, 2);
+    setSignalDisposition(ignoredState, 2, 1);
+    const delivered = state.broker.killJob(job, 2);
+    expect(state.host.wait(state.pid)).toBe(130);
+    expect(state.host.wait(secondDefault)).toBe(130);
+    expect(state.host.wait(handled)).toBe(-2);
+    expect(state.host.wait(ignored)).toBe(-2);
+    expect(takeSignal(handledState)).toBe(2);
+    expect(takeSignal(ignoredState)).toBe(0);
+    await delivered;
+    expect(reentered).toBe(true);
+    await timerTurn();
+    expect(takeSignal(handledState)).toBe(0);
+    expect(supervisor.get(handled)!.result).toBeNull();
+    expect(supervisor.get(ignored)!.result).toBeNull();
+    state.workers.get(handled)!.exit(23);
+    state.workers.get(ignored)!.exit(0);
+    // Root DEFAULT has already made these children orphans; shared guest handles still own
+    // their immutable results even though the page controller reaps unowned metadata.
+    expect(state.host.wait(handled)).toBe(23);
+    expect(state.host.wait(ignored)).toBe(0);
+  } finally { state.dispose(); }
+});
+
+test("previously admitted children survive lazy activation after root default according to their jobs", async () => {
+  let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const root = rootWords();
+  const state = liveFixture({ root, activate: async () => { await barrier; return import("../../runtime/proc"); } });
+  try {
+    const background = state.host.spawn(JSON.stringify({ argv: ["fixture"], job: -1 }));
+    const delivered = state.broker.killJob(1, 2);
+    expect(readOutcome(outcomeWord(root.outcome))?.status).toBe(130);
+    expect(state.host.wait(state.pid)).toBe(130);
+    expect(state.host.wait(background)).toBe(-2);
+    state.broker.rootExit(130);
+    release();
+    await delivered;
+    const supervisor = await state.started(background);
+    expect(state.workers.has(state.pid)).toBe(false);
+    expect(state.workers.has(background)).toBe(true);
+    expect(supervisor.get(background)!.result).toBeNull();
+    state.workers.get(background)!.exit(42);
+    expect(state.host.wait(background)).toBe(42);
+  } finally { release(); state.dispose(); }
+});
+
+for (const signal of [2, 9, 13, 15]) {
+  test(`child dispatch rejects queued spawn after fatal ${signal} selection before revocation`, async () => {
+    const state = liveFixture();
+    try {
+      const supervisor = await state.started(state.pid);
+      let request!: SpawnRequest;
+      const transport = state.transports.get(state.pid)!;
+      const nested = state.hostFor(transport, value => { request = value; });
+      const pid = nested.spawn(JSON.stringify({ argv: ["fixture"], job: -1 }));
+      expect(pid).toBeGreaterThan(state.pid);
+      claimOutcome(outcomeWord(transport.outcome), { kind: "signaled", code: signal });
+      state.workers.get(state.pid)!.onmessage?.({ data: { type: "spawn", request } } as MessageEvent);
+      expect(nested.wait(pid)).toBe(137);
+      expect(readOutcome(outcomeWord(request.child.outcome))).toEqual({ kind: "signaled", code: 9, status: 137 });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(supervisor.get(pid)).toBeUndefined();
+      expect(state.workers.has(pid)).toBe(false);
+    } finally { state.dispose(); }
+  });
+}
+
+test("child dispatch admits a live parent's queued independent spawn", async () => {
+  const state = liveFixture();
+  try {
+    await state.started(state.pid);
+    let request!: SpawnRequest;
+    const nested = state.hostFor(state.transports.get(state.pid)!, value => { request = value; });
+    const pid = nested.spawn(JSON.stringify({ argv: ["fixture"], job: -1 }));
+    state.workers.get(state.pid)!.onmessage?.({ data: { type: "spawn", request } } as MessageEvent);
+    const supervisor = await state.started(pid);
+    expect(supervisor.get(pid)!.state).toBe("running");
+    state.workers.get(pid)!.exit(23);
+    expect((await state.broker.wait(pid)).status).toBe(23);
+  } finally { state.dispose(); }
+});
+
+test("child dispatch rejects queued close after fatal selection before revocation", async () => {
+  const state = liveFixture();
+  try {
+    const supervisor = await state.started(state.pid);
+    const transport = state.transports.get(state.pid)!;
+    const nested = state.hostFor(transport);
+    const background = nested.spawn(JSON.stringify({ argv: ["fixture"], job: -1 }));
+    await state.started(background);
+    claimOutcome(outcomeWord(transport.outcome), { kind: "signaled", code: 15 });
+    state.workers.get(state.pid)!.onmessage?.({ data: { type: "child-close", parentPid: state.pid, pid: background } } as MessageEvent);
+    await Promise.resolve();
+    expect(supervisor.get(background)!.result).toBeNull();
+    expect(readOutcome(outcomeWord(state.transports.get(background)!.outcome))).toBeNull();
+    state.workers.get(background)!.exit(23);
+  } finally { state.dispose(); }
+});

@@ -86,13 +86,14 @@ try {
         await s.broker.kill(child.transport.pid, signal!);
         await exit(child, status!);
         const result = await recorded;
-        equal(result.kind, "signaled", "signal outcome kind"); equal(result.code, signal, "recorded signal survives explicit default trap");
+        equal(result.kind, "signaled", "signal outcome kind"); equal(result.code, signal, "unregistered signal is claimed by the supervisor");
+        equal(Atomics.load(new Int32Array(child.transport.signalState), signal!), 0, "default signal never becomes pending handled work");
         truth(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0) !== 0, "signal default action revokes filesystem access");
       } finally { s.dispose(); }
     });
   }
-  await test("handled-EPIPE-keeps-own-exit-42-not-SIGPIPE-141", async () => {
-    const s = scope({ epipe: { module: module("epipe"), adapter: "preview1" } });
+  for (const mode of ["epipe", "epipe-ignored"] as const) await test(`${mode}-keeps-own-exit-42-not-SIGPIPE-141`, async () => {
+    const s = scope({ epipe: { module: module(mode), adapter: "preview1" } });
     try {
       const child = s.spawn("epipe");
       // Close before async activation, guaranteeing the guest's ordinary fd_write sees EPIPE.
@@ -101,12 +102,52 @@ try {
       equal((await recorded).kind, "exited", "handled EPIPE is not default SIGPIPE"); equal(child.stderr, "", "handled EPIPE stderr");
     } finally { s.dispose(); }
   });
-  await test("handled-INT-keeps-own-exit-zero", async () => {
-    const s = scope({ handled: { module: module("handled"), adapter: "preview1" } });
+  for (const [mode, signal, status] of [["handled", 2, 0], ["handled-term", 15, 0], ["handled-term-23", 15, 23], ["handled-term-143", 15, 143], ["handled-pipe", 13, 42]] as const) {
+    await test(`${mode}-signal-${signal}-keeps-own-exit-${status}`, async () => {
+      const s = scope({ handled: { module: module(mode), adapter: "preview1" } });
+      try {
+        const child = s.spawn("handled"); await ready(child); const recorded = s.broker.wait(child.transport.pid);
+        equal(Atomics.load(new Int32Array(child.transport.signalState), signal), 2, "handler registered before readiness");
+        await s.broker.kill(child.transport.pid, signal); await exit(child, status);
+        const result = await recorded;
+        equal(result.kind, "exited", "handled signal preserves ordinary exit kind"); equal(result.code, status, "own exit code is not inferred to be a signal");
+      } finally { s.dispose(); }
+    });
+  }
+  await test("ignored-PIPE-never-pends-or-revokes-and-guest-keeps-own-zero", async () => {
+    const s = scope({ ignored: { module: module("ignored-pipe"), adapter: "preview1" } });
     try {
-      const child = s.spawn("handled"); await ready(child); const recorded = s.broker.wait(child.transport.pid);
+      const child = s.spawn("ignored"); await ready(child);
+      const interruptBefore = Atomics.load(new Int32Array(child.transport.interrupt), 0);
+      await s.broker.kill(child.transport.pid, 13);
+      equal(Atomics.load(new Int32Array(child.transport.signalState), 13), 1, "ignored PIPE has no pending bit");
+      equal(Atomics.load(new Int32Array(child.transport.interrupt), 0), interruptBefore, "ignored PIPE does not request an interrupt wake");
+      equal(child.host.wait(child.handle), -2, "ignored PIPE leaves guest alive");
+      equal(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "ignored PIPE does not revoke filesystem");
+      const recorded = s.broker.wait(child.transport.pid);
       await s.broker.kill(child.transport.pid, 2); await exit(child, 0);
-      equal((await recorded).kind, "exited", "catchable signal can be handled");
+      equal((await recorded).kind, "exited", "ignored PIPE cannot overwrite later ordinary exit");
+    } finally { s.dispose(); }
+  });
+  await test("last-handler-removal-restores-default-for-next-INT", async () => {
+    const s = scope({ once: { module: module("removed"), adapter: "preview1" } });
+    try {
+      const child = s.spawn("once"); await ready(child);
+      await s.broker.kill(child.transport.pid, 2);
+      await until(() => { drain(child); return child.stdout.includes("handling\n"); }, "once handler removed acknowledgement");
+      equal(Atomics.load(new Int32Array(child.transport.signalState), 2), 0, "last removal resets disposition and clears consumed pending");
+      equal(child.host.wait(child.handle), -2, "removal cannot reinterpret already consumed first signal");
+      const recorded = s.broker.wait(child.transport.pid);
+      await s.broker.kill(child.transport.pid, 2); await exit(child, 130);
+      equal((await recorded).kind, "signaled", "second INT applies restored default");
+    } finally { s.dispose(); }
+  });
+  await test("explicit-default-signal-remains-typed-signal-outcome", async () => {
+    const s = scope({ explicit: { module: module("explicit-default"), adapter: "preview1" } });
+    try {
+      const child = s.spawn("explicit"); await ready(child); const recorded = s.broker.wait(child.transport.pid);
+      await s.broker.kill(child.transport.pid, 2); await exit(child, 130);
+      const result = await recorded; equal(result.kind, "signaled", "explicit default trap is typed"); equal(result.code, 2, "explicit default signal");
     } finally { s.dispose(); }
   });
   await test("handled-INT-then-unrelated-trap-not-signal-default", async () => {
@@ -123,13 +164,37 @@ try {
       const child = s.spawn("handler"); await ready(child);
       equal(child.host.kill(child.handle, 2), 0, "guest SubprocessHost.kill publishes the shared request");
       await until(() => { drain(child); return child.stdout.includes("handling\n"); }, "signal handler output");
-      // The broker watcher must observe, not redeliver, the same shared pending signal.
-      for (let tick = 0; tick < 5; tick++) await pause();
-      drain(child); equal(child.stdout.split("handling\n").length - 1, 1, "one INT request is delivered exactly once");
+      // The acknowledgement proves dequeue completed; no arbitrary delay is needed.
+      equal(Atomics.load(new Int32Array(child.transport.signalState), 2), 2, "INT pending bit was consumed, disposition remains handled");
       equal(child.host.wait(child.handle), -2, "catchable INT must not force termination");
       equal(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "handled INT must not revoke");
       const recorded = s.broker.wait(child.transport.pid); await s.broker.kill(child.transport.pid, 9); await exit(child, 137);
       equal((await recorded).code, 9, "KILL overrides an in-progress handler");
+      equal(child.stdout.split("handling\n").length - 1, 1, "broker observation never redelivers a consumed INT request");
+    } finally { s.dispose(); }
+  });
+  await test("mixed-job-members-apply-their-own-default-handled-ignored-dispositions", async () => {
+    const s = scope({ active: { module: module("handling"), adapter: "preview1" }, unhandled: { module: module("default"), adapter: "preview1" }, ignored: { module: module("ignored-int"), adapter: "preview1" } });
+    try {
+      const parent = s.spawn("active", { job: 0 }); await ready(parent);
+      const unhandled = s.spawn("unhandled", {}, parent), ignored = s.spawn("ignored", {}, parent);
+      await Promise.all([ready(unhandled), ready(ignored)]);
+      equal(unhandled.transport.jobId, parent.transport.jobId, "default child shares foreground job");
+      equal(ignored.transport.jobId, parent.transport.jobId, "ignored child shares foreground job");
+      const unhandledExit = s.broker.wait(unhandled.transport.pid);
+      await s.broker.killJob(parent.transport.jobId, 2);
+      await exit(unhandled, 130);
+      await until(() => { drain(parent); return parent.stdout.includes("handling\n"); }, "mixed job handled acknowledgement");
+      equal((await unhandledExit).kind, "signaled", "default member exits on INT");
+      equal(parent.host.wait(parent.handle), -2, "handled member remains alive");
+      equal(ignored.host.wait(ignored.handle), -2, "ignored member remains alive");
+      equal(Atomics.load(new Int32Array(ignored.transport.signalState), 2), 1, "ignored member never queues INT");
+      for (const child of [parent, ignored]) equal(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "nondefault member keeps filesystem capability");
+      const remaining = Promise.all([s.broker.wait(parent.transport.pid), s.broker.wait(ignored.transport.pid)]);
+      await s.broker.killJob(parent.transport.jobId, 9);
+      for (const result of await remaining) { equal(result.kind, "signaled", "KILL ignores member dispositions"); equal(result.status, 137, "KILL member status"); }
+      await exit(parent, 137);
+      equal((await unhandledExit).status, 130, "later job KILL cannot overwrite completed INT outcome");
     } finally { s.dispose(); }
   });
   await test("delayed-first-activation-does-not-block-other-shell-task", async () => {

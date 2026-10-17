@@ -1,9 +1,8 @@
 import { spawnSync } from "node:child_process";
 
-// Native uses its real TERM interruption; the cooperative Node adapter needs explicit KILL.
-const nodeHost = process.env.BUNWASM_TEST_HOST === "node";
-const stopSignal = nodeHost ? "SIGKILL" : "SIGTERM";
-const stopStatus = nodeHost ? 137 : 143;
+// Every host takes the POSIX default action for an unhandled TERM.
+const stopSignal = "SIGTERM";
+const stopStatus = 143;
 const cmd = (code) => [process.execPath, "-e", code];
 const large = Bun.spawnSync(cmd("process.stdout.write('x'.repeat(1200000)); process.stderr.write('y'.repeat(1200000))"));
 console.log("large output", large.exitCode, large.stdout.length, large.stderr.length);

@@ -2,10 +2,10 @@ import { spawn, spawnSync, exec, execSync, execFile, execFileSync, fork } from "
 import { promisify } from "node:util";
 import { readFileSync, mkdirSync } from "node:fs";
 
-// The harness deliberately names its adapter; native TERM is a default action, Node TERM is cooperative.
+// The harness names its adapter only for executable-registry error behavior.
 const nodeHost = process.env.BUNWASM_TEST_HOST === "node";
-const stopSignal = nodeHost ? "SIGKILL" : "SIGTERM";
-const stopStatus = nodeHost ? 137 : 143;
+const stopSignal = "SIGTERM";
+const stopStatus = 143;
 const command = [process.execPath, "-e"];
 const sync = Bun.spawnSync(command.concat(["console.log(process.env.CHILD_VALUE); console.error('error'); process.exit(7)"]), {
   env: { CHILD_VALUE: "child-env" },

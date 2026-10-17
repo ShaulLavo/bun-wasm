@@ -323,6 +323,7 @@ mod tests {
     #[test]
     fn explicit_exit_143_is_not_a_requested_term() {
         let cancel = Cancellation::default();
+        assert_eq!(cancel.signal(15, 2), 0);
         assert!(cancel.kill(15));
         assert_eq!(select_instance_outcome(Err(I32Exit(143).into()), &cancel), FinalOutcome::Exit(143));
         assert!(!cancel.kill(9));
@@ -344,10 +345,30 @@ mod tests {
     }
 
     #[test]
-    fn pending_term_does_not_relabel_an_unrelated_trap() {
+    fn handled_term_does_not_relabel_an_unrelated_trap() {
         let cancel = Cancellation::default();
+        assert_eq!(cancel.signal(15, 2), 0);
         assert!(cancel.kill(15));
         assert_eq!(select_instance_outcome(Err(anyhow::anyhow!("unreachable")), &cancel), FinalOutcome::Exit(134));
+    }
+
+    #[test]
+    fn default_int_preserves_signal_kind_even_if_guest_returns_zero() {
+        let cancel = Cancellation::default();
+        assert!(cancel.kill(2));
+        let outcome = select_instance_outcome(Err(I32Exit(0).into()), &cancel);
+        assert_eq!(outcome, FinalOutcome::Signal(2));
+        assert_eq!(outcome.code(), 130);
+    }
+
+    #[test]
+    fn handled_int_preserves_the_guests_own_zero_exit() {
+        let cancel = Cancellation::default();
+        assert_eq!(cancel.signal(2, 2), 0);
+        assert!(cancel.kill(2));
+        assert!(cancel.check().is_ok());
+        assert_eq!(cancel.signal(0, 0), 2);
+        assert_eq!(select_instance_outcome(Err(I32Exit(0).into()), &cancel), FinalOutcome::Exit(0));
     }
 
     #[test]

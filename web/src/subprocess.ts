@@ -3,6 +3,7 @@ import type { EngineNet } from "./net/host";
 import type { SlotImpls } from "./net/trampoline";
 import { ProcessIdentityAllocator } from "../../runtime/proc/identity.ts";
 import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
+import { createSignalState, publishSignal, requestSignal, setSignalDisposition, takeSignal } from "../../runtime/proc/signals.ts";
 import { memoryViews } from "../../runtime/core/memory-views.js";
 
 export interface SpawnMeta {
@@ -22,6 +23,7 @@ export interface ChildTransport {
   identity: SharedArrayBuffer;
   interrupt: SharedArrayBuffer;
   requestedSignal: SharedArrayBuffer;
+  signalState: SharedArrayBuffer;
   outcome: SharedArrayBuffer;
   budget: SharedArrayBuffer;
   slot: number;
@@ -43,6 +45,12 @@ export interface SubprocessOptions {
   slot?: number;
   token?: number;
   stdin?: SharedArrayBuffer;
+  /** Current process dispositions and pending signals; never inherited by a new child. */
+  signalState?: SharedArrayBuffer;
+  /** Adopt the current process's existing terminal decision for signal-entry checkpoints. */
+  outcome?: SharedArrayBuffer;
+  /** Synchronously apply a raised, selected, or newly unhandled fatal signal. */
+  defaultSignal?(signal: number): void;
   /** Shared process capability revocation, including roots without a budget slot. */
   revoked?(): boolean;
   onChildClose?(pid: number): void;
@@ -244,6 +252,7 @@ export class SubprocessHost {
   options: SubprocessOptions;
   budget: SharedArrayBuffer;
   identity: SharedArrayBuffer;
+  signalState: Int32Array;
   identities: ProcessIdentityAllocator;
   children: Map<number, Child>;
   handles: Map<number, { pipe: SharedPipe; fd: number; child: number }>;
@@ -258,6 +267,7 @@ export class SubprocessHost {
   private detached = false;
   constructor(options: SubprocessOptions) {
     this.options = options;
+    this.signalState = createSignalState(options.signalState);
     this.budget = options.budget || createProcessBudget();
     this.identities = new ProcessIdentityAllocator(options.identity);
     this.identity = this.identities.buffer;
@@ -275,6 +285,19 @@ export class SubprocessHost {
     this.stdinWaiting = false;
   }
   attach(memory: WebAssembly.Memory) { this.memory = memoryViews(memory); }
+  private fatalSignal(): number {
+    const outcome = this.options.outcome;
+    const winner = outcome === undefined ? null : readOutcome(outcomeWord(outcome));
+    return winner?.kind === "signaled" ? winner.code : 0;
+  }
+  /** Admit guest capability use against the existing current-process terminal decision. */
+  private admit(): boolean {
+    const signal = this.fatalSignal();
+    if (signal === 0) return true;
+    // Keep the default callback outside guest-input catches; production callbacks terminate.
+    this.options.defaultSignal?.(signal);
+    return false;
+  }
   fail(message: string, code: string) {
     this.lastError = JSON.stringify({ name: "Error", message, code });
     return -1;
@@ -306,6 +329,7 @@ export class SubprocessHost {
     releaseProcessSlot({ budget: this.budget, slot, token });
   }
   spawn(text: string) {
+    if (!this.admit()) return -1;
     let meta: SpawnMeta;
     try { meta = JSON.parse(text); } catch { return this.fail("spawn: invalid metadata", "EINVAL"); }
     if (!meta || typeof meta !== "object") return this.fail("spawn: invalid metadata", "EINVAL");
@@ -337,7 +361,8 @@ export class SubprocessHost {
     }
     const transport: ChildTransport = {
       pid: id, parentPid: this.options.pid ?? 1, jobId, identity: this.identity,
-      interrupt: new SharedArrayBuffer(4), requestedSignal: new SharedArrayBuffer(4), outcome: new SharedArrayBuffer(8),
+      interrupt: new SharedArrayBuffer(4), requestedSignal: new SharedArrayBuffer(4),
+      signalState: createSignalState().buffer as SharedArrayBuffer, outcome: new SharedArrayBuffer(8),
       budget: this.budget, slot, token, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16),
     };
     const pipes = transport.pipes.map((buffer) => new SharedPipe(buffer, this.budget));
@@ -367,6 +392,7 @@ export class SubprocessHost {
     this.notify();
   }
   pipe(id: number, fd: number) {
+    if (!this.admit()) return -1;
     if (fd === CHILD_FINAL_SIGNAL && !this.parentActive(new Int32Array(this.budget))) return this.fail("child outcome: process is no longer active", "ESRCH");
     const child = this.children.get(id);
     if (!child) return BADF;
@@ -378,6 +404,7 @@ export class SubprocessHost {
     return fd >= 0 && fd <= 2 ? (child.handles[fd] ?? BADF) : BADF;
   }
   read(handle: number, cap = 65536) {
+    if (!this.admit()) return -1;
     if (handle === 0) {
       const value = this.stdin ? this.stdin.read(cap) : -4;
       this.stdinWaiting = value === AGAIN;
@@ -388,6 +415,7 @@ export class SubprocessHost {
     return h && h.fd !== 0 ? h.pipe.read(cap) : BADF;
   }
   write(handle: number, bytes: Uint8Array) {
+    if (!this.admit()) return -1;
     const h = this.handles.get(handle);
     if (!h || h.fd !== 0) return BADF;
     const result = h.pipe.write(bytes);
@@ -398,6 +426,7 @@ export class SubprocessHost {
     return -1;
   }
   close(handle: number) {
+    if (!this.admit()) return -1;
     if (this.children.has(handle)) {
       const result = this.kill(handle, 9);
       if (result < 0) return result;
@@ -412,6 +441,10 @@ export class SubprocessHost {
     return 0;
   }
   wait(id: number) {
+    if (!this.admit()) return -1;
+    return this.waitAdmitted(id);
+  }
+  private waitAdmitted(id: number) {
     if (!this.parentActive(new Int32Array(this.budget))) return this.fail("wait: process is no longer active", "ESRCH");
     return this.waitInternal(id);
   }
@@ -439,7 +472,22 @@ export class SubprocessHost {
     this.children.delete(id);
     this.options.onChildClose?.(child.transport.pid);
   }
+  /** Current-process disposition, handled-pending dequeue, and mode 3 RAISE (Bun host slot 18). */
+  signal(signal: number, mode: number): number {
+    if (!this.admit()) return 0;
+    if (signal === 0) return mode === 0 ? takeSignal(this.signalState) : -22;
+    let applyDefault: boolean;
+    try {
+      applyDefault = mode === 3
+        ? publishSignal(this.signalState, signal) === "default"
+        : setSignalDisposition(this.signalState, signal, mode);
+    } catch { return -22; }
+    // Do not catch callback exceptions: applying the default can terminate the current guest.
+    if (applyDefault) this.options.defaultSignal?.(signal);
+    return 0;
+  }
   kill(id: number, signal = 15) {
+    if (!this.admit()) return -1;
     if (!this.parentActive(new Int32Array(this.budget))) return this.fail("kill: process is no longer active", "ESRCH");
     // This control operation was admitted alive; concurrent revocation may linearize afterward.
     return this.killInternal(id, signal);
@@ -450,30 +498,17 @@ export class SubprocessHost {
     if (![0, 2, 9, 13, 15].includes(signal)) return this.fail("kill: invalid signal", "EINVAL");
     if (this.waitInternal(id) !== AGAIN || signal === 0) return 0;
     const transport = child.transport;
-    const outcome = outcomeWord(transport.outcome);
-    const terminal = signal === 9 ? claimOutcome(outcome, { kind: "signaled", code: 9 }) : readOutcome(outcome);
-    if (terminal) {
-      if (terminal.kind !== "signaled" || terminal.code !== 9) return 0;
-      signal = 9;
-    }
-    const requested = new Int32Array(transport.requestedSignal);
-    for (;;) {
-      const previous = Atomics.load(requested, 0);
-      if (previous === 9) { signal = 9; break; }
-      if (Atomics.compareExchange(requested, 0, previous, signal) === previous) break;
-    }
-    const interrupt = new Int32Array(transport.interrupt);
-    for (;;) {
-      const pending = Atomics.load(interrupt, 0);
-      if (pending === 9 || Atomics.load(requested, 0) === 9) signal = 9;
-      if (Atomics.compareExchange(interrupt, 0, pending, signal) !== pending) continue;
-      // A page-side kill can win between publication to the two separate cells.
-      if (signal !== 9 && Atomics.load(requested, 0) === 9) { signal = 9; continue; }
-      break;
-    }
-    Atomics.notify(interrupt, 0);
-    wake(this.budget);
-    if (signal !== 9) return 0;
+    const result = requestSignal({
+      signalState: createSignalState(transport.signalState),
+      interrupt: new Int32Array(transport.interrupt),
+      requestedSignal: new Int32Array(transport.requestedSignal),
+      outcome: outcomeWord(transport.outcome),
+    }, signal);
+    if (result.action === "handled" || result.outcome?.kind === "signaled") wake(this.budget);
+    // The shared helper claims a default outcome before publishing any audit or wake word.
+    // Handled signals only wake the guest; its eventual ordinary exit remains authoritative.
+    if (result.outcome?.kind !== "signaled") return 0;
+    signal = result.outcome.code;
     child.worker?.revoke?.();
     Atomics.store(new Int32Array(transport.control), 3, 1);
     // Close this process's endpoints before physical teardown; inherited stdin is not ours.
@@ -483,6 +518,7 @@ export class SubprocessHost {
     return 0;
   }
   drainInherited(child: Child) {
+    if (this.fatalSignal() !== 0) return;
     for (const fd of [1, 2]) {
       if (child.modes[fd] === "pipe") continue;
       this.drainPipe(child, fd);
@@ -498,19 +534,25 @@ export class SubprocessHost {
     }
   }
   poll(timeout = 0) {
-    for (const id of this.children.keys()) this.wait(id);
+    if (!this.admit()) return -1;
+    return this.pollAdmitted(timeout);
+  }
+  private pollAdmitted(timeout = 0) {
+    for (const id of this.children.keys()) this.waitAdmitted(id);
     if (!timeout) return 0;
     const cells = new Int32Array(this.budget);
     const seen = Atomics.load(cells, 1);
     Atomics.wait(cells, 1, seen, timeout < 0 ? 4 : Math.min(timeout, 4));
-    for (const id of this.children.keys()) this.wait(id);
+    for (const id of this.children.keys()) this.waitAdmitted(id);
     return Atomics.load(cells, 1) !== seen ? 1 : 0;
   }
   watch() {
-    if (this.detached || this.timer !== null) return;
+    if (this.detached || this.timer !== null || this.fatalSignal() !== 0) return;
     this.timer = nativeSetTimeout(() => {
       this.timer = null;
-      this.poll();
+      // This host timer is not guest reentry: stop quietly rather than throwing a guest exit.
+      if (this.fatalSignal() !== 0) return;
+      this.pollAdmitted();
       this.notify();
       if (this.stdinWaiting || Array.from(this.children.values()).some((child) => !child.ended)) this.watch();
     }, 4);
@@ -535,20 +577,25 @@ export class SubprocessHost {
       if (name !== "hostError") this.lastError = null;
       return fn(...args);
     }]));
+    const natives: EngineNet["natives"] = {
+      ...fallback,
+      hostPoll: (timeout) => this.poll(timeout),
+      hostSpawn: (meta) => this.spawn(meta),
+      hostChildWait: (id) => this.wait(id),
+      hostChildPipe: (id, fd) => this.pipe(id, fd),
+      hostChildKill: (id, signal) => this.kill(id, signal),
+      hostSignal: (signal, mode) => this.signal(signal, mode),
+      hostRead: (id: number, cap?: number) => this.owns(id) || id === 0 ? this.read(id, cap) : fallback.hostRead?.(...([id, cap] as never[])) ?? BADF,
+      hostWrite: (id: number, bytes: Uint8Array) => this.owns(id) ? this.write(id, bytes) : fallback.hostWrite?.(...([id, bytes] as never[])) ?? BADF,
+      hostClose: (id: number) => this.owns(id) ? this.close(id) : fallback.hostClose?.(...([id] as never[])) ?? BADF,
+      hostError: (id) => this.pipeErrors.get(id) ?? (id === 0 && this.lastError ? this.lastError : (fallback.hostError?.(...([id] as never[])) ?? this.lastError ?? BADF)),
+    };
     return {
-      natives: {
-        ...fallback,
-        hostPoll: (timeout) => this.poll(timeout),
-        hostSpawn: (meta) => this.spawn(meta),
-        hostChildWait: (id) => this.wait(id),
-        hostChildPipe: (id, fd) => this.pipe(id, fd),
-        hostChildKill: (id, signal) => this.kill(id, signal),
-        hostRead: (id: number, cap?: number) => this.owns(id) || id === 0 ? this.read(id, cap) : fallback.hostRead?.(...([id, cap] as never[])) ?? BADF,
-        hostWrite: (id: number, bytes: Uint8Array) => this.owns(id) ? this.write(id, bytes) : fallback.hostWrite?.(...([id, bytes] as never[])) ?? BADF,
-        hostClose: (id: number) => this.owns(id) ? this.close(id) : fallback.hostClose?.(...([id] as never[])) ?? BADF,
-        hostError: (id) => this.pipeErrors.get(id) ?? (id === 0 && this.lastError ? this.lastError : (fallback.hostError?.(...([id] as never[])) ?? this.lastError ?? BADF)),
-      },
-      caps: { ...net?.caps, spawn: true, child_wait: true, child_pipe: true, child_kill: true, read: true, write: true, close: true, error: true },
+      natives: Object.fromEntries(Object.entries(natives).map(([name, fn]) => [name, (...args: never[]) => {
+        if (!this.admit()) return name === "hostSignal" ? 0 : -1;
+        return fn(...args);
+      }])),
+      caps: { ...net?.caps, spawn: true, child_wait: true, child_pipe: true, child_kill: true, signal: true, read: true, write: true, close: true, error: true },
       onNews: (cb) => { this.notify = cb; net?.onNews(cb); },
     };
   }
@@ -572,17 +619,22 @@ export class SubprocessHost {
       if (value.length <= cap) bytes(ptr, value.length).set(value);
       return value.length;
     };
-    return {
+    const impls: SlotImpls = {
       ...net,
       spawn: (ptr, len) => this.spawn(decode.decode(bytes(ptr, len).slice())),
       child_wait: (id) => this.wait(id),
       child_pipe: (id, fd) => this.pipe(id, fd),
       child_kill: (id, signal) => this.kill(id, signal),
+      signal: (signal, mode) => this.signal(signal, mode),
       read: (id, ptr, cap) => id === 0 || this.owns(id) ? read(id, ptr, cap) : (net.read?.(id, ptr, cap) ?? BADF),
       write: (id, ptr, len) => this.owns(id) ? this.write(id, bytes(ptr, len)) : (net.write?.(id, ptr, len) ?? BADF),
       close: (id) => this.owns(id) ? this.close(id) : (net.close?.(id) ?? BADF),
       error: (id, ptr, cap) => this.pipeErrors.has(id) || id === 0 && this.lastError ? error(id, ptr, cap) : (net.error?.(id, ptr, cap) ?? BADF),
       poll: (timeout) => { const news = net.poll?.(0) || 0; return this.poll(news ? 0 : timeout) || news; },
     };
+    return Object.fromEntries(Object.entries(impls).map(([name, fn]) => [name, (...args: number[]) => {
+      if (!this.admit()) return name === "signal" ? 0 : -1;
+      return fn(...args);
+    }]));
   }
 }

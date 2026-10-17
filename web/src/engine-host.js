@@ -376,8 +376,9 @@ class EngineHost {
     const host = this;
     return {
       exit(code) {
-        host.exit(code === undefined ? 0 : code | 0);
-        throw new ExitSignal(code);
+        const status = (code | 0) & 0xff;
+        host.exit(status);
+        throw new ExitSignal(status);
       },
       scheduleTick() {
         if (host.tickQueued) return;
@@ -820,6 +821,8 @@ class EngineHost {
   // then decide when to come back.
   pump() {
     if (this.exited) return;
+    this.guard(() => this.internal.pumpSignals(), false);
+    if (this.exited) return;
     if (this.testComplete) return this.finish();
     let next = this.guard(() => this.internal.runTimers(), 0);
     // Network handles (net.js waiters): step them; the networking host's
@@ -831,8 +834,14 @@ class EngineHost {
     if (this.exited) return;
     if (next >= 0 || this.pendingAsync > 0 || io > 0) this.idleWait = false;
     if (next === 0) return this.schedule(0);
-    if (next > 0) return this.schedule(next);
-    if (this.pendingAsync > 0 || io > 0) return undefined;
+    // A sender may be another worker, so shared pending signals do not necessarily post a
+    // message here. Only bound waits that already keep the guest alive; handlers alone must
+    // not create a timer or stop an otherwise idle program from finishing.
+    if (next > 0) return this.schedule(this.native.hostCaps.signal ? Math.min(next, 25) : next);
+    if (this.pendingAsync > 0 || io > 0) {
+      if (this.native.hostCaps.signal) this.schedule(25);
+      return undefined;
+    }
     return this.finish();
   }
 

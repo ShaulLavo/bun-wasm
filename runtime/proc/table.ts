@@ -9,6 +9,7 @@ export interface ProcessRecord {
   readonly descriptors: DescriptorTable;
   readonly interrupt: Int32Array;
   readonly requestedSignal: Int32Array;
+  readonly signalState: Int32Array;
   readonly outcome: BigInt64Array;
   readonly request: Readonly<SpawnRequest> | null;
   state: "reserved" | "starting" | "running" | "exited";

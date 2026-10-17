@@ -23,6 +23,8 @@ import { memoryViews } from "../../runtime/core/memory-views.js";
 import { SubprocessHost, childTransport, wasiPipe } from "../src/subprocess.ts";
 import { launchNodeExecutable } from "./node-spawn.ts";
 import { forwardOutput, writeStdio } from "./node-stdio.ts";
+import { createNodeSignalController } from "./node-signals.ts";
+import { installHostSlots } from "../src/net/trampoline.ts";
 
 // V8's stack limit also bounds wasm frames, and the main thread's (about 984 KB) is small. Every
 // guest, the top-level one included, runs in a Worker whose thread Node creates with this stack,
@@ -35,16 +37,21 @@ if (isMainThread) {
   const end = cli.indexOf("--");
   const at = cli.indexOf("--stack-mb");
   const stackMb = at >= 0 && (end < 0 || at < end) ? Number(cli[at + 1]) : STACK_MB;
+  const signals = createNodeSignalController();
   const guest = new Worker(new URL(import.meta.url), {
     argv: cli,
-    workerData: { bunwasmMain: true, stackMb },
+    workerData: { bunwasmMain: true, stackMb, rootSignals: signals.buffers },
     resourceLimits: { stackSizeMb: stackMb },
   });
   guest.on("error", (error) => {
     process.stderr.write(`node-host: ${error.stack || error}\n`);
     process.exitCode = 1;
   });
-  guest.on("exit", (code) => process.exit(process.exitCode || code));
+  guest.on("exit", (code) => process.exit(signals.finish(process.exitCode || code).status));
+  for (const [name, number] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]]) process.on(name, () => {
+    const result = signals.request(number);
+    if (result.action === "default") void guest.terminate();
+  });
 }
 
 // The runtime replaces globalThis.process with its own; keep Node's.
@@ -88,13 +95,19 @@ if (Object.keys(preopens).length === 0) {
 env.BUN_WASM_STACK_KIB ??= GUEST_STACK_KIB;
 
 const child = workerData?.bunwasmChild ? childTransport(workerData.transport) : null;
+const signals = isMainThread ? null : createNodeSignalController(workerData.bunwasmChild ? workerData.transport : workerData.rootSignals);
 let subprocess;
 let cliFetch;
-function finish(code) {
+function checkFatal() {
+  const selected = signals.selected();
+  if (selected?.kind === "signaled") finish(selected.status, selected.code);
+}
+function finish(code, signal) {
+  const selected = signals.finish(code, signal);
   cliFetch?.dispose();
   subprocess?.dispose();
-  child?.finish(code);
-  nodeProcess.exit(code);
+  child?.finish(selected.status, selected.kind === "signaled" ? selected.code : undefined);
+  nodeProcess.exit(selected.status);
 }
 
 function installStdio(imports, getInstance) {
@@ -110,6 +123,7 @@ function installStdio(imports, getInstance) {
     });
   };
   imports.wasi_snapshot_preview1.fd_read = (fd, ptr, count, result) => {
+    checkFatal();
     if (!child || fd !== 0 || workerData.meta.stdin === "inherit" && !workerData.transport.inheritedStdin) return originalRead(fd, ptr, count, result);
     const chunks = vectors(ptr, count);
     const bytes = child.stdin.readBlocking(chunks.reduce((n, chunk) => n + chunk.length, 0));
@@ -124,6 +138,7 @@ function installStdio(imports, getInstance) {
     return 0;
   };
   imports.wasi_snapshot_preview1.fd_write = (fd, ptr, count, result) => {
+    checkFatal();
     if (fd !== 1 && fd !== 2) return originalWrite(fd, ptr, count, result);
     const chunks = vectors(ptr, count);
     const written = child ? wasiPipe(child[fd === 2 ? "stderr" : "stdout"], "write").write(chunks) : writeStdio(fd, chunks);
@@ -146,6 +161,10 @@ function validateCwd(cwd) {
 async function run() {
   const module = workerData?.module || await WebAssembly.compile(readFileSync(wasmPath));
   subprocess = new SubprocessHost({
+    signalState: signals.buffers.signalState,
+    outcome: signals.buffers.outcome,
+    defaultSignal: (signal) => finish(128 + signal, signal),
+    revoked: () => signals.selected()?.kind === "signaled",
     budget: workerData?.transport?.budget,
     identity: workerData?.transport?.identity,
     pid: workerData?.transport?.pid,
@@ -154,6 +173,7 @@ async function run() {
     token: workerData?.transport?.token,
     stdin: child && (workerData.meta.stdin !== "inherit" || workerData.transport.inheritedStdin) ? workerData.transport.pipes[0] : undefined,
     output: (fd, bytes) => {
+      checkFatal();
       if (child) return wasiPipe(child[fd === 2 ? "stderr" : "stdout"], "write").write([bytes]) === bytes.length;
       return forwardOutput(fd === 2 ? 2 : 1, bytes);
     },
@@ -173,6 +193,8 @@ async function run() {
   installStdio(imports, () => instance);
   if (withNet) cliFetch = installCliFetch(imports, () => instance);
   instance = await WebAssembly.instantiate(module, imports);
+  // Rust natives and host-engine JS must observe one current-process disposition/queue.
+  installHostSlots(instance, { signal: (signal, mode) => subprocess.signal(signal, mode) });
   cliFetch?.install();
   const code = wasi.start(instance);
   if (!instance.exports.bunwasm_ready || instance.exports.bunwasm_ready() !== 1) finish(code);

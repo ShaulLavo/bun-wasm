@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { ExecutableRegistry, FirstSpawnStub, ProcessIdentityAllocator, ProcessSupervisor, Signal, claimOutcome, type ProcessContext, type SpawnRequest } from "../proc";
+import { spawnSync } from "node:child_process";
+import { ExecutableRegistry, FirstSpawnStub, ProcessIdentityAllocator, ProcessSupervisor, Signal, SignalDisposition, SIGNAL_PENDING, createSignalState, signalDisposition, setSignalDisposition, publishSignal, requestSignal, takeSignal, outcomeWord, claimOutcome, type ProcessContext, type SpawnRequest } from "../proc";
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
 function deferred<T>() {
@@ -143,9 +144,7 @@ test("kill records signal, interrupts, revokes and publishes logical exit before
   });
   supervisor.onChildExit(event => { if (event.pid === pid) order.push("exit"); });
   supervisor.kill(pid, Signal.SIGINT);
-  expect(order).toEqual([]);
-  expect(supervisor.wait(root, pid)).toBeNull();
-  context.defaultSignal(Signal.SIGINT);
+  // No guest checkpoint or default-action acknowledgement is needed.
   expect(order).toEqual(["revoked", "exit"]);
   expect(terminated).toEqual([pid]);
   expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: Signal.SIGINT, status: 130 });
@@ -170,7 +169,6 @@ test("killJob includes same-job descendants but preserves explicit background jo
   expect(supervisor.job(supervisor.jobOf(background))!.foreground).toBe(false);
   supervisor.killJob(supervisor.jobOf(foreground), Signal.SIGTERM);
   for (const pid of [foreground, child]) {
-    contexts.get(pid)!.defaultSignal(Signal.SIGTERM);
     expect(supervisor.get(pid)!.result).toEqual({ kind: "signaled", code: Signal.SIGTERM, status: 143 });
   }
   expect(Atomics.load(contexts.get(descendant)!.interrupt, 0)).toBe(0);
@@ -250,6 +248,8 @@ test("handled SIGINT may exit zero and pending requested signal never reclassifi
   const crashed = supervisor.spawn(root, request());
   await supervisor.start(handled);
   await supervisor.start(crashed);
+  setSignalDisposition(contexts.get(handled)!.signalState, Signal.SIGINT, SignalDisposition.HANDLE);
+  setSignalDisposition(contexts.get(crashed)!.signalState, Signal.SIGINT, SignalDisposition.HANDLE);
   supervisor.kill(handled, Signal.SIGINT);
   expect(Atomics.exchange(contexts.get(handled)!.interrupt, 0, 0)).toBe(Signal.SIGINT);
   expect(supervisor.wait(root, handled)).toBeNull();
@@ -266,6 +266,7 @@ test("SIGKILL during a handler overrides later handled exits and default actions
   const { supervisor, root, contexts } = fixture();
   const pid = supervisor.spawn(root, request());
   await supervisor.start(pid);
+  setSignalDisposition(contexts.get(pid)!.signalState, Signal.SIGINT, SignalDisposition.HANDLE);
   supervisor.kill(pid, Signal.SIGINT);
   Atomics.exchange(contexts.get(pid)!.interrupt, 0, 0);
   supervisor.kill(pid, Signal.SIGKILL);
@@ -414,6 +415,7 @@ test("observing an already delivered signal records it without publishing a seco
   const pid = supervisor.spawn(root, request());
   await supervisor.start(pid);
   const context = contexts.get(pid)!;
+  setSignalDisposition(context.signalState, Signal.SIGINT, SignalDisposition.HANDLE);
   for (let request = 0; request < 2; request++) {
     Atomics.store(context.requestedSignal, 0, Signal.SIGINT);
     Atomics.store(context.interrupt, 0, Signal.SIGINT);
@@ -459,6 +461,7 @@ for (const word of ["requestedSignal", "interrupt"] as const) {
     const pid = supervisor.spawn(root, request());
     await supervisor.start(pid);
     const context = contexts.get(pid)!;
+    setSignalDisposition(context.signalState, Signal.SIGINT, SignalDisposition.HANDLE);
     const original = Atomics.compareExchange;
     let raced = false;
     Atomics.compareExchange = ((array: Int32Array, index: number, expected: number, replacement: number) => {
@@ -484,6 +487,7 @@ test("persistent SIGKILL wins when its pending interrupt was consumed before a s
   await supervisor.start(pid);
   const context = contexts.get(pid)!;
   const original = Atomics.compareExchange;
+  setSignalDisposition(context.signalState, Signal.SIGINT, SignalDisposition.HANDLE);
   let raced = false;
   Atomics.compareExchange = ((array: Int32Array, index: number, expected: number, replacement: number) => {
     if (!raced && array === context.interrupt) {
@@ -538,4 +542,378 @@ test("a parent with a sealed terminal outcome cannot reserve descendants before 
   const { supervisor, root } = fixture();
   claimOutcome(supervisor.get(root)!.outcome, { kind: "signaled", code: 9 });
   expect(() => supervisor.reserveSpawn(root, request())).toThrow();
+});
+
+test("signal state starts default, adopts all cells, and validates registration", () => {
+  const state = createSignalState();
+  expect(state.length).toBe(65);
+  for (const sig of [2, 13, 15, 64]) expect(signalDisposition(state, sig)).toBe(SignalDisposition.DEFAULT);
+  setSignalDisposition(state, 15, SignalDisposition.HANDLE);
+  expect(createSignalState(state)).toBe(state);
+  expect(signalDisposition(createSignalState(state.buffer as SharedArrayBuffer), 15)).toBe(SignalDisposition.HANDLE);
+  for (const sig of [0, 9, 65, -1, 1.5]) expect(() => setSignalDisposition(state, sig, SignalDisposition.HANDLE)).toThrow();
+  for (const mode of [-1, 3, 4, 1.5]) expect(() => setSignalDisposition(state, 2, mode)).toThrow();
+  expect(() => createSignalState(new Int32Array(new SharedArrayBuffer(4)))).toThrow();
+});
+
+test("distinct pending signals coalesce individually and dequeue in signal order", () => {
+  const state = createSignalState();
+  for (const sig of [2, 13, 15]) setSignalDisposition(state, sig, SignalDisposition.HANDLE);
+  expect(publishSignal(state, 15)).toBe("handled");
+  expect(publishSignal(state, 2)).toBe("handled");
+  expect(publishSignal(state, 13)).toBe("handled");
+  expect(publishSignal(state, 2)).toBe("handled");
+  expect(Atomics.load(state, 2)).toBe(SignalDisposition.HANDLE | SIGNAL_PENDING);
+  expect([takeSignal(state), takeSignal(state), takeSignal(state), takeSignal(state)]).toEqual([2, 13, 15, 0]);
+  expect(signalDisposition(state, 2)).toBe(SignalDisposition.HANDLE);
+});
+
+test("pending disposition changes ignore or select default atomically", () => {
+  const state = createSignalState();
+  setSignalDisposition(state, 13, SignalDisposition.HANDLE);
+  publishSignal(state, 13);
+  expect(setSignalDisposition(state, 13, SignalDisposition.IGNORE)).toBe(false);
+  expect(takeSignal(state)).toBe(0);
+  expect(publishSignal(state, 13)).toBe("ignore");
+  setSignalDisposition(state, 2, SignalDisposition.HANDLE);
+  publishSignal(state, 2);
+  expect(setSignalDisposition(state, 2, SignalDisposition.DEFAULT)).toBe(true);
+  expect(takeSignal(state)).toBe(0);
+  expect(publishSignal(state, 15)).toBe("default");
+  expect(publishSignal(state, 9)).toBe("default");
+});
+
+test("dequeue clears pending before a once handler restores default", () => {
+  const state = createSignalState();
+  setSignalDisposition(state, 2, SignalDisposition.HANDLE);
+  publishSignal(state, 2);
+  expect(takeSignal(state)).toBe(2);
+  expect(setSignalDisposition(state, 2, SignalDisposition.DEFAULT)).toBe(false);
+  expect(publishSignal(state, 2)).toBe("default");
+});
+
+for (const sig of [Signal.SIGINT, Signal.SIGTERM, Signal.SIGPIPE]) {
+  test(`default signal ${sig} immediately revokes, terminates and preserves its typed outcome`, async () => {
+    const { supervisor, root, contexts, terminated } = fixture();
+    const pid = supervisor.spawn(root, request());
+    await supervisor.start(pid);
+    let revoked = 0;
+    contexts.get(pid)!.registerRevocation(() => revoked++);
+    supervisor.kill(pid, sig);
+    expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: sig, status: 128 + sig });
+    expect(revoked).toBe(1);
+    expect(terminated).toEqual([pid]);
+    contexts.get(pid)!.exit(0);
+    expect(supervisor.wait(root, pid)!.kind).toBe("signaled");
+  });
+  test(`registered signal ${sig} leaves the guest's own exit authoritative`, async () => {
+    const { supervisor, root, contexts, terminated } = fixture();
+    const pid = supervisor.spawn(root, request());
+    await supervisor.start(pid);
+    const context = contexts.get(pid)!;
+    setSignalDisposition(context.signalState, sig, SignalDisposition.HANDLE);
+    supervisor.kill(pid, sig);
+    expect(supervisor.wait(root, pid)).toBeNull();
+    expect(terminated).toEqual([]);
+    expect(takeSignal(context.signalState)).toBe(sig);
+    expect(setSignalDisposition(context.signalState, sig, SignalDisposition.DEFAULT)).toBe(false);
+    supervisor.observeSignal(pid, sig);
+    expect(takeSignal(context.signalState)).toBe(0);
+    expect(supervisor.wait(root, pid)).toBeNull();
+    context.exit(23);
+    expect(supervisor.wait(root, pid)).toEqual({ kind: "exited", code: 23, status: 23 });
+  });
+}
+
+test("ignored PIPE does not interrupt and preserves the EPIPE handler's exit", async () => {
+  const { supervisor, root, contexts } = fixture();
+  const pid = supervisor.spawn(root, request());
+  await supervisor.start(pid);
+  const context = contexts.get(pid)!;
+  setSignalDisposition(context.signalState, 13, SignalDisposition.IGNORE);
+  supervisor.kill(pid, 13);
+  expect(Atomics.load(context.interrupt, 0)).toBe(0);
+  expect(takeSignal(context.signalState)).toBe(0);
+  expect(supervisor.wait(root, pid)).toBeNull();
+  context.exit(23);
+  expect(supervisor.wait(root, pid)!.status).toBe(23);
+});
+
+test("mixed jobs preclaim every default fatal outcome before reentrant teardown", async () => {
+  const { supervisor, root, contexts, terminated } = fixture();
+  const a = supervisor.spawn(root, request());
+  const job = supervisor.jobOf(a);
+  const b = supervisor.spawn(root, request({ job }));
+  const handled = supervisor.spawn(root, request({ job }));
+  const ignored = supervisor.spawn(root, request({ job }));
+  for (const pid of [a, b, handled, ignored]) await supervisor.start(pid);
+  setSignalDisposition(contexts.get(handled)!.signalState, 15, SignalDisposition.HANDLE);
+  setSignalDisposition(contexts.get(ignored)!.signalState, 15, SignalDisposition.IGNORE);
+  let rejected = false;
+  contexts.get(a)!.registerRevocation(() => {
+    contexts.get(b)!.exit(0);
+    try { supervisor.spawn(b, request()); } catch { rejected = true; }
+  });
+  supervisor.killJob(job, 15);
+  expect(rejected).toBe(true);
+  for (const pid of [a, b]) expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: 15, status: 143 });
+  expect(terminated.sort()).toEqual([a, b].sort());
+  expect(takeSignal(contexts.get(handled)!.signalState)).toBe(15);
+  expect(Atomics.load(contexts.get(ignored)!.interrupt, 0)).toBe(0);
+  expect(supervisor.wait(root, handled)).toBeNull();
+  expect(supervisor.wait(root, ignored)).toBeNull();
+  supervisor.dispose();
+});
+
+test("adopted signal state is not reset and children start with independent defaults", async () => {
+  const { supervisor, root, contexts } = fixture();
+  setSignalDisposition(supervisor.get(root)!.signalState, 2, SignalDisposition.HANDLE);
+  const state = createSignalState();
+  setSignalDisposition(state, 15, SignalDisposition.HANDLE);
+  const pid = supervisor.reserveSpawn(root, request(), { signalState: state });
+  await supervisor.start(pid);
+  expect(contexts.get(pid)!.signalState).toBe(state);
+  expect(signalDisposition(state, 15)).toBe(SignalDisposition.HANDLE);
+  expect(signalDisposition(state, 2)).toBe(SignalDisposition.DEFAULT);
+  supervisor.dispose();
+});
+
+
+test("shared request preclaims default before delayed host observation", async () => {
+  const { supervisor, root, contexts } = fixture();
+  const pid = supervisor.spawn(root, request());
+  await supervisor.start(pid);
+  const context = contexts.get(pid)!;
+  const result = requestSignal(context, 15);
+  expect(result.action).toBe("default");
+  expect(result.outcome).toEqual({ kind: "signaled", code: 15, status: 143 });
+  setSignalDisposition(context.signalState, 15, SignalDisposition.HANDLE);
+  context.exit(0);
+  supervisor.observeSignal(pid, 15);
+  expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: 15, status: 143 });
+});
+
+test("shared request does not replay handled root delivery on supervisor adoption", () => {
+  const transport = {
+    signalState: createSignalState(), interrupt: new Int32Array(new SharedArrayBuffer(4)),
+    requestedSignal: new Int32Array(new SharedArrayBuffer(4)), outcome: outcomeWord(),
+  };
+  setSignalDisposition(transport.signalState, 2, SignalDisposition.HANDLE);
+  expect(requestSignal(transport, 2)).toEqual({ action: "handled", outcome: null });
+  expect(takeSignal(transport.signalState)).toBe(2);
+  setSignalDisposition(transport.signalState, 2, SignalDisposition.DEFAULT);
+  const { supervisor } = fixture();
+  const root = supervisor.createRoot(transport);
+  supervisor.observeSignal(root, 2);
+  expect(supervisor.get(root)!.result).toBeNull();
+  expect(supervisor.get(root)!.signalState).toBe(transport.signalState);
+  expect(supervisor.get(root)!.outcome).toBe(transport.outcome);
+  expect(takeSignal(transport.signalState)).toBe(0);
+  supervisor.dispose();
+});
+
+
+for (const mode of [SignalDisposition.DEFAULT, SignalDisposition.IGNORE]) {
+  test(`registration racing delivery classifies mode ${mode} without stale pending`, () => {
+    const state = createSignalState();
+    setSignalDisposition(state, 2, SignalDisposition.HANDLE);
+    const original = Atomics.compareExchange;
+    let raced = false;
+    Atomics.compareExchange = ((array: Int32Array, index: number, expected: number, replacement: number) => {
+      if (!raced && array === state && index === 2) {
+        raced = true;
+        setSignalDisposition(state, 2, mode);
+      }
+      return original(array, index, expected, replacement);
+    }) as typeof Atomics.compareExchange;
+    try { expect(publishSignal(state, 2)).toBe(mode === SignalDisposition.DEFAULT ? "default" : "ignore"); }
+    finally { Atomics.compareExchange = original; }
+    expect(raced).toBe(true);
+    expect(Atomics.load(state, 2)).toBe(mode);
+    expect(takeSignal(state)).toBe(0);
+  });
+}
+
+test("default restoration racing a new pending delivery consumes it exactly once", () => {
+  const state = createSignalState();
+  setSignalDisposition(state, 15, SignalDisposition.HANDLE);
+  const original = Atomics.compareExchange;
+  let raced = false;
+  Atomics.compareExchange = ((array: Int32Array, index: number, expected: number, replacement: number) => {
+    if (!raced && array === state && index === 15) {
+      raced = true;
+      publishSignal(state, 15);
+    }
+    return original(array, index, expected, replacement);
+  }) as typeof Atomics.compareExchange;
+  try { expect(setSignalDisposition(state, 15, SignalDisposition.DEFAULT)).toBe(true); }
+  finally { Atomics.compareExchange = original; }
+  expect(raced).toBe(true);
+  expect(Atomics.load(state, 15)).toBe(SignalDisposition.DEFAULT);
+  expect(setSignalDisposition(state, 15, SignalDisposition.DEFAULT)).toBe(false);
+});
+
+test("dequeue racing ignore cannot deliver a stale handled signal", () => {
+  const state = createSignalState();
+  setSignalDisposition(state, 2, SignalDisposition.HANDLE);
+  publishSignal(state, 2);
+  const original = Atomics.compareExchange;
+  let raced = false;
+  Atomics.compareExchange = ((array: Int32Array, index: number, expected: number, replacement: number) => {
+    if (!raced && array === state && index === 2) {
+      raced = true;
+      setSignalDisposition(state, 2, SignalDisposition.IGNORE);
+    }
+    return original(array, index, expected, replacement);
+  }) as typeof Atomics.compareExchange;
+  try { expect(takeSignal(state)).toBe(0); }
+  finally { Atomics.compareExchange = original; }
+  expect(raced).toBe(true);
+  expect(Atomics.load(state, 2)).toBe(SignalDisposition.IGNORE);
+});
+
+for (const sig of [2, 13, 15]) {
+  test(`default signal ${sig} prevents reserved and starting guests from launching`, async () => {
+    const { supervisor, root, registry, contexts } = fixture();
+    const reserved = supervisor.reserveSpawn(root, request());
+    supervisor.kill(reserved, sig);
+    await supervisor.start(reserved);
+    const activation = deferred<WebAssembly.Module>();
+    registry.register("slow", { module: () => activation.promise, adapter: "preview1" });
+    const starting = supervisor.reserveSpawn(root, request({ executable: "slow" }));
+    const launched = supervisor.start(starting);
+    supervisor.kill(starting, sig);
+    activation.resolve(module);
+    await launched;
+    for (const pid of [reserved, starting]) {
+      expect(contexts.has(pid)).toBe(false);
+      expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: sig, status: 128 + sig });
+    }
+    supervisor.dispose();
+  });
+}
+
+test("changing pending handled signal to default selects immediate guest default action", async () => {
+  const { supervisor, root, contexts, terminated } = fixture();
+  const pid = supervisor.spawn(root, request());
+  await supervisor.start(pid);
+  const context = contexts.get(pid)!;
+  setSignalDisposition(context.signalState, 2, SignalDisposition.HANDLE);
+  supervisor.kill(pid, 2);
+  if (setSignalDisposition(context.signalState, 2, SignalDisposition.DEFAULT)) context.defaultSignal(2);
+  expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: 2, status: 130 });
+  expect(terminated).toEqual([pid]);
+  expect(setSignalDisposition(context.signalState, 2, SignalDisposition.DEFAULT)).toBe(false);
+});
+
+
+for (const sig of [1, 10, 64]) {
+  test(`self-raised signal ${sig} adopts its typed outcome without broadening kill`, async () => {
+    const { supervisor, root, contexts } = fixture();
+    const pid = supervisor.spawn(root, request());
+    await supervisor.start(pid);
+    const context = contexts.get(pid)!;
+    expect(() => supervisor.kill(pid, sig)).toThrow();
+    expect(() => supervisor.killJob(supervisor.jobOf(pid), sig)).toThrow();
+    expect(requestSignal(context, sig)).toEqual({ action: "default", outcome: { kind: "signaled", code: sig, status: 128 + sig } });
+    expect(() => supervisor.observeSignal(pid, sig)).not.toThrow();
+    expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: sig, status: 128 + sig });
+  });
+  test(`self-raised signal ${sig} handler removal can select explicit default action`, async () => {
+    const { supervisor, root, contexts } = fixture();
+    const pid = supervisor.spawn(root, request());
+    await supervisor.start(pid);
+    const context = contexts.get(pid)!;
+    setSignalDisposition(context.signalState, sig, SignalDisposition.HANDLE);
+    expect(requestSignal(context, sig).action).toBe("handled");
+    expect(() => supervisor.observeSignal(pid, sig)).not.toThrow();
+    expect(supervisor.wait(root, pid)).toBeNull();
+    if (setSignalDisposition(context.signalState, sig, SignalDisposition.DEFAULT)) context.defaultSignal(sig);
+    expect(supervisor.wait(root, pid)).toEqual({ kind: "signaled", code: sig, status: 128 + sig });
+  });
+}
+
+test("generic self-raise rejects out-of-range signals and KILL bypasses raw ignore", async () => {
+  const { supervisor, root, contexts } = fixture();
+  const pid = supervisor.spawn(root, request());
+  await supervisor.start(pid);
+  const context = contexts.get(pid)!;
+  for (const sig of [0, -1, 65, 1.5]) {
+    expect(() => requestSignal(context, sig)).toThrow();
+    expect(() => supervisor.observeSignal(pid, sig)).toThrow();
+    expect(() => context.defaultSignal(sig)).toThrow();
+  }
+  Atomics.store(context.signalState, 9, SignalDisposition.IGNORE);
+  expect(requestSignal(context, 9).outcome).toEqual({ kind: "signaled", code: 9, status: 137 });
+  supervisor.observeSignal(pid, 9);
+  expect(supervisor.wait(root, pid)!.status).toBe(137);
+});
+
+
+test("shared signal helper imports directly under Node strip-only TypeScript", () => {
+  const url = new URL("../proc/signals.ts", import.meta.url).href;
+  const script = `
+    import assert from "node:assert/strict";
+    const { createSignalState, requestSignal, setSignalDisposition, SignalDisposition, takeSignal } = await import(${JSON.stringify(url)});
+    const transport = {
+      signalState: createSignalState(), interrupt: new Int32Array(new SharedArrayBuffer(4)),
+      requestedSignal: new Int32Array(new SharedArrayBuffer(4)), outcome: new BigInt64Array(new SharedArrayBuffer(8)),
+    };
+    setSignalDisposition(transport.signalState, 64, SignalDisposition.HANDLE);
+    assert.equal(requestSignal(transport, 64).action, "handled");
+    assert.equal(takeSignal(transport.signalState), 64);
+    assert.throws(() => setSignalDisposition(transport.signalState, 9, SignalDisposition.IGNORE), { name: "ProcessError", errno: 28 });
+  `;
+  const result = spawnSync("node", ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 10_000 });
+  expect(result.error).toBeUndefined();
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+});
+
+
+for (const finalizeParent of [false, true]) {
+  test(`previously admitted foreground and background spawns survive lazy registration (parent finalized=${finalizeParent})`, async () => {
+    const { supervisor, root, contexts } = fixture();
+    const parent = supervisor.get(root)!;
+    const foregroundOutcome = outcomeWord();
+    claimOutcome(foregroundOutcome, { kind: "signaled", code: 2 });
+    claimOutcome(parent.outcome, { kind: "signaled", code: 2 });
+    if (finalizeParent) supervisor.observeSignal(root, 2);
+    expect(() => supervisor.reserveSpawn(root, request())).toThrow();
+    const state = createSignalState();
+    setSignalDisposition(state, 15, SignalDisposition.HANDLE);
+    const foreground = supervisor.reserveAdmittedSpawn(root, request({ job: parent.job }), {
+      job: parent.job, signalState: state, outcome: foregroundOutcome,
+    });
+    const background = supervisor.reserveAdmittedSpawn(root, request({ job: -1 }), {});
+    expect(supervisor.get(foreground)!.signalState).toBe(state);
+    expect(signalDisposition(state, 15)).toBe(SignalDisposition.HANDLE);
+    expect(supervisor.get(foreground)!.outcome).toBe(foregroundOutcome);
+    await supervisor.start(foreground);
+    await supervisor.start(background);
+    expect(contexts.has(foreground)).toBe(false);
+    expect(supervisor.wait(root, foreground)).toEqual({ kind: "signaled", code: 2, status: 130 });
+    expect(contexts.has(background)).toBe(true);
+    expect(supervisor.jobOf(background)).not.toBe(parent.job);
+    expect(supervisor.wait(root, background)).toBeNull();
+    let rejected = false;
+    contexts.get(background)!.registerRevocation(() => {
+      try { supervisor.spawn(root, request()); } catch { rejected = true; }
+    });
+    contexts.get(background)!.exit(23);
+    expect(rejected).toBe(true);
+    expect(supervisor.wait(root, background)).toEqual({ kind: "exited", code: 23, status: 23 });
+    supervisor.dispose();
+  });
+}
+
+test("admitted registration still validates identities, descriptors and supervisor lifetime", () => {
+  const { supervisor, root } = fixture();
+  claimOutcome(supervisor.get(root)!.outcome, { kind: "signaled", code: 2 });
+  expect(() => supervisor.reserveAdmittedSpawn(root, request(), { pid: root })).toThrow();
+  expect(() => supervisor.reserveAdmittedSpawn(root, request({ fds: [{ child: 0, parent: 99 }] }), {})).toThrow();
+  expect(() => supervisor.reserveAdmittedSpawn(root, request({ job: -2 }), {})).toThrow();
+  expect(() => supervisor.reserveAdmittedSpawn(999999, request(), {})).toThrow();
+  supervisor.dispose();
+  expect(() => supervisor.reserveAdmittedSpawn(root, request(), {})).toThrow();
 });

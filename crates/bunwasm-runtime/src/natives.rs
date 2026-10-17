@@ -185,7 +185,7 @@ pub fn table(state: &Rc<State>) -> Table {
     crate::streams::install(&mut t);
     install_crypto(&mut t);
     install_url(&mut t);
-    install_host(&mut t);
+    install_host(&mut t, state);
     crate::sqlite::install(&mut t);
     crate::wasm::install(&mut t);
     t.constants.push(("platformInfo", platform_info()));
@@ -200,6 +200,9 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("writeStdout", move |a| {
         st.write_stdout(a.bytes(0)?).map_err(|e| io_error(e, "write", None))?;
+        if a.bool(1) {
+            st.flush_stdout().map_err(|e| io_error(e, "write", None))?;
+        }
         ok()
     });
     let st = state.clone();
@@ -815,7 +818,7 @@ fn install_url(t: &mut Table) {
 /// The `bun_wasm` host ABI (docs/host-abi.md) for the JS networking layer
 /// (src/js/net.js). Functions return the ABI's raw codes (negative = error);
 /// byte results come back as Uint8Array / strings.
-fn install_host(t: &mut Table) {
+fn install_host(t: &mut Table, state: &Rc<State>) {
     use crate::host;
     let caps = host::SLOT_NAMES
         .iter()
@@ -834,6 +837,8 @@ fn install_host(t: &mut Table) {
     t.add("hostChildWait", |a| Ok(host::child_wait(a.i32(0)?).into()));
     t.add("hostChildPipe", |a| Ok(host::child_pipe(a.i32(0)?, a.i32(1)?).into()));
     t.add("hostChildKill", |a| Ok(host::child_kill(a.i32(0)?, a.i32(1)?).into()));
+    let st = state.clone();
+    t.add("hostSignal", move |a| Ok(st.signal(a.i32(0)?, a.i32(1)?).into()));
     t.add("hostPoll", |a| Ok(host::poll(a.i32(0)?).into()));
     t.add("hostFetch", |a| {
         let body = if a.is_missing(1) { &[][..] } else { a.bytes(1)? };

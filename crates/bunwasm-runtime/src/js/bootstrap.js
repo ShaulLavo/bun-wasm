@@ -744,11 +744,21 @@
     printError(err);
   }
 
+  function handleBrokenPipe(err) {
+    if (!err || err.code !== "EPIPE") return false;
+    // Preserve errno through try/catch and stream callbacks first. Only an escaping broken
+    // pipe takes the process's SIGPIPE disposition, rather than guessing from an I/O trap.
+    if (native.hostSignal(13, 3) < 0) throw new Error("Cannot raise SIGPIPE");
+    internal.pumpSignals();
+    return true;
+  }
+
   internal.handleUncaught = function handleUncaught(err) {
     if (listenerCount("uncaughtException") > 0) {
       globalThis.process.emit("uncaughtException", err, "uncaughtException");
       return true;
     }
+    if (handleBrokenPipe(err)) return true;
     printFatal(err);
     globalThis.process.exitCode = 1;
     emitExit(1);
@@ -760,6 +770,7 @@
       globalThis.process.emit("unhandledRejection", reason, undefined);
       return true;
     }
+    if (handleBrokenPipe(reason)) return true;
     printFatal(reason);
     // Bun reports exit code 0 to "exit" listeners here (and still exits 1).
     emitExit(0);

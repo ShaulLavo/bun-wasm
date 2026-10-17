@@ -7,7 +7,8 @@ import { FilesystemClient, createFilesystemIdentity, revokeFilesystem, sharedRev
 import { NetHost } from "./net/host";
 import type { NetRequest } from "./net/protocol";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline";
-import { Wasi, WasiExit } from "@bun-wasm/runtime/core";
+import { Wasi, WasiExit, type Stream } from "@bun-wasm/runtime/core";
+import { claimOutcome, outcomeWord, readOutcome, type ProcessExit } from "@bun-wasm/runtime/proc";
 import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.ts";
 
 export type Engine = "quickjs" | "jsc" | "browser";
@@ -19,6 +20,9 @@ export interface RunRequest {
   jobId?: number;
   identity?: SharedArrayBuffer;
   interrupt?: SharedArrayBuffer;
+  requestedSignal?: SharedArrayBuffer;
+  signalState?: SharedArrayBuffer;
+  outcome?: SharedArrayBuffer;
   module: WebAssembly.Module;
   args: string[];
   env: Record<string, string>;
@@ -90,7 +94,8 @@ export type WorkerMessage =
   | { type: "stderr"; data: Uint8Array }
   | { type: "net"; req: NetRequest }
   | { type: "exit"; code: number; signal?: number; sleep: SleepMode }
-  | { type: "error"; message: string; sleep: SleepMode };
+  | { type: "default-signal"; signal: number }
+  | { type: "error"; code: number; message: string; sleep: SleepMode };
 
 export type SleepMode = "atomics" | "busy-wait";
 
@@ -143,11 +148,54 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   const req = event.data;
   const fs = new FilesystemClient(req.filesystem);
   const child = req.child ? childTransport(req.child) : null;
-  const post = (type: "stdout" | "stderr", data: Uint8Array) => {
-    if (!child) { ctx.postMessage({ type, data }, [data.buffer]); return true; }
-    return wasiPipe(child[type], "write").write([data]) === data.length;
+  const isolated = ctx.crossOriginIsolated && typeof SharedArrayBuffer === "function";
+  const sharedOutcome = req.child?.outcome ?? req.outcome;
+  const outcome = sharedOutcome || isolated ? outcomeWord(sharedOutcome) : null;
+  const requestedSignal = req.child?.requestedSignal ?? req.requestedSignal;
+  const revoked = sharedRevoked(req.filesystem);
+  let localOutcome: ProcessExit | null = null;
+  const claim = (result: Pick<ProcessExit, "kind" | "code">): ProcessExit => outcome
+    ? claimOutcome(outcome, result)
+    : localOutcome ??= { ...result, status: result.kind === "signaled" ? 128 + result.code : result.code };
+  const defaultSignal = (signal: number): never => {
+    if (!Number.isInteger(signal) || signal < 1 || signal > 64) throw new Error(`Invalid default signal: ${signal}`);
+    const killed = requestedSignal && Atomics.load(new Int32Array(requestedSignal), 0) === 9;
+    // Guest JS can catch this unwind. Commit logical death before it regains control, and never
+    // allow a later code-only engine completion to replace the typed terminal winner.
+    const winner = claim({ kind: "signaled", code: killed ? 9 : signal });
+    revokeFilesystem(fs.connection);
+    // Without shared memory the page cannot observe logical death if guest JS catches this
+    // unwind and never completes. This notice is not an acknowledgement of released references.
+    if (!outcome && winner.kind === "signaled") ctx.postMessage({ type: "default-signal", signal: winner.code } satisfies WorkerMessage);
+    throw new DefaultSignal(signal);
   };
-  const subprocess = ctx.crossOriginIsolated && typeof SharedArrayBuffer === "function" ? new SubprocessHost({
+  const checkActive = () => {
+    const winner = outcome ? readOutcome(outcome) : localOutcome;
+    if (winner?.kind === "signaled") defaultSignal(winner.code);
+    if (winner) throw new WasiExit(winner.status);
+    if (revoked()) throw new WasiExit(1);
+  };
+  const guardStream = (stream: Stream): Stream => ({
+    ...stream,
+    read(chunks) { checkActive(); return stream.read(chunks); },
+    write(chunks) { checkActive(); return stream.write(chunks); },
+    readiness() { checkActive(); return stream.readiness(); },
+  });
+  const stdio = child ? {
+    0: guardStream(wasiPipe(child.stdin, "read")),
+    1: guardStream(wasiPipe(child.stdout, "write")),
+    2: guardStream(wasiPipe(child.stderr, "write")),
+  } : undefined;
+  const post = (type: "stdout" | "stderr", data: Uint8Array) => {
+    if (stdio) return stdio[type === "stderr" ? 2 : 1].write([data]) === data.length;
+    checkActive();
+    ctx.postMessage({ type, data }, [data.buffer]);
+    return true;
+  };
+  const subprocess = isolated ? new SubprocessHost({
+    signalState: req.child?.signalState ?? req.signalState,
+    outcome: outcome?.buffer as SharedArrayBuffer | undefined,
+    defaultSignal,
     budget: req.child?.budget,
     identity: req.child?.identity ?? req.identity,
     pid: req.child?.pid ?? req.pid,
@@ -155,7 +203,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     slot: req.child?.slot,
     token: req.child?.token,
     stdin: req.child?.pipes[0],
-    revoked: sharedRevoked(req.filesystem),
+    revoked,
     onChildClose: pid => ctx.postMessage({ type: "child-close", pid, parentPid: req.child?.pid ?? req.pid ?? 1 } satisfies WorkerMessage),
     output: (fd, data) => post(fd === 2 ? "stderr" : "stdout", data),
     launch: (meta, transport) => {
@@ -184,20 +232,15 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     env: guestEnv(req),
     fs,
     preopens: { "/": "/" },
-    stdio: child ? { 0: wasiPipe(child.stdin, "read"), 1: wasiPipe(child.stdout, "write"), 2: wasiPipe(child.stderr, "write") } : undefined,
+    stdio,
     stdout: (data) => post("stdout", data),
     stderr: (data) => post("stderr", data),
     sleep,
     namespaces: {
       runtime_proc: {
-        interrupted: () => {
-          const interrupt = req.child?.interrupt ?? req.interrupt;
-          return interrupt ? Atomics.exchange(new Int32Array(interrupt), 0, 0) : 0;
-        },
-        default_signal: (signal: number) => {
-          if (![2, 9, 13, 15].includes(signal)) throw new Error(`Invalid default signal: ${signal}`);
-          throw new DefaultSignal(signal);
-        },
+        signal: (signal: number, mode: number) => subprocess?.signal(signal, mode) ?? -38,
+        interrupted: () => subprocess?.signal(0, 0) ?? 0,
+        default_signal: defaultSignal,
       },
     },
     trace: req.trace ? (line) => console.debug(`[wasi] ${line}`) : undefined,
@@ -208,27 +251,34 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   const finish = (result: { code: number; signal?: number } | { error: unknown }) => {
     if (done) return;
     done = true;
+    const settled = outcome ? readOutcome(outcome) : localOutcome;
+    const ownCode = "code" in result ? result.code : started ? 1 : 126;
+    const ownSignal = "signal" in result ? result.signal : undefined;
     subprocess?.detach();
     if (child) {
-      if ("error" in result) child.stderr.writeAll(new TextEncoder().encode(`${describeError(result.error)}\n`));
-      const code = "code" in result ? result.code : started ? 1 : 126;
-      const signal = "signal" in result ? result.signal : undefined;
+      // A broker may close pipes as soon as it observes ordinary completion. Buffer host-owned
+      // crash diagnostics first; fatal callbacks have already claimed their outcome and skip this.
+      if ("error" in result && !settled) child.stderr.writeAll(new TextEncoder().encode(`${describeError(result.error)}\n`));
       wasi.descriptors.dispose();
       fs.dispose();
-      child.finish(code, signal);
+      child.finish(ownCode, ownSignal);
+      const winner = readOutcome(outcome!)!;
       // A completion word alone does not prove the worker released filesystem references.
-      ctx.postMessage({ type: "exit", code, signal, sleep: sleepMode } satisfies WorkerMessage);
+      ctx.postMessage({ type: "exit", code: winner.status, signal: winner.kind === "signaled" ? winner.code : undefined, sleep: sleepMode } satisfies WorkerMessage);
       return;
     }
+    const winner = claim(ownSignal === undefined ? { kind: "exited", code: ownCode } : { kind: "signaled", code: ownSignal });
+    const code = winner.status;
+    const signal = winner.kind === "signaled" ? winner.code : undefined;
     wasi.descriptors.dispose();
     fs.dispose();
-    if ("code" in result) {
-      ctx.postMessage({ type: "exit", code: result.code, signal: result.signal, sleep: sleepMode } satisfies WorkerMessage);
+    if ("code" in result || settled || winner.kind === "signaled") {
+      ctx.postMessage({ type: "exit", code, signal, sleep: sleepMode } satisfies WorkerMessage);
       return;
     }
     const err = result.error;
     const message = describeError(err);
-    ctx.postMessage({ type: "error", message, sleep: sleepMode } satisfies WorkerMessage);
+    ctx.postMessage({ type: "error", code, message, sleep: sleepMode } satisfies WorkerMessage);
   };
   try {
     const instantiating = perfNow();
@@ -254,16 +304,21 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
       finish({ code: exited ?? 0 });
       return;
     }
-    // A wasm native calling proc_exit from a JS callback (a timer, a promise job) unwinds to here.
+    // Terminal unwinds from timer callbacks and promise jobs have the same typed outcome as
+    // synchronous guest execution; suppress the secondary uncaught-error reporting in both paths.
+    const terminalResult = (error: unknown) => error instanceof WasiExit ? { code: error.code }
+      : error instanceof DefaultSignal ? { code: 128 + error.signal, signal: error.signal } : null;
     const onError = (e: ErrorEvent) => {
-      if (!(e.error instanceof WasiExit)) return;
+      const result = terminalResult(e.error);
+      if (!result) return;
       e.preventDefault();
-      finish({ code: e.error.code });
+      finish(result);
     };
     const onRejection = (e: PromiseRejectionEvent) => {
-      if (!(e.reason instanceof WasiExit)) return;
+      const result = terminalResult(e.reason);
+      if (!result) return;
       e.preventDefault();
-      finish({ code: e.reason.code });
+      finish(result);
     };
     ctx.addEventListener("error", onError);
     ctx.addEventListener("unhandledrejection", onRejection);
@@ -271,11 +326,12 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     // through the page's helper and Bun.serve gets /__preview/<port>/ connections.
     const networking = slots !== "off" ? netHost?.engineNet() : undefined;
     const net = slots !== "off" && subprocess ? subprocess.engineNet(networking) : networking;
+    const nativeFetch = ctx.fetch.bind(ctx);
     const code = await startEngineHost({
       instance,
       moduleUrls: "blob",
       modules: req.moduleCache ? moduleStore(req.moduleCache) : undefined,
-      fetch: ctx.fetch.bind(ctx),
+      fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
       net,
       onExit: (exitCode) => finish({ code: exitCode }),
     });

@@ -1,3 +1,5 @@
+export type { SignalTransport, SignalRequestResult } from "./signals";
+export { SignalDisposition, SIGNAL_PENDING, createSignalState, signalDisposition, setSignalDisposition, publishSignal, requestSignal, takeSignal } from "./signals";
 export { ProcessIdentityAllocator } from "./identity";
 export { outcomeWord, readOutcome, claimOutcome } from "./outcome";
 export { ExecutableRegistry, ExecutableNotFound } from "./registry";

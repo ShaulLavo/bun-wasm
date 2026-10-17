@@ -1,6 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { CHILD_FINAL_SIGNAL, SubprocessHost, childTransport, type ChildTransport } from "../src/subprocess.ts";
 import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
+import { createSignalState, setSignalDisposition, SignalDisposition } from "../../runtime/proc/signals.ts";
 
 function fixture() {
   const launched: ChildTransport[] = [];
@@ -48,6 +49,7 @@ test("nested stubs share globally unique process ids and never reuse signal buff
     expect(replacement).not.toBe(first);
     expect(launched[1]?.interrupt).not.toBe(parent.interrupt);
     expect(launched[1]?.requestedSignal).not.toBe(parent.requestedSignal);
+    expect(launched[1]?.signalState).not.toBe(parent.signalState);
     expect(launched[1]?.outcome).not.toBe(parent.outcome);
   } finally { nested.dispose(); host.dispose(); }
 });
@@ -110,10 +112,11 @@ test("SIGKILL revokes before termination and wins over a late success", () => {
   } finally { host.dispose(); }
 });
 
-test.each([2, 13, 15])("catchable signal %i notifies without destroying descriptors or overriding the guest exit", (signal) => {
+test.each([2, 13, 15])("handled signal %i notifies without destroying descriptors or overriding the guest exit", (signal) => {
   const { host, launched, events } = fixture();
   try {
     const pid = host.spawn(command());
+    setSignalDisposition(createSignalState(launched[0]!.signalState), signal, SignalDisposition.HANDLE);
     expect(host.kill(pid, signal)).toBe(0);
     expect(events).toEqual([]);
     expect(host.wait(pid)).toBe(-2);
@@ -127,6 +130,7 @@ test("a concurrent supervisor SIGKILL cannot be downgraded while publishing a ca
   const { host, launched } = fixture();
   const pid = host.spawn(command());
   const transport = launched[0]!;
+  setSignalDisposition(createSignalState(transport.signalState), 15, SignalDisposition.HANDLE);
   const requested = new Int32Array(transport.requestedSignal);
   const interrupt = new Int32Array(transport.interrupt);
   const compareExchange = Atomics.compareExchange;

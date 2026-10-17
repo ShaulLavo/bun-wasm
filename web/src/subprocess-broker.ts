@@ -1,6 +1,8 @@
 // Runnable page-side adapter. The generic process service is loaded only on first spawn;
 // blocked guest workers never have to activate a MessageChannel or a nested Worker.
-import type { ChildExitEvent, ProcessContext, ProcessExit, ProcessSupervisor, Signal } from "../../runtime/proc";
+import type { ChildExitEvent, ProcessContext, ProcessExit, ProcessSupervisor, RootProcessOptions, Signal } from "../../runtime/proc";
+import { checkedSignal } from "../../runtime/proc/types";
+import { createSignalState, requestSignal, type SignalTransport } from "../../runtime/proc/signals";
 import { isRevoked } from "../../runtime/fs/protocol";
 import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
 import type { SharedFilesystem } from "./shared-fs";
@@ -31,8 +33,23 @@ export class SubprocessBroker {
   private registrations = new Map<string, ExecutableRegistration>();
   private activation?: Promise<ProcessSupervisor>;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private root?: SignalTransport & { pid: number; job: number };
   constructor(private workerUrl: string, private filesystem: SharedFilesystem,
-    private options: { activate?: () => Promise<Proc>; rootPid?: number; rootJob?: number } = {}) {}
+    private options: { activate?: () => Promise<Proc>; root?: RootProcessOptions } = {}) {
+    // Root control is available before the optional process service is imported. Non-isolated
+    // runs never supply shared root words and never allocate them unless they activate spawning.
+    if (options.root) this.rootTransport();
+  }
+
+  private rootTransport(): SignalTransport & { pid: number; job: number } {
+    const source = this.options.root;
+    return this.root ??= {
+      pid: source?.pid ?? 1, job: source?.job ?? 1,
+      signalState: createSignalState(source?.signalState), outcome: outcomeWord(source?.outcome),
+      interrupt: source?.interrupt instanceof Int32Array ? source.interrupt : new Int32Array(source?.interrupt ?? new SharedArrayBuffer(4)),
+      requestedSignal: source?.requestedSignal instanceof Int32Array ? source.requestedSignal : new Int32Array(source?.requestedSignal ?? new SharedArrayBuffer(4)),
+    };
+  }
 
   register(name: string, entry: ExecutableRegistration): void {
     if (this.activation) throw new Error("Register executables before the first spawn");
@@ -46,7 +63,7 @@ export class SubprocessBroker {
         module: entry.module, adapter: entry.adapter === "preview1" ? "preview1" : `bun:${entry.engine ?? "browser"}`,
       });
       const supervisor = new proc.ProcessSupervisor({ registry, launch: context => this.launch(context), onError: error => this.report(error) });
-      supervisor.createRoot({ pid: this.options.rootPid ?? 1, job: this.options.rootJob ?? 1 });
+      supervisor.createRoot({ ...this.options.root, ...this.rootTransport() });
       supervisor.onChildExit(event => this.exited(supervisor, event));
       return supervisor;
     });
@@ -69,15 +86,18 @@ export class SubprocessBroker {
 
   spawn(spawn: SpawnRequest): void {
     if (this.disposed) { this.cancel(spawn); return; }
+    this.rootTransport();
     const child: Child = { spawn, signal: 0, acknowledged: false, closed: false, stopped: false };
     this.children.set(spawn.pid, child);
     // No import, compile, worker startup or wait is on the synchronous spawn path.
     void this.ready().then(supervisor => {
       if (this.disposed) return;
-      supervisor.reserveSpawn(spawn.parentPid, {
+      // This request was admitted while its sender still held filesystem authority. A root
+      // exit during lazy activation must not erase an already accepted independent job.
+      supervisor.reserveAdmittedSpawn(spawn.parentPid, {
         executable: spawn.executable, argv: spawn.argv, env: spawn.env, cwd: spawn.cwd,
         job: spawn.job ?? spawn.jobId, fds: [],
-      }, { pid: spawn.pid, job: spawn.jobId, interrupt: spawn.child.interrupt, requestedSignal: spawn.child.requestedSignal, outcome: spawn.child.outcome });
+      }, { pid: spawn.pid, job: spawn.jobId, interrupt: spawn.child.interrupt, requestedSignal: spawn.child.requestedSignal, signalState: spawn.child.signalState, outcome: spawn.child.outcome });
       const signal = Atomics.load(new Int32Array(spawn.child.requestedSignal), 0);
       if (signal) { child.signal = signal; supervisor.observeSignal(spawn.pid, signal); }
       return supervisor.start(spawn.pid);
@@ -102,6 +122,7 @@ export class SubprocessBroker {
       args: spawn.argv, env: { ...spawn.env, PWD: spawn.cwd },
       filesystem: this.filesystem.connect(spawn.filesystem), child: spawn.child,
       pid: spawn.pid, jobId: spawn.jobId, identity: spawn.child.identity, interrupt: spawn.child.interrupt,
+      signalState: spawn.child.signalState, requestedSignal: spawn.child.requestedSignal, outcome: spawn.child.outcome,
       trace: spawn.trace, slots: spawn.slots, spawnBroker: true, net: null, moduleCache: null,
     };
     if (!preview1 && engine === "browser" && new URL(this.workerUrl).pathname.endsWith("/__bunwasm/worker.js")) request.moduleCache = `bunwasm-m-${crypto.randomUUID()}`;
@@ -117,6 +138,12 @@ export class SubprocessBroker {
       transport.stdout.close(); transport.stderr.close();
     });
     worker.onmessage = ({ data }: MessageEvent<WorkerMessage>) => {
+      const selected = readOutcome(outcomeWord(spawn.child.outcome));
+      if (selected?.kind === "signaled" && data.type !== "exit" && data.type !== "error") {
+        // Reject queued capabilities even when fatal publication preceded filesystem revocation.
+        if (data.type === "spawn") this.cancel(data.request);
+        return;
+      }
       if (data.type === "spawn") {
         if (isRevoked(spawn.filesystem) || data.request.parentPid !== context.pid) this.cancel(data.request);
         else this.spawn(data.request);
@@ -154,20 +181,48 @@ export class SubprocessBroker {
   async wait(pid: number): Promise<ProcessExit> {
     const child = this.children.get(pid);
     const supervisor = await this.ready();
-    return supervisor.waitForExit(child?.spawn.parentPid ?? supervisor.get(pid)?.parentPid ?? this.options.rootPid ?? 1, pid);
+    return supervisor.waitForExit(child?.spawn.parentPid ?? supervisor.get(pid)?.parentPid ?? this.options.root?.pid ?? 1, pid);
   }
-  async kill(pid: number, signal: number): Promise<void> {
-    const supervisor = await this.ready();
-    supervisor.kill(pid, signal as Signal);
-    const child = this.children.get(pid);
-    if (child) child.signal = supervisor.get(pid)?.signal ?? signal;
+  private childSignalTransport(child: Child): SignalTransport {
+    const transport = child.spawn.child;
+    return { signalState: createSignalState(transport.signalState), interrupt: new Int32Array(transport.interrupt),
+      requestedSignal: new Int32Array(transport.requestedSignal), outcome: outcomeWord(transport.outcome) };
   }
-  async killJob(job: number, signal: number): Promise<void> {
-    if (!this.activation) return;
-    const supervisor = await this.activation;
-    const children = Array.from(this.children.values()).filter(child => child.spawn.jobId === job);
-    supervisor.killJob(job, signal as Signal);
-    for (const child of children) child.signal = supervisor.get(child.spawn.pid)?.signal ?? signal;
+  private deliver(targets: { pid: number; transport: SignalTransport; child?: Child }[], signal: number): Promise<void> {
+    // Publication has no callbacks. Every default member's terminal choice precedes any revoke,
+    // stream closure, or worker stop, including reentrant exits caused by those operations.
+    const deliveries = targets.map(target => ({ ...target, delivery: requestSignal(target.transport, signal) }));
+    for (const { child, delivery } of deliveries) {
+      if (!child) continue;
+      if (delivery.action !== "ignore") child.signal = Atomics.load(new Int32Array(child.spawn.child.requestedSignal), 0);
+      if (delivery.outcome) {
+        this.filesystem.revoke(child.spawn.filesystem);
+        childTransport(child.spawn.child).finish(delivery.outcome.status, delivery.outcome.kind === "signaled" ? delivery.outcome.code : undefined);
+        if (child.worker) this.stopSafely(child);
+      }
+    }
+    if (!this.activation) return Promise.resolve();
+    return this.activation.then(supervisor => {
+      for (const { pid, delivery } of deliveries) {
+        if (delivery.action !== "ignore" && supervisor.get(pid)) supervisor.observeSignal(pid, signal);
+      }
+    });
+  }
+  kill(pid: number, signal: number): Promise<void> {
+    const sig = checkedSignal(signal), child = this.children.get(pid);
+    if (child) return this.deliver([{ pid, child, transport: this.childSignalTransport(child) }], sig);
+    if (this.root?.pid === pid) return this.deliver([{ pid, transport: this.root }], sig);
+    return this.ready().then(supervisor => supervisor.kill(pid, sig));
+  }
+  killJob(job: number, signal: number): Promise<void> {
+    const sig = checkedSignal(signal);
+    const targets = Array.from(this.children.values()).filter(child => child.spawn.jobId === job)
+      .map(child => ({ pid: child.spawn.pid, child, transport: this.childSignalTransport(child) }));
+    // Root and child workers share these exact words with a later lazy supervisor instance.
+    // Never publish locally and then call supervisor.killJob: that could replay a consumed bit.
+    const root: { pid: number; transport: SignalTransport; child?: Child }[] = this.root?.job === job
+      ? [{ pid: this.root.pid, transport: this.root }] : [];
+    return this.deliver(root.concat(targets), sig);
   }
   /** Guest handle ownership, not process ancestry. Close makes an existing wait resolve before
    * reaping; closing a completed child simply releases its retained argv/env/job metadata.
@@ -193,7 +248,7 @@ export class SubprocessBroker {
   }
   /** Parent exit is not job teardown: independently running/background children stay alive. */
   rootExit(code: number): void {
-    if (this.activation) void this.activation.then(supervisor => supervisor.exit(this.options.rootPid ?? 1, code)).catch(error => this.report(error));
+    if (this.activation) void this.activation.then(supervisor => supervisor.exit(this.options.root?.pid ?? 1, code)).catch(error => this.report(error));
   }
 
   private cleanupCache(child: Child): void { if (child.request?.moduleCache) void caches.delete(child.request.moduleCache); }
@@ -214,6 +269,8 @@ export class SubprocessBroker {
     catch (error) { this.report(error); }
   }
   private report(error: unknown): void { console.error("bun-wasm: process controller failed", error); }
+  /** Release an unadmitted request whose sender has already lost process authority. */
+  rejectSpawn(spawn: SpawnRequest): void { this.cancel(spawn); }
   private cancel(spawn: SpawnRequest): void {
     const result = claimOutcome(outcomeWord(spawn.child.outcome), { kind: "signaled", code: 9 });
     if (result.kind === "signaled" && result.code === 9) {

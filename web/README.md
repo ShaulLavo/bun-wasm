@@ -102,7 +102,8 @@ role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `1
   ENOSYS stub that prints `[wasi] unimplemented import …` once.
 - `src/worker.ts`: each `bun …` command starts a fresh worker, instantiates the precompiled module,
   streams `fd_write` on fds 1/2 back as it happens, and uses the live filesystem service.
-  Ctrl-C requests SIGINT; a second stop request sends SIGKILL. Completed writes remain visible.
+  Ctrl-C sends SIGINT: an ordinary program stops immediately with 130; a registered handler may
+  clean up and retain its own exit code. A second stop request sends SIGKILL. Completed writes remain visible.
 - `src/shell.ts`: line editing, history, Tab completion, `;`/`&&`, `>`/`>>`, and the builtins
   `ls cat echo cd pwd mkdir rm mv touch edit clear history help`.
 - `src/runner.ts`: loading an engine's wasm and starting one `bun …` run in a worker with its
@@ -127,10 +128,14 @@ Bun alias registry and real filesystem preopens.
 
 Each process has separate argv, environment, cwd and stdio. Bun's existing bounded 1 MiB pipe
 transport remains until step 4b. Closing stdin sends EOF; `child_wait` polls the exit status.
-SIGINT, SIGTERM and SIGPIPE publish a shared interrupt so a guest can handle the signal and
-keep its own exit code. An explicit default action reports `128 + signal`; SIGKILL immediately
-records 137 and revokes before requesting physical termination. Engine-specific checkpoints
-are step 7a. A second Run/Ctrl+C stop request escalates to SIGKILL; the runtime adds no timer.
+SIGINT, SIGTERM and SIGPIPE use per-process, per-signal dispositions. Without a registered
+handler, the supervisor immediately records `128 + signal` and revokes before termination.
+Ignored signals do nothing; handled signals queue for the guest and preserve its own exit code.
+Node/Bun listener registration and removal publish synchronously; removing the final handler
+restores default. Ordinary `process.exit(143)` remains an ordinary exit, not a SIGTERM result.
+SIGKILL always records 137 and revokes; it cannot be caught or ignored. Cooperative event-loop
+turns deliver registered handlers now; CPU-bound engine checkpoints are step 7a, not a dependency
+of unhandled default actions. A second Run/Ctrl+C stop request sends SIGKILL; no timer escalates.
 Jobs and pids have separate namespaces; foreground job termination leaves other background jobs
 alive, and ordinary parent exit does not kill children. Bun's adapter retains its four-active-child
 budget; the generic service does not impose that limit. Each wasm instance retains the module's
