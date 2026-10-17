@@ -50,6 +50,7 @@ export function checkTransferValidation(send: Sender) {
       send(null, options ? { transfer } : transfer);
       assert.equal(buffer.byteLength, 0);
     }
+    checkCallableContainers(send);
     const received = new Promise(resolve => { channel.port2.onmessage = event => resolve(event.data); });
     channel.port1.postMessage("still owned");
     return received.then(value => assert.equal(value, "still owned")).finally(() => { channel.port1.close(); channel.port2.close(); });
@@ -89,4 +90,29 @@ function checkTransferVariant(send: Sender, test: InvalidTransfer, options: bool
   });
   for (const [buffer, length] of buffers) assert.equal(buffer.byteLength, length);
   assert.equal(serialized, false);
+}
+
+function callableIterable(buffer: ArrayBuffer) {
+  return Object.assign(function () { throw new Error("Transfer container must not be called"); }, {
+    *[Symbol.iterator]() { yield buffer; },
+  });
+}
+
+function checkCallableContainers(send: Sender) {
+  const cases: { label: string; make(buffer: ArrayBuffer): unknown; detached: boolean }[] = [
+    { label: "callable iterable", make: callableIterable, detached: true },
+    { label: "callable proxy iterable", make: buffer => new Proxy(callableIterable(buffer), {}), detached: true },
+    { label: "callable options", make: buffer => Object.assign(function () {}, { transfer: [buffer] }), detached: true },
+    { label: "callable options with callable transfer", make: buffer => Object.assign(function () {}, { transfer: callableIterable(buffer) }), detached: true },
+    { label: "callable empty options", make: () => function () {}, detached: false },
+  ];
+  for (const test of cases) {
+    const buffer = new ArrayBuffer(16);
+    send(test.label, test.make(buffer));
+    assert.equal(buffer.byteLength, test.detached ? 0 : 16);
+  }
+  const buffer = new ArrayBuffer(16);
+  const invalid = Object.assign(function () {}, { transfer: [buffer, null] });
+  assert.throws(() => send(null, invalid), { name: "TypeError", message: "Type error" });
+  assert.equal(buffer.byteLength, 16);
 }

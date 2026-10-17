@@ -237,5 +237,5 @@ const transferResult = new Promise<void>((resolve, reject) => {
 await checkTransferValidation(transferWorker.postMessage.bind(transferWorker));
 await transferResult;
 await transferClose;
-assert.deepEqual(transferMessages, [null, null, "worker transfer validation"]);
+assert.deepEqual(transferMessages, [null, null, "callable iterable", "callable proxy iterable", "callable options", "callable options with callable transfer", "callable empty options", "worker transfer validation"]);
 console.log("Web transfer validation is atomic and matches Bun errors");
