@@ -105,7 +105,7 @@ try {
     await page.waitForFunction(() => (globalThis as any).processResult, undefined, { timeout: 90_000 });
     const result = await page.evaluate(() => (globalThis as any).processResult);
     assert.equal(result.ok, true, JSON.stringify(result));
-    assert.equal(result.checks.length, artifact ? 15 : 14, "process gate unexpectedly changed coverage");
+    assert.equal(result.checks.length, artifact ? 24 : 23, "process gate unexpectedly changed coverage");
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ browser: name, version: browser.version(), revision: "working-tree", ...result }));
     if (benchmark) {
