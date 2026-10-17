@@ -9,6 +9,13 @@ for (const code of [0, 23]) {
     expect(result.stderr).toBe("");
   });
 }
+for (const [signal, code] of [["SIGTERM", 143], ["SIGKILL", 137]] as const) {
+  test(`portable command deadline preserves child ${signal}`, () => {
+    const result = spawnSync("node", [script, "5", "node", "-e", `process.kill(process.pid, ${JSON.stringify(signal)})`], { encoding: "utf8", timeout: 10000 });
+    expect(result.status).toBe(code);
+    expect(result.stderr).toBe("");
+  });
+}
 test("portable command deadline kills an overlong command", () => {
   const result = spawnSync("node", [script, "0.1", "node", "-e", "setInterval(() => {}, 1000)"], { encoding: "utf8", timeout: 10000 });
   expect(result.status).toBe(124);
