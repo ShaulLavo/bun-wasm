@@ -292,3 +292,99 @@ bash /work/tmp/wave-heavy/run.sh --class suite worker-threads-census -- \
 Use `jsc` or `browser` for the other engines. Raw before/after JSON, JSONL, build
 logs, gate logs, selection, and artifact hashes are retained in
 `/work/reports/bun-wasm-worker-threads/` until coordinator acceptance.
+
+
+## Global Web Worker
+
+The global `Worker` constructor wraps the same guest execution as
+`node:worker_threads.Worker`. It accepts file paths, file URL strings and objects,
+data URLs, and object URLs made from Blob or File. TypeScript entry points use
+Bun's transpiler. `name`, `argv`, `env`, `preload`, and `ref: false` configure the
+worker. `preload` accepts a path or an array of paths. `data` is cloned at
+construction and is available through `node:worker_threads.workerData`.
+Entries are modules, including when `type: "module"` is specified. `smol` is
+accepted as a memory-use hint. It does not change the guest engine's heap policy.
+
+The parent receives EventTarget `open`, `message`, `messageerror`, `error`, and
+`close` events. Property handlers work alongside event listeners. `MessageEvent.ports` contains
+transferred ports in transfer-list order, including ports absent from the data. `open` precedes
+entry execution, so a missing entry still produces `open` before `error`.
+Messages sent before natural exit drain before `close`. `terminate()` requests
+termination and suppresses later messages. The final `close` event follows host
+completion. `ref()` and `unref()` control the parent's lifetime.
+
+Incoming messages stay queued while dependencies and preloads load. Delivery
+starts after the entry's synchronous code runs, including before a top-level
+`await` settles. After that point, messages with no handler are dropped.
+An accepted port batch drains through microtasks before later broadcast tasks,
+so installing a handler from a broadcast callback does not revive earlier messages.
+
+Inside a web worker, `self` is the global object. `postMessage`, `onmessage`,
+`onmessageerror`, `addEventListener`, `removeEventListener`, `dispatchEvent`,
+`close`, and `name` are available. A message handler keeps the child alive.
+`Bun.isMainThread` is false in both web and Node workers.
+
+The adapter uses original TypeScript because Bun's implementation requires
+JavaScriptCore C++ bindings. The existing four-child host budget and shared
+memory limitations apply. Object URL registries are local to a guest. Creating
+a worker captures the blob's contents, so immediate revocation does not cancel
+that startup. This differs from Bun's deferred blob lookup. Cross-worker object URLs and shared buffers need separate lifetime and sharing
+support.
+
+The focused fixture runs with `scripts/test.sh --no-build web-worker`, repeated
+with `--engine jsc` and `--engine browser`. The full web gate also runs
+`web/tests/browser-web-workers.ts` in
+Chromium and WebKit on all engines.
+
+### Global constructor measurement
+
+Measured 2026-10-17 with the exact eleven `web-worker` cause files in
+`scripts/measure-web-workers.sh`. Each engine uses one job, loopback-only
+networking, a fifteen-second file deadline, and the same dependencies.
+
+| Engine | Fully passing files before/after | Observed assertions before/after | File timeouts before/after |
+| --- | ---: | ---: | ---: |
+| QuickJS | 0/11 → 3/11 | 22 → 60 | 0 → 0 |
+| JSC | 0/11 → 3/11 | 20 → 58 | 0 → 0 |
+| Browser | 0/11 → 3/11 | 23 → 61 | 0 → 0 |
+
+The newly passing files check `Bun.isMainThread`, Comlink, and MessagePort context
+destruction. Passing these checks does not establish leak freedom; unavailable
+heap counters remain a limitation of the suite adapters.
+
+No previously passing assertion fails or becomes unobserved afterward.
+All engines complete `worker.test.ts` with 31 passes and 11 failures.
+Earlier integration runs timed out in this file, including at a separate
+sixty-second diagnostic deadline. The final integration includes main's
+event-loop scheduling fixes and has no file timeouts.
+
+The baseline suite revision is `cd95fa7a13b3f13be73e512b38ec111c1c228084`; the final
+run uses `5e0baa66516f3af00b008cdf1521c681317741e8`. Their complete test trees are
+identical at `7d3cb10bd796680db5b458041eea9451944bdedf`; the intervening changes are
+Rust lint-driver edits. Dependency hashes and execution settings match. The
+runtime comparison also includes intervening main host changes through #56,
+the event-loop fixes in #42, and HTMLRewriter/X509 in #41.
+
+Remaining failures include the four-child budget, cross-guest SharedArrayBuffer,
+environment-proxy cloning, unsupported execution flags and VM APIs, loader-error
+diagnostics, BroadcastChannel close/inspection behavior, and shared object-URL
+lifetime. [The follow-up plan](../plans/compatibility-followups.md#global-web-worker-census)
+records the reproduction and affected adapters.
+
+The full fixture gates pass 211/211 on each engine, with no known-main exceptions.
+The full web gate, all six Chromium/WebKit global-Worker combinations, and all
+six sandbox HMR runs pass. The three lifetime assertions flagged by an earlier
+combined browser run also pass in a fresh, same-artifact filtered diagnostic.
+
+Raw results, source/dependency provenance, reproducer output, and exact gate
+scripts are retained at `/work/reports/bun-wasm-web-worker/` until coordinator
+acceptance. Build the launcher and all engines in private targets, then reproduce:
+
+```sh
+source env.sh
+export CARGO_TARGET_DIR=/work/tmp/bun-wasm-web-worker-check-target
+bash /work/tmp/wave-heavy/run.sh --class suite web-worker-census -- \
+  env PATH="$PATH" scripts/measure-web-workers.sh quickjs /work/tmp/bun-wasm-web-worker-quickjs.json
+```
+
+Repeat with `jsc` and `browser` and separate result paths.

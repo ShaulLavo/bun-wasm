@@ -607,6 +607,12 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         }
     });
     let st = state.clone();
+    t.add("workerSource", move |a| {
+        let path = a.str(1)?;
+        st.transpiler.transpile(a.str(0)?, path, crate::transpiler::Loader::from_path(path))
+            .map(Val::from).map_err(NativeError::syntax_error)
+    });
+    let st = state.clone();
     t.add("moduleFormat", move |a| Ok(st.load_source(a.str(0)?)?.1.name().into()));
     let st = state.clone();
     t.add("mapPosition", move |a| {

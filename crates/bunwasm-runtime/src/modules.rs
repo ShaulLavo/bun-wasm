@@ -415,7 +415,9 @@ pub fn esm_source(state: &State, name: &str, code: &str) -> String {
 /// [`esm_source`] with `extra` code put first on line 1 (the host engine's
 /// `import.meta` set-up).
 pub fn esm_source_with(state: &State, name: &str, code: &str, extra: &str) -> String {
-    let prologue = format!("{extra}{}", esm_prologue(code));
+    let entry = !state.main_arg.borrow().is_empty() && name == state.main.borrow().as_str();
+    let worker = if entry { "import.meta.__bunwasm_workerEntry?.(); " } else { "" };
+    let prologue = format!("{extra}{worker}{}", esm_prologue(code));
     state.record_prologue(name, prologue.chars().count());
     format!("{prologue}{code}")
 }

@@ -114,7 +114,7 @@ declare namespace BunWasm {
     toUint8(value: ArrayBuffer | ArrayBufferView): Uint8Array;
     concatBytes(chunks: Uint8Array[]): Uint8Array;
     require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
-    require(name: "bun"): { write(path: unknown, data: Uint8Array): Promise<number> };
+    require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
     builtin(name: "node:stream"): {
       Transform: CompressionConstructor;
       Readable: new(options: { read(): void }) => WorkerReadable;
