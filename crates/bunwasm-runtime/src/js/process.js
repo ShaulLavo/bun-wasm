@@ -10,7 +10,6 @@
   const native = internal.native;
   const EventEmitter = internal.require("events");
   const info = native.platformInfo;
-  internal.require("signal_defaults");
 
   const NODE_VERSION = "26.3.0";
 
