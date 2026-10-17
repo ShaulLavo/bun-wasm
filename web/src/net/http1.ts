@@ -1,1 +1,1 @@
-export * from "@bun-wasm/runtime/browser/net/http1";
+export * from "waffle/browser/net/http1";

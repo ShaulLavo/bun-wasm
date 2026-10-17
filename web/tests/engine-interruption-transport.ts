@@ -1,5 +1,5 @@
 import type { RunRequest } from "../src/worker";
-import { workerProcessState } from "../../runtime/proc/worker-client";
+import { workerProcessState } from "waffle/proc/worker-client";
 
 /** Views of the real request, including generic signal records at nonzero offsets.
  * Never allocate a substitute budget: a detached wait word would fabricate proof. */

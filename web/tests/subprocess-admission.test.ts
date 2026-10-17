@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { SubprocessHost, SharedPipe, childTransport, type ChildTransport } from "../src/subprocess.ts";
 import { SLOT_NAMES } from "../src/net/trampoline.ts";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
-import { createSignalState, takeSignal } from "../../runtime/proc/signals.ts";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
+import { createSignalState, takeSignal } from "waffle/proc/signals";
 
 const command = JSON.stringify({ argv: ["fixture"] });
 const bytes = new Uint8Array([1, 2, 3]);

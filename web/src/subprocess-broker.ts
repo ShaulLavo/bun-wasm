@@ -1,13 +1,13 @@
 // Bun's legacy subprocess adapter. The page runtime owns admission and supervision.
-import type { ChildExitEvent, ProcessContext, ProcessExit, ProcessSupervisor, RootProcessOptions, Signal } from "@bun-wasm/runtime/proc";
-import { checkedSignal } from "@bun-wasm/runtime/proc/types";
-import { createSignalState, requestSignal, type SignalTransport } from "@bun-wasm/runtime/proc/signals";
-import { isRevoked } from "@bun-wasm/runtime/fs/protocol";
-import { claimOutcome, outcomeWord, readOutcome } from "@bun-wasm/runtime/proc/outcome";
-import type { Runtime, ProcessService, RuntimeFilesystem } from "@bun-wasm/runtime";
+import type { ChildExitEvent, ProcessContext, ProcessExit, ProcessSupervisor, RootProcessOptions, Signal } from "waffle/proc";
+import { checkedSignal } from "waffle/proc/types";
+import { createSignalState, requestSignal, type SignalTransport } from "waffle/proc/signals";
+import { isRevoked } from "waffle/fs/protocol";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
+import type { Runtime, ProcessService, RuntimeFilesystem } from "waffle";
 import { childTransport, createProcessBudget } from "./subprocess.ts";
 import type { Engine, RunRequest, SpawnRequest, WorkerMessage } from "./worker";
-import type { WorkerProcessMessage, WorkerProcessTransport } from "@bun-wasm/runtime/proc/worker-client";
+import type { WorkerProcessMessage, WorkerProcessTransport } from "waffle/proc/worker-client";
 
 type CompiledExecutable = WebAssembly.Module | (() => Promise<WebAssembly.Module>);
 export type ExecutableRegistration =
@@ -47,7 +47,7 @@ export class SubprocessBroker {
       budget?: SharedArrayBuffer;
       output?(fd: 1 | 2, data: Uint8Array): void;
       quiesceRoot?(): void | Promise<void>;
-      rootFilesystem?: import("@bun-wasm/runtime/fs").FilesystemIdentity;
+      rootFilesystem?: import("waffle/fs").FilesystemIdentity;
       rootAcknowledged?(): boolean;
       stopRoot?(): void | Promise<void>;
       engine?: Engine;
@@ -102,7 +102,7 @@ export class SubprocessBroker {
   }
   async adoptRuntimeRoot(transport: WorkerProcessTransport): Promise<void> {
     if (this.disposed) throw new Error("Process broker is disposed");
-    const { workerProcessState } = await import("@bun-wasm/runtime/proc/worker-client");
+    const { workerProcessState } = await import("waffle/proc/worker-client");
     const state = workerProcessState(transport);
     if (this.root) controllersFor(this.runtime).delete(this.root.pid);
     this.root = { pid: state.pid, job: state.job, ...state.signals };

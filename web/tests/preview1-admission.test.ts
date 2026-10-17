@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { RuntimeFilesystem } from "@bun-wasm/runtime";
-import { createFilesystemIdentity } from "@bun-wasm/runtime/fs";
+import type { RuntimeFilesystem } from "waffle";
+import { createFilesystemIdentity } from "waffle/fs";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { SubprocessHost } from "../src/subprocess";
 import type { RunRequest } from "../src/worker";

@@ -1,8 +1,8 @@
 // Spike 4's five micro workloads, unchanged counts/fixtures; only host construction differs.
 import { Wasi as BaselineWasi } from "benchmark:baseline-core";
 import { MemFS as BaselineMemFS } from "benchmark:baseline-fs";
-import { Wasi } from "@bun-wasm/runtime/core";
-import { FilesystemClient } from "@bun-wasm/runtime/fs";
+import { Wasi } from "waffle/core";
+import { FilesystemClient } from "waffle/fs";
 const encoder = new TextEncoder();
 const names = Array.from({ length: 300 }, (_, i) => `file${String(i).padStart(3, "0")}.txt`);
 const line = encoder.encode("sample text line\n");

@@ -1,7 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { CHILD_FINAL_SIGNAL, SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "../src/subprocess.ts";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
-import { createSignalState, takeSignal } from "../../runtime/proc/signals.ts";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
+import { createSignalState, takeSignal } from "waffle/proc/signals";
 import { SLOT_NAMES, installHostSlots, installHostSlotsViaImport } from "../src/net/trampoline.ts";
 import { NetHost } from "../src/net/host.ts";
 import { createRing } from "../src/net/ring.ts";

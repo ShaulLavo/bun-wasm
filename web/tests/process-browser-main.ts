@@ -1,8 +1,8 @@
-import { createRuntime, type Runtime, type RuntimeOptions } from "@bun-wasm/runtime";
-import { BrowserProcessBroker } from "@bun-wasm/runtime/browser/process-broker";
+import { createRuntime, type Runtime, type RuntimeOptions } from "waffle";
+import { BrowserProcessBroker } from "waffle/browser/process-broker";
 import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess-broker";
 import { SubprocessHost, type ChildTransport, type SpawnMeta } from "../src/subprocess.ts";
-import { createFilesystemIdentity, type FilesystemIdentity } from "../../runtime/fs";
+import { createFilesystemIdentity, type FilesystemIdentity } from "waffle/fs";
 import { processFixture, type ProcessFixture } from "./process-fixtures";
 import { measureProcessStarts } from "./process-benchmark";
 
@@ -219,7 +219,7 @@ try {
   await test("delayed-first-activation-does-not-block-other-shell-task", async () => {
     let release!: () => void; let activationCalls = 0;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    const s = await scope({ tiny: { module: module("exit"), adapter: "preview1", cooperative: true } }, { processHost: options => new BrowserProcessBroker({ ...options, activate: async () => { activationCalls++; await gate; return import("../../runtime/proc"); } }) });
+    const s = await scope({ tiny: { module: module("exit"), adapter: "preview1", cooperative: true } }, { processHost: options => new BrowserProcessBroker({ ...options, activate: async () => { activationCalls++; await gate; return import("waffle/proc"); } }) });
     try {
       const child = s.spawn("tiny");
       equal(child.host.wait(child.handle), -2, "delayed spawn returns before activation");

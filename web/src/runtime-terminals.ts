@@ -1,1 +1,1 @@
-export * from "@bun-wasm/runtime/browser/runtime-terminals";
+export * from "waffle/browser/runtime-terminals";

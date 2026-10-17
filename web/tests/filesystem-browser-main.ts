@@ -1,4 +1,4 @@
-import { createRuntime, type RuntimeFilesystem, type Runtime } from "@bun-wasm/runtime";
+import { createRuntime, type RuntimeFilesystem, type Runtime } from "waffle";
 import { startRun } from "../src/runner";
 
 const runtime = createRuntime({ filesystem: { workerURL: new URL("./fs-worker.js", location.href) } });

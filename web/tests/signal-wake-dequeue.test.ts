@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { Wasi } from "../../runtime/core/wasi";
-import { MemFS } from "../../runtime/fs/memory";
-import { outcomeWord } from "../../runtime/proc/outcome";
-import { ProcessABI } from "../../runtime/proc/abi";
-import { createSignalState, requestSignal } from "../../runtime/proc/signals";
+import { Wasi } from "waffle/core/wasi";
+import { MemFS } from "waffle/fs/memory";
+import { outcomeWord } from "waffle/proc/outcome";
+import { ProcessABI } from "waffle/proc/abi";
+import { createSignalState, requestSignal } from "waffle/proc/signals";
 import { SubprocessHost } from "../src/subprocess";
 
 for (const mode of ["legacy", "generic"] as const) test(`${mode} dequeue preserves later pending signals and releases the final WASI wait`, () => {

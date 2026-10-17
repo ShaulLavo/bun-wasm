@@ -1,12 +1,12 @@
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, test } from "bun:test";
-import { DescriptorTable } from "../../runtime/core/descriptors";
-import { createFilesystemIdentity, revokeFilesystem } from "../../runtime/fs";
-import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "../../runtime/proc/worker-client";
+import { DescriptorTable } from "waffle/core/descriptors";
+import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { SharedFilesystem } from "../src/shared-fs";
 import { SubprocessBroker } from "../src/subprocess-broker";
-import { claimOutcome } from "../../runtime/proc/outcome";
-import { setSignalDisposition } from "../../runtime/proc/signals";
+import { claimOutcome } from "waffle/proc/outcome";
+import { setSignalDisposition } from "waffle/proc/signals";
 import type { RunRequest, WorkerMessage } from "../src/worker";
 
 const pause = (ms = 1) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -15,7 +15,7 @@ async function until(condition: () => boolean, label: string, milliseconds = 500
   while (!condition()) { if (performance.now() >= end) throw new Error(`${label} timed out`); await pause(); }
 }
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
-function fixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("../../runtime/proc")> }, failPostMessage = false, quiesce?: () => Promise<void>) {
+function fixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("waffle/proc")> }, failPostMessage = false, quiesce?: () => Promise<void>) {
   const NativeWorker = globalThis.Worker;
   const workers: FakeWorker[] = [];
   const ports: MessagePort[] = [];
@@ -189,7 +189,7 @@ test("generic worker loaded after first watcher tick still confirms a caught def
 
 test("already-published background spawn survives root exit during lazy supervisor activation", async () => {
   const activation = deferred(); let activating = false;
-  const state = fixture({ activate: async () => { activating = true; await activation.promise; return import("../../runtime/proc"); } });
+  const state = fixture({ activate: async () => { activating = true; await activation.promise; return import("waffle/proc"); } });
   try {
     state.broker.register("child", { adapter: "preview1", cooperative: true, module: emptyModule() });
     await state.broker.adoptRuntimeRoot(state.root);

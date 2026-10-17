@@ -1,6 +1,6 @@
-import { createRuntime, type Runtime } from "@bun-wasm/runtime";
+import { createRuntime, type Runtime } from "waffle";
 import { startRun, type Run } from "../src/runner";
-import { createWorkerProcessTransport, workerProcessState } from "@bun-wasm/runtime/proc/worker-client";
+import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { runtimeProcChecks, runtimeProcFixture, runtimeProcStages, runtimeProcJobWaitChecks, runtimeProcJobWaitFixture, runtimeProcJobWaitStages } from "./runtime-proc-fixtures";
 
 // Diagnostic only: identify the exact BufferSource representation rejected by an engine.

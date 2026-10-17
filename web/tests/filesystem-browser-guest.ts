@@ -1,4 +1,4 @@
-import { FilesystemClient, revokeFilesystem } from "@bun-wasm/runtime/fs";
+import { FilesystemClient, revokeFilesystem } from "waffle/fs";
 self.onmessage = ({ data }) => {
   const fs = new FilesystemClient(data.connection);
   try {

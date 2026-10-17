@@ -1,11 +1,11 @@
 // Bun executor policy over the reusable browser process bootstrap.
 import { startEngineHost } from "./engine-host.js";
-import { createFilesystemIdentity, revokeFilesystem, sharedRevoked, type FilesystemIdentity } from "@bun-wasm/runtime/fs";
+import { createFilesystemIdentity, revokeFilesystem, sharedRevoked, type FilesystemIdentity } from "waffle/fs";
 import { NetHost } from "./net/host";
 import type { NetRequest } from "./net/protocol";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline";
-import { readOutcome, outcomeWord } from "@bun-wasm/runtime/proc/outcome";
-import { bootstrap, type RuntimeWorkerRequest, type RuntimeWorkerMessage, type RuntimeWorkerHost, type WorkerExecutor } from "@bun-wasm/runtime/browser/worker";
+import { readOutcome, outcomeWord } from "waffle/proc/outcome";
+import { bootstrap, type RuntimeWorkerRequest, type RuntimeWorkerMessage, type RuntimeWorkerHost, type WorkerExecutor } from "waffle/browser/worker";
 import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.ts";
 import { DefaultSignal } from "./default-signal";
 

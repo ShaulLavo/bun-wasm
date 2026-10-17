@@ -68,7 +68,10 @@ try {
     // A remote runner may receive the exact source-and-harness archive below instead
     // of an entire repository/history. Both routes unpack only into this run's owned scratch.
     const archivePath = process.env.PROCESS_BASELINE_ARCHIVE;
-    baselineRevision = archivePath ? process.env.PROCESS_BASELINE_REVISION : (await new Response(track(Bun.spawn(["git", "-C", root, "rev-parse", process.env.PROCESS_BASELINE_REF ?? "origin/main"], { stdout: "pipe", stderr: "inherit" })).stdout).text()).trim();
+    // This comparison intentionally owns a frozen pre-extraction runtime and harness.
+    // Current main uses installed Waffle and is not a historical runtime archive.
+    const baselineRef = process.env.PROCESS_BASELINE_REF ?? "74e2cee12e9a000ea23b9542d07bf3923f8360b5";
+    baselineRevision = archivePath ? process.env.PROCESS_BASELINE_REVISION : (await new Response(track(Bun.spawn(["git", "-C", root, "rev-parse", baselineRef], { stdout: "pipe", stderr: "inherit" })).stdout).text()).trim();
     if (!baselineRevision || !/^[0-9a-f]{40}$/.test(baselineRevision)) throw new Error("cannot resolve baseline revision (archive input requires PROCESS_BASELINE_REVISION)");
     const snapshot = join(scratch, "baseline-source");
     await mkdir(snapshot);

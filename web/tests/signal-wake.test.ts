@@ -1,10 +1,10 @@
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { Worker } from "node:worker_threads";
-import { createFilesystemIdentity, revokeFilesystem } from "../../runtime/fs";
-import { outcomeWord } from "../../runtime/proc/outcome";
-import { createSignalState, setSignalDisposition, SIGNAL_PENDING } from "../../runtime/proc/signals";
-import { createWorkerProcessTransport, workerProcessState } from "../../runtime/proc/worker-client";
+import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
+import { outcomeWord } from "waffle/proc/outcome";
+import { createSignalState, setSignalDisposition, SIGNAL_PENDING } from "waffle/proc/signals";
+import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { createProcessBudget } from "../src/subprocess";
 import type { SharedFilesystem } from "../src/shared-fs";

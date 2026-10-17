@@ -2,10 +2,10 @@
 import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createRing } from "@bun-wasm/runtime/browser/net/ring";
+import { createRing } from "waffle/browser/net/ring";
 import { installHostSlots, trampolineModule } from "../src/net/trampoline";
 import { MemFS } from "../src/fs";
-import { Wasi } from "@bun-wasm/runtime/core";
+import { Wasi } from "waffle/core";
 
 const encode = (s: string) => new TextEncoder().encode(s);
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);

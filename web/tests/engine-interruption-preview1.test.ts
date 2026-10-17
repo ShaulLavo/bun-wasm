@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { WasiExit } from "../../runtime/core";
+import { WasiExit } from "waffle/core";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 
 function fixture(firstPollErrno = 27) {

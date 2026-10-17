@@ -6,23 +6,24 @@ import { tmpdir } from "node:os";
 import { buildBrowserEntries, resolveRuntimePackage } from "../../scripts/browser-build";
 import { initialJavaScript } from "../../scripts/runtime-size";
 import { runInNewContext } from "node:vm";
-import { DescriptorTable, OpenDescription } from "@bun-wasm/runtime/core/descriptors";
-import { FilesystemClient, FilesystemService, MemoryBackend, connectFilesystemIdentity, createFilesystemConnection, createProcessFilesystemIdentity, revokeFilesystem, sharedRevoked } from "@bun-wasm/runtime/fs";
-import * as protocol from "@bun-wasm/runtime/fs/protocol";
-import * as codec from "@bun-wasm/runtime/proc/filesystem-codec";
-import * as client from "@bun-wasm/runtime/proc/worker-client";
-import * as pipes from "@bun-wasm/runtime/proc/worker-pipes";
-import * as abi from "@bun-wasm/runtime/proc/abi";
-import * as terminals from "@bun-wasm/runtime/browser/runtime-terminals";
-import { claimOutcome, outcomeWord, readOutcome } from "@bun-wasm/runtime/proc/outcome";
+import { DescriptorTable, OpenDescription } from "waffle/core/descriptors";
+import { FilesystemClient, FilesystemService, MemoryBackend, connectFilesystemIdentity, createFilesystemConnection, createProcessFilesystemIdentity, revokeFilesystem, sharedRevoked } from "waffle/fs";
+import * as protocol from "waffle/fs/protocol";
+import * as codec from "waffle/proc/filesystem-codec";
+import * as client from "waffle/proc/worker-client";
+import * as pipes from "waffle/proc/worker-pipes";
+import * as abi from "waffle/proc/abi";
+import * as terminals from "waffle/browser/runtime-terminals";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
 import { SubprocessHost } from "../src/subprocess";
-import { fatalInterrupt } from "@bun-wasm/runtime/interrupt/check";
-import { requestSignal, setSignalDisposition, SIGNAL_PENDING } from "@bun-wasm/runtime/proc/signals";
+import { fatalInterrupt } from "waffle/interrupt/check";
+import { requestSignal, setSignalDisposition, SIGNAL_PENDING } from "waffle/proc/signals";
 import { DefaultSignal } from "../src/default-signal";
 import type { RunRequest, WorkerMessage } from "../src/worker";
 
+const runtimePackage = resolveRuntimePackage(new URL(import.meta.url).pathname);
 const source = new Bun.Transpiler({ loader: "ts", target: "browser" }).transformSync(
-  (readFileSync(new URL(import.meta.resolve("@bun-wasm/runtime/browser/worker")), "utf8") + "\n" +
+  (readFileSync(runtimePackage.source("waffle/browser/worker"), "utf8") + "\n" +
     readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8"))
     .replace(/^import .*;\n/gm, "")
     .replace(/^export /gm, "")
