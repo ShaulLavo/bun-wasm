@@ -26,3 +26,12 @@ test("SvelteKit's timestamped Vite SSR diagnostic stays visible", () => {
   const message = 'Error when evaluating SSR module /node_modules/@sveltejs/kit/src/runtime/server/index.js: transport was disconnected, cannot call "fetchModule"';
   expect(firstError('6:37:22 AM [vite] (ssr) ' + message)).toBe(message);
 });
+
+for (const message of [
+  "circular import: binding 'Fragment' is not resolvable in module '/node_modules/astro/dist/runtime/server/index.js'",
+  "Export named 'Http2ServerResponse' not found in module 'node:http2'.",
+]) {
+  test(`Astro retains the engine message ${message}`, () => {
+    expect(firstError(message + '\n[bun-wasm:exit] {"reason":"process.exit","code":1,"stack":null,"loop":null}')).toBe(message);
+  });
+}
