@@ -305,8 +305,8 @@ export class SubprocessHost {
     this.options.defaultSignal?.(signal);
     return false;
   }
-  fail(message: string, code: string) {
-    this.lastError = JSON.stringify({ name: "Error", message, code });
+  fail(message: string, code: string, details: object = {}) {
+    this.lastError = JSON.stringify({ ...details, name: "Error", message, code });
     return -1;
   }
   parentActive(cells: Int32Array) {
@@ -387,7 +387,9 @@ export class SubprocessHost {
     catch (error) {
       this.kill(id, 9);
       this.release(id);
-      return this.fail(String(error), error && typeof error === "object" && "code" in error ? String(error.code) : "EIO");
+      return this.fail(error instanceof Error ? error.message : String(error),
+        error && typeof error === "object" && "code" in error ? String(error.code) : "EIO",
+        error instanceof Error ? error : {});
     }
     this.watch();
     return id;

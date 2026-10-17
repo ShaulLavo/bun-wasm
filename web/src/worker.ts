@@ -13,6 +13,7 @@ import type { ProcessExit } from "../../runtime/proc/types.ts";
 import { fatalInterrupt } from "../../runtime/interrupt/check";
 import type { WorkerProcessClient, WorkerProcessMessage, WorkerProcessTransport } from "../../runtime/proc/worker-client";
 import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.ts";
+import { executableNotFound } from "./spawn-error.ts";
 
 export type Engine = "quickjs" | "jsc" | "browser";
 
@@ -50,8 +51,8 @@ export interface RunRequest {
   child?: ChildTransport;
   /** Generic descriptor ownership is opt-in; legacy Bun slots do not load its adapters. */
   runtimeProcess?: WorkerProcessTransport;
-  /** The page creates child workers while this worker may be blocked in a wasm call. */
-  spawnBroker?: boolean;
+  /** Registered names let the Bun adapter reject a missing command synchronously. */
+  spawnBroker?: { executables: readonly string[] };
 }
 
 // The browser engine's polyfills replace globalThis.Response; Cache.put needs the real one.
@@ -270,10 +271,12 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
         const cwd = meta.cwd || req.env.PWD || "/";
         if (fs.lookup(cwd)?.kind !== "dir") throw Object.assign(new Error(`spawn: cwd does not exist: ${cwd}`), { code: "ENOENT" });
         if (!req.spawnBroker) throw Object.assign(new Error("spawn: this worker has no page subprocess broker"), { code: "ENOTSUP" });
+        const executable = meta.executable ?? meta.argv[0]!;
+        if (!req.spawnBroker.executables.includes(executable)) throw executableNotFound(executable);
         // Process ancestry is not capability ancestry: another job may outlive this parent.
         const filesystem = createFilesystemIdentity({ ...fs.connection, revocations: fs.connection.revocations.slice(-1) });
         const request: SpawnRequest = {
-          executable: meta.executable ?? meta.argv[0]!, argv: meta.argv, cwd,
+          executable, argv: meta.argv, cwd,
           pid: transport.pid, parentPid: transport.parentPid, jobId: transport.jobId, job: meta.job ?? transport.jobId,
           env: { ...meta.env, PWD: cwd }, filesystem, child: transport,
           trace: req.trace, slots: req.slots, spawnBroker: true,

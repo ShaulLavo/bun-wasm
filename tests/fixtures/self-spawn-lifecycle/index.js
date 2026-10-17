@@ -13,8 +13,12 @@ console.log("cpu timeout", timed.status, timed.signal === stopSignal, timed.erro
 const waiting = Bun.spawn(cmd("await Bun.stdin.text()"), { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
 setTimeout(() => waiting.kill("SIGKILL"), 100);
 console.log("blocked input kill", await waiting.exited, waiting.signalCode);
-const missing = Bun.spawnSync(cmd("console.log('never')"), { cwd: "/does-not-exist" });
-console.log("missing cwd", missing.error.code);
+try {
+  Bun.spawnSync(cmd("console.log('never')"), { cwd: "/does-not-exist" });
+  console.log("missing cwd", false);
+} catch (error) {
+  console.log("missing cwd", error.code);
+}
 const nested = Bun.spawnSync(cmd("const c = Bun.spawnSync([process.execPath, '-e', 'console.log(99)']); console.log(c.exitCode, c.stdout.toString().trim())"));
 console.log("nested", nested.exitCode, nested.stdout.toString().trim());
 const clockStart = Date.now();
