@@ -4,6 +4,7 @@ import { readOutcome } from "../../runtime/proc/outcome";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from "../../runtime/proc/worker-client";
 import { createRuntimeTerminalCodec } from "../src/runtime-terminals";
 import { SubprocessBroker } from "../src/subprocess-broker";
+import { SubprocessHost } from "../src/subprocess";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { Engine } from "../src/worker";
 
@@ -109,4 +110,50 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
       dispose,
     };
   } catch (error) { dispose(); throw error; }
+}
+
+export function createLegacyEngineScope(module: WebAssembly.Module, engine: Engine, fs: SharedFilesystem,
+  workerUrl: string, adapter: "bun" | "preview1" = "bun"): EngineInterruptionScope {
+  const decoder = new TextDecoder();
+  const broker = new SubprocessBroker(workerUrl, fs);
+  broker.register("bun", { module, adapter, engine });
+  const children = new Map<number, EngineInterruptionChild>();
+  const host = new SubprocessHost({
+    output() {}, onChildClose: pid => broker.close(1, pid),
+    launch(meta, transport) {
+      const identity = createFilesystemIdentity(fs.client.connection);
+      children.set(transport.pid, { pid: transport.pid, jobId: transport.jobId,
+        requestedSignal: new Int32Array(transport.requestedSignal), signalState: new Int32Array(transport.signalState), stdout: "", stderr: "" });
+      broker.spawn({ executable: "bun", argv: meta.argv, pid: transport.pid, parentPid: transport.parentPid,
+        jobId: transport.jobId, cwd: "/home/user", env: {}, filesystem: identity, child: transport,
+        trace: false, slots: "imports", spawnBroker: true });
+      return { revoke() { fs.revoke(identity); }, terminate() {} };
+    },
+  });
+  return { broker, children,
+    drain(child) {
+      for (const fd of [1, 2]) for (;;) {
+        const bytes = host.read(host.pipe(child.pid, fd));
+        if (!(bytes instanceof Uint8Array)) break;
+        if (fd === 1) child.stdout += decoder.decode(bytes); else child.stderr += decoder.decode(bytes);
+      }
+    },
+    spawn(source) {
+      // Signal the guest job without also default-killing this scope's controller.
+      // The generic adapter uses the same real production new-job admission.
+      const pid = host.spawn(JSON.stringify({ executable: "bun", argv: ["bun", "-e", source], job: -1 }));
+      if (pid <= 0) throw new Error(`spawn failed: ${pid}`);
+      const child = children.get(pid);
+      if (!child) throw new Error("spawn transport missing");
+      return child;
+    },
+    wait: child => host.wait(child.pid),
+    async kill(child, signal, delivery = "host") {
+      if (delivery === "host") return host.kill(child.pid, signal);
+      if (delivery === "page-killJob") await broker.killJob(child.jobId, signal);
+      else await broker.kill(child.pid, signal);
+      return 0;
+    },
+    dispose() { broker.dispose(); host.dispose(); },
+  };
 }

@@ -1,15 +1,12 @@
 import { SharedFilesystem } from "../src/shared-fs";
-import { SubprocessBroker } from "../src/subprocess-broker";
-import { SubprocessHost } from "../src/subprocess";
 import type { Engine, RunRequest } from "../src/worker";
 import { startRun, type Run } from "../src/runner";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
-import { createFilesystemIdentity } from "../../runtime/fs";
 import { assertCausalIdleWake, assertNativeEngineCompletion, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 import { measureInterruptionOverhead } from "./engine-interruption-benchmark";
 import { handledSignalGuest, idleSignalGuest } from "./engine-interruption-guests";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
-import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignalDelivery } from "./engine-interruption-scope";
+import { createLegacyEngineScope, createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineSignalDelivery } from "./engine-interruption-scope";
 
 const NativeWorker = globalThis.Worker;
 const activeWorkers = new Set<ObservedWorker>();
@@ -84,49 +81,10 @@ function assertDeferredHandledSignal(worker: ObservedWorker): void {
   equal(evidence.handledBeforeLoopFinished, 0, "no mode0 dequeue before synchronous CPU work yields");
   equal(evidence.checkpointNonzero, 0, "mode4 is a non-dequeue fatal checkpoint");
 }
-function legacyScope(module: WebAssembly.Module, engine: Engine, adapter: "bun" | "preview1" = "bun"): EngineInterruptionScope {
-  const fs = filesystem!;
-  const workerName = engine === "browser" && adapter !== "preview1" ? "worker.js" : "engine-interruption-worker.js";
-  const broker = new SubprocessBroker(new URL(`./${workerName}`, location.href).href, fs);
-  broker.register("bun", { module, adapter, engine });
-  const children = new Map<number, Child>();
-  const host = new SubprocessHost({
-    output() {}, onChildClose: pid => broker.close(1, pid),
-    launch(meta, transport) {
-      const identity = createFilesystemIdentity(fs.client.connection);
-      children.set(transport.pid, { pid: transport.pid, jobId: transport.jobId,
-        requestedSignal: new Int32Array(transport.requestedSignal), signalState: new Int32Array(transport.signalState), stdout: "", stderr: "" });
-      broker.spawn({ executable: "bun", argv: meta.argv, pid: transport.pid, parentPid: transport.parentPid,
-        jobId: transport.jobId, cwd: "/home/user", env: {}, filesystem: identity, child: transport,
-        trace: false, slots: "imports", spawnBroker: true });
-      return { revoke() { fs.revoke(identity); }, terminate() {} };
-    },
-  });
-  return { broker, children,
-    drain(child) {
-      for (const fd of [1, 2]) for (;;) {
-        const bytes = host.read(host.pipe(child.pid, fd));
-        if (!(bytes instanceof Uint8Array)) break;
-        if (fd === 1) child.stdout += decoder.decode(bytes); else child.stderr += decoder.decode(bytes);
-      }
-    },
-    spawn(source) {
-      const pid = host.spawn(JSON.stringify({ executable: "bun", argv: ["bun", "-e", source] }));
-      truth(pid > 0, `spawn failed: ${pid}`);
-      const child = children.get(pid); truth(child, "spawn transport missing"); return child;
-    },
-    wait: child => host.wait(child.pid),
-    async kill(child, signal, delivery = "host") {
-      if (delivery === "host") return host.kill(child.pid, signal);
-      if (delivery === "page-killJob") await broker.killJob(child.jobId, signal);
-      else await broker.kill(child.pid, signal);
-      return 0;
-    },
-    dispose() { broker.dispose(); host.dispose(); },
-  };
-}
 async function scope(module: WebAssembly.Module, engine: Engine, route: EngineInterruptionRoute = "legacy", adapter: "bun" | "preview1" = "bun") {
-  const base = route === "runtimeProcess" ? await createRuntimeEngineScope(module, engine, filesystem!) : legacyScope(module, engine, adapter);
+  const workerName = engine === "browser" && adapter !== "preview1" ? "worker.js" : "engine-interruption-worker.js";
+  const base = route === "runtimeProcess" ? await createRuntimeEngineScope(module, engine, filesystem!)
+    : createLegacyEngineScope(module, engine, filesystem!, new URL(`./${workerName}`, location.href).href, adapter);
   const owned = { ...base,
     async ready(child: Child): Promise<ObservedWorker> {
       try { await until(() => { base.drain(child); return child.stderr.includes("ready\n"); }, "guest ready"); }
