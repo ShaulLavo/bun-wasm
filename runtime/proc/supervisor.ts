@@ -253,7 +253,8 @@ export class ProcessSupervisor {
         pid: record.pid, parentPid: record.parentPid, job: record.job, request: record.request!,
         module: executable.module, adapter: executable.adapter,
         descriptors: record.descriptors, interrupt: record.interrupt, requestedSignal: record.requestedSignal, signalState: record.signalState, outcome: record.outcome,
-        exit: code => this.exit(record.pid, code), fail: error => this.failStart(record.pid, error),
+        exit: code => this.exit(record.pid, code), fail: () => this.exit(record.pid, 126),
+        startFailed: error => this.failStart(record.pid, error),
         defaultSignal: signal => this.defaultSignal(record.pid, signal),
         registerRevocation: hook => this.registerRevocation(record.pid, hook),
       };
@@ -265,9 +266,8 @@ export class ProcessSupervisor {
   failStart(pid: number, error: unknown): void {
     const record = this.table.get(pid);
     if (!record) return;
-    const starting = record.state !== "running" || readOutcome(record.outcome)?.kind === "start-failed";
     const missing = error instanceof ExecutableNotFound || error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT";
-    this.finish(pid, starting ? { kind: "start-failed", code: missing ? 2 : 13 } : { kind: "exited", code: 126 });
+    this.finish(pid, { kind: "start-failed", code: missing ? 2 : 13 });
   }
   exit(pid: number, code: number): void {
     if (!Number.isInteger(code)) throw new ProcessError(ProcessErrno.INVAL, "exit code must be an integer");

@@ -378,8 +378,8 @@ export class SubprocessBroker {
     worker.onerror = event => {
       event.preventDefault();
       childTransport(spawn.child).stderr.write(new TextEncoder().encode(`bun-wasm: child worker failed: ${event.message}\n`));
-      if (!child.started) claimOutcome(context.outcome, { kind: "start-failed", code: 13 });
-      context.fail(new Error(event.message));
+      if (!child.started) context.startFailed(new Error(event.message));
+      else context.fail(new Error(event.message));
       // Error events are not quiescent acknowledgements. The outcome is already selected,
       // but filesystem work must drain before exit confirmation or physical termination.
       this.stopSafely(child);
@@ -453,8 +453,8 @@ export class SubprocessBroker {
       // No ordered final message will follow a host failure. This permits confirmation,
       // but is not an acknowledgement: quiesceChild must still drain filesystem work.
       child.failed = true;
-      if (!child.started) claimOutcome(context.outcome, { kind: "start-failed", code: 13 });
-      context.fail(new Error(event.message));
+      if (!child.started) context.startFailed(new Error(event.message));
+      else context.fail(new Error(event.message));
       this.stopRuntimeSafely(child);
     };
     try { worker.postMessage(request, [request.filesystem.port]); }
