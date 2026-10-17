@@ -147,6 +147,10 @@ export interface RunOptions {
   /** From registerModuleScope(): run the worker under ./__bunwasm/. */
   moduleScope: boolean;
   trace?: boolean;
+  /** Skip Bun host slots for arbitrary Preview1 guests. */
+  adapter?: RunRequest["adapter"];
+  /** Explicit generic ownership transport; extended runtime_proc imports activate one automatically. */
+  runtimeProcess?: RunRequest["runtimeProcess"];
 }
 
 export interface RunHooks {
@@ -188,12 +192,17 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   // One Cache Storage cache per run holds its modules; deleted when the run ends.
   const moduleCache = options.moduleScope ? `bunwasm-m-${crypto.randomUUID()}` : null;
   const isolated = globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== "undefined";
+  const generic = !!options.runtimeProcess || WebAssembly.Module.imports(options.module).some(entry =>
+    entry.module === "runtime_proc" && !["signal", "interrupted", "default_signal"].includes(entry.name));
+  const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("../../runtime/fs").FilesystemIdentity } | undefined)?.filesystem;
   const request: RunRequest = {
     engine: options.engine,
+    adapter: options.adapter,
+    runtimeProcess: options.runtimeProcess,
     module: options.module,
     args: ["bun", ...options.args],
     env: options.env,
-    filesystem: options.filesystem.fork(),
+    filesystem: filesystemIdentity ? options.filesystem.connect(filesystemIdentity) : options.filesystem.fork(),
     trace: options.trace ?? false,
     net: ring,
     moduleCache,
@@ -201,14 +210,15 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     spawnBroker: true,
     pid: 1,
     jobId: 1,
-    interrupt: isolated ? new SharedArrayBuffer(4) : undefined,
-    requestedSignal: isolated ? new SharedArrayBuffer(4) : undefined,
-    signalState: isolated ? createSignalState().buffer as SharedArrayBuffer : undefined,
-    outcome: isolated ? new SharedArrayBuffer(8) : undefined,
+    interrupt: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
+    requestedSignal: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
+    signalState: isolated && !generic ? createSignalState().buffer as SharedArrayBuffer : undefined,
+    outcome: isolated && !generic ? new SharedArrayBuffer(8) : undefined,
   };
-  const rootOutcome = request.outcome ? outcomeWord(request.outcome) : null;
+  let rootOutcome = request.outcome ? outcomeWord(request.outcome) : null;
+  let rootPid = 1, rootJob = 1;
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
-  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { root: isolated ? {
+  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
     pid: 1, job: 1, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
     signalState: request.signalState, outcome: request.outcome,
   } : undefined });
@@ -223,7 +233,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
     return module;
   };
-  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, { module: moduleFor(options.engine), adapter: "bun", engine: options.engine });
+  const rootExecutable = options.adapter === "preview1"
+    ? { module: moduleFor(options.engine), adapter: "preview1" as const, cooperative: true as const }
+    : { module: moduleFor(options.engine), adapter: "bun" as const, engine: options.engine };
+  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, rootExecutable);
   for (const engine of ["quickjs", "jsc", "browser"] as const) subprocess.register(`bun-${engine}`, { module: moduleFor(engine), adapter: "bun", engine });
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
@@ -239,6 +252,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       result = winner.kind === "exited" && winner.code === result.code && result.error
         ? { code: winner.status, error: result.error } : { code: winner.status };
     }
+    subprocess.revokeRuntimeProcess(rootPid);
     finished = true;
     if (outcomeTimer !== null) clearTimeout(outcomeTimer);
     outcomeTimer = null;
@@ -258,6 +272,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     const msg = event.data;
     if (finished) {
       if (msg.type === "spawn") subprocess.rejectSpawn(msg.request);
+      if (msg.type === "runtime-proc") subprocess.rejectRuntimeMessage(msg);
       return;
     }
     const selected = rootOutcome && readOutcome(rootOutcome);
@@ -265,7 +280,12 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       // Reject capabilities at the dispatch boundary too: the periodic observer need not have
       // run yet when a guest catches its own terminal unwind and sends more messages.
       if (msg.type === "spawn") subprocess.rejectSpawn(msg.request);
+      if (msg.type === "runtime-proc") subprocess.rejectRuntimeMessage(msg);
       finish({ code: selected.status }, false, selected.code);
+      return;
+    }
+    if (msg.type === "runtime-proc") {
+      void subprocess.runtimeMessage(msg, rootPid).catch(error => console.error("bun-wasm: process message failed", error));
       return;
     }
     if (msg.type === "spawn") {
@@ -303,30 +323,50 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     event.preventDefault();
     finish({ code: 1, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
-  worker.postMessage(request, [request.filesystem.port]);
-  const watchOutcome = () => {
+  let prepared = !generic;
+  const preparation = generic ? (async () => {
+    const { workerProcessState, createWorkerProcessTransport } = await import("../../runtime/proc/worker-client");
+    const transport = request.runtimeProcess ??= createWorkerProcessTransport();
+    const state = workerProcessState(transport);
+    // The host endpoint and descriptor reservations use the same filesystem identity.
+    const { port, ...filesystem } = request.filesystem;
+    transport.data = { ...(transport.data as object | undefined), filesystem };
+    await subprocess.adoptRuntimeRoot(transport);
+    rootOutcome = state.signals.outcome;
+    rootPid = request.pid = state.pid;
+    rootJob = request.jobId = state.job;
+    prepared = true;
+    if (!finished) {
+      worker.postMessage(request, [request.filesystem.port]);
+      watchOutcome();
+    }
+  })().catch(error => finish({ code: 126, error: String(error) })) : undefined;
+  if (!preparation) worker.postMessage(request, [request.filesystem.port]);
+  function watchOutcome(): void {
     if (!rootOutcome || finished) return;
     outcomeTimer = setTimeout(() => {
       outcomeTimer = null;
-      const result = readOutcome(rootOutcome);
+      const result = readOutcome(rootOutcome!);
       // A guest can catch a default-signal unwind and keep running. Its already selected fatal
       // outcome is authority to revoke, not an acknowledgement that filesystem locks are free.
       if (result?.kind === "signaled") finish({ code: result.status }, false, result.code);
       else watchOutcome();
     }, 4);
-  };
+  }
   watchOutcome();
   let interrupted = false;
-  return { done, kill: (requestedSignal?: 2 | 9) => {
+  const kill = (requestedSignal?: 2 | 9): void => {
     if (finished) return;
+    if (!prepared) { void preparation!.then(() => kill(requestedSignal)); return; }
     const signal = requestedSignal ?? (interrupted ? 9 : 2);
     interrupted = true;
     // Without isolation there is no shared interrupt channel or subprocess service.
-    if (!request.interrupt) { finish({ code: 128 + signal }, false, signal); return; }
+    if (!request.interrupt && !request.runtimeProcess) { finish({ code: 128 + signal }, false, signal); return; }
     // The broker synchronously publishes every job member before any teardown callback. Root
     // HANDLE/IGNORE stays alive; DEFAULT selects its typed outcome without guest cooperation.
-    void subprocess.killJob(1, signal).catch(error => console.error("bun-wasm: job signal failed", error));
+    void subprocess.killJob(rootJob, signal).catch(error => console.error("bun-wasm: job signal failed", error));
     const result = readOutcome(rootOutcome!);
     if (result) finish({ code: result.status }, false, result.kind === "signaled" ? result.code : undefined);
-  } };
+  };
+  return { done, kill };
 }
