@@ -81,18 +81,8 @@ const cases: Record<string, () => Promise<void>> = {
     const added = await run(join(cwd, "packages/a"), "add", "fixture-cli");
     latest = "1.0.0";
     const member = JSON.parse(readFileSync(join(cwd, "packages/a/package.json"), "utf8"));
-    const firstRequests = requests.slice();
-    const firstLock = readFileSync(join(cwd, "bun.lock"), "utf8");
-    let refreshed: unknown;
-    if (member.dependencies["fixture-cli"] !== "^2.0.0") {
-      latest = "2.0.0";
-      try {
-        const output = await run(join(cwd, "packages/a"), "add", "fixture-cli", "--no-cache");
-        refreshed = { output, member: JSON.parse(readFileSync(join(cwd, "packages/a/package.json"), "utf8")) };
-      } catch (error) { refreshed = String(error); }
-      finally { latest = "1.0.0"; }
-    }
-    check(member.dependencies["fixture-cli"] === "^2.0.0", `workspace add writes member resolution: ${JSON.stringify({ member, added, firstRequests, firstLock, refreshed, requests, root: readFileSync(join(cwd, "package.json"), "utf8") })}`);
+    check(member.dependencies["fixture-cli"] === "^2.0.0", `workspace add writes member resolution: ${JSON.stringify({ member, added, requests })}`);
+    check(member.devDependencies === undefined && member.optionalDependencies === undefined && member.peerDependencies === undefined, "adding a dependency inserted absent groups");
     check(JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).dependencies["fixture-cli"] === "1.0.0", "workspace add changed root");
   },
   async registry() {
