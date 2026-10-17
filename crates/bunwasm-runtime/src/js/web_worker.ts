@@ -103,8 +103,11 @@
       const runMain = internal.runMain;
       internal.runMain = async path => {
         for (const preload of options.preload) await internal.importModule(internal.native.resolve(preload, process.cwd() + "/", false));
+        port.start();
         return runMain(path);
       };
+    } else {
+      port.start();
     }
     const listeners = new Map<string, Map<EventListenerOrEventListenerObject, { capture: boolean; wrapped: EventListener }[]>>();
     const handlers = new Map<string, GlobalHandler | null>();
@@ -165,7 +168,6 @@
     EventTarget.prototype.addEventListener.call(port, "messageerror", event => {
       if (event instanceof MessageEvent) scope.dispatchEvent(messageEvent("messageerror", event.data));
     });
-    port.start();
     internal.addIoWaiter({
       get ref() { return Boolean(handlers.get("message") || listeners.get("message")?.size); },
       step() { return false; },
