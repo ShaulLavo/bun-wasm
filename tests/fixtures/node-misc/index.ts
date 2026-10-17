@@ -30,32 +30,38 @@ for (const [name, fn] of [
   }
 }
 
+const spawnErrors = new Set(["ENOENT", "ERR_NOT_SUPPORTED_IN_WASM"]);
+function unavailable(error: unknown) {
+  return error instanceof Error && "code" in error && typeof error.code === "string" && spawnErrors.has(error.code);
+}
+function unregistered(code: number | null, diagnostic: string) {
+  return code === 127 && diagnostic.includes("executable not found: ls");
+}
 const missingChild = childProcess.spawn("ls");
-const missing = await new Promise<boolean>((resolve) => {
-  missingChild.once("error", (error) => resolve(error.code === "ERR_NOT_SUPPORTED_IN_WASM"));
-  missingChild.once("exit", (code) => resolve(code === 127));
+let diagnostic = "";
+missingChild.stdout?.on("data", () => {});
+missingChild.stderr?.on("data", chunk => { diagnostic += String(chunk); });
+const failed = await new Promise<boolean>(resolve => {
+  let settled = false;
+  const finish = (value: boolean) => { if (settled) return; settled = true; resolve(value); };
+  missingChild.once("error", error => finish(unavailable(error)));
+  missingChild.once("close", (code, signal) => finish(signal == null && unregistered(code, diagnostic)));
 });
-console.log("child_process unavailable:", missing);
-
+console.log("child_process.spawn fails:", failed);
 console.log("Bun.which:", Bun.which("ls"));
 const spawned = Bun.spawnSync({ cmd: ["ls"] });
-console.log("Bun.spawnSync unavailable:", !spawned.success &&
-  (spawned.error?.code === "ERR_NOT_SUPPORTED_IN_WASM" || spawned.exitCode === 127));
-let spawnUnavailable = false;
+console.log("Bun.spawnSync fails:", !spawned.success && spawned.exitCode !== 0 &&
+  (unavailable(spawned.error) || unregistered(spawned.exitCode, new TextDecoder().decode(spawned.stderr))));
 try {
-  const child = Bun.spawn({ cmd: ["ls"], stdout: "ignore", stderr: "pipe" });
-  await new Response(child.stderr).text();
-  spawnUnavailable = await child.exited === 127;
-} catch (error) {
-  spawnUnavailable = error.code === "ERR_NOT_SUPPORTED_IN_WASM";
-}
-console.log("Bun.spawn unavailable:", spawnUnavailable);
+  const child = Bun.spawn({ cmd: ["ls"], stdout: "pipe", stderr: "pipe" });
+  const [code, text] = await Promise.all([child.exited, child.stderr.text()]);
+  console.log("Bun.spawn fails:", unregistered(code, text));
+} catch (error) { console.log("Bun.spawn fails:", unavailable(error)); }
 try {
-  Bun.serve({ fetch() {} });
-  console.log("Bun.serve ran");
-} catch (error) {
-  console.log("Bun.serve throws:", error.message.includes("not supported in bun-wasm"));
-}
+  const server = Bun.serve({ port: 0, fetch() { return new Response("unexpected"); } });
+  server.stop(true);
+  console.log("Bun.serve throws:", false);
+} catch (error) { console.log("Bun.serve throws:", error instanceof Error && error.message.includes("not supported in bun-wasm")); }
 try {
   await fetch("http://127.0.0.1:9/");
   console.log("fetch resolved");
