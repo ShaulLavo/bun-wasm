@@ -77,7 +77,9 @@
       for (const callback of callbacks) callback(error);
       failure = null;
       stream.writable = true;
-      internal.nextTick(() => stream.emit("error", error));
+      // A supplied write callback can consume the error itself. Still notify installed
+      // stream listeners, preserving callback -> callback tick -> error event ordering.
+      if (callbacks.length === 0 || stream.listenerCount("error") > 0) internal.nextTick(() => stream.emit("error", error));
     }
     Object.assign(stream, {
       fd,
@@ -93,7 +95,9 @@
           return false;
         }
         try {
-          write(typeof chunk === "string" ? chunk : internal.toUint8(chunk));
+          // This API is synchronous: surface a buffered stdout failure to this write's
+          // callback/listener path, not to an unrelated later event-loop flush.
+          write(typeof chunk === "string" ? chunk : internal.toUint8(chunk), true);
         } catch (error) {
           failure = { error, callbacks: typeof callback === "function" ? [callback] : [] };
           stream.writable = false;
@@ -174,6 +178,44 @@
   let stderr;
   let stdin;
 
+  const signals = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGABRT: 6, SIGKILL: 9, SIGUSR1: 10, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15 };
+  const signalNames = new Map(Object.entries(signals).map(([name, number]) => [number, name]));
+  const dispositions = new Map();
+  function publishSignalDisposition(name) {
+    const number = signals[name];
+    if (number === 9) return; // SIGKILL cannot acquire a handler or ignored disposition.
+    // SIGPIPE starts ignored, but Node/Bun restore DEFAULT after its last handler is removed.
+    // An unrelated removeAllListeners must preserve a signal that was still ignored.
+    const disposition = process.listenerCount(name) > 0 ? 2 : dispositions.get(number) === 1 ? 1 : 0;
+    if ((dispositions.get(number) || 0) === disposition) return;
+    if (native.hostSignal(number, disposition) < 0) throw new Error(`Cannot set ${name} disposition`);
+    dispositions.set(number, disposition);
+  }
+  // EventEmitter invokes this after its actual mutation, before removeListener observers.
+  // This also covers once wrappers and direct EventEmitter.prototype calls on process.
+  internal.listenerChanged = function listenerChanged(target, name) {
+    if (target !== process) return;
+    if (name === undefined) {
+      for (const signal of Object.keys(signals)) publishSignalDisposition(signal);
+    } else if (Object.hasOwn(signals, name)) publishSignalDisposition(name);
+  };
+  // Publish the runtime's JS-only startup default before user code can write to stdio.
+  if (native.hostSignal(13, 1) < 0) throw new Error("Cannot set SIGPIPE disposition");
+  dispositions.set(13, 1);
+  internal.pumpSignals = function pumpSignals() {
+    let progress = false;
+    for (;;) {
+      const number = native.hostSignal(0, 0);
+      if (number <= 0) return progress;
+      const name = signalNames.get(number);
+      if (!name) throw new Error(`Cannot dispatch signal ${number}`);
+      // The host clears pending first. A once listener can therefore restore DEFAULT before
+      // its callback runs without reclassifying this already delivered, handled signal.
+      process.emit(name, name);
+      progress = true;
+    }
+  };
+
   const props = {
     title: "bun",
     version: `v${NODE_VERSION}`,
@@ -211,10 +253,13 @@
     },
     reallyExit: (code) => native.exit(code | 0),
     abort: () => native.exit(134),
-    kill(pid, signal) {
+    kill(pid, signal = "SIGTERM") {
+      const number = typeof signal === "number" ? signal : signals[String(signal).toUpperCase()];
+      if (!Number.isInteger(number) || number < 0 || number > 64) throw new TypeError(`Unknown signal: ${signal}`);
       if (pid === process.pid) {
-        if (signal === 0) return true;
-        native.exit(143);
+        if (number === 0) return true;
+        if (native.hostSignal(number, 3) < 0) throw new Error(`Cannot send signal ${signal}`);
+        return true;
       }
       throw errnoException("kill");
     },

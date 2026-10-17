@@ -1,2 +1,3 @@
 Bun stdin close race EPIPE -32 write
 Node stdin callback, event; EPIPE -32 write
+Bun buffered stdout before stdin

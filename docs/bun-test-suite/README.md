@@ -1,17 +1,32 @@
 # Bun's upstream suite
 
-## Before → current
+<!-- history-comparison:start -->
+## Historical and current observations
 
-The previous committed full QuickJS baseline was upstream `4ceda2c2868d3a7703c7737ddd9de7244ec384df` on 2026-10-15. The current replay uses upstream `cd95fa7a13b3f13be73e512b38ec111c1c228084` from runtime commit `6e93c80c6f9bccc879990bedb999c3efdcd3166f`.
+QuickJS 282 → 411 is the sole comparable baseline by matched file selection, with all 2,305 files selected on both sides. JSC and browser are non-comparable. They previously selected 1,082 files under js/bun, js/node, and js/web, while each current run selected all 2,305 files. Runner, suite, and supplemental-dependency hashes changed on all engines, so the matched QuickJS selection does not establish an isolated runtime gain.
 
-| Engine | Fully passing before → current | Observed passes before → current | File timeouts before → current |
-|---|---:|---:|---:|
-| QuickJS | 282 → 411 | 12,663 → 20,162 | 57 → 51 |
-| JSC | 113 → 411 | 8,878 → 19,290 | 46 → 50 |
-| Browser | 116 → 418 | 15,143 → 29,457 | 43 → 62 |
+| Engine | Historical selected files | Current selected files | Historical result | Current result | Comparison |
+| --- | --- | --- | --- | --- | --- |
+| quickjs | 2305 | 2305 | 282 fully passing files; 12663 observed passes; 57 timeouts | 411 fully passing files; 20162 observed passes; 51 timeouts | Comparable baseline (matched selection) |
+| jsc | 1082 | 2305 | 113 fully passing files; 8878 observed passes; 46 timeouts | 411 fully passing files; 19290 observed passes; 50 timeouts | Non-comparable |
+| browser | 1082 | 2305 | 116 fully passing files; 15143 observed passes; 43 timeouts | 418 fully passing files; 29457 observed passes; 62 timeouts | Non-comparable |
+
+| Input on all engines | Historical | Current |
+| --- | --- | --- |
+| Suite revision | 4ceda2c2868d3a7703c7737ddd9de7244ec384df | cd95fa7a13b3f13be73e512b38ec111c1c228084 |
+| Runner SHA-256 | 402ec80ab03e0a367a6a8fc49fe6605847a37c99b69fb8f93d9c66ebc8539d44 | 9df69cce25bc9d94722cfd323d018943da08456e7c000c9d1f0c884426d52767 |
+| Supplemental dependency files | 4248 | 2483 |
+| Supplemental dependency SHA-256 | fa39a9d0c87fde12be431f502e4803f0445b844dfdbb59cd19773965e33046ae | 59663e62be14bd8b6cf77bf3eca5ccb4506ad635ed2c795327b238b32ea6e787 |
+| Root dependency SHA-256 | febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7 | febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7 |
+| File deadline / test deadline | 15 seconds / 2,000 ms | 15 seconds / 2,000 ms |
+
+The historical inputs are preserved in [historical-summary.json](historical-summary.json). The current inputs are in [summary.json](summary.json). No historical artifact was rerun with the current runner and dependencies. Regenerate these tables with `bun scripts/refresh-compatibility-docs.ts`; `--check` rejects stale tables.
+<!-- history-comparison:end -->
 
 <!-- baseline:start -->
-## Measured baseline
+## Historical measured baseline
+
+QuickJS is the sole comparable baseline by matched file selection. JSC and browser used a smaller historical selection and remain non-comparable. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim. See the input table above.
 
 Upstream `4ceda2c2868d3a7703c7737ddd9de7244ec384df`, engine `quickjs`.
 
@@ -77,8 +92,6 @@ Categories are mutually exclusive first-blocker assignments. Passing, empty and 
 | js/node | 340 | 35 | 1,847/3,884 | 114 | 14 |
 | js/web | 185 | 16 | 762/7,949 | 114 | 5 |
 <!-- baseline:end -->
-
-## Current measurement
 
 <!-- current:start -->
 ## Current measured run
@@ -258,11 +271,11 @@ systemd-run --user --scope -p MemoryMax=4G nice -n 5 \
 systemd-run --user --scope -p MemoryMax=2G nice -n 5 \
   scripts/bun-suite.sh --engine browser --network loopback --jobs 2 \
   --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" \
-  --output "$results/browser.json" js/bun js/node js/web
+  --output "$results/browser.json"
 systemd-run --user --scope -p MemoryMax=2G nice -n 5 \
   scripts/bun-suite.sh --engine jsc --network loopback --jobs 2 \
   --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" \
-  --output "$results/jsc.json" js/bun js/node js/web
+  --output "$results/jsc.json"
 python3 scripts/bun-suite-report.py "$results/quickjs.json" \
   --compare "$results/browser.json" --compare "$results/jsc.json" \
   --previous /path/to/previous-full-quickjs.json --runtime-commit "$(git rev-parse HEAD)"
@@ -281,7 +294,7 @@ QuickJS and JSC use the native launcher and its networking/subprocess ABI. The b
 
 Every worker owns a source snapshot, restores tracked changes and deletes generated files after each test, verifies clean Git status, then clears its temp directory. Snapshot attributes preserve fixture bytes. Per-file process groups are killed and reaped on timeout/interruption. The runner removes its scratch directory on success, failure and handled signals. After an uncatchable SIGKILL, inspect the named scratch directory and its processes before deleting it.
 
-Pinned supplemental dependencies are installed from the checked-in manifest and lockfile. The new run installs all 198 packages, with 4,248 hashed files, versus 137 dependency files in the previous baseline. Root upstream dependencies are unchanged at 537 files. This setup change is recorded in provenance and contributes to progress; it is not a pure runtime comparison. Native addons and the full upstream framework/app dependency graph are not installed. Missing packages remain setup blockers.
+The current supplemental dependency tree has 2,483 hashed files, compared with 4,248 in the historical baseline. Root upstream dependencies retain the same 537 files and hash. The changed runner, suite revision, and supplemental dependency hash make these runs non-comparable as isolated runtime gains. Native addons and the full upstream framework/app dependency graph are not installed. Missing packages remain setup blockers.
 
 `bun:jsc.heapStats()` exposes engine memory totals with unavailable per-type/protected counters left empty or zero. Passing leak assertions against these counters does not establish leak freedom. `isASANEnabled()` is false, and unsupported unsafe operations still throw. Self-spawn runs fresh wasm instances, never native Bun. External programs, child IPC, terminals, real OS process trees and several stdio modes remain unsupported.
 
@@ -294,11 +307,14 @@ Raw JSON, JSONL, command logs, diagnostic output tails and the source diagnosis 
 <!-- progress:start -->
 ## Progress
 
+QuickJS 282 → 411 is the sole comparable baseline by matched file selection. JSC and browser are non-comparable because their selections changed. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim for any engine.
+
 | Date | Runtime commit | Files fully passing | Tests passing | Timeouts | a | b | c | d | e | f |
-|---|---|---|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-15 | 42262f8 | 137 | 5802 | 90 | 164 | 694 | 218 | 876 | 104 | 6 |
 | 2026-10-15 | a8ef9ca | 282 | 12651 | 61 | 89 | 50 | 146 | 1523 | 108 | 0 |
 | 2026-10-15 | 5ed3e9e | 282 | 12663 | 57 | 87 | 67 | 147 | 1505 | 92 | 18 |
+| 2026-10-17 | 6e93c80c6f9bccc879990bedb999c3efdcd3166f | 411 | 20162 | 51 | 84 | 81 | 54 | 1451 | 93 | 23 |
 
-Category counts use each run's classifier. The current classifier requires an explicit missing subprocess capability for b; category movement alone is not a compatibility gain.
+Category counts use each run's classifier. Category movement alone is not a compatibility gain.
 <!-- progress:end -->

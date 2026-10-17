@@ -7,9 +7,9 @@ exec sync 42
 execFile sync 43
 exec 44
 execFile 45
-kill 143 SIGTERM
-unsupported ENOENT
+kill true true
+unsupported true
 fork fork-arg 0
 ipc ERR_NOT_SUPPORTED_IN_WASM
-exec error ENOENT true
-exec error ENOENT true
+exec error true true
+exec error true true

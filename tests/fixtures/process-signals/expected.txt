@@ -1,0 +1,23 @@
+handled SIGINT 0 null
+default SIGINT 130 SIGINT
+removed SIGINT 130 SIGINT
+handled SIGTERM 0 null
+default SIGTERM 143 SIGTERM
+removed SIGTERM 143 SIGTERM
+handled SIGPIPE 0 null
+default SIGPIPE 17 null
+removed SIGPIPE 141 SIGPIPE
+handled SIGTERM 23 null
+handled SIGTERM 143 null
+stdio SIGPIPE 17 null
+once restored default SIGINT
+distinct handled signals 0 null
+self SIGINT false 130 SIGINT
+self SIGINT true 0 null
+self SIGTERM false 143 SIGTERM
+self SIGTERM true 0 null
+self SIGPIPE false 99 null
+self SIGPIPE true 0 null
+sync maxBuffer selected SIGKILL
+worker signal exit 0
+worker EPIPE exit 1

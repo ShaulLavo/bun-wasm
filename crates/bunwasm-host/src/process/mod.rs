@@ -2,10 +2,10 @@ mod pipe;
 mod stdio;
 mod stdin;
 
-pub use stdio::{Cancellation, Stdio};
+pub use stdio::{Cancellation, FinalOutcome, Stdio};
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::task::{Context, Waker};
@@ -18,7 +18,20 @@ use pipe::Pipe;
 use stdin::SharedInput;
 
 pub const FIRST_HANDLE: i32 = 0x4000_0000;
+/// Metadata selector on the existing child_pipe slot; fd 0..=2 remain pipes.
+pub const CHILD_FINAL_SIGNAL: i32 = 3;
+/// Worker control streams follow metadata rather than occupying selector 3.
+pub const CHILD_WORKER_INPUT: i32 = 4;
+pub const CHILD_WORKER_OUTPUT: i32 = 5;
 const MAX_CHILDREN: usize = 4;
+const BUN_EXECUTABLE_ALIASES: [&str; 6] = [
+    "bun",
+    "/bun",
+    "node",
+    "/node",
+    "/usr/local/bin/bun",
+    "/usr/local/bin/node",
+];
 
 pub struct Runtime {
     pub engine: wasmtime::Engine,
@@ -62,7 +75,8 @@ pub struct WorkerLimits {
 
 struct Child {
     cancel: Arc<Cancellation>,
-    result: Arc<Mutex<Option<i32>>>,
+    result: Arc<Mutex<Option<FinalOutcome>>>,
+    reaped: AtomicBool,
     thread: Option<JoinHandle<()>>,
     pipes: [i32; 5],
 }
@@ -77,7 +91,7 @@ pub struct Processes {
     stdio: Stdio,
     stdin: SharedInput,
     notify: Arc<Notify>,
-    next: i32,
+    next: u32,
     children: HashMap<i32, Child>,
     pipes: HashMap<i32, PipeHandle>,
     worker_pipes: [i32; 2],
@@ -85,6 +99,15 @@ pub struct Processes {
 
 fn error(message: impl Into<String>, code: &str) -> ErrorInfo {
     ErrorInfo::new("Error", message, Some(code))
+}
+
+fn close_child_pipes(inputs: Vec<Pipe>, outputs: Vec<Pipe>) {
+    for pipe in inputs {
+        pipe.close_reader();
+    }
+    for pipe in outputs {
+        pipe.close_writer();
+    }
 }
 
 impl Processes {
@@ -95,7 +118,7 @@ impl Processes {
             stdin: stdio.stdin.clone(),
             stdio,
             notify,
-            next: FIRST_HANDLE,
+            next: FIRST_HANDLE as u32,
             children: HashMap::new(),
             pipes: HashMap::new(),
             worker_pipes: [0; 2],
@@ -103,7 +126,7 @@ impl Processes {
         if let Some(pipes) = worker {
             for (index, pipe) in pipes.into_iter().enumerate() {
                 pipe.observe(&processes.notify);
-                let id = processes.next();
+                let id = processes.next().expect("fresh worker has room for both inherited pipes");
                 processes.pipes.insert(id, PipeHandle { pipe, write: index == 1 });
                 processes.worker_pipes[index] = id;
             }
@@ -111,14 +134,24 @@ impl Processes {
         processes
     }
 
-    fn next(&mut self) -> i32 {
-        let id = self.next;
-        self.next += 1;
-        id
+    fn require_handles(&self, count: usize) -> Result<(), ErrorInfo> {
+        // u32 can retain the exhausted sentinel after allocating i32::MAX.
+        let available = (i32::MAX as u32 + 1).saturating_sub(self.next) as usize;
+        if count > available {
+            return Err(error("bun-wasm child handle space exhausted", "EAGAIN"));
+        }
+        Ok(())
     }
 
-    fn pipe(&mut self, write: bool) -> (i32, Pipe) {
-        let id = self.next();
+    fn next(&mut self) -> Result<i32, ErrorInfo> {
+        self.require_handles(1)?;
+        let id = self.next as i32;
+        self.next += 1;
+        Ok(id)
+    }
+
+    fn pipe(&mut self, write: bool) -> Result<(i32, Pipe), ErrorInfo> {
+        let id = self.next()?;
         let pipe = Pipe::new(self.notify.clone());
         self.pipes.insert(
             id,
@@ -127,7 +160,7 @@ impl Processes {
                 write,
             },
         );
-        (id, pipe)
+        Ok((id, pipe))
     }
 
     fn stdin(&mut self, mode: &str) -> Result<(i32, SharedInput), ErrorInfo> {
@@ -135,7 +168,7 @@ impl Processes {
             "inherit" => Ok((0, self.stdio.stdin.clone())),
             "ignore" => Ok((0, SharedInput::new(Arc::new(wasmtime_wasi::p2::pipe::MemoryInputPipe::new(Vec::new()))))),
             "pipe" => {
-                let (id, pipe) = self.pipe(true);
+                let (id, pipe) = self.pipe(true)?;
                 Ok((id, SharedInput::new(Arc::new(pipe))))
             }
             _ => Err(error("Unsupported stdin mode in bun-wasm", "EINVAL")),
@@ -154,7 +187,7 @@ impl Processes {
             )),
             "ignore" => Ok((0, Arc::new(tokio::io::empty()))),
             "pipe" => {
-                let (id, pipe) = self.pipe(false);
+                let (id, pipe) = self.pipe(false)?;
                 Ok((id, Arc::new(pipe)))
             }
             _ => Err(error("Unsupported output mode in bun-wasm", "EINVAL")),
@@ -164,7 +197,7 @@ impl Processes {
     pub fn spawn(&mut self, meta: &[u8]) -> Result<i32, ErrorInfo> {
         let request: Request = serde_json::from_slice(meta).map_err(|e| error(e.to_string(), "EINVAL"))?;
         let command = request.argv.first().map(String::as_str).unwrap_or("");
-        if !matches!(command, "bun" | "/bun") {
+        if !BUN_EXECUTABLE_ALIASES.contains(&command) {
             return Err(error(
                 format!("spawn {command} ENOENT: only bun is supported in bun-wasm"),
                 "ENOENT",
@@ -203,22 +236,29 @@ impl Processes {
     }
 
     fn start(&mut self, mut request: Request) -> Result<i32, ErrorInfo> {
+        let stdio_pipes = [&request.stdin, &request.stdout, &request.stderr]
+            .into_iter().filter(|mode| mode.as_str() == "pipe").count();
+        // Reserve capacity before creating any pipe or starting a child thread.
+        self.require_handles(1 + stdio_pipes + if request.worker.is_some() { 2 } else { 0 })?;
         request.env.insert("PWD".into(), request.cwd.clone());
         let (stdin_id, stdin) = self.stdin(&request.stdin)?;
         let (stdout_id, stdout) = self.output(&request.stdout, 1)?;
         let (stderr_id, stderr) = self.output(&request.stderr, 2)?;
         let (to_worker, from_worker, worker) = if request.worker.is_some() {
-            let (incoming, input) = self.pipe(true);
-            let (outgoing, output) = self.pipe(false);
+            let (incoming, input) = self.pipe(true)?;
+            let (outgoing, output) = self.pipe(false)?;
             (incoming, outgoing, Some([input, output]))
         } else { (0, 0, None) };
         let memory_limit = request.worker.as_ref().and_then(|limits| limits.memory_limit_mb)
             .map(|mb| mb.saturating_mul(1 << 20)).unwrap_or(512 << 20);
         let pipes = [stdin_id, stdout_id, stderr_id, to_worker, from_worker];
-        let input = self.pipes.get(&stdin_id).map(|handle| handle.pipe.clone());
-        let outputs: Vec<Pipe> = pipes[1..]
-            .iter()
-            .filter_map(|id| self.pipes.get(id).map(|p| p.pipe.clone()))
+        let inputs: Vec<Pipe> = [stdin_id, to_worker]
+            .into_iter()
+            .filter_map(|id| self.pipes.get(&id).map(|p| p.pipe.clone()))
+            .collect();
+        let outputs: Vec<Pipe> = [stdout_id, stderr_id, from_worker]
+            .into_iter()
+            .filter_map(|id| self.pipes.get(&id).map(|p| p.pipe.clone()))
             .collect();
         let result = Arc::new(Mutex::new(None));
         let cancel = Arc::new(Cancellation::default());
@@ -228,33 +268,25 @@ impl Processes {
             result.clone(),
             cancel.clone(),
         );
+        let id = self.next()?;
         let thread = std::thread::Builder::new()
             .name("bun-wasm-child".into())
             .stack_size(crate::THREAD_STACK)
             .spawn(move || {
-                let code = crate::run_instance(
+                let outcome = crate::run_instance(
                     runtime.clone(),
                     request.argv,
                     request.env.into_iter().collect(),
                     Stdio { stdin, stdout, stderr, worker, memory_limit },
                     cancellation.clone(),
-                );
-                let signal = cancellation.signal.load(Ordering::SeqCst);
-                let code = if signal != 0 {
-                    128 + signal
-                } else {
-                    code.unwrap_or_else(|e| {
-                        eprintln!("bun-wasm child: {e:#}");
-                        1
-                    })
-                };
-                if let Some(pipe) = input {
-                    pipe.close_reader();
-                }
-                for pipe in outputs {
-                    pipe.close_writer();
-                }
-                *completed.lock().unwrap() = Some(code);
+                ).unwrap_or_else(|e| {
+                    eprintln!("bun-wasm child: {e:#}");
+                    cancellation.select(FinalOutcome::Exit(1))
+                });
+                // Child stdin and worker control input are readers; only its
+                // stdout, stderr and worker control output are writer endpoints.
+                close_child_pipes(inputs, outputs);
+                *completed.lock().unwrap() = Some(outcome);
                 runtime.active.fetch_sub(1, Ordering::SeqCst);
                 notify.bump();
             });
@@ -265,12 +297,12 @@ impl Processes {
                 return Err(error(cause.to_string(), "EAGAIN"));
             }
         };
-        let id = self.next();
         self.children.insert(
             id,
             Child {
                 cancel,
                 result,
+                reaped: AtomicBool::new(false),
                 thread: Some(thread),
                 pipes,
             },
@@ -290,22 +322,40 @@ impl Processes {
         let Some(child) = self.children.get_mut(&id) else {
             return BADF;
         };
-        let Some(code) = *child.result.lock().unwrap() else {
+        let Some(outcome) = *child.result.lock().unwrap() else {
             return AGAIN;
         };
         if let Some(thread) = child.thread.take() {
             let _ = thread.join();
         }
-        code
+        child.reaped.store(true, Ordering::SeqCst);
+        outcome.code()
     }
 
-    pub fn child_pipe(&self, id: i32, fd: i32) -> i32 {
-        if id == 0 && (3..=4).contains(&fd) { return self.worker_pipes[(fd - 3) as usize]; }
-        self.children
-            .get(&id)
-            .and_then(|c| c.pipes.get(fd as usize))
-            .copied()
-            .unwrap_or(BADF)
+    pub fn child_pipe(&self, id: i32, selector: i32) -> i32 {
+        if id == 0 {
+            return match selector {
+                CHILD_WORKER_INPUT => self.worker_pipes[0],
+                CHILD_WORKER_OUTPUT => self.worker_pipes[1],
+                _ => BADF,
+            };
+        }
+        let Some(child) = self.children.get(&id) else {
+            return BADF;
+        };
+        if selector == CHILD_FINAL_SIGNAL {
+            let Some(outcome) = *child.result.lock().unwrap() else {
+                return AGAIN;
+            };
+            child.reaped.store(true, Ordering::SeqCst);
+            return outcome.signal();
+        }
+        let index = match selector {
+            0..=2 => selector,
+            CHILD_WORKER_INPUT | CHILD_WORKER_OUTPUT => selector - 1,
+            _ => return BADF,
+        };
+        child.pipes[index as usize]
     }
 
     pub fn kill(&mut self, id: i32, signal: i32) -> i32 {
@@ -315,12 +365,12 @@ impl Processes {
         let Some(child) = self.children.get(&id) else {
             return BADF;
         };
-        if child.result.lock().unwrap().is_some() {
+        if child.reaped.load(Ordering::SeqCst) {
             return BADF;
         }
-        if signal != 0 {
-            child.cancel.kill(signal);
-        }
+        // A selected child is a zombie until its final result is consumed.
+        // A late request succeeds without changing that immutable winner.
+        child.cancel.kill(signal);
         self.notify.bump();
         0
     }
@@ -397,5 +447,326 @@ impl Drop for Processes {
                 let _ = thread.join();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn processes() -> Processes {
+        let mut config = wasmtime::Config::new();
+        config.epoch_interruption(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        // Original no-op guest: (module (func (export "_start"))).
+        let module = wasmtime::Module::new(
+            &engine,
+            b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\x03\x02\x01\0\x07\x0a\x01\x06_start\0\0\x0a\x04\x01\x02\0\x0b",
+        )
+        .unwrap();
+        let runtime = Runtime::new(
+            engine,
+            module,
+            vec![(
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+                "/".into(),
+            )],
+        );
+        Processes::new(runtime, Stdio::inherited(), crate::net::Net::new().notify())
+    }
+
+    fn request(argv: &[&str]) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "argv": argv,
+            "cwd": "/",
+            "env": {},
+            "stdin": "ignore",
+            "stdout": "ignore",
+            "stderr": "ignore",
+        }))
+        .unwrap()
+    }
+
+    fn assert_spawn_succeeds(processes: &mut Processes, command: &str) {
+        let child = processes
+            .spawn(&request(&[command, "child.js"]))
+            .unwrap_or_else(|error| panic!("{command}: {error:?}"));
+        processes
+            .children
+            .get_mut(&child)
+            .unwrap()
+            .thread
+            .take()
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(processes.wait(child), 0, "{command}");
+        assert_eq!(processes.close(child), 0, "{command}");
+        assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn final_signal_selector_waits_for_publication_and_preserves_pipe_selectors() {
+        let mut processes = processes();
+        let (stdin_id, input) = processes.pipe(true).unwrap();
+        let (stdout_id, output) = processes.pipe(false).unwrap();
+        let pipes = [stdin_id, stdout_id, 0, 0, 0];
+        let cancel = Arc::new(Cancellation::default());
+        let result = Arc::new(Mutex::new(None));
+        let id = processes.next().unwrap();
+        processes.children.insert(id, Child {
+            cancel: cancel.clone(), result: result.clone(), reaped: AtomicBool::new(false), thread: None, pipes,
+        });
+        for (fd, pipe) in pipes[..3].iter().enumerate() {
+            assert_eq!(processes.child_pipe(id, fd as i32), *pipe);
+        }
+        assert_eq!(processes.child_pipe(id, CHILD_WORKER_INPUT), 0);
+        assert_eq!(processes.child_pipe(id, CHILD_WORKER_OUTPUT), 0);
+        assert_eq!(processes.child_pipe(id, -1), BADF);
+        assert_eq!(processes.child_pipe(id, 6), BADF);
+        assert_eq!(processes.child_pipe(id + 1, CHILD_FINAL_SIGNAL), BADF);
+        assert_eq!(processes.kill(id + 1, 15), BADF);
+        assert_eq!(processes.wait(id), AGAIN);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
+
+        assert_eq!(cancel.signal(15, 2), 0);
+        assert!(cancel.kill(15));
+        let outcome = cancel.select(FinalOutcome::Exit(143));
+        for signal in [15, 9] {
+            assert_eq!(processes.kill(id, signal), 0);
+            for _ in 0..3 {
+                assert_eq!(processes.wait(id), AGAIN);
+                assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
+            }
+            assert_eq!(cancel.select(FinalOutcome::Signal(signal)), outcome);
+        }
+        input.close_reader();
+        output.close_writer();
+        *result.lock().unwrap() = Some(outcome);
+        assert_eq!(processes.kill(id, 15), 0);
+        assert_eq!(processes.kill(id, 9), 0);
+        assert_eq!(cancel.select(FinalOutcome::Signal(9)), outcome);
+        assert_eq!(processes.write(stdin_id, b"late"), -1);
+        assert_eq!(processes.read(stdout_id, &mut [0]), 0);
+        assert_eq!(processes.wait(id), 143);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 0);
+        assert_eq!(processes.kill(id, 15), BADF);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 0);
+        assert_eq!(processes.close(id), 0);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), BADF);
+    }
+
+    #[test]
+    fn final_signal_selector_reports_observed_term_not_numeric_exit_status() {
+        let mut processes = processes();
+        let cancel = Arc::new(Cancellation::default());
+        let result = Arc::new(Mutex::new(None));
+        let id = processes.next().unwrap();
+        processes.children.insert(id, Child {
+            cancel: cancel.clone(), result: result.clone(), reaped: AtomicBool::new(false), thread: None, pipes: [0; 5],
+        });
+        assert_eq!(processes.kill(id, 15), 0);
+        assert!(cancel.check().is_err());
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
+        *result.lock().unwrap() = Some(cancel.select(FinalOutcome::Exit(1)));
+        assert_eq!(processes.kill(id, 9), 0);
+        // Reading published final metadata also reaps, without changing the result.
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 15);
+        assert_eq!(processes.kill(id, 9), BADF);
+        assert_eq!(processes.wait(id), 143);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 15);
+    }
+
+    #[test]
+    fn worker_stream_selectors_preserve_each_endpoint_direction() {
+        let parent = processes();
+        let input = Pipe::new(parent.notify.clone());
+        let output = Pipe::new(parent.notify.clone());
+        let mut stdio = Stdio::inherited();
+        stdio.worker = Some([input.clone(), output.clone()]);
+        let mut worker = Processes::new(parent.runtime.clone(), stdio, crate::net::Net::new().notify());
+        let read = worker.child_pipe(0, CHILD_WORKER_INPUT);
+        let write = worker.child_pipe(0, CHILD_WORKER_OUTPUT);
+        assert!(read >= FIRST_HANDLE);
+        assert!(write > read);
+        assert_eq!(worker.child_pipe(0, CHILD_FINAL_SIGNAL), BADF);
+        assert_eq!(worker.child_pipe(0, 6), BADF);
+        assert_eq!(input.write(b"in"), 2);
+        let mut bytes = [0; 2];
+        assert_eq!(worker.read(read, &mut bytes), 2);
+        assert_eq!(&bytes, b"in");
+        assert_eq!(worker.write(read, b"wrong end"), BADF);
+        assert_eq!(worker.write(write, b"ok"), 2);
+        assert_eq!(worker.read(write, &mut bytes), BADF);
+        assert_eq!(output.read(&mut bytes), 2);
+        assert_eq!(&bytes, b"ok");
+    }
+
+    #[test]
+    fn worker_endpoints_close_before_signaled_completion_is_published() {
+        let mut processes = processes();
+        let (stdin_id, stdin) = processes.pipe(true).unwrap();
+        let (stdout_id, stdout) = processes.pipe(false).unwrap();
+        let (stderr_id, stderr) = processes.pipe(false).unwrap();
+        let (worker_input_id, worker_input) = processes.pipe(true).unwrap();
+        let (worker_output_id, worker_output) = processes.pipe(false).unwrap();
+        let cancel = Arc::new(Cancellation::default());
+        let result = Arc::new(Mutex::new(None));
+        let id = processes.next().unwrap();
+        processes.children.insert(id, Child {
+            cancel: cancel.clone(), result: result.clone(), reaped: AtomicBool::new(false), thread: None,
+            pipes: [stdin_id, stdout_id, stderr_id, worker_input_id, worker_output_id],
+        });
+        assert_eq!(processes.child_pipe(id, CHILD_WORKER_INPUT), worker_input_id);
+        assert_eq!(processes.child_pipe(id, CHILD_WORKER_OUTPUT), worker_output_id);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
+        assert_eq!(processes.write(stdin_id, b"pending stdin"), 13);
+        assert_eq!(processes.write(worker_input_id, b"pending control"), 15);
+        assert_eq!(stdout.write(b"out"), 3);
+        assert_eq!(stderr.write(b"err"), 3);
+        assert_eq!(worker_output.write(b"message"), 7);
+        assert_eq!(processes.kill(id, 2), 0);
+        let outcome = cancel.select(FinalOutcome::Exit(0));
+        assert_eq!(outcome, FinalOutcome::Signal(2));
+        let input_probe = worker_input.clone();
+        close_child_pipes(vec![stdin, worker_input], vec![stdout, stderr, worker_output]);
+        // Teardown is observable before final metadata or wait status. Input
+        // readers discard unread bytes and reject writes; output still drains.
+        assert_eq!(processes.wait(id), AGAIN);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
+        assert_eq!(processes.write(stdin_id, b"late"), -1);
+        assert_eq!(processes.write(worker_input_id, b"late"), -1);
+        // Closing its writer instead would leave the queued control bytes here.
+        assert_eq!(input_probe.read(&mut [0; 15]), AGAIN);
+        let mut bytes = [0; 7];
+        for (pipe, expected) in [(stdout_id, &b"out"[..]), (stderr_id, &b"err"[..]), (worker_output_id, &b"message"[..])] {
+            assert_eq!(processes.read(pipe, &mut bytes), expected.len() as i32);
+            assert_eq!(&bytes[..expected.len()], expected);
+            assert_eq!(processes.read(pipe, &mut bytes), 0);
+        }
+        assert_eq!(processes.kill(id, 9), 0);
+        assert_eq!(cancel.select(FinalOutcome::Signal(9)), outcome);
+        *result.lock().unwrap() = Some(outcome);
+        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 2);
+        assert_eq!(processes.wait(id), 130);
+        assert_eq!(processes.kill(id, 9), BADF);
+        assert_eq!(processes.child_pipe(id, CHILD_WORKER_INPUT), worker_input_id);
+        assert_eq!(processes.child_pipe(id, CHILD_WORKER_OUTPUT), worker_output_id);
+    }
+
+    #[test]
+    fn handle_allocator_stops_after_the_last_positive_handle() {
+        let mut processes = processes();
+        processes.next = i32::MAX as u32 - 1;
+        assert_eq!(processes.next().unwrap(), i32::MAX - 1);
+        assert_eq!(processes.next().unwrap(), i32::MAX);
+        assert_eq!(processes.next, i32::MAX as u32 + 1);
+        for _ in 0..3 {
+            let error = processes.next().unwrap_err();
+            assert_eq!(error.code.as_deref(), Some("EAGAIN"));
+            assert_eq!(processes.next, i32::MAX as u32 + 1);
+        }
+    }
+
+    #[test]
+    fn pipe_exhaustion_does_not_insert_a_negative_or_reused_handle() {
+        let mut processes = processes();
+        processes.next = i32::MAX as u32;
+        let (id, _) = processes.pipe(true).unwrap();
+        assert_eq!(id, i32::MAX);
+        assert_eq!(processes.pipes.len(), 1);
+        let error = match processes.pipe(false) {
+            Err(error) => error,
+            Ok(_) => panic!("exhausted allocator created another pipe"),
+        };
+        assert_eq!(error.code.as_deref(), Some("EAGAIN"));
+        assert_eq!(processes.pipes.len(), 1);
+        assert!(processes.pipes.contains_key(&i32::MAX));
+        assert_eq!(processes.close(id), 0);
+        assert!(processes.pipes.is_empty());
+        assert!(processes.next().is_err());
+    }
+
+    #[test]
+    fn spawn_exhaustion_preflights_stdio_and_worker_handles_without_partial_resources() {
+        for worker in [false, true] {
+            let mut processes = processes();
+            let required = if worker { 6 } else { 4 };
+            processes.next = i32::MAX as u32 - (required - 2);
+            let next = processes.next;
+            let meta = serde_json::to_vec(&serde_json::json!({
+                "argv": ["bun", "child.js"], "cwd": "/", "env": {},
+                "stdin": "pipe", "stdout": "pipe", "stderr": "pipe",
+                "worker": if worker { serde_json::json!({}) } else { serde_json::Value::Null },
+            })).unwrap();
+            for _ in 0..3 {
+                let error = processes.spawn(&meta).unwrap_err();
+                assert_eq!(error.code.as_deref(), Some("EAGAIN"));
+                assert_eq!(processes.next, next);
+                assert!(processes.pipes.is_empty());
+                assert!(processes.children.is_empty());
+                assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn last_child_handle_preserves_completion_and_then_reports_exhaustion() {
+        let mut processes = processes();
+        processes.next = i32::MAX as u32;
+        assert_spawn_succeeds(&mut processes, "bun");
+        assert_eq!(processes.next, i32::MAX as u32 + 1);
+        let error = processes.spawn(&request(&["bun", "child.js"])).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("EAGAIN"));
+        assert!(processes.children.is_empty());
+        assert!(processes.pipes.is_empty());
+        assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn spawn_accepts_registered_bun_and_node_aliases() {
+        let mut processes = processes();
+        for command in [
+            "bun",
+            "/bun",
+            "node",
+            "/node",
+            "/usr/local/bin/bun",
+            "/usr/local/bin/node",
+        ] {
+            assert_spawn_succeeds(&mut processes, command);
+        }
+    }
+
+    #[test]
+    fn spawn_accepts_default_fork_exec_path() {
+        let mut processes = processes();
+        assert_spawn_succeeds(&mut processes, "/usr/local/bin/bun");
+    }
+
+    #[test]
+    fn spawn_rejects_unregistered_commands() {
+        let mut processes = processes();
+        for command in [
+            "",
+            "sh",
+            "bunx",
+            "nodejs",
+            "./bun",
+            "/tmp/bun",
+            "/tmp/node",
+            "/usr/bin/bun",
+            "/usr/bin/node",
+            "/usr/local/bin/bun-other",
+            "/usr/local/bin/node/child",
+        ] {
+            let error = processes.spawn(&request(&[command])).unwrap_err();
+            assert_eq!(error.code.as_deref(), Some("ENOENT"), "{command}");
+        }
+        let error = processes.spawn(&request(&[])).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("ENOENT"));
+        assert!(processes.children.is_empty());
+        assert!(processes.pipes.is_empty());
+        assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
     }
 }

@@ -49,9 +49,9 @@ def command(directory: Path, script: str) -> list[str]:
 def closed_pipe(directory: Path, fd: int, method: str, handled: bool) -> tuple[int, float]:
     arguments = [str(fd), method] + (["handled"] if handled else [])
     producer = subprocess.Popen(
-        command(directory, "index.js") + arguments, cwd=directory,
+        command(directory, "callback.ts" if method == "callback" else "index.js") + arguments, cwd=directory,
         stdout=subprocess.PIPE if fd == 1 else subprocess.DEVNULL,
-        stderr=subprocess.PIPE if fd == 2 else subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
     pipe = producer.stdout if fd == 1 else producer.stderr
     assert pipe is not None
@@ -62,7 +62,11 @@ def closed_pipe(directory: Path, fd: int, method: str, handled: bool) -> tuple[i
         first, _ = reader.communicate(timeout=30)
         assert reader.returncode == 0 and first == b"x", "producer did not reach its output loop"
         started = time.monotonic()
-        return producer.wait(timeout=5), time.monotonic() - started
+        status = producer.wait(timeout=5)
+        if fd == 1 and not handled:
+            diagnostic = producer.stderr.read()
+            assert b"EPIPE" in diagnostic, f"unhandled stdout error was not printed: {diagnostic!r}"
+        return status, time.monotonic() - started
     except subprocess.TimeoutExpired:
         producer.kill()
         producer.wait()
@@ -77,6 +81,8 @@ def closed_pipe(directory: Path, fd: int, method: str, handled: bool) -> tuple[i
         if producer.poll() is None:
             producer.kill()
         producer.wait()
+        if fd == 1:
+            producer.stderr.close()
 
 
 def sustained_output(directory: Path, fd: int) -> tuple[int, int, float]:
@@ -138,7 +144,7 @@ def check_batch(directory: Path, fd: int):
 
 with tempfile.TemporaryDirectory(prefix="bun-wasm-closed-output-", dir="/work/tmp") as directory:
     work = Path(directory)
-    for name in ("index.js", "large.js", "batch.ts"):
+    for name in ("index.js", "large.js", "batch.ts", "callback.ts"):
         (work / name).write_bytes((FIXTURE / name).read_bytes())
     batch_failures = 0
     for fd in (1, 2):
@@ -150,7 +156,7 @@ with tempfile.TemporaryDirectory(prefix="bun-wasm-closed-output-", dir="/work/tm
                 print(f"FAIL pipe-closed-output {args.engine}/{host}: {error}")
         if args.batch_only:
             continue
-        cases = () if args.large_only else (("stream", False), ("stream", True), ("console", False), ("fs", False), ("writev", False))
+        cases = () if args.large_only else (("stream", False), ("stream", True), ("callback", True), ("console", False), ("fs", False), ("writev", False))
         for method, handled in cases:
             check_closed(work, fd, method, handled)
         check_large(work, fd)

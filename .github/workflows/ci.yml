@@ -32,7 +32,7 @@ jobs:
       - name: Runtime type check
         run: node_modules/.bin/tsc -p ../crates/bunwasm-runtime/tsconfig.json
       - name: Runtime emission and native type regressions
-        run: bun test ../scripts/runtime-emission.test.ts ../scripts/runtime-types.test.ts
+        run: bun test ../scripts/runtime-emission.test.ts ../scripts/runtime-types.test.ts ../scripts/worker-codec.test.ts ../scripts/worker-selectors.test.ts ../scripts/worker-outcome.test.ts
       - name: Install runtime and sandbox dependencies
         run: |
           bun install --cwd ../runtime --frozen-lockfile
@@ -75,8 +75,47 @@ jobs:
           PERSIST_SMOKE: "1"
           PERSISTENCE_PORT: "4182"
         run: bun tests/browser-persistence.ts chromium
+      - name: OPFS persistence, file fsync and crash recovery (no WASM)
+        env:
+          PERSIST_SMOKE: "1"
+          PERSIST_STORAGE: "opfs"
+          PERSISTENCE_PORT: "4182"
+        run: bun tests/browser-persistence.ts chromium
       - name: Editor durable saves and template reset (no WASM)
         env:
           EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
           EDITOR_PORT: "4183"
         run: bun tests/browser-editor.ts chromium
+
+  browser-process:
+    name: Processes (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: Install browser
+        run: bunx playwright install --with-deps ${{ matrix.browser }}
+      - name: Process supervisor, generic preview1 and interrupt gate (no Rust or dist artifacts)
+        env:
+          PROCESS_SMOKE_PORT: "4186"
+          TMPDIR: ${{ runner.temp }}
+        run: bun tests/browser-process.ts ${{ matrix.browser }}
+      - name: Injected third-party interrupt checks (no Rust or dist artifacts)
+        env:
+          INTERRUPT_SCRATCH_ROOT: ${{ runner.temp }}
+        run: bun tests/browser-interrupt.ts ${{ matrix.browser }}
+      - name: Process pipes and runtime_proc guest ABI (no Rust or dist artifacts)
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bun tests/browser-runtime-proc.ts ${{ matrix.browser }}

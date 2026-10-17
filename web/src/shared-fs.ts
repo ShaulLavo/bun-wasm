@@ -1,4 +1,4 @@
-import { FilesystemClient, createFilesystemConnection, connectFilesystemIdentity, reapFilesystem, type FilesystemIdentity, type FilesystemConnection } from "@bun-wasm/runtime/fs";
+import { FilesystemClient, createFilesystemConnection, connectFilesystemIdentity, revokeFilesystemService, revokeFilesystem, reapFilesystem, waitForFilesystemQuiescence, type FilesystemIdentity, type FilesystemConnection } from "@bun-wasm/runtime/fs";
 
 export interface Entry { kind: "file" | "dir"; ino: number; mtime: number; children: Map<string, Entry>; }
 /** Page-side API: never blocks the UI thread and owns no tree. Mutations complete in memory;
@@ -10,7 +10,7 @@ export class SharedFilesystem {
   private writes: Promise<unknown> = Promise.resolve();
   private failure: unknown;
   private fatal: Error | undefined;
-  constructor(options: { persistence?: boolean; name?: string } = {}) {
+  constructor(options: { persistence?: boolean; name?: string; storage?: "indexeddb" | "opfs" } = {}) {
     this.worker = new Worker(new URL("./fs-worker.js", location.href), { type: "module" });
     const connection = createFilesystemConnection();
     this.client = new FilesystemClient(connection.client);
@@ -19,7 +19,7 @@ export class SharedFilesystem {
       this.fail(new Error(`Filesystem worker failed: ${event.message || "uncaught error"}`));
     });
     this.worker.addEventListener("messageerror", () => this.fail(new Error("Filesystem worker message could not be decoded")));
-    try { this.worker.postMessage({ connect: connection.server, persistence: options.persistence ?? true, name: options.name }, [connection.server.port]); }
+    try { this.worker.postMessage({ connect: connection.server, persistence: options.persistence ?? true, name: options.name, storage: options.storage ?? "indexeddb" }, [connection.server.port]); }
     catch (error) {
       connection.server.port.close();
       this.fail(error instanceof Error ? error : new Error(String(error)));
@@ -28,8 +28,9 @@ export class SharedFilesystem {
   }
   private fail(error: Error): void {
     this.fatal ??= error;
-    // Revoking the root wakes blocking and asynchronous descendants even when the worker
-    // cannot deliver a completion message. No request waits for a dead service to reply.
+    // A process does not inherit its parent's lifetime. Publish the separate service-wide
+    // revocation so even unpublished independent identities wake when this worker dies.
+    revokeFilesystemService(this.client.connection);
     this.client.dispose();
     this.worker.terminate();
   }
@@ -41,7 +42,15 @@ export class SharedFilesystem {
     this.client.connection.port.postMessage({ connect: connection.server }, [connection.server.port]);
     return connection.client;
   }
-  revoke(connection: FilesystemIdentity): void { reapFilesystem(connection); this.client.sweep(); }
+  /** Cancellation is immediate, but terminate() does not establish worker death. */
+  revoke(connection: FilesystemIdentity): void { revokeFilesystem(connection); this.client.sweep(); }
+  /** A guest exit acknowledgement or the admission fence below proves filesystem quiescence. */
+  reap(connection: FilesystemIdentity): void { reapFilesystem(connection); this.client.sweep(); }
+  /** Revoke immediately, then wait for host critical sections before physical termination. */
+  async quiesce(connection: FilesystemIdentity): Promise<void> {
+    await waitForFilesystemQuiescence(connection);
+    this.reap(connection);
+  }
   private async request(operation: string, args: unknown[] = [], bytes?: Uint8Array): Promise<any> {
     this.assertLive();
     try { return await this.client.asyncCall(operation, args, bytes); }
@@ -61,7 +70,7 @@ export class SharedFilesystem {
   /** Wait for this page's queued mutations, without waiting for background persistence. */
   async drain(): Promise<void> { await this.writes; this.assertLive(); if (this.failure !== undefined) { const error = this.failure; this.failure = undefined; throw error; } }
   /** A save is durable only once both data and metadata have reached storage. */
-  async flush(): Promise<void> { await this.drain(); await this.request("flush"); }
+  async flush(path?: string): Promise<void> { await this.drain(); await this.request("flush", path === undefined ? [] : [path]); }
   async lookup(path: string): Promise<Entry | undefined> { await this.drain(); return this.request("lookup", [path]); }
   async readFile(path: string): Promise<Uint8Array | undefined> { await this.drain(); return this.request("readFile", [path]); }
   async listFiles(path = "/"): Promise<string[]> { await this.drain(); return this.request("listFiles", [path]); }
@@ -72,5 +81,5 @@ export class SharedFilesystem {
     const error = await this.mutate("move", [from, to]);
     if (error) throw new Error(`rename failed: errno ${error}`);
   }
-  dispose(): void { this.client.dispose(); this.worker.terminate(); }
+  dispose(): void { revokeFilesystemService(this.client.connection); this.client.dispose(); this.worker.terminate(); }
 }

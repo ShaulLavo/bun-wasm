@@ -35,6 +35,7 @@ const engine: Engine = isEngine(requested) ? requested : defaultEngine;
 const engineName = engines[engine].name;
 const wasmUrl = params.get("wasm") ?? engines[engine].wasm;
 const trace = params.has("trace");
+const storage = params.get("storage") === "opfs" ? "opfs" as const : "indexeddb" as const;
 const isolated = globalThis.crossOriginIsolated === true;
 const sleepMode = isolated ? "Atomics.wait (cross-origin isolated)" : "busy-wait (page is not cross-origin isolated)";
 
@@ -52,7 +53,7 @@ const previews = new Previews();
 
 // ---------- filesystem ----------
 
-const fs = new SharedFilesystem();
+const fs = new SharedFilesystem({ storage });
 try {
   await fs.mkdirp("/tmp");
   // Background persistence can save a prefix of startup. Publish completion only after
@@ -102,8 +103,8 @@ async function loadWasm(): Promise<void> {
   }
 }
 
-// The browser engine's modules are served under ./__bunwasm/ (runner.ts), so imports can form cycles.
-const moduleScope: Promise<boolean> = engine === "browser" ? registerModuleScope() : Promise.resolve(false);
+// Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
+const moduleScope: Promise<boolean> = registerModuleScope();
 
 let current: Run | null = null;
 
@@ -280,7 +281,7 @@ class Editor {
     const path = this.path;
     const text = this.view.state.doc.toString();
     await fs.writeFile(path, text);
-    await fs.flush();
+    await fs.flush(path);
     this.saved.set(path, text);
     await this.renderTabs();
   }

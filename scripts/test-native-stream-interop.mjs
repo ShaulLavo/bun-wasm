@@ -17,7 +17,7 @@ function inputs() {
 if (argument("--dump")) { writeFileSync(argument("--dump"), JSON.stringify(inputs())); process.exit(0); }
 const sources = argument("--sources") ? JSON.parse(readFileSync(argument("--sources"), "utf8")) : inputs();
 sources.benchmark = process.argv.includes("--benchmark");
-const location = process.env.PLAYWRIGHT ?? `${process.env.HOME}/.local/share/mise/installs/npm-playwright/1.63.0/node_modules/.mise/playwright@1.63.0/node_modules/playwright/index.mjs`;
+const location = process.env.PLAYWRIGHT ?? join(root, "web/node_modules/playwright/index.mjs");
 const playwright = await import(pathToFileURL(location).href);
 let failures = 0;
 for (const name of ["chromium", "webkit"]) {

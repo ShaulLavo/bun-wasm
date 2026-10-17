@@ -44,12 +44,16 @@ than it is today. The process layer loads on the first spawn.
 - **Storage backends are swappable.** The filesystem service talks to storage through a small
   backend interface (load the tree, read data that isn't in memory, persist a batch, flush). We
   ship two from day one: IndexedDB, the default (fastest writes on Chromium and Safari, consistent
-  reads), and OPFS. The OPFS backend is simple: one OPFS file per file, no per-file flush, create
-  concurrency tuned per browser, and lazy loading (the index loads in about 20 ms; files are read
+  reads), and OPFS. The OPFS backend is simple: one OPFS file per immutable file revision, no
+  per-file flush in background checkpoints, create concurrency tuned per browser, and lazy loading
+  (the spike's index loads in about 20 ms; files are read
   on first use, since reading every file takes 16-33 s in Firefox). A packed OPFS backend, 15x
-  faster to write in Firefox, can come later (spike 3). Later backends can include IndexedDB
-  without our own memory cache (lower memory, the browser caches for us) and memory-only for
-  throwaway sandboxes (owner, 2026-10-16).
+  faster to write in Firefox, can come later (spike 3). Memory-only throwaway sandboxes already
+  use `persistence: false`. A later backend can use IndexedDB without our own memory cache
+  (lower memory, the browser caches for us; owner, 2026-10-16). Explicit `fsync(fd)` and the editor's persisted save
+  flush that file's payload and the snapshot naming it before resolving; they do not promise
+  durability for unrelated unsynced payloads. IndexedDB requests strict atomic transaction
+  durability, while OPFS background checkpoints remain close-only with a flushed naming snapshot.
 - **Killing is not instant, so kills interrupt, revoke and confirm.** Chromium waits 2 s before
   forcibly stopping a busy worker after `terminate()` (`kForcibleTerminationDelay` in Blink's
   `worker_thread.cc`; spike 2 saw CPU-bound WASM and JS keep running and writing shared memory).
@@ -59,19 +63,48 @@ than it is today. The process layer loads on the first spawn.
   optimization. Our own programs check it at their checkpoints, including inside the JS engines
   (QuickJS's interrupt handler, a JSC trap hook); third-party WASM gets checks injected at loop
   headers and function entries (covering tail-call cycles) when loaded, or is refused.
-  `terminate()` stays as the backstop. Revocation wakes blocked peers at once (EOF in about
-  0.06 ms, EPIPE in about 0.3 ms), so pipelines never wait on a dying worker.
+  `terminate()` stays as the backstop. Each process has a per-signal disposition: default,
+  ignored or handled. When the guest retains the default disposition, the supervisor applies
+  SIGINT, SIGTERM or SIGPIPE's default action immediately, recording `128 + sig` and revoking;
+  it does not wait for an engine checkpoint. Only handled signals are queued for guest delivery,
+  and that guest keeps its own exit code. Removing the last handler restores the runtime's
+  default action, including SIGPIPE. Node/Bun JS guests initially ignore SIGPIPE until its first
+  handler is installed; unrelated listener removal preserves that initial disposition.
+  SIGKILL is always immediate and cannot be caught or ignored. Revocation
+  wakes blocked peers at once (EOF in about 0.06 ms, EPIPE in about 0.3 ms), so pipelines never
+  wait on a dying worker. There is no automatic escalation timer.
 - **A killed process can't corrupt shared state.** Shared memory can't be taken back from a
   running worker, and a worker can be killed between checking a flag and publishing a write. So
   no ring is ever written by two processes: each (writing process, pipe) pair gets its own
-  single-producer ring, and the reader takes from all of a pipe's rings. When a writer is
-  revoked, the supervisor records that ring's committed write position at that moment; the
-  reader still drains every byte committed before it, then treats the ring as closed. Anything a
-  zombie publishes afterwards lies past the recorded position and is never read, and since a
-  writer only fills free space, it can't overwrite unread bytes. A pipe with more than one reading process
-  (rare, such as two children inheriting one stdin) switches to relay mode through the
-  supervisor, which checks revocation on every chunk. A killed process's buffers are never handed
-  to another process; new processes get fresh ones. A guest that stops cooperatively acknowledges
+  single-producer ring, and the reader takes from all of a pipe's rings. Each writer's canonical
+  publication cursor lives in a host-only shared process directory: one atomic word holds both
+  its committed position and its revoked bit. Authorized host code (the target's parent chain
+  or job owner) freezes every cursor before exposing child exit; guest WASM cannot access this
+  control memory. A writer publishes only by compare-and-swap on that same word, so publication
+  racing revocation either commits before it or fails. Registry cells are append-only in a growable
+  shared buffer. Revocation marks the process before walking its immutable linked cursor list;
+  allocation initializes and links its cell, then rechecks revocation before admitting the endpoint.
+  A cell missed by the killer's snapshot therefore freezes itself and cannot publish. No cell is
+  recycled: stale publisher, reader or killer references can never acquire a new occupant. The reader
+  drains every byte through the frozen watermark, then treats the ring as closed. Anything a zombie tries to publish afterwards is
+  never read, and since a writer only fills free space, it can't overwrite unread bytes. This
+  makes guest-initiated kill safe without waiting for a supervisor message round trip. Per-write
+  records also preserve causal order between writers: a completed write precedes any write
+  that begins later. Writes up to 4 KiB stay contiguous across short reads (a deliberately tiny
+  test pipe uses its smaller capacity as that bound); larger concurrent writes may interleave.
+  Record metadata is bounded and participates in publication and backpressure, not a separate
+  unbounded log. A pipe with more than one reading process (rare, such as two children inheriting
+  one stdin) switches to relay mode through the supervisor, which checks revocation on every
+  chunk. Polling and an idle inherited reader cannot reserve bytes; unread deliveries remain
+  reclaimable when a reader stops retrying, closes or dies. Relay work is bounded and yields to
+  supervisor message tasks so continuous traffic cannot starve kill or exit. A killed process's
+  buffers are never handed to another process; new processes get fresh ones. The default registry
+  grows from about 2 MiB to at most 16,777,216 cells (256 MiB plus its header), enough for about
+  4,194,304 simple same-process pipes at four 16-byte cells per pipe; extra inherited endpoints
+  use more cells. The append-only lifetime bound is service-wide, not a fixed per-process cursor quota.
+  The separate process directory keeps 1,024 permanent PID rows. Exhausting either bound reports
+  WASI ENFILE (41). Cell recycling is not needed for this target and must never reset a cursor
+  that a stale publisher, reader or killer could still reference. A guest that stops cooperatively acknowledges
   its exit; for an uncooperative kill the browser gives no teardown signal, so revocation, not
   silence, is the correctness boundary.
 - **Pipes run directly between workers** over shared memory, not through the supervisor, except in
@@ -101,8 +134,13 @@ Reports in `/work/reports/browser-runtime/spikes/`: `1-size-startup.md`, `2-proc
 
 - **Size and startup.** Runtime JS for bun light is about 30-37 KiB gzipped and adds 10-30 ms at
   startup; the 3.85 MB WASM and the demo UI (89% of the JS) dominate. Proc is imported and
-  constructed on every run today. Per-layer budgets: core 6 KiB, fs 6 KiB, net 14 KiB, proc
-  8 KiB gzipped, zero proc bytes before the first spawn.
+  constructed on every run today. Per-layer budgets: core 7 KiB, fs 6 KiB, net 14 KiB, proc
+  8 KiB gzipped, zero proc bytes before the first spawn. Step 4b measures core at 6,327 B
+  gzip, up from 5,987 B after descriptor ownership (+340 B): shared fd bounds, preview1
+  readiness notifications and immediate terminal capabilities belong in core, not the lazy
+  process service. Its round guide/gate is now 7 KiB; the process-service lazy boundary remains
+  enforced. A bounded vectored-I/O factoring trial reduced minified bytes but increased gzip
+  (6,353 B), so it was reverted rather than complicating the host to meet the old 6 KiB guide.
 - **Processes and pipes.** Sharing one compiled module cuts bun.wasm spawn from 57-76 ms to
   23-32 ms. A 1-2 worker idle pool saves 4-8 ms per spawn in Chromium and Firefox at 2-3 MiB per
   worker, but regressed WebKit's single spawn (51 ms against 28 ms), so pooling is optional and
@@ -141,8 +179,9 @@ sections 7 and 8) maps its `ProcessHost` trait onto this layer. The process laye
 A new `runtime/` directory in bun-wasm: a TypeScript package (`@bun-wasm/runtime`) with one entry
 per layer (`core`, `fs`, `net`, `proc`, `term`) so a bundler includes only what a page imports,
 and `proc` loaded on the first spawn. A guest's `spawn` import can't await an `import()`, so the
-guest worker keeps a stub of about 1 KiB: it reserves a pid, takes the inherited descriptor
-references and returns at once, and the supervisor loads proc and starts the process
+guest worker keeps a stub of about 1 KiB gzipped, including identity and atomic terminal-result
+primitives: it reserves a pid, takes the inherited descriptor references and returns at once,
+and the supervisor loads proc and starts the process
 asynchronously. A start failure shows up through `wait` (127 for a missing program, 126 for one
 that can't run) and as a child-exit event in `poll`. A synchronous caller such as Bun's
 `spawnSync` polls afterwards; the shell never blocks on a first spawn. The builds (`web/build.ts`,
@@ -166,8 +205,9 @@ before it returns, so the parent may close its copy immediately. A child's `fd_c
 `fd_renumber`, exit or kill releases its references. EOF reaches readers after the last writer
 reference closes; EPIPE reaches writers after the last reader reference closes.
 
-All calls return 0 or a non-negative result on success and a negative WASI errno on failure. All
-are non-blocking except `poll`.
+Calls return 0 or a non-negative result on success and a negative error on failure (WASI errno
+for descriptor operations; `signal` uses the Bun slot's -22 invalid-argument result). All are
+non-blocking except `poll` and `wait_job` without NOHANG.
 
 | Import | Signature | Meaning |
 |---|---|---|
@@ -178,16 +218,60 @@ are non-blocking except `poll`.
 | `read` | `(fd, buf, len) -> n` | `n > 0` bytes, `0` at EOF or when `len == 0`, `-EAGAIN` when empty. |
 | `write` | `(fd, buf, len) -> n` | Bytes accepted (partial writes allowed), `-EAGAIN` when full, `-EPIPE` when no reader remains. |
 | `wait` | `(pid, out_ptr) -> 0` | `-EAGAIN` while running; otherwise writes `u32 kind` (0 exited, 1 signaled) and `i32 code` (exit code or signal number). |
+| `wait_job` | `(job, flags, status_ptr) -> errno` | Flag 1 (NOHANG) returns -6 while any member is unsafe; flag 0 blocks. Success writes one little-endian i32 leader status (exit code or 128 + signal) and reaps the whole job. Unknown job -71, reaped job -12, outside owner ancestry -63. |
 | `kill` | `(pid, sig) -> 0` | Signals one process. |
 | `kill_job` | `(job, sig) -> 0` | Signals every process in a job, including descendants spawned into it. |
-| `poll` | `(subs_ptr, n, timeout_ms, out_ptr) -> n_ready` | Each subscription is 16 bytes: `u32 kind` (0 readable, 1 writable, 2 child exit, 3 filesystem completion), `u32 id` (fd, pid or request), `u64 userdata`. Each event written is 16 bytes: `u64 userdata`, `u32 kind`, `u32 flags` (bit 0 hang-up). Also returns when this process's interrupt word is set (`n_ready` may be 0). The only call that blocks. |
-| `interrupted` | `() -> sig` | Returns and clears the pending signal for this process (0 if none). Guests call it at checkpoints and stop when it returns a signal. Don't rely on the host call itself to make `terminate()` work: in real Safari, `terminate()` alone stopped only 13 of 50 runs with tiny injected host checks, while stopping on the returned signal worked 50 of 50 (spike 5). |
+| `poll` | `(subs_ptr, n, timeout_ms, out_ptr) -> n_ready` | Each subscription is 16 bytes: `u32 kind` (0 readable, 1 writable, 2 child exit, 3 filesystem completion, 4 job-empty), `u32 id` (fd, pid, request or job), `u64 userdata`. Each event written is 16 bytes: `u64 userdata`, `u32 kind`, `u32 flags` (bit 0 hang-up). Also returns when this process's interrupt word is set (`n_ready` may be 0). Blocks unless timeout is zero. |
+| `signal` | `(sig, mode) -> result` | Synchronously sets this process's disposition: 0 default, 1 ignored, 2 handled; mode 3 raises a signal against the current disposition. `(0, 0)` dequeues the next pending handled signal (0 if none), sharing the queue with `interrupted`. Set/raise returns 0, invalid arguments -22. SIGKILL cannot be registered or ignored. Bun reaches the same adapter through optional host slot 18. |
+| `interrupted` | `() -> sig` | Dequeues one pending handled signal for this process (0 if none); the guest dispatches its handler at a checkpoint. Unhandled default actions have already been selected by the supervisor. Don't rely on the host call itself to make `terminate()` work: in real Safari, `terminate()` alone stopped only 13 of 50 runs with tiny injected host checks, while stopping on the returned signal worked 50 of 50 (spike 5). |
+| `default_signal` | `(sig) -> never` | Takes the default action for the signal returned by a checkpoint. The adapter reports it explicitly before unwinding; the supervisor records `128 + sig`, revokes descriptors and requests physical termination. An unrelated later trap is not inferred to be a signal exit. |
 
-Signals are `SIGINT`, `SIGTERM`, `SIGKILL` and `SIGPIPE`. `kill` revokes the target's descriptors
-at once and sets its interrupt word; physical teardown follows. The supervisor records the
-requested signal, and that record, not the way the guest happened to stop, decides the status:
-shells see 128 + sig (130, 143, 137, 141). A guest that handles a signal or EPIPE and exits on its
-own keeps its own code.
+Job completion preserves the leader outcome across individual reaping and later descendant
+signal deaths. Member job IDs cannot move; spawns selecting separate jobs are independent.
+Kind 4 is non-consuming level readiness until successful `wait_job`; repeated waits and polls
+after reaping return ECHILD. Completion counts accepted reservations before host admission and
+requires every member's revocation, descriptor release and filesystem/adapter quiescence, not
+merely an outcome word or `Worker.terminate()`. Individual process confirmation and root
+`run.done` likewise follow their own quiesce hook, never physical worker termination. Legacy
+`SubprocessHost.wait` remains on the old transport until step 7b replaces it with the process
+directory. A safely completed job cannot be reopened. The shared
+wake is registered before capturing its sequence and scanning, preventing lost completion races.
+Invalid flags return EINVAL; bad status memory does not consume the job; pending handled signals
+interrupt blocking wait with EINTR without consuming delivery. See `docs/host-abi.md` for layout.
+
+
+Signals are `SIGINT`, `SIGTERM`, `SIGKILL` and `SIGPIPE`. Plain preview1 processes start with the
+default per-signal disposition, rather than assuming every program handles a signal. The Node/Bun
+JS runtime starts SIGPIPE ignored, matching Node and Bun; an explicit JS listener changes it to
+handled and removing the final SIGPIPE listener restores default, matching native Node/Bun. For SIGINT, SIGTERM and SIGPIPE, `kill`
+examines the current disposition synchronously: default selects signal death, records `128 + sig`
+and revokes immediately; ignored does nothing; handled queues delivery without revoking the guest.
+Node/Bun listener mutations publish registration and removal before user callbacks; preview1 guests
+register through `runtime_proc.signal`. A handled guest's own exit code stands, including 0 or
+ordinary 143. Removing a pending handler to default immediately applies that action, while
+ignoring a signal clears its pending state. Standard signals may coalesce per signal, but distinct
+pending signals must not overwrite one another. Dequeue clears pending before a once-listener
+removes itself. The per-signal state is authoritative; the shared interrupt word only wakes
+checkpoints.
+
+An explicit `runtime_proc.default_signal(sig)` still reports a typed default action. SIGKILL
+always selects 137 and revokes immediately; it cannot be caught or ignored. Guest completion
+and signal death compete for one immutable outcome, so a late worker message or prior request
+cannot relabel an ordinary exit. Physical termination waits for host filesystem critical sections,
+not guest WASM: a per-connection section count is published before the revocation check and lock
+acquisition, and cleared on exit. After revoking, the supervisor waits asynchronously for zero,
+then reaps filesystem locks and terminates. A guest entering after revocation must abort before
+acquiring any lock. This proves quiescence without claiming `terminate()` proves death.
+Default-action statuses are 130, 143, 137 and 141. A JS EPIPE error remains catchable through
+normal stream callbacks/listeners or try/catch. An escaping EPIPE follows the ordinary uncaught-error
+path and exits 1, even with a SIGPIPE listener; an EPIPE-handling guest keeps its own status. The
+error policy never synthesizes SIGPIPE; physical signals are delivered separately. Plain preview1
+guests retain the default SIGPIPE disposition and status 141 for signal delivery.
+
+One Ctrl+C stops an ordinary foreground program with 130 without waiting for step 7a. A
+registered SIGINT handler may clean up and keep its own status. Ctrl+C signals the foreground
+job and waits; a second Ctrl+C or explicit kill may send SIGKILL. Listener registration and
+signal polling do not keep an otherwise idle guest alive. The runtime has no escalation timers.
 
 WASI preview1 programs use the same descriptors through ordinary fd calls: a spawned child's
 `fd_read(0)` blocks on its bound pipe, and `poll_oneoff` reports pipe readiness. Third-party
@@ -206,14 +290,14 @@ the CI gate.
 | 2 | **Package skeleton and core.** Create `runtime/`; move `wasi.ts`, `memory-views.js` and path helpers; one descriptor namespace with file, directory, pipe and terminal kinds and reference-counted open descriptions, so the host no longer holds MemFS nodes; explicit import namespaces instead of ENOSYS stubs; `poll_oneoff` with per-descriptor readiness. Enable code splitting in `web/build.ts` and `sandbox/build.ts`, including chunks under the scoped worker. `web/` consumes it with no behaviour change. CI checks bundle sizes against the budgets and initial downloads. | 1,500-2,200 |
 | 3a | **Filesystem worker and protocol.** In-memory tree owned by one worker; non-blocking submit and completion handles over shared memory; blocking preview1 adapter; open-file identity across rename and unlink. Memory-only backend. Replaces copy-at-spawn and merge-at-exit. | 1,500-2,200 |
 | 3b | **Persistence.** Backend interface; IndexedDB backend (default); background batched persistence; `fsync`; checksummed metadata written beside the old copy then swapped; Web Locks for one writer tab; the editor's persisted save. Reload test immediately after a save resolves. | 1,200-1,800 |
-| 3c | **OPFS backend.** One file per file, lazy loading, bounded handle cache under Safari's 253, per-browser create concurrency. | 600-1,000 |
-| 4a | **Processes.** Supervisor, process table, generic registry (module plus guest adapter), shared compiled modules, the first-spawn stub, spawn/wait/kill/kill_job, jobs, interrupt words and recorded signals, revocation. Optional per-browser pool. Test: a deliberately delayed first activation while another shell task keeps running. | 1,200-1,800 |
+| 3c | **OPFS backend.** One file per immutable revision, lazy loading, bounded total native handles under Safari's 253, per-browser create concurrency, and file-scoped durability. Explicit `storage: "opfs"`; IndexedDB stays default. [Implementation and measured corpus evidence](../runtime/README.md#opfs-corpus-measurements). | 600-1,000 |
+| 4a | **Processes.** Supervisor, process table, generic registry (module plus guest adapter), shared compiled modules, first-spawn stub, spawn/wait/kill/kill_job, jobs, per-signal dispositions and registration, immutable outcomes and revocation. Unhandled signals apply their default action immediately; handled signals retain the guest's own exit. Optional per-browser pool. Tests: delayed first activation while another shell task runs; one Ctrl+C stops an unhandled program with 130; a SIGINT handler exits 0 and keeps 0; removing it restores default; handled EPIPE retains its status. | 1,200-1,800 |
 | 4b | **Pipes.** Per-writer rings built from `SharedPipe`, reader merging, relay mode for multiple reading processes, reference counts, readiness, the `runtime_proc` imports. Tests: inherited concurrent writers, inherited readers, kill between a writer's check and publish, output queued before a kill still drained, a delayed publish after a kill never read, zero-length and partial I/O. | 1,000-1,500 |
 | 4c | **Process gate for the shell.** The own-shell spike's section 8 gate on real workers: external producer and consumer with a builtin filter, bounded flow and early reader close across workers, interrupt while WASM runs, descendant kill with reaping, an inherited nonstandard fd closed by the parent right after spawn, a background job surviving one command and controlled by the next. Runs against a preview1 fixture until the shell lands. | 500-800 |
 | 4d | **IPC.** Node `fork()` and Bun `spawn({ipc})` as a pipe pair on a child fd with newline-delimited JSON; guest send and receive on QuickJS and JSC as well as Bun light. | 400-700 |
 | 5 | **Terminal.** Terminal descriptor kind with a foreground owner; cooked mode (echo, line editing, Ctrl+D) ported from brush-web; raw mode passes Ctrl+C through as a byte; resize events. | 600-1,000 |
 | 6 | **Network.** One socket namespace shared by all processes (children get networking; loopback works across workers); fetch bridge; bounded connection writes; preview routing split from Bun's module-serving service worker, one registration; the preview client loads only when a preview opens. | 1,000-1,600 |
-| 7a | **Engine interruption.** QuickJS's interrupt handler and a JSC trap hook call `interrupted`; CPU-bound JS in each engine stops on Ctrl+C in Chromium, Firefox and real Safari. | 300-600 |
+| 7a | **Engine interruption.** QuickJS's interrupt handler and a JSC trap hook check shared interruption while CPU-bound JS runs, delivering registered handlers and stopping revoked guests in Chromium, Firefox and real Safari. Immediate unhandled default actions already belong to 4a; they do not wait for these engine hooks. | 300-600 |
 | 7b | **Bun onto the runtime.** Bun's slots as an adapter over the services; remove the Bun-only spawn restrictions (`spawn.js:49-65`, `subprocess.js:170-179`) and engine inheritance; playground migrated; demo UI out of the runtime import graph; WebKit engine-cache retention fixed. Bun light meets the budgets, measured on real downloads before and after the first spawn. | 1,000-1,500 |
 | 8 | **The shell on the runtime.** Owned by the shell track: its `ProcessHost` maps onto the process ABI. This track supplies the ABI, the 4c gate and the milestone's Playwright acceptance tests (`/work/reports/browser-shell-research/pipelines.acceptance.spec.ts`). | shell track |
 | 9 | **Interrupt injection for third-party WASM.** Spike first: rewrite a module at load time to call `interrupted` at loop headers and function entries, measuring rewrite time and overhead on a real program; refuse modules it can't instrument; then build it into the loader. | 800-1,500 |

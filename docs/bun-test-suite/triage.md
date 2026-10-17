@@ -42,7 +42,7 @@ Each row describes the first observed blocker. Subsystem assignments marked 'nee
 
 ## Regressions from the previous baseline
 
-The before→current comparison is recorded in [README.md](README.md#before--current) and `summary.json`.
+QuickJS is the sole comparable baseline by matched file selection; JSC and browser remain non-comparable. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim. See [README.md](README.md#historical-and-current-observations) and `summary.json` for selections and provenance.
 
 ## Timeout index
 
@@ -6086,6 +6086,6 @@ The remaining 279 files in the selection are listed here without invented root c
 
 App matrix causes are separate because they unblock app stages rather than suite files.
 
-- **Next WebAssembly export tables**. Unblocks 6 failed and 3 blocked Next stages. Reproduce with `scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser --hosts=native --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/next-rerun`. Suspected location `crates/bunwasm-runtime/src/js/webassembly.js:139`.
+- **Next first blockers**. QuickJS and JSC dev reject WebAssembly export tables; browser build rejects child IPC. Other failing Next commands have no diagnostic. All three production starts are blocked by build failures. Reproduce with `scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser --hosts=native --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/next-rerun`. Suspected location `crates/bunwasm-runtime/src/js/webassembly.js:139`.
 - **Prisma install memory ceiling**. Unblocks 9 blocked Prisma stages. Reproduce with `scripts/app-matrix.sh --apps=prisma --engines=quickjs,jsc,browser --hosts=native --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/prisma-rerun`. Suspected location `crates/bunwasm-runtime/src/engine.rs:1`.
-- **Vite, Astro, SvelteKit and Vitest runtime failures after mirror repair**. Recording removed all 51 mirror blocks. Reproduce each app with `scripts/app-matrix.sh --apps=<app> --engines=quickjs,jsc,browser --hosts=native,playground --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/<app>-rerun`. Suspected locations are the first blocker listed in the app table in `docs/app-matrix/README.md`.
+- **Vite, Astro, SvelteKit and Vitest runtime failures after mirror repair**. The corrected replay has no mirror misses; 39 of the original 51 blocked stages were mirror misses. Reproduce each app with `scripts/app-matrix.sh --apps=<app> --engines=quickjs,jsc,browser --hosts=native,playground --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/<app>-rerun`. Suspected locations are the first blocker listed in the app table in `docs/app-matrix/README.md`.

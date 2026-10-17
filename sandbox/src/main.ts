@@ -176,7 +176,8 @@ new ResizeObserver(() => fit.fit()).observe(termEl);
 
 const previews = new Previews();
 linkLocalUrls(term, previews);
-const moduleScope: Promise<boolean> = engine === "browser" ? registerModuleScope() : Promise.resolve(false);
+// A QuickJS/JSC parent can launch Bun light, whose cyclic imports need the module scope too.
+const moduleScope: Promise<boolean> = registerModuleScope();
 let wasm: Awaited<ReturnType<typeof loadWasm>> | null = null;
 let firstStart = true;
 let depsKey: string | null = null;
@@ -323,7 +324,8 @@ function stopDevServer(): void {
   const current = run;
   run = null;
   server = null;
-  current?.kill();
+  // Restart discards this Run handle, so request the force-stop action explicitly.
+  current?.kill(9);
 }
 
 async function showPreview(target: Server, visibleStart: number): Promise<void> {
@@ -371,7 +373,7 @@ async function sendUpdate(path: string, revision: number): Promise<void> {
 
 async function save(path: string, text: string, revision: number): Promise<void> {
   await fs.writeFile(abs(path), text);
-  await fs.flush();
+  await fs.flush(abs(path));
   if (server) await sendUpdate(path, revision);
   else if (run) unsent.set(path, revision);
   else if (revision === editRevision) setSaveState("saved", "ok");

@@ -17,7 +17,7 @@
     },
     "node_parallel": false,
     "network": "loopback",
-    "timeout_seconds": 15.0,
+    "timeout_seconds": 15,
     "test_timeout_ms": 2000
   },
   "runner_source_commit": "7aa78b19ba2ec798bfc75eb08da84afd04d0e0ee",
@@ -158,7 +158,7 @@
       },
       "node_parallel": false,
       "network": "loopback",
-      "timeout_seconds": 15.0,
+      "timeout_seconds": 15,
       "test_timeout_ms": 2000
     },
     "jsc": {
@@ -179,7 +179,7 @@
       },
       "node_parallel": false,
       "network": "loopback",
-      "timeout_seconds": 15.0,
+      "timeout_seconds": 15,
       "test_timeout_ms": 2000
     }
   },
@@ -187,17 +187,109 @@
     "quickjs": {
       "fully_passing": 282,
       "observed_passes": 12663,
-      "timeouts": 57
+      "timeouts": 57,
+      "comparison_status": "comparable",
+      "selected_files": 2305,
+      "selection": [
+        "**"
+      ],
+      "provenance": {
+        "schema": 1,
+        "engine": "quickjs",
+        "suite_commit": "4ceda2c2868d3a7703c7737ddd9de7244ec384df",
+        "wasm_sha256": "0b6e61d2b8bc87770d62db21b795a34adb772301ff4daf604b10c5079c408dbf",
+        "runner_sha256": "402ec80ab03e0a367a6a8fc49fe6605847a37c99b69fb8f93d9c66ebc8539d44",
+        "launcher_sha256": "6086c031ea3880512fe73b96618f20cbdc8d328bf05a56f3ba70c3768fbae696",
+        "host_sources": {},
+        "dependencies": {
+          "files": 537,
+          "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
+        },
+        "test_dependencies": {
+          "files": 4248,
+          "sha256": "fa39a9d0c87fde12be431f502e4803f0445b844dfdbb59cd19773965e33046ae"
+        },
+        "network": "loopback",
+        "timeout_seconds": 15,
+        "test_timeout_ms": 2000
+      },
+      "comparison_scope": "same-selection baseline",
+      "reason": "QuickJS is the sole matched-selection baseline, with 2,305 files on both sides. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim."
     },
     "jsc": {
       "fully_passing": 113,
       "observed_passes": 8878,
-      "timeouts": 46
+      "timeouts": 46,
+      "comparison_status": "non-comparable",
+      "selected_files": 1082,
+      "selection": [
+        "js/bun",
+        "js/node",
+        "js/web"
+      ],
+      "provenance": {
+        "schema": 1,
+        "engine": "jsc",
+        "suite_commit": "4ceda2c2868d3a7703c7737ddd9de7244ec384df",
+        "wasm_sha256": "aa3ac5798092c3b8179d959526e8cd9daaa04755d9a5155ede17e1756b214f1d",
+        "runner_sha256": "402ec80ab03e0a367a6a8fc49fe6605847a37c99b69fb8f93d9c66ebc8539d44",
+        "launcher_sha256": "6086c031ea3880512fe73b96618f20cbdc8d328bf05a56f3ba70c3768fbae696",
+        "host_sources": {},
+        "dependencies": {
+          "files": 537,
+          "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
+        },
+        "test_dependencies": {
+          "files": 4248,
+          "sha256": "fa39a9d0c87fde12be431f502e4803f0445b844dfdbb59cd19773965e33046ae"
+        },
+        "network": "loopback",
+        "timeout_seconds": 15,
+        "test_timeout_ms": 2000
+      },
+      "comparison_scope": "different selections",
+      "reason": "Historical selection covered only js/bun, js/node, and js/web; current selection covers all files. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim."
     },
     "browser": {
       "fully_passing": 116,
       "observed_passes": 15143,
-      "timeouts": 43
+      "timeouts": 43,
+      "comparison_status": "non-comparable",
+      "selected_files": 1082,
+      "selection": [
+        "js/bun",
+        "js/node",
+        "js/web"
+      ],
+      "provenance": {
+        "schema": 1,
+        "engine": "browser",
+        "suite_commit": "4ceda2c2868d3a7703c7737ddd9de7244ec384df",
+        "wasm_sha256": "5cfac0b675efa2cfe87007b4628678e31200ba458eebb4f6dde447a211545661",
+        "runner_sha256": "402ec80ab03e0a367a6a8fc49fe6605847a37c99b69fb8f93d9c66ebc8539d44",
+        "launcher_sha256": "6a4b0887cf2bded70a2d752d419e10b29a8ed0e3baa583c8cb4f8769707bde60",
+        "host_sources": {
+          "web/src/engine-host.js": "128b00396611cb3f7106e176d4f8ede839998c70d8f1d9013f7a423e0414c120",
+          "web/scripts/node-net.mjs": "137b8bdfe805643b34367bd356d23d798e1cea40bbc2f887f4d356042405f88d",
+          "web/src/subprocess.js": "63314be35f10fe311ace9638cc2080c069ba5a980013d9435699e6c65be4e1bb",
+          "web/src/subprocess-fs.ts": "7766f031b52ce8d22f719e6da99cdccd52c0f61d6cc4816b2857e5eaf3096dd9",
+          "web/src/fs.ts": "5e52efaa27bf0fcbb2c3c41987dc6a82090499fdb0a53ecb313a4599c1d3e400",
+          "web/src/wasi.ts": "7c1432514faf1fd0ba66f638714b2804b7fd3115b2c32ee341b9b7a97a875576"
+        },
+        "dependencies": {
+          "files": 537,
+          "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
+        },
+        "test_dependencies": {
+          "files": 4248,
+          "sha256": "fa39a9d0c87fde12be431f502e4803f0445b844dfdbb59cd19773965e33046ae"
+        },
+        "network": "loopback",
+        "timeout_seconds": 15,
+        "test_timeout_ms": 2000
+      },
+      "comparison_scope": "different selections",
+      "reason": "Historical selection covered only js/bun, js/node, and js/web; current selection covers all files. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim."
     }
   },
   "before_after": {
@@ -213,7 +305,14 @@
       "timeouts": [
         57,
         51
-      ]
+      ],
+      "comparison_status": "comparable",
+      "selected_files": [
+        2305,
+        2305
+      ],
+      "reason": "QuickJS is the sole matched-selection baseline, with 2,305 files on both sides. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim.",
+      "comparison_scope": "same-selection baseline"
     },
     "jsc": {
       "fully_passing": [
@@ -227,7 +326,14 @@
       "timeouts": [
         46,
         50
-      ]
+      ],
+      "comparison_status": "non-comparable",
+      "selected_files": [
+        1082,
+        2305
+      ],
+      "reason": "Historical selection covered only js/bun, js/node, and js/web; current selection covers all files. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim.",
+      "comparison_scope": "different selections"
     },
     "browser": {
       "fully_passing": [
@@ -241,7 +347,14 @@
       "timeouts": [
         43,
         62
-      ]
+      ],
+      "comparison_status": "non-comparable",
+      "selected_files": [
+        1082,
+        2305
+      ],
+      "reason": "Historical selection covered only js/bun, js/node, and js/web; current selection covers all files. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim.",
+      "comparison_scope": "different selections"
     }
   }
 }

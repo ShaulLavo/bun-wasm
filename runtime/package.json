@@ -1,13 +1,16 @@
 {
   "name": "@bun-wasm/runtime",
-  "version": "0.0.7",
+  "version": "0.0.16",
   "private": true,
   "type": "module",
   "exports": {
     "./core": "./core/index.ts",
     "./core/memory-views": "./core/memory-views.js",
     "./fs": "./fs/index.ts",
-    "./fs/memory": "./fs/memory.ts"
+    "./fs/memory": "./fs/memory.ts",
+    "./proc": "./proc/index.ts",
+    "./proc/stub": "./proc/stub.ts",
+    "./interrupt": "./interrupt/index.ts"
   },
   "scripts": {
     "test": "bun test ./tests",

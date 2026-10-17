@@ -56,7 +56,7 @@ export async function readGuest(page, path) {
 }
 
 export async function browserHost({ root, options, launch, stop }) {
-  const playwrightPath = process.env.PLAYWRIGHT ?? "/home/shaul/.local/share/mise/installs/npm-playwright/1.63.0/node_modules/.mise/playwright@1.63.0/node_modules/playwright/index.mjs";
+  const playwrightPath = process.env.PLAYWRIGHT ?? join(root, "web/node_modules/playwright/index.mjs");
   const { chromium } = await import(pathToFileURL(playwrightPath).href);
   const { ready, run, terminalText, writeFile } = await import(pathToFileURL(join(root, "web/tests/playground.mjs")).href);
   let browser;

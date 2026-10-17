@@ -667,15 +667,13 @@ checks of browser behavior, not evidence of forced collection in those workers.
 The second-review red/green logs are retained in
 `/work/reports/bun-wasm-rv28-round2-20261016/`.
 
-
-
-
+<!-- replay:start -->
 ## Current full replay after mirror recording
 
-The 2026-10-17 run first recorded the six apps that had missing `esbuild-wasm` metadata, then reran all 17 apps offline. Recording had zero registry misses and zero registry errors. The offline replay also had zero misses and zero errors. It used runtime commit `6e93c80c6f9bccc879990bedb999c3efdcd3166f`, registry digest `5428da1454a78fbfa8dc868114365c5a448fc2ad2556b2977caa17520890a7d2`, and produced 180 stage records.
+The recording and corrected offline replay have zero registry misses and zero registry errors. Counts below exclude the recording's native Bun controls.
 
 | App | Pass | Fail | Blocked | First blocker |
-|---|---:|---:|---:|---|
+| --- | --- | --- | --- | --- |
 | astro | 3 | 3 | 0 | quickjs/native/build: build: No diagnostic before exit or deadline |
 | drizzle | 12 | 0 | 0 | - |
 | elysia | 6 | 0 | 0 | - |
@@ -693,16 +691,50 @@ The 2026-10-17 run first recorded the six apps that had missing `esbuild-wasm` m
 | vite-vanilla | 3 | 6 | 0 | quickjs/native/dev: server: No diagnostic before exit or deadline |
 | vite-vue | 3 | 6 | 0 | quickjs/native/dev: server: No diagnostic before exit or deadline |
 | vitest | 3 | 6 | 0 | quickjs/native/test: test: No diagnostic before exit or deadline |
-
 | Overall | 120 | 48 | 12 | - |
 
-Before recording, all 51 blocked stages were mirror misses for `esbuild-wasm`. After recording, those installs pass. The remaining blocked stages are only Next production starts blocked by failed builds and Prisma commands blocked by its install failure. The remaining failures are runtime or app behavior results.
+| Engine | Host | Pass | Fail | Blocked |
+| --- | --- | --- | --- | --- |
+| quickjs | native | 27 | 14 | 4 |
+| quickjs | playground | 13 | 2 | 0 |
+| jsc | native | 27 | 14 | 4 |
+| jsc | playground | 13 | 2 | 0 |
+| browser | native | 27 | 14 | 4 |
+| browser | playground | 13 | 2 | 0 |
 
-| Scope | Before | After |
-|---|---:|---:|
-| Native stages | 63 pass / 27 fail / 45 blocked | 72 pass / 45 fail / 6 blocked |
-| Playground stages | 36 pass / 3 fail / 6 blocked | 36 pass / 3 fail / 6 blocked |
+| Scope | Before recording | Corrected offline replay |
+| --- | --- | --- |
+| native | 63 pass / 27 fail / 45 blocked | 81 pass / 42 fail / 12 blocked |
+| playground | 36 pass / 3 fail / 6 blocked | 39 pass / 6 fail / 0 blocked |
 | All stages | 99 pass / 30 fail / 51 blocked | 120 pass / 48 fail / 12 blocked |
+
+The original replay had 51 blocked stages. Of those, 39 were blocked by missing esbuild-wasm records. The corrected replay has 12 prerequisite blocks, from Next builds and Prisma installs. Missing diagnostics identify an unresolved failure, not a proven cause.
+
+### Provenance
+
+These tables are generated from the committed raw JSON snapshots. Each snapshot is byte-identical to the retained results.json. The suite artifacts were built at runtime commit `6e93c80c6f9bccc879990bedb999c3efdcd3166f`. The app snapshots record their checkout revisions below, including the docs-only checkout `ec213e8ee326336f31feea9ef5763e793b9e2d60` used for the corrected replay. App artifact hashes changed between replays. These runs establish app outcomes for the recorded artifacts, not an isolated runtime before/after improvement.
+
+| Snapshot | Recorded checkout revision | Raw JSON SHA-256 |
+| --- | --- | --- |
+| before.json | 6e93c80c6f9bccc879990bedb999c3efdcd3166f | 1a9f9747c62d03859ca8b968ce81c361f723c75bd2eeb360b1819b58507a652f |
+| recording.json | ec213e8ee326336f31feea9ef5763e793b9e2d60 | 74a4a5d823b4bdef8643c95ead958963c1b829a6dd801bc1b5d3c7c3d030b4c0 |
+| after.json | ec213e8ee326336f31feea9ef5763e793b9e2d60 | 6b203e01cdb2c202f6fb04ec056fc1175120d07b34e79f9571de53b90aed4313 |
+
+| Engine | Original replay wasm SHA-256 | Corrected replay wasm SHA-256 |
+| --- | --- | --- |
+| quickjs | 794e4b24f5755f4f18d2e2aac5149d87de73f7d7f2c27fba2d0fdf8ff7ec82c9 | 639050a0c57a032bba6faf902ccd0cc10b6baff070428b1503832f5aa34df32c |
+| jsc | 596e8f29bfd9d48c556b1f9a26ca9e8b9e439a4d8351551718cb13cbefe7b36f | 5fe717047ff801443f9cbbebc6e62b72bc443a608235879269deac1c9b94bfb3 |
+| browser | accc747792ac2e53e4ea86e51b15c3f3ec5354e20516288d95a79aae7cea7e0e | 4bc3f2754a9bfc59c613f36c5c4009cf345e5a46455453227ce67423b65d81f6 |
+
+Corrected registry digest: `5428da1454a78fbfa8dc868114365c5a448fc2ad2556b2977caa17520890a7d2`.
+
+Regenerate or check every table in this section, and the suite headline and progress tables, with:
+
+```sh
+bun scripts/refresh-compatibility-docs.ts
+bun scripts/refresh-compatibility-docs.ts --check
+```
+<!-- replay:end -->
 
 Recording command:
 

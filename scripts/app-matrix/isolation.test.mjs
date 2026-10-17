@@ -34,13 +34,14 @@ function fixture() {
     mkdirSync(join(directory, "web/dist"), { recursive: true });
     mkdirSync(join(directory, "web/tests"), { recursive: true });
     cpSync(join(root, "web/tests/playground.mjs"), join(directory, "web/tests/playground.mjs"), { recursive: true });
+    cpSync(join(root, "web/tests/foreground.ts"), join(directory, "web/tests/foreground.ts"));
     mkdirSync(join(directory, "owned-scratch"));
     return { directory, cleanup };
   } catch (error) { cleanup(); throw error; }
 }
 
 async function matrix(directory, extra = [], prefix = []) {
-  return launch(prefix.concat([join(directory, "scripts/app-matrix/isolate.mjs"), "--apps=typescript,eslint", "--engines=quickjs", "--hosts=native", "--launcher=/usr/bin/true", `--cache=${directory}/cache`, `--output=${directory}/results`], extra), { MATRIX_SCRATCH_ROOT: join(directory, "owned-scratch") });
+  return launch(prefix.concat([join(directory, "scripts/app-matrix/isolate.mjs"), "--apps=typescript,eslint", "--engines=quickjs", "--hosts=native", "--launcher=/usr/bin/true", `--cache=${directory}/cache`, `--output=${directory}/results`], extra), { MATRIX_SCRATCH_ROOT: join(directory, "owned-scratch"), PLAYWRIGHT: join(root, "web/node_modules/playwright/index.mjs") });
 }
 
 test("native server must stay alive until its DOM assertion completes", async () => {

@@ -1,9 +1,11 @@
-// Self-spawning uses fresh wasm instances supplied by the host, never OS commands.
+// Guest processes resolve through the host executable registry, never arbitrary OS commands.
 (function (internal) {
   "use strict";
   const native = internal.native;
   const { Buffer } = internal.require("buffer");
   const AGAIN = -2;
+  // Slot 14 selector 3 returns the completed outcome's signal, not a requested signal.
+  const CHILD_FINAL_SIGNAL = 3;
   const signals = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGABRT: 6, SIGKILL: 9, SIGUSR1: 10, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15 };
 
   function unsupported(message) {
@@ -24,6 +26,12 @@
 
   function signalName(number) {
     return Object.keys(signals).find((name) => signals[name] === number) || number;
+  }
+
+  function finalSignal(handle) {
+    const number = native.hostChildPipe(handle, CHILD_FINAL_SIGNAL);
+    if (number < 0) throw hostError(handle);
+    return number === 0 ? null : signalName(number);
   }
 
   function bytes(value) {
@@ -58,11 +66,7 @@
     const argv = cmd.map(String);
     if (argv.some((arg) => arg.includes("\0"))) throw new TypeError("Command arguments cannot contain null bytes");
     const proc = globalThis.process;
-    if (!["bun", "/bun", "node", proc.execPath, proc.argv0].includes(argv[0])) {
-      throw Object.assign(new Error(`Executable not found in bun-wasm: ${argv[0]}`), { code: "ENOENT", errno: -2, path: argv[0], syscall: "spawn" });
-    }
-    argv[0] = "bun";
-    if (!native.hostCaps.spawn) throw unsupported("Spawning bun without host process support");
+    if (!native.hostCaps.spawn) throw unsupported("Spawning a process without host process support");
     const env = {};
     for (const [key, value] of Object.entries(options.env || proc.env)) if (value !== undefined) env[key] = String(value);
     const io = options.stdio;
@@ -71,7 +75,7 @@
     const error = Array.isArray(io) ? io[2] : options.stderr;
     const requestedCwd = options.cwd instanceof URL ? decodeURIComponent(options.cwd.pathname) : String(options.cwd || native.cwd());
     const cwd = internal.require("path").resolve(native.cwd(), requestedCwd);
-    const meta = { argv, cwd, env,
+    const meta = { executable: argv[0], argv, cwd, env,
       stdin: stdioMode(input, 0, "ignore"),
       stdout: stdioMode(output, 1, "pipe"),
       stderr: stdioMode(error, 2, sync ? "pipe" : "inherit") };
@@ -205,7 +209,6 @@
     let rejectExit;
     let timer;
     let abort;
-    let signalCode = null;
     let closed = false;
     let settled = false;
     const exited = new Promise((resolve, reject) => { resolveExit = resolve; rejectExit = reject; });
@@ -221,7 +224,8 @@
           if (native.hostChildWait(spec.handle) >= 0) return;
           throw hostError(spec.handle);
         }
-        if (number) { child.killed = true; signalCode = number; }
+        if (number) child.killed = true;
+        // Requests do not classify completion; even SIGKILL may lose to an already selected exit.
       },
       ref() { waiter.ref = true; return child; },
       unref() { waiter.ref = false; return child; },
@@ -229,9 +233,10 @@
       async [Symbol.asyncDispose]() { if (!settled) child.kill(); await exited; },
     };
     function finish(code) {
+      const signalCode = finalSignal(spec.handle);
       settled = true;
       child.exitCode = signalCode === null ? code : null;
-      child.signalCode = signalCode === null ? null : signalName(signalCode);
+      child.signalCode = signalCode;
       if (timer) clearTimeout(timer);
       if (abort) spec.options.signal.removeEventListener("abort", abort);
       resolveExit(code);
@@ -298,7 +303,7 @@
     const maxBuffer = spec.options.maxBuffer === undefined ? 64 * 1024 * 1024 : Number(spec.options.maxBuffer);
     const sizes = [0, 0];
     let exitCode = AGAIN;
-    let signalCode = null;
+    let timedOut = false;
     try {
       if (spec.input && typeof spec.input.getReader === "function") throw unsupported("Synchronous streaming stdin");
       initialInput(spec.input, sink);
@@ -312,17 +317,23 @@
         }));
         exitCode = native.hostChildWait(spec.handle);
         if (exitCode < 0 && exitCode !== AGAIN) throw hostError(spec.handle);
-        if (spec.options.timeout > 0 && native.now() - started >= spec.options.timeout && signalCode === null) {
-          signalCode = signalNumber(spec.options.killSignal);
-          native.hostChildKill(spec.handle, signalCode);
+        if (exitCode === AGAIN && !timedOut && spec.options.timeout > 0 && native.now() - started >= spec.options.timeout) {
+          timedOut = true;
+          const requestedSignal = signalNumber(spec.options.killSignal);
+          if (native.hostChildKill(spec.handle, requestedSignal) < 0 && native.hostChildWait(spec.handle) < 0) throw hostError(spec.handle);
         }
         if (exitCode === AGAIN || states.some((state) => state.handle)) native.hostPoll(1);
       }
-      return { pid: spec.handle, success: exitCode === 0, exitCode: signalCode === null ? exitCode : null, signalCode: signalCode === null ? null : signalName(signalCode),
-        exitedDueToTimeout: signalCode !== null, stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])) };
+      const signalCode = finalSignal(spec.handle);
+      return { pid: spec.handle, success: exitCode === 0, exitCode: signalCode === null ? exitCode : null, signalCode,
+        exitedDueToTimeout: timedOut, stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])) };
     } catch (error) {
       native.hostChildKill(spec.handle, 9);
-      return { pid: spec.handle, success: false, exitCode: 1, signalCode: 9,
+      // Selection can precede completion publication. Observe the winner before closing it.
+      while ((exitCode = native.hostChildWait(spec.handle)) === AGAIN) native.hostPoll(1);
+      if (exitCode < 0) throw hostError(spec.handle);
+      const signalCode = finalSignal(spec.handle);
+      return { pid: spec.handle, success: false, exitCode: signalCode === null ? exitCode : null, signalCode,
         stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])), error };
     } finally {
       for (const pipe of spec.pipes) if (pipe > 0) native.hostClose(pipe);
