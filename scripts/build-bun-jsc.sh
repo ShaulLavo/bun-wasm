@@ -10,13 +10,17 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$root/jsc/common.sh"
+check_jsc_inputs_stamp
 "$root/scripts/sync-crypto.sh"
 export CARGO_TARGET_DIR="${JSC_CARGO_TARGET_DIR:-$JSC_BUILD_DIR/target}"
 export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--cap-lints=warn -C link-self-contained=no"
 export JSC_BUILD_DIR
 # rquickjs-sys isn't built here, but sqlite's cc build uses the same wasi-sdk.
 export WASI_SDK="${WASI_SDK:-$WASI_SDK_PATH}"
-[[ -f "$JSC_OBJ/lib/libJavaScriptCore.a" ]] || "$root/scripts/build-jsc.sh"
+[[ -f "$JSC_OBJ/lib/libJavaScriptCore.a" ]] || {
+  echo "error: JSC prebuild at $JSC_BUILD_DIR is incomplete; run JSC_BUILD_DIR=$JSC_BUILD_DIR scripts/build-jsc.sh." >&2
+  exit 1
+}
 # jsc/webkit-wasi.patch gives WTF's StackBounds a native recursion budget (docs/stack-limits.md).
 # A WTF built before that links fine, but lets getters and Proxy traps exhaust the host's wasm stack.
 if ! LC_ALL=C grep -qa BUN_WASM_STACK_KIB "$JSC_OBJ/lib/libWTF.a"; then

@@ -24,7 +24,7 @@ The header dropdown (`?engine=`) picks what runs the program:
 | --- | --- | --- | --- |
 | `browser` (default) | `bun-browser.wasm`: transpiler, resolver, `bun build`, sqlite and natives only | `scripts/build-bun-browser.sh` | `BUN_BROWSER_WASM` |
 | `quickjs` | `bun.wasm`: QuickJS compiled to wasm | `scripts/build.sh` | `BUN_WASM` |
-| `jsc` | `bun-jsc.wasm`: JavaScriptCore compiled to wasm (no JIT) | `scripts/build-bun-jsc.sh` | `JSC_WASM` |
+| `jsc` | `bun-jsc.wasm`: JavaScriptCore compiled to wasm (no JIT) | `scripts/build-jsc.sh`, then `scripts/build-bun-jsc.sh` | `JSC_WASM` |
 
 With `browser`, the wasm's `_start` sets the program up and returns; the worker then hands the
 instance to `src/engine-host.js`, which runs the runtime's JS and the user's code on the worker's
