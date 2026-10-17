@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { Buffer } from "node:buffer";
 import * as nodePath from "node:path";
 import { runInNewContext } from "node:vm";
+import { EventEmitter } from "node:events";
+import * as nodeStream from "node:stream";
 
 // spawn.ts against an in-memory runtime_proc service: descriptors, pipes with reference counts,
 // typed wait and job reaping. Real hosts are covered by the browser, Node and native ABI suites.
@@ -34,6 +36,11 @@ function service(options: { failSpawn?: number } = {}) {
   };
   const native: Record<string, any> = {
     hostCaps: { proc_spawn: true }, cwd: () => "/work", now: () => Date.now(),
+    stat(path: string) {
+      if (["/", "/work", "/tmp"].includes(path)) return { mode: 0o040755 };
+      if (path === "/work/file.txt") return { mode: 0o100644 };
+      throw Object.assign(new Error(`ENOENT: no such file or directory, stat '${path}'`), { code: "ENOENT", errno: -2, syscall: "stat" });
+    },
     procPipe() {
       const pipe: FakePipe = { chunks: [], readers: 1, writers: 1 };
       const ends = [next++, next++] as [number, number];
@@ -128,7 +135,7 @@ function load(fake: ReturnType<typeof service>) {
     ReadableStream, Response, URL, TextEncoder, TextDecoder, Promise,
     process: { env: { HOME: "/home" }, execArgv: [], execPath: "bun", cwd: () => "/work" },
   });
-  const modules: Record<string, unknown> = { buffer: { Buffer }, path: nodePath, net: {} };
+  const modules: Record<string, unknown> = { buffer: { Buffer }, path: nodePath, net: {}, events: EventEmitter };
   const internal = {
     native: fake.native,
     web: { ReadableStream, Response },
@@ -136,6 +143,7 @@ function load(fake: ReturnType<typeof service>) {
     toUint8: (value: ArrayBufferView) => new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
     concatBytes: (chunks: Uint8Array[]) => Buffer.concat(chunks),
     nextTick: (callback: () => void) => queueMicrotask(callback),
+    builtin: (name: string) => name === "node:stream" ? nodeStream : (() => { throw new Error(`Unexpected builtin ${name}`); })(),
     addIoWaiter(waiter: any) { waiters.push(waiter); return waiter; },
     require(name: string) {
       if (!(name in modules)) throw new Error(`Unexpected module ${name}`);
@@ -370,4 +378,28 @@ for (const ownCode of [23, 143]) test(`a handled TERM keeps the guest's own exit
   expect(child.exitCode).toBe(ownCode);
   expect(child.signalCode).toBeNull();
   expect(child.killed).toBe(true);
+});
+
+test("a missing or non-directory cwd is the spawn error and starts nothing", async () => {
+  const fake = service();
+  const { module } = load(fake);
+  for (const [cwd, code, errno] of [["/does-not-exist", "ENOENT", -2], ["/work/file.txt", "ENOTDIR", -20]] as const) {
+    const node = module.nodeChildProcess();
+    const child = node.spawn("bun", ["x"], { cwd, stdio: "pipe" });
+    const emitted: any = await new Promise((resolve) => child.once("error", resolve));
+    expect(emitted).toMatchObject({ code, errno, syscall: "spawn", path: "bun", message: `spawn bun ${code}` });
+    expect(() => module.spawn(["bun", "x"], { cwd })).toThrow(`spawn bun ${code}`);
+    const result = module.spawnSync(["bun", "x"], { cwd, stdin: new Uint8Array(1) });
+    expect(result).toMatchObject({ pid: 0, success: false, exitCode: 1 });
+    expect(result.error).toMatchObject({ code, errno, syscall: "spawn", path: "bun" });
+    const sync = node.spawnSync("bun", ["x"], { cwd });
+    expect(sync.error).toMatchObject({ code, syscall: "spawn" });
+    expect(sync.status).toBeNull();
+  }
+  // Nothing was spawned, no job was looked up and no descriptor was created or leaked.
+  expect(fake.calls).not.toContain("spawn");
+  expect(fake.children.size).toBe(0);
+  expect(fake.open()).toBe(0);
+  // A relative cwd resolves against the guest cwd before the check.
+  expect(module.spawn(["bun", "x"], { cwd: "../tmp", stdout: "pipe" }).pid).toBeGreaterThan(0);
 });
