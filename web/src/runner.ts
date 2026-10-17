@@ -9,6 +9,8 @@ import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
 import { measureStartup } from "./startup";
 import { SubprocessBroker } from "./subprocess-broker";
+import { createSignalState } from "../../runtime/proc/signals";
+import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
 import type { Engine, RunRequest, WorkerMessage } from "./worker";
 
 export type { Engine } from "./worker";
@@ -164,8 +166,8 @@ export interface RunResult {
 
 export interface Run {
   readonly done: Promise<RunResult>;
-  /** Terminates the worker (exit code 130); completed filesystem writes remain visible. */
-  kill(): void;
+  /** Signal the foreground job with SIGINT; a second call or explicit 9 force-kills it. */
+  kill(signal?: 2 | 9): void;
 }
 
 /** `?slots=table|off` on the page: how the wasm engines get networking (see RunRequest.slots). */
@@ -185,6 +187,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     : null;
   // One Cache Storage cache per run holds its modules; deleted when the run ends.
   const moduleCache = options.moduleScope ? `bunwasm-m-${crypto.randomUUID()}` : null;
+  const isolated = globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== "undefined";
   const request: RunRequest = {
     engine: options.engine,
     module: options.module,
@@ -196,29 +199,81 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     moduleCache,
     slots: slotsMode(),
     spawnBroker: true,
+    pid: 1,
+    jobId: 1,
+    interrupt: isolated ? new SharedArrayBuffer(4) : undefined,
+    requestedSignal: isolated ? new SharedArrayBuffer(4) : undefined,
+    signalState: isolated ? createSignalState().buffer as SharedArrayBuffer : undefined,
+    outcome: isolated ? new SharedArrayBuffer(8) : undefined,
   };
+  const rootOutcome = request.outcome ? outcomeWord(request.outcome) : null;
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
-  const subprocess = new SubprocessBroker(workerUrl, options.filesystem);
+  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { root: isolated ? {
+    pid: 1, job: 1, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
+    signalState: request.signalState, outcome: request.outcome,
+  } : undefined });
+  // Generic aliases use the page/root engine; named executables select an engine explicitly.
+  const modules = new Map<Engine, Promise<WebAssembly.Module>>();
+  modules.set(options.engine, Promise.resolve(options.module));
+  const moduleFor = (engine: Engine) => () => {
+    let module = modules.get(engine);
+    if (!module) {
+      module = loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
+      modules.set(engine, module);
+    }
+    return module;
+  };
+  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, { module: moduleFor(options.engine), adapter: "bun", engine: options.engine });
+  for (const engine of ["quickjs", "jsc", "browser"] as const) subprocess.register(`bun-${engine}`, { module: moduleFor(engine), adapter: "bun", engine });
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
   let settle: (result: RunResult) => void = () => {};
   const done = new Promise<RunResult>((resolve) => (settle = resolve));
   let finished = false;
-  const finish = (result: RunResult) => {
+  let outcomeTimer: ReturnType<typeof setTimeout> | null = null;
+  const finish = (result: RunResult, acknowledged = false, signal?: number) => {
     if (finished) return;
+    if (rootOutcome) {
+      const winner = claimOutcome(rootOutcome, signal === undefined
+        ? { kind: "exited", code: result.code } : { kind: "signaled", code: signal });
+      result = winner.kind === "exited" && winner.code === result.code && result.error
+        ? { code: winner.status, error: result.error } : { code: winner.status };
+    }
     finished = true;
-    worker.terminate();
-    subprocess.dispose();
-    options.filesystem.revoke(request.filesystem);
+    if (outcomeTimer !== null) clearTimeout(outcomeTimer);
+    outcomeTimer = null;
+    if (acknowledged) {
+      options.filesystem.reap(request.filesystem);
+      worker.terminate();
+    } else {
+      // Logical exit/revocation is immediate; physical termination must not strand a host lock.
+      void options.filesystem.quiesce(request.filesystem).then(() => worker.terminate());
+    }
+    subprocess.rootExit(result.code);
     helper?.dispose();
     if (moduleCache) void caches.delete(moduleCache);
     settle(result);
   };
   worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
-    if (finished) return;
     const msg = event.data;
+    if (finished) {
+      if (msg.type === "spawn") subprocess.rejectSpawn(msg.request);
+      return;
+    }
+    const selected = rootOutcome && readOutcome(rootOutcome);
+    if (selected?.kind === "signaled" && msg.type !== "exit" && msg.type !== "error") {
+      // Reject capabilities at the dispatch boundary too: the periodic observer need not have
+      // run yet when a guest catches its own terminal unwind and sends more messages.
+      if (msg.type === "spawn") subprocess.rejectSpawn(msg.request);
+      finish({ code: selected.status }, false, selected.code);
+      return;
+    }
     if (msg.type === "spawn") {
       subprocess.spawn(msg.request);
+      return;
+    }
+    if (msg.type === "child-close") {
+      subprocess.close(msg.parentPid, msg.pid);
       return;
     }
     if (msg.type === "phase") {
@@ -235,14 +290,43 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       (msg.type === "stdout" ? hooks.stdout : hooks.stderr)(msg.data);
       return;
     }
+    if (msg.type === "default-signal") {
+      // This is fatal selection, not proof that a caught unwind released filesystem locks.
+      finish({ code: 128 + msg.signal }, false, msg.signal);
+      return;
+    }
     // Terminals want CRLF between the error's stack lines.
-    if (msg.type === "error") finish({ code: 134, error: `bun.wasm crashed: ${msg.message}`.replace(/\r?\n/g, "\r\n") });
-    else finish({ code: msg.code });
+    if (msg.type === "error") finish({ code: msg.code, error: `bun.wasm crashed: ${msg.message}`.replace(/\r?\n/g, "\r\n") }, true);
+    else finish({ code: msg.code }, true, msg.signal);
   };
   worker.onerror = (event) => {
     event.preventDefault();
     finish({ code: 1, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
   worker.postMessage(request, [request.filesystem.port]);
-  return { done, kill: () => finish({ code: 130 }) };
+  const watchOutcome = () => {
+    if (!rootOutcome || finished) return;
+    outcomeTimer = setTimeout(() => {
+      outcomeTimer = null;
+      const result = readOutcome(rootOutcome);
+      // A guest can catch a default-signal unwind and keep running. Its already selected fatal
+      // outcome is authority to revoke, not an acknowledgement that filesystem locks are free.
+      if (result?.kind === "signaled") finish({ code: result.status }, false, result.code);
+      else watchOutcome();
+    }, 4);
+  };
+  watchOutcome();
+  let interrupted = false;
+  return { done, kill: (requestedSignal?: 2 | 9) => {
+    if (finished) return;
+    const signal = requestedSignal ?? (interrupted ? 9 : 2);
+    interrupted = true;
+    // Without isolation there is no shared interrupt channel or subprocess service.
+    if (!request.interrupt) { finish({ code: 128 + signal }, false, signal); return; }
+    // The broker synchronously publishes every job member before any teardown callback. Root
+    // HANDLE/IGNORE stays alive; DEFAULT selects its typed outcome without guest cooperation.
+    void subprocess.killJob(1, signal).catch(error => console.error("bun-wasm: job signal failed", error));
+    const result = readOutcome(rootOutcome!);
+    if (result) finish({ code: result.status }, false, result.kind === "signaled" ? result.code : undefined);
+  } };
 }

@@ -11,9 +11,9 @@ use crate::Host;
 use crate::net::Output;
 
 const ABI_VERSION: u32 = 1;
-const SLOT_NAMES: [&str; 18] = [
+const SLOT_NAMES: [&str; 19] = [
     "poll", "fetch", "fetch_head", "read", "write", "close", "listen", "local_port", "accept", "connect", "error",
-    "peer_addr", "spawn", "child_wait", "child_pipe", "child_kill", "shutdown", "local_addr",
+    "peer_addr", "spawn", "child_wait", "child_pipe", "child_kill", "shutdown", "local_addr", "signal",
 ];
 
 /// Fills the guest's slot table. A bun.wasm without the export (older
@@ -93,12 +93,12 @@ fn text(bytes: &[u8]) -> String {
     if text.len() > 300 { format!("{}…", &text[..text.floor_char_boundary(300)]) } else { text.into_owned() }
 }
 
-/// The 12 host functions, in slot order, with the exact ABI signatures.
+/// Host functions in slot order, with the exact ABI signatures.
 fn functions(store: &mut Store<Host>) -> Vec<Func> {
     vec![
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, timeout: i32| -> Result<i32> {
             let host = caller.data_mut();
-            if host.cancel.signal.load(std::sync::atomic::Ordering::SeqCst) != 0 { bail!("child killed"); }
+            host.cancel.check()?;
             let woke = host.net.poll(if timeout < 0 { 25 } else { timeout.min(25) });
             if timeout != 0 || woke != 0 {
                 trace(host, format_args!("poll({timeout}) -> {woke}"));
@@ -214,6 +214,14 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, id: i32| caller.data_mut().net.shutdown(id)),
         Func::wrap(&mut *store, |mut caller: Caller<'_, Host>, id: i32, buf: i32, cap: i32| {
             with_memory(&mut caller, |memory, host| put(memory, buf, cap, host.net.local_addr(id)))
+        }),
+        Func::wrap(&mut *store, |caller: Caller<'_, Host>, signal: i32, operation: i32| -> Result<i32> {
+            let cancel = &caller.data().cancel;
+            let result = cancel.signal(signal, operation);
+            // A self-raise or pending-handler removal can select default death.
+            // Stop this guest call now; its typed outcome was already sealed.
+            cancel.check()?;
+            Ok(result)
         }),
     ]
 }

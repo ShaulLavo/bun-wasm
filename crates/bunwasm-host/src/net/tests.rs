@@ -39,6 +39,89 @@ fn read_all(net: &mut Net, handle: i32) -> Vec<u8> {
 }
 
 #[test]
+fn handle_capacity_stops_at_the_process_namespace() {
+    let mut net = Net::new();
+    net.next_handle = crate::process::FIRST_HANDLE - 1;
+    assert!(net.require_handle().is_ok());
+    net.next_handle += 1;
+    for _ in 0..3 {
+        let error = net.require_handle().unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("EAGAIN"));
+        assert_eq!(net.next_handle, crate::process::FIRST_HANDLE);
+        assert!(net.handles.is_empty());
+    }
+}
+
+#[test]
+fn exhausted_network_operations_report_error_without_starting_io() {
+    let mut net = Net::new();
+    net.next_handle = crate::process::FIRST_HANDLE;
+    for operation in 0..3 {
+        let result = match operation {
+            0 => net.fetch(br#"{"url":"http://127.0.0.1:9/"}"#, b""),
+            1 => net.listen("127.0.0.1", 0),
+            _ => net.connect("127.0.0.1", 9),
+        };
+        assert_eq!(result, ERROR);
+        assert_eq!(json(net.error(0))["code"], "EAGAIN");
+        assert_eq!(net.next_handle, crate::process::FIRST_HANDLE);
+        assert!(net.handles.is_empty());
+    }
+    // Descriptor errors keep their original result and do not overwrite error(0).
+    assert_eq!(net.accept(123), BADF);
+    assert_eq!(json(net.error(0))["code"], "EAGAIN");
+    assert_eq!(net.connect("127.0.0.1", -1), ERROR);
+    assert_eq!(json(net.error(0))["code"], "ERR_SOCKET_BAD_PORT");
+}
+
+#[test]
+fn last_network_handle_remains_below_process_handles_and_is_not_reused() {
+    let mut net = Net::new();
+    net.next_handle = crate::process::FIRST_HANDLE - 1;
+    let listener = net.listen("127.0.0.1", 0);
+    assert_eq!(listener, crate::process::FIRST_HANDLE - 1);
+    assert_eq!(net.next_handle, crate::process::FIRST_HANDLE);
+    assert_eq!(net.listen("127.0.0.1", 0), ERROR);
+    assert_eq!(json(net.error(0))["code"], "EAGAIN");
+    assert_eq!(net.close(listener), 0);
+    assert!(net.handles.is_empty());
+    assert_eq!(net.listen("127.0.0.1", 0), ERROR);
+    assert_eq!(net.next_handle, crate::process::FIRST_HANDLE);
+}
+
+#[test]
+fn exhausted_accept_preserves_the_pending_connection() {
+    // Net owns every listener/connection and closes them during unwind too.
+    let mut net = Net::new();
+    let listener = net.listen("127.0.0.1", 0);
+    assert!(listener > 0);
+    let mut client = TcpStream::connect(("127.0.0.1", net.local_port(listener) as u16)).unwrap();
+    // Before sending data there are exactly two notifications: connection
+    // readiness and accept publication. Both prove the socket is queued,
+    // without assuming how many TCP reads will receive the message below.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while *net.notify.generation.lock().unwrap() < 2 {
+        assert!(Instant::now() < deadline, "connection was not queued");
+        net.poll(1000);
+    }
+    net.next_handle = crate::process::FIRST_HANDLE;
+    assert_eq!(net.accept(listener), ERROR);
+    assert_eq!(json(net.error(0))["code"], "EAGAIN");
+    // Test-only restoration of one free ID exposes whether rejection popped it.
+    net.next_handle -= 1;
+    let conn = net.accept(listener);
+    assert_eq!(conn, crate::process::FIRST_HANDLE - 1);
+    client.write_all(b"ping").unwrap();
+    client.shutdown(std::net::Shutdown::Write).unwrap();
+    assert_eq!(read_all(&mut net, conn), b"ping");
+    assert_eq!(net.close(conn), 0);
+    drop(client);
+    net.flush_closed(Duration::from_secs(1));
+    assert_eq!(net.close(listener), 0);
+    assert!(net.handles.is_empty());
+}
+
+#[test]
 fn poll_times_out_and_reports_new_events_once() {
     let mut net = Net::new();
     assert_eq!(net.poll(0), 0);

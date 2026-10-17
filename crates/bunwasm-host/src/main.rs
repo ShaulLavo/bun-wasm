@@ -182,10 +182,10 @@ fn run(options: Options) -> Result<i32> {
         .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
     running.store(false, Ordering::Relaxed);
     let _ = ticker.join();
-    result
+    result.map(process::FinalOutcome::code)
 }
 
-fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<(String, String)>, stdio: process::Stdio, cancel: Arc<process::Cancellation>) -> Result<i32> {
+fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<(String, String)>, stdio: process::Stdio, cancel: Arc<process::Cancellation>) -> Result<process::FinalOutcome> {
     if !env.iter().any(|(k, _)| k == "BUN_WASM_STACK_KIB") {
         env.push(("BUN_WASM_STACK_KIB".into(), GUEST_STACK_KIB.into()));
     }
@@ -214,11 +214,20 @@ fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<
     store.set_epoch_deadline(1);
     let interruption = cancel.clone();
     store.epoch_deadline_callback(move |_| {
-        if interruption.signal.load(Ordering::SeqCst) != 0 { bail!("child killed"); }
+        interruption.check()?;
         Ok(UpdateDeadline::Continue(1))
     });
     let mut linker: Linker<Host> = Linker::new(&runtime.engine);
     p1::add_to_linker_sync(&mut linker, |host| &mut host.wasi)?;
+    // Wasmtime's preview1 proc_exit rejects statuses >=126. This process host
+    // instead uses the native byte-sized status, including ordinary exit143.
+    // Normalizing here also keeps negative status values out of child_wait's
+    // control-code range; signal provenance comes only from Cancellation.
+    linker.allow_shadowing(true);
+    linker.func_wrap("wasi_snapshot_preview1", "proc_exit", |status: i32| -> Result<()> {
+        Err(I32Exit(i32::from(status as u8)).into())
+    })?;
+    linker.allow_shadowing(false);
     slots::add_import(&mut linker)?;
     let instance = linker.instantiate(&mut store, &runtime.module)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");
@@ -226,20 +235,149 @@ fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<
 
     let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
     let result = start.call(&mut store, ());
-    let signal = cancel.signal.load(Ordering::SeqCst);
-    if signal != 0 { return Ok(128 + signal); }
-    store.data_mut().net.flush_closed(std::time::Duration::from_secs(2));
+    let outcome = select_instance_outcome(result, &cancel);
+    if matches!(outcome, process::FinalOutcome::Exit(_)) {
+        store.data_mut().net.flush_closed(std::time::Duration::from_secs(2));
+    }
+    Ok(outcome)
+}
+
+fn select_instance_outcome(result: Result<()>, cancel: &process::Cancellation) -> process::FinalOutcome {
+    use process::FinalOutcome;
     match result {
-        Ok(()) => Ok(0),
+        Ok(()) => cancel.select(FinalOutcome::Exit(0)),
         Err(error) => match error.downcast_ref::<I32Exit>() {
-            Some(exit) => Ok(exit.0),
+            Some(exit) => cancel.select(FinalOutcome::Exit(exit.0)),
             None => {
-                // A trap (unreachable, out of bounds, stack overflow, ...):
-                // report it like a native abort (SIGABRT).
-                eprintln!("bun-wasm: bun.wasm trapped: {error:?}");
-                Ok(134)
+                // Preserve the ordinary trap status unless KILL or an interruption
+                // observed by epoch, poll, or stdio already selected signal death.
+                let outcome = cancel.select(FinalOutcome::Exit(134));
+                if matches!(outcome, FinalOutcome::Exit(_)) {
+                    eprintln!("bun-wasm: bun.wasm trapped: {error:?}");
+                }
+                outcome
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use process::{Cancellation, FinalOutcome};
+
+    /// Original minimal guest: import proc_exit, export memory, and call the
+    /// import from _start. Encode directly so the test needs no WAT dependency.
+    fn proc_exit_guest(status: i32) -> Vec<u8> {
+        fn section(module: &mut Vec<u8>, id: u8, payload: &[u8]) {
+            assert!(payload.len() < 128);
+            module.extend_from_slice(&[id, payload.len() as u8]);
+            module.extend_from_slice(payload);
+        }
+        let mut module = b"\0asm\x01\0\0\0".to_vec();
+        section(&mut module, 1, &[2, 0x60, 1, 0x7f, 0, 0x60, 0, 0]);
+        let mut import = vec![1, 22];
+        import.extend_from_slice(b"wasi_snapshot_preview1");
+        import.push(9);
+        import.extend_from_slice(b"proc_exit");
+        import.extend_from_slice(&[0, 0]);
+        section(&mut module, 2, &import);
+        section(&mut module, 3, &[1, 1]);
+        section(&mut module, 5, &[1, 0, 1]);
+        let mut exports = vec![2, 6];
+        exports.extend_from_slice(b"_start");
+        exports.extend_from_slice(&[0, 1, 6]);
+        exports.extend_from_slice(b"memory");
+        exports.extend_from_slice(&[2, 0]);
+        section(&mut module, 7, &exports);
+        let mut body = vec![0, 0x41]; // no locals; i32.const (signed LEB128)
+        let mut remaining = status;
+        loop {
+            let byte = (remaining & 0x7f) as u8;
+            remaining >>= 7;
+            let done = (remaining == 0 && byte & 0x40 == 0)
+                || (remaining == -1 && byte & 0x40 != 0);
+            body.push(if done { byte } else { byte | 0x80 });
+            if done { break; }
+        }
+        body.extend_from_slice(&[0x10, 0, 0x0b]); // call proc_exit; end
+        let mut code = vec![1, body.len() as u8];
+        code.extend_from_slice(&body);
+        section(&mut module, 10, &code);
+        module
+    }
+
+    #[test]
+    fn real_wasi_proc_exit_preserves_ordinary_native_statuses() {
+        let mut config = Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).unwrap();
+        for (status, expected) in [(23, 23), (126, 126), (143, 143), (255, 255), (-1, 255), (256, 0)] {
+            let module = Module::new(&engine, proc_exit_guest(status)).unwrap();
+            let runtime = process::Runtime::new(engine.clone(), module, Vec::new());
+            let outcome = run_instance(runtime, Vec::new(), Vec::new(), process::Stdio::inherited(), Arc::default()).unwrap();
+            assert_eq!(outcome, FinalOutcome::Exit(expected), "proc_exit({status})");
+            assert_eq!(outcome.signal(), 0);
+        }
+    }
+
+    #[test]
+    fn explicit_exit_143_is_not_a_requested_term() {
+        let cancel = Cancellation::default();
+        assert_eq!(cancel.signal(15, 2), 0);
+        assert!(cancel.kill(15));
+        assert_eq!(select_instance_outcome(Err(I32Exit(143).into()), &cancel), FinalOutcome::Exit(143));
+        assert!(!cancel.kill(9));
+    }
+
+    #[test]
+    fn observed_term_survives_guest_error_conversion() {
+        let cancel = Cancellation::default();
+        assert!(cancel.kill(15));
+        assert!(cancel.check().is_err());
+        assert_eq!(select_instance_outcome(Err(I32Exit(1).into()), &cancel), FinalOutcome::Signal(15));
+    }
+
+    #[test]
+    fn accepted_kill_wins_before_an_explicit_exit() {
+        let cancel = Cancellation::default();
+        assert!(cancel.kill(9));
+        assert_eq!(select_instance_outcome(Err(I32Exit(143).into()), &cancel), FinalOutcome::Signal(9));
+    }
+
+    #[test]
+    fn handled_term_does_not_relabel_an_unrelated_trap() {
+        let cancel = Cancellation::default();
+        assert_eq!(cancel.signal(15, 2), 0);
+        assert!(cancel.kill(15));
+        assert_eq!(select_instance_outcome(Err(anyhow::anyhow!("unreachable")), &cancel), FinalOutcome::Exit(134));
+    }
+
+    #[test]
+    fn default_int_preserves_signal_kind_even_if_guest_returns_zero() {
+        let cancel = Cancellation::default();
+        assert!(cancel.kill(2));
+        let outcome = select_instance_outcome(Err(I32Exit(0).into()), &cancel);
+        assert_eq!(outcome, FinalOutcome::Signal(2));
+        assert_eq!(outcome.code(), 130);
+    }
+
+    #[test]
+    fn handled_int_preserves_the_guests_own_zero_exit() {
+        let cancel = Cancellation::default();
+        assert_eq!(cancel.signal(2, 2), 0);
+        assert!(cancel.kill(2));
+        assert!(cancel.check().is_ok());
+        assert_eq!(cancel.signal(0, 0), 2);
+        assert_eq!(select_instance_outcome(Err(I32Exit(0).into()), &cancel), FinalOutcome::Exit(0));
+    }
+
+    #[test]
+    fn selected_success_rejects_late_kill() {
+        let cancel = Cancellation::default();
+        assert_eq!(select_instance_outcome(Ok(()), &cancel), FinalOutcome::Exit(0));
+        assert!(!cancel.kill(9));
+        assert_eq!(cancel.select(FinalOutcome::Signal(9)), FinalOutcome::Exit(0));
     }
 }
 

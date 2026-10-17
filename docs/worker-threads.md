@@ -24,6 +24,9 @@ and `unref()` control whether the child keeps its parent alive. A worker's
 `process.exit()` ends that guest without ending its parent. Output goes to the
 parent by default. With `stdout: true` or `stderr: true`, the corresponding Node
 readable stream lets the caller consume it. `stdin: true` exposes a writable stream.
+A typed signal termination emits its selected exit status, not a synthesized ordinary
+uncaught-worker error. The host's final kind, not the numeric status alone, makes
+that distinction; a genuine ordinary crash with the same status still reports an error.
 
 `MessageChannel`, `MessagePort`, and `BroadcastChannel` work within and between
 guests. The global constructors match the module exports. Ports clone cycles,
@@ -58,6 +61,15 @@ messages reject marked objects in transfer lists.
 
 The existing host budget permits four active child guests, including nested
 workers and subprocesses. Worker guests share the host filesystem. Browser guests use the shared filesystem service.
+
+The original host adapters reserve child-pipe selectors 4/5 for worker control:
+4 carries parent-to-worker input and 5 carries worker-to-parent output. A worker
+queries its own endpoints with child handle 0. Selector 3 remains final-signal
+metadata for a child handle; it is never a worker pipe. Native completion closes
+the worker's input reader and output writer before publishing its result, so
+late parent writes fail with EPIPE while buffered worker output drains to EOF.
+These channels are separate from stdio selectors 0–2 and their inheritance modes.
+See [the host ABI](host-abi.md#bun-child-processes).
 
 Native `resourceLimits` maps the combined old and young heap limit to the guest's
 WebAssembly memory budget. Node hosts also pass limits to the physical V8 worker.
