@@ -66,7 +66,7 @@ function project(name: string, files: Record<string, unknown>) {
 function check(value: unknown, message: string) { if (!value) throw new Error(message); }
 const cases: Record<string, () => Promise<void>> = {
   async workspaces() {
-    const cwd = project("workspace", { "package.json": { name: "root", workspaces: ["packages/*"], dependencies: { a: "workspace:*" } },
+    const cwd = project("workspace", { "package.json": { name: "root", workspaces: ["packages/*"], dependencies: { a: "workspace:*", "fixture-cli": "1.0.0" } },
       "packages/a/package.json": { name: "a", version: "1.0.0", main: "index.ts", dependencies: { b: "workspace:^" } },
       "packages/a/index.ts": 'import { value } from "b"; console.log(value);',
       "packages/b/package.json": { name: "b", version: "1.0.0", main: "index.ts" },
@@ -76,9 +76,11 @@ const cases: Record<string, () => Promise<void>> = {
     check((await run(cwd, "run", "packages/a/index.ts")).trim() === "workspace-ok", "workspace graph");
     await run(cwd, "install", "--frozen-lockfile");
     await run(join(cwd, "packages/a"), "install", "--frozen-lockfile");
-    await run(join(cwd, "packages/a"), "add", "fixture-cli@1.0.0");
-    check(JSON.parse(readFileSync(join(cwd, "packages/a/package.json"), "utf8")).dependencies["fixture-cli"] === "1.0.0", "workspace add writes member");
-    check(!JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).dependencies["fixture-cli"], "workspace add changed root");
+    latest = "2.0.0";
+    await run(join(cwd, "packages/a"), "add", "fixture-cli");
+    latest = "1.0.0";
+    check(JSON.parse(readFileSync(join(cwd, "packages/a/package.json"), "utf8")).dependencies["fixture-cli"] === "^2.0.0", "workspace add writes member resolution");
+    check(JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).dependencies["fixture-cli"] === "1.0.0", "workspace add changed root");
   },
   async registry() {
     const cwd = project("registry", { "package.json": { dependencies: { "fixture-cli": "^1.0.0" } } });
