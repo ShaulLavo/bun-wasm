@@ -38,7 +38,7 @@
     if (item instanceof ArrayBuffer) {
       if (seen.has(item)) throw cloneError("Transfer list contains duplicate ArrayBuffer");
       try { new DataView(item); } catch { throw cloneError(); }
-      if (internal.isWasmMemoryBuffer?.(item)) throw new TypeError("Cannot transfer a WebAssembly.Memory");
+      if (internal.isWasmMemoryBuffer?.(item) || internal.native.isWasmMemoryBuffer?.(item)) throw new TypeError("Cannot transfer a WebAssembly.Memory");
       return;
     }
     if (!internal.isMessagePort?.(item)) throw cloneError();

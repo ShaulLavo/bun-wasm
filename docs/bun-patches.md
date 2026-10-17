@@ -1767,6 +1767,8 @@ implements the global `Worker` constructor and the worker-global message API.
 Its Web boundary converts transfer sequences before validating transferable objects,
 duplicates, detached buffers, marked objects and WebAssembly memory. Rejections
 match host Bun 1.4.2 error classes and messages before serialization or detachment.
+The host engine exposes the existing memory-buffer classifier from the original
+TypeScript adapter in `web/src/buffer-transfer.ts` for this boundary check.
 It wraps the separate-guest execution, clone, port, reference and termination
 contracts in `worker_threads.ts`. Port packets retain transferred ports for
 web events while Node listeners and synchronous receives still return the data. `web.js` installs the constructor and blob URL
