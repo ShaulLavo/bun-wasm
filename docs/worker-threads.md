@@ -114,6 +114,25 @@ teardown. Worker streams have no cumulative subprocess capture limit.
 
 ## Guest worker measurement
 
+The review-fix census corrects the initial result below. Error propagation had
+hidden five failing worker scripts. The same 120-file selection now passes
+64/120 on each engine, compared with the earlier 67/120. Nested uncaught errors
+and unref'd termination add two passing files. The five exposed API and
+diagnostic gaps are recorded in
+[the compatibility follow-ups](../plans/compatibility-followups.md#worker-errors-exposed-by-the-review-fixes).
+Observed assertion counters remain zero for these standalone Node scripts.
+QuickJS/JSC have no timeouts. The browser retains the one known 10,000-round-trip
+timeout at the unchanged fifteen-second deadline.
+
+The 16 process-level review cases pass on Node, native guests and Node-hosted
+guests. The browser gate runs the same cases on all three engines. Before the fixes, the three
+retained artifacts pass 2/16 each. The constructor-only case keeps the parent
+alive until its external ten-second cutoff. Sender buffer and port ownership,
+two-million-byte exit messages, lifecycle listener exceptions, unref termination,
+both 70 MiB output streams and termination after exit are checked directly.
+Raw review evidence is retained at `/work/reports/bun-wasm-worker-r37/` until
+coordinator acceptance.
+
 Measured 2026-10-17. The same 120 tracked `.js` files under Node's parallel
 suite contain a `new Worker` or namespaced Worker construction. The upstream
 suite revision is `cd95fa7a13b3f13be73e512b38ec111c1c228084`. The baseline is
