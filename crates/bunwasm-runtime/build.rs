@@ -14,10 +14,13 @@ fn build_brotli() {
     let mut build = cc::Build::new();
     build.include(source.join("include")).define("BROTLI_BUILD_PORTABLE", None).warnings(false);
     for part in ["common", "dec", "enc"] {
-        for entry in fs::read_dir(source.join(part)).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_some_and(|s| s == "c") { build.file(path); }
-        }
+        // Sorted: directory order is not a reproducible link-input order.
+        let mut files: Vec<_> = fs::read_dir(source.join(part)).unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|s| s == "c"))
+            .collect();
+        files.sort();
+        build.files(files);
     }
     build.compile("bunwasm_brotli");
     println!("cargo:rerun-if-changed=../../third_party/brotli/c");

@@ -116,7 +116,7 @@
     return nodeError(new RangeError(`Cannot create a Buffer larger than ${limit} bytes`), "ERR_BUFFER_TOO_LARGE");
   }
   function trailingJunk() {
-    return nodeError(new Error("Trailing junk found after the end of the compressed stream"), "ERR_TRAILING_JUNK_AFTER_STREAM_END");
+    return nodeError(new TypeError("Trailing junk found after the end of the compressed stream"), "ERR_TRAILING_JUNK_AFTER_STREAM_END");
   }
 
   // internal/validators
@@ -204,7 +204,8 @@
       this.close();
       // Node's ResetStream keeps a zlib dictionary; Brotli and Zstd start over.
       const keep = this.#mode !== BROTLI_DECODE && this.#mode !== BROTLI_ENCODE && this.#mode !== ZSTD_COMPRESS && this.#mode !== ZSTD_DECOMPRESS;
-      this.id = native.streams.codec(modeNames[this.#mode], JSON.stringify(keep ? this.#options : {}), keep ? this.#dictionary : undefined);
+      const { rejectGarbageAfterEnd } = this.#options as { rejectGarbageAfterEnd?: boolean };
+      this.id = native.streams.codec(modeNames[this.#mode], JSON.stringify(keep ? this.#options : { rejectGarbageAfterEnd }), keep ? this.#dictionary : undefined);
       finalizers.register(this, this.id, this);
     }
     close() {
@@ -359,9 +360,12 @@
   const zstdDefaultOpts = { flush: ZSTD_e_continue, finishFlush: ZSTD_e_end, fullFlush: ZSTD_e_flush };
 
   function initFor(mode: number, opts: ZlibOptions | undefined) {
-    if (mode === BROTLI_ENCODE || mode === BROTLI_DECODE) return { ...brotliInit(opts), defaults: brotliDefaultOpts, level: undefined, strategy: undefined };
-    if (mode === ZSTD_COMPRESS || mode === ZSTD_DECOMPRESS) return { ...zstdInit(opts, mode), defaults: zstdDefaultOpts, level: undefined, strategy: undefined };
-    return { ...zlibInit(opts, mode), defaults: zlibDefaultOpts };
+    const init = mode === BROTLI_ENCODE || mode === BROTLI_DECODE ? { ...brotliInit(opts), defaults: brotliDefaultOpts, level: undefined, strategy: undefined }
+      : mode === ZSTD_COMPRESS || mode === ZSTD_DECOMPRESS ? { ...zstdInit(opts, mode), defaults: zstdDefaultOpts, level: undefined, strategy: undefined }
+      : { ...zlibInit(opts, mode), defaults: zlibDefaultOpts };
+    // Node's handle.init() takes the flag too: it stops gzip members and Zstd
+    // frames from continuing past the first.
+    return { ...init, options: { ...init.options, rejectGarbageAfterEnd: opts?.rejectGarbageAfterEnd === true } };
   }
 
   // Set up 'special' zero-length buffers that .flush() writes to carry its flush
@@ -729,8 +733,10 @@
   }
   function bunCompress(data: unknown, options?: { level?: unknown }) {
     let level = 3;
-    if (options && typeof options === "object" && options.level !== undefined) {
-      level = Number(options.level) | 0;
+    // Bun reads `level` once (BunObject.rs JSZstd::get_level), then coerces it.
+    const value = options && typeof options === "object" ? options.level : undefined;
+    if (value !== undefined) {
+      level = Number(value) | 0;
       if (level < 1 || level > 22) throw nodeError(new TypeError("Compression level must be between 1 and 22"), "ERR_INVALID_ARG_TYPE");
     }
     return toBuffer(native.zstdCompress(bunInput(data), level));

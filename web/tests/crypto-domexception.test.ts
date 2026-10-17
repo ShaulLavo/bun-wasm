@@ -1,12 +1,15 @@
 import {test, expect} from "bun:test";
-import {mkdtempSync, readFileSync, rmSync} from "node:fs";
+import {existsSync, mkdtempSync, readFileSync, rmSync} from "node:fs";
+import {tmpdir} from "node:os";
 import {fileURLToPath} from "node:url";
 import {join} from "node:path";
 import {webcrypto} from "node:crypto";
 test("host crypto errors retain the DOMException brand", async () => {
   const streams = (0, eval)(readFileSync(new URL("../../crates/bunwasm-runtime/src/js/streams.js", import.meta.url), "utf8"));
   const native = {engine: "host", DOMException, timeOrigin: () => 0, platformInfo: {version: "test", arch: "wasm"}};
-  const scratch = mkdtempSync("/work/tmp/bun-wasm-compression-crypto-");
+  // /work/tmp is this repository's local scratch preference; CI runners lack it.
+  const root = process.env.BUN_WASM_TEST_TMP ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  const scratch = mkdtempSync(join(root, "bun-wasm-compression-crypto-"));
   let compression;
   try {
     const output = join(scratch, "compression.js");

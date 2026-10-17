@@ -164,6 +164,67 @@ mod tests {
         convert(Mode::Gzip, &Options::default(), &tar, Mode::Gzip.finish_flush(), 64 * 1024, usize::MAX).unwrap()
     }
 
+    /// A gzip tar whose first member is a GNU long-name ('L'), long-link ('K')
+    /// or PAX ('x') record with a `body`-byte body, followed by a small file.
+    fn gzip_tar_with_metadata(kind: u8, body: usize) -> Vec<u8> {
+        let mut header = tar::Header::new_gnu();
+        header.set_path("././@LongLink").unwrap();
+        header.set_entry_type(tar::EntryType::new(kind));
+        header.set_size(body as u64);
+        header.set_cksum();
+        let mut tar = header.as_bytes().to_vec();
+        let record = if kind == b'x' { pax_record(body) } else { vec![b'a'; body] };
+        tar.extend_from_slice(&record);
+        tar.resize(tar.len().next_multiple_of(512), 0);
+        let mut file = tar::Header::new_gnu();
+        file.set_path("file.txt").unwrap();
+        file.set_size(5);
+        file.set_cksum();
+        tar.extend_from_slice(file.as_bytes());
+        tar.extend_from_slice(b"hello");
+        tar.resize(tar.len().next_multiple_of(512) + 1024, 0);
+        convert(Mode::Gzip, &Options::default(), &tar, Mode::Gzip.finish_flush(), 64 * 1024, usize::MAX).unwrap()
+    }
+
+    /// One `path=` PAX record exactly `size` bytes long.
+    fn pax_record(size: usize) -> Vec<u8> {
+        (1..=8)
+            .map(|digits| format!("{size} path={}\n", "a".repeat(size - digits - " path=\n".len())))
+            .find(|record| record.len() == size)
+            .expect("a PAX record of that size")
+            .into_bytes()
+    }
+
+    fn names(value: Val) -> Vec<String> {
+        let Val::Array(entries) = value else { panic!("expected entries") };
+        entries.into_iter().map(|entry| {
+            let Val::Object(fields) = entry else { panic!("expected an object") };
+            match fields.into_iter().find(|(key, _)| key == "name") { Some((_, Val::Str(name))) => name, _ => panic!("missing name") }
+        }).collect()
+    }
+
+    #[test]
+    fn oversized_metadata_is_skipped_without_being_read_into_memory() {
+        let root = std::env::temp_dir().join(format!("bunwasm-archive-metadata-{}", std::process::id()));
+        for kind in [b'L', b'K', b'x'] {
+            // Like libarchive (Bun): over 1 MiB the record is ignored and the
+            // member keeps its own header fields.
+            let archive = gzip_tar_with_metadata(kind, 4 * 1024 * 1024);
+            let (result, largest, _) = measure(|| files(&archive, &[]));
+            assert_eq!(names(result.unwrap()), ["file.txt"], "{}", kind as char);
+            assert!(largest < 512 * 1024, "{}: allocated {largest} bytes", kind as char);
+            let (result, largest, _) = measure(|| extract(&archive, root.to_str().unwrap(), &[]));
+            assert_eq!(result.unwrap(), 1, "{}", kind as char);
+            assert!(largest < 512 * 1024, "{}: extract allocated {largest} bytes", kind as char);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        // Up to the limit the record applies to its member.
+        let name = names(files(&gzip_tar_with_metadata(b'L', 1024 * 1024), &[]).unwrap());
+        assert_eq!(name[0].len(), 1024 * 1024);
+        let name = names(files(&gzip_tar_with_metadata(b'x', 4096), &[]).unwrap());
+        assert_eq!(name[0], "a".repeat(4096 - "4096 path=\n".len()));
+    }
+
     #[test]
     fn extract_streams_a_large_gzip_entry() {
         let size = 32 * 1024 * 1024;

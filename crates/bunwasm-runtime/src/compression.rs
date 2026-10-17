@@ -28,6 +28,11 @@ pub fn too_large(limit: usize) -> NativeError {
         .prop("code", "ERR_BUFFER_TOO_LARGE")
 }
 
+pub fn trailing_junk() -> NativeError {
+    NativeError::type_error("Trailing junk found after the end of the compressed stream")
+        .prop("code", "ERR_TRAILING_JUNK_AFTER_STREAM_END")
+}
+
 pub fn out_of_memory() -> NativeError {
     NativeError::range_error("Out of memory")
 }
@@ -102,11 +107,14 @@ pub struct Options<'a> {
     /// Brotli or Zstd `(parameter, value)` pairs, in key order.
     pub params: Vec<(u32, u32)>,
     pub dictionary: &'a [u8],
+    /// Node's `rejectGarbageAfterEnd`: input after the end of the stream is an
+    /// error, and gzip members and Zstd frames do not continue.
+    pub reject_garbage: bool,
 }
 
 impl Default for Options<'_> {
     fn default() -> Self {
-        Self { level: -1, window_bits: 15, mem_level: 8, strategy: 0, params: Vec::new(), dictionary: &[] }
+        Self { level: -1, window_bits: 15, mem_level: 8, strategy: 0, params: Vec::new(), dictionary: &[], reject_garbage: false }
     }
 }
 
@@ -123,6 +131,7 @@ impl<'a> Options<'a> {
         options.window_bits = int("windowBits").unwrap_or(options.window_bits);
         options.mem_level = int("memLevel").unwrap_or(options.mem_level);
         options.strategy = int("strategy").unwrap_or(options.strategy);
+        options.reject_garbage = value.get("rejectGarbageAfterEnd").and_then(serde_json::Value::as_bool).unwrap_or(false);
         if let Some(params) = value.get("params").and_then(serde_json::Value::as_object) {
             for (key, value) in params {
                 let key = key.parse::<u32>().map_err(|_| NativeError::type_error("Invalid parameter"))?;
@@ -188,6 +197,7 @@ struct Zlib {
     gzip_id_bytes_read: u8,
     err: i32,
     flush: i32,
+    reject_garbage: bool,
 }
 
 impl Drop for Zlib {
@@ -243,6 +253,7 @@ impl Zlib {
             gzip_id_bytes_read: 0,
             err: z::Z_OK,
             flush: z::Z_NO_FLUSH,
+            reject_garbage: options.reject_garbage,
         };
         zlib.set_dictionary().map_err(|_| init_failed("Initialization failed"))?;
         Ok(zlib)
@@ -312,6 +323,7 @@ impl Zlib {
         // Trailing zero bytes are padding.
         while self.stream.avail_in > 0
             && self.mode == Mode::Gunzip
+            && !self.reject_garbage
             && self.err == z::Z_STREAM_END
             // SAFETY: avail_in > 0, so next_in points at a readable byte.
             && unsafe { *self.stream.next_in } != 0
@@ -571,6 +583,7 @@ struct Zstd {
     decoder: *mut zs::ZSTD_DStream,
     /// Decoder: the input so far ends on a frame boundary.
     frame_done: bool,
+    reject_garbage: bool,
 }
 
 impl Drop for Zstd {
@@ -589,7 +602,7 @@ impl Drop for Zstd {
 
 impl Zstd {
     fn new(decode: bool, options: &Options) -> Result<Self, NativeError> {
-        let mut zstd = Self { encoder: ptr::null_mut(), decoder: ptr::null_mut(), frame_done: false };
+        let mut zstd = Self { encoder: ptr::null_mut(), decoder: ptr::null_mut(), frame_done: false, reject_garbage: options.reject_garbage };
         let (data, size) = (options.dictionary.as_ptr().cast(), options.dictionary.len());
         let load = |result: usize| {
             if zs::ZSTD_isError(result) != 0 {
@@ -656,7 +669,7 @@ impl Zstd {
             }
             // A finished frame may be followed by another one (RFC 8878 §3.1).
             let next = &input[source.pos..input.len().min(source.pos + 4)];
-            if remaining != 0 || sink.pos == sink.size || next.is_empty() || !is_zstd_frame_prefix(next) {
+            if remaining != 0 || sink.pos == sink.size || next.is_empty() || self.reject_garbage || !is_zstd_frame_prefix(next) {
                 break;
             }
         }
@@ -746,6 +759,9 @@ pub fn convert(
         }
         input = &input[input.len() - available_in..];
         if available_out != 0 {
+            if options.reject_garbage && !input.is_empty() {
+                return Err(trailing_junk());
+            }
             output.shrink_to_fit();
             return Ok(output);
         }
@@ -795,11 +811,6 @@ fn web_spare(out: &mut Vec<u8>, cap: usize) -> Result<usize, NativeError> {
 
 fn web_error(message: &str) -> NativeError {
     NativeError::type_error(message)
-}
-
-fn trailing_junk() -> NativeError {
-    NativeError::type_error("Trailing junk found after the end of the compressed stream")
-        .prop("code", "ERR_TRAILING_JUNK_AFTER_STREAM_END")
 }
 
 /// The rest of a chunk (or flush) whose last step stopped at the output cap.

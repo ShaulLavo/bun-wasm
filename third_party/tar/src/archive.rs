@@ -415,7 +415,7 @@ impl<'a> EntriesFields<'a> {
                          the same member",
                     ));
                 }
-                gnu_longname = Some(EntryFields::from(entry).read_all()?);
+                gnu_longname = EntryFields::from(entry).read_metadata()?;
                 continue;
             }
 
@@ -426,7 +426,7 @@ impl<'a> EntriesFields<'a> {
                          the same member",
                     ));
                 }
-                gnu_longlink = Some(EntryFields::from(entry).read_all()?);
+                gnu_longlink = EntryFields::from(entry).read_metadata()?;
                 continue;
             }
 
@@ -437,7 +437,7 @@ impl<'a> EntriesFields<'a> {
                          the same member",
                     ));
                 }
-                pax_extensions = Some(EntryFields::from(entry).read_all()?);
+                pax_extensions = EntryFields::from(entry).read_metadata()?;
                 continue;
             }
 

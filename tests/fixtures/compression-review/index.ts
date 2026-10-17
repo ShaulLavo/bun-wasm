@@ -193,6 +193,55 @@ await check("Archive extracts a large expansion in bounded memory", async () => 
   if (rss() - before > 24 * 1024 * 1024) throw new Error(`memory grew by ${rss() - before} bytes`);
 });
 
+// Re-review 1: like libarchive (Bun), a GNU long-name or PAX record over
+// 1 MiB is skipped without being held in memory; the member keeps its name.
+for (const [name, key] of [["GNU long name", "longNameArchive"], ["PAX header", "paxArchive"]] as const) {
+  await check(`Archive skips an oversized ${name} in bounded memory`, async () => {
+    const bytes = fromHex((oracle as any)[key]);
+    const before = rss();
+    equal([...(await new Bun.Archive(bytes).files()).keys()], ["file.txt"], "files");
+    equal(await new Bun.Archive(bytes).extract("metadata"), 1, "extract");
+    if (rss() - before > 32 * 1024 * 1024) throw new Error(`memory grew by ${rss() - before} bytes`);
+  });
+}
+
+// Re-review 3: rejectGarbageAfterEnd on every path (Node v26.7.0).
+await check("zlib rejectGarbageAfterEnd", async () => {
+  const junk = Buffer.from([1, 2, 3]);
+  for (const [compress, decompress, Create] of [["deflate", "inflate", "Inflate"], ["brotliCompress", "brotliDecompress", "BrotliDecompress"], ["zstdCompress", "zstdDecompress", "ZstdDecompress"], ["gzip", "gunzip", "Gunzip"]]) {
+    const frame = zlib[compress + "Sync"]("hello");
+    const input = Buffer.concat([frame, junk]);
+    const options = { rejectGarbageAfterEnd: true };
+    const expected = { class: "TypeError", message: "Trailing junk found after the end of the compressed stream", code: "ERR_TRAILING_JUNK_AFTER_STREAM_END" };
+    equal(shape(thrown(() => zlib[decompress + "Sync"](input, options))), expected, `${decompress} sync`);
+    equal(shape(thrown(() => zlib[decompress + "Sync"](input, { ...options, info: true }))), expected, `${decompress} info`);
+    equal(shape(await new Promise(resolve => zlib[decompress](input, options, resolve))), expected, `${decompress} callback`);
+    const stream = zlib["create" + Create](options);
+    const streamed = await new Promise(resolve => { stream.on("error", resolve); stream.on("end", () => resolve(null)); stream.resume(); stream.end(input); });
+    equal(shape(streamed), expected, `${decompress} stream`);
+    if (decompress !== "gunzip") equal(zlib[decompress + "Sync"](input).toString(), "hello", `${decompress} default`);
+  }
+  const members = Buffer.concat([z.gzipSync("hi"), z.gzipSync("hi")]);
+  equal(z.gunzipSync(members).toString(), "hihi", "members");
+  equal(thrown(() => z.gunzipSync(members, { rejectGarbageAfterEnd: true }))?.code, "ERR_TRAILING_JUNK_AFTER_STREAM_END", "members rejected");
+});
+
+// Re-review 4: each option is read once, as Bun reads it.
+await check("Compression options are read once", async () => {
+  function once(value: unknown) {
+    const box = { reads: 0 };
+    return [box, () => { if (box.reads++) throw new Error("read twice"); return value; }] as const;
+  }
+  const [levelReads, level] = once(3);
+  Bun.zstdCompressSync("hello", { get level() { return level(); } } as any);
+  const [highWaterMarkReads, highWaterMark] = once(1024);
+  const [webLevelReads, webLevel] = once(6);
+  new CompressionStream("gzip", { get highWaterMark() { return highWaterMark(); }, get level() { return webLevel(); } } as any);
+  const [decompressReads, decompressMark] = once(1024);
+  new DecompressionStream("gzip", { get highWaterMark() { return decompressMark(); } } as any);
+  equal([levelReads.reads, highWaterMarkReads.reads, webLevelReads.reads, decompressReads.reads], [1, 1, 1, 1]);
+});
+
 // 5 and 1: Web streams take Bun's level and queuing-strategy options and
 // emit an expansion one bounded step at a time.
 async function readAll(readable: ReadableStream<Uint8Array>) {

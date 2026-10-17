@@ -44,6 +44,10 @@ fn set_symlink_file_times(path: &Path, atime: FileTime, mtime: FileTime) -> io::
 /// This structure is a window into a portion of a borrowed archive which can
 /// be inspected. It acts as a file handle by implementing the Reader trait. An
 /// entry cannot be rewritten once inserted into an archive.
+
+/// Largest GNU long-name/long-link or PAX extension body (libarchive's limit).
+pub(crate) const METADATA_LIMIT: u64 = 1024 * 1024;
+
 pub struct Entry<'a, R: 'a + Read> {
     fields: EntryFields<'a>,
     _ignored: marker::PhantomData<&'a Archive<R>>,
@@ -325,6 +329,18 @@ impl<'a> EntryFields<'a> {
         self.read_to_end(&mut v).map(|_| v)
     }
 
+    /// Reads a GNU long-name/long-link or PAX extension body. The body is held
+    /// in memory before its member is parsed, so, like libarchive (Bun's tar
+    /// reader), a body larger than `METADATA_LIMIT` is drained without being
+    /// kept and the record is ignored.
+    pub fn read_metadata(&mut self) -> io::Result<Option<Vec<u8>>> {
+        if self.size > METADATA_LIMIT {
+            io::copy(self, &mut io::sink())?;
+            return Ok(None);
+        }
+        self.read_all().map(Some)
+    }
+
     fn path(&self) -> io::Result<Cow<'_, Path>> {
         bytes2path(self.path_bytes())
     }
@@ -396,7 +412,10 @@ impl<'a> EntryFields<'a> {
             {
                 return Ok(None);
             }
-            self.pax_extensions = Some(self.read_all()?);
+            match self.read_metadata()? {
+                Some(bytes) => self.pax_extensions = Some(bytes),
+                None => return Ok(None),
+            }
         }
         Ok(Some(PaxExtensions::new(
             self.pax_extensions.as_ref().unwrap(),

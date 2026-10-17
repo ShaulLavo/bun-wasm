@@ -53,19 +53,21 @@
   }
   function parseOptions(strategy: unknown, levelFormat: string | undefined) {
     if (strategy != null && typeof strategy !== "object" && typeof strategy !== "function") throw new TypeError("The queuing strategy must be an object");
-    const dictionary = (strategy ?? {}) as { highWaterMark?: unknown; level?: unknown };
-    let highWaterMark = 64 * 1024;
-    if (dictionary.highWaterMark !== undefined) {
-      highWaterMark = Number(dictionary.highWaterMark);
-      if (Number.isNaN(highWaterMark) || highWaterMark < 0) throw new RangeError("The queuing strategy's highWaterMark must be a non-negative, non-NaN number");
-    }
-    let level: number | undefined;
-    if (levelFormat && strategy !== null && typeof strategy === "object" && dictionary.level !== undefined) {
-      level = Number(dictionary.level);
-      const [min, max] = levels[levelFormat];
-      if (!(level >= min && level <= max) || level !== Math.trunc(level)) {
-        throw new RangeError(`The compression level must be an integer between ${min} and ${max} for ${levelFormat}`);
-      }
+    // Each member is read once, as the WebIDL dictionary conversion and Bun's
+    // parseCodecOptions do: highWaterMark and size, then level.
+    const dictionary = (strategy ?? {}) as { highWaterMark?: unknown; size?: unknown; level?: unknown };
+    const rawHighWaterMark = dictionary.highWaterMark;
+    const highWaterMark = rawHighWaterMark === undefined ? 64 * 1024 : Number(rawHighWaterMark);
+    const size = dictionary.size;
+    if (size !== undefined && typeof size !== "function") throw new TypeError("The queuing strategy's 'size' property must be a function");
+    if (Number.isNaN(highWaterMark) || highWaterMark < 0) throw new RangeError("The queuing strategy's highWaterMark must be a non-negative, non-NaN number");
+    if (!levelFormat || strategy === null || typeof strategy !== "object") return { highWaterMark, level: undefined };
+    const rawLevel = dictionary.level;
+    if (rawLevel === undefined) return { highWaterMark, level: undefined };
+    const level = Number(rawLevel);
+    const [min, max] = levels[levelFormat];
+    if (!(level >= min && level <= max) || level !== Math.trunc(level)) {
+      throw new RangeError(`The compression level must be an integer between ${min} and ${max} for ${levelFormat}`);
     }
     return { highWaterMark, level };
   }
@@ -115,33 +117,35 @@
         queued?.stop(reason);
       }
       const full = () => (readableController.desiredSize ?? 0) <= 0;
+      // One coder step; a failure releases the coder and errors the readable.
+      function step(input: Uint8Array, finish: boolean): { bytes: Uint8Array; more: boolean } | { error: unknown } {
+        try {
+          if (released) throw new TypeError("Compression stream is closed");
+          return native.webStep(id, input, finish);
+        } catch (caught) {
+          const error = codecError(caught);
+          release();
+          errorReadable(error);
+          return { error };
+        }
+      }
+      // Steps a chunk (or the flush) until it is done, fails, or the reader is
+      // full; a full reader parks the rest until its next pull.
       function run(input: Uint8Array, finish: boolean): Promise<void> {
         return new Promise((resolve, reject) => {
-          let first = true;
-          const step = () => {
+          let next = input;
+          const drive = () => {
             parked = undefined;
             for (;;) {
-              let piece: { bytes: Uint8Array; more: boolean };
-              try {
-                if (released) throw new TypeError("Compression stream is closed");
-                piece = native.webStep(id, first ? input : empty, finish);
-              } catch (caught) {
-                const error = codecError(caught);
-                release();
-                errorReadable(error);
-                reject(error);
-                return;
-              }
-              first = false;
+              const piece = step(next, finish);
+              next = empty;
+              if ("error" in piece) return reject(piece.error);
               if (piece.bytes.byteLength) readableController.enqueue(piece.bytes);
-              if (!piece.more) { resolve(); return; }
-              if (full()) {
-                parked = { resume: step, abandon: () => resolve() };
-                return;
-              }
+              if (!piece.more) return resolve();
+              if (full()) return void (parked = { resume: drive, abandon: () => resolve() });
             }
           };
-          step();
+          drive();
         });
       }
       const readable = new Readable<Uint8Array>({

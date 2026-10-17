@@ -1760,6 +1760,12 @@ operations on every wasm target, causing otherwise valid extraction to fail.
 Other targets keep their original filesystem behavior. Header parsing,
 destination checks, link checks and archive writing remain upstream code.
 
+`src/entry.rs` and `src/archive.rs` also bound extension metadata: GNU long-name
+and long-link records and PAX extension bodies are held in memory before their
+member is parsed, so a body over 1 MiB is drained in 8 KiB copies and ignored, as
+libarchive (Bun's tar reader) does; up to 1 MiB the record applies unchanged.
+Upstream reads the declared body whole.
+
 `src/pax_sparse.rs` is an original adapter for GNU PAX sparse 1.0 members, matching
 the format produced by GNU tar and Bun's pinned `test/js/bun/archive.test.ts`.
 The parser validates decimal map values, block order, logical size and stored

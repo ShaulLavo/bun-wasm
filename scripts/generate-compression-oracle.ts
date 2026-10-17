@@ -135,12 +135,29 @@ async function record() {
   }
   const truncatedArchive = zlib.gzipSync(Buffer.concat([tarHeader("huge.bin", 8 * 1024 ** 3 - 1), Buffer.alloc(1024 * 1024)]));
   const expandingArchive = zlib.gzipSync(Buffer.concat([tarHeader("large.bin", 48 * 1024 * 1024), Buffer.alloc(48 * 1024 * 1024), Buffer.alloc(1024)]));
+  // GNU long-name ('L') and PAX ('x') records whose 64 MiB bodies precede a
+  // small file: the metadata must be refused before it is read into memory.
+  function metadataArchive(kind: string) {
+    const size = 64 * 1024 * 1024;
+    const header = tarHeader("././@LongLink", size);
+    header[156] = kind.charCodeAt(0);
+    header.fill(32, 148, 156);
+    const sum = header.reduce((total, byte) => total + byte, 0);
+    header.write(sum.toString(8).padStart(6, "0") + "\0 ", 148);
+    const body = Buffer.alloc(size, 0x61);
+    if (kind === "x") body.write(`${size} path=`, 0);
+    body[size - 1] = 10;
+    return zlib.gzipSync(Buffer.concat([header, body, tarHeader("file.txt", 0), Buffer.alloc(1024)]));
+  }
+  const longNameArchive = metadataArchive("L");
+  const paxArchive = metadataArchive("x");
 
   return {
     runtime: B ? `bun ${B.version}` : `node ${process.version}`,
     cases, corrupt, dictionaryErrors, limits, bun,
     bomb: hex(bomb), bigBomb: hex(bigBomb),
     truncatedArchive: hex(truncatedArchive), expandingArchive: hex(expandingArchive),
+    longNameArchive: hex(longNameArchive), paxArchive: hex(paxArchive),
   };
 }
 
@@ -163,6 +180,7 @@ function merge(nodeFile: string, bunFile: string) {
     cases: pick("cases"), corrupt: pick("corrupt"), dictionaryErrors: pick("dictionaryErrors"), limits: pick("limits"),
     bunFunctions: bun.bun, bomb: node.bomb, bigBomb: node.bigBomb,
     truncatedArchive: node.truncatedArchive, expandingArchive: node.expandingArchive,
+    longNameArchive: node.longNameArchive, paxArchive: node.paxArchive,
     disagreements,
   };
   writeFileSync("tests/fixtures/compression-review/oracle.json", JSON.stringify(oracle) + "\n");

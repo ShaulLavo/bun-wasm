@@ -58,6 +58,10 @@ PASS zlib gunzip callback maxOutputLength
 PASS zlib stream expands only as it is read
 PASS Archive rejects a truncated entry without allocating its size
 PASS Archive extracts a large expansion in bounded memory
+PASS Archive skips an oversized GNU long name in bounded memory
+PASS Archive skips an oversized PAX header in bounded memory
+PASS zlib rejectGarbageAfterEnd
+PASS Compression options are read once
 PASS Web level selects the compression level
 PASS Web level validation
 PASS Web queuing strategy validation
