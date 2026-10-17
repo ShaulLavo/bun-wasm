@@ -347,7 +347,7 @@ function focusedCases(): OpfsCase[] {
         const data = await (await workspaceDirectory(name)).getDirectoryHandle("data");
         const orphan = `p-${encodedTestName("crash-orphan")}`;
         await writeRaw(await data.getFileHandle(orphan, { create: true }), bytes("uncommitted crash residue"));
-        const prototype = FileSystemDirectoryHandle.prototype as Directory;
+        const prototype = FileSystemDirectoryHandle.prototype;
         const original = prototype.entries;
         let loading = true, sweeps = 0;
         prototype.entries = function() {

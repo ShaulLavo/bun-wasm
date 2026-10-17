@@ -212,12 +212,24 @@ export class PersistentBackend extends MemoryBackend {
     this.pruneDetached();
     const changed = new Set(this.dirty);
     const data = new Map<string, Uint8Array>();
+    const detachedSnapshots = new Map<FileNode, { handle: FileHandle; key: string }>();
     this.shared.mutate(undefined, undefined, () => {
       for (const handle of this.shared.registeredHandles()) {
         const revision = this.shared.revision(handle);
         if (revision === undefined || revision === this.revisions.get(handle)) continue;
         const node = this.registeredNodes.get(handle);
-        if (node?.kind !== "file" || this.detached.has(node)) continue;
+        if (node?.kind !== "file") continue;
+        if (this.detached.has(node)) {
+          if (!durable || (target !== undefined && selected !== node)) continue;
+          const snapshot = this.shared.snapshot(handle);
+          if (snapshot) {
+            const key = `${this.nonce}:${node.ino}:${++this.sequence}`;
+            data.set(key, snapshot.data); detachedSnapshots.set(node, { handle, key });
+          }
+          // An unlinked fd still owns bytes, not a namespace entry. Leave its revision
+          // dirty so a queued relink recaptures shared bytes rather than the old baseline.
+          continue;
+        }
         const stat = this.shared.stat(handle);
         if (!stat) continue;
         node.size = stat.size; node.mtime = stat.mtime;
@@ -235,9 +247,9 @@ export class PersistentBackend extends MemoryBackend {
       : { ino: node.ino, kind: "file", mtime: node.mtime, size: node.size ?? node.data.length, data: this.keys.get(node.ino) });
     this.dirty.clear();
     const removes = Array.from(this.removed); this.removed.clear();
-    const key = selected?.kind === "file" ? this.keys.get(selected.ino) ?? this.detachedKeys.get(selected.ino) : undefined;
+    const key = selected?.kind === "file" ? detachedSnapshots.get(selected)?.key ?? this.keys.get(selected.ino) ?? this.detachedKeys.get(selected.ino) : undefined;
     const flushKeys = target === undefined ? undefined : key ? [key] : [];
-    if (!upserts.length && !removes.length) return this.lastCommit.then(() => durable ? this.storage.flush(flushKeys) : undefined);
+    if (!upserts.length && !removes.length && !data.size) return this.lastCommit.then(() => durable ? this.storage.flush(flushKeys) : undefined);
     const epoch = this.checkpointEpoch;
     const batch: PersistenceBatch = { generation: 0, root: this.fs.root.ino, upserts, removes, data };
     this.pendingCheckpoints++;
@@ -249,7 +261,7 @@ export class PersistentBackend extends MemoryBackend {
       batch.retainedData = this.retainedData().concat(removes.flatMap(ino => {
         const key = this.committedKeys.get(ino);
         return this.nodes.has(ino) && key ? [key] : [];
-      }));
+      }), Array.from(detachedSnapshots.values(), snapshot => snapshot.key));
       await this.storage.persist(batch);
       this.generation = batch.generation;
       for (const entry of upserts) if (entry.data) this.committedKeys.set(entry.ino, entry.data);
@@ -261,6 +273,12 @@ export class PersistentBackend extends MemoryBackend {
         if (key && retained.has(key)) this.detachedKeys.set(ino, key);
         this.committedKeys.delete(ino);
         this.keys.delete(ino);
+      }
+      for (const [node, snapshot] of detachedSnapshots) {
+        // Last close or a relink may have happened while persist waited. Never recreate
+        // a dead fd's pin or overwrite the baseline now owned by a linked checkpoint.
+        if (this.detached.has(node) && this.registeredNodes.get(snapshot.handle) === node
+          && this.shared.revision(snapshot.handle) !== undefined) this.detachedKeys.set(node.ino, snapshot.key);
       }
     }).finally(() => { this.pendingCheckpoints--; });
     this.lastCommit = commit;
