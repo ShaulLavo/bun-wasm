@@ -57,7 +57,7 @@ export function encode(text: string): Uint8Array {
 
 export function decode(data: Uint8Array): string {
   // TextDecoder rejects resizable backing; shared input also needs a private snapshot.
-  return decoder.decode(data.buffer instanceof ArrayBuffer && !Reflect.get(data.buffer, "resizable") ? data : data.slice());
+  return decoder.decode(Reflect.get(data.buffer, "resizable") || Object.prototype.toString.call(data.buffer) === "[object SharedArrayBuffer]" ? new Uint8Array(data) : data);
 }
 
 export class MemFS implements FileSystem {

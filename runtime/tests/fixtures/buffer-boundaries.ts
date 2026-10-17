@@ -1,23 +1,30 @@
 import { spyOn } from "bun:test";
+import { Buffer } from "node:buffer";
+import { runInNewContext } from "node:vm";
 
 type MutableBuffer = ArrayBufferLike & { resizable?: boolean; growable?: boolean };
-type BufferConstructor = new (length: number, options: { maxByteLength: number }) => MutableBuffer;
+type BufferConstructor = new (length: number, options?: { maxByteLength: number }) => MutableBuffer;
 
-export const bufferKinds = ["fixed", "resizable"].concat(
+const backingKinds = ["fixed", "resizable"].concat(
   typeof SharedArrayBuffer === "undefined" ? [] : ["shared"],
   typeof SharedArrayBuffer !== "undefined" && Reflect.get(new (SharedArrayBuffer as unknown as BufferConstructor)(1, { maxByteLength: 2 }), "growable") ? ["growable"] : [],
 );
+export const bufferKinds = backingKinds.concat(["fixed cross-realm"], backingKinds.filter(kind => kind !== "fixed").map(kind => `${kind} Buffer`));
 
 /** Junk before and after a nonzero-offset, explicitly bounded caller view. */
 export function callerSpan(bytes: Uint8Array, kind: string): Uint8Array {
+  const bufferView = kind.endsWith(" Buffer");
+  const foreign = kind.endsWith(" cross-realm");
+  kind = kind.split(" ")[0]!;
   const length = bytes.length + 19;
-  const Constructor = (kind === "shared" || kind === "growable" ? SharedArrayBuffer : ArrayBuffer) as unknown as BufferConstructor;
-  const storage = kind === "fixed" ? new ArrayBuffer(length) : kind === "shared" ? new SharedArrayBuffer(length)
+  const OrdinaryBuffer = foreign ? runInNewContext("ArrayBuffer") : ArrayBuffer;
+  const Constructor = (kind === "shared" || kind === "growable" ? SharedArrayBuffer : OrdinaryBuffer) as BufferConstructor;
+  const storage = kind === "fixed" || kind === "shared" ? new Constructor(length)
     : new Constructor(length, { maxByteLength: length * 2 });
   new Uint8Array(storage).fill(0xff);
   const span = new Uint8Array(storage, 7, bytes.length);
   span.set(bytes);
-  return span;
+  return bufferView ? Buffer.from(storage, span.byteOffset, span.byteLength) : span;
 }
 
 /** Enforce WebIDL's missing AllowResizable on hosts with a permissive native decoder. */

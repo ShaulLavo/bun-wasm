@@ -26,7 +26,7 @@ for (const kind of bufferKinds) {
       expect(out.ended).toBe(1);
       expect(parser.done).toBe(true);
       expect(backings).toHaveLength(1);
-      if (kind === "fixed") expect(backings[0]).toBe(span.buffer);
+      if (kind.startsWith("fixed")) expect(backings[0]).toBe(span.buffer);
       else expect(backings[0]).not.toBe(span.buffer);
     });
   });
@@ -37,7 +37,7 @@ for (const kind of bufferKinds) {
       const span = callerSpan(encode(text), kind);
       parser.push(span);
       // Special backings must not survive push: callers can overwrite or resize them.
-      if (kind !== "fixed") span.fill(0xff);
+      if (!kind.startsWith("fixed")) span.fill(0xff);
       expect(out.errors).toEqual([]);
     };
     withStrictDecoder(backings => {

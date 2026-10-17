@@ -10,7 +10,7 @@ for (const kind of bufferKinds) {
     withStrictDecoder(backings => {
       expect(decode(span)).toBe(text);
       expect(backings).toHaveLength(1);
-      if (kind === "fixed") expect(backings[0]).toBe(span.buffer);
+      if (kind.startsWith("fixed")) expect(backings[0]).toBe(span.buffer);
       else expect(backings[0]).not.toBe(span.buffer);
     });
   });
@@ -28,7 +28,7 @@ for (const kind of bufferKinds) {
       expect(Object.hasOwn(decoded.array, 0)).toBe(false);
       expect(decoded.array[1]).toBe("é");
       expect(backings).toHaveLength(1);
-      if (kind === "fixed") expect(backings[0]).toBe(span.buffer);
+      if (kind.startsWith("fixed")) expect(backings[0]).toBe(span.buffer);
       else expect(backings[0]).not.toBe(span.buffer);
     });
   });
