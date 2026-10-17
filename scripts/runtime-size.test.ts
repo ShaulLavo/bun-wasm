@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { resolveRuntimePackage } from "./browser-build";
 import { join } from "node:path";
-import { initialJavaScript, checkCoreBudget, checkLazyProcessService, checkLazyInterruptRewriter, processServiceInputs } from "./runtime-size";
+import { initialJavaScript, checkCoreBudget, checkLazyProcessService, checkLazyInterruptRewriter, processServiceInputs, bunProcessAdapterInputs } from "./runtime-size";
 
 const runtime = resolveRuntimePackage(join(import.meta.dir, "../web/src/main.ts"));
 const installed = (file: string) => join(runtime.path, file);
@@ -29,7 +29,7 @@ test("initial download accounting refuses unmeasured static external scripts", (
 });
 
 test("the first-spawn service gate allows reservation primitives but rejects service code", () => {
-  const inputs = ["proc/stub.ts", "proc/identity.ts", "proc/outcome.ts", "proc/signals.ts", "proc/types.ts", "web/src/subprocess.ts"].map(installed);
+  const inputs = ["proc/stub.ts", "proc/identity.ts", "proc/outcome.ts", "proc/signals.ts", "proc/types.ts"].map(installed).concat(["web/src/bun-launcher.ts", "web/src/subprocess-broker.ts"]);
   expect(() => checkLazyProcessService(inputs, runtime)).not.toThrow();
   expect(processServiceInputs(inputs.concat([installed("proc/table.ts")]), runtime)).toEqual([installed("proc/table.ts")]);
   expect(() => checkLazyProcessService(inputs.concat([installed("proc/supervisor.ts")]), runtime)).toThrow("process service is eager");
@@ -39,13 +39,22 @@ test("the first-spawn service gate allows reservation primitives but rejects ser
   expect(() => checkLazyProcessService(inputs.concat([installed("dist/proc/supervisor.js")]), runtime)).toThrow("process service is eager");
 });
 
+test("Bun policy attribution names current adapters without hiding generic service imports", () => {
+  const adapters = ["web/src/bun-executor.ts", "/checkout/web/src/bun-launcher.ts", "web/src/subprocess-broker.ts"];
+  const service = ["proc/abi.ts", "proc/worker-client.ts", "proc/worker-broker.ts", "proc/pipes.ts", "proc/worker-pipes.ts"].map(installed);
+  const inputs = adapters.concat(service, ["web/src/worker.ts", "web/src/subprocess.ts", "web/src/worker-pipes.ts", "web/src/bun-executor.test.ts"]);
+  expect(bunProcessAdapterInputs(inputs)).toEqual(adapters);
+  expect(processServiceInputs(inputs, runtime)).toEqual(service);
+  for (const file of service) expect(() => checkLazyProcessService([file], runtime)).toThrow("process service is eager");
+});
+
 test("core gzip budget includes boundary, reports actionable excess", () => {
   expect(() => checkCoreBudget(7 * 1024)).not.toThrow();
   expect(() => checkCoreBudget(7 * 1024 + 1)).toThrow("core exceeds 7168 B gzip budget by 1 B");
 });
 
 test("Bun light initial downloads allow the tiny fatal check but never the binary rewriter", () => {
-  const inputs = ["interrupt/check.ts", "proc/outcome.ts", "web/src/subprocess-broker.ts"].map(installed);
+  const inputs = ["interrupt/check.ts", "proc/outcome.ts"].map(installed).concat(["web/src/bun-executor.ts"]);
   expect(() => checkLazyInterruptRewriter(inputs, runtime)).not.toThrow();
   for (const file of ["rewriter", "loader", "index", "future-compiler"]) {
     expect(() => checkLazyInterruptRewriter(inputs.concat([installed(`interrupt/${file}.ts`)]), runtime)).toThrow("interrupt rewriter is eager");

@@ -44,6 +44,10 @@ export function checkLazyProcessService(inputs: readonly string[], runtime: Runt
   const eager = processServiceInputs(inputs, runtime);
   if (eager.length) throw new Error(`process service is eager before first spawn: ${eager.join(", ")}`);
 }
+/** Bun supplies launch/engine policy; Waffle owns processes, signals and pipes. */
+export function bunProcessAdapterInputs(inputs: readonly string[]): string[] {
+  return inputs.filter(path => /(?:^|\/)web\/src\/(?:bun-executor|bun-launcher|subprocess-broker)\.ts$/.test(path));
+}
 /** Own Bun programs need only the tiny fatal-outcome check, never the load-time compiler. */
 export function checkLazyInterruptRewriter(inputs: readonly string[], runtime: RuntimePackage): void {
   const eager = inputs.filter(path => {
@@ -111,7 +115,7 @@ async function application(name: "web" | "sandbox", splitting: boolean, serviceW
   const inputs = Array.from(new Set(initialKeys.flatMap((key) => Object.keys(outputs[key]!.inputs)))).sort();
   const runtime = resolveRuntimePackage(resolve(root, name, "src/main.ts"));
   const procInputs = processServiceInputs(inputs, runtime);
-  const bunAdapterInputs = inputs.filter(path => /(?:\/|^)subprocess(?:[-.]|\/)/.test(path));
+  const bunAdapterInputs = bunProcessAdapterInputs(inputs);
   if (splitting) {
     checkLazyProcessService(inputs, runtime);
     checkLazyInterruptRewriter(inputs, runtime);
@@ -126,7 +130,7 @@ async function application(name: "web" | "sandbox", splitting: boolean, serviceW
     otherBunLightDownloads: ["index.html", "main.css", "bun-browser.wasm.gz"].concat(name === "sandbox" ? ["template.json"] : []),
     excludedDownloads: ["bun.wasm.gz", "bun-jsc.wasm.gz", "*.map"],
     proc: { eager: procInputs.length > 0, inputs: procInputs, bunAdapterInputs,
-      note: "The generic registry/table/supervisor loads on first spawn; Bun's existing slot and pipe adapter remains in its initial closure (pipe replacement is step 4b)." },
+      note: "Waffle owns the runtime_proc service and process-owned pipes; Bun contributes only launch and engine policy. Static service imports remain measured and gated separately from those Bun adapters." },
   };
 }
 
@@ -138,7 +142,6 @@ export async function runtimeSizeReport() {
     layer("net", ["waffle/browser/net/host", "waffle/browser/net/helper", "waffle/browser/preview"], 14),
     layer("proc", ["waffle/proc"], 8),
     layer("proc-stub", ["waffle/proc/stub", "waffle/proc/outcome"], 1),
-    layer("bun-process-adapter", ["web/src/subprocess.ts", "web/src/subprocess-broker.ts"], 8),
   ]);
   // This separately linked preview client uses a source-wrapper plugin; measure its real build.
   const net = layers.find((layer) => layer.name === "net")!;
