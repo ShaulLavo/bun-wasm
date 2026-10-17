@@ -184,8 +184,31 @@ try {
     const { fs } = (globalThis as any).playground;
     return { text: new TextDecoder().decode(await fs.readFile("/home/user/index.ts")), deleted: await fs.lookup("/home/user/math.test.ts") };
   }), { text: "console.log('saved playground');", deleted: undefined });
+
+  const contender = await page.context().newPage();
+  const startupErrors: string[] = [];
+  contender.on("pageerror", error => startupErrors.push(error.message));
+  await contender.setViewportSize({ width: 390, height: 844 });
+  await contender.goto(`${base}/playground/`);
+  await contender.waitForFunction(() => document.querySelector("#status")?.getAttribute("data-kind") === "error");
+  assert.match(await contender.locator("#status").innerText(), /Filesystem already has a writer in another tab/);
+  assert.deepEqual(await contender.locator("#status").evaluate(element => ({
+    wrapping: getComputedStyle(element).whiteSpace,
+    clipped: element.scrollWidth > element.clientWidth || element.scrollHeight > element.clientHeight,
+  })), { wrapping: "pre-wrap", clipped: false });
+  assert.equal(await contender.locator("#run").innerText(), "Reload");
+  assert.equal(await contender.locator("#run").isEnabled(), true);
+  assert.equal(await contender.locator("#new-file").isDisabled(), true);
+  assert.equal(await contender.locator("#engine").isDisabled(), true);
+  assert.deepEqual(startupErrors, []);
+  if (process.env.STARTUP_ERROR_SCREENSHOT) await contender.screenshot({ path: process.env.STARTUP_ERROR_SCREENSHOT });
+  await page.close();
+  await contender.locator("#run").click();
+  await contender.waitForFunction(() => (globalThis as any).playground?.editor.path === "/home/user/index.ts");
+  assert.equal(await contender.evaluate(async () => new TextDecoder().decode(await (globalThis as any).playground.fs.readFile("/home/user/index.ts"))), "console.log('saved playground');");
+  await contender.close();
   assert.deepEqual(errors, []);
-  console.log(`${engine} ${browser.version()}: durable editor saves, immediate reload, deleted files, interrupted seed/reset recovery, explicit template reset and mobile reset control passed`);
+  console.log(`${engine} ${browser.version()}: durable saves, reload, seed/reset recovery, complete mobile startup errors, writer release and preserved edits passed`);
 } finally {
   clearTimeout(timeout);
   await cleanup();

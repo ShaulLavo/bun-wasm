@@ -61,6 +61,17 @@ function nextMessage(worker: Worker): Promise<any> {
   });
 }
 
+test("backend startup failures report their complete message and original worker stack", async () => {
+  const worker = new Worker(new URL("./fixtures/filesystem-startup-failure.ts", import.meta.url).href);
+  cleanups.push(() => worker.terminate());
+  const message = nextMessage(worker);
+  worker.postMessage({});
+  const error = await message;
+  expect(error).toMatchObject({ type: "filesystem-error", message: "Error: Filesystem fixture cannot open storage" });
+  expect(error.stack).toContain("filesystem-startup-failure.ts");
+  worker.terminate();
+});
+
 test("completed writes are visible to siblings before either process exits", async () => {
   const { client } = fixture();
   const sibling = new FilesystemClient(client.fork());
