@@ -8,6 +8,11 @@ const closedOutput = readFileSync(new URL("../../tests/fixtures/pipe-closed-chil
 const orderedOutput = readFileSync(new URL("../../tests/fixtures/pipe-write-order/index.ts", import.meta.url), "utf8");
 const orderedChild = readFileSync(new URL("../../tests/fixtures/pipe-write-order/child.ts", import.meta.url), "utf8");
 const stdinRace = readFileSync(new URL("../../tests/fixtures/pipe-stdin-race/index.ts", import.meta.url), "utf8");
+const ipcParent = readFileSync(new URL("../../tests/fixtures/child-process-ipc/index.ts", import.meta.url), "utf8");
+const ipcBusy = readFileSync(new URL("../../tests/fixtures/child-process-ipc-busy/index.ts", import.meta.url), "utf8");
+const ipcChild = readFileSync(new URL("../../tests/fixtures/child-process-ipc/child.ts", import.meta.url), "utf8");
+const tableSource = readFileSync(new URL("../../tests/fixtures/webassembly-table/index.ts", import.meta.url), "utf8");
+const tableBinaries = ["module", "import", "references", "callbacks"].map(name => [name, Array.from(readFileSync(new URL(`../../tests/fixtures/webassembly-table/${name}.wasm`, import.meta.url)))] as const);
 const apiProgram = `
 import { spawnSync, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -77,6 +82,24 @@ try {
         assert.equal(checked.code, 0, checked.output);
         console.log(`ok ${browserName} ${engine}: ${name}`);
       }
+      await writeFile(page, "/home/user/ipc.ts", ipcParent);
+      await writeFile(page, "/home/user/child.ts", ipcChild);
+      const ipc = await run(page, "bun run ipc.ts");
+      assert.equal(ipc.code, 0, ipc.output);
+      assert.ok(ipc.output.includes("spawn advanced IPC round trip and disconnect pass"), ipc.output);
+      await writeFile(page, "/home/user/ipc-busy.ts", ipcBusy);
+      const busy = await run(page, "bun run ipc-busy.ts");
+      assert.equal(busy.code, 0, busy.output);
+      assert.ok(busy.output.includes("IPC disconnect does not wait for child"), busy.output);
+      await writeFile(page, "/home/user/table.ts", tableSource);
+      await page.evaluate(files => {
+        const playground = (globalThis as unknown as { playground: { fs: { writeFile(path: string, bytes: Uint8Array): void } } }).playground;
+        for (const [name, bytes] of files) playground.fs.writeFile(`/home/user/${name}.wasm`, new Uint8Array(bytes));
+      }, tableBinaries);
+      const table = await run(page, "bun run table.ts");
+      assert.equal(table.code, 0, table.output);
+      assert.ok(table.output.includes("table exports, imports, identity"), table.output);
+      console.log(`ok ${browserName} ${engine}: Table and child-process IPC contracts`);
       await checkWorkers(page, `${browserName} ${engine}`);
     }
     await browser.close();

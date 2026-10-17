@@ -1,2 +1,5 @@
-fork IPC round trip and disconnect pass
-spawn IPC round trip and disconnect pass
+fork json IPC round trip and disconnect pass
+spawn json IPC round trip and disconnect pass
+fork advanced IPC round trip and disconnect pass
+spawn advanced IPC round trip and disconnect pass
+Bun advanced IPC graph pass

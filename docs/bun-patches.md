@@ -17,6 +17,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
+| [WebAssembly tables and child-process IPC](#webassembly-tables-and-child-process-ipc) | Host feature | Original TypeScript and Rust adapters preserve table references and exchange child messages over host pipes. |
+| [Wasmi table identity](#wasmi-table-identity) | Port | Expose store-guarded table handle equality for aliased exports and imports. |
 | [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing and stream adapters over separate host guest instances. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
@@ -351,7 +353,7 @@ measured package is 4.64.7, including `dist/native.js`,
 These upstream files remain unchanged inside installed projects. No Rollup
 implementation is retained in this repository.
 
-`crates/bunwasm-runtime/src/wasm.rs` and `src/js/webassembly.js` are original
+`crates/bunwasm-runtime/src/wasm.rs` and `src/js/webassembly.ts` are original
 adapters over the public `wasmi` 0.46.0 API and the WebAssembly JavaScript API.
 They do not adapt an upstream implementation. The Wasmi dependency has the
 small port described below. Resumable host traps let JavaScript imports reenter
@@ -371,6 +373,7 @@ dependencies remain published crates.
 
 Local changes are limited to these files:
 
+- `src/table/mod.rs` derives store-guarded equality, as described in [table identity](#wasmi-table-identity).
 - `src/memory/mod.rs` derives equality on store-guarded memory handles and exposes
   the growth generation. Successful public growth increments that generation.
 - `src/store/inner.rs` owns a generation counter for each allocated memory.
@@ -1377,3 +1380,44 @@ count. Checking the queue only before accepting an entire large write allowed
 the first write to bypass the limit. The bounded host test fails with that
 implementation and passes with capacity-aware writes, including full-queue,
 zero-length and owned-copy cases. No upstream implementation is copied.
+
+## WebAssembly tables and child-process IPC
+
+Class **Host feature**, **original adapters** in
+`crates/bunwasm-runtime/src/{wasm.rs,js/webassembly.ts,js/child_process_ipc.ts}`,
+`crates/bunwasm-host/src/process/mod.rs`, `src/js/worker_codec.ts`, and
+`web/src/worker-pipes.ts`. Bootstrap
+and spawn retain their existing factory wiring. No upstream implementation is
+copied or adapted. These adapters use Wasmi 0.46.0's public table, function and
+external-reference APIs, and the existing bun-wasm subprocess byte pipes.
+
+One interpreter store owns all guest modules, so a table import shares the
+exporter's table and functions. Function and external-reference registries keep
+JavaScript identity across get, set, growth, indirect calls and module boundaries.
+Interpreter objects retain the adapter's existing process lifetime and are released when the guest exits.
+Imported JavaScript functions use resumable host calls inside wasm. Direct calls
+to re-exported imports dispatch the same callback without a wasm continuation.
+
+Child IPC uses the same two private pipes as worker control traffic, selected
+for an IPC child instead of a worker. The native, Node and browser hosts create
+the actual pipes. The TypeScript adapter frames JSON messages, uses the existing
+worker graph codec for advanced serialization, preserves Buffer objects through
+its per-codec buffer hook, queues partial writes, and keeps
+the event loop alive while messages or disconnect writes remain. Disconnect
+finishes after local writes drain and does not wait for the child to cooperate.
+No host ABI slot is added. Native executable spawning and OS handle transfer
+remain outside this transport.
+
+The original fixtures in `tests/fixtures/{webassembly-table,child-process-ipc}`
+exercise this contract on every engine. Their WAT files generate the checked-in
+wasm inputs with `wasm-tools parse <file>.wat -o <file>.wasm`.
+`web/tests/browser-subprocess.ts` runs the same programs in browser workers.
+
+## Wasmi table identity
+
+Class **Port**. `third_party/wasmi/src/table/mod.rs` is upstream
+`crates/wasmi/src/table/mod.rs` from Wasmi 0.46.0, revision
+`50ac76771d631f642e8c4c61bf44c99546024461`. The local table handle derives
+`PartialEq` and `Eq` over its existing store-guarded representation, matching the
+existing memory-handle port. This lets the adapter return one JavaScript table
+object for aliased exports and shared imports. No interpreter behavior changes.

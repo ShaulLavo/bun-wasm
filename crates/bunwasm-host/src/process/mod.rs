@@ -52,6 +52,8 @@ pub struct Request {
     stderr: String,
     #[serde(default)]
     worker: Option<WorkerLimits>,
+    #[serde(default)]
+    ipc: bool,
 }
 
 #[derive(Deserialize)]
@@ -207,7 +209,7 @@ impl Processes {
         let (stdin_id, stdin) = self.stdin(&request.stdin)?;
         let (stdout_id, stdout) = self.output(&request.stdout, 1)?;
         let (stderr_id, stderr) = self.output(&request.stderr, 2)?;
-        let (to_worker, from_worker, worker) = if request.worker.is_some() {
+        let (to_worker, from_worker, worker) = if request.worker.is_some() || request.ipc {
             let (incoming, input) = self.pipe(true);
             let (outgoing, output) = self.pipe(false);
             (incoming, outgoing, Some([input, output]))

@@ -823,6 +823,7 @@
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
   internal.require("function");
+  if (process.env.BUNWASM_CHILD_IPC) internal.require("child_process_ipc").initialize();
   if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
 
   return internal;

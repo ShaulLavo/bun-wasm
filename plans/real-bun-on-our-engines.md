@@ -249,5 +249,4 @@ Remaining files at this change:
 - `crates/bunwasm-runtime/src/js/temporal.js`
 - `crates/bunwasm-runtime/src/js/util.js`
 - `crates/bunwasm-runtime/src/js/web.js`
-- `crates/bunwasm-runtime/src/js/webassembly.js`
 - `crates/bunwasm-runtime/src/js/websocket.js`

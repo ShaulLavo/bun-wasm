@@ -8,4 +8,4 @@ rejects("large sync", () => Bun.spawnSync(command), /cmd array is too large/);
 rejects("large async", () => Bun.spawn(command), /cmd array is too large/);
 rejects("large options sync", () => Bun.spawnSync({ cmd: command }), /cmd array is too large/);
 rejects("large options async", () => Bun.spawn({ cmd: command }), /cmd array is too large/);
-rejects("ipc", () => Bun.spawn([process.execPath, "-e", "0"], { ipc() {} }), /Child process IPC is not supported/);
+rejects("ipc", () => Bun.spawn([process.execPath, "-e", "0"], { ipc: true }), /ipc must be a function/);

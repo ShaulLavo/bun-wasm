@@ -25,6 +25,7 @@ declare namespace BunWasm {
     commit(): void;
   }
   interface WorkerCodecHooks {
+    buffer?: { is(value: unknown): boolean; restore(buffer: ArrayBuffer, offset: number, length: number): Uint8Array };
     isPort(value: unknown): boolean;
     prepare(value: unknown): PortTransfer;
     restore(snapshot: PortSnapshot): unknown;
@@ -130,7 +131,11 @@ declare namespace BunWasm {
       Readable: new(options: { read(): void }) => WorkerReadable;
       Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: () => void): void }) => WorkerWritable;
     };
-    require(name: "buffer"): { Buffer: { from(value: unknown, encoding?: string): Uint8Array } };
+    require(name: "buffer"): { Buffer: {
+      from(value: unknown, encoding?: string): Uint8Array;
+      from(buffer: ArrayBuffer, offset: number, length: number): Uint8Array;
+      isBuffer(value: unknown): boolean;
+    } };
     require(name: "spawn"): { spawn(argv: string[], options: Record<string, unknown>): WorkerChild };
     require(name: "worker_stdio"): {
       readable(source: ReadableStream<Uint8Array>): { stream: WorkerReadable; drained: Promise<void> };

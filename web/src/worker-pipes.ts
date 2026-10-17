@@ -2,7 +2,7 @@ import { SharedPipe } from "./subprocess.js";
 import type { ChildTransport, SpawnMeta } from "./subprocess.js";
 
 export function workerBuffers(meta: SpawnMeta) {
-  if (!meta.worker) return [];
+  if (!meta.worker && !meta.ipc) return [];
   return [new SharedArrayBuffer(16 + (1 << 20)), new SharedArrayBuffer(16 + (1 << 20))];
 }
 

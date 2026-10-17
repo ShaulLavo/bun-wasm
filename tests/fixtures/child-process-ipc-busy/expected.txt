@@ -1,0 +1,1 @@
+IPC disconnect does not wait for child

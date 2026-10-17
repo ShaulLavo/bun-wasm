@@ -2,6 +2,7 @@ import type { Stream, Readiness } from "@bun-wasm/runtime/core";
 import type { EngineNet } from "./net/host";
 import type { SlotImpls } from "./net/trampoline";
 export interface SpawnMeta {
+  ipc?: boolean;
   worker?: { memoryLimitMb?: number; resourceLimits?: { maxOldGenerationSizeMb?: number; maxYoungGenerationSizeMb?: number; codeRangeSizeMb?: number; stackSizeMb?: number } };
   argv: string[];
   cwd: string;
