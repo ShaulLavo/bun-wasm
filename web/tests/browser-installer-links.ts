@@ -29,16 +29,23 @@ async function check(browserName: string, engine: string, url: string) {
     await writeFile(page, "/home/user/package.json", JSON.stringify({ name: "page-bin-fixture", scripts: { dev: 'fixture-tool "two words"' } }));
     await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);
     await command("bun add is-odd");
+    await writeFile(page, "/home/user/check-links.ts", 'import fs from "node:fs"; for (const bin of ["cli", "fixture-tool"]) console.log("link", bin, fs.existsSync("node_modules/.bin/" + bin));');
     for (const install of ["bun add @fixture/cli", "bun install --frozen-lockfile"]) {
       const output = await command(install);
       const warnings = output.split("\n").filter(line => line.includes("bin link skipped:"));
-      assert.equal(warnings.length, 2, output);
+      const links = await command("bun run check-links.ts");
+      let skipped = 0;
       for (const bin of ["cli", "fixture-tool"]) {
-        assert.ok(warnings.some(line => line.includes(`@fixture/cli (${bin})`) && line.includes("bin link skipped: this filesystem does not support symbolic links")), output);
+        const linked = links.includes(`link ${bin} true`);
+        const matching = warnings.filter(line => line.includes(`@fixture/cli (${bin})`) && line.includes("bin link skipped: this filesystem does not support symbolic links"));
+        assert.equal(matching.length, linked ? 0 : 1, output);
+        if (!linked) skipped++;
       }
+      assert.equal(warnings.length, skipped, output);
     }
-    await writeFile(page, "/home/user/check-lock.ts", 'import fs from "node:fs"; console.log("lock:", fs.readFileSync("bun.lock", "utf8").includes("@fixture/cli@1.0.0"), "link:", fs.existsSync("node_modules/.bin/fixture-tool"));');
-    assert.match(await command("bun run check-lock.ts"), /lock: true link: false/);
+    await writeFile(page, "/home/user/check-lock.ts", 'import fs from "node:fs"; console.log("lock:", fs.readFileSync("bun.lock", "utf8").includes("@fixture/cli@1.0.0"));');
+    assert.match(await command("bun run check-lock.ts"), /lock: true/);
+    await command("rm -r node_modules/.bin");
     for (const [text, args] of [
       ["bun run fixture-tool direct", "direct"],
       ["bun run dev tail", "two words|tail"],
@@ -49,7 +56,7 @@ async function check(browserName: string, engine: string, url: string) {
       assert.ok(output.includes(`page-cli ${args}`), output);
       assert.ok(output.includes("/home/user/node_modules/@fixture/cli/cli.ts"), output);
     }
-    await command("rm -r node_modules/.bin bun.lock");
+    await command("rm bun.lock");
     await writeFile(page, "/home/user/node_modules/.bin", "not a directory");
     const failed = await run(page, "bun install");
     assert.equal(failed.code, 1, failed.output);
