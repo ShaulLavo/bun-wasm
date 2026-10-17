@@ -440,8 +440,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       rootOutcome = state.signals.outcome;
       rootPid = request.pid = state.pid;
       rootJob = request.jobId = state.job;
-    } else await subprocess.prepareRoot();
-    releaseRootConsumer();
+    } else if (isolated) await subprocess.prepareRoot();
+    if (generic || isolated) releaseRootConsumer();
     prepared = true;
     if (!finished) {
       worker.postMessage(request, [request.filesystem.port]);
