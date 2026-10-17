@@ -1677,7 +1677,8 @@ into that graph before resolution, so migrated versions remain pinned.
 `bun update` resolves selected dependencies again, within their declared ranges
 unless `--latest` is supplied. `bun x` prefers a local binary and otherwise
 installs into an atomically published cache directory. Concurrent cold installs
-have separate staging directories. Installed binaries use relative links so a
+have separate staging directories. Download cache writes also use unique temporary
+files and publish complete bytes through an atomic rename. Installed binaries use relative links so a
 published cache directory remains movable.
 
 The TypeScript package-script dispatcher runs JavaScript and TypeScript binaries
