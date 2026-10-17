@@ -24,6 +24,35 @@ await check("nullish selectors", () => {
   for (const selector of [null, undefined]) assert.throws(() => new HTMLRewriter().on(selector, {}), { name: "TypeError", message: "Expected string" });
   assert.equal(new HTMLRewriter().on("null", { element(e) { e.setInnerContent("ok"); } }).transform("<null></null>"), "<null>ok</null>");
 });
+await check("fulfilled promise then accessor", async () => {
+  let reads = 0;
+  const value = { get then() {
+    reads++;
+    if (reads === 1) return undefined;
+    throw new Error("read twice");
+  } };
+  const settled = Promise.resolve(value);
+  const output = new HTMLRewriter().on("p", { element() { return settled; } }).transform(new Response("<p>x</p>"));
+  assert.equal(await output.text(), "<p>x</p>");
+  assert.equal(reads, 1);
+});
+await check("void end-tag registration releases callback", async () => {
+  let sourceController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const source = new ReadableStream<Uint8Array>({ start(controller) { sourceController = controller; } });
+  let weak: WeakRef<() => void> | undefined;
+  const output = new HTMLRewriter().on("img", { element(element) {
+    const callback = () => {};
+    weak = new WeakRef(callback);
+    try { element.onEndTag(callback); } catch (error) { assert.equal((error as Error).message, "No end tag."); }
+  } }).transform(new Response(source));
+  const reader = output.body!.getReader();
+  sourceController!.enqueue(new TextEncoder().encode("<img>"));
+  await reader.read();
+  const collect = typeof Bun !== "undefined" ? () => Bun.gc(true) : () => globalThis.gc?.();
+  for (let i = 0; i < 4 && weak!.deref() !== undefined; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
+  assert.equal(weak!.deref(), undefined);
+  await reader.cancel("done");
+});
 await check("response header snapshot", async () => {
   const input = new Response("<p>x</p>", { headers: { "x-test": "before" } });
   const output = new HTMLRewriter().on("p", { element() { input.headers.set("x-test", "after"); } }).transform(input);
