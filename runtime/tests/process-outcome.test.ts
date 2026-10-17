@@ -63,3 +63,13 @@ for (const signal of [2, 13, 15]) {
     expect(claimOutcome(word, { kind: "exited", code: 23 })).toEqual({ kind: "signaled", code: signal, status: 128 + signal });
   });
 }
+
+for (const [code, error] of [[2, "ENOENT"], [13, "EACCES"]] as const) {
+  test(`start failure ${error} has no exit status and wins against exit and kill`, () => {
+    const word = outcomeWord();
+    const expected = { kind: "start-failed", code, error, status: null };
+    expect(claimOutcome(word, { kind: "start-failed", code })).toEqual(expected);
+    expect(claimOutcome(word, { kind: "exited", code: 127 })).toEqual(expected);
+    expect(claimOutcome(word, { kind: "signaled", code: 9 })).toEqual(expected);
+  });
+}

@@ -1,3 +1,6 @@
+import { processOutcome } from "../../runtime/proc/outcome.ts";
+import type { ProcessExit } from "../../runtime/proc/types.ts";
+import { spawnStartError } from "./spawn-error.ts";
 import type { Stream } from "@bun-wasm/runtime/core";
 import type { EngineNet } from "./net/host";
 import type { SlotImpls } from "./net/trampoline";
@@ -35,6 +38,8 @@ export interface ChildTransport {
   control: SharedArrayBuffer;
 }
 export interface ChildWorker {
+  /** A proxy launcher awaits the execution worker's shared startup acknowledgement. */
+  starting?: true;
   /** Revoke access before requesting physical worker termination. */
   revoke?(): void;
   terminate(): unknown;
@@ -221,30 +226,37 @@ export function releaseProcessSlot(transport: Pick<ChildTransport, "budget" | "s
 }
 
 export function childTransport(transport: ChildTransport) {
+  const cells = new Int32Array(transport.control, 0, 4);
+  const started = () => { Atomics.store(cells, 2, 1); Atomics.notify(cells, 2); };
+  function complete(result: ProcessExit) {
+    const winner = claimOutcome(outcomeWord(transport.outcome), result);
+    if (Atomics.load(cells, 0)) return;
+    Atomics.store(cells, 1, winner.status ?? 0);
+    for (const [fd, pipe] of transport.pipes.entries()) {
+      if (fd === 0 && transport.inheritedStdin) continue;
+      new SharedPipe(pipe, transport.budget).close();
+    }
+    releaseProcessSlot(transport);
+    Atomics.store(cells, 0, 1);
+    Atomics.notify(cells, 0);
+    started();
+    wake(transport.budget);
+  }
   return {
     stdin: new SharedPipe(transport.pipes[0], transport.budget),
     stdout: new SharedPipe(transport.pipes[1], transport.budget),
     stderr: new SharedPipe(transport.pipes[2], transport.budget),
+    started,
+    complete,
+    startFailed(error: "ENOENT" | "EACCES") { complete(processOutcome({ kind: "start-failed", code: error === "ENOENT" ? 2 : 13 })); },
     finish(code: number, signal?: number) {
-      const result = claimOutcome(outcomeWord(transport.outcome), signal === undefined
-        ? { kind: "exited", code }
-        : { kind: "signaled", code: signal });
-      const cells = new Int32Array(transport.control, 0, 4);
-      if (Atomics.load(cells, 0)) return;
-      Atomics.store(cells, 1, result.status);
-      for (const [fd, pipe] of transport.pipes.entries()) {
-        if (fd === 0 && transport.inheritedStdin) continue;
-        new SharedPipe(pipe, transport.budget).close();
-      }
-      releaseProcessSlot(transport);
-      Atomics.store(cells, 0, 1);
-      Atomics.notify(cells, 0);
-      wake(transport.budget);
+      complete(processOutcome(signal === undefined ? { kind: "exited", code } : { kind: "signaled", code: signal }));
     },
   };
 }
 
 type Child = {
+  executable: string;
   transport: ChildTransport;
   pipes: SharedPipe[];
   handles: number[];
@@ -380,16 +392,27 @@ export class SubprocessHost {
       this.handles.set(handle, { pipe, fd, child: id });
       return handle;
     });
-    const child: Child = { transport, pipes, handles, modes, worker: null, ended: false };
+    const child: Child = { executable, transport, pipes, handles, modes, worker: null, ended: false };
     this.children.set(id, child);
     if (modes[0] !== "pipe" && !inheritedStdin) pipes[0]!.close();
     try { child.worker = this.options.launch(meta, transport, (error) => this.workerError(id, error)); }
     catch (error) {
-      this.kill(id, 9);
+      const missing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+      childTransport(transport).startFailed(missing ? "ENOENT" : "EACCES");
+    }
+    const control = new Int32Array(transport.control);
+    if (child.worker?.starting) {
+      while (Atomics.load(control, 2) === 0) {
+        if (!this.admit()) return -1;
+        Atomics.wait(control, 2, 0, 100);
+      }
+    }
+    const outcome = readOutcome(outcomeWord(transport.outcome));
+    if (outcome?.kind === "start-failed") {
+      this.reap(child);
       this.release(id);
-      return this.fail(error instanceof Error ? error.message : String(error),
-        error && typeof error === "object" && "code" in error ? String(error.code) : "EIO",
-        error instanceof Error ? error : {});
+      const error = spawnStartError(executable, outcome.error);
+      return this.fail(error.message, error.code, error);
     }
     this.watch();
     return id;
@@ -398,7 +421,9 @@ export class SubprocessHost {
     const child = this.children.get(id);
     if (!child || child.ended) return;
     child.pipes[2]!.write(encode.encode(`bun-wasm: ${String(error)}\n`));
-    childTransport(child.transport).finish(1);
+    const transport = childTransport(child.transport);
+    if (Atomics.load(new Int32Array(child.transport.control), 2) === 0) transport.startFailed("EACCES");
+    else transport.finish(1);
     this.notify();
   }
   pipe(id: number, fd: number) {
@@ -473,7 +498,10 @@ export class SubprocessHost {
     const cells = new Int32Array(child.transport.control, 0, 4);
     if (!Atomics.load(cells, 0)) return AGAIN;
     if (!child.ended) this.reap(child);
-    return readOutcome(outcomeWord(child.transport.outcome))!.status;
+    const result = readOutcome(outcomeWord(child.transport.outcome))!;
+    if (result.kind !== "start-failed") return result.status;
+    const error = spawnStartError(child.executable, result.error);
+    return this.fail(error.message, error.code, error);
   }
   reap(child: Child) {
     child.ended = true;

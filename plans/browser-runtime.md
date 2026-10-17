@@ -182,9 +182,11 @@ and `proc` loaded on the first spawn. A guest's `spawn` import can't await an `i
 guest worker keeps a stub of about 1 KiB gzipped, including identity and atomic terminal-result
 primitives: it reserves a pid, takes the inherited descriptor references and returns at once,
 and the supervisor loads proc and starts the process
-asynchronously. A start failure shows up through `wait` (127 for a missing program, 126 for one
-that can't run) and as a child-exit event in `poll`. A synchronous caller such as Bun's
-`spawnSync` polls afterwards; the shell never blocks on a first spawn. The builds (`web/build.ts`,
+asynchronously. A start failure retains its own typed outcome with ENOENT or EACCES,
+separate from an ordinary exit. The shell and `runtime_proc` wait adapters map it to
+127 or 126. Bun's adapter waits for startup acknowledgement and raises the matching
+error before returning a child, including for `spawnSync`. The supervisor chooses no
+shell-versus-spawn policy, and the shell never blocks on a first spawn. The builds (`web/build.ts`,
 `sandbox/build.ts`) enable code splitting and serve the split chunks under every worker scope.
 Bun's adapter and executor stay in
 `web/`. brush-web and the own shell consume the package as a pinned copy, the way brush-web
