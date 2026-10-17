@@ -18,6 +18,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
 | [WebAssembly tables and child-process IPC](#webassembly-tables-and-child-process-ipc) | Host feature | Original TypeScript and Rust adapters preserve table references and exchange child messages over host pipes. |
+| [Subprocess exit output ordering](#subprocess-exit-output-ordering) | Host feature | Original adapter observes child completion before draining inherited output, preserving final diagnostics. |
+| [Wasmi ordered imports](#wasmi-ordered-imports) | Port | Expose the existing ordered instantiation API for repeated import names and accessor values. |
 | [Wasmi table identity](#wasmi-table-identity) | Port | Expose store-guarded table handle equality for aliased exports and imports. |
 | [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing and stream adapters over separate host guest instances. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
@@ -373,6 +375,7 @@ dependencies remain published crates.
 
 Local changes are limited to these files:
 
+- `src/module/instantiate/mod.rs` exposes ordered imports, as described in [ordered imports](#wasmi-ordered-imports).
 - `src/table/mod.rs` derives store-guarded equality, as described in [table identity](#wasmi-table-identity).
 - `src/memory/mod.rs` derives equality on store-guarded memory handles and exposes
   the growth generation. Successful public growth increments that generation.
@@ -1421,3 +1424,22 @@ Class **Port**. `third_party/wasmi/src/table/mod.rs` is upstream
 `PartialEq` and `Eq` over its existing store-guarded representation, matching the
 existing memory-handle port. This lets the adapter return one JavaScript table
 object for aliased exports and shared imports. No interpreter behavior changes.
+
+## Wasmi ordered imports
+
+Class **Port**. `third_party/wasmi/src/module/instantiate/mod.rs` is upstream
+`crates/wasmi/src/module/instantiate/mod.rs` from Wasmi 0.46.0, revision
+`50ac76771d631f642e8c4c61bf44c99546024461`. The existing `Module::instantiate`
+method becomes public. Its implementation is unchanged. The JavaScript API reads
+imports in order, including repeated module and field names whose getters return
+different tables. Passing those bindings directly preserves their identity and
+keeps Wasmi's type validation. A linker keyed by names loses that ordering.
+
+## Subprocess exit output ordering
+
+Class **Host feature**, **original adapter** in `web/src/subprocess.js`. No upstream
+implementation is copied. The host observes the child's completion flag before
+draining inherited output. That observation makes writes published before exit
+visible to the drain, so exit handlers receive the final diagnostics before they
+can stop the parent. `web/tests/subprocess.test.ts` forces the publication between
+a pipe read and completion observation and checks the output before wait succeeds.

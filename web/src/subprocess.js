@@ -303,9 +303,10 @@ export class SubprocessHost {
   wait(id) {
     const child = this.children.get(id);
     if (!child) return BADF;
-    this.drainInherited(child);
     const cells = new Int32Array(child.transport.control, 0, 4);
-    if (!Atomics.load(cells, 0)) return AGAIN;
+    const exited = Atomics.load(cells, 0);
+    this.drainInherited(child);
+    if (!exited) return AGAIN;
     if (!child.ended) this.reap(child, cells);
     return Atomics.load(cells, 1);
   }

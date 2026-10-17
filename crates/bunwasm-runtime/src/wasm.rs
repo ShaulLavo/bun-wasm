@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc};
 
 use wasmi::{
-    Engine, ExternRef, ExternType, Func, FuncRef, Instance, Linker, Memory, Module, ResumableCall,
+    Engine, ExternRef, ExternType, Func, FuncRef, Instance, Memory, Module, ResumableCall,
     ResumableCallHostTrap, Store, Table as WTable, TableType, Val as WVal,
     core::{HostError, ValType},
 };
@@ -307,7 +307,7 @@ impl Runtime {
             .modules
             .get(id as usize)
             .ok_or_else(|| error("Invalid WebAssembly module"))?;
-        let mut linker = Linker::new(&self.engine);
+        let mut externals = Vec::with_capacity(imports.len());
         for (index, import) in module.imports().enumerate() {
             let value = imports.get(index).unwrap_or(&Val::Undefined);
             let external: wasmi::Extern = match import.ty() {
@@ -345,12 +345,10 @@ impl Runtime {
                 }
                 _ => return Err(error("Unsupported WebAssembly import kind")),
             };
-            linker
-                .define(import.module(), import.name(), external)
-                .map_err(error)?;
+            externals.push(external);
         }
-        let instance = linker
-            .instantiate(&mut self.store, module)
+        let instance = module
+            .instantiate(&mut self.store, externals)
             .map_err(error)?
             .start(&mut self.store)
             .map_err(error)?;

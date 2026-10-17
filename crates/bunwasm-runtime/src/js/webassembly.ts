@@ -10,7 +10,7 @@
   const modules = new WeakMap<Module, Description>();
   const memories = new WeakMap<Memory, MemoryRecord>();
   const globals = new WeakMap<Global, { id: number; name: string; type: string; mutable: boolean }>();
-  const tables = new WeakMap<Table, TableRecord>();
+  const tables = new WeakMap<object, TableRecord>();
   const tableObjects = new Map<number, Table>();
   const functionIds = new WeakMap<Function, number>();
   const functionObjects = new Map<number, Function>();
@@ -223,7 +223,8 @@
       if (!description) throw new TypeError("Expected a WebAssembly.Module");
       const entries = description.imports.map(item => {
         const value = provided[item.module]?.[item.name];
-        if (item.kind === "table" && value instanceof Table) return tableState(value).id;
+        const table = value !== null && typeof value === "object" ? tables.get(value) : undefined;
+        if (item.kind === "table" && table) return table.id;
         if (item.kind !== "function" || typeof value !== "function") throw new LinkError(`Missing WebAssembly import ${item.module}.${item.name}`);
         const id = functionIds.get(value);
         if (id !== undefined) return id;
