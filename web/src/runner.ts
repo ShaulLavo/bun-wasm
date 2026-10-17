@@ -225,12 +225,26 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
   let rootAcknowledged = false;
   let rootQuiescence: Promise<void> | undefined;
+  let rootStopped = false;
+  let rootConsumerRelease: (() => void) | undefined;
   const quiesceRoot = (): void | Promise<void> => {
     if (rootAcknowledged) return;
     return rootQuiescence ??= options.runtime.filesystem.quiesce(request.filesystem);
   };
   let workerStopped = false;
-  const stopWorker = () => { if (workerStopped) return; workerStopped = true; worker.terminate(); };
+  const releaseRootConsumer = () => { rootConsumerRelease?.(); rootConsumerRelease = undefined; };
+  const stopWorker = () => {
+    if (workerStopped) return;
+    workerStopped = true;
+    request.filesystem.port.close();
+    worker.terminate();
+  };
+  const stopRoot = () => { if (rootStopped) return; rootStopped = true; stopWorker(); };
+  rootConsumerRelease = options.runtime.retainConsumer({
+    filesystem: request.filesystem,
+    revoke: () => { if (!finished) finish({ code: 137 }, false, 9, true); },
+    stop: stopRoot,
+  });
   const subprocess = new SubprocessBroker(workerUrl, options.runtime, { quiesceRoot, rootIdentity: { pid, job }, rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged, stopRoot: () => finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true), engine: options.engine, aliasExecutable: options.adapter === "preview1" ? `preview1-root-${pid}` : undefined, budget: request.budget, output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
 
     pid, job, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
@@ -264,6 +278,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     // The admission fence proves completion. Never make run.done depend on terminate().
     settle(selectedResult!);
     stopWorker();
+    releaseRootConsumer();
   };
   const finish = (result: RunResult, acknowledged = false, signal?: number, ownedDisposal = false) => {
     // Page disposal may take ownership while this run is already awaiting its root fence.
@@ -373,6 +388,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       rootPid = request.pid = state.pid;
       rootJob = request.jobId = state.job;
     } else await subprocess.prepareRoot();
+    releaseRootConsumer();
     prepared = true;
     if (!finished) {
       worker.postMessage(request, [request.filesystem.port]);

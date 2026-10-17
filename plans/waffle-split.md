@@ -40,12 +40,14 @@ The root API is `createRuntime(options)`. A runtime exposes its borrowed filesys
 - Programs use the interruption admission rules: instrument source bytes, or require explicit trusted cooperative execution for a compiled module. No unrestricted compiled-module escape hatch.
 - Bun engine registrations are immutable and engine-qualified. Concurrent runs must not mutate a shared `bun` alias.
 - Closing one run or shell must not dispose the page runtime or kill unrelated jobs. Borrowed capabilities do not convey teardown ownership.
+- `retainConsumer({ filesystem, revoke, stop })` is adapter-only synchronous admission before lazy process activation, not an application or shell call. Its idempotent lease releases only after a broker synchronously accepts ownership or physical cleanup is proven; failed handoff retains it and release after page disposal begins is a no-op. Snapshot identities/hooks, cancel before fencing, and stop only after all fences succeed, even when process activation never starts or fails.
 - Disposal rejects new work, publishes outcomes/revocation, reaches filesystem quiescence, stops consumers/workers/relays, closes owned filesystem services last, then releases the guard. Logical exit and `Worker.terminate()` returning do not prove physical cleanup. If a quiescence fence rejects, disposal rejects without physically stopping unsafe consumers, closing their filesystem or releasing the ownership guard; destroying the page is the recovery boundary. Preserve the existing admission/quiescence fences; extraction does not claim the later 4c work is complete.
 
 ## Package and tooling
 
 - Before extraction, the local package remains `@bun-wasm/runtime`. Rename to `waffle` during normalization.
 - Export TypeScript for Bun/browser and source types; export ignored per-module JavaScript for Node. Browser-worker-only entries are not Node exports.
+- Curate the adapter-only `RuntimeConsumer` type explicitly at the root; synchronous consumer retention must not eagerly import process implementations or interruption compilation.
 - `build` emits one module for each source module, preserving class/state identity across exports, and validates Node-safe relative specifiers. `prepare` invokes it.
 - A clean trusted commit-pinned Git install must generate the Node outputs with no sibling bun-wasm checkout. Test installed exports, not only links or source paths. Keep `private: true` while npm publication is not intended.
 - Preserve existing trusted dependencies when adding `waffle` to both applications.
