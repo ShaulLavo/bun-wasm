@@ -23,12 +23,13 @@ try {
       assert.equal(downloads.length, 1, "first lint fetches tools once");
       assert.equal((await run(page, "bun fmt --check tool-source.ts")).code, 0);
       assert.equal(downloads.length, 1, "fmt reuses compiled tools");
-      await page.waitForFunction(async () => {
-        const cache = await caches.open("bunwasm-engines");
+      await page.waitForFunction(() => {
         const key = new URL("bun-tools.wasm", location.href).href;
-        const response = await cache.match(key);
         const build = Reflect.get(globalThis, "__bunwasmBuilds")["bun-tools.wasm"];
-        return response?.headers.get("x-bunwasm-build") === build;
+        return performance.getEntriesByName("bunwasm:engine-cache-stored").some(entry => {
+          const detail = Reflect.get(entry, "detail");
+          return detail?.url === key && detail?.build === build;
+        });
       });
       const cold = await page.evaluate(() => performance.getEntriesByType("resource").filter(entry => entry.name.includes("bun-tools.wasm")).map(entry => ({ url: entry.name, duration: entry.duration, transferSize: Reflect.get(entry, "transferSize") })));
       await page.reload();

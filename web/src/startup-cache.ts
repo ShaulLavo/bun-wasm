@@ -18,13 +18,15 @@ export async function cachedEngine(url: string, build: string): Promise<Response
   }
 }
 
-export async function cacheEngine(url: string, build: string, response: Response): Promise<void> {
+export async function cacheEngine(url: string, build: string, response: Response): Promise<boolean> {
   try {
     const headers = new Headers(response.headers);
     headers.set("x-bunwasm-build", build);
     await (await caches.open(CACHE)).put(url, new Response(response.body, { headers }));
+    return true;
   } catch {
     // Disabled or full storage must not stop a working engine.
+    return false;
   }
 }
 

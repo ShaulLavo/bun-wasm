@@ -122,7 +122,9 @@ async function cacheIfExpected(key: string, build: string, chunks: Uint8Array<Ar
   const hex = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
   if (hex !== build) return;
   const headers = { "content-type": "application/wasm", "content-length": String(size) };
-  await cacheEngine(key, build, new Response(blob, { headers }));
+  if (await cacheEngine(key, build, new Response(blob, { headers }))) {
+    performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
+  }
 }
 
 // The service worker at ./__bunwasm/ (sw.ts) serves named module URLs for import cycles.
