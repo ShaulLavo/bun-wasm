@@ -293,7 +293,7 @@ Each file has a 15-second wall limit excluding snapshot setup/reset. The initial
 
 ## Isolation and harness
 
-QuickJS and JSC use the native launcher and its networking/subprocess ABI. The browser comparison uses Node's host engine with `--net`. Only the private source snapshot at `/bun` and a private `/tmp` are preopened. Host and guest cwd are the snapshot's `test/` directory. The runner uses the actual upstream shared harness and `bunfig.toml` preload. Generated alias packages resolve harness imports because general tsconfig paths are not implemented. No upstream test or harness source changes.
+QuickJS and JSC use the native launcher and its networking/subprocess ABI. The browser comparison uses Node's host engine with `--net`. Only the private source snapshot at `/bun` and a private `/tmp` are preopened. The guest cwd is the snapshot's source root. Test paths and preloads are absolute, so discovery still selects files under `test/`. Earlier runs used `test/` as cwd; those runs print different relative report paths. The runner uses the actual upstream shared harness and `bunfig.toml` preload. Generated alias packages resolve harness imports because general tsconfig paths are not implemented. No upstream test or harness source changes.
 
 Every worker owns a source snapshot, restores tracked changes and deletes generated files after each test, verifies clean Git status, then clears its temp directory. Snapshot attributes preserve fixture bytes. Per-file process groups are killed and reaped on timeout/interruption. The runner removes its scratch directory on success, failure and handled signals. After an uncatchable SIGKILL, inspect the named scratch directory and its processes before deleting it.
 

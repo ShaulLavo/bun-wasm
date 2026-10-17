@@ -1,0 +1,1 @@
+The failed assertion must exit 1 even when its returned promise is inspected.
