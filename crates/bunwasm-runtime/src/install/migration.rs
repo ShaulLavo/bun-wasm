@@ -652,7 +652,7 @@ fn remove_optional_duplicates(meta: &mut Value) {
         .flat_map(|deps| deps.keys().cloned())
         .collect();
     for field in ["dependencies", "devDependencies"] {
-        let Some(deps) = meta[field].as_object_mut() else {
+        let Some(deps) = meta.get_mut(field).and_then(Value::as_object_mut) else {
             continue;
         };
         for name in &names {
