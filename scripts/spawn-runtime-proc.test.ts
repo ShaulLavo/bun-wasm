@@ -32,7 +32,7 @@ function service(options: { failSpawn?: number } = {}) {
     for (const entry of child.held.values()) release(entry);
     child.held.clear();
   };
-  const native = {
+  const native: Record<string, any> = {
     hostCaps: { proc_spawn: true }, cwd: () => "/work", now: () => Date.now(),
     procPipe() {
       const pipe: FakePipe = { chunks: [], readers: 1, writers: 1 };
@@ -62,7 +62,8 @@ function service(options: { failSpawn?: number } = {}) {
       children.set(child.pid, child);
       return child.pid;
     },
-    procJobOf: (id: number) => children.get(id)?.job ?? -71,
+    ownJob: 0,
+    procJobOf(id: number) { return id === 0 ? this.ownJob || -71 : children.get(id)?.job ?? -71; },
     procRead(fd: number) {
       const entry = pipes.get(fd);
       if (!entry) return -8;
@@ -303,4 +304,20 @@ test("spawnSync timeout kills with the requested signal and reports it", () => {
   expect(result.exitCode).toBeNull();
   expect(result.success).toBe(false);
   expect(fake.pipes.size).toBe(0);
+});
+
+test("a caller with a job puts children in it and never reaps or kills the shared job", async () => {
+  const fake = service();
+  fake.native.ownJob = 3;
+  const { module, pump } = load(fake);
+  const child = module.spawn(["bun", "j"], { stdout: "pipe" });
+  const record = fake.children.get(child.pid)!;
+  expect(record.request.job).toBe(3);
+  fake.exit(record, 0);
+  await pump();
+  expect(await child.exited).toBe(0);
+  expect(fake.calls).not.toContain("reap");
+  const sync = module.spawnSync(["bun", "k"], { timeout: 1, killSignal: "SIGKILL" });
+  expect(sync.signalCode).toBe("SIGKILL");
+  expect(fake.calls).not.toContain("reap");
 });
