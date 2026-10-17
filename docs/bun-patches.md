@@ -1408,8 +1408,9 @@ or adapted. `web/tests/{subprocess,playground,browser-net}.mjs` and
 `tests/install/run.mjs` use the host temporary directory or `BUN_WASM_TEST_TMP`.
 `scripts/test-web.sh` honors that override or `TMPDIR`, installs scratch teardown
 before allocation, and waits for its fixture server to exit. Its original
-`scripts/run-with-timeout.mts` adapter uses Node's child-process deadline rather
-than requiring GNU timeout on macOS. Browser network teardown uses owned
+`scripts/run-with-timeout.mts` adapter owns a POSIX process group and kills command
+descendants on normal exit, deadline and interruption rather than requiring GNU
+timeout on macOS. Browser network teardown uses owned
 ChildProcess handles, not Linux-only `/proc` paths. Test assertions are unchanged.
 
 ### Native browser stream completion
