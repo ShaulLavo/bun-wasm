@@ -255,7 +255,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (rootOutcome) {
       const winner = claimOutcome(rootOutcome, signal === undefined
         ? { kind: "exited", code: result.code } : { kind: "signaled", code: signal });
-      result = winner.kind === "exited" && winner.code === result.code && result.error
+      result = (winner.kind === "start-failed" || winner.kind === "exited" && winner.code === result.code) && result.error
         ? { code: waitStatus(winner), error: result.error } : { code: waitStatus(winner) };
     }
     subprocess.revokeRuntimeProcess(rootPid);
