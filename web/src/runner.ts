@@ -147,7 +147,9 @@ export interface RunOptions {
   /** From registerModuleScope(): run the worker under ./__bunwasm/. */
   moduleScope: boolean;
   trace?: boolean;
-  /** Explicit generic ownership transport; normal Bun roots remain on the legacy adapter. */
+  /** Skip Bun host slots for arbitrary Preview1 guests. */
+  adapter?: RunRequest["adapter"];
+  /** Explicit generic ownership transport; extended runtime_proc imports activate one automatically. */
   runtimeProcess?: RunRequest["runtimeProcess"];
 }
 
@@ -190,15 +192,17 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   // One Cache Storage cache per run holds its modules; deleted when the run ends.
   const moduleCache = options.moduleScope ? `bunwasm-m-${crypto.randomUUID()}` : null;
   const isolated = globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== "undefined";
+  const generic = !!options.runtimeProcess || WebAssembly.Module.imports(options.module).some(entry =>
+    entry.module === "runtime_proc" && !["signal", "interrupted", "default_signal"].includes(entry.name));
+  const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("../../runtime/fs").FilesystemIdentity } | undefined)?.filesystem;
   const request: RunRequest = {
     engine: options.engine,
+    adapter: options.adapter,
     runtimeProcess: options.runtimeProcess,
     module: options.module,
     args: ["bun", ...options.args],
     env: options.env,
-    filesystem: options.runtimeProcess?.data
-      ? options.filesystem.connect((options.runtimeProcess.data as { filesystem: import("../../runtime/fs").FilesystemIdentity }).filesystem)
-      : options.filesystem.fork(),
+    filesystem: filesystemIdentity ? options.filesystem.connect(filesystemIdentity) : options.filesystem.fork(),
     trace: options.trace ?? false,
     net: ring,
     moduleCache,
@@ -206,15 +210,15 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     spawnBroker: true,
     pid: 1,
     jobId: 1,
-    interrupt: isolated && !options.runtimeProcess ? new SharedArrayBuffer(4) : undefined,
-    requestedSignal: isolated && !options.runtimeProcess ? new SharedArrayBuffer(4) : undefined,
-    signalState: isolated && !options.runtimeProcess ? createSignalState().buffer as SharedArrayBuffer : undefined,
-    outcome: isolated && !options.runtimeProcess ? new SharedArrayBuffer(8) : undefined,
+    interrupt: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
+    requestedSignal: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
+    signalState: isolated && !generic ? createSignalState().buffer as SharedArrayBuffer : undefined,
+    outcome: isolated && !generic ? new SharedArrayBuffer(8) : undefined,
   };
   let rootOutcome = request.outcome ? outcomeWord(request.outcome) : null;
   let rootPid = 1, rootJob = 1;
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
-  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { root: isolated && !request.runtimeProcess ? {
+  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
     pid: 1, job: 1, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
     signalState: request.signalState, outcome: request.outcome,
   } : undefined });
@@ -229,7 +233,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
     return module;
   };
-  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, { module: moduleFor(options.engine), adapter: "bun", engine: options.engine });
+  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, { module: moduleFor(options.engine), adapter: options.adapter ?? "bun", engine: options.engine });
   for (const engine of ["quickjs", "jsc", "browser"] as const) subprocess.register(`bun-${engine}`, { module: moduleFor(engine), adapter: "bun", engine });
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
@@ -245,6 +249,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       result = winner.kind === "exited" && winner.code === result.code && result.error
         ? { code: winner.status, error: result.error } : { code: winner.status };
     }
+    subprocess.revokeRuntimeProcess(rootPid);
     finished = true;
     if (outcomeTimer !== null) clearTimeout(outcomeTimer);
     outcomeTimer = null;
@@ -315,14 +320,14 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     event.preventDefault();
     finish({ code: 1, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
-  let prepared = !request.runtimeProcess;
-  const preparation = request.runtimeProcess ? (async () => {
-    const { workerProcessState } = await import("../../runtime/proc/worker-client");
-    const transport = request.runtimeProcess!;
+  let prepared = !generic;
+  const preparation = generic ? (async () => {
+    const { workerProcessState, createWorkerProcessTransport } = await import("../../runtime/proc/worker-client");
+    const transport = request.runtimeProcess ??= createWorkerProcessTransport();
     const state = workerProcessState(transport);
     // The host endpoint and descriptor reservations use the same filesystem identity.
     const { port, ...filesystem } = request.filesystem;
-    transport.data = { filesystem };
+    transport.data = { ...(transport.data as object | undefined), filesystem };
     await subprocess.adoptRuntimeRoot(transport);
     rootOutcome = state.signals.outcome;
     rootPid = request.pid = state.pid;
