@@ -49,19 +49,19 @@ async function sandboxOnlyInstall() {
   owned.push(dir);
   const main = join(dir, "sandbox/src/main.ts");
   const worker = join(dir, "web/src/worker.ts");
-  const dependency = join(dir, "sandbox/node_modules/@bun-wasm/runtime");
+  const dependency = join(dir, "sandbox/node_modules/waffle");
   await Bun.write(join(dependency, "package.json"), JSON.stringify({
-    name: "@bun-wasm/runtime", type: "module",
+    name: "waffle", type: "module",
     exports: { "./core": "./dist/public-core.ts", "./core/memory-views": "./dist/public-views.ts" },
   }));
   await Bun.write(join(dependency, "dist/public-core.ts"), "export const core = 'core from sandbox install';");
   await Bun.write(join(dependency, "dist/public-views.ts"), "export const views = 'views from sandbox install';");
   await Bun.write(join(dependency, "private.ts"), "export const secret = 'not exported';");
-  await Bun.write(join(dir, "web/src/fs.ts"), "import { core } from '@bun-wasm/runtime/core'; import { views } from '@bun-wasm/runtime/core/memory-views'; export const shared = [core, views];");
+  await Bun.write(join(dir, "web/src/fs.ts"), "import { core } from 'waffle/core'; import { views } from 'waffle/core/memory-views'; export const shared = [core, views];");
   await Bun.write(main, "import { shared } from '../../web/src/fs'; console.log(shared);");
   await Bun.write(worker, "import { shared } from './fs'; postMessage(shared);");
-  expect(() => Bun.resolveSync("@bun-wasm/runtime/core", join(dir, "web/src"))).toThrow();
-  expect(await Bun.file(join(dir, "web/node_modules/@bun-wasm/runtime/package.json")).exists()).toBe(false);
+  expect(() => Bun.resolveSync("waffle/core", join(dir, "web/src"))).toThrow();
+  expect(await Bun.file(join(dir, "web/node_modules/waffle/package.json")).exists()).toBe(false);
   return { dir, main, worker };
 }
 
@@ -72,13 +72,13 @@ test("sandbox-only install resolves shared web sources through the consumer's pa
   expect(javascript).toContain("core from sandbox install");
   expect(javascript).toContain("views from sandbox install");
   const inputs = Object.keys(result.metafile!.inputs);
-  expect(inputs.some((path) => path.endsWith("sandbox/node_modules/@bun-wasm/runtime/dist/public-core.ts"))).toBe(true);
-  expect(inputs.some((path) => path.endsWith("sandbox/node_modules/@bun-wasm/runtime/dist/public-views.ts"))).toBe(true);
+  expect(inputs.some((path) => path.endsWith("sandbox/node_modules/waffle/dist/public-core.ts"))).toBe(true);
+  expect(inputs.some((path) => path.endsWith("sandbox/node_modules/waffle/dist/public-views.ts"))).toBe(true);
 });
 
 test("consumer runtime resolution does not expose unexported package files", async () => {
   const { dir, main, worker } = await sandboxOnlyInstall();
-  await Bun.write(join(dir, "web/src/fs.ts"), "import { secret } from '@bun-wasm/runtime/private.ts'; export const shared = secret;");
+  await Bun.write(join(dir, "web/src/fs.ts"), "import { secret } from 'waffle/private.ts'; export const shared = secret;");
   await expect(buildBrowserEntries([main, worker], join(dir, "sandbox/dist"))).rejects.toThrow();
 });
 

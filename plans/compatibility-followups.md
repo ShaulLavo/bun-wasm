@@ -493,7 +493,7 @@ engine/browser combinations. Main's filesystem merge changes no embedded
 runtime or launcher source; that input comparison is retained in
 `/work/reports/bun-wasm-streams-round6-2026-10-16/fs-main-native-input-diff.txt`.
 The new real-browser shared filesystem path is the next boundary to inspect,
-especially `runtime/fs/shared.ts`, `runtime/fs/client.ts` and `runtime/fs/backend.ts`.
+especially Waffle `fs/shared.ts`, `fs/client.ts` and `fs/backend.ts`.
 
 Reproduce after building web assets with `PLAYWRIGHT=<playwright/index.mjs>
 node web/tests/browser-memory.mjs chromium`, or `scripts/test-web.sh` in full,

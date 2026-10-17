@@ -1,9 +1,9 @@
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, test } from "bun:test";
-import { claimOutcome } from "../../runtime/proc/outcome";
-import { DescriptorTable } from "../../runtime/core/descriptors";
-import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "../../runtime/fs";
-import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "../../runtime/proc/worker-client";
+import { claimOutcome } from "waffle/proc/outcome";
+import { DescriptorTable } from "waffle/core/descriptors";
+import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "waffle/fs";
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { startRun } from "../src/runner";
 import type { SharedFilesystem } from "../src/shared-fs";

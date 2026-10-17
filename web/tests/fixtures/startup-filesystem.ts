@@ -1,5 +1,5 @@
-import { SharedFilesystem as Filesystem } from "@bun-wasm/runtime/browser/shared-fs";
-export * from "@bun-wasm/runtime/browser/shared-fs";
+import { SharedFilesystem as Filesystem } from "waffle/browser/shared-fs";
+export * from "waffle/browser/shared-fs";
 
 const pause = new URLSearchParams(location.search).has("pause-startup") && !sessionStorage.getItem("startup-paused");
 let writesUntilFailure: number | undefined;

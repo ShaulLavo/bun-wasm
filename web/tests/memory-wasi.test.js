@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { MemFS } from "../src/fs";
-import { memoryViews } from "@bun-wasm/runtime/core";
+import { memoryViews } from "waffle/core";
 import { HOST_CALL_FD } from "../src/net/trampoline";
-import { Wasi } from "@bun-wasm/runtime/core";
+import { Wasi } from "waffle/core";
 
 const wasm = new URL("../../dist/bun.wasm", import.meta.url);
 for (const fallback of [false, true]) {

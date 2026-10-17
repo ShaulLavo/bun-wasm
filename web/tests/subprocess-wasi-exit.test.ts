@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { Wasi } from "@bun-wasm/runtime/core";
-import { MemFS } from "@bun-wasm/runtime/fs/memory";
+import { Wasi } from "waffle/core";
+import { MemFS } from "waffle/fs/memory";
 import { CHILD_FINAL_SIGNAL, SubprocessHost, childTransport, type ChildTransport } from "../src/subprocess";
 
 function signedLeb(value: number): number[] {

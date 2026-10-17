@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { createRuntime, type Runtime } from "@bun-wasm/runtime";
+import { createRuntime, type Runtime } from "waffle";
 import type { RunRequest, WorkerMessage } from "../src/worker";
-import { workerProcessState } from "../../runtime/proc/worker-client";
+import { workerProcessState } from "waffle/proc/worker-client";
 import { createLegacyEngineScope, createRuntimeEngineScope } from "./engine-interruption-scope";
-import { setSignalDisposition, takeSignal } from "../../runtime/proc/signals";
+import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 
 /** Keep production page ownership, allocator, filesystem admission and launchRuntime intact.

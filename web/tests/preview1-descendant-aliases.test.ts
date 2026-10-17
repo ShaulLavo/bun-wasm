@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { DescriptorTable } from "@bun-wasm/runtime/core/descriptors";
-import { createFilesystemIdentity } from "@bun-wasm/runtime/fs";
-import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "@bun-wasm/runtime/proc/worker-client";
-import { WorkerPipeHost } from "@bun-wasm/runtime/proc/worker-pipes";
-import type { PipeEndpoint } from "@bun-wasm/runtime/proc/pipes";
-import type { RuntimeWorkerRequest } from "@bun-wasm/runtime/browser/worker";
-import type { RuntimeFilesystem } from "@bun-wasm/runtime";
+import { DescriptorTable } from "waffle/core/descriptors";
+import { createFilesystemIdentity } from "waffle/fs";
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
+import { WorkerPipeHost } from "waffle/proc/worker-pipes";
+import type { PipeEndpoint } from "waffle/proc/pipes";
+import type { RuntimeWorkerRequest } from "waffle/browser/worker";
+import type { RuntimeFilesystem } from "waffle";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 

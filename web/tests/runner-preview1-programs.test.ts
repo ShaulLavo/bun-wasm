@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
-import type { RuntimeFilesystem } from "@bun-wasm/runtime";
-import { createFilesystemIdentity } from "@bun-wasm/runtime/fs";
+import type { RuntimeFilesystem } from "waffle";
+import { createFilesystemIdentity } from "waffle/fs";
 import { startRun } from "../src/runner";
 import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess-broker";
 import { processRuntimeFixture } from "./process-runtime-fixture";

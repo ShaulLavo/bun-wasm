@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { WasiExit } from "@bun-wasm/runtime/core";
-import { ProcessSignalExit } from "../../runtime/proc/abi";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
+import { WasiExit } from "waffle/core";
+import { ProcessSignalExit } from "waffle/proc/abi";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
 import { DefaultSignal } from "../src/default-signal";
 import { assertFatalEngineCompletion, assertNativeEngineCompletion, engineInterruptionFailure, observeEngineImports, observeEventLoopWait, observedEngineStart, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 

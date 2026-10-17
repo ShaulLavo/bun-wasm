@@ -1,8 +1,8 @@
 // Bun ABI adapters over the runtime's generic handles, rings and network state.
 // Guest pointers, native names and slot installation stay on this side of the boundary.
-import { memoryViews, type MemoryViews } from "@bun-wasm/runtime/core";
-import { NetHost as RuntimeNetHost } from "@bun-wasm/runtime/browser/net/host";
-import { type NetRequest, UNSUPPORTED } from "@bun-wasm/runtime/browser/net/protocol";
+import { memoryViews, type MemoryViews } from "waffle/core";
+import { NetHost as RuntimeNetHost } from "waffle/browser/net/host";
+import { type NetRequest, UNSUPPORTED } from "waffle/browser/net/protocol";
 import { SLOT_NAMES, type SlotImpls } from "./trampoline";
 
 /** What engine-host.js takes as `net` (see engine-host.d.ts). */

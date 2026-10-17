@@ -12,7 +12,7 @@
 // and streams the parsed response back here. Root-relative requests made by a preview page (e.g.
 // `/style.css`) go to the same port.
 
-import { createPreviewServiceWorker } from "@bun-wasm/runtime/browser/service-worker";
+import { createPreviewServiceWorker } from "waffle/browser/service-worker";
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 const prefix = new URL(sw.registration.scope).pathname;

@@ -42,12 +42,12 @@ test('unbundled headless hosts load with their installed runtime package', async
     // Copy the installed package, including its generated Node modules, not a
     // sibling runtime checkout. Host modules must link through package exports.
     const installed = resolveRuntimePackage(fileURLToPath(new URL('../src/main.ts', import.meta.url))).path;
-    await cp(installed, join(dir, 'web/node_modules/@bun-wasm/runtime'), {
+    await cp(installed, join(dir, 'web/node_modules/waffle'), {
       recursive: true, dereference: true,
       filter(source) { return source === installed || !source.slice(installed.length + 1).split('/').includes('node_modules'); },
     });
     expect(existsSync(join(dir, 'runtime'))).toBe(false);
-    expect(existsSync(join(dir, 'web/node_modules/@bun-wasm/runtime/dist/core/memory-views.js'))).toBe(true);
+    expect(existsSync(join(dir, 'web/node_modules/waffle/dist/core/memory-views.js'))).toBe(true);
     const imports = ['web/src/engine-host.js', 'web/src/subprocess.ts', 'web/scripts/node-install-net.mjs', 'web/scripts/node-stdio.ts', 'web/scripts/node-process.ts'];
     const load = spawnSync('node', ['--input-type=module', '-e', `for (const path of ${JSON.stringify(imports)}) await import('./' + path);`], { cwd: dir, encoding: 'utf8' });
     expect(load.stderr).toBe('');

@@ -1,8 +1,8 @@
 import { expect, spyOn, test } from "bun:test";
-import { createRuntime } from "@bun-wasm/runtime";
-import { FilesystemSection } from "@bun-wasm/runtime/fs/protocol";
-import { createWorkerProcessTransport } from "@bun-wasm/runtime/proc/worker-client";
-import { BrowserProcessBroker } from "@bun-wasm/runtime/browser/process-broker";
+import { createRuntime } from "waffle";
+import { FilesystemSection } from "waffle/fs/protocol";
+import { createWorkerProcessTransport } from "waffle/proc/worker-client";
+import { BrowserProcessBroker } from "waffle/browser/process-broker";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { startRun } from "../src/runner";
 import { SubprocessHost } from "../src/subprocess";
@@ -115,7 +115,7 @@ for (const phase of ["supervisor", "service"] as const) test(`page disposal owns
   process.on("unhandledRejection", unhandled);
   const runtime = createRuntime({ filesystem: { workerURL: "https://example.test/fs-worker.js", persistence: false },
     processHost: options => new BrowserProcessBroker({ ...options, activate: async () => {
-      enteredActivation(); await activation; return import("../../runtime/proc");
+      enteredActivation(); await activation; return import("waffle/proc");
     } }),
   });
   const broker = new SubprocessBroker("https://example.test/worker.js", runtime);
