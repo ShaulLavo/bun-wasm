@@ -38,9 +38,11 @@ def arguments():
     parser.add_argument("--suite", type=Path, default=ROOT / "vendor/bun")
     parser.add_argument("--launcher", type=Path, default=Path(os.environ["CARGO_TARGET_DIR"]) / "release/bun-wasm")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--log-dir", type=Path, help="retain bounded per-file output for diagnosing the full selected census")
     parser.add_argument("--dependencies", type=Path, help="additional installed suite node_modules directory")
     parser.add_argument("--resume", action="store_true", help="reuse finished files with identical provenance")
     parser.add_argument("--rerun", action="store_true", help="with --resume, replace results for the selected files")
+    parser.add_argument("--node-parallel", action="store_true", help="include Node test-*.js assertion scripts; report script exits separately from test counts")
     parser.add_argument("--limit", type=int, help="run first N matching files")
     opts = parser.parse_args()
     if opts.jobs < 1 or opts.timeout <= 0 or opts.test_timeout < 1:
@@ -70,7 +72,7 @@ def git(suite, *args):
 
 def discover(opts):
     paths = git(opts.suite, "ls-files", "test").splitlines()
-    paths = [path[5:] for path in paths if TEST_NAME.search(Path(path).name) or (path[5:] in opts.glob and Path(path).suffix in {".js", ".mjs", ".cjs", ".ts"})]
+    paths = [path[5:] for path in paths if TEST_NAME.search(Path(path).name) or (opts.node_parallel and path.startswith("test/js/node/test/parallel/test-") and Path(path).suffix in {".js", ".mjs", ".cjs"}) or (path[5:] in opts.glob and Path(path).suffix in {".js", ".mjs", ".cjs", ".ts"})]
     paths = [path for path in paths if any(fnmatch.fnmatchcase(path, glob) or path.startswith(glob.rstrip("/") + "/") for glob in opts.glob)]
     return sorted(paths)[:opts.limit]
 
@@ -133,7 +135,7 @@ def provenance(opts, wasm):
             "host_sources": {path: digest(ROOT / path) for path in ["web/src/engine-host.js", "runtime/core/memory-views.js", "web/scripts/node-net.mjs", "web/scripts/node-stdio.ts", "web/scripts/node-spawn.ts", "web/src/subprocess.ts", "runtime/proc/identity.ts", "runtime/proc/outcome.ts", "web/src/fs.ts", "runtime/fs/memory.ts", "runtime/fs/backend.ts", "runtime/fs/client.ts", "runtime/fs/service.ts", "runtime/fs/protocol.ts", "runtime/fs/index.ts", "runtime/core/wasi.ts", "runtime/core/descriptors.ts", "runtime/core/filesystem.ts", "runtime/core/path.ts", "runtime/core/index.ts", "runtime/package.json"]} if opts.engine == "browser" else {},
             "dependencies": dependency_digest(opts.suite / "node_modules"),
             "test_dependencies": dependency_digest(opts.dependencies or opts.suite / "test/node_modules"),
-            "network": opts.network, "timeout_seconds": opts.timeout, "test_timeout_ms": opts.test_timeout}
+            "node_parallel": opts.node_parallel, "network": opts.network, "timeout_seconds": opts.timeout, "test_timeout_ms": opts.test_timeout}
 
 
 def stop_process(proc):
@@ -155,15 +157,29 @@ def loopback_command(command):
     return ["unshare", "--user", "--map-root-user", "--net", "sh", "-c", 'ip link set lo up && exec "$@"', "bun-suite"] + command
 
 
+def is_assertion_script(opts, source, path):
+    if not opts.node_parallel or not path.startswith("js/node/test/parallel/"):
+        return False
+    text = source.read_text()
+    return not re.search(r"(?:require\(\s*['\"]node:test['\"]|from\s*['\"]node:test['\"])", text)
+
+
+
+def runs_as_script(opts, source, path):
+    if opts.node_parallel and path.startswith("js/node/test/parallel/"):
+        return is_assertion_script(opts, source, path)
+    return not TEST_NAME.search(Path(path).name)
+
+
 def command(opts, wasm, work, preloads, path):
     dirs = ["--dir", f"{work}/bun::/bun", "--dir", f"{work}/tmp::/tmp"]
     env = {"PWD": "/bun/test", "HOME": "/tmp", "TMPDIR": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin", "CI": "1", "AGENT": "0", "NO_COLOR": "1", "BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING": "1", "BUNWASM_TEST": "1"}
     flags = [part for key, value in env.items() for part in ["--env", f"{key}={value}"]]
-    tests = ["test", "--timeout", str(opts.test_timeout)]
-    tests += [part for preload in preloads for part in ["--preload", "/bun/test/" + preload.removeprefix("./")]]
-    tests += ["/bun/test/" + path]
-    if not TEST_NAME.search(Path(path).name):
-        tests = ["run", "/bun/test/" + path]
+    script = runs_as_script(opts, work / "bun/test" / path, path)
+    tests = ["run", "/bun/test/" + path] if script else ["test", "--timeout", str(opts.test_timeout)]
+    if tests[0] == "test":
+        tests += [part for preload in preloads for part in ["--preload", "/bun/test/" + preload.removeprefix("./")]]
+        tests += ["/bun/test/" + path]
     if opts.engine == "browser":
         return ["node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm), "--net"] + dirs + flags + ["--"] + tests
     return [str(opts.launcher), "--wasm", str(wasm)] + dirs + flags + tests
@@ -232,13 +248,18 @@ def invoke(opts, wasm, work, preloads, path):
         if size > 4 * 1024 * 1024:
             output.seek(max(0, size - 65536))
             text += "\n[output truncated]\n" + output.read().decode("utf-8", errors="replace")
+    if opts.log_dir:
+        log = opts.log_dir / (path + ".log")
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(text)
     result = parse_output(text)
     result.update(file=path, exit=proc.returncode, duration_seconds=round(time.monotonic() - started, 3), timed_out=timed_out, output_bytes=size, interrupted=STOP.is_set())
-    result["kind"] = "test" if TEST_NAME.search(Path(path).name) else "script"
-    result["fully_passing"] = proc.returncode == 0 and result["complete"] and result["counts"]["fail"] == 0 and result["counts"]["errors"] == 0 and result["counts"]["pass"] > 0
-    if result["kind"] == "script":
-        result["complete"] = not timed_out and not STOP.is_set()
-        result["fully_passing"] = result["complete"] and proc.returncode == 0
+    result["assertion_script"] = is_assertion_script(opts, work / "bun/test" / path, path)
+    result["skipped_script"] = result["assertion_script"] and bool(re.search(r"^1\.\.0 # Skipped:", text, re.M))
+    result["kind"] = "script" if runs_as_script(opts, work / "bun/test" / path, path) else "test"
+    if result["skipped_script"]: result["counts"]["skip"] += 1
+    if result["kind"] == "script": result["complete"] = not timed_out and not STOP.is_set()
+    result["fully_passing"] = proc.returncode == 0 and result["complete"] and not result["skipped_script"] and result["counts"]["fail"] == 0 and result["counts"]["errors"] == 0 and (result["counts"]["pass"] > 0 or result["kind"] == "script")
     return result
 
 
@@ -290,7 +311,7 @@ def drain_record(finished, records, checkpoint, selected):
     records[record["file"]] = record
     checkpoint.write(json.dumps(record) + "\n")
     checkpoint.flush()
-    label = "PASS" if record["fully_passing"] else "TIME" if record["timed_out"] else "FAIL"
+    label = "PASS" if record["fully_passing"] else "TIME" if record["timed_out"] else "SKIP" if record.get("skipped_script") else "FAIL"
     print(f"{len(records)}/{len(set(records).union(selected))} {label} {record['file']} {record['counts']}", flush=True)
 
 

@@ -25,10 +25,9 @@ const HOME = "/home/user";
 /** The project's directory in the guest's filesystem. */
 const APP = `${HOME}/app`;
 const PORT = 5173;
-/** Files the user changed, kept across reloads and engine switches. */
+/** Each template has its own persistent workspace, shared across engine switches. */
 const template = new URLSearchParams(location.search).get("template") === "vanilla" ? "vanilla" : "react";
 const templateFile = template === "vanilla" ? "template-vanilla.json" : "template.json";
-const EDITS_KEY = `bun-wasm-sandbox:edits:${template}`;
 const SAVE_DELAY_MS = 350;
 /** Opened first. */
 const START_FILE = template === "vanilla" ? "src/main.ts" : "src/App.tsx";
@@ -39,12 +38,17 @@ const engineSelect = $<HTMLSelectElement>("#engine");
 const templateSelect = $<HTMLSelectElement>("#template");
 templateSelect.value = template;
 templateSelect.addEventListener("change", () => {
-  const next = new URL(location.href);
-  if (templateSelect.value === "react") next.searchParams.delete("template");
-  else next.searchParams.set("template", templateSelect.value);
-  location.assign(next);
+  const selected = templateSelect.value;
+  void (async () => {
+    await editor.flushAll();
+    const next = new URL(location.href);
+    if (selected === "react") next.searchParams.delete("template");
+    else next.searchParams.set("template", selected);
+    location.assign(next);
+  })().catch(reportError);
 });
 const restartButton = $<HTMLButtonElement>("#restart");
+const resetButton = $<HTMLButtonElement>("#reset");
 const treeEl = $<HTMLUListElement>("#tree");
 const fileSelect = $<HTMLSelectElement>("#file-select");
 const fileName = $<HTMLSpanElement>("#file-name");
@@ -62,12 +66,16 @@ const wasmUrl = params.get("wasm") ?? ENGINES[engine].wasm;
 
 engineSelect.value = engine;
 engineSelect.addEventListener("change", () => {
-  // The edits are already in sessionStorage; the reloaded page restores them.
-  const next = new URL(location.href);
-  if (engineSelect.value === DEFAULT_ENGINE) next.searchParams.delete("engine");
-  else next.searchParams.set("engine", engineSelect.value);
-  next.searchParams.delete("wasm");
-  location.assign(next);
+  // Flush debounced edits before leaving; a failed save keeps this page open.
+  const selected = engineSelect.value;
+  void (async () => {
+    await editor.flushAll();
+    const next = new URL(location.href);
+    if (selected === DEFAULT_ENGINE) next.searchParams.delete("engine");
+    else next.searchParams.set("engine", selected);
+    next.searchParams.delete("wasm");
+    location.assign(next);
+  })().catch(reportError);
 });
 
 function setStatus(text: string, kind: "" | "ok" | "error" = ""): void {
@@ -82,29 +90,13 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 
 // ---------- filesystem ----------
 
-const fs = new SharedFilesystem();
-await fs.mkdirp("/tmp");
+const fs = new SharedFilesystem({ name: `bun-wasm-sandbox-${template}` });
+await fs.mkdirp("/tmp").catch((error) => {
+  setStatus(String(error), "error");
+  throw error;
+});
 const rel = (path: string) => path.slice(APP.length + 1);
 const abs = (relPath: string) => `${APP}/${relPath}`;
-
-function loadEdits(): Record<string, string> {
-  try {
-    return JSON.parse(sessionStorage.getItem(EDITS_KEY) ?? "{}") as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
-
-const edits = loadEdits();
-
-function rememberEdit(relPath: string, text: string): void {
-  edits[relPath] = text;
-  try {
-    sessionStorage.setItem(EDITS_KEY, JSON.stringify(edits));
-  } catch {
-    /* storage full or disabled: edits last until the page reloads */
-  }
-}
 
 function templateFiles(text: string): Record<string, string> | null {
   try {
@@ -121,15 +113,44 @@ function templateFiles(text: string): Record<string, string> | null {
   } catch { return null; }
 }
 
-async function loadTemplate(): Promise<void> {
+let templateSources: Record<string, string> = {};
+
+async function loadTemplate(reset = false): Promise<void> {
   const started = performance.now();
   const response = await fetch(`./${templateFile}`);
   if (!response.ok) throw new Error(`${templateFile}: HTTP ${response.status}`);
   const files = templateFiles(await response.text());
   if (!files) throw new Error(`${templateFile}: invalid project files`);
   measureStartup("template", started);
-  for (const [path, text] of Object.entries(files)) await fs.writeFile(abs(path), text);
-  for (const [path, text] of Object.entries(edits)) await fs.writeFile(abs(path), text);
+  templateSources = files;
+  const initialized = `${APP}/.bunwasm-initialized`;
+  // A directory alone may be a persisted prefix of startup or reset. Only mark a complete
+  // seed, so reload retries an interrupted replacement instead of accepting partial files.
+  // Once marked, intentionally deleted template files stay deleted until an explicit reset.
+  if (reset || !await fs.lookup(initialized)) {
+    // Reset is destructive once replacement starts. If interrupted, its absent marker
+    // makes the next startup finish a clean reset rather than mixing old and new files.
+    await fs.remove(APP);
+    await fs.mkdirp(APP);
+    for (const [path, text] of Object.entries(files)) await fs.writeFile(abs(path), text);
+    await fs.mkdirp(initialized);
+    await fs.flush();
+  }
+}
+
+function isDependency(path: string): boolean {
+  return path === "package.json" || path.startsWith("node_modules/");
+}
+
+/** A persisted or program-written dependency edit must also invalidate the bundle cache. */
+async function dependenciesChanged(): Promise<boolean> {
+  const paths = (await fs.listFiles(APP)).map(rel).filter(isDependency);
+  if (paths.length !== Object.keys(templateSources).filter(isDependency).length) return true;
+  for (const path of paths) {
+    const data = await fs.readFile(abs(path));
+    if (!data || decode(data) !== templateSources[path]) return true;
+  }
+  return false;
 }
 
 // ---------- terminal ----------
@@ -198,7 +219,8 @@ async function startDevServer(): Promise<void> {
     performance.clearMarks(`bunwasm:${phase}`);
     performance.clearMeasures(`bunwasm:${phase}`);
   }
-  const changedDeps = Object.keys(edits).some((path) => path === "package.json" || path.startsWith("node_modules/"));
+  const changedDeps = await dependenciesChanged();
+  if (revision !== serverRevision) return;
   depsKey = changedDeps ? null : depsCacheKey(engine, wasm.build, templateFile);
   const cached = depsKey ? await readDeps(depsKey) : null;
   if (revision !== serverRevision) return;
@@ -350,8 +372,8 @@ async function sendUpdate(path: string, revision: number): Promise<void> {
 }
 
 async function save(path: string, text: string, revision: number): Promise<void> {
-  rememberEdit(path, text);
   await fs.writeFile(abs(path), text);
+  await fs.flush();
   if (server) await sendUpdate(path, revision);
   else if (run) unsent.set(path, revision);
   else if (revision === editRevision) setSaveState("saved", "ok");
@@ -417,7 +439,6 @@ class Editor {
   private schedule(path: string): void {
     clearTimeout(this.timers.get(path));
     this.revisions.set(path, ++editRevision);
-    rememberEdit(path, this.text(path));
     setSaveState("editing…");
     this.timers.set(
       path,
@@ -458,6 +479,17 @@ class Editor {
     fileName.textContent = path;
     fileSelect.value = path;
     tree.select(path);
+  }
+
+  /** A reset discards pending edits and prevents typing from racing the template replacement. */
+  discard(): void {
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+    this.revisions.clear();
+    this.states.clear();
+    this.openRevision++;
+    editRevision++;
+    this.view.setState(EditorState.create({ extensions: [EditorState.readOnly.of(true)] }));
   }
 
   /** Replaces a file's text (tests use this to type like a person would). */
@@ -565,6 +597,24 @@ fileSelect.addEventListener("change", () => void editor.open(fileSelect.value).c
 restartButton.addEventListener("click", () => {
   term.write("\r\n");
   void startDevServer().catch(reportError);
+});
+
+async function resetTemplate(): Promise<void> {
+  editor.discard();
+  const current = run;
+  stopDevServer();
+  await current?.done;
+  await loadTemplate(true);
+  location.reload();
+}
+
+resetButton.addEventListener("click", () => {
+  if (!confirm(`Reset the ${template} workspace to its template? All changes in this workspace will be deleted.`)) return;
+  resetButton.disabled = restartButton.disabled = engineSelect.disabled = templateSelect.disabled = true;
+  void resetTemplate().catch((error) => {
+    resetButton.disabled = restartButton.disabled = engineSelect.disabled = templateSelect.disabled = false;
+    reportError(error);
+  });
 });
 
 // Keep the app inside the visible area when the iOS keyboard opens.

@@ -25,12 +25,12 @@ test("the service grows into another SAB segment and preserves page data", () =>
   expect(out[0]).toBe(66);
 });
 
-test("storage cap reports ENOSPC while a single-file limit reports EFBIG", () => {
+test("storage cap reports ENOSPC while the address-space limit reports EFBIG", () => {
   const cap = new SharedFilesystemState(undefined, 16 * 1024 * 1024);
   cap.register(0, { kind: "file", ino: 1, size: PAGE * 256, mtime: 1 }, new Uint8Array(PAGE * 256));
   try { cap.register(1, { kind: "file", ino: 2, size: PAGE, mtime: 1 }, new Uint8Array(PAGE)); throw new Error("expected ENOSPC"); }
   catch (error) { expect((error as { errno?: number }).errno).toBe(51); }
-  expect(() => cap.register(2, { kind: "file", ino: 3, size: PAGE * 257, mtime: 1 }, new Uint8Array())).toThrow(RangeError);
+  expect(() => cap.register(2, { kind: "file", ino: 3, size: 1024 * 1024 * 1024 + PAGE, mtime: 1 }, new Uint8Array())).toThrow(RangeError);
 });
 
 test("a cloned root attachment preserves service-owned extra segments", () => {

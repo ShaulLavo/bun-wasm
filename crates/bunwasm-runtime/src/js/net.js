@@ -109,6 +109,7 @@
   function handleStream(handle, onEnd) {
     let done = false;
     return new ReadableStream({
+      type: "bytes",
       pull(controller) {
         if (done) {
           controller.close();
@@ -117,11 +118,13 @@
         return new Promise((resolve, reject) => {
           addWaiter({
             step() {
+              if (done) { resolve(); return true; }
               const chunk = native.hostRead(handle);
               if (chunk === AGAIN) return false;
               if (chunk === 0) {
                 done = true;
                 controller.close();
+                if (controller.byobRequest) controller.byobRequest.respond(0);
                 if (onEnd) onEnd();
               } else if (typeof chunk === "number") {
                 done = true;
@@ -136,6 +139,10 @@
             fail: reject,
           });
         });
+      },
+      cancel() {
+        done = true;
+        if (onEnd) onEnd();
       },
     });
   }
@@ -793,6 +800,7 @@
     const { Buffer } = internal.require("buffer");
 
     class IncomingMessage extends Readable {
+      _read() {}
       constructor() {
         super();
         this.headers = {};
@@ -956,12 +964,6 @@
         socket._phase = "open";
         socket._updatePeer();
         socket.encrypted = protocol === "https:";
-        let writable = socket.writable;
-        Object.defineProperty(socket, "writable", {
-          configurable: true, enumerable: true,
-          get() { return writable && !this._conn.closed && !this._conn.closing; },
-          set(value) { writable = value; },
-        });
         conn.onClose = () => socket.destroy();
         trackServerConnection(this, conn);
         this.emit("connection", socket);
@@ -1023,8 +1025,9 @@
     // Client side: requests go through fetch.
     class ClientRequest extends Writable {
       constructor(options, callback) {
-        super();
+        super({ autoDestroy: false });
         this._options = options;
+        this._abortController = new AbortController();
         this._chunks = [];
         this._headers = Object.assign({}, options.headers);
         this.method = (options.method || "GET").toUpperCase();
@@ -1040,30 +1043,21 @@
       removeHeader(name) {
         delete this._headers[name];
       }
-      write(chunk, encoding, cb) {
-        if (typeof encoding === "function") cb = encoding;
-        this._chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : internal.toUint8(chunk));
-        if (typeof cb === "function") internal.nextTick(cb);
-        return true;
+      _write(chunk, encoding, callback) {
+        this._chunks.push(internal.toUint8(chunk));
+        callback();
       }
-      end(chunk, encoding, cb) {
-        if (typeof chunk === "function") cb = chunk;
-        else if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
-        this._send().catch((err) => this.emit("error", err));
-        if (typeof cb === "function") this.once("finish", cb);
-        internal.nextTick(() => this.emit("finish"));
-        return this;
+      _final(callback) {
+        this._send().catch(error => { if (!this.destroyed) this.destroy(error); });
+        callback();
       }
-      abort() {
-        this.destroy();
-      }
-      destroy(err) {
-        if (this._aborted) return this;
+      abort() { this.destroy(); }
+      _destroy(error, callback) {
         this._aborted = true;
+        this._abortController.abort(error);
         if (this._upgrade) this._cancelUpgrade();
         if (this.socket) this.socket.destroy();
-        if (err) internal.nextTick(() => this.emit("error", err));
-        return this;
+        callback(error);
       }
       setTimeout() {
         return this;
@@ -1149,7 +1143,7 @@
         const o = this._options;
         const url = o.href || `${o.protocol || protocol}//${o.hostname || o.host || "localhost"}${o.port ? ":" + o.port : ""}${this.path}`;
         const body = this._chunks.length ? internal.concatBytes(this._chunks) : undefined;
-        const res = await fetch(url, { method: this.method, headers: this._headers, body: this.method === "GET" || this.method === "HEAD" ? undefined : body, redirect: "manual" });
+        const res = await fetch(url, { method: this.method, headers: this._headers, body: this.method === "GET" || this.method === "HEAD" ? undefined : body, redirect: "manual", signal: this._abortController.signal });
         if (this._aborted) return;
         const msg = new IncomingMessage();
         msg.statusCode = res.status;

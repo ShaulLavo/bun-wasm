@@ -1,0 +1,9 @@
+writable closed
+writable errored
+readable closed
+readable errored
+normal fromWeb end
+destroy writable false
+destroy writable true
+destroy readable false
+destroy readable true
