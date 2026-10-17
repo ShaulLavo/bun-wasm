@@ -112,3 +112,9 @@ adapter preserves the custom path, rejects the inconsistent inputs and removes U
 outcomes are retained alongside the native bytes rather than reported as exact
 native matches. Unsupported adapter configuration also has an explicit rejection
 assertion even where native Bun supports it.
+
+
+Migration rejects transport URL queries and embedded registry-authentication
+options. Those identities can carry credentials or expiring signatures and are
+not represented by the portable installer's separate authentication configuration.
+Plain registry URL userinfo is removed before any source is stored.

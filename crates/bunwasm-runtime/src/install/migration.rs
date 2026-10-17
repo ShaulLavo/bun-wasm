@@ -949,19 +949,7 @@ fn clean_transport(value: &str) -> Result<String> {
     if !["https", "http"].contains(&url.scheme()) || url.host_str().is_none() {
         return Err("Unsupported migrated resolution".into());
     }
-    if url.query_pairs().any(|(key, _)| {
-        matches!(
-            key.to_ascii_lowercase().as_str(),
-            "token"
-                | "auth"
-                | "_auth"
-                | "_authtoken"
-                | "password"
-                | "_password"
-                | "authorization"
-                | "access_token"
-        )
-    }) {
+    if url.query().is_some() {
         return Err("Credential-bearing URL query is not supported during migration".into());
     }
     let _ = url.set_username("");

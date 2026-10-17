@@ -125,6 +125,7 @@ function scenarios(): Scenario[] {
     { name: "npm-link-credential-diagnostic", manifest: { name: "review", dependencies: { dep: "link:https://synthetic-user:synthetic-secret@other.invalid/dep" } }, files: npm(manifest, {}), packages: [], unsupported: /Unsupported migrated resolution/ },
     { name: "berry-credential-diagnostic", manifest: { name: "review", dependencies: { dep: "https://synthetic-user:synthetic-secret@other.invalid/dep.tgz" } }, files: berry(manifest, [dep]), packages: [], reject: /(?:no entry|resolution|pin|protocol)/i },
     { name: "berry-missing-root-schema", manifest, files: { "yarn.lock": "__metadata:\n  version: 8\ndep@npm:1.0.0:\n  version: 1.0.0\n  resolution: dep@npm:1.0.0\n" }, packages: [dep], reject: /no root workspace entry/ },
+    { name: "npm-transport-query-credential", manifest, files: npm(manifest, { "node_modules/dep": npmRow(dep, base + "/dep/-/dep-1.0.0.tgz?authToken=synthetic-secret") }), packages: [dep], unsupported: /Credential-bearing URL query/ },
     { name: "registry-query-credential", manifest, files: berry(manifest, [dep]), packages: [], registry: base + "/?token=synthetic-secret", unsupported: /Credential-bearing URL query/ },
     { name: "registry-embedded-credential", manifest, files: berry(manifest, [dep]), packages: [], registry: base + "/:_authToken=synthetic-secret", unsupported: /Embedded registry authentication/ },
     { name: "berry-registry-credentials", manifest, files: berry(manifest, [dep]), packages: [dep], registry: base.replace("://", "://synthetic-user:synthetic-secret@") },
