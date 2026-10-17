@@ -4,8 +4,15 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { dirname, join, resolve } from "node:path";
 import { packageFixture } from "./registry.mjs";
 
-type Manifest = Record<string, unknown>;
-type Fixture = ReturnType<typeof packageFixture>;
+type Manifest = Record<string, unknown> & {
+  name?: string;
+  version?: string;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+};
+type Fixture = Omit<ReturnType<typeof packageFixture>, "manifest"> & { manifest: Manifest & { name: string; version: string } };
 type Scenario = { name: string; manifest: Manifest; files: Record<string, string>; packages: Fixture[]; reject?: RegExp; unsupported?: RegExp; install?: boolean; env?: Record<string, string>; registry?: string; noArchives?: boolean; upstream?: string; stricter?: RegExp; preserveTransport?: string; missingArchive?: string; installReject?: boolean; sanitizeTransport?: boolean };
 const root = resolve(import.meta.dir, "../..");
 const scratch = mkdtempSync("/work/tmp/bun-wasm-migration-review-");
@@ -17,17 +24,18 @@ let requests: string[] = [];
 const missingArchives = new Set<string>();
 let externalRequests = 0;
 const otherPackage = packageFixture("dep", "1.0.0", {}, 'module.exports = "different-registry-bytes";');
-const external = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+const external = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request): Response {
   externalRequests++;
   if (new URL(request.url).pathname.endsWith(".tgz")) return new Response(otherPackage.archive);
   return Response.json({ name: "dep", versions: { "1.0.0": { ...otherPackage.manifest, dist: { integrity: otherPackage.integrity, tarball: String(external.url) + "dep.tgz" } } } });
 } });
 let base = "";
-const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request): Response {
   const path = new URL(request.url).pathname;
   requests.push(path);
   if (missingArchives.has(path)) return new Response("archive unavailable", { status: 404 });
-  if (archives.has(path)) return new Response(archives.get(path));
+  const archive = archives.get(path);
+  if (archive) return new Response(Uint8Array.from(archive).buffer);
   const name = decodeURIComponent(path.slice(1));
   return metadata.has(name) ? Response.json({ name, versions: metadata.get(name) }) : new Response("fixture unavailable", { status: 404 });
 } });
@@ -46,7 +54,10 @@ async function cleanup() {
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => void cleanup().then(() => process.exit(130)));
 function json(value: unknown) { return JSON.stringify(value, null, 2); }
 function yaml(value: unknown) { return Bun.YAML.stringify(value, null, 2); }
-function pkg(name: string, version: string, extra: Manifest = {}) { return packageFixture(name, version, extra); }
+function pkg(name: string, version: string, extra: Manifest = {}): Fixture {
+  const fixture = packageFixture(name, version, extra);
+  return { ...fixture, manifest: { ...extra, ...fixture.manifest, name, version } };
+}
 function npm(manifest: Manifest, rows: Record<string, unknown>) { return { "package-lock.json": json({ lockfileVersion: 3, packages: { "": manifest, ...rows } }) }; }
 function npmRow(p: Fixture, transport = `${base}/${p.manifest.name}/-/${p.manifest.name.split("/").at(-1)}-${p.manifest.version}.tgz`) { return { ...p.manifest, resolved: transport, integrity: p.integrity }; }
 function pnpm(manifest: Manifest, packages: Fixture[], selections?: Record<string, unknown>) {
@@ -58,7 +69,7 @@ function pnpm(manifest: Manifest, packages: Fixture[], selections?: Record<strin
 function berry(manifest: Manifest, packages: Fixture[], selectors: Record<string, string> = {}) {
   const rows: Record<string, unknown> = { __metadata: { version: 8 }, "review@workspace:.": { version: "0.0.0-use.local", resolution: "review@workspace:.", dependencies: manifest.dependencies } };
   for (const p of packages) {
-    const entry = { ...p.manifest, resolution: `${p.manifest.name}@npm:${p.manifest.version}` };
+    const entry: Manifest = { ...p.manifest, resolution: `${p.manifest.name}@npm:${p.manifest.version}` };
     if (p.manifest.optionalDependencies) {
       entry.dependencies = { ...entry.dependencies, ...p.manifest.optionalDependencies };
       entry.dependenciesMeta = Object.fromEntries(Object.keys(p.manifest.optionalDependencies).map(name => [name, { optional: true }]));
