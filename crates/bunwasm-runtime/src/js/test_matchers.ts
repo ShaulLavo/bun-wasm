@@ -52,17 +52,21 @@
       if (!isPromise<unknown>(value) || records.has(value)) return value;
       const descriptor = Object.getOwnPropertyDescriptor(value, "constructor");
       const prototype: object = Object.getPrototypeOf(value);
-      const restore = () => descriptor ? Reflect.defineProperty(value, "constructor", descriptor) : Reflect.deleteProperty(value, "constructor");
+      function restore() {
+        if (Object.getOwnPropertyDescriptor(value, "constructor")?.get !== observedConstructor) return;
+        return descriptor ? Reflect.defineProperty(value, "constructor", descriptor) : Reflect.deleteProperty(value, "constructor");
+      }
       const record: Record = { observed: false, restore, result: react<unknown, Settlement>(value,
         () => ({ kind: "fulfilled" }), error => ({ kind: "rejected", error }),
       ) };
       // Await reads constructor before retaining a native promise's fulfillment without re-assimilation.
-      Object.defineProperty(value, "constructor", { configurable: true, get() {
+      function observedConstructor() {
         record.observed = true;
         restore();
         if (!descriptor) return Reflect.get(prototype, "constructor", value);
         return "value" in descriptor ? descriptor.value : descriptor.get?.call(value);
-      } });
+      }
+      Object.defineProperty(value, "constructor", { configurable: true, get: observedConstructor });
       records.set(value, record);
       return value;
     }
