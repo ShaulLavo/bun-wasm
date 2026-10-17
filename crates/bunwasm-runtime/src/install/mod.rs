@@ -130,7 +130,11 @@ fn execute(command: &str, args: Vec<String>, parser: &dyn Transpiler) -> Result<
     let mut resolution_lock = locked.clone();
     if command == "update" {
         opts.refresh = true;
-        unlock(&mut resolution_lock, &opts);
+        unlock(
+            &mut resolution_lock,
+            &opts,
+            member.as_ref().and_then(|_| manifest["name"].as_str()),
+        );
     }
     let mut resolver = Resolver::new(registry, resolution_lock, opts.refresh);
     let project_manifest = if member.is_some() { &root_manifest } else { &manifest };
@@ -648,11 +652,15 @@ fn selected(name: &str, opts: &Options) -> bool {
             .any(|input| resolve::spec(input).is_ok_and(|(n, _)| n == name))
 }
 
-fn unlock(locked: &mut Value, opts: &Options) {
+fn unlock(locked: &mut Value, opts: &Options, workspace: Option<&str>) {
     let Some(packages) = locked["packages"].as_object_mut() else {
         return;
     };
-    packages.retain(|key, _| !selected(key, opts));
+    let prefix = workspace.map(|name| format!("{name}/"));
+    packages.retain(|key, _| {
+        let name = prefix.as_deref().and_then(|prefix| key.strip_prefix(prefix)).unwrap_or(key);
+        !selected(name, opts)
+    });
 }
 
 fn finalize_updates(manifest: &mut Value, opts: &Options, resolver: &Resolver, member: Option<&Path>) -> Result<()> {
