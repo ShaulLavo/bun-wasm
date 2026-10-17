@@ -114,7 +114,10 @@ The worker-execution fixture checks isolated globals, cyclic data, buffer and po
 transfers, queued messages, metadata, environment data, stdio, preload flags,
 errors, explicit exit, termination of an infinite loop and a message flood,
 nested workers, and references. The same fixture runs through real browser Web
-Workers in Chromium and WebKit for all engines.
+Workers in Chromium and WebKit for all engines. Acyclic browser modules use blob
+URLs because WebKit can start a fresh worker outside the module service worker's
+control. Import cycles retain named module URLs and require service-worker
+control, as before. This also applies to file workers and subprocesses.
 
 The `worker-review` cases also run directly on Node. They check unhandled errors
 and throwing lifecycle listeners, two-million-byte messages during explicit exit
