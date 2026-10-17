@@ -5,6 +5,20 @@
   type ExtractOptions = { glob?: string | string[] };
   type Source = Blob | ArrayBuffer | ArrayBufferView | Record<string, unknown>;
 
+  function copyEntry(value: unknown): Blob | Uint8Array | string {
+    if (value instanceof Blob) return new Blob([value]);
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return new Uint8Array(internal.toUint8(value));
+    return String(value);
+  }
+
+  function snapshot(source: Source): Source {
+    if (source instanceof Blob) return new Blob([source]);
+    if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) return new Uint8Array(internal.toUint8(source));
+    const entries: Record<string, unknown> = Object.create(null);
+    for (const [name, value] of Object.entries(source)) entries[name] = copyEntry(value);
+    return entries;
+  }
+
   function patterns(value: unknown): string[] {
     if (value === undefined) return [];
     if (typeof value === "string") return [value];
@@ -29,12 +43,12 @@
       if (options.level !== undefined && (!Number.isInteger(options.level) || options.level < 1 || options.level > 12)) {
         throw new RangeError("Compression level must be between 1 and 12");
       }
-      this.#source = source;
+      this.#source = snapshot(source);
       this.#options = { ...options };
     }
     async bytes(): Promise<Uint8Array> {
       const source = this.#source;
-      if (source instanceof Blob || source instanceof ArrayBuffer || ArrayBuffer.isView(source)) return bytes(source);
+      if (source instanceof Blob || source instanceof ArrayBuffer || ArrayBuffer.isView(source)) return new Uint8Array(await bytes(source));
       const entries: [string, Uint8Array][] = [];
       for (const [path, content] of Object.entries(source)) entries.push([path, await bytes(content)]);
       return native.create(entries, this.#options.compress === "gzip", this.#options.level ?? 6, this.#mtime);

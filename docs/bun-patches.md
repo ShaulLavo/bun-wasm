@@ -18,6 +18,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Compression and archive adapters](#compression-and-archive-adapters) | Host feature | Original TypeScript API adapters over Bun's Rust Zstd and portable Rust codec and tar libraries. |
 | [`third_party/tar/src/entry.rs`, symlink timestamp adapter](#tar-wasi-extraction) | Host feature | Original Rust adapter for no-follow WASI timestamp updates. |
+| [`third_party/tar/src/pax_sparse.rs`, GNU PAX sparse adapter](#tar-wasi-extraction) | Host feature | Original GNU PAX sparse 1.0 parser that feeds the upstream sparse block reader. |
 | [`third_party/tar/`, WASI extraction](#tar-wasi-extraction) | Port | WASI symlink support and permission handling over the unchanged tar extractor. |
 | [Compression constants](#compression-and-archive-adapters) | Port | Public Brotli and Zstd constant names and integer values for the Node adapter. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
@@ -1613,5 +1614,13 @@ checked nanosecond conversion. `filetime` has no wasm implementation of that
 operation. Permission application succeeds without changing mode bits because
 WASI Preview 1 exposes no chmod operation. Upstream rejects these filesystem
 operations on every wasm target, causing otherwise valid extraction to fail.
-Other targets keep their original behavior. Header parsing, destination checks,
-link checks, sparse-file handling and archive writing remain upstream code.
+Other targets keep their original filesystem behavior. Header parsing,
+destination checks, link checks and archive writing remain upstream code.
+
+`src/pax_sparse.rs` is an original adapter for GNU PAX sparse 1.0 members, matching
+the format produced by GNU tar and Bun's pinned `test/js/bun/archive.test.ts`.
+The parser validates decimal map values, block order, logical size and stored
+payload length, then builds the upstream `EntryIo::Pad` and `EntryIo::Data` list.
+`src/archive.rs` dispatches PAX members to it. Existing GNU sparse parsing and the
+upstream extraction and seeking paths remain intact. Other GNU PAX sparse
+versions report an unsupported-format error.

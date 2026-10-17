@@ -131,6 +131,7 @@
   }
 
   async function dataBytes(data) {
+    if (data instanceof internal.require("archive").Archive) return data.bytes();
     if (data instanceof Response) return new Uint8Array(await data.arrayBuffer());
     if (data instanceof Blob) return data._bytes();
     if (typeof data === "string") return native.utf8Encode(data);

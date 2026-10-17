@@ -24,6 +24,14 @@ assert.equal(await new Bun.Archive({ "empty/": "", "package/file.txt": "package"
 assert.equal(statSync("directories/empty").isDirectory(), true);
 assert.equal(await Bun.Archive.write("saved.tar", new Bun.Archive({ "saved.txt": "saved" })), (await Bun.file("saved.tar").bytes()).length);
 assert.equal((await new Bun.Archive(await Bun.file("saved.tar").bytes()).files()).size, 1);
+const originalData = new Uint8Array([1, 2, 3]);
+const originalEntries = { "data.bin": originalData };
+const immutable = new Bun.Archive(originalEntries);
+originalData[0] = 255;
+originalEntries["data.bin"] = new Uint8Array([9]);
+assert.deepEqual(new Uint8Array(await (await immutable.files()).get("data.bin")!.arrayBuffer()), new Uint8Array([1, 2, 3]));
+await Bun.write("via-bun.tar", immutable);
+assert.deepEqual(new Uint8Array(await (await new Bun.Archive(await Bun.file("via-bun.tar").bytes()).files()).get("data.bin")!.arrayBuffer()), new Uint8Array([1, 2, 3]));
 await assert.rejects(() => new Bun.Archive(new Uint8Array([1, 2, 3])).files());
 mkdirSync("guard");
 symlinkSync("..", "guard/link");
@@ -37,6 +45,31 @@ const original = await new Bun.Archive({ "hello.txt": "linked" }).bytes();
 await new Bun.Archive(Buffer.concat([original.subarray(0, -1024), link])).extract("linked");
 assert.equal(readlinkSync("linked/alias.txt"), "hello.txt");
 assert.equal(readFileSync("linked/alias.txt", "utf8"), "linked");
+function paxField(key: string, value: string): Uint8Array {
+  const content = new TextEncoder().encode(`${key}=${value}\n`);
+  for (let length = content.length + 2; ; length++) {
+    const prefix = new TextEncoder().encode(`${length} `);
+    if (prefix.length + content.length === length) return Buffer.concat([prefix, content]);
+  }
+}
+const pax = Buffer.concat([
+  paxField("GNU.sparse.major", "1"), paxField("GNU.sparse.minor", "0"),
+  paxField("GNU.sparse.name", "sparse.bin"), paxField("GNU.sparse.realsize", "4096"),
+]);
+const paxHeader = await new Bun.Archive({ "PaxHeaders/sparse": pax }).bytes();
+paxHeader[156] = 120;
+checksum(paxHeader);
+const sparseBody = new Uint8Array(515);
+sparseBody.set(new TextEncoder().encode("2\n0\n3\n4096\n0\n"));
+sparseBody.set([1, 2, 3], 512);
+const sparseTar = await new Bun.Archive({ "GNUSparseFile.0/sparse.bin": sparseBody }).bytes();
+const sparse = new Bun.Archive(Buffer.concat([paxHeader.subarray(0, -1024), sparseTar]));
+const sparseFile = (await sparse.files()).get("sparse.bin")!;
+assert.equal(sparseFile.size, 4096);
+assert.deepEqual(new Uint8Array(await sparseFile.arrayBuffer()).subarray(0, 3), new Uint8Array([1, 2, 3]));
+assert.equal(await sparse.extract("sparse"), 1);
+assert.equal(statSync("sparse/sparse.bin").size, 4096);
+assert.equal(readFileSync("sparse/sparse.bin")[4095], 0);
 for (const time of [1n << 62n, -1n, 0n]) {
   const timestamp = await new Bun.Archive({ "time.txt": "" }).bytes();
   let field = time;

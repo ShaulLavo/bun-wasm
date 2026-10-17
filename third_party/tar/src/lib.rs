@@ -53,6 +53,7 @@ pub use crate::header::{GnuHeader, GnuSparseHeader, Header, HeaderMode, OldHeade
 pub use crate::pax::{PaxExtension, PaxExtensions};
 
 mod archive;
+mod pax_sparse;
 mod builder;
 mod entry;
 mod entry_type;

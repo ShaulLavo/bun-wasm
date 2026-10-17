@@ -452,7 +452,7 @@ impl<'a> EntriesFields<'a> {
 
     fn parse_sparse_header(&mut self, entry: &mut EntryFields<'a>) -> io::Result<()> {
         if !entry.header.entry_type().is_gnu_sparse() {
-            return Ok(());
+            return crate::pax_sparse::parse(entry, &self.archive.inner);
         }
         let gnu = match entry.header.as_gnu() {
             Some(gnu) => gnu,
