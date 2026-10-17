@@ -1,11 +1,11 @@
+import { waitStatus } from "../../runtime/proc/wait-status.ts";
 import { expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
+import { claimOutcome, outcomeWord, processOutcome, readOutcome } from "../../runtime/proc/outcome.ts";
 import { createSignalState, publishSignal, setSignalDisposition } from "../../runtime/proc/signals.ts";
 import { SharedPipe, SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "../src/subprocess.ts";
 import type { RunRequest, WorkerMessage } from "../src/worker.ts";
-import { executableNotFound } from "../src/spawn-error.ts";
 import type { Stream } from "../../runtime/core/descriptors.ts";
 
 // Execute the actual worker lifecycle with host boundaries injected, without replacing runner globals.
@@ -22,7 +22,6 @@ class TestWasiExit extends Error { constructor(readonly code: number) { super("e
 
 async function run(options: {
   adapter?: RunRequest["adapter"];
-  spawnBroker?: RunRequest["spawnBroker"];
   instantiateError?: boolean;
   onMessage?(message: WorkerMessage): void;
   onSubprocess?(host: SubprocessHost): void;
@@ -58,7 +57,7 @@ async function run(options: {
   };
   const outcome = options.outcome ?? (options.isolated === false ? undefined : new SharedArrayBuffer(8));
   const request = {
-    engine: "browser", adapter: options.adapter, spawnBroker: options.spawnBroker, module: {}, args: ["fixture"], env: {},
+    engine: "browser", adapter: options.adapter, module: {}, args: ["fixture"], env: {},
     filesystem, trace: false, net: null, moduleCache: null, slots: "off", child: options.child,
     signalState: options.signalState, outcome, interrupt: options.interrupt, requestedSignal: options.requestedSignal,
   } as unknown as RunRequest;
@@ -75,7 +74,6 @@ async function run(options: {
     },
     FilesystemClient: class {
       connection = filesystem;
-      lookup() { return { kind: "dir" }; }
       dispose() { events.push("dispose fs"); }
     },
     revokeFilesystem() { revoked = true; events.push("revoke"); },
@@ -87,8 +85,8 @@ async function run(options: {
         options.onSubprocess?.(this);
       }
     },
-    childTransport, wasiPipe, executableNotFound,
-    claimOutcome, outcomeWord, readOutcome,
+    childTransport, wasiPipe,
+    claimOutcome, outcomeWord, processOutcome, readOutcome, waitStatus,
     HOST_CALL_FD: 3,
     WasiExit: TestWasiExit,
     Wasi: class {
@@ -420,10 +418,10 @@ test("a previously selected child fatal outcome suppresses later unrelated diagn
   } finally { parent.dispose(); }
 });
 
-test("worker startup errors report their selected 126 outcome with diagnostics", async () => {
+test("worker startup errors retain EACCES while the root shell reports 126 with diagnostics", async () => {
   const result = await run({ instantiateError: true });
   expect(exits(result.messages)).toMatchObject([{ type: "error", code: 126, message: expect.stringContaining("instantiate diagnostic") }]);
-  expect(readOutcome(outcomeWord(result.outcome!))).toMatchObject({ kind: "exited", code: 126 });
+  expect(readOutcome(outcomeWord(result.outcome!))).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
 });
 
 test("caught non-isolated fatal defaults notify logical death before the guest releases its turn", async () => {
@@ -516,21 +514,4 @@ test("ordinary numeric signal-like exit remains an ordinary exit", async () => {
 test("non-isolated workers retain ordinary execution without SharedArrayBuffer", async () => {
   const result = await run({ isolated: false, adapter: "preview1", launch: () => 23 });
   expect(exits(result.messages)).toEqual([{ type: "exit", code: 23, signal: undefined, sleep: "busy-wait" }]);
-});
-
-test("page Bun workers reject unregistered commands before posting a filesystem transfer", async () => {
-  let host!: SubprocessHost;
-  await run({
-    spawnBroker: { executables: ["bun", "custom.wasm"] },
-    onSubprocess(value) { host = value; },
-    engine() {
-      expect(host.spawn(JSON.stringify({ argv: ["missing", "argument"] }))).toBe(-1);
-      expect(JSON.parse(host.lastError!)).toMatchObject({
-        code: "ENOENT", errno: -2, path: "missing", message: 'Executable not found in $PATH: "missing"',
-      });
-      expect(host.children.size).toBe(0);
-      expect(host.handles.size).toBe(0);
-      return 0;
-    },
-  });
 });

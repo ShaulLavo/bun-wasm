@@ -39,6 +39,7 @@ interface Child {
   request?: RunRequest;
   signal: number;
   acknowledged: boolean;
+  started?: boolean;
   confirmed: boolean;
   closed: boolean;
   stopped: boolean;
@@ -53,6 +54,7 @@ interface RuntimeChild {
   request: RunRequest;
   worker: Worker;
   acknowledged: boolean;
+  started?: boolean;
   failed?: boolean;
   stopped: boolean;
   stopping?: Promise<void>;
@@ -106,7 +108,6 @@ export class SubprocessBroker {
     if (this.activation) throw new Error("Register executables before the first spawn");
     this.registrations.set(name, entry);
   }
-  executableNames(): string[] { return Array.from(this.registrations.keys()); }
 
   ready(): Promise<ProcessSupervisor> {
     return this.activation ??= (this.options.activate?.() ?? import("../../runtime/proc")).then(proc => {
@@ -253,7 +254,7 @@ export class SubprocessBroker {
     const result = record && readOutcome(record.outcome);
     const executable = record?.request?.executable;
     const refused = executable && this.loaderErrors.get(executable);
-    if (!refused || result?.kind !== "exited" || result.code !== 126) return;
+    if (!refused || result?.kind !== "start-failed" || result.error !== "EACCES") return;
     this.diagnosedRuntimeRefusals.add(transport);
     const stderr = record!.descriptors.get(2)?.resource;
     if (stderr?.kind !== "pipe" && stderr?.kind !== "terminal") return;
@@ -270,10 +271,10 @@ export class SubprocessBroker {
     if (child) {
       child.confirmed = true;
       const refused = this.loaderErrors.get(child.spawn.executable);
-      if (refused && !child.worker && event.result.kind === "exited" && event.result.code === 126) {
+      if (refused && !child.worker && event.result.kind === "start-failed" && event.result.error === "EACCES") {
         childTransport(child.spawn.child).stderr.write(new TextEncoder().encode(`bun-wasm: ${child.spawn.executable}: ${refused}\n`));
       }
-      childTransport(child.spawn.child).finish(event.result.status, event.result.kind === "signaled" ? event.result.code : undefined);
+      childTransport(child.spawn.child).complete(event.result);
       if (!child.acknowledged) this.filesystem.revoke(child.spawn.filesystem);
       if (!child.worker || child.stopped) this.children.delete(event.pid);
     }
@@ -306,7 +307,7 @@ export class SubprocessBroker {
       return supervisor.start(spawn.pid);
     }).catch(error => {
       childTransport(spawn.child).stderr.write(new TextEncoder().encode(`bun-wasm: process start failed: ${String(error)}\n`));
-      childTransport(spawn.child).finish(126);
+      childTransport(spawn.child).startFailed("EACCES");
       this.filesystem.revoke(spawn.filesystem);
       this.children.delete(spawn.pid);
     });
@@ -330,7 +331,7 @@ export class SubprocessBroker {
       filesystem: this.filesystem.connect(spawn.filesystem), child: spawn.child,
       pid: spawn.pid, jobId: spawn.jobId, identity: spawn.child.identity, interrupt: spawn.child.interrupt,
       signalState: spawn.child.signalState, requestedSignal: spawn.child.requestedSignal, outcome: spawn.child.outcome,
-      trace: spawn.trace, slots: spawn.slots, spawnBroker: { executables: this.executableNames() }, net: null, moduleCache: null,
+      trace: spawn.trace, slots: spawn.slots, spawnBroker: true, net: null, moduleCache: null,
     };
     if (!preview1 && engine === "browser" && new URL(this.workerUrl).pathname.endsWith("/__bunwasm/worker.js")) request.moduleCache = `bunwasm-m-${crypto.randomUUID()}`;
     child.request = request;
@@ -345,6 +346,7 @@ export class SubprocessBroker {
       transport.stdout.close(); transport.stderr.close();
     });
     worker.onmessage = ({ data }: MessageEvent<WorkerMessage>) => {
+      if (data.type === "phase" && data.name === "instantiate") child.started = true;
       const selected = readOutcome(outcomeWord(spawn.child.outcome));
       if (data.type === "runtime-proc") {
         if (selected?.kind === "signaled" || isRevoked(spawn.filesystem)) this.rejectRuntimeMessage(data, context.pid);
@@ -376,6 +378,7 @@ export class SubprocessBroker {
     worker.onerror = event => {
       event.preventDefault();
       childTransport(spawn.child).stderr.write(new TextEncoder().encode(`bun-wasm: child worker failed: ${event.message}\n`));
+      if (!child.started) claimOutcome(context.outcome, { kind: "start-failed", code: 13 });
       context.fail(new Error(event.message));
       // Error events are not quiescent acknowledgements. The outcome is already selected,
       // but filesystem work must drain before exit confirmation or physical termination.
@@ -401,7 +404,7 @@ export class SubprocessBroker {
       adapter: preview1 ? "preview1" : "bun", interruptible, args: context.request.argv,
       env: { ...context.request.env, PWD: context.request.cwd },
       filesystem: this.filesystem.connect(filesystem), runtimeProcess: transport,
-      pid: context.pid, jobId: context.job, trace: false, spawnBroker: { executables: this.executableNames() }, net: null, moduleCache: null,
+      pid: context.pid, jobId: context.job, trace: false, spawnBroker: true, net: null, moduleCache: null,
     };
     if (!preview1 && request.engine === "browser" && new URL(this.workerUrl).pathname.endsWith("/__bunwasm/worker.js")) request.moduleCache = `bunwasm-m-${crypto.randomUUID()}`;
     let worker: Worker;
@@ -416,6 +419,7 @@ export class SubprocessBroker {
       this.filesystem.revoke(filesystem);
     });
     worker.onmessage = ({ data }: MessageEvent<WorkerMessage>) => {
+      if (data.type === "phase" && data.name === "instantiate") child.started = true;
       const selected = readOutcome(context.outcome);
       if (data.type === "runtime-proc") {
         if (selected?.kind === "signaled" || (!selected && isRevoked(filesystem))) this.rejectRuntimeMessage(data, context.pid);
@@ -449,6 +453,7 @@ export class SubprocessBroker {
       // No ordered final message will follow a host failure. This permits confirmation,
       // but is not an acknowledgement: quiesceChild must still drain filesystem work.
       child.failed = true;
+      if (!child.started) claimOutcome(context.outcome, { kind: "start-failed", code: 13 });
       context.fail(new Error(event.message));
       this.stopRuntimeSafely(child);
     };
@@ -507,7 +512,7 @@ export class SubprocessBroker {
       if (delivery.action !== "ignore") child.signal = Atomics.load(new Int32Array(child.spawn.child.requestedSignal), 0);
       if (delivery.outcome) {
         this.filesystem.revoke(child.spawn.filesystem);
-        childTransport(child.spawn.child).finish(delivery.outcome.status, delivery.outcome.kind === "signaled" ? delivery.outcome.code : undefined);
+        childTransport(child.spawn.child).complete(delivery.outcome);
         if (child.worker) this.stopSafely(child);
       }
     }
@@ -615,7 +620,7 @@ export class SubprocessBroker {
       Atomics.store(new Int32Array(spawn.child.interrupt), 0, 9);
     }
     this.filesystem.revoke(spawn.filesystem);
-    childTransport(spawn.child).finish(result.status, result.kind === "signaled" ? result.code : undefined);
+    childTransport(spawn.child).complete(result);
   }
   private watch(): void {
     if (this.timer !== null || this.disposed) return;

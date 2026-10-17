@@ -2,15 +2,19 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
-import { SubprocessHost } from "../src/subprocess.ts";
+import { SubprocessHost, childTransport } from "../src/subprocess.ts";
 import { launchNodeExecutable } from "../scripts/node-spawn.ts";
 
 const require = createRequire(import.meta.url);
 const source = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/spawn.js", import.meta.url), "utf8");
-function fixture() {
+function fixture(failure?: "ENOENT" | "EACCES") {
   const host = new SubprocessHost({
     output() {},
-    launch(meta, transport) { return launchNodeExecutable(meta, transport, () => { throw new Error("unexpected launch"); }); },
+    launch(meta, transport) {
+      if (!failure) return launchNodeExecutable(meta, transport, () => { throw new Error("unexpected launch"); });
+      childTransport(transport).startFailed(failure);
+      return { terminate() {} };
+    },
   });
   const api = runInNewContext(source, { process: { env: {} }, URL, setImmediate })({
     require, builtin: require, nextTick: process.nextTick,
@@ -78,5 +82,36 @@ test("Node spawnSync returns an ENOENT error with null status", () => {
     expect(result.output).toBeNull();
     expect(result.stdout).toBeNull();
     expect(result.stderr).toBeNull();
+  } finally { host.dispose(); }
+});
+
+test("the Bun host waits for a real worker startup result before returning a child", () => {
+  const result = Bun.spawnSync(["node", "--no-warnings", new URL("./spawn-start-probe.ts", import.meta.url).pathname]);
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr.toString()).toBe("");
+  expect(result.stdout.toString()).toBe("startup acknowledgement and typed failures passed\n");
+});
+
+for (const method of ["spawn", "spawnSync"]) test(`Bun.${method} throws EACCES for an unrunnable executable`, () => {
+  const { host, api } = fixture("EACCES");
+  try {
+    let caught;
+    try { api[method](["broken"]); } catch (error) { caught = error; }
+    expect(caught).toMatchObject({ name: "Error", code: "EACCES", errno: -13, path: "broken" });
+    const result = api.nodeChildProcess().spawnSync("broken", ["argument"]);
+    expect(result.error).toMatchObject({ code: "EACCES", errno: -13, syscall: "spawnSync broken", path: "broken", spawnargs: ["argument"] });
+    expect(result.status).toBeNull();
+  } finally { host.dispose(); }
+});
+
+test("Node spawn reports EACCES before close for an unrunnable executable", async () => {
+  const { host, api } = fixture("EACCES");
+  try {
+    const child = api.nodeChildProcess().spawn("broken", ["argument"]);
+    let failure;
+    child.on("error", (error: Error) => { failure = error; });
+    await new Promise(resolve => child.once("close", resolve));
+    expect(failure).toMatchObject({ code: "EACCES", errno: -13, syscall: "spawn broken", path: "broken", spawnargs: ["argument"] });
+    expect(child.pid).toBeUndefined();
   } finally { host.dispose(); }
 });
