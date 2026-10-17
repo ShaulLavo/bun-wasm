@@ -172,7 +172,7 @@ rebuilt artifacts are retained in
 
 ## Second review: fulfilled handlers and failed end tags
 
-Current main through `b14f536f` is merged for this review. The targeted run adds
+Current main through `ab027f91` is merged for this review. The targeted run adds
 an already-fulfilled native Promise whose value has a stateful `then` getter.
 Completion now discards that value, so successful handlers do not read its
 accessor twice. A streamed void-element regression catches `No end tag.`, forces
