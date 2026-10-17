@@ -43,3 +43,16 @@ unsafe extern "C" {
         output_len: *mut usize,
     ) -> i32;
 }
+
+unsafe extern "C" {
+    pub fn bunwasm_key_encoding(
+        op: i32,
+        input: *const u8,
+        input_len: usize,
+        password: *const u8,
+        password_len: usize,
+        cipher: *const std::ffi::c_char,
+        out: *mut u8,
+        capacity: usize,
+    ) -> usize;
+}

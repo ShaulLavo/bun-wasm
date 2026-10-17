@@ -1,0 +1,1 @@
+Native Bun throws in streamed verification. Node 26 returns false there; both reject one-shot verification. The runtime follows Bun and the explicit review requirement.

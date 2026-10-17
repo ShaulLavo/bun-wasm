@@ -706,6 +706,10 @@ fn install_encoding(t: &mut Table) {
 }
 
 fn install_crypto(t: &mut Table) {
+    t.add("timingSafeEqual", |a| {
+        use subtle::ConstantTimeEq;
+        Ok(Val::Bool(bool::from(a.bytes(0)?.ct_eq(a.bytes(1)?))))
+    });
     t.add("cryptoOp", |a| Ok(crate::crypto::request(a.str(0)?).into()));
     t.add("randomBytes", |a| {
         let mut buf = vec![0u8; a.num(0)? as usize];

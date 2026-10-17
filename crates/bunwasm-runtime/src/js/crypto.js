@@ -559,7 +559,18 @@
     }
   }
   internal.crypto = {
+    supportsAlgorithm: name => names.some(item => item.toUpperCase() === name.toUpperCase()),
     isKey: (value) => material.has(value),
+    isWasmKey: (value) => material.has(value) && !material.get(value).nativeKey,
+    rememberKey(key, jwk) {
+      const data = { ...jwk };
+      for (const field of ["alg", "ext", "key_ops", "use"]) delete data[field];
+      material.set(key, {
+        algorithm: copy(key.algorithm), displayAlgorithm: key.algorithm,
+        type: key.type, extractable: key.extractable, usages: Array.from(key.usages),
+        key: data, nativeKey: key,
+      });
+    },
     record,
     makeKey,
     generate,
@@ -575,6 +586,10 @@
     decode,
     keyAlgorithm,
   };
+  if (native.subtleCrypto) {
+    Object.setPrototypeOf(CryptoKey.prototype, native.CryptoKey.prototype);
+    internal.require("crypto_host_keys");
+  }
   return (defineGlobal) => {
     defineGlobal("Crypto", Crypto);
     Object.setPrototypeOf(globalThis.crypto, Crypto.prototype);

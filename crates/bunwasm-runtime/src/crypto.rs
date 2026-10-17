@@ -1,3 +1,4 @@
+use bunwasm_crypto_sys::bunwasm_key_encoding;
 use bunwasm_crypto_sys::{
     bunwasm_rsa, bunwasm_rsa_der, bunwasm_rsa_field, bunwasm_rsa_free,
     bunwasm_rsa_from_jwk, bunwasm_rsa_generate, bunwasm_rsa_parse,
@@ -34,7 +35,12 @@ fn decode(s: &str) -> Vec<u8> {
     crate::encoding::base64_decode(s)
 }
 fn bytes(v: &J, key: &str) -> Result<Vec<u8>> {
-    Ok(decode(text(v, key)?))
+    let encoded = text(v, key)?;
+    let decoded = decode(encoded);
+    if b64(&decoded) != encoded {
+        return Err("DataError");
+    }
+    Ok(decoded)
 }
 fn b64(b: &[u8]) -> String {
     crate::encoding::base64_encode(b, true)
@@ -59,6 +65,7 @@ pub fn request(input: &str) -> String {
 fn dispatch(q: &J) -> Result<J> {
     let alg = &q["algorithm"];
     match text(q, "op")? {
+        "keyEncoding" => key_encoding(q),
         "generate" => generate(alg),
         "import" => import(alg, text(q, "format")?, &bytes(q, "data")?),
         "export" => export(alg, text(q, "format")?, &q["key"]),
@@ -140,10 +147,15 @@ impl RsaKey {
 fn rsa_format(format: &str, bytes: &[u8]) -> Result<(RsaKey, bool)> {
     if format == "jwk" {
         let k: J = data(serde_json::from_slice(bytes))?;
+        if text(&k, "kty")? != "RSA" {
+            return Err("DataError");
+        }
         let private = k["d"].is_string();
         return Ok((RsaKey::from_jwk(&k)?, private));
     }
     let (inner, private) = match format {
+        "pkcs1-private" => (bytes, true),
+        "pkcs1-public" => (bytes, false),
         "pkcs8" => {
             let info = data(pkcs8::PrivateKeyInfo::try_from(bytes))?;
             if info.algorithm.oid.to_string() != "1.2.840.113549.1.1.1" {
@@ -174,6 +186,8 @@ fn rsa_export(format: &str, k: &J) -> Result<J> {
         parameters: Some(pkcs8::der::asn1::AnyRef::NULL),
     };
     match format {
+        "pkcs1-private" => Ok(output(key.der(true)?)),
+        "pkcs1-public" => Ok(output(key.der(false)?)),
         "pkcs8" => {
             let inner = key.der(true)?;
             Ok(output(data(
@@ -272,6 +286,9 @@ fn ec_import(a: &J, format: &str, b: &[u8]) -> Result<J> {
     macro_rules! curve {
         ($c:ident) => {
             match format {
+                "sec1" => Ok(data(serde_json::from_str(
+                    &data($c::SecretKey::from_sec1_der(b))?.to_jwk_string(),
+                ))?),
                 "pkcs8" => Ok(data(serde_json::from_str(
                     &data($c::SecretKey::from_pkcs8_der(b))?.to_jwk_string(),
                 ))?),
@@ -402,6 +419,10 @@ fn ec_export(a: &J, format: &str, k: &J) -> Result<J> {
     macro_rules! curve {
         ($c:ident) => {
             match format {
+                "sec1" => Ok(output(
+                    data(data($c::SecretKey::from_jwk_str(&k.to_string()))?.to_sec1_der())?
+                        .as_slice(),
+                )),
                 "pkcs8" => Ok(output(
                     data(data($c::SecretKey::from_jwk_str(&k.to_string()))?.to_pkcs8_der())?
                         .as_bytes(),
@@ -508,11 +529,12 @@ fn ec_sign(a: &J, k: &J, input: &[u8], sig: &[u8], verify: bool) -> Result<J> {
         if !verify {
             let key=data($c::ecdsa::SigningKey::from_slice(&bytes(k,"d")?))?;
             let s: $c::ecdsa::Signature=operation(key.sign_prehash(&digest))?;
-            return Ok(output(s.to_bytes()));
+            return Ok(output(if a["der"].as_bool().unwrap_or(false) {s.to_der().as_bytes().to_vec()} else {s.to_bytes().to_vec()}));
         }
         let public=data($c::PublicKey::from_jwk_str(&k.to_string()))?;
         let key=$c::ecdsa::VerifyingKey::from(public);
-        Ok(json!({"verified":$c::ecdsa::Signature::from_slice(sig).is_ok_and(|s| key.verify_prehash(&digest,&s).is_ok())}))
+        let parsed=if a["der"].as_bool().unwrap_or(false) {$c::ecdsa::Signature::from_der(sig)} else {$c::ecdsa::Signature::from_slice(sig)};
+        Ok(json!({"verified":parsed.is_ok_and(|s| key.verify_prehash(&digest,&s).is_ok())}))
     }}; }
     match text(a, "namedCurve")? {
         "P-256" => curve!(p256),
@@ -527,6 +549,7 @@ fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J
     let der = key.der(private)?;
     let hash = match text(a, "hash")? {
         "SHA-1" => 1,
+        "SHA-224" => 224,
         "SHA-256" => 256,
         "SHA-384" => 384,
         "SHA-512" => 512,
@@ -534,7 +557,8 @@ fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J
     };
     let pss = text(a, "name")? == "RSA-PSS";
     let salt = if pss {
-        i32::try_from(number(a, "saltLength")?).map_err(|_| "OperationError")?
+        i32::try_from(a["saltLength"].as_i64().ok_or("OperationError")?)
+            .map_err(|_| "OperationError")?
     } else {
         0
     };
@@ -841,4 +865,39 @@ fn kw_crypt(key: &[u8], input: &[u8], encrypt: bool) -> Result<Vec<u8>> {
         32 => run!(aes::Aes256),
         _ => Err("DataError"),
     }
+}
+
+
+fn key_encoding(q: &J) -> Result<J> {
+    let input = bytes(q, "data")?;
+    let password = bytes(q, "password")?;
+    let cipher = data(std::ffi::CString::new(q["cipher"].as_str().unwrap_or("")))?;
+    let op = i32::try_from(number(q, "mode")?).map_err(|_| "DataError")?;
+    if !(0..=5).contains(&op) {
+        return Err("DataError");
+    }
+    let capacity = input
+        .len()
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(4096))
+        .ok_or("OperationError")?;
+    let mut out = vec![0; capacity];
+    // The adapter borrows the inputs and copies the encoded key into this buffer.
+    let size = unsafe {
+        bunwasm_key_encoding(
+            op,
+            input.as_ptr(),
+            input.len(),
+            password.as_ptr(),
+            password.len(),
+            cipher.as_ptr(),
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    if size == 0 || size > out.len() {
+        return Err("OperationError");
+    }
+    out.truncate(size);
+    Ok(output(out))
 }

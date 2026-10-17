@@ -86,3 +86,64 @@ passing yet. The separate regression fixtures pass on all three engines.
 These builds use the existing BoringSSL Release archive with assembly disabled. The default
 fresh build uses MinSizeRel. JSC uses the shared prebuilt C-loop engine. The measurements
 include the required workspace patch bump from 0.0.13 to 0.0.14.
+
+## Node key APIs
+
+`node:crypto` provides KeyObject, createSecretKey, createPrivateKey, createPublicKey,
+generateKeyPair and generateKeyPairSync, generateKey and generateKeySync, createSign,
+createVerify, sign and verify. Signing objects are Writable streams. Callback variants
+schedule work on the runtime event loop. PBKDF2 and HKDF expose sync and callback forms.
+
+Key-pair generation supports RSA, EC P-256/P-384, Ed25519 and X25519. Secret generation
+supports HMAC and AES. HMAC lengths round down to complete bytes, as in native Node.
+Asymmetric keys import and export JWK, PEM and DER. RSA also supports PKCS#1; EC supports
+SEC1. Private-key encryption uses BoringSSL for PEM PKCS#8/PKCS#1/SEC1 and DER PKCS#8,
+with byte-preserving passphrases. RSA-OAEP is also available through publicEncrypt and
+privateDecrypt. Other classic RSA encryption padding and privateEncrypt/publicDecrypt
+remain unsupported.
+
+KeyObject.from and KeyObject.toCryptoKey share key material with WebCrypto. The Node key
+family reflects the material: converting an RSA-PSS CryptoKey produces an RSA KeyObject,
+and converting an ECDH CryptoKey produces an EC KeyObject. Secret equality compares bytes;
+asymmetric equality compares canonical public encodings. Byte comparison runs in Rust
+through `subtle::ConstantTimeEq`.
+
+The Node key fixture includes six native Node encrypted-key vectors and signature checks.
+`scripts/generate-node-key-vectors.mjs` regenerates them. The fixture is marked manual
+because native Bun 1.4.2 reports the wrong private/public type for createPublicKey with
+encrypted PKCS#8 DER. The adapter returns a public key, matching Node. The upstream
+reproduction is recorded for the owner in `/work/reports/upstream-bugs/README.md`.
+
+With the Node key adapters, the same 24-file census records 270 observed passes on QuickJS
+and browser and 269 on JSC, with two fully passing signing files and no timeouts. The
+KeyObject file now collects: 75 passing, 12 failing, 31 skipped and one todo. Its former
+collection failure did not register those cases, so the overall observed totals increase.
+The complete fixture gate passes 108 fixtures on each engine, plus web checks and six HMR runs.
+
+| Node artifact | Size in bytes | Increase over WebCrypto | Gzip-9 increase |
+| --- | ---: | ---: | ---: |
+| bun.wasm | 13,295,126 | 459,727 | 161,864 |
+| bun-jsc.wasm | 49,465,549 | 655,102 | 184,277 |
+| bun-browser.wasm | 12,589,890 | 463,571 | 164,916 |
+
+An offline Next 15.5.6 browser-engine/native-host replay with PR 13's import transform and
+main's Next runtime fixes passes installation. Build advances beyond the missing crypto
+operation and stops at `TypeError: _promises.default.opendir is not a function`. Dev has no
+useful diagnostic; start is blocked by build. The replay is not a passing Next application.
+
+### Host key interop
+
+The browser engine keeps the original native SubtleCrypto object. Its key bridge retains
+private key records at asynchronous creation boundaries for Node's synchronous KeyObject
+operations. Generated non-extractable keys return as non-extractable native keys; the
+private records support the same KeyObject conversion as the wasm provider. Converting a
+native key back with the same algorithm, extractability and usages returns its native key.
+Keys created synchronously by Node APIs enter the native provider when a SubtleCrypto
+operation consumes them. This fills the native provider's inability to import a wasm key
+synchronously. The provider performs the cryptographic operation.
+
+Secret KeyObject conversion imports raw bytes, including HKDF and PBKDF2 material. RSA
+signature padding accepts the default, PKCS#1 v1.5 and PSS modes. Other values throw before
+the backend runs. Native Bun also throws on streamed verification; Node 26 returns false
+there, while its one-shot verification throws. The runtime follows the requested throwing
+behavior on both paths.
