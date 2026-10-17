@@ -493,12 +493,16 @@ fn graph(
         if range.starts_with("workspace:") || range.starts_with("link:") {
             continue;
         }
-        let meta = find_record(records, &name, &range)
-            .ok_or_else(|| format!("Missing migrated resolution for {name}@{range}"))?;
-        let row = record(&name, meta)?;
         if peer_satisfied(packages, &name, peer.as_deref()) {
             continue;
         }
+        let selected = find_record(records, &name, &range)
+            .ok_or_else(|| format!("Missing migrated resolution for {name}@{range}"))?;
+        let meta = peer
+            .as_ref()
+            .and_then(|range| peer_record(records, &name, range))
+            .unwrap_or(selected);
+        let row = record(&name, meta)?;
         let mut chain = parent;
         chain.push(name.clone());
         let key = if packages.get(&name).is_none_or(|old| old == &row) {
@@ -662,4 +666,22 @@ fn remove_optional_duplicates(meta: &mut Value) {
             meta.as_object_mut().unwrap().shift_remove(field);
         }
     }
+}
+
+fn peer_record<'a>(
+    records: &'a BTreeMap<String, Value>,
+    name: &str,
+    range: &str,
+) -> Option<&'a Value> {
+    records
+        .iter()
+        .filter_map(|(key, value)| {
+            let (logical, _) = key.split('(').next()?.rsplit_once('@')?;
+            let version = value["version"].as_str()?;
+            ((logical == name || value["name"].as_str() == Some(name))
+                && resolve::matches(version, range))
+            .then_some((version, value))
+        })
+        .max_by(|(left, _), (right, _)| resolve::order(left, right))
+        .map(|(_, value)| value)
 }

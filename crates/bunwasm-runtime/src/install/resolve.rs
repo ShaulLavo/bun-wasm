@@ -83,7 +83,7 @@ pub fn matches(version: &str, range: &str) -> bool {
     }
 }
 
-fn order(a: &str, b: &str) -> Ordering {
+pub(super) fn order(a: &str, b: &str) -> Ordering {
     let parse = |s: &[u8]| Version::parse_exact(SlicedString::init(s, s));
     match (parse(a.as_bytes()), parse(b.as_bytes())) {
         (Some(a_version), Some(b_version)) => a_version.order_without_build(b_version, a.as_bytes(), b.as_bytes()),
