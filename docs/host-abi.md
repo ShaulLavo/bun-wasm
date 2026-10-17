@@ -287,10 +287,10 @@ ordinary `process.exit(143)` reports `exitCode: 143, signalCode: null`, whereas
 selected SIGTERM reports `exitCode: null, signalCode: "SIGTERM"`. Signal requests
 and timeout flags do not classify the final outcome.
 
-Separate-guest workers use two additional control-pipe selectors, without reusing
-signal metadata selector 3. Selector 4 is parent-to-worker input (parent writes,
-worker reads); selector 5 is worker-to-parent output (worker writes, parent reads).
-The parent queries these with the worker's child handle; a worker queries its own
+Separate-guest workers and child IPC use two additional control-pipe selectors, without reusing
+signal metadata selector 3. Selector 4 is parent-to-child input (parent writes,
+child reads); selector 5 is child-to-parent output (child writes, parent reads).
+The parent queries these with the child's handle; a child queries its own
 endpoints with child handle 0. Handle 0 does not turn selector 3 into a pipe or
 provide root completion metadata. These private channels do not change stdio
 selectors 0–2 or their inheritance modes. Native worker completion closes its incoming

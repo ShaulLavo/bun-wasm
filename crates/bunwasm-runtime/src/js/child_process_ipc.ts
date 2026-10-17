@@ -4,6 +4,8 @@
   const encoder = new TextEncoder();
   const { Buffer } = internal.require("buffer");
   const AGAIN = -2;
+  const CHILD_CHANNEL_INPUT = 4;
+  const CHILD_CHANNEL_OUTPUT = 5;
   const marker = "BUNWASM_CHILD_IPC";
   type Callback = (error: Error | null) => void;
   type Frame = ["message", unknown] | ["disconnect"];
@@ -170,13 +172,13 @@
   }
   function connectNode(target: Target, child: Child, handle: number, value: Options) {
     child._ipcClosed = false;
-    attach(target, native.hostChildPipe(handle, 4), native.hostChildPipe(handle, 3), mode(value), true, undefined, () => { child._ipcClosed = true; });
+    attach(target, native.hostChildPipe(handle, CHILD_CHANNEL_OUTPUT), native.hostChildPipe(handle, CHILD_CHANNEL_INPUT), mode(value), true, undefined, () => { child._ipcClosed = true; });
   }
   function connectBun(child: Child, handle: number, value: Options) {
     child._ipcClosed = false;
     const target: Target = new (internal.require("events"))();
     const callback = value.ipc;
-    attach(target, native.hostChildPipe(handle, 4), native.hostChildPipe(handle, 3), mode(value), true,
+    attach(target, native.hostChildPipe(handle, CHILD_CHANNEL_OUTPUT), native.hostChildPipe(handle, CHILD_CHANNEL_INPUT), mode(value), true,
       typeof callback === "function" ? message => callback(message, child) : undefined, () => { child._ipcClosed = true; });
     Object.defineProperties(child, {
       connected: { get: () => target.connected },
@@ -191,7 +193,7 @@
     const serialization = process.env[marker];
     delete process.env[marker];
     if (serialization !== "json" && serialization !== "advanced") throw new Error("Invalid child IPC initialization");
-    attach(process, native.hostChildPipe(0, 3), native.hostChildPipe(0, 4), serialization, false);
+    attach(process, native.hostChildPipe(0, CHILD_CHANNEL_INPUT), native.hostChildPipe(0, CHILD_CHANNEL_OUTPUT), serialization, false);
   }
   function sendClosed(target: Target, args: unknown[]) {
     const callback = args.find(value => typeof value === "function") as Callback | undefined;

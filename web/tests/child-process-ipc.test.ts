@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
-import { SharedPipe } from "../src/subprocess.js";
+import { SharedPipe } from "../src/subprocess.ts";
 
 const path = new URL("../../crates/bunwasm-runtime/src/js/child_process_ipc.ts", import.meta.url).pathname;
 const emitted = Bun.spawnSync(["node", "-e", 'const fs=require("node:fs");const {stripTypeScriptTypes}=require("node:module");process.stdout.write(stripTypeScriptTypes(fs.readFileSync(process.argv[1],"utf8"),{mode:"strip"}));', path], { timeout: 10000 });
@@ -27,7 +27,11 @@ function channel(closed = false) {
   if (typeof factory !== "function") throw new Error("Expected the IPC factory");
   const ipc: unknown = factory({
     native: {
-      hostChildPipe: (_id: number, fd: number) => fd === 4 ? 11 : 12,
+      hostChildPipe: (_id: number, fd: number) => {
+        if (fd === 5) return 11;
+        if (fd === 4) return 12;
+        throw new Error(`Unexpected IPC selector ${fd}`);
+      },
       hostRead: () => input.read(),
       hostWrite: (_id: number, bytes: Uint8Array) => output.write(bytes),
       hostClose: (id: number) => { (id === 11 ? input : output).close(); return 0; },

@@ -210,7 +210,7 @@ worker paused inside a locked write followed by a rejected late write.
 
 Class **Host feature**, **original adapters** in `crates/bunwasm-runtime/src/lib.rs`,
 `src/natives.rs`, `src/js/{process,spawn,web}.js`, `web/scripts/node-host.mjs`,
-`web/scripts/node-stdio.ts`, `web/src/{subprocess.js,worker.ts}`, and
+`web/scripts/node-stdio.ts`, `web/src/{subprocess.ts,worker.ts}`, and
 `crates/bunwasm-host/src/process/{mod,pipe,stdio}.rs`, and its original `net/error.rs` error record.
 No Bun or Node implementation is copied or adapted for this change.
 Rust output natives return write errors with Node-style `EPIPE`, errno `-32`, and
