@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import * as path from "node:path";
 import { runInNewContext } from "node:vm";
 
-const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(readFileSync(new URL("../../crates/bunwasm-runtime/src/js/package_scripts.ts", import.meta.url), "utf8")));
+const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync("globalThis.factory = " + readFileSync(new URL("../../crates/bunwasm-runtime/src/js/package_scripts.ts", import.meta.url), "utf8")));
 function fixture(check: (cwd: string) => void) {
   const cwd = mkdtempSync("/work/tmp/bun-wasm-script-resolution-");
   try { check(cwd); } finally { rmSync(cwd, { recursive: true, force: true }); }
