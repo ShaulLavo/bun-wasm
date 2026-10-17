@@ -12,12 +12,13 @@ let cleaned = false;
 async function cleanup() {
   if (cleaned) return;
   cleaned = true;
+  const exits = Array.from(children, child => new Promise<void>(resolve => { child.once("close", () => resolve()); }));
   for (const child of children) child.kill("SIGKILL");
+  await Promise.all(exits);
   await registry?.close();
   rmSync(scratch, { recursive: true, force: true });
 }
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => void cleanup().then(() => process.exit(130)));
-process.on("exit", () => { for (const child of children) child.kill("SIGKILL"); rmSync(scratch, { recursive: true, force: true }); });
 async function run(...args: string[]) {
   const browser = process.env.INSTALL_ENGINE === "browser";
   const options = ["--wasm", resolve(root, process.env.BUN_WASM || "dist/bun.wasm"), "--dir", `${scratch}::/`,
