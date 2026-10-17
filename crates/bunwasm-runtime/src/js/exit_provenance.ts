@@ -7,14 +7,19 @@
   const enabled = internal.native.env().BUN_WASM_TRACE_EXIT === "1";
   internal.traceExit = (reason, code, error) => {
     if (!enabled) return;
-    let stack: string | null = null;
     try {
-      const value = error ?? new Error("Runtime exit");
-      if (value !== null && typeof value === "object" && "stack" in value && typeof value.stack === "string") stack = value.stack;
+      let stack: string | null = null;
+      try {
+        const value = error ?? new Error("Runtime exit");
+        if (value !== null && typeof value === "object" && "stack" in value && typeof value.stack === "string") stack = value.stack;
+      } catch {
+        stack = "<stack unavailable>";
+      }
+      const record = { reason, code, stack, loop: internal.loopState?.() ?? null };
+      // Application output may have left stderr in the middle of a line.
+      internal.native.writeStderr("\n[bun-wasm:exit] " + JSON.stringify(record) + "\n");
     } catch {
-      stack = "<stack unavailable>";
+      // Optional diagnostics must not replace the exit they are describing.
     }
-    const record = { reason, code, stack, loop: internal.loopState?.() ?? null };
-    internal.native.writeStderr("[bun-wasm:exit] " + JSON.stringify(record) + "\n");
   };
 })

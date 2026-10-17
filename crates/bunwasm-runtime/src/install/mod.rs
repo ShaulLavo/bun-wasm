@@ -130,6 +130,12 @@ fn execute(command: &str, args: Vec<String>, parser: &dyn Transpiler) -> Result<
         );
     }
     let mut resolver = Resolver::new(registry, resolution_lock, opts.refresh);
+    if command == "update" && member.is_some() {
+        resolver.member_update = Some(resolve::MemberUpdate {
+            member: manifest["name"].as_str().ok_or("Workspace package needs a name")?.to_owned(),
+            dependencies: resolve::dependencies(&manifest, opts.production, true).into_keys().filter(|name| selected(name, &opts)).collect(),
+        });
+    }
     let project_manifest = if member.is_some() { &root_manifest } else { &manifest };
     resolver.workspaces = local::workspaces(
         &std::env::current_dir().map_err(|e| e.to_string())?,
@@ -656,20 +662,9 @@ fn selected(name: &str, opts: &Options) -> bool {
 }
 
 fn unlock(locked: &mut Value, opts: &Options, workspace: Option<&str>) {
-    let Some(packages) = locked["packages"].as_object_mut() else {
-        return;
-    };
-    let prefix = workspace.map(|name| format!("{name}/"));
-    packages.retain(|key, _| {
-        let name = match prefix.as_deref() {
-            Some(prefix) => match key.strip_prefix(prefix) {
-                Some(name) => name,
-                None => return true,
-            },
-            None => key,
-        };
-        !selected(name, opts)
-    });
+    if workspace.is_some() { return; }
+    let Some(packages) = locked["packages"].as_object_mut() else { return; };
+    packages.retain(|key, _| !selected(key, opts));
 }
 
 fn finalize_updates(manifest: &mut Value, opts: &Options, resolver: &Resolver, member: Option<&Path>) -> Result<()> {

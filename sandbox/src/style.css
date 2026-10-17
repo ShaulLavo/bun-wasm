@@ -81,6 +81,10 @@ h1 {
 
 #status[data-kind="error"] {
   color: var(--bad);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 button,

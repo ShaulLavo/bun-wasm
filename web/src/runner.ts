@@ -9,6 +9,7 @@ import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
 import { measureStartup } from "./startup";
 import { SubprocessBroker } from "./subprocess-broker";
+import { createProcessBudget } from "./subprocess";
 import { createSignalState } from "../../runtime/proc/signals";
 import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
 import type { Engine, RunRequest, WorkerMessage } from "./worker";
@@ -209,6 +210,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     spawnBroker: true,
     pid: 1,
     jobId: 1,
+    budget: isolated ? createProcessBudget() : undefined,
     interrupt: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
     requestedSignal: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
     signalState: isolated && !generic ? createSignalState().buffer as SharedArrayBuffer : undefined,
@@ -223,7 +225,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (rootAcknowledged) return;
     return rootQuiescence ??= options.filesystem.quiesce(request.filesystem);
   };
-  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { quiesceRoot, output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
+  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { quiesceRoot, budget: request.budget, output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
+
     pid: 1, job: 1, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
     signalState: request.signalState, outcome: request.outcome,
   } : undefined });
