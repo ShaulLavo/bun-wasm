@@ -1,0 +1,6 @@
+workspaces ok
+registry ok
+binaries ok
+update ok
+migration ok
+bunx ok
