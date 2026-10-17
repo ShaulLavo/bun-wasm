@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::PathBuf,
 };
 
@@ -131,6 +131,14 @@ fn add_dependencies(
     }
 }
 
+pub struct MemberUpdate {
+    pub member: String,
+    pub dependencies: BTreeSet<String>,
+}
+
+#[derive(Clone, Copy)]
+enum LockLookup { Use, Skip }
+
 pub struct Resolver {
     pub packages: BTreeMap<String, Package>,
     pub registry: String,
@@ -140,6 +148,7 @@ pub struct Resolver {
     pending: VecDeque<String>,
     pub workspaces: BTreeMap<String, Local>,
     production: bool,
+    pub member_update: Option<MemberUpdate>,
 }
 
 impl Resolver {
@@ -153,6 +162,7 @@ impl Resolver {
             pending: VecDeque::new(),
             workspaces: BTreeMap::new(),
             production: false,
+            member_update: None,
         }
     }
 
@@ -203,14 +213,27 @@ impl Resolver {
         if self.local_package(name, range)?.is_some() {
             return Ok(Some(range.into()));
         }
+        if self.member_update.as_ref().is_some_and(|update| update.member == parent.name && update.dependencies.contains(name)) {
+            return self.member_target(name, range, optional);
+        }
         if let Some(version) = self.locked_child(parent, name, range) {
             return Ok(Some(version));
         }
         if !is_tag(range) || self.workspaces.contains_key(name) {
             return Ok(Some(range.into()));
         }
-        match self.package(name, range, vec![name.into()], optional) {
+        match self.package(name, range, vec![name.into()], optional, LockLookup::Use) {
             Ok(package) => Ok(Some(package.version)),
+            Err(_) if optional => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn member_target(&mut self, name: &str, range: &str, optional: bool) -> Result<Option<String>> {
+        match self.package(name, range, vec![name.into()], optional, LockLookup::Skip) {
+            Ok(package) => Ok(Some(if range.starts_with("npm:") {
+                format!("npm:{}@{}", package.name, package.version)
+            } else { package.version })),
             Err(_) if optional => Ok(None),
             Err(error) => Err(error),
         }
@@ -295,7 +318,7 @@ impl Resolver {
             return Err("Dependency graph exceeds install limit".into());
         }
         valid_name(name)?;
-        let result = self.package(name, range, chain, optional);
+        let result = self.package(name, range, chain, optional, LockLookup::Use);
         let package = match result {
             Ok(package) => package,
             Err(error) if optional => {
@@ -310,10 +333,10 @@ impl Resolver {
         Ok(())
     }
 
-    fn package(&mut self, name: &str, range: &str, chain: Vec<String>, optional: bool) -> Result<Package> {
+    fn package(&mut self, name: &str, range: &str, chain: Vec<String>, optional: bool, lookup: LockLookup) -> Result<Package> {
         if let Some(alias) = range.strip_prefix("npm:") {
             let (target, version) = spec(alias)?;
-            return self.package(&target, &version, chain, optional);
+            return self.package(&target, &version, chain, optional, lookup);
         }
         if let Some(local) = self.local_package(name, range)? {
             return Ok(Package {
@@ -328,7 +351,7 @@ impl Resolver {
                 local: Some(local),
             });
         }
-        if let Some(package) = self.from_lock(name, range, &chain, optional) {
+        if matches!(lookup, LockLookup::Use) && let Some(package) = self.from_lock(name, range, &chain, optional) {
             return Ok(package);
         }
         if !self.packuments.contains_key(name) {
@@ -351,7 +374,7 @@ impl Resolver {
         let replacement = platform_package(name, version);
         if replacement != name {
             let version = version.clone();
-            return self.package(replacement, &version, chain, optional);
+            return self.package(replacement, &version, chain, optional, lookup);
         }
         let meta = versions[version].clone();
         if !compatible(&meta) {
