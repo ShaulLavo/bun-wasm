@@ -97,6 +97,7 @@ function scenarios(): Scenario[] {
     { name: "pnpm-nested-cycle", manifest: cycleManifest, files: pnpm(cycleManifest, cycle), packages: cycle, install: true },
     { name: "berry-nested-cycle", manifest: cycleManifest, files: berry(cycleManifest, cycle), packages: cycle, install: true },
     { name: "berry-workspace-semver", manifest: workspace, files: { ...berry(workspace, []), ...workspaceFiles }, packages: [], install: true },
+    { name: "berry-explicit-registry-workspace-conflict", manifest: workspace, files: { ...berry(workspace, [pkg("member", "1.0.0")], { "member@1.0.0": "^1.0.0" }), ...workspaceFiles, ".yarnrc.yml": "enableTransparentWorkspaces: false\n" }, packages: [pkg("member", "1.0.0")], unsupported: /root workspace.*not supported/i },
     { name: "pnpm-workspace-link", manifest: workspace, files: { "pnpm-lock.yaml": yaml({ lockfileVersion: "9.0", importers: { ".": { dependencies: { member: { specifier: "^1.0.0", version: "link:packages/member" } } }, "packages/member": {} }, packages: {}, snapshots: {} }), ...workspaceFiles }, packages: [], install: true },
     { name: "classic-workspace-semver", manifest: workspace, files: { "yarn.lock": "# yarn lockfile v1\n", ...workspaceFiles }, packages: [], install: true },
     { name: "pnpm-incompatible-selected-version", manifest: { name: "review", dependencies: { dep: "^2.0.0" } }, files: pnpm({ dependencies: { dep: "^2.0.0" } }, [dep]), packages: [dep], stricter: /selected version.*specifier/i },

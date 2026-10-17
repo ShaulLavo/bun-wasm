@@ -677,6 +677,16 @@ fn graph(
             .or_else(|| find_record(records, &name, &range))
             .ok_or_else(|| format!("Missing migrated resolution for {name}"))?;
         let row = record(&name, meta, registry)?;
+        if parent.is_empty()
+            && packages
+                .get(&name)
+                .is_some_and(|row| row.as_array().is_some_and(|row| row.len() == 1))
+        {
+            return Err(
+                "Registry selection replacing a root workspace is not supported during migration"
+                    .into(),
+            );
+        }
         if visible_row(packages, &parent, &name) == Some(&row) {
             continue;
         }

@@ -116,5 +116,9 @@ assertion even where native Bun supports it.
 
 Migration rejects transport URL queries and embedded registry-authentication
 options. Those identities can carry credentials or expiring signatures and are
-not represented by the portable installer's separate authentication configuration.
+not represented by the portable lock format.
 Plain registry URL userinfo is removed before any source is stored.
+
+A source selection that would replace a root workspace with a registry package
+also rejects. Bun reserves that root location for the workspace, so publishing the
+registry record there would lose the source selection.
