@@ -93,6 +93,7 @@ pub(crate) struct State {
     /// file on disk (transpiled code, injected ESM prologue).
     positions: RefCell<HashMap<String, modules::PositionMap>>,
     stdout: RefCell<BufWriter<io::Stdout>>,
+    signals: RefCell<host::LocalSignals>,
     /// Set when `process.nextTick` queued work.
     tick_pending: Cell<bool>,
     fds: RefCell<natives::FdTable>,
@@ -115,6 +116,7 @@ impl State {
             cjs_sources: RefCell::new(HashMap::new()),
             positions: RefCell::new(HashMap::new()),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
+            signals: RefCell::new(host::LocalSignals::default()),
             tick_pending: Cell::new(false),
             fds: RefCell::new(natives::FdTable::default()),
             directories: Rc::new(RefCell::new(directory::Directories::default())),
@@ -141,8 +143,23 @@ impl State {
         io::stderr().write_all(bytes)
     }
 
+    pub(crate) fn flush_stdout(&self) -> io::Result<()> {
+        self.stdout.borrow_mut().flush()
+    }
+
     pub(crate) fn flush(&self) {
-        let _ = self.stdout.borrow_mut().flush();
+        let _ = self.flush_stdout();
+    }
+
+    pub(crate) fn signal(&self, signal: i32, operation: i32) -> i32 {
+        if host::provided(host::Slot::Signal as usize) {
+            return host::signal(signal, operation);
+        }
+        let action = self.signals.borrow_mut().signal(signal, operation);
+        match action {
+            host::SignalAction::Value(value) => value,
+            host::SignalAction::Default(signal) => self.exit(128 + signal),
+        }
     }
 
     pub(crate) fn exit(&self, code: i32) -> ! {
@@ -405,6 +422,11 @@ fn run_in_engine<E: Engine>(e: &E, core: &Rc<Core<E>>, entry: &Entry, main_path:
 fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test_command: bool) {
     let mut main = main;
     loop {
+        // Signal handlers run only at cooperative guest checkpoints. Pending
+        // signals do not count as work keeping an otherwise-finished loop alive.
+        if let Err(err) = core.call_internal(e, "pumpSignals", &[]) {
+            core.uncaught(e, err);
+        }
         core.drain_jobs(e);
         if let Some(promise) = main.take() {
             main = check_main_promise(e, core, promise);
@@ -440,7 +462,7 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
                 continue;
             }
             core.state.flush();
-            let wait = if next < 0.0 { -1 } else { next.ceil() as i32 };
+            let wait = if next < 0.0 { 25 } else { (next.ceil() as i32).clamp(1, 25) };
             if host::poll(wait) == host::UNSUPPORTED {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
@@ -464,7 +486,11 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
             }
         }
         core.state.flush();
-        host::sleep(std::time::Duration::from_secs_f64(next / 1000.0));
+        // Reenter the checkpoint after one bounded poll rather than sleeping
+        // through the whole timer delay with handled signals still pending.
+        if host::poll((next.ceil() as i32).clamp(1, 25)) == host::UNSUPPORTED {
+            std::thread::sleep(std::time::Duration::from_secs_f64(next / 1000.0));
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 import { memoryViews } from "../../runtime/core/memory-views.js";
-import type { SubprocessHost } from "../src/subprocess.js";
+import type { SubprocessHost } from "../src/subprocess.ts";
 import { HOST_CALL_FD, installHostSlotsViaImport, type SlotImpls } from "../src/net/trampoline.ts";
 
 type HostCall = (slot: number, a: number, b: number, c: number, d: number) => number;

@@ -113,6 +113,7 @@ declare namespace BunWasm {
   }
   interface WorkerChild {
     pid: number;
+    readonly signalCode: string | number | null;
     stdin: { write(chunk: unknown): unknown; end(): void } | null;
     stdout: ReadableStream<Uint8Array>;
     stderr: ReadableStream<Uint8Array>;

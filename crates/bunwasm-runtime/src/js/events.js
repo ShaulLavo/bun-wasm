@@ -140,6 +140,7 @@
     if (existing === undefined) {
       events[type] = listener;
       target._eventsCount++;
+      if (internal.listenerChanged) internal.listenerChanged(target, type);
       return target;
     }
     let list = existing;
@@ -151,6 +152,7 @@
     } else {
       list.push(listener);
     }
+    if (internal.listenerChanged) internal.listenerChanged(target, type);
     warnIfLeaking(target, type, list);
     return target;
   }
@@ -244,6 +246,7 @@
   function deleteType(target, type) {
     if (--target._eventsCount === 0) target._events = Object.create(null);
     else delete target._events[type];
+    if (internal.listenerChanged) internal.listenerChanged(target, type);
   }
 
   function findListenerIndex(list, listener) {
@@ -272,6 +275,7 @@
     const removed = list[index];
     list.splice(index, 1);
     if (list.length === 1) events[type] = list[0];
+    if (internal.listenerChanged) internal.listenerChanged(this, type);
     if (events.removeListener !== undefined) this.emit("removeListener", type, removed.listener || listener);
     return this;
   };
@@ -297,6 +301,7 @@
       if (arguments.length === 0) {
         this._events = Object.create(null);
         this._eventsCount = 0;
+        if (internal.listenerChanged) internal.listenerChanged(this);
       } else if (events[type] !== undefined) {
         deleteType(this, type);
       }
@@ -313,6 +318,7 @@
     removeAllOfType(this, "removeListener");
     this._events = Object.create(null);
     this._eventsCount = 0;
+    if (internal.listenerChanged) internal.listenerChanged(this);
     return this;
   };
 

@@ -1,20 +1,22 @@
 // Shared helpers for the playwright scripts that drive the playground (browser-engine.mjs,
 // bench-engines.mjs): start web/serve.ts and a CORS fixture server, run shell commands through
 // `playground` (main.ts), read the terminal, and kill everything that was started.
-// PLAYWRIGHT=<path to playwright/index.mjs> overrides the default mise install.
+// PLAYWRIGHT=<path to playwright/index.mjs> overrides the project's installed package.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { runForeground } from "./foreground.ts";
 
 export const web = join(new URL(".", import.meta.url).pathname, "..");
 const playwrightPath =
   process.env.PLAYWRIGHT ??
-  `${process.env.HOME}/.local/share/mise/installs/npm-playwright/1.63.0/node_modules/.mise/playwright@1.63.0/node_modules/playwright/index.mjs`;
+  "playwright";
 export const playwright = await import(playwrightPath);
 
 /** Children, browsers and a scratch directory, all removed by `cleanup` (also on SIGINT/SIGTERM). */
 export function session(prefix) {
-  const scratch = mkdtempSync(join(process.env.BUN_WASM_TEST_TMP ?? "/work/tmp", prefix));
+  const scratch = mkdtempSync(join(process.env.BUN_WASM_TEST_TMP ?? tmpdir(), prefix));
   const children = [];
   const browsers = [];
   let cleaned = false;
@@ -130,26 +132,11 @@ export async function writeFile(page, path, text) {
 /**
  * Types `command` at the prompt and waits for it to finish. Returns its exit code, the terminal
  * output it produced (prompt line excluded) and its wall time in ms; `code` is null on timeout
- * (the program is then stopped with Ctrl-C).
+ * (the test then requests forceful foreground cleanup and waits for the shell to become idle).
  */
 export async function run(page, command, ms = 60000) {
   const before = (await terminalText(page)).split("\n").length;
-  const result = await page.evaluate(
-    async ([cmd, timeout]) => {
-      const { shell } = globalThis.playground;
-      const t0 = performance.now();
-      const done = shell.submit(cmd).then(() => shell.lastExit);
-      const code = await Promise.race([done, new Promise((r) => setTimeout(() => r(null), timeout))]);
-      const ms = performance.now() - t0;
-      // On timeout, Ctrl-C the program so the shell takes the next command.
-      if (code === null) {
-        shell.input("\x03");
-        await done;
-      }
-      return { code, ms };
-    },
-    [command, ms],
-  );
+  const result = await runForeground(page, command, ms);
   const lines = (await terminalText(page)).split("\n");
   // The command's own prompt line is before[-1]; the new prompt is the last line.
   const output = lines.slice(before, -1).join("\n");
