@@ -20,7 +20,8 @@ fi
 const wasm = join(scratch, "guest with spaces.wasm");
 
 function run(script: string, args: readonly string[], expected?: string) {
-  const result = Bun.spawnSync(["python3", join(root, script)].concat(args), {
+  const executable = script.endsWith(".py") ? ["python3"] : ["node", "--no-warnings"];
+  const result = Bun.spawnSync(executable.concat([join(root, script)], args), {
     cwd: root,
     env: {
       ...process.env,
@@ -69,6 +70,14 @@ test("stack measurement defaults to native host and preserves host/guest stack c
     "host-stack=512", "cache=", "cow=",
   ]);
   expect(JSON.parse(result.stdout)).toMatchObject({ host: "launcher", stack_kib: 512, budget_kib: 256, results: { plain: { completed_at_max: 1 } } });
+});
+
+test("Worker regression runner honors the native launcher override", () => {
+  const expected = join(scratch, "worker-expected.txt");
+  writeFileSync(expected, "clone transfer attached\n");
+  const result = run("tests/check-worker-regressions.ts", ["--engine", "quickjs", "--wasm", wasm, "--case", "clone-atomic-transfer"], expected);
+  expect(result.args.slice(0, 4)).toEqual(["--wasm", wasm, "--", "-e"]);
+  expect(result.stdout).toContain("PASS quickjs/native clone-atomic-transfer");
 });
 
 test("native Bun harnesses do not use the plain wasmtime CLI", () => {
