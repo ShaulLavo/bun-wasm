@@ -2,16 +2,19 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 phase="${1:-all}"
-case "$phase" in --unit|--browser|all) ;; *) echo "usage: $0 [--unit|--browser]" >&2; exit 2 ;; esac
+case "$phase" in --setup|--unit|--browser|all) ;; *) echo "usage: $0 [--setup|--unit|--browser]" >&2; exit 2 ;; esac
 cd "$root/web"
 
 if [[ "$phase" != --browser ]]; then
+  # Bun's file: installation snapshots existing directories. Generate Node
+  # modules before installing consumers so their package copies include dist.
+  bun install --cwd ../runtime --frozen-lockfile
+  bun run --cwd ../runtime build
   bun install --frozen-lockfile
+  bun install --cwd ../sandbox --frozen-lockfile
+  [[ "$phase" != --setup ]] || exit 0
   node_modules/.bin/tsc -p ../crates/bunwasm-runtime/tsconfig.json
   bun test ../scripts/runtime-emission.test.ts ../scripts/runtime-types.test.ts ../scripts/runtime-signal-dispatch.test.ts ../scripts/worker-codec.test.ts ../scripts/worker-selectors.test.ts ../scripts/worker-outcome.test.ts
-  bun install --cwd ../runtime --frozen-lockfile
-  bun install --cwd ../sandbox --frozen-lockfile
-  bun run --cwd ../runtime build
   bun test ../scripts/browser-build.test.ts ../scripts/runtime-installed.test.ts
   bun run test
   bun test ../runtime/tests ../scripts/runtime-size.test.ts

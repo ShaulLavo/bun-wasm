@@ -6,6 +6,50 @@ import { join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { browserBuildConfig, buildClassicWorker, resolveRuntimePackage } from "./browser-build";
 
+test.each([false, true])("source checkout prepares and refreshes installed Node output (consumers preinstalled: %s)", async (preinstalled) => {
+  const root = resolve(import.meta.dir, "..");
+  const scratch = await mkdtemp(join(process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-clean-checkout-"));
+  const children = new Set<ReturnType<typeof Bun.spawn>>();
+  async function run(command: string[], cwd: string): Promise<string> {
+    const child = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+    children.add(child);
+    try {
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      if (code !== 0) throw new Error(`${command.join(" ")} exited ${code}\n${stdout}\n${stderr}`);
+      return stdout;
+    } finally { children.delete(child); }
+  }
+  try {
+    await cp(join(root, "runtime"), join(scratch, "runtime"), {
+      recursive: true,
+      filter(source) { return !["node_modules", "dist", ".git"].some(part => source.split("/").includes(part)); },
+    });
+    await mkdir(join(scratch, "scripts"));
+    await cp(join(root, "scripts/test-web-host.sh"), join(scratch, "scripts/test-web-host.sh"));
+    for (const app of ["web", "sandbox"]) {
+      await mkdir(join(scratch, app));
+      for (const file of ["package.json", "bun.lock"]) await cp(join(root, app, file), join(scratch, app, file));
+      expect(existsSync(join(scratch, app, "node_modules"))).toBe(false);
+    }
+    expect(existsSync(join(scratch, "runtime/dist"))).toBe(false);
+    if (preinstalled) {
+      for (const app of ["web", "sandbox"]) {
+        await run([process.execPath, "install", "--frozen-lockfile"], join(scratch, app));
+        expect(existsSync(join(scratch, app, "node_modules/@bun-wasm/runtime/dist/proc/identity.js"))).toBe(false);
+      }
+    }
+    await run(["bash", "scripts/test-web-host.sh", "--setup"], scratch);
+    for (const app of ["web", "sandbox"]) {
+      expect(await run(["node", "--input-type=module", "--eval", 'await import("@bun-wasm/runtime/proc/identity"); await import("@bun-wasm/runtime/core/memory-views"); console.log("installed Node output linked");'], join(scratch, app))).toContain("installed Node output linked");
+    }
+  } finally {
+    for (const child of children) child.kill();
+    await Promise.all(Array.from(children, child => child.exited));
+    await rm(scratch, { recursive: true, force: true });
+    expect(existsSync(scratch)).toBe(false);
+  }
+}, 180_000);
+
 // A real Git installation is essential: file/workspace copies can hide Node's
 // node_modules TypeScript restrictions, prepare/trust failures and missing files.
 test("trusted commit-pinned Git package prepares Node exports without sibling source", async () => {
