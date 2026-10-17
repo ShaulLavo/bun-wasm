@@ -74,12 +74,72 @@ test("catch/finally writes are visible even when real revoked stdio throws", () 
   const f = fixture(), fatal = new Error("revoked stdio");
   const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { throw fatal; } } };
   observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
-  const bytes = new TextEncoder().encode("CATCH-RAN FINALLY-RAN AFTER-RAN\n");
+  const bytes = new TextEncoder().encode("CATCH-RAN\nFINALLY-RAN\nAFTER-RAN\n");
   new Uint8Array(f.memory.buffer, 512, bytes.length).set(bytes);
   f.view.setUint32(256, 512, true); f.view.setUint32(260, bytes.length, true);
   expect(() => (imports.wasi_snapshot_preview1!.fd_write as Function)(1, 256, 1, 300)).toThrow(fatal);
   const evidence = snapshotProbe(f.probe);
   expect(evidence.catchWrites).toBe(1); expect(evidence.finallyWrites).toBe(1); expect(evidence.afterWrites).toBe(1);
+});
+test("runtime diagnostics quoting marker source are not executed catch/finally/continuation writes", () => {
+  const f = fixture();
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const text = "1 | try { while(true){} } catch(error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');\nInternalError: interrupted\n";
+  const bytes = new TextEncoder().encode(text);
+  new Uint8Array(f.memory.buffer, 512, bytes.length).set(bytes);
+  f.view.setUint32(256, 512, true); f.view.setUint32(260, bytes.length, true);
+  expect((imports.wasi_snapshot_preview1!.fd_write as Function)(2, 256, 1, 300)).toBe(0);
+  const evidence = snapshotProbe(f.probe);
+  expect(evidence.writes).toBe(1);
+  expect(evidence.catchWrites).toBe(0); expect(evidence.finallyWrites).toBe(0); expect(evidence.afterWrites).toBe(0);
+});
+test("marker substrings and unterminated source tokens do not fabricate execution evidence", () => {
+  const f = fixture();
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const bytes = new TextEncoder().encode("NOT-CATCH-RAN\nFINALLY-RAN-not\nError: AFTER-RAN\nCATCH-RAN");
+  new Uint8Array(f.memory.buffer, 512, bytes.length).set(bytes);
+  f.view.setUint32(256, 512, true); f.view.setUint32(260, bytes.length, true);
+  (imports.wasi_snapshot_preview1!.fd_write as Function)(2, 256, 1, 300);
+  const evidence = snapshotProbe(f.probe);
+  expect(evidence.catchWrites).toBe(0); expect(evidence.finallyWrites).toBe(0); expect(evidence.afterWrites).toBe(0);
+});
+test("exact marker records survive split fd_write calls and iovecs without joining different fds", () => {
+  const f = fixture();
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const write = (fd: number, parts: string[]) => {
+    let pointer = 512;
+    for (const [index, part] of parts.entries()) {
+      const bytes = new TextEncoder().encode(part);
+      new Uint8Array(f.memory.buffer, pointer, bytes.length).set(bytes);
+      f.view.setUint32(256 + index * 8, pointer, true); f.view.setUint32(260 + index * 8, bytes.length, true);
+      pointer += bytes.length;
+    }
+    return (imports.wasi_snapshot_preview1!.fd_write as Function)(fd, 256, parts.length, 300);
+  };
+  write(2, ["CATCH-"]); write(1, ["RAN\n"]);
+  expect(snapshotProbe(f.probe).catchWrites).toBe(0);
+  write(2, ["RA", "N\nFINALLY-", "RAN\n"]);
+  write(1, ["AFTER-"]); write(1, ["RAN", "\n"]);
+  const evidence = snapshotProbe(f.probe);
+  expect(evidence.catchWrites).toBe(1); expect(evidence.finallyWrites).toBe(1); expect(evidence.afterWrites).toBe(1);
+});
+test("split quoted source remains diagnostic while a subsequent exact marker is still rejected", () => {
+  const f = fixture();
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const write = (text: string) => {
+    const bytes = new TextEncoder().encode(text);
+    new Uint8Array(f.memory.buffer, 512, bytes.length).set(bytes);
+    f.view.setUint32(256, 512, true); f.view.setUint32(260, bytes.length, true);
+    (imports.wasi_snapshot_preview1!.fd_write as Function)(2, 256, 1, 300);
+  };
+  write("1 | fs.writeSync(2,'"); write("CATCH-"); write("RAN\\n');\nError: AFTER-RAN\n");
+  expect(snapshotProbe(f.probe).catchWrites).toBe(0); expect(snapshotProbe(f.probe).afterWrites).toBe(0);
+  write("CA"); write("TCH-RAN\n");
+  expect(snapshotProbe(f.probe).catchWrites).toBe(1);
 });
 test("output observation accepts a resizable wasm memory buffer", () => {
   const f = fixture();

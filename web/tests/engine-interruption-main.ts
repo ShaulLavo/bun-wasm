@@ -205,9 +205,13 @@ async function testDefault(module: WebAssembly.Module, engine: Engine, signal: 2
 }
 async function testNativeInterrupt(module: WebAssembly.Module, engine: Engine): Promise<void> {
   const owned = await scope(module, engine);
+  let diagnostics: () => unknown = () => ({ phase: "before guest spawn" });
   try {
     const child = owned.spawn(`const fs=require('node:fs'); fs.writeSync(2,'ready\\n'); try { while(true){} } catch(error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`);
+    diagnostics = () => ({ stdout: child.stdout, stderr: child.stderr });
     const worker = await owned.ready(child);
+    diagnostics = () => ({ evidence: snapshotProbe(worker.probe), requestedSignal: Atomics.load(child.requestedSignal, 0),
+      ordinaryStatus: owned.wait(child), stdout: child.stdout, stderr: child.stderr });
     await new Promise<void>(resolve => setTimeout(resolve, 20));
     equal(Atomics.load(worker.probe, probeCell.startLeft), 0, "native interrupt guest remains CPU-bound");
     Atomics.store(worker.probe, probeCell.nativeInterruptRequested, 1);
@@ -232,6 +236,8 @@ async function testNativeInterrupt(module: WebAssembly.Module, engine: Engine): 
     // This covers this interrupted frame, not a prohibition on future VM entries
     // used by runtime error reporting or cleanup after native termination.
     checks.push({ engine, route: "legacy", delivery: "native-callback", name: "native-interrupt-true-unwinds-current-frame", evidence: { ...evidence, outcome: result } });
+  } catch (error) {
+    throw new Error(`${engine} native true-return proof failed: ${String(error)}; diagnostics=${JSON.stringify(diagnostics())}`, { cause: error });
   } finally { owned.dispose(); }
 }
 async function testHandled(module: WebAssembly.Module, engine: Engine, route: EngineInterruptionRoute = "legacy"): Promise<void> {

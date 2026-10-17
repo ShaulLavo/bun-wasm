@@ -106,6 +106,13 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
   const write = wasi.fd_write;
   if (typeof write !== "function") throw new Error("engine interruption guest has no fd_write import");
   const decoder = new TextDecoder();
+  const markers = [["ready", probeCell.readyWrites], ["loop-finished", probeCell.loopFinishedWrites],
+    ["CATCH-RAN", probeCell.catchWrites], ["FINALLY-RAN", probeCell.finallyWrites], ["AFTER-RAN", probeCell.afterWrites]] as const;
+  // Raw diagnostics can quote the source containing marker literals. Match complete
+  // output records, carrying only possible marker prefixes across calls per fd.
+  // A non-matching line stays ignored until newline; arbitrarily long source
+  // excerpts therefore cannot grow this state or reset into a mid-line marker.
+  const partialLines = new Map<number, string | null>();
   wasi.fd_write = (fd: number, vectors: number, count: number, written: number) => {
     // Observe attempts BEFORE the real import rejects a revoked guest. Otherwise the
     // supervisor's closed pipe could conceal an incorrectly executed catch/finally.
@@ -121,11 +128,19 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
       }
       text += decoder.decode();
       Atomics.add(probe, probeCell.writes, 1);
-      if (text.includes("ready\n")) Atomics.add(probe, probeCell.readyWrites, 1);
-      if (text.includes("loop-finished\n")) Atomics.add(probe, probeCell.loopFinishedWrites, 1);
-      for (const [marker, cell] of [["CATCH-RAN", probeCell.catchWrites], ["FINALLY-RAN", probeCell.finallyWrites], ["AFTER-RAN", probeCell.afterWrites]] as const) {
-        if (text.includes(marker)) Atomics.add(probe, cell, 1);
+      const previousLine = partialLines.get(fd);
+      let line: string | null = previousLine === undefined ? "" : previousLine;
+      for (const character of text) {
+        if (character === "\n") {
+          const cell = markers.find(([marker]) => marker === line)?.[1];
+          if (cell !== undefined) Atomics.add(probe, cell, 1);
+          line = "";
+        } else if (line !== null) {
+          const next: string = line + character;
+          line = markers.some(([marker]) => marker.startsWith(next)) ? next : null;
+        }
       }
+      partialLines.set(fd, line);
     }
     return write(fd, vectors, count, written);
   };

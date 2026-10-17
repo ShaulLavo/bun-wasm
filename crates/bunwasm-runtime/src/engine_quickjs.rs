@@ -550,6 +550,65 @@ mod tests {
     }
 
     #[test]
+    fn cpu_bound_one_shot_interrupt_bypasses_nested_catch_finally_and_continuation() {
+        struct OneShotInterruptHost {
+            polls: std::cell::Cell<u32>,
+            armed: std::cell::Cell<bool>,
+        }
+        impl ModuleHost<QuickJs> for OneShotInterruptHost {
+            fn resolve(&self, _: &QuickJs, _: &str, _: &str) -> Result<String, V> { unreachable!() }
+            fn load(&self, _: &QuickJs, _: &str) -> Result<String, V> { unreachable!() }
+            fn init_meta(&self, _: &QuickJs, _: &str, _: &V) -> Result<(), V> { Ok(()) }
+            fn has_interrupt_handler(&self) -> bool { true }
+            fn interrupt(&self) -> bool {
+                self.polls.set(self.polls.get() + 1);
+                self.armed.replace(false)
+            }
+        }
+
+        // Cover both direct evaluation and Rust entering a JS function, as the
+        // CommonJS module wrapper does. The host returns true exactly once.
+        for call_from_rust in [false, true] {
+            let host = Rc::new(OneShotInterruptHost {
+                polls: std::cell::Cell::new(0), armed: std::cell::Cell::new(false),
+            });
+            let engine = QuickJs::new(host.clone());
+            engine.eval_script(r#"
+                globalThis.markers = { innerCatch: 0, innerFinally: 0, outerCatch: 0, outerFinally: 0, after: 0 };
+                function interruptedInner() {
+                    try { while (true) {} }
+                    catch { markers.innerCatch++; }
+                    finally { markers.innerFinally++; }
+                }
+                function interruptedOuter() {
+                    try { interruptedInner(); }
+                    catch { markers.outerCatch++; }
+                    finally { markers.outerFinally++; }
+                    markers.after++;
+                }
+            "#, "nested-interrupt", 1).unwrap();
+            host.armed.set(true);
+            let result = if call_from_rust {
+                let function = engine.ctx().globals().get::<_, V>("interruptedOuter").unwrap();
+                engine.call(&function, &engine.undefined(), &[])
+            } else {
+                engine.eval_script("interruptedOuter();", "nested-entry", 1)
+            };
+            assert!(result.is_err(), "one native true return must unwind the current entry");
+            assert!(host.polls.get() > 0);
+            assert!(!host.armed.get(), "native interrupt request was consumed");
+            let markers = engine.ctx().globals().get::<_, V>("markers").unwrap();
+            for key in ["innerCatch", "innerFinally", "outerCatch", "outerFinally", "after"] {
+                assert_eq!(engine.to_val(&engine.get(&markers, key).unwrap()), Val::Num(0.0), "{key}; call_from_rust={call_from_rust}");
+            }
+            // A native interrupt aborts this entry, not all future VM entries.
+            let resumed = engine.eval_script("6 * 7", "after-interrupt", 1).unwrap();
+            assert_eq!(engine.to_val(&resumed), Val::Num(42.0));
+            std::mem::forget(engine);
+        }
+    }
+
+    #[test]
     fn data_arrays_leave_no_exception() {
         let runtime = Runtime::new().unwrap();
         let context = Context::full(&runtime).unwrap();
