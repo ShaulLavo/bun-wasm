@@ -1491,6 +1491,7 @@ dependencies = [
  "hmac",
  "libc",
  "libsqlite3-sys",
+ "lol_html",
  "md-5",
  "miniz_oxide 0.8.9",
  "p256",

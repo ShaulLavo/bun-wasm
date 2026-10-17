@@ -1,0 +1,6 @@
+PASS wildcards
+PASS multiLabelWildcards
+PASS partialWildcards
+PASS subject
+PASS singleLabelSubdomains
+PASS standalone issuer

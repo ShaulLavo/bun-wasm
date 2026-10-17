@@ -169,6 +169,8 @@ fn open_options(flags: &str) -> OpenOptions {
 /// Every data native.
 pub fn table(state: &Rc<State>) -> Table {
     let mut t = Table::default();
+    crate::html_rewriter::install(&mut t);
+    crate::x509::install(&mut t);
     install_process(&mut t, state);
     install_fs(&mut t);
     install_fds(&mut t, state);
