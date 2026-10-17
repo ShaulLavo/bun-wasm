@@ -42,7 +42,7 @@ Each row describes the first observed blocker. Subsystem assignments marked 'nee
 
 ## Regressions from the previous baseline
 
-Historical and current observations are non-comparable as runtime deltas because measurement inputs changed. See [README.md](README.md#historical-and-current-observations) and `summary.json` for selections and provenance.
+QuickJS is the sole comparable baseline by matched file selection; JSC and browser remain non-comparable. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim. See [README.md](README.md#historical-and-current-observations) and `summary.json` for selections and provenance.
 
 ## Timeout index
 

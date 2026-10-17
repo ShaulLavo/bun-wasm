@@ -188,7 +188,7 @@
       "fully_passing": 282,
       "observed_passes": 12663,
       "timeouts": 57,
-      "comparison_status": "non-comparable",
+      "comparison_status": "comparable",
       "selected_files": 2305,
       "selection": [
         "**"
@@ -212,7 +212,9 @@
         "network": "loopback",
         "timeout_seconds": 15,
         "test_timeout_ms": 2000
-      }
+      },
+      "comparison_scope": "same-selection baseline",
+      "reason": "QuickJS is the sole matched-selection baseline, with 2,305 files on both sides. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim."
     },
     "jsc": {
       "fully_passing": 113,
@@ -244,7 +246,9 @@
         "network": "loopback",
         "timeout_seconds": 15,
         "test_timeout_ms": 2000
-      }
+      },
+      "comparison_scope": "different selections",
+      "reason": "Historical selection covered only js/bun, js/node, and js/web; current selection covers all files. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim."
     },
     "browser": {
       "fully_passing": 116,
@@ -283,7 +287,9 @@
         "network": "loopback",
         "timeout_seconds": 15,
         "test_timeout_ms": 2000
-      }
+      },
+      "comparison_scope": "different selections",
+      "reason": "Historical selection covered only js/bun, js/node, and js/web; current selection covers all files. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim."
     }
   },
   "before_after": {
@@ -300,12 +306,13 @@
         57,
         51
       ],
-      "comparison_status": "non-comparable",
+      "comparison_status": "comparable",
       "selected_files": [
         2305,
         2305
       ],
-      "reason": "Runner hash, suite revision, and supplemental dependency hash changed."
+      "reason": "QuickJS is the sole matched-selection baseline, with 2,305 files on both sides. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim.",
+      "comparison_scope": "same-selection baseline"
     },
     "jsc": {
       "fully_passing": [
@@ -325,7 +332,8 @@
         1082,
         2305
       ],
-      "reason": "Runner hash, suite revision, and supplemental dependency hash changed. Historical selection covered only js/bun, js/node, and js/web; current selection covers all files."
+      "reason": "Historical selection covered only js/bun, js/node, and js/web; current selection covers all files. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim.",
+      "comparison_scope": "different selections"
     },
     "browser": {
       "fully_passing": [
@@ -345,7 +353,8 @@
         1082,
         2305
       ],
-      "reason": "Runner hash, suite revision, and supplemental dependency hash changed. Historical selection covered only js/bun, js/node, and js/web; current selection covers all files."
+      "reason": "Historical selection covered only js/bun, js/node, and js/web; current selection covers all files. Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim.",
+      "comparison_scope": "different selections"
     }
   }
 }

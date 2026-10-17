@@ -135,7 +135,7 @@ const categories = ["a", "b", "c", "d", "e", "f"];
 const historyRows = history.map(row => [string(row.date), string(row.commit), String(number(row.fully_passing)), String(number(row.tests_passing)), String(number(row.timeouts))].concat(categories.map(key => String(number(record(row.categories)[key])))));
 section("docs/bun-test-suite/README.md", "progress", [
   "## Progress",
-  "Historical observations have different measurement inputs. They are non-comparable as runtime deltas; the provenance differences are listed above.",
+  "QuickJS 282 → 411 is the sole comparable baseline by matched file selection. JSC and browser are non-comparable because their selections changed. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim for any engine.",
   table(["Date", "Runtime commit", "Files fully passing", "Tests passing", "Timeouts"].concat(categories), historyRows),
   "Category counts use each run's classifier. Category movement alone is not a compatibility gain.",
 ].join("\n\n"));
@@ -147,24 +147,30 @@ for (const engine of ["quickjs", "jsc", "browser"]) {
   const comparison = record(record(summary.before_after)[engine]);
   const old = record(engine === "quickjs" ? historical.summary : record(historical.comparison)[engine]);
   const current = record(engine === "quickjs" ? summary.summary : record(summary.comparison)[engine]);
-  prior.comparison_status = "non-comparable";
+  const status = engine === "quickjs" ? "comparable" : "non-comparable";
+  const scope = engine === "quickjs" ? "same-selection baseline" : "different selections";
+  const reason = (engine === "quickjs" ? "QuickJS is the sole matched-selection baseline, with 2,305 files on both sides. " : "Historical selection covered only js/bun, js/node, and js/web; current selection covers all files. ") + "Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim.";
+  prior.comparison_status = status;
+  prior.comparison_scope = scope;
+  prior.reason = reason;
   prior.selected_files = number(old.files);
   prior.selection = engine === "quickjs" ? ["**"] : ["js/bun", "js/node", "js/web"];
   prior.provenance = engine === "quickjs" ? historical.provenance : record(historical.comparison_provenance)[engine];
-  comparison.comparison_status = "non-comparable";
+  comparison.comparison_status = status;
+  comparison.comparison_scope = scope;
   comparison.selected_files = [number(old.files), number(current.files)];
-  comparison.reason = "Runner hash, suite revision, and supplemental dependency hash changed." + (engine === "quickjs" ? "" : " Historical selection covered only js/bun, js/node, and js/web; current selection covers all files.");
+  comparison.reason = reason;
 }
 write("docs/bun-test-suite/summary.json", JSON.stringify(summary, null, 2) + "\n");
 const headlineRows = ["quickjs", "jsc", "browser"].map(engine => {
   const old = record(engine === "quickjs" ? historical.summary : record(historical.comparison)[engine]);
   const current = record(engine === "quickjs" ? summary.summary : record(summary.comparison)[engine]);
   const result = (run: Record<string, unknown>) => `${number(run.fully_passing)} fully passing files; ${number(record(run.counts).pass)} observed passes; ${number(run.timeouts)} timeouts`;
-  return [engine, String(number(old.files)), String(number(current.files)), result(old), result(current), "Non-comparable"];
+  return [engine, String(number(old.files)), String(number(current.files)), result(old), result(current), engine === "quickjs" ? "Comparable baseline (matched selection)" : "Non-comparable"];
 });
 section("docs/bun-test-suite/README.md", "history-comparison", [
   "## Historical and current observations",
-  "The historical and current runs are non-comparable as runtime gains. JSC and browser previously selected 1,082 files under js/bun, js/node, and js/web; each current run selected all 2,305 files. QuickJS selected all 2,305 files in both runs, but its runner, suite revision, and supplemental dependencies also changed.",
+  "QuickJS 282 → 411 is the sole comparable baseline by matched file selection, with all 2,305 files selected on both sides. JSC and browser are non-comparable. They previously selected 1,082 files under js/bun, js/node, and js/web, while each current run selected all 2,305 files. Runner, suite, and supplemental-dependency hashes changed on all engines, so the matched QuickJS selection does not establish an isolated runtime gain.",
   table(["Engine", "Historical selected files", "Current selected files", "Historical result", "Current result", "Comparison"], headlineRows),
   table(["Input on all engines", "Historical", "Current"], [
     ["Suite revision", string(record(historical.provenance).suite_commit), string(record(summary.provenance).suite_commit)],

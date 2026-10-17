@@ -3,11 +3,11 @@
 <!-- history-comparison:start -->
 ## Historical and current observations
 
-The historical and current runs are non-comparable as runtime gains. JSC and browser previously selected 1,082 files under js/bun, js/node, and js/web; each current run selected all 2,305 files. QuickJS selected all 2,305 files in both runs, but its runner, suite revision, and supplemental dependencies also changed.
+QuickJS 282 → 411 is the sole comparable baseline by matched file selection, with all 2,305 files selected on both sides. JSC and browser are non-comparable. They previously selected 1,082 files under js/bun, js/node, and js/web, while each current run selected all 2,305 files. Runner, suite, and supplemental-dependency hashes changed on all engines, so the matched QuickJS selection does not establish an isolated runtime gain.
 
 | Engine | Historical selected files | Current selected files | Historical result | Current result | Comparison |
 | --- | --- | --- | --- | --- | --- |
-| quickjs | 2305 | 2305 | 282 fully passing files; 12663 observed passes; 57 timeouts | 411 fully passing files; 20162 observed passes; 51 timeouts | Non-comparable |
+| quickjs | 2305 | 2305 | 282 fully passing files; 12663 observed passes; 57 timeouts | 411 fully passing files; 20162 observed passes; 51 timeouts | Comparable baseline (matched selection) |
 | jsc | 1082 | 2305 | 113 fully passing files; 8878 observed passes; 46 timeouts | 411 fully passing files; 19290 observed passes; 50 timeouts | Non-comparable |
 | browser | 1082 | 2305 | 116 fully passing files; 15143 observed passes; 43 timeouts | 418 fully passing files; 29457 observed passes; 62 timeouts | Non-comparable |
 
@@ -26,7 +26,7 @@ The historical inputs are preserved in [historical-summary.json](historical-summ
 <!-- baseline:start -->
 ## Historical measured baseline
 
-Historical results are non-comparable with the current run because the runner and supplemental dependencies changed. JSC and browser also used a smaller selection. See the input table above.
+QuickJS is the sole comparable baseline by matched file selection. JSC and browser used a smaller historical selection and remain non-comparable. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim. See the input table above.
 
 Upstream `4ceda2c2868d3a7703c7737ddd9de7244ec384df`, engine `quickjs`.
 
@@ -307,7 +307,7 @@ Raw JSON, JSONL, command logs, diagnostic output tails and the source diagnosis 
 <!-- progress:start -->
 ## Progress
 
-Historical observations have different measurement inputs. They are non-comparable as runtime deltas; the provenance differences are listed above.
+QuickJS 282 → 411 is the sole comparable baseline by matched file selection. JSC and browser are non-comparable because their selections changed. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim for any engine.
 
 | Date | Runtime commit | Files fully passing | Tests passing | Timeouts | a | b | c | d | e | f |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
