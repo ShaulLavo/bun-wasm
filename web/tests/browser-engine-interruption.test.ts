@@ -25,6 +25,45 @@ function fixture(overrides: Record<string, unknown> = {}) {
   } };
 }
 
+test("WebDriver null for absent unsafeCleanup admits only an otherwise fully green result", async () => {
+  const f = fixture({ runBrowser: async () => ({ ...green(), unsafeCleanup: null }) });
+  const report = await runBrowserGate(f.options);
+  expect(report.ok).toBe(true);
+  expect(report.cleanup.safe).toBe(true);
+  expect(report.unsafeCleanup).toBeUndefined();
+  expect(report.reports).toHaveLength(4);
+  expect(report.reports.every(result => result.ok && result.cleanup.safe)).toBe(true);
+});
+for (const unsafeCleanup of [false, "", 0, "unproved"]) {
+  test(`non-null unsafeCleanup remains unsafe even when falsy: ${JSON.stringify(unsafeCleanup)}`, async () => {
+    const f = fixture({ runBrowser: async () => ({ ...green(), unsafeCleanup }) });
+    const report = await runBrowserGate(f.options);
+    expect(report.ok).toBe(false);
+    expect(report.cleanup.safe).toBe(false);
+    expect(report.reports).toHaveLength(1);
+    expect(report.unsafeCleanup).toBeDefined();
+  });
+}
+for (const unsafe of [
+  { cleanup: { safe: false, activeWorkers: 0 } },
+  { outcomes: [{ ok: true, cleanup: { safe: false } }] },
+]) {
+  test(`null unsafeCleanup never hides unsafe page or outcome cleanup: ${JSON.stringify(unsafe)}`, async () => {
+    const f = fixture({ runBrowser: async () => ({ ...green(), unsafeCleanup: null, ...unsafe }) });
+    const report = await runBrowserGate(f.options);
+    expect(report.ok).toBe(false);
+    expect(report.cleanup.safe).toBe(false);
+    expect(report.reports).toHaveLength(1);
+  });
+}
+test("null unsafeCleanup never hides a failed functional outcome", async () => {
+  const f = fixture({ runBrowser: async () => ({ ...green(), unsafeCleanup: null,
+    outcomes: [{ ok: false, cleanup: { safe: true } }] }) });
+  const report = await runBrowserGate(f.options);
+  expect(report.ok).toBe(false);
+  expect(report.reports.every(result => result.ok === false)).toBe(true);
+});
+
 test("safe functional RED retains all page outcomes and continues only after browser close", async () => {
   const f = fixture();
   f.options.runBrowser = async name => {

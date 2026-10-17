@@ -83,7 +83,8 @@ export async function finishRunnerCleanup(options: {
 function assertGreenResult(result: Record<string, any>, benchmark: boolean): void {
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.cleanup?.safe, true, "page execution quiescence and cleanup");
-  assert.equal(result.unsafeCleanup, undefined, "page unsafe cleanup");
+  // WebDriver JSON cloning represents an absent undefined page field as null.
+  assert.equal(result.unsafeCleanup ?? undefined, undefined, "page unsafe cleanup");
   assert.ok(Array.isArray(result.outcomes) && result.outcomes.length > 0, "page functional outcomes");
   assert.ok(result.outcomes.every((outcome: any) => outcome.ok === true && outcome.cleanup?.safe === true), "all page functional cases passed safely");
   assert.deepEqual(result.pageErrors ?? [], [], "page errors");
@@ -123,7 +124,7 @@ export async function runBrowserGate(options: {
         const result = await options.runBrowser(name, report);
         Object.assign(report, result, { browser: name });
         // Do not replace page diagnostics/outcomes when admission fails.
-        if (result.cleanup?.safe === false || result.unsafeCleanup !== undefined
+        if (result.cleanup?.safe === false || (result.unsafeCleanup !== undefined && result.unsafeCleanup !== null)
           || result.outcomes?.some((outcome: any) => outcome.cleanup?.safe === false)) {
           report.cleanup = { ...result.cleanup, safe: false };
           output.unsafeCleanup = `${name}: ${result.unsafeCleanup ?? "page execution quiescence or resource cleanup is unproved"}`;
