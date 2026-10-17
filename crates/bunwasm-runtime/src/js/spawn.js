@@ -75,6 +75,7 @@
       stdin: stdioMode(input, 0, "ignore"),
       stdout: stdioMode(output, 1, "pipe"),
       stderr: stdioMode(error, 2, sync ? "pipe" : "inherit") };
+    if (options._worker) meta.worker = options._worker;
     return { meta, options, input };
   }
 
@@ -243,13 +244,14 @@
       native.hostClose(spec.handle);
     }
     function step() {
+      if (closed) return true;
       const code = settled ? 0 : native.hostChildWait(spec.handle);
       if (code < 0 && code !== AGAIN) throw hostError(spec.handle);
       if (code >= 0 && !settled) { sink.destroy(); finish(code); }
       if (!settled) sink.flush();
       let progress = false;
       for (const state of states) if (readPipe(state, state.consume)) progress = true;
-      if (settled && states.every((state) => !state.handle)) { close(); return true; }
+      if (settled && states.every((state) => !state.handle)) { if (!spec.options._worker) close(); return true; }
       return progress ? "progress" : false;
     }
     function fail(error) {
@@ -261,7 +263,19 @@
       close();
       rejectExit(error);
     }
+    Object.defineProperty(child, "_finishWorker", { value: close });
     const waiter = internal.addIoWaiter({ step, fail, ref: true });
+    Object.defineProperty(child, "_abortWorker", { value() {
+      child.kill(9);
+      for (const state of states) {
+        if (state.handle) native.hostClose(state.handle);
+        state.handle = 0;
+        state.end();
+      }
+      settled = true;
+      resolveExit(1);
+      close();
+    } });
     initialInput(spec.input, sink);
     if (spec.options.timeout > 0) timer = setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, spec.options.timeout);
     if (spec.options.signal) {

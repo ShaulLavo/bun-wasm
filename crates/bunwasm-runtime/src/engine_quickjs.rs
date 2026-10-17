@@ -21,6 +21,7 @@ type V = Value<'static>;
 
 unsafe extern "C" {
     fn JS_bunwasm_IsArrayBufferLike(value: qjs::JSValue) -> bool;
+    fn JS_bunwasm_IsDetachableArrayBuffer(value: qjs::JSValue) -> bool;
     /// Added to QuickJS by bun-wasm (third_party/rquickjs-sys): remaining
     /// entries of a Map/Set iterator, without advancing it.
     fn JS_bunwasm_IteratorEntries(ctx: *mut qjs::JSContext, value: qjs::JSValue) -> qjs::JSValue;
@@ -290,6 +291,16 @@ impl Engine for QuickJs {
 
     fn is_proxy(&self, v: &V) -> bool {
         v.is_proxy()
+    }
+
+    fn is_detachable_buffer(&self, v: &V) -> bool {
+        // SAFETY: the helper only inspects the buffer class and detached flag.
+        unsafe { JS_bunwasm_IsDetachableArrayBuffer(v.as_raw()) }
+    }
+
+    fn detach_buffer(&self, v: &V) {
+        // SAFETY: the transfer native validated every buffer before detaching any.
+        unsafe { qjs::JS_DetachArrayBuffer(self.raw(), v.as_raw()) }
     }
 
     fn proxy_target(&self, v: &V) -> V {

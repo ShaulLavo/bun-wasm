@@ -334,6 +334,107 @@ bash /work/tmp/wave-heavy/run.sh --class light "MessagePort compatibility follow
   js/node/test/parallel/test-worker-message-port-infinite-message-loop.js
 ```
 
+## Guest worker follow-ups
+
+The initial run at `9f780ca411096b1bdae995d729982aaa9160b521` recorded 67/120
+clean exits on each engine, compared with 21/120 at Step 1 revision `8596b11a`.
+The review fixes below expose five earlier false passes and add two real passes,
+leaving 64/120 on every engine. Repeating the census after Streams and persistence
+integration gives the same result. Observed assertion counters remain zero.
+[The worker report](../docs/worker-threads.md#guest-worker-measurement) contains
+the exact selection and full gate results. Raw records are retained under
+`/work/reports/bun-wasm-worker-execution/` until coordinator acceptance.
+
+### Shared memory and transferable engine objects
+
+`tests/esbuild/run.mjs`, with `ESBUILD_CHECKS=sync.cjs`, still has no fully passing
+engine run before or after guest workers. Its four synchronous APIs need a shared
+buffer between the caller and worker. QuickJS and the browser engine now stop in
+`worker_codec.ts` with `DataCloneError`; JSC stops in esbuild's `lib/main.js:1941`
+with `SharedArrayBuffer is not defined`. The three raw runs are in
+`esbuild-before.log` and `esbuild-after.log`. The final aggregate repeats earlier
+output, so raw occurrences of `PASS` are not a count of independent checks.
+
+Implement real shared backing storage and atomic access across guest instances.
+Do not copy SharedArrayBuffer bytes or force the package onto its other backend.
+WebAssembly.Module cloning also remains unsupported by the guest codec. Keep
+these objects separate from the existing byte-copy ArrayBuffer transfer and
+routed MessagePort transfer. Reproduce through the heavy wrapper using the
+commands in the worker report and the unchanged official esbuild package.
+
+### Vite's builtin lookup before worker pools
+
+The same frozen offline cache gives six successful installs and twelve failed
+commands both before and after. This includes Vite React dev/build, Vitest's
+default pool, and its explicit `--pool=threads` row on all three engines.
+The first diagnostic is `ENOENT: no such file or directory, open 'ws'` at Vite's
+`import.meta.require("ws").WebSocketServer` in `dist/node/chunks/config.js`.
+The Vitest browser-engine log points to line 20578; the Vite React build log
+points to line 23728. The error precedes worker construction. The portable ws
+builtin is present, so inspect whether `import.meta.require` follows the same
+builtin lookup as ordinary `require`; the exact cause is not established here.
+
+Reproduce with `scripts/app-matrix.sh --apps=vitest,vite-react --hosts=native
+--engines=quickjs,jsc,browser --timeout=45 --cache=<offline-mirror>
+--launcher=<private-launcher> --output=<fresh-directory>`. The retained
+`apps-before-complete/` and `apps-after/` records both have zero registry misses
+and errors. Do not alter the real package sources to bypass this lookup.
+
+### Browser-host round-trip deadline
+
+Only the browser engine times out in
+`js/node/test/parallel/test-worker-message-port-message-before-close.js` at the
+shared fifteen-second deadline. This file performs 10,000 cross-guest port round
+trips. QuickJS and JSC complete it in the same census. No output appears before
+the browser deadline. Reproduce it alone with `scripts/bun-suite.sh --engine
+browser --jobs 1 --timeout 60 --output <fresh.json>` and that file path before
+claiming either a scheduling bug or a performance cause. Start by tracing control
+pipe notification in `web/src/subprocess.js`, including its four-millisecond
+watch interval. No timing optimization or cause is claimed by this measurement.
+
+### Worker errors exposed by the review fixes
+
+Status: Approved. Follow up in the process, module-loader and tracing tracks.
+
+The #37 review fixes stop swallowing Worker errors and exceptions from parent
+listeners. The same 120-file census changes from 67 to 64 fully passing files on
+each engine. `test-worker-nested-uncaught.js` and
+`test-worker-terminate-unrefed.js` now pass. Five earlier clean exits concealed
+errors. Each engine exposes the same five cases in this comparison. These files are assertion scripts, so observed assertion counters
+are zero before and after.
+
+| File under `js/node/test/parallel/` | Newly visible failure | Starting point |
+| --- | --- | --- |
+| `test-process-execve-worker-threads.js` | Expected `TypeError` with `ERR_WORKER_UNSUPPORTED_OPERATION`; absent `process.execve` produces a plain TypeError. | `src/js/process.js` lacks the API. Define the worker-only unsupported-operation behavior with a Node/Bun control first. |
+| `test-trace-events-api-worker-disabled.js` | Expected `ERR_TRACE_EVENTS_UNAVAILABLE`; receives `MODULE_NOT_FOUND`. | The builtin registry lacks `trace_events`. Determine main-thread support and the worker-specific rejection together. |
+| `test-worker-dns-terminate-during-query.js` | `dgram.createSocket('udp4')` throws `ERR_NOT_SUPPORTED_IN_WASM`. | Existing UDP platform limitation. The worker error now correctly fails the parent. |
+| `test-worker-esm-missing-main.js` | Expected `Cannot find module ...`; receives `Module not found "..."`. | `src/js/bootstrap.js` main-entry existence check. Compare native Bun and Node before changing the shared loader's diagnostic contract. |
+| `test-worker-syntax-error-file.js` | Expected a `SyntaxError` constructor; receives `Error`. | `src/modules.rs::build_error` creates BuildError metadata; `src/js/worker_codec.ts` decodes unknown error constructors as Error. Trace the loader error before deciding where Node Worker normalization belongs. |
+
+Runtime paths above are relative to `crates/bunwasm-runtime`. Raw before/after
+JSON, stderr excerpts, hashes and the comparison script are retained at
+`/work/reports/bun-wasm-worker-r37/` until coordinator acceptance. Reproduce each
+file with `scripts/bun-suite.sh --engine quickjs --jobs 1 --timeout 15 --output
+<fresh.json> js/node/test/parallel/<file>` through the heavy wrapper. Repeat with
+`jsc` and `browser`. Preserve correct uncaught-error propagation while addressing
+the owning API or diagnostic gap.
+
+### Resolved full-web memory-growth gate
+
+The original full web gate failed after 243 unit passes and all six real-browser
+worker runs. Chromium's first growth guest in `web/tests/browser-memory.mjs:65` times out
+after 120 seconds and reports `null !== 0`. Its program is the unchanged
+`tests/fixtures/memory-grow/index.js`, which writes and reads a 48 MiB file.
+The same main failure was independently recorded during
+[Step 1 review](https://github.com/ShaulLavo/bun-wasm/pull/31#issuecomment-6225280460).
+This lane did not change the memory test or the filesystem implementation.
+
+The original Step 2 run reported this blocker in
+[this comment](https://github.com/ShaulLavo/bun-wasm/pull/31#issuecomment-6225879642).
+PR #36 fixed the shared filesystem capacity problem. It is merged into the #37
+review-fix branch. The repeated memory gate now passes all six Chromium/WebKit
+and engine combinations. This is no longer a Worker delivery blocker.
+
 ### Node stream adapter census after unavailable worker detection
 
 The PR12 round-5 merge includes main `0cffef1`. All 22 selected Node adapter

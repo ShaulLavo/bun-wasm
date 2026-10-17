@@ -197,6 +197,7 @@ fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<
             .with_context(|| format!("preopening {}", host.display()))?;
     }
     let net = net::Net::new();
+    let memory_limit = stdio.memory_limit;
     let processes = process::Processes::new(runtime.clone(), stdio, net.notify());
     let host = Host {
         wasi: wasi.build_p1(),
@@ -204,7 +205,7 @@ fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<
         functions: Vec::new(),
         cancel: cancel.clone(),
         processes,
-        limits: StoreLimitsBuilder::new().memory_size(512 << 20).instances(1).build(),
+        limits: StoreLimitsBuilder::new().memory_size(memory_limit).instances(1).build(),
         memory: None,
         trace: std::env::var("BUN_WASM_TRACE").is_ok_and(|v| !v.is_empty() && v != "0"),
     };

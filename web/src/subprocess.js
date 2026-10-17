@@ -1,3 +1,4 @@
+import { InheritedWorkerPipes, workerBuffers } from "./worker-pipes.ts";
 import { memoryViews } from "../../runtime/core/memory-views.js";
 
 // Shared transport for browser and Node workers. No native executables are launched.
@@ -162,6 +163,7 @@ export function childTransport(transport) {
 export class SubprocessHost {
   constructor(options) {
     this.options = options;
+    this.workerPipes = new InheritedWorkerPipes(options.workerTransport);
     this.budget = options.budget || createProcessBudget();
     this.children = new Map();
     this.handles = new Map();
@@ -224,14 +226,14 @@ export class SubprocessHost {
     const reservation = this.reserve();
     if (!reservation) return this.fail("spawn: at most four bun-wasm child instances may run", "EAGAIN");
     const { slot, token } = reservation;
-    const buffers = modes.map(() => new SharedArrayBuffer(16 + PIPE_SIZE));
+    const buffers = modes.map(() => new SharedArrayBuffer(16 + PIPE_SIZE)).concat(workerBuffers(meta));
     const inheritedStdin = modes[0] === "inherit" && Boolean(this.options.stdin);
     if (inheritedStdin) buffers[0] = this.options.stdin;
     const transport = { budget: this.budget, slot, token, inheritedStdin, pipes: buffers, control: new SharedArrayBuffer(16) };
     const id = this.nextHandle++;
     const pipes = transport.pipes.map((buffer) => new SharedPipe(buffer, this.budget));
     const handles = pipes.map((pipe, fd) => {
-      if (modes[fd] !== "pipe") return 0;
+      if (fd < 3 && modes[fd] !== "pipe") return 0;
       const handle = this.nextHandle++;
       this.handles.set(handle, { pipe, fd, child: id });
       return handle;
@@ -257,9 +259,11 @@ export class SubprocessHost {
   }
   pipe(id, fd) {
     const child = this.children.get(id);
-    return child && fd >= 0 && fd <= 2 ? child.handles[fd] : BADF;
+    if (id === 0) return this.workerPipes.handle(fd);
+    return child && fd >= 0 && fd < child.handles.length ? child.handles[fd] : BADF;
   }
   read(handle, cap) {
+    if (this.workerPipes.owns(handle)) { this.watch(); return this.workerPipes.read(handle, cap); }
     if (handle === 0) {
       const value = this.stdin ? this.stdin.read(cap) : -4;
       this.stdinWaiting = value === AGAIN;
@@ -267,11 +271,14 @@ export class SubprocessHost {
       return value;
     }
     const h = this.handles.get(handle);
-    return h && h.fd !== 0 ? h.pipe.read(cap) : BADF;
+    return h && h.fd !== 0 && h.fd !== 3 ? h.pipe.read(cap) : BADF;
   }
   write(handle, bytes) {
+    if (this.workerPipes.owns(handle)) {
+      return this.workerPipes.write(handle, bytes);
+    }
     const h = this.handles.get(handle);
-    if (!h || h.fd !== 0) return BADF;
+    if (!h || h.fd !== 0 && h.fd !== 3) return BADF;
     const result = h.pipe.write(bytes);
     return result === -1 ? this.closedPipe(handle) : result;
   }
@@ -280,6 +287,7 @@ export class SubprocessHost {
     return -1;
   }
   close(handle) {
+    if (this.workerPipes.owns(handle)) return this.workerPipes.close(handle);
     if (this.children.has(handle)) {
       this.kill(handle, 9);
       this.release(handle);
@@ -355,7 +363,7 @@ export class SubprocessHost {
       this.timer = null;
       this.poll();
       this.notify();
-      if (this.stdinWaiting || Array.from(this.children.values()).some((child) => !child.ended)) this.watch();
+      if (this.workerPipes.active || this.stdinWaiting || Array.from(this.children.values()).some((child) => !child.ended)) this.watch();
     }, 4);
   }
   dispose() {

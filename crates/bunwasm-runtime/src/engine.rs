@@ -319,6 +319,8 @@ pub trait Engine: Sized + 'static {
     // --- introspection for console.log / util.types ---
     fn is_promise(&self, v: &Self::Value) -> bool;
     fn is_proxy(&self, v: &Self::Value) -> bool;
+    fn is_detachable_buffer(&self, v: &Self::Value) -> bool;
+    fn detach_buffer(&self, v: &Self::Value);
     fn proxy_target(&self, v: &Self::Value) -> Self::Value;
     fn is_error(&self, v: &Self::Value) -> bool;
     /// Remaining entries of a Map/Set iterator without advancing it.
