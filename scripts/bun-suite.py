@@ -390,6 +390,11 @@ def main():
             shutil.copyfile(wasm, frozen_wasm)
             if digest(frozen_wasm) != meta["wasm_sha256"]:
                 raise RuntimeError("Wasm changed during suite setup; rerun with a stable artifact")
+            if meta["tools_sha256"] is not None:
+                frozen_tools = scratch / "bun-tools.wasm"
+                shutil.copyfile(wasm.with_name("bun-tools.wasm"), frozen_tools)
+                if digest(frozen_tools) != meta["tools_sha256"]:
+                    raise RuntimeError("Tools changed during suite setup; rerun with stable artifacts")
             run_workers(opts, frozen_wasm, source, scratch, preloads, records, selected)
     finally:
         write_results(opts, meta, records, selected)
