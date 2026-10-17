@@ -10,7 +10,7 @@ net.connect throws: true
 child_process.spawn fails: true
 Bun.which: null
 Bun.spawnSync fails: true
-Bun.spawn throws: true
+Bun.spawn fails: true
 Bun.serve throws: true
 fetch rejects: true
 fetch file: URL: true

@@ -1698,7 +1698,9 @@ tarballs. It checks the header, workspace imports, a frozen reinstall, binary
 links, script argument forwarding, update ranges, migration pins, and `bun x`
 without public-registry access.
 
-The original `node-misc` fixture requires asynchronous spawn errors and a failed,
-nonzero synchronous result when the program or process provider is unavailable.
-It checks the structured `ENOENT` and `ERR_NOT_SUPPORTED_IN_WASM` codes used by
-the current optional-host configurations. Its source is TypeScript.
+The original `node-misc` fixture checks current process-provider failure paths.
+It requires a structured `ENOENT` or `ERR_NOT_SUPPORTED_IN_WASM` error when
+admission fails, or status 127 with the missing-program diagnostic when the host
+completes an unregistered program. Both asynchronous completion and synchronous
+failure are checked. Its source is TypeScript. The spawn-facade unit harness loads
+the real TypeScript command dispatcher with an explicitly empty filesystem.
