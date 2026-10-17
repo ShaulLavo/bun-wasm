@@ -33,6 +33,41 @@ const timeout = setTimeout(() => {
   void cleanup().finally(() => process.exit(1));
 }, 90_000);
 
+async function startupStealChecks(base: string) {
+  for (const app of ["sandbox", "playground"]) {
+    for (const rejectPending of [false, true]) await startupSteal(base, app, rejectPending);
+  }
+}
+async function startupSteal(base: string, app: string, rejectPending: boolean) {
+  const context = await browser!.newContext();
+  const owner = await context.newPage();
+  const errors: string[] = [];
+  owner.on("pageerror", error => errors.push(error.message));
+  try {
+    await owner.goto(`${base}/${app}/?pause-startup=1`);
+    await owner.waitForFunction(() => (globalThis as any).startupFilesystem?.paused);
+    const contender = await context.newPage();
+    await contender.goto(`${base}/${app}/`);
+    await contender.waitForFunction(app => !!(globalThis as any)[app]?.editor, app);
+    await contender.evaluate(async app => {
+      const fs = (globalThis as any)[app].fs;
+      await fs.writeFile("/startup-saved", "saved during takeover"); await fs.flush();
+    }, app);
+    await owner.bringToFront();
+    await owner.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("This workspace was opened in another tab."));
+    if (rejectPending) await owner.evaluate(() => (globalThis as any).startupFilesystem.resume());
+    const button = owner.locator(app === "sandbox" ? "#restart" : "#run");
+    await button.waitFor();
+    assert.equal(await button.innerText(), "Reload");
+    assert.equal(await button.isEnabled(), true);
+    await Promise.all([owner.waitForNavigation({ timeout: 4_000 }), button.click()]);
+    await owner.waitForFunction(app => !!(globalThis as any)[app]?.editor, app);
+    assert.equal(await owner.evaluate(async app => new TextDecoder().decode(await (globalThis as any)[app].fs.readFile("/startup-saved")), app), "saved during takeover");
+    assert.deepEqual(errors, []);
+    console.log(`ok ${engine} ${app}: startup steal ${rejectPending ? "rejection" : "pending request"}, complete error and working Reload`);
+  } finally { await context.close(); }
+}
+
 try {
   scratch = await mkdtemp(join(process.env.EDITOR_SCRATCH_ROOT ?? "/work/tmp", "bun-wasm-browser-editor-"));
   process.env.TMPDIR = scratch;
@@ -49,6 +84,7 @@ try {
         setup(build) {
           // Only the engine and preview host are replaced. All editor, startup, save and
           // persistence code runs as shipped, including the real filesystem worker.
+          build.onResolve({ filter: /(?:\.\/|\.\.\/web\/src\/)shared-fs$/ }, () => ({ path: join(root, "web/tests/fixtures/startup-filesystem.ts") }));
           build.onLoad({ filter: /\/web\/src\/runner\.ts$/ }, () => ({ loader: "ts", contents: `
             export const ENGINES = Object.fromEntries(["browser", "quickjs", "jsc"].map(key => [key, { name: key, wasm: "not-built.wasm" }]));
             export class WasmMissing extends Error {}
@@ -94,6 +130,8 @@ try {
   page.on("response", response => { if (response.status() >= 400) console.error(`HTTP ${response.status()}: ${response.url()}`); });
   const base = `http://127.0.0.1:${server.port}`;
 
+  await startupStealChecks(base);
+  if (process.env.STARTUP_STEAL_ONLY !== "1") {
   await page.goto(`${base}/sandbox/`);
   await page.waitForFunction(() => (globalThis as any).sandbox?.editor.path === "src/App.tsx");
   await page.evaluate(async () => {
@@ -219,6 +257,7 @@ try {
   assert.equal(await page.evaluate(async () => new TextDecoder().decode(await (globalThis as any).playground.fs.readFile("/home/user/index.ts"))), "console.log('saved playground');");
   assert.deepEqual(errors, []);
   console.log(`${engine} ${browser.version()}: durable saves, reload, seed/reset recovery, complete mobile startup errors, newest writer wins and displaced edits remain visible passed`);
+  }
 } finally {
   clearTimeout(timeout);
   await cleanup();
