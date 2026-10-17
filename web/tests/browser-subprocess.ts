@@ -49,14 +49,18 @@ for (const code of [23, 143]) {
   // Wait for a live guest blocked on stdin, request TERM, then let it choose its own exit.
   const child = Bun.spawn(cmd('console.log("term-ready"); await Bun.stdin.text(); process.exit(' + code + ')'), { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   const reader = child.stdout.getReader();
-  const first = await reader.read();
-  if (first.done || new TextDecoder().decode(first.value).trim() !== "term-ready") throw new Error("TERM child was not ready");
-  reader.releaseLock();
-  child.kill("SIGTERM");
-  child.stdin.end();
-  const exited = await child.exited;
-  await new Response(child.stdout).text();
-  console.log("api term", code, exited, child.exitCode, JSON.stringify(child.signalCode), child.killed);
+  try {
+    const first = await reader.read();
+    if (first.done || new TextDecoder().decode(first.value).trim() !== "term-ready") throw new Error("TERM child was not ready");
+    child.kill("SIGTERM");
+    child.stdin.end();
+    const exited = await child.exited;
+    // The readiness read disturbed stdout; drain its existing reader, not a new Response body.
+    while (!(await reader.read()).done) { /* Drain through EOF. */ }
+    console.log("api term", code, exited, child.exitCode, JSON.stringify(child.signalCode), child.killed);
+  } finally {
+    reader.releaseLock();
+  }
   // No signal listener: a finite awaited child completes after the synchronous timeout request.
   const timed = Bun.spawnSync(cmd("await Bun.sleep(250); process.exit(" + code + ")"), { timeout: 1, killSignal: "SIGTERM" });
   console.log("api term timeout", code, timed.exitCode, JSON.stringify(timed.signalCode), timed.exitedDueToTimeout, timed.success, JSON.stringify(timed.error ?? null));
