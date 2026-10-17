@@ -24,7 +24,7 @@
       }
       if (char === "$" && quote !== "'") {
         const variable = /^(?:\{([A-Za-z_][\w]*)\}|([A-Za-z_][\w]*))/.exec(source.slice(index + 1));
-        if (variable) { word += process.env[variable[1] || variable[2]] || ""; index += variable[0].length; started = true; continue; }
+        if (variable) { const value = process.env[variable[1] || variable[2]] || ""; word += value; index += variable[0].length; started ||= value.length > 0 || quote !== ""; continue; }
       }
       word += char; started = true;
     }
@@ -104,6 +104,13 @@
     throw Object.assign(new Error("Too many symbolic links in package binary"), { code: "ELOOP" });
   }
 
+  function sourceFile(cwd: string, name: string): string | undefined {
+    try {
+      const file = native.resolve(path.resolve(cwd, name), "/", false);
+      if (native.exists(file) && (native.stat(file).mode & 0o170000) === 0o100000) return file;
+    } catch {}
+  }
+
   function resolve(requested: string): string {
     const cwd = process.cwd();
     let name = native.mainArg();
@@ -117,7 +124,7 @@
     process.env.PATH = bins.concat(process.env.PATH ? [process.env.PATH] : []).join(":");
     for (let depth = 0; depth < 32; depth++) {
       const command = name && !name.includes("/") ? script(cwd, name) : undefined;
-      if (command === undefined) { file = binary(cwd, name) || path.resolve(cwd, name || requested); break; }
+      if (command === undefined) { file = sourceFile(cwd, name || requested) || binary(cwd, name) || path.resolve(cwd, name || requested); break; }
       const argv = words(command);
       while (argv.length && /^[A-Za-z_][\w]*=/.test(argv[0])) {
         const entry = argv.shift();

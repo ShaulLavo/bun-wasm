@@ -34,7 +34,8 @@ async function run(cwd: string, ...args: string[]) {
   const options = ["--wasm", resolve(root, process.env.BUN_WASM || "dist/bun.wasm"), "--dir", `${cwd}::/`,
     "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache", "--"];
   const executable = engine === "native" ? "bun" : engine === "browser" ? process.execPath : process.env.BUN_WASM_LAUNCHER!;
-  const argv = engine === "native" ? args : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(options, args) : options.concat(args);
+  const nativeArgs = args[0] === "x" ? ["x", "--bun"].concat(args.slice(1)) : args;
+  const argv = engine === "native" ? nativeArgs : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(options, args) : options.concat(args);
   const child = spawn(executable, argv, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   children.add(child);
   let stdout = "", stderr = "";
@@ -53,7 +54,7 @@ async function success(cwd: string, ...args: string[]) {
 }
 const cases: Record<string, () => Promise<void>> = {
   async sourcePrecedence() {
-    const cwd = project("precedence", { "package.json": '{"dependencies":{"tool":"1.0.0"}}', "tool.ts": 'console.log("source-file");' });
+    const cwd = project("precedence", { "package.json": '{"dependencies":{"tool":"1.0.0"}}', "tool.ts": '#!/usr/bin/env bun\nconsole.log("source-file");' });
     await success(cwd, "install");
     for (const linked of [true, false]) {
       if (!linked) rmSync(join(cwd, "node_modules/.bin"), { recursive: true });
@@ -62,35 +63,39 @@ const cases: Record<string, () => Promise<void>> = {
     }
   },
   async expandedScript() {
-    const cwd = project("script", { "package.json": '{"scripts":{"start":"bun src/main"}}', "src/main.ts": 'console.log("expanded-main", process.argv[1].endsWith("/src/main.ts"), import.meta.main);' });
+    const cwd = project("script", { "package.json": '{"scripts":{"start":"bun src/main"}}', "src/main.ts": '#!/usr/bin/env bun\nconsole.log("expanded-main", process.argv[1].endsWith("/src/main.ts"), import.meta.main);' });
     assert.match(await success(cwd, "run", "start"), /expanded-main true true/);
   },
   async binSelection() {
     const cwd = project("bins", { "package.json": '{"dependencies":{"@fixture/multiple":"1.0.0","only":"1.0.0","@fixture/string":"1.0.0"}}' });
     await success(cwd, "install");
     rmSync(join(cwd, "node_modules/.bin"), { recursive: true });
-    assert.match(await success(cwd, "x", "--no-install", "@fixture/multiple"), /first-bin/);
-    assert.match(await success(cwd, "x", "--no-install", "@fixture/string"), /string-bin/);
+    assert.match(await success(cwd, "x", ...(process.env.INSTALL_ENGINE === "native" ? [] : ["--no-install"]), "@fixture/multiple"), /first-bin/);
+    assert.match(await success(cwd, "x", ...(process.env.INSTALL_ENGINE === "native" ? [] : ["--no-install"]), "@fixture/string"), /string-bin/);
     assert.match(await success(cwd, "x", "--no-install", "--package", "@fixture/multiple", "second"), /second-bin/);
     const missing = await run(cwd, "x", "--no-install", "--package", "only", "missing");
     assert.notEqual(missing.code, 0, missing.stdout);
     assert.doesNotMatch(missing.stdout, /only-bin/);
   },
+  async unsetExpansion() {
+    const cwd = project("unset", { "package.json": JSON.stringify({ scripts: { check: 'bun args.ts $BUN_WASM_UNSET_VALUE "${BUN_WASM_UNSET_VALUE}"' } }), "args.ts": 'console.log(JSON.stringify(process.argv.slice(2)));' });
+    assert.equal((await success(cwd, "run", "check")).trim(), '[""]');
+  },
   async warmCache() {
     const cwd = project("cache", { "package.json": '{}' });
-    assert.match(await success(cwd, "x", "only@1.0.0"), /only-bin/);
+    assert.match(await success(cwd, "x", "@fixture/string@1.0.0"), /string-bin/);
     registry.setOffline(true);
-    try { assert.match(await success(cwd, "x", "--no-install", "only@1.0.0"), /only-bin/); }
+    try { assert.match(await success(cwd, "x", "--no-install", "@fixture/string@1.0.0"), /string-bin/); }
     finally { registry.setOffline(false); }
   },
 };
 try {
   registry = await createRegistry([
-    packageFixture("tool", "1.0.0", { bin: "cli.ts" }, undefined, [tarEntry("package/cli.ts", 'console.log("bin-tool");')]),
+    packageFixture("tool", "1.0.0", { bin: "cli.ts" }, undefined, [tarEntry("package/cli.ts", '#!/usr/bin/env bun\nconsole.log("bin-tool");')]),
     packageFixture("@fixture/multiple", "1.0.0", { bin: { first: "first.ts", second: "second.ts" } }, undefined,
-      [tarEntry("package/first.ts", 'console.log("first-bin");'), tarEntry("package/second.ts", 'console.log("second-bin");')]),
-    packageFixture("only", "1.0.0", { bin: { actual: "cli.ts" } }, undefined, [tarEntry("package/cli.ts", 'console.log("only-bin");')]),
-    packageFixture("@fixture/string", "1.0.0", { bin: "cli.ts" }, undefined, [tarEntry("package/cli.ts", 'console.log("string-bin");')]),
+      [tarEntry("package/first.ts", '#!/usr/bin/env bun\nconsole.log("first-bin");'), tarEntry("package/second.ts", '#!/usr/bin/env bun\nconsole.log("second-bin");')]),
+    packageFixture("only", "1.0.0", { bin: { actual: "cli.ts" } }, undefined, [tarEntry("package/cli.ts", '#!/usr/bin/env bun\nconsole.log("only-bin");')]),
+    packageFixture("@fixture/string", "1.0.0", { bin: "cli.ts" }, undefined, [tarEntry("package/cli.ts", '#!/usr/bin/env bun\nconsole.log("string-bin");')]),
   ]);
   for (const [name, check] of Object.entries(cases)) {
     try { await check(); console.log(`PASS ${name}`); }

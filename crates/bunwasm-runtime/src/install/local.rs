@@ -67,15 +67,15 @@ pub fn workspaces(root: &Path, manifest: &Value, parser: &dyn Transpiler) -> Res
             .walk()
             .map_err(|e| format!("Workspace glob: {e:?}"))?
             .map_err(|e| format!("Workspace glob: {e:?}"))?;
-        for path in walker.matched_paths.keys().iter() {
-            let path = PathBuf::from(String::from_utf8_lossy(path).into_owned());
-            if exclude {
-                paths.retain(|p| p != &path);
-            } else {
-                paths.push(path);
-            }
+        let matched: Vec<_> = walker.matched_paths.keys().iter()
+            .map(|path| PathBuf::from(String::from_utf8_lossy(path).into_owned())).collect();
+        if exclude {
+            paths.retain(|path| !matched.contains(path));
+            continue;
         }
+        paths.extend(matched);
     }
+
     paths.sort();
     paths.dedup();
     for path in paths {

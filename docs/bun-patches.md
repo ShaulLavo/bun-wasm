@@ -1703,6 +1703,12 @@ through its package manifest, including scoped packages. These are original
 adapter changes, with no additional upstream source or patch. The playground
 shell dispatches its `bunx` alias through the same `bun x` command path.
 
+Default bunx bin-map selection follows Bun's first-valid-entry behavior in
+`src/runtime/cli/bunx_command.rs`, `get_bin_name_from_subpath`, at the Bun pin.
+Explicit bin names require an exact match. The local adapter preserves published
+cache use under `--no-install`. Member updates invalidate only the member's
+selected lock entries, leaving unrelated root pins intact.
+
 The TypeScript package-script dispatcher runs JavaScript and TypeScript binaries
 inside the selected engine. It handles quoted arguments and environment
 assignments. Shell pipelines, redirections, command substitution, and native

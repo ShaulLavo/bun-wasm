@@ -641,7 +641,13 @@ fn unlock(locked: &mut Value, opts: &Options, workspace: Option<&str>) {
     };
     let prefix = workspace.map(|name| format!("{name}/"));
     packages.retain(|key, _| {
-        let name = prefix.as_deref().and_then(|prefix| key.strip_prefix(prefix)).unwrap_or(key);
+        let name = match prefix.as_deref() {
+            Some(prefix) => match key.strip_prefix(prefix) {
+                Some(name) => name,
+                None => return true,
+            },
+            None => key,
+        };
         !selected(name, opts)
     });
 }
@@ -682,36 +688,36 @@ fn finalize_updates(manifest: &mut Value, opts: &Options, resolver: &Resolver, m
     Ok(())
 }
 
-fn link_bins(resolver: &Resolver) -> Result<()> {
-    for package in resolver.packages.values() {
-        let path = package.path();
-        if package.local.is_some() && !path.join("package.json").exists() {
+fn link_package_bins(package: &Package) -> Result<()> {
+    let path = package.path();
+    if package.local.is_some() && !path.join("package.json").exists() {
+        return Ok(());
+    }
+    let meta: Value = serde_json::from_slice(&fs::read(path.join("package.json")).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let modules = resolve::path(&package.chain[..package.chain.len() - 1]).join("node_modules");
+    for (name, file) in binary_entries(&meta, &path)? {
+        let target = std::env::current_dir().map_err(|e| e.to_string())?.join(&path).join(&file);
+        if !target.is_file() {
             continue;
         }
-        let meta: Value = serde_json::from_slice(&fs::read(path.join("package.json")).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        let bins = binary_entries(&meta, &path)?;
-        let modules = resolve::path(&package.chain[..package.chain.len() - 1]).join("node_modules");
-        for (name, file) in bins {
-            let target = std::env::current_dir()
-                .map_err(|e| e.to_string())?
-                .join(&path)
-                .join(&file);
-            if !target.is_file() {
-                continue;
-            }
-            let relative = Path::new("..").join(package.chain.last().unwrap()).join(file);
-            if let local::BinLink::Unsupported = local::bin_link(&relative, &modules.join(".bin").join(&name))? {
-                eprintln!("warn: {} ({name}): bin link skipped: this filesystem does not support symbolic links", package.name);
-            }
+        let relative = Path::new("..").join(package.chain.last().unwrap()).join(file);
+        if let local::BinLink::Unsupported = local::bin_link(&relative, &modules.join(".bin").join(&name))? {
+            eprintln!("warn: {} ({name}): bin link skipped: this filesystem does not support symbolic links", package.name);
         }
     }
-    if let Ok(entries) = fs::read_dir("node_modules/.bin") {
-        for entry in entries {
-            let path = entry.map_err(|e| e.to_string())?.path();
-            if path.is_symlink() && !path.exists() {
-                fs::remove_file(path).map_err(|e| e.to_string())?;
-            }
+    Ok(())
+}
+
+fn link_bins(resolver: &Resolver) -> Result<()> {
+    for package in resolver.packages.values() {
+        link_package_bins(package)?;
+    }
+    let Ok(entries) = fs::read_dir("node_modules/.bin") else { return Ok(()) };
+    for entry in entries {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path.is_symlink() && !path.exists() {
+            fs::remove_file(path).map_err(|e| e.to_string())?;
         }
     }
     Ok(())
@@ -791,21 +797,18 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
     if input == name {
         for ancestor in cwd.ancestors() {
             let bin = ancestor.join("node_modules/.bin").join(bin_name);
-            if bin.is_file() {
-                return Ok((bin.to_string_lossy().into_owned(), args.collect()));
-            }
             let base = ancestor.join("node_modules").join(&name);
             if !base.join("package.json").is_file() {
+                if package.is_none() && bin.is_file() {
+                    return Ok((bin.to_string_lossy().into_owned(), args.collect()));
+                }
                 continue;
             }
             let meta = io::read(&base.join("package.json"), "JSON", parser)?;
-            if let Some(file) = package_binary(&meta, &base, bin_name)? {
+            if let Some(file) = package_binary(&meta, &base, package.as_ref().map(|_| bin_name))? {
                 return Ok((file.to_string_lossy().into_owned(), args.collect()));
             }
         }
-    }
-    if no_install {
-        return Err(format!("Executable not found: {bin_name}"));
     }
     let registry = registry(&Options::default(), parser)?;
     let hash = format!(
@@ -815,6 +818,9 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
     let cache = cwd.join(io::cache_dir()).join("bunx");
     let destination = cache.join(hash);
     if !destination.join("bun.lock").exists() {
+        if no_install {
+            return Err(format!("Executable not found: {bin_name}"));
+        }
         fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
         let mut random = [0u8; 16];
         getrandom::fill(&mut random).map_err(|e| e.to_string())?;
@@ -848,17 +854,16 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
     }
     let base = destination.join("node_modules").join(&name);
     let meta = io::read(&base.join("package.json"), "JSON", parser)?;
-    let file = package_binary(&meta, &base, bin_name)?
+    let file = package_binary(&meta, &base, package.as_ref().map(|_| bin_name))?
         .ok_or_else(|| format!("Could not determine executable for package {name}"))?;
     Ok((file.to_string_lossy().into_owned(), args.collect()))
 }
 
-fn package_binary(meta: &Value, base: &Path, bin_name: &str) -> Result<Option<std::path::PathBuf>> {
+fn package_binary(meta: &Value, base: &Path, requested: Option<&str>) -> Result<Option<std::path::PathBuf>> {
     let bins = binary_entries(meta, base)?;
     Ok(bins
         .iter()
-        .find(|(bin, _)| bin == bin_name)
-        .or_else(|| if bins.len() == 1 { bins.first() } else { None })
+        .find(|(bin, file)| requested.is_none_or(|name| bin == name) && base.join(file).is_file())
         .map(|(_, file)| base.join(file))
         .filter(|file| file.is_file()))
 }
