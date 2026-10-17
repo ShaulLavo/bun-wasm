@@ -10,7 +10,8 @@ import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
 import { decode, normalize } from "./fs";
-import { SharedFilesystem, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
+import { createRuntime } from "@bun-wasm/runtime";
+import { WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
 import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
 import { type Output, Shell } from "./shell";
@@ -59,7 +60,8 @@ runButton.onclick = () => {
   if (startup === "failed") { location.reload(); return; }
   if (startup === "ready") void runCurrent().catch(reportError);
 };
-const fs = new SharedFilesystem({ storage });
+const runtime = createRuntime({ filesystem: { storage, name: "bun-wasm-workspace" } });
+const fs = runtime.filesystem;
 fs.onOwnershipLost = () => {
   startup = "failed";
   setStatus("", "error");
@@ -149,7 +151,7 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
   runButton.disabled = true;
   try {
     await fs.drain();
-    const run = startRun({ engine, module: wasm.module, args, env, filesystem: fs, moduleScope: scoped, trace }, {
+    const run = startRun({ engine, module: wasm.module, args, env, runtime, moduleScope: scoped, trace }, {
       stdout: (data) => io.out(data),
       stderr: (data) => io.err(data),
       listening: (port, helper) => {
