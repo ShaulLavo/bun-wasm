@@ -179,7 +179,7 @@
     });
     const head = await Promise.race([waitHead(handle), aborted]);
     const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 304;
-    const body = nullBody ? null : handleStream(handle, closeHandle);
+    const body = nullBody ? null : internal.require("compression_streams").decode(handleStream(handle, closeHandle), head.bodyEncoding);
     if (nullBody) closeHandle();
     const res = new Response(body, {
       status: head.status >= 200 && head.status <= 599 ? head.status : 200,

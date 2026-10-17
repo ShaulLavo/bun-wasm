@@ -1,0 +1,10 @@
+
+index.test.ts:
+(pass) waits for an unawaited async throw assertion
+(pass) an unawaited async throw mismatch fails the test
+(pass) awaited failures can be asserted without poisoning the test
+
+ 3 pass
+ 0 fail
+ 5 expect() calls
+Ran 3 tests across 1 file. [TIME]

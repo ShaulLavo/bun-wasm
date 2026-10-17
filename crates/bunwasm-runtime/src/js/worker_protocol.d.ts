@@ -103,15 +103,6 @@ interface ArrayBufferConstructor {
   new(length: number, options?: { maxByteLength?: number }): ArrayBuffer;
 }
 declare namespace BunWasm {
-  interface WorkerReadable extends NodeEmitter {
-    push(chunk: unknown): boolean;
-    pipe(target: { write(chunk: unknown): unknown }): unknown;
-    destroy(error?: unknown): void;
-  }
-  interface WorkerWritable extends NodeEmitter {
-    write(chunk: unknown): unknown;
-    end(): unknown;
-  }
   interface WorkerChild {
     pid: number;
     readonly signalCode: string | number | null;
@@ -128,11 +119,6 @@ declare namespace BunWasm {
   interface Internal {
     builtin(name: "node:module"): { createRequire(path: string): (specifier: string) => unknown };
     workerNoWarnings?: boolean;
-    builtin(name: "node:stream"): {
-      Readable: new(options: { read(): void }) => WorkerReadable;
-      Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: () => void): void }) => WorkerWritable;
-    };
-    require(name: "buffer"): { Buffer: { from(value: unknown, encoding?: string): Uint8Array & { toString(encoding?: string): string }; isEncoding(encoding: string): boolean } };
     require(name: "spawn"): { spawn(argv: string[], options: Record<string, unknown>): WorkerChild };
     require(name: "worker_stdio"): {
       readable(source: ReadableStream<Uint8Array>): { stream: WorkerReadable; drained: Promise<void> };

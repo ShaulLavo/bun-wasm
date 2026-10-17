@@ -64,6 +64,7 @@
 
   const kReadableOperator = {
     deepStrictEqual: "Expected values to be strictly deep-equal:",
+    partialDeepStrictEqual: "Expected values to be partially and strictly deep-equal:",
     strictEqual: "Expected values to be strictly equal:",
     strictEqualObject: 'Expected "actual" to be reference-equal to "expected":',
     deepEqual: "Expected values to be loosely deep-equal:",
@@ -234,7 +235,7 @@
   }
 
   function generateMessage(actual, expected, operator) {
-    if (operator === "deepStrictEqual" || operator === "strictEqual") return createErrDiff(actual, expected, operator);
+    if (operator === "deepStrictEqual" || operator === "strictEqual" || operator === "partialDeepStrictEqual") return createErrDiff(actual, expected, operator);
     if (operator === "notDeepStrictEqual" || operator === "notStrictEqual") return notEqualMessage(actual, operator);
     return otherMessage(actual, expected, operator);
   }
@@ -251,7 +252,7 @@
       let text;
       if (message != null) {
         text =
-          operator === "deepStrictEqual" || operator === "strictEqual"
+          operator === "deepStrictEqual" || operator === "strictEqual" || operator === "partialDeepStrictEqual"
             ? createErrDiff(actual, expected, operator, message)
             : String(message);
       } else {
@@ -669,6 +670,7 @@
     deepEqual,
     notDeepEqual,
     deepStrictEqual,
+    partialDeepStrictEqual: internal.require("partial_assert").create(innerFail, requireArgs),
     notDeepStrictEqual,
     throws,
     doesNotThrow,
