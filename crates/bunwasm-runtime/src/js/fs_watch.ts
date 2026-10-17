@@ -149,8 +149,10 @@
 
     function watch(path: unknown, value?: unknown, listener?: Listener) {
       if (typeof value === "function") {
-        const callback = value;
-        listener = function (this: unknown, ...args) { Reflect.apply(callback, this, args); };
+        const callback = value as Listener;
+        const wrapped = function (this: unknown, ...args: unknown[]) { Reflect.apply(callback, this, args); } as Listener & { listener?: Listener };
+        wrapped.listener = callback;
+        listener = wrapped;
         value = undefined;
       }
       const settings = options(value);
