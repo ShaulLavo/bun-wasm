@@ -1,4 +1,4 @@
-import { memoryViews } from "@bun-wasm/runtime/core/memory-views";
+import { memoryViews } from "waffle/core/memory-views";
 
 // Installs JS functions into bun.wasm's `bun_wasm` host slots (docs/host-abi.md).
 //

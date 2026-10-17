@@ -1,9 +1,9 @@
 // Bun's registration policy; routing and socket transport are guest-independent.
-import { PreviewRouter } from "@bun-wasm/runtime/browser/preview";
-import { activated } from "@bun-wasm/runtime/browser/service-worker";
+import { PreviewRouter } from "waffle/browser/preview";
+import { activated } from "waffle/browser/service-worker";
 import { PREVIEW_DIR } from "./preview-protocol";
 
-export { activated } from "@bun-wasm/runtime/browser/service-worker";
+export { activated } from "waffle/browser/service-worker";
 export type PreviewState = "ready" | "unsupported" | "failed";
 
 export class Previews extends PreviewRouter {

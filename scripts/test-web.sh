@@ -36,7 +36,7 @@ cleanup() {
     else
       rm -f "$root/$app/bunfig.toml"
     fi
-    # Put back the default layout, or the next typecheck sees two copies of @bun-wasm/runtime.
+    # Put back the default layout, or the next typecheck sees two copies of waffle.
     (cd "$root/$app" && bun install --frozen-lockfile >/dev/null 2>&1) || true
   done
   rm -rf "$scratch" "$isolated_scratch"
@@ -91,7 +91,13 @@ if [[ $browser == 1 ]]; then
   bun tests/browser-editor.ts webkit || failed=1
   bun tests/browser-filesystem-lifecycle.ts chromium || failed=1
   bun tests/browser-filesystem-lifecycle.ts webkit || failed=1
-  bun "$root/runtime/tests/storage-browser-runner.ts" chromium webkit || failed=1
+  storage_runner="$(cd "$root/web" && realpath node_modules/waffle/tests/storage-browser-runner.ts)"
+  if [[ -f "$storage_runner" ]]; then
+    bun "$storage_runner" chromium webkit || failed=1
+  else
+    echo "missing installed Waffle storage browser runner: $storage_runner" >&2
+    failed=1
+  fi
   node tests/browser-install.mjs || failed=1
   node tests/browser-installer-links.ts || failed=1
   node tests/browser-shell-stop.ts || failed=1

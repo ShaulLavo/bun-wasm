@@ -2,14 +2,14 @@ import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess-broker";
 import { SubprocessHost, childTransport, type ChildTransport } from "../src/subprocess.ts";
-import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "../../runtime/fs";
-import { FilesystemSection, waitForFilesystemQuiescence } from "../../runtime/fs/protocol";
+import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "waffle/fs";
+import { FilesystemSection, waitForFilesystemQuiescence } from "waffle/fs/protocol";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { SpawnRequest } from "../src/worker";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
-import { createSignalState, setSignalDisposition, takeSignal } from "../../runtime/proc/signals";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
+import { createSignalState, setSignalDisposition, takeSignal } from "waffle/proc/signals";
 
-function fixture(activate?: () => Promise<typeof import("../../runtime/proc")>) {
+function fixture(activate?: () => Promise<typeof import("waffle/proc")>) {
   const revoked: number[] = [];
   const filesystem = { revoke(identity: { owner: number }) { revoked.push(identity.owner); }, reap() {}, async quiesce() {} } as unknown as SharedFilesystem;
   const runtime = processRuntimeFixture(filesystem, { activate });
@@ -28,7 +28,7 @@ function fixture(activate?: () => Promise<typeof import("../../runtime/proc")>) 
 test("first activation returns a pid immediately and does not block an unrelated task", async () => {
   let release!: () => void;
   const barrier = new Promise<void>(resolve => { release = resolve; });
-  const state = fixture(async () => { await barrier; return import("../../runtime/proc"); });
+  const state = fixture(async () => { await barrier; return import("waffle/proc"); });
   try {
     expect(state.pid).toBeGreaterThan(1);
     expect(state.host.wait(state.pid)).toBe(-2);
@@ -54,7 +54,7 @@ test("missing executable is an asynchronous child exit, not a thrown spawn error
 test("disposing during delayed activation revokes pending children without starting them", async () => {
   let release!: () => void;
   const barrier = new Promise<void>(resolve => { release = resolve; });
-  const state = fixture(async () => { await barrier; return import("../../runtime/proc"); });
+  const state = fixture(async () => { await barrier; return import("waffle/proc"); });
   try {
     state.broker.dispose();
     expect(state.revoked).toHaveLength(1);
@@ -66,7 +66,7 @@ test("disposing during delayed activation revokes pending children without start
 });
 
 const fixtureModule = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-function liveFixture(options: { executable?: ExecutableRegistration; quiesce?: (identity: FilesystemIdentity) => Promise<void>; slowModule?: () => Promise<WebAssembly.Module>; postFailure?: boolean; activate?: () => Promise<typeof import("../../runtime/proc")>; root?: import("../../runtime/proc").RootProcessOptions } = {}) {
+function liveFixture(options: { executable?: ExecutableRegistration; quiesce?: (identity: FilesystemIdentity) => Promise<void>; slowModule?: () => Promise<WebAssembly.Module>; postFailure?: boolean; activate?: () => Promise<typeof import("waffle/proc")>; root?: import("waffle/proc").RootProcessOptions } = {}) {
   const originalWorker = globalThis.Worker;
   const workers = new Map<number, FakeWorker>();
   class FakeWorker {
@@ -329,7 +329,7 @@ test("an acknowledged ordinary exit may stop immediately without a quiescence wa
 test("closing a handle before activation completes cannot retain a reserved process", async () => {
   let release!: () => void;
   const barrier = new Promise<void>(resolve => { release = resolve; });
-  const state = fixture(async () => { await barrier; return import("../../runtime/proc"); });
+  const state = fixture(async () => { await barrier; return import("waffle/proc"); });
   try {
     state.host.close(state.pid);
     state.broker.close(1, state.pid);
@@ -455,7 +455,7 @@ function rootWords() {
 test("root job signaling is synchronous without activating the lazy process service", async () => {
   const root = rootWords();
   let activated = 0;
-  const runtime = processRuntimeFixture({} as SharedFilesystem, { activate: async () => { activated++; return import("../../runtime/proc"); } });
+  const runtime = processRuntimeFixture({} as SharedFilesystem, { activate: async () => { activated++; return import("waffle/proc"); } });
   const broker = new SubprocessBroker("http://localhost/worker.js", runtime, { root });
   try {
     const delivered = broker.killJob(1, 2);
@@ -533,7 +533,7 @@ test("previously admitted children survive lazy activation after root default ac
   let release!: () => void;
   const barrier = new Promise<void>(resolve => { release = resolve; });
   const root = rootWords();
-  const state = liveFixture({ root, activate: async () => { await barrier; return import("../../runtime/proc"); } });
+  const state = liveFixture({ root, activate: async () => { await barrier; return import("waffle/proc"); } });
   try {
     const background = state.host.spawn(JSON.stringify({ argv: ["fixture"], job: -1 }));
     const delivered = state.broker.killJob(1, 2);

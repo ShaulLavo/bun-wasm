@@ -1,10 +1,10 @@
-import { PersistentBackend } from "../../runtime/fs/persistent";
-import { IndexedDBStorage } from "../../runtime/fs/indexeddb";
-import { OpfsStorage } from "../../runtime/fs/opfs";
-import type { StorageBackend, PersistenceBatch } from "../../runtime/fs/storage";
+import { PersistentBackend } from "waffle/fs/persistent";
+import { IndexedDBStorage } from "waffle/fs/indexeddb";
+import { OpfsStorage } from "waffle/fs/opfs";
+import type { StorageBackend, PersistenceBatch } from "waffle/fs/storage";
 import corpus from "./fixtures/persistence-corpus.json";
-import { runStorageTests, storageTests } from "../../runtime/tests/storage-browser";
-import { runOpfsStorageTests, opfsStorageTests } from "../../runtime/tests/opfs-storage-browser";
+import { runStorageTests, storageTests } from "waffle/testing/storage-browser";
+import { runOpfsStorageTests, opfsStorageTests } from "waffle/testing/opfs-storage-browser";
 
 let backend: PersistentBackend | undefined;
 let reads = 0, readBytes = 0, commits = 0, nativePayloadRequests = 0;
