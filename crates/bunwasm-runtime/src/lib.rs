@@ -438,7 +438,7 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
         if test_command && main.is_none() {
             break;
         }
-        // runTimers returns: 0 = a timer ran (loop again), >0 = ms until the
+        // runTimers returns: 0 = another turn is ready, >0 = ms until the
         // next timer, <0 = nothing left keeping the loop alive.
         let next = match core.call_internal_num(e, "runTimers") {
             Ok(next) => next,

@@ -44,7 +44,10 @@ declare function setImmediate(callback: () => void): unknown;
 
 declare namespace BunWasm {
   interface BufferBytes extends Uint8Array { toString(encoding?: string): string }
-  interface BufferConstructor { from(data: unknown, encodingOrOffset?: string | number, length?: number): BufferBytes }
+  interface BufferConstructor {
+    from(data: unknown, encodingOrOffset?: string | number, length?: number): BufferBytes;
+    isEncoding(encoding: string): boolean;
+  }
   interface CompressionTransform extends NodeEmitter {
     readonly destroyed: boolean;
     readonly writableEnded: boolean;

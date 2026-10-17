@@ -1,0 +1,2554 @@
+{
+  "provenance": {
+    "date": "2026-10-17T02:58:32.602Z",
+    "revision": "6e93c80c6f9bccc879990bedb999c3efdcd3166f",
+    "nativeBun": "1.4.2",
+    "options": {
+      "cache": "/work/cache/bun-wasm-app-matrix",
+      "output": "/work/reports/bun-wasm-main-2026-10-17/app-matrix",
+      "launcher": "/work/tmp/bun-wasm-measure-suite-matrix/quickjs-target/release/bun-wasm",
+      "engines": [
+        "quickjs",
+        "jsc",
+        "browser"
+      ],
+      "hosts": [
+        "native",
+        "playground"
+      ],
+      "timeout": 90000,
+      "record": false,
+      "reference": false
+    },
+    "fixtures_sha256": "0483b996f4f1365c14ab4543197ad7ab72f5c7efe5b426ac76e444b805ae6006",
+    "artifacts": {
+      "quickjs": "794e4b24f5755f4f18d2e2aac5149d87de73f7d7f2c27fba2d0fdf8ff7ec82c9",
+      "jsc": "596e8f29bfd9d48c556b1f9a26ca9e8b9e439a4d8351551718cb13cbefe7b36f",
+      "browser": "accc747792ac2e53e4ea86e51b15c3f3ec5354e20516288d95a79aae7cea7e0e"
+    },
+    "runner_sources": {
+      "run.mjs": "40c5c19666b07c30fa3df893e653bc49453e57a68e4fdbfc4a718df4a093e8bd",
+      "apps.mjs": "0483b996f4f1365c14ab4543197ad7ab72f5c7efe5b426ac76e444b805ae6006",
+      "registry.mjs": "a86d1e9aa07e95223f567742e02508032586892f1ab93935bb45c8c86c5ec5a8",
+      "browser.mjs": "bdc2a8091b1fa3eb94911653252e176ab9b82f6acbe30dbb8532f72aeca1c152",
+      "checks.mjs": "a80a7526246bcd312b02fd0f088ee37c1b9fe857d63603512929d0c3c5fdb377",
+      "classify.mjs": "6cd7ac9e52425175185820b561289b30f0ccc7d9cb1899a9cec17c64c04ed45b",
+      "isolate.mjs": "74dd9ec3da769b0baee1db0af280bef8d02712807e55c71f79b48548d4453ff6"
+    },
+    "playground_builds": {
+      "bun.wasm": "794e4b24f5755f4f18d2e2aac5149d87de73f7d7f2c27fba2d0fdf8ff7ec82c9",
+      "bun-jsc.wasm": "596e8f29bfd9d48c556b1f9a26ca9e8b9e439a4d8351551718cb13cbefe7b36f",
+      "bun-browser.wasm": "accc747792ac2e53e4ea86e51b15c3f3ec5354e20516288d95a79aae7cea7e0e"
+    },
+    "launcher_sha256": "0b61ddaa7e30cbe3e26fbed3d3c78d529e8727462efd9f9eb302de7dcd38b300",
+    "registry": {
+      "entries": 1292,
+      "sha256": "bff1211cea1f8aed1dacd80b53b81b8a75a1a63987c8b053e426021269389b59",
+      "requests": 2754,
+      "misses": [
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm",
+        "/esbuild-wasm"
+      ],
+      "errors": []
+    }
+  },
+  "results": [
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"hono\":\"4.10.2\"}"
+    },
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"hono\":\"4.10.2\"}"
+    },
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"hono\":\"4.10.2\"}"
+    },
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"hono\":\"4.10.2\"}"
+    },
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "Service-worker preview renders \"bun-wasm app matrix\""
+    },
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"hono\":\"4.10.2\"}"
+    },
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "Service-worker preview renders \"bun-wasm app matrix\""
+    },
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"hono\":\"4.10.2\"}"
+    },
+    {
+      "app": "hono",
+      "versions": {
+        "hono": "4.10.2"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "Service-worker preview renders \"bun-wasm app matrix\""
+    },
+    {
+      "app": "express",
+      "versions": {
+        "express": "5.1.0"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"express\":\"5.1.0\"}"
+    },
+    {
+      "app": "express",
+      "versions": {
+        "express": "5.1.0"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "express",
+      "versions": {
+        "express": "5.1.0"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"express\":\"5.1.0\"}"
+    },
+    {
+      "app": "express",
+      "versions": {
+        "express": "5.1.0"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "express",
+      "versions": {
+        "express": "5.1.0"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"express\":\"5.1.0\"}"
+    },
+    {
+      "app": "express",
+      "versions": {
+        "express": "5.1.0"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "elysia",
+      "versions": {
+        "elysia": "1.4.13"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"elysia\":\"1.4.13\"}"
+    },
+    {
+      "app": "elysia",
+      "versions": {
+        "elysia": "1.4.13"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "elysia",
+      "versions": {
+        "elysia": "1.4.13"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"elysia\":\"1.4.13\"}"
+    },
+    {
+      "app": "elysia",
+      "versions": {
+        "elysia": "1.4.13"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "elysia",
+      "versions": {
+        "elysia": "1.4.13"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"elysia\":\"1.4.13\"}"
+    },
+    {
+      "app": "elysia",
+      "versions": {
+        "elysia": "1.4.13"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "fastify",
+      "versions": {
+        "fastify": "5.6.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"fastify\":\"5.6.1\"}"
+    },
+    {
+      "app": "fastify",
+      "versions": {
+        "fastify": "5.6.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "fastify",
+      "versions": {
+        "fastify": "5.6.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"fastify\":\"5.6.1\"}"
+    },
+    {
+      "app": "fastify",
+      "versions": {
+        "fastify": "5.6.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "fastify",
+      "versions": {
+        "fastify": "5.6.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"fastify\":\"5.6.1\"}"
+    },
+    {
+      "app": "fastify",
+      "versions": {
+        "fastify": "5.6.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "koa",
+      "versions": {
+        "koa": "3.0.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"koa\":\"3.0.1\"}"
+    },
+    {
+      "app": "koa",
+      "versions": {
+        "koa": "3.0.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "koa",
+      "versions": {
+        "koa": "3.0.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"koa\":\"3.0.1\"}"
+    },
+    {
+      "app": "koa",
+      "versions": {
+        "koa": "3.0.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "koa",
+      "versions": {
+        "koa": "3.0.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"koa\":\"3.0.1\"}"
+    },
+    {
+      "app": "koa",
+      "versions": {
+        "koa": "3.0.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run server.ts",
+      "status": "pass",
+      "assertion": "HTTP 200, body contains \"bun-wasm app matrix\""
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/astro/astro.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/astro/astro.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/astro/astro.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"next\":\"15.5.6\",\"react\":\"19.1.1\",\"react-dom\":\"19.1.1\"}"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: LinkError: Unsupported WebAssembly export table",
+      "output": "5625 |       try {\n5626 |         mod = await WebAssembly.compile(require_llhttp_simd_wasm());\n5627 |       } catch (e) {\n5628 |         mod = await WebAssembly.compile(llhttpWasmData || require_llhttp_wasm());\n5629 |       }\n5630 |       return await WebAssembly.instantiate(mod, {\n                                      ^\nLinkError: Unsupported WebAssembly export table\n      at lazyllhttp (/node_modules/next/dist/compiled/@edge-runtime/primitives/load.js:5630:32)\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/next/dist/bin/next build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline",
+      "prerequisite": "build"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"next\":\"15.5.6\",\"react\":\"19.1.1\",\"react-dom\":\"19.1.1\"}"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: LinkError: Unsupported WebAssembly export table",
+      "output": "5625 |       try {\n5626 |         mod = await WebAssembly.compile(require_llhttp_simd_wasm());\n5627 |       } catch (e) {\n5628 |         mod = await WebAssembly.compile(llhttpWasmData || require_llhttp_wasm());\n5629 |       }\n5630 |       return await WebAssembly.instantiate(mod, {\n                                      ^\nLinkError: Unsupported WebAssembly export table\n      at lazyllhttp (/node_modules/next/dist/compiled/@edge-runtime/primitives/load.js:5630:32)\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/next/dist/bin/next build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline",
+      "prerequisite": "build"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"next\":\"15.5.6\",\"react\":\"19.1.1\",\"react-dom\":\"19.1.1\"}"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "\u001b[?25h\n"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/next/dist/bin/next build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "b",
+      "blocker": "Error: Child process IPC is not supported in bun-wasm"
+    },
+    {
+      "app": "next",
+      "versions": {
+        "next": "15.5.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "start",
+      "command": "bun run node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port {port}",
+      "status": "blocked",
+      "category": "b",
+      "blocker": "Error: Child process IPC is not supported in bun-wasm",
+      "prerequisite": "build"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"drizzle-orm\":\"0.44.6\"}"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "query",
+      "command": "bun run query.ts",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"bun-wasm app matrix\"}"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"drizzle-orm\":\"0.44.6\"}"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "query",
+      "command": "bun run query.ts",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"bun-wasm app matrix\"}"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"drizzle-orm\":\"0.44.6\"}"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "query",
+      "command": "bun run query.ts",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"bun-wasm app matrix\"}"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"drizzle-orm\":\"0.44.6\"}"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "query",
+      "command": "bun run query.ts",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"bun-wasm app matrix\"}"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"drizzle-orm\":\"0.44.6\"}"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "query",
+      "command": "bun run query.ts",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"bun-wasm app matrix\"}"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"drizzle-orm\":\"0.44.6\"}"
+    },
+    {
+      "app": "drizzle",
+      "versions": {
+        "drizzle-orm": "0.44.6"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "query",
+      "command": "bun run query.ts",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"bun-wasm app matrix\"}"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 134,
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "generate",
+      "command": "bun run node_modules/prisma/build/index.js generate",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed",
+      "prerequisite": "install"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "schema",
+      "command": "bun run node_modules/prisma/build/index.js db push --skip-generate",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed",
+      "prerequisite": "install"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "query",
+      "command": "bun run query.ts",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed",
+      "prerequisite": "install"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 134,
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "generate",
+      "command": "bun run node_modules/prisma/build/index.js generate",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed",
+      "prerequisite": "install"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "schema",
+      "command": "bun run node_modules/prisma/build/index.js db push --skip-generate",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed",
+      "prerequisite": "install"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "query",
+      "command": "bun run query.ts",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed",
+      "prerequisite": "install"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "generate",
+      "command": "bun run node_modules/prisma/build/index.js generate",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed",
+      "prerequisite": "install"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "schema",
+      "command": "bun run node_modules/prisma/build/index.js db push --skip-generate",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed",
+      "prerequisite": "install"
+    },
+    {
+      "app": "prisma",
+      "versions": {
+        "prisma": "6.17.1",
+        "@prisma/client": "6.17.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "query",
+      "command": "bun run query.ts",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: memory allocation of 16777216 bytes failed",
+      "prerequisite": "install"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"typescript\":\"5.9.3\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "check",
+      "command": "bun run node_modules/typescript/bin/tsc --pretty false",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"files\",\"paths\":[\"clean-output/index.js\"],\"text\":\"matrix\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "reject",
+      "command": "bun run node_modules/typescript/bin/tsc --noEmit --pretty false invalid.ts",
+      "status": "pass",
+      "exit": 2,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":2,\"texts\":[\"error TS2322\",\"Type 'number' is not assignable to type 'string'\"]}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"typescript\":\"5.9.3\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "check",
+      "command": "bun run node_modules/typescript/bin/tsc --pretty false",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"files\",\"paths\":[\"clean-output/index.js\"],\"text\":\"matrix\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "reject",
+      "command": "bun run node_modules/typescript/bin/tsc --noEmit --pretty false invalid.ts",
+      "status": "pass",
+      "exit": 2,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":2,\"texts\":[\"error TS2322\",\"Type 'number' is not assignable to type 'string'\"]}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"typescript\":\"5.9.3\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "check",
+      "command": "bun run node_modules/typescript/bin/tsc --pretty false",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"files\",\"paths\":[\"clean-output/index.js\"],\"text\":\"matrix\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "reject",
+      "command": "bun run node_modules/typescript/bin/tsc --noEmit --pretty false invalid.ts",
+      "status": "pass",
+      "exit": 2,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":2,\"texts\":[\"error TS2322\",\"Type 'number' is not assignable to type 'string'\"]}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"typescript\":\"5.9.3\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "check",
+      "command": "bun run node_modules/typescript/bin/tsc --pretty false",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"files\",\"paths\":[\"clean-output/index.js\"],\"text\":\"matrix\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "reject",
+      "command": "bun run node_modules/typescript/bin/tsc --noEmit --pretty false invalid.ts",
+      "status": "pass",
+      "exit": 2,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":2,\"texts\":[\"error TS2322\",\"Type 'number' is not assignable to type 'string'\"]}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"typescript\":\"5.9.3\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "check",
+      "command": "bun run node_modules/typescript/bin/tsc --pretty false",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"files\",\"paths\":[\"clean-output/index.js\"],\"text\":\"matrix\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "reject",
+      "command": "bun run node_modules/typescript/bin/tsc --noEmit --pretty false invalid.ts",
+      "status": "pass",
+      "exit": 2,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":2,\"texts\":[\"error TS2322\",\"Type 'number' is not assignable to type 'string'\"]}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"typescript\":\"5.9.3\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "check",
+      "command": "bun run node_modules/typescript/bin/tsc --pretty false",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"files\",\"paths\":[\"clean-output/index.js\"],\"text\":\"matrix\"}"
+    },
+    {
+      "app": "typescript",
+      "versions": {
+        "typescript": "5.9.3"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "reject",
+      "command": "bun run node_modules/typescript/bin/tsc --noEmit --pretty false invalid.ts",
+      "status": "pass",
+      "exit": 2,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":2,\"texts\":[\"error TS2322\",\"Type 'number' is not assignable to type 'string'\"]}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"eslint\":\"9.38.0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "lint",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"\\\"errorCount\\\":0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "reject",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json invalid.js",
+      "status": "pass",
+      "exit": 1,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":1,\"texts\":[\"\\\"ruleId\\\":\\\"no-debugger\\\"\",\"\\\"message\\\":\\\"Unexpected 'debugger' statement.\\\"\",\"\\\"errorCount\\\":1\"]}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"eslint\":\"9.38.0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "lint",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"\\\"errorCount\\\":0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "reject",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json invalid.js",
+      "status": "pass",
+      "exit": 1,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":1,\"texts\":[\"\\\"ruleId\\\":\\\"no-debugger\\\"\",\"\\\"message\\\":\\\"Unexpected 'debugger' statement.\\\"\",\"\\\"errorCount\\\":1\"]}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"eslint\":\"9.38.0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "lint",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"\\\"errorCount\\\":0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "reject",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json invalid.js",
+      "status": "pass",
+      "exit": 1,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":1,\"texts\":[\"\\\"ruleId\\\":\\\"no-debugger\\\"\",\"\\\"message\\\":\\\"Unexpected 'debugger' statement.\\\"\",\"\\\"errorCount\\\":1\"]}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"eslint\":\"9.38.0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "lint",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"\\\"errorCount\\\":0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "reject",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json invalid.js",
+      "status": "pass",
+      "exit": 1,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":1,\"texts\":[\"\\\"ruleId\\\":\\\"no-debugger\\\"\",\"\\\"message\\\":\\\"Unexpected 'debugger' statement.\\\"\",\"\\\"errorCount\\\":1\"]}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"eslint\":\"9.38.0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "lint",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"\\\"errorCount\\\":0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "reject",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json invalid.js",
+      "status": "pass",
+      "exit": 1,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":1,\"texts\":[\"\\\"ruleId\\\":\\\"no-debugger\\\"\",\"\\\"message\\\":\\\"Unexpected 'debugger' statement.\\\"\",\"\\\"errorCount\\\":1\"]}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"eslint\":\"9.38.0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "lint",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"\\\"errorCount\\\":0\"}"
+    },
+    {
+      "app": "eslint",
+      "versions": {
+        "eslint": "9.38.0"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "reject",
+      "command": "bun run node_modules/eslint/bin/eslint.js --format json invalid.js",
+      "status": "pass",
+      "exit": 1,
+      "assertion": "{\"kind\":\"diagnostics\",\"exit\":1,\"texts\":[\"\\\"ruleId\\\":\\\"no-debugger\\\"\",\"\\\"message\\\":\\\"Unexpected 'debugger' statement.\\\"\",\"\\\"errorCount\\\":1\"]}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"prettier\":\"3.6.2\"}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "check",
+      "command": "bun run node_modules/prettier/bin/prettier.cjs --check index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"All matched files use Prettier code style\"}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"prettier\":\"3.6.2\"}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "check",
+      "command": "bun run node_modules/prettier/bin/prettier.cjs --check index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"All matched files use Prettier code style\"}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"prettier\":\"3.6.2\"}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "check",
+      "command": "bun run node_modules/prettier/bin/prettier.cjs --check index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"All matched files use Prettier code style\"}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"prettier\":\"3.6.2\"}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "check",
+      "command": "bun run node_modules/prettier/bin/prettier.cjs --check index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"All matched files use Prettier code style\"}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"prettier\":\"3.6.2\"}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "check",
+      "command": "bun run node_modules/prettier/bin/prettier.cjs --check index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"All matched files use Prettier code style\"}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"prettier\":\"3.6.2\"}"
+    },
+    {
+      "app": "prettier",
+      "versions": {
+        "prettier": "3.6.2"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "check",
+      "command": "bun run node_modules/prettier/bin/prettier.cjs --check index.js",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"All matched files use Prettier code style\"}"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "test",
+      "command": "bun run node_modules/vitest/vitest.mjs run --maxWorkers=1 --no-file-parallelism",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "threads",
+      "command": "bun run node_modules/vitest/vitest.mjs run --pool=threads --maxWorkers=1 --no-file-parallelism",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "test",
+      "command": "bun run node_modules/vitest/vitest.mjs run --maxWorkers=1 --no-file-parallelism",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "threads",
+      "command": "bun run node_modules/vitest/vitest.mjs run --pool=threads --maxWorkers=1 --no-file-parallelism",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "test",
+      "command": "bun run node_modules/vitest/vitest.mjs run --maxWorkers=1 --no-file-parallelism",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "threads",
+      "command": "bun run node_modules/vitest/vitest.mjs run --pool=threads --maxWorkers=1 --no-file-parallelism",
+      "status": "blocked",
+      "category": "d",
+      "blocker": "install: error: GET http://127.0.0.1:42301/esbuild-wasm - 503",
+      "prerequisite": "install"
+    }
+  ]
+}
