@@ -114,7 +114,7 @@ fn execute(command: &str, args: Vec<String>, parser: &dyn Transpiler) -> Result<
         add_names(&mut manifest, &opts)?;
     }
     let registry = registry(&opts, parser)?;
-    let mut locked = if Path::new("bun.lock").exists() {
+    let locked = if Path::new("bun.lock").exists() {
         io::read(Path::new("bun.lock"), "JSONC", parser)?
     } else {
         migration::read(
@@ -127,11 +127,12 @@ fn execute(command: &str, args: Vec<String>, parser: &dyn Transpiler) -> Result<
         )?
         .unwrap_or_else(|| json!({}))
     };
+    let mut resolution_lock = locked.clone();
     if command == "update" {
         opts.refresh = true;
-        unlock(&mut locked, &opts);
+        unlock(&mut resolution_lock, &opts);
     }
-    let mut resolver = Resolver::new(registry, locked.clone(), opts.refresh);
+    let mut resolver = Resolver::new(registry, resolution_lock, opts.refresh);
     let project_manifest = if member.is_some() { &root_manifest } else { &manifest };
     resolver.workspaces = local::workspaces(
         &std::env::current_dir().map_err(|e| e.to_string())?,
