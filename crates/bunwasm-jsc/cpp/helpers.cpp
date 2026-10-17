@@ -14,6 +14,7 @@
 #include "JSObjectRef.h"
 #include "JSValueRef.h"
 #include "Completion.h"
+#include "CatchScope.h"
 #include "ErrorInstance.h"
 #include "DeferredWorkTimer.h"
 #include <wtf/Threading.h>
