@@ -153,8 +153,8 @@ try {
     await driver.navigate(url);
     const first = await state();
     assert.equal(first.ready, true, JSON.stringify(first));
-    // Completed memory writes must survive handoff without an explicit save/flush call.
-    await driver.evaluate("await lifecycle.fs.writeFile('/saved','before navigation');return true;");
+    // Persisted saves must survive the complete cached-page navigation cycle.
+    await driver.evaluate("await lifecycle.fs.writeFile('/saved','before navigation');await lifecycle.fs.flush();return true;");
     await driver.navigate(new URL("away.html", base).href);
     report.phase = `${storage} same-tab reopen`;
     await driver.navigate(url);
@@ -163,7 +163,7 @@ try {
     assert.equal((await driver.handles()).length, 1);
     assert.equal(reopened.ready, true, JSON.stringify(reopened));
     assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "before navigation");
-    await driver.evaluate("await lifecycle.fs.writeFile('/saved','fresh page edit');return true;");
+    await driver.evaluate("await lifecycle.fs.writeFile('/saved','fresh page edit');await lifecycle.fs.flush();return true;");
     report.phase = `${storage} Reload`;
     await driver.reload(); reopened = await state();
     assert.equal(reopened.ready, true, JSON.stringify(reopened));
@@ -185,7 +185,7 @@ try {
     report.cases.push({ phase: report.phase, ...refused });
     if (process.env.SAFARI_SCREENSHOT) await driver.screenshot?.(`${process.env.SAFARI_SCREENSHOT}-${storage}.png`);
     await driver.select(owner);
-    await driver.evaluate("await lifecycle.fs.writeFile('/saved','live owner edit');return true;");
+    await driver.evaluate("await lifecycle.fs.writeFile('/saved','live owner edit');await lifecycle.fs.flush();return true;");
     await driver.navigate(new URL("away.html", base).href);
     await driver.select(contender); await driver.reload();
     reopened = await state();

@@ -72,12 +72,17 @@ test("backend startup failures report their complete message and original worker
   worker.terminate();
 });
 
-for (const reason of ["hostile", "null-prototype"]) test(`backend startup reports an unprintable ${reason} rejection`, async () => {
+const rejectedReasons: [string, string][] = [
+  ["hostile", "Unknown filesystem worker error"],
+  ["null-prototype", "Unknown filesystem worker error"],
+  ["hostile-stack", "Error: Filesystem fixture stack is unavailable"],
+];
+for (const [reason, message] of rejectedReasons) test(`backend startup reports an unprintable ${reason} rejection`, async () => {
   const worker = new Worker(new URL("./fixtures/filesystem-startup-failure.ts", import.meta.url).href);
   cleanups.push(() => worker.terminate());
-  const message = nextMessage(worker);
+  const received = nextMessage(worker);
   worker.postMessage({ reason });
-  expect(await message).toMatchObject({ type: "filesystem-error", message: "Unknown filesystem worker error" });
+  expect(await received).toMatchObject({ type: "filesystem-error", message });
   worker.terminate();
 });
 

@@ -17,16 +17,11 @@ export class SharedFilesystem {
   private writes: Promise<unknown> = Promise.resolve();
   private failure: unknown;
   private fatal: Error | undefined;
-  private stopped = false;
-  private readonly hide = () => this.shutdown();
-  private readonly restore = (event: PageTransitionEvent) => { if (event.persisted) location.reload(); };
-  private readonly resume = () => { if (this.stopped) location.reload(); };
   constructor(options: { persistence?: boolean; name?: string; storage?: "indexeddb" | "opfs" } = {}) {
     this.worker = new Worker(new URL("./fs-worker.js", location.href), { type: "module" });
     const connection = createFilesystemConnection();
     this.client = new FilesystemClient(connection.client);
     this.worker.addEventListener("message", event => {
-      if (event.data?.type === "filesystem-closed") { this.client.dispose(); this.worker.terminate(); return; }
       const error = workerError(event.data);
       if (error) this.fail(error);
     });
@@ -41,10 +36,6 @@ export class SharedFilesystem {
       this.fail(error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
-    addEventListener("pagehide", this.hide);
-    document.addEventListener("freeze", this.hide);
-    document.addEventListener("resume", this.resume);
-    addEventListener("pageshow", this.restore);
   }
   private fail(error: Error): void {
     this.fatal ??= error;
@@ -54,10 +45,7 @@ export class SharedFilesystem {
     this.client.dispose();
     this.worker.terminate();
   }
-  private assertLive(): void {
-    if (this.fatal) throw this.fatal;
-    if (this.stopped) throw new Error("Filesystem page has been suspended. Reload this page before editing.");
-  }
+  private assertLive(): void { if (this.fatal) throw this.fatal; }
   fork(): FilesystemConnection { this.assertLive(); return this.client.fork(); }
   connect(identity: FilesystemIdentity): FilesystemConnection {
     this.assertLive();
@@ -85,7 +73,6 @@ export class SharedFilesystem {
     }
   }
   private mutate(operation: string, args: unknown[], bytes?: Uint8Array): Promise<any> {
-    this.assertLive();
     const result = this.writes.then(() => this.request(operation, args, bytes));
     // Keep ordering after an error, while returning the failure to the caller that owns it.
     this.writes = result.catch(error => { this.failure ??= error; });
@@ -105,18 +92,5 @@ export class SharedFilesystem {
     const error = await this.mutate("move", [from, to]);
     if (error) throw new Error(`rename failed: errno ${error}`);
   }
-  private shutdown(): void {
-    if (this.stopped) return;
-    this.stopped = true;
-    // Dispatch without waiting for page promises: a cached page may stop running them.
-    revokeFilesystemService(this.client.connection);
-    this.worker.postMessage({ shutdown: true });
-  }
-  dispose(): void {
-    this.shutdown();
-    removeEventListener("pagehide", this.hide);
-    document.removeEventListener("freeze", this.hide);
-    document.removeEventListener("resume", this.resume);
-    removeEventListener("pageshow", this.restore);
-  }
+  dispose(): void { revokeFilesystemService(this.client.connection); this.client.dispose(); this.worker.terminate(); }
 }

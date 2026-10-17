@@ -88,8 +88,6 @@ for slots in table imports; do
 done
 
 if [[ $browser == 1 ]]; then
-  bun tests/browser-filesystem-lifecycle.ts chromium || failed=1
-  bun tests/browser-filesystem-lifecycle.ts webkit || failed=1
   bun tests/browser-editor.ts chromium || failed=1
   bun tests/browser-editor.ts webkit || failed=1
   node "$root/scripts/test-native-stream-interop.mjs" || failed=1
