@@ -21,6 +21,28 @@ test("explicit artifact must actually import the complete direct process ABI", (
   expect(existsSync(directory)).toBe(false);
 });
 
+for (const missing of ["job_of", "signal"]) test(`explicit artifact must directly import runtime_proc.${missing}`, () => {
+  const names = ["spawn", "pipe", "read", "write", "wait", "wait_job", "kill", "kill_job", "poll", "job_of", "signal"].filter(name => name !== missing);
+  // Original import-only module: admission inspects imports, never executes these stubs.
+  const leb = (value: number): number[] => value < 128 ? [value] : [value % 128 + 128].concat(leb(Math.floor(value / 128)));
+  const text = (value: string) => leb(value.length).concat(Array.from(new TextEncoder().encode(value)));
+  const imports = leb(names.length).concat(names.flatMap(name => text("runtime_proc").concat(text(name), [0, 0])));
+  const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 2].concat(leb(imports.length), imports));
+  expect(WebAssembly.validate(bytes)).toBe(true);
+  const base = process.env.RUNNER_TEMP ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  const directory = mkdtempSync(join(base, "bun-wasm-bun-runtime-artifact-control-"));
+  try {
+    const artifact = join(directory, `missing-${missing}.wasm`);
+    writeFileSync(artifact, bytes);
+    const result = Bun.spawnSync({ cmd: [process.execPath, driver, "--check-artifact"],
+      env: { ...process.env, BUN_WASM_RUNTIME_PROC_ARTIFACT: artifact }, stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(1);
+    expect(new TextDecoder().decode(result.stderr)).toContain(`matching rebuilt guest must directly import runtime_proc.${missing}`);
+    expect(new TextDecoder().decode(result.stdout)).not.toContain('"resources"');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+  expect(existsSync(directory)).toBe(false);
+});
+
 for (const artifact of ["", "dist/bun-browser.wasm"]) test(`real Bun acceptance refuses ${artifact || "missing"} artifact before browser setup`, () => {
   const result = Bun.spawnSync({ cmd: [process.execPath, driver],
     env: { ...process.env, BUN_WASM_RUNTIME_PROC_ARTIFACT: artifact }, stdout: "pipe", stderr: "pipe" });
