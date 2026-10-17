@@ -19,7 +19,7 @@ const bytes = new Uint8Array(await Bun.file(artifact).arrayBuffer());
 assert.deepEqual(Array.from(bytes.subarray(0, 8)), [0, 97, 115, 109, 1, 0, 0, 0], "explicit artifact must be Wasm version 1");
 const artifactModule = new WebAssembly.Module(bytes);
 const procImports = WebAssembly.Module.imports(artifactModule).filter(entry => entry.module === "runtime_proc").map(entry => entry.name);
-for (const name of ["spawn", "pipe", "read", "write", "wait", "wait_job", "kill", "kill_job", "poll"]) {
+for (const name of ["spawn", "pipe", "read", "write", "wait", "wait_job", "kill", "kill_job", "poll", "job_of", "signal"]) {
   assert.ok(procImports.includes(name), `matching rebuilt guest must directly import runtime_proc.${name}; an older slot-backed artifact does not prove step7b`);
 }
 const artifactReceipt = { path: artifact, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), procImports };
