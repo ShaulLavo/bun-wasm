@@ -368,7 +368,7 @@
         this.#schedule(); this.#maybeClose(); return;
       }
       state.scheduled = true;
-      setImmediate(() => this.#deliverBatch(state, batch));
+      queueMicrotask(() => this.#deliverBatch(state, batch));
     }
     start() { if (this.#state) { this.#state.started = true; this.#schedule(); } }
     ref() { if (this.#state?.phase === "open" && !this.#state.ref) { this.#state.ref = true; internal.messagePortRefs++; } }

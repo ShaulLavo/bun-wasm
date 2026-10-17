@@ -213,7 +213,7 @@ const late = new Worker("data:text/javascript," + encodeURIComponent(`
 const lateClose = closed(late);
 assert.equal(await message(late), "entry waiting");
 const installed = message(late);
-late.postMessage("dropped while no handler exists");
+for (const value of [0, 1, 2]) late.postMessage(value);
 lateGate.postMessage("continue");
 assert.equal(await installed, "installed");
 const lateReply = message(late);

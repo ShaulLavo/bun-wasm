@@ -316,6 +316,8 @@ completion. `ref()` and `unref()` control the parent's lifetime.
 Incoming messages stay queued while dependencies and preloads load. Delivery
 starts after the entry's synchronous code runs, including before a top-level
 `await` settles. After that point, messages with no handler are dropped.
+An accepted port batch drains through microtasks before later broadcast tasks,
+so installing a handler from a broadcast callback does not revive earlier messages.
 
 Inside a web worker, `self` is the global object. `postMessage`, `onmessage`,
 `onmessageerror`, `addEventListener`, `removeEventListener`, `dispatchEvent`,
