@@ -1,0 +1,3 @@
+Assertions preserve falsy handler rejection identity. Installed native Bun 1.4.2
+changes those reasons to a generic stopped-rewriter error, so its --update output
+is not the reference for this fixture.
