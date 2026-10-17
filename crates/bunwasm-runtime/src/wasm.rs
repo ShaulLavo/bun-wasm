@@ -104,6 +104,43 @@ fn describe(record: Record, ty: &ExternType) -> Record {
         _ => record,
     }
 }
+fn imported_table(tables: &[WTable], value: &Val) -> Result<WTable, NativeError> {
+    let Val::Num(id) = value else {
+        return Err(error("Expected WebAssembly table import"));
+    };
+    tables
+        .get(*id as usize)
+        .copied()
+        .ok_or_else(|| error("Invalid table import"))
+}
+
+fn imported_function(
+    store: &mut Store<()>,
+    functions: &[Func],
+    ty: &wasmi::FuncType,
+    value: &Val,
+) -> Result<Func, NativeError> {
+    if let Val::Num(id) = value {
+        return functions
+            .get(*id as usize)
+            .copied()
+            .ok_or_else(|| error("Invalid function import"));
+    }
+    let Val::Array(callback) = value else {
+        return Err(error("Expected WebAssembly function import"));
+    };
+    let Some(Val::Num(id)) = callback.first() else {
+        return Err(error("Invalid callback import"));
+    };
+    let index = *id as usize;
+    Ok(Func::new(store, ty.clone(), move |_, args, _| {
+        Err(wasmi::Error::host(ImportCall {
+            index,
+            args: args.to_vec(),
+        }))
+    }))
+}
+
 impl Runtime {
     fn function_id(&mut self, function: Func) -> u32 {
         let bits = u64::from(wasmi::core::UntypedVal::from(FuncRef::from(function)));
@@ -311,37 +348,9 @@ impl Runtime {
         for (index, import) in module.imports().enumerate() {
             let value = imports.get(index).unwrap_or(&Val::Undefined);
             let external: wasmi::Extern = match import.ty() {
-                ExternType::Table(_) => {
-                    let Val::Num(id) = value else {
-                        return Err(error("Expected WebAssembly table import"));
-                    };
-                    (*self
-                        .tables
-                        .get(*id as usize)
-                        .ok_or_else(|| error("Invalid table import"))?)
-                    .into()
-                }
+                ExternType::Table(_) => imported_table(&self.tables, value)?.into(),
                 ExternType::Func(ty) => {
-                    let function = match value {
-                        Val::Num(id) => *self
-                            .functions
-                            .get(*id as usize)
-                            .ok_or_else(|| error("Invalid function import"))?,
-                        Val::Array(callback) => {
-                            let Some(Val::Num(id)) = callback.first() else {
-                                return Err(error("Invalid callback import"));
-                            };
-                            let index = *id as usize;
-                            Func::new(&mut self.store, ty.clone(), move |_, args, _| {
-                                Err(wasmi::Error::host(ImportCall {
-                                    index,
-                                    args: args.to_vec(),
-                                }))
-                            })
-                        }
-                        _ => return Err(error("Expected WebAssembly function import")),
-                    };
-                    function.into()
+                    imported_function(&mut self.store, &self.functions, ty, value)?.into()
                 }
                 _ => return Err(error("Unsupported WebAssembly import kind")),
             };

@@ -46,7 +46,7 @@ console.log("api timeout", timeout.signal, timeout.error.code);
 console.log("api cwd", Bun.spawnSync(cmd("0"), { cwd: "/missing-child-cwd" }).error.code);
 `;
 const apiExpected = ["api nodefsstdin 0 stdin", "api sync 0 fresh err", "api input 0 1200000", "api files 0 child shared", "api nested 0 0 99", "api exec 42", "api cycle 0 ab", "api timeout SIGTERM ETIMEDOUT", "api cwd ENOENT", "api live child", "api ack 0"];
-process.env.BUN_WASM_TEST_PORT ??= "4183";
+process.env.BUN_WASM_TEST_PORT ??= "0";
 const s = session("bun-wasm-self-spawn-browser-");
 const deadline = setTimeout(() => { console.error("subprocess browser gate timed out"); void s.cleanup().finally(() => process.exit(1)); }, 900_000);
 try {

@@ -40,7 +40,7 @@ function channel(closed = false) {
   ipc.connectNode(target, {}, 1, { serialization: "json" });
   return {
     target, output, errors,
-    ticks() { while (ticks.length) ticks.shift()!(); },
+    ticks() { for (const callback of ticks.splice(0)) callback(); },
     close() { input.close(); output.close(); waiters.length = 0; ticks.length = 0; target.removeAllListeners(); },
   };
 }

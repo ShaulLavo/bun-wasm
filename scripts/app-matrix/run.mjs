@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { apps, browserSubset, projectFiles } from "./apps.mjs";
 import { registry, sha256 } from "./registry.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
-import { failure, compareEngines } from "./classify.mjs";
+import { failure, compareEngines } from "./classify.ts";
 import { earlyServerExit } from "./browser.mjs";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
@@ -216,7 +216,7 @@ try {
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.mjs", "isolate.mjs"].map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.ts", "isolate.mjs"].map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
   mirror = await registry({ directory: options.cache, record: options.record });
   const { browserHost } = await import("./browser.mjs");

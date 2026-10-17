@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { projectFiles } from "./apps.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
-import { failure, stageOutput } from "./classify.mjs";
+import { failure, stageOutput } from "./classify.ts";
 
 export function earlyServerExit(command, stage) {
   const classified = failure(command.output, stage);
