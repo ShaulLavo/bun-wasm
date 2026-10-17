@@ -62,8 +62,8 @@ function service(options: { failSpawn?: number } = {}) {
       children.set(child.pid, child);
       return child.pid;
     },
-    ownJob: 0,
-    procJobOf(id: number) { return id === 0 ? this.ownJob || -71 : children.get(id)?.job ?? -71; },
+    ownJob: 3,
+    procJobOf(id: number) { return id === 0 ? this.ownJob : children.get(id)?.job ?? -71; },
     procRead(fd: number) {
       const entry = pipes.get(fd);
       if (!entry) return -8;
@@ -162,12 +162,12 @@ function decode(subscriptions: Uint8Array) {
   return Array.from({ length: subscriptions.length / 16 }, (_, i) => [view.getUint32(i * 16, true), view.getUint32(i * 16 + 4, true)]);
 }
 
-test("pipes bind to child descriptors, the parent drops its child ends, and the job is reaped", async () => {
+test("pipes bind to child descriptors and the parent drops its child ends", async () => {
   const fake = service();
   const { module, pump } = load(fake);
   const child = module.spawn(["bun", "-e", "1"], { stdin: "pipe", stdout: "pipe", stderr: "inherit", env: { A: "1" }, cwd: "/tmp" });
   const record = fake.children.get(child.pid)!;
-  expect(record.request).toMatchObject({ executable: "bun", argv: ["bun", "-e", "1"], env: { A: "1" }, cwd: "/tmp", job: 0 });
+  expect(record.request).toMatchObject({ executable: "bun", argv: ["bun", "-e", "1"], env: { A: "1" }, cwd: "/tmp", job: 3 });
   const bindings = record.request.fds;
   expect(bindings.map((b: any) => b.child)).toEqual([0, 1, 2]);
   expect(bindings[2]).toEqual({ child: 2, parent: 2 });
@@ -185,7 +185,7 @@ test("pipes bind to child descriptors, the parent drops its child ends, and the 
   expect(child.exitCode).toBe(3);
   expect(child.signalCode).toBeNull();
   expect(await child.stdout.text()).toBe("pong");
-  expect(record.reaped).toBe(true);
+  expect(record.reaped).toBe(false); // the caller's job is not ours to reap
   expect(fake.pipes.size).toBe(0);
 });
 
@@ -274,7 +274,7 @@ test("the idle loop sleeps on exactly the descriptors and child the waiter watch
   expect(kinds()).toEqual([]);
 });
 
-test("spawnSync collects output, classifies the exit and reaps the job", () => {
+test("spawnSync collects output and classifies the exit", () => {
   const fake = service();
   const { module } = load(fake);
   const original = fake.native.procPoll;
@@ -291,7 +291,7 @@ test("spawnSync collects output, classifies the exit and reaps the job", () => {
   expect(result.success).toBe(false);
   expect(result.stdout.toString()).toBe("out");
   expect(result.stderr.toString()).toBe("err");
-  expect(fake.calls).toContain("reap");
+  expect(fake.calls).not.toContain("reap");
   expect(fake.pipes.size).toBe(0);
 });
 
@@ -306,9 +306,8 @@ test("spawnSync timeout kills with the requested signal and reports it", () => {
   expect(fake.pipes.size).toBe(0);
 });
 
-test("a caller with a job puts children in it and never reaps or kills the shared job", async () => {
+test("children join the caller's job and the guest never reaps or kills that job", async () => {
   const fake = service();
-  fake.native.ownJob = 3;
   const { module, pump } = load(fake);
   const child = module.spawn(["bun", "j"], { stdout: "pipe" });
   const record = fake.children.get(child.pid)!;
@@ -316,8 +315,35 @@ test("a caller with a job puts children in it and never reaps or kills the share
   fake.exit(record, 0);
   await pump();
   expect(await child.exited).toBe(0);
-  expect(fake.calls).not.toContain("reap");
   const sync = module.spawnSync(["bun", "k"], { timeout: 1, killSignal: "SIGKILL" });
   expect(sync.signalCode).toBe("SIGKILL");
   expect(fake.calls).not.toContain("reap");
+});
+
+test("a detached child starts a new job that the guest owns and reaps", async () => {
+  const fake = service();
+  const { module, pump } = load(fake);
+  const child = module.spawn(["bun", "d"], { stdout: "pipe", detached: true });
+  const record = fake.children.get(child.pid)!;
+  expect(record.request.job).toBe(0);
+  fake.exit(record, 0);
+  await pump();
+  expect(await child.exited).toBe(0);
+  expect(record.reaped).toBe(true);
+});
+
+test("a caller whose job cannot be named fails the spawn instead of starting a new job", () => {
+  const fake = service();
+  fake.native.ownJob = -71;
+  const { module } = load(fake);
+  expect(() => module.spawn(["bun", "j"], { stdout: "pipe", stdin: "pipe" })).toThrow(/spawn bun ESRCH/);
+  expect(fake.calls).not.toContain("spawn");
+  expect(fake.open()).toBe(0);
+  const result = module.spawnSync(["bun", "j"], {});
+  expect(result.success).toBe(false);
+  expect(result.error.code).toBe("ESRCH");
+  expect(fake.children.size).toBe(0);
+  // Detaching does not need the caller's job.
+  const detached = module.spawn(["bun", "j"], { stdout: "pipe", detached: true });
+  expect(fake.children.get(detached.pid)!.request.job).toBe(0);
 });

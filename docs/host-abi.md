@@ -283,7 +283,7 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 | import | signature |
 |---|---|
 | `runtime_proc.spawn` | `(desc_ptr, desc_len) -> pid` |
-| `runtime_proc.job_of` | `(pid) -> job` |
+| `runtime_proc.job_of` | `(pid) -> job`; `job_of(0)` is the caller's own job |
 | `runtime_proc.pipe` | `(out_ptr) -> 0` (two `u32`: read end, write end) |
 | `runtime_proc.read` | `(fd, buf, len) -> n` |
 | `runtime_proc.write` | `(fd, buf, len) -> n` |
@@ -312,8 +312,11 @@ The guest never chooses descriptor numbers for itself. `spawn` takes UTF-8 JSON:
   and the explicit `bun-quickjs`, `bun-jsc` and `bun-browser` engine names; generic aliases keep
   the page or root engine. No native executable is ever started.
 - `env` replaces the child environment; the host sets `PWD` to `cwd`.
-- `job` is always `0`: each Bun child is a new foreground job owned by its parent. The guest
-  reaps it with `wait_job(job, NOHANG)` after observing the exit.
+- `job` is the caller's own job, from `job_of(0)`, so job-wide signals and waits from the owner
+  reach grandchildren; the guest never waits for or signals that job as a whole. If `job_of(0)`
+  fails the spawn throws that error (no new-job fallback). A `detached` child instead requests
+  `job: 0`, a new foreground job owned by its parent; the guest then reaps it with
+  `wait_job(job, NOHANG)` after observing the exit and signals it with `kill_job` on abort.
 - `fds` binds child descriptors to parent descriptors. Stdio `pipe` creates a fresh pipe whose
   child end is bound to fd 0, 1 or 2 and whose other end the parent keeps. `inherit` binds
   `{child: n, parent: n}`, the parent's own stream, including a pipe when the parent is itself a

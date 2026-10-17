@@ -2,6 +2,7 @@
 // Children run on the runtime_proc process ABI (docs/host-abi.md, "Process slots"): descriptors
 // from `procPipe`, `procSpawn` bindings, nonblocking `procRead`/`procWrite`, `procWait`,
 // `procWaitJob`, `procKill`/`procKillJob` and `procPoll`. No Bun-specific child handles remain.
+// A child joins the caller's own job; only a `detached` child starts (and owns) a new one.
 (function (internal: BunWasm.Internal) {
   "use strict";
   const native = internal.native;
@@ -248,17 +249,22 @@
         worker = { input: fromWorker[0], output: toWorker[1] };
         env = Object.assign({}, env, { BUNWASM_WORKER_CONTROL: JSON.stringify({ input: toWorker[0], output: fromWorker[1] }) });
       }
-      // Children join the caller's own job so job-wide signals and waits reach them. A service
-      // that cannot name the caller's job gives each child its own new foreground job instead.
-      const inherited = native.procJobOf(0);
-      const request: Record<string, unknown> = { executable, argv, env, cwd, job: inherited > 0 ? inherited : 0, fds: bindings };
+      // Children join the caller's own job so job-wide signals and waits reach them; a detached
+      // child starts a new foreground job instead. Failing to name the caller's job is an error.
+      const detached = Boolean(spec.options.detached);
+      let inherited = 0;
+      if (!detached) {
+        inherited = native.procJobOf(0);
+        if (inherited <= 0) throw processError(inherited < 0 ? inherited : -28, "spawn", executable);
+      }
+      const request: Record<string, unknown> = { executable, argv, env, cwd, job: inherited, fds: bindings };
       if (spec.meta.worker) request.worker = spec.meta.worker;
       const pid = native.procSpawn(JSON.stringify(request));
       if (pid < 0) throw processError(pid, "spawn", executable);
       for (const fd of childEnds) release(fd);
       held.clear();
       // Only a job this child owns is ours to reap or kill; an inherited group belongs to its owner.
-      const job = inherited > 0 ? 0 : native.procJobOf(pid);
+      const job = detached ? native.procJobOf(pid) : 0;
       return Object.assign(spec, { pid, job: job > 0 ? job : 0, stdinFd, outputFds, discard, worker });
     } catch (error) {
       for (const fd of Array.from(held)) release(fd);
