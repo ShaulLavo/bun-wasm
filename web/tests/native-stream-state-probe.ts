@@ -36,6 +36,11 @@ const dispose = installNativeStreamState();
 try {
   const stream = new ReadableStream({ start(controller) { controller.close(); } });
   const hasNativeHooks = hooks[0] !== undefined;
+  // The guest stream bindings validate capability on prototypes before loading.
+  for (const Ctor of [ReadableStream, WritableStream]) {
+    assert.ok(closedKey in Ctor.prototype);
+    assert.ok(errorKey in Ctor.prototype);
+  }
   for (const name of ["ReadableStream", "WritableStream", "TransformStream"] as const) {
     assert.equal(globalThis[name] === before[name], hasNativeHooks);
     assert.equal(globalThis[name].prototype, before[name].prototype);
@@ -57,11 +62,11 @@ try {
   assert.equal((await reader.read()).done, true);
   reader.releaseLock();
   writer.releaseLock();
-  if (!hasNativeHooks) {
+  if (mode !== "own") {
     const errored = new ReadableStream();
     const failure = new Error("native bridge error");
     const completion = Reflect.get(errored, closedKey).promise;
-    Reflect.get(errored, errorKey)(failure);
+    Reflect.apply(Reflect.get(errored, errorKey), errored, [failure]);
     await assert.rejects(completion, error => error === failure);
   }
 } finally {

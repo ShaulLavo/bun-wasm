@@ -329,10 +329,20 @@ function streamMethods(Ctor: typeof ReadableStream | typeof WritableStream, read
 }
 
 export function installNativeStreamState() {
-  // Native hosts may expose these hooks on instances rather than the prototype.
-  // Check before installing accessors: native constructors can assign own hooks.
-  if (!constructors && (closedKey in Native.ReadableStream.prototype ||
-    closedKey in new Native.ReadableStream({ start(controller) { controller.close(); } }))) return () => {};
+  if (!constructors) {
+    if (closedKey in Native.ReadableStream.prototype) return () => {};
+    // Native hosts may assign own hooks during construction. Publish writable
+    // capability slots for the guest's prototype check, never getter-only hooks
+    // that would prevent those assignments. Each instance keeps its native state.
+    if (closedKey in new Native.ReadableStream({ start(controller) { controller.close(); } })) {
+      for (const Ctor of [Native.ReadableStream, Native.WritableStream]) {
+        for (const key of [closedKey, errorKey]) {
+          if (!(key in Ctor.prototype)) Object.defineProperty(Ctor.prototype, key, { configurable: true, writable: true, value: undefined });
+        }
+      }
+      return () => {};
+    }
+  }
   if (!constructors) {
     streamMethods(Native.ReadableStream, true);
     streamMethods(Native.WritableStream, false);

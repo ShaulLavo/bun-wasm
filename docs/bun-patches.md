@@ -1422,8 +1422,10 @@ those hooks before the runtime bootstrap; Node-host execution retains Node's
 existing hooks and embedded engines retain the reference ponyfill hooks. Detection
 checks both the prototype and a closed native stream instance: Node 24/25 assign
 own symbol properties in their constructors, while Node 26 exposes prototype
-getters. Installing a getter-only bridge over the former would break subsequent
-native construction. The isolated native-stream probes cover both representations
+getters. Native instance hooks receive writable prototype capability slots for
+the guest bindings' startup check; constructor assignments still create the real
+own properties. Installing a getter-only bridge over the former would break
+subsequent native construction. The isolated native-stream probes cover both representations
 and a host without hooks, even when the test runner itself uses Node 26.
 
 Construction proxies delegate to the browser's native ReadableStream,
