@@ -217,7 +217,13 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   let rootOutcome = request.outcome ? outcomeWord(request.outcome) : null;
   let rootPid = 1, rootJob = 1;
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
-  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
+  let rootAcknowledged = false;
+  let rootQuiescence: Promise<void> | undefined;
+  const quiesceRoot = (): void | Promise<void> => {
+    if (rootAcknowledged) return;
+    return rootQuiescence ??= options.filesystem.quiesce(request.filesystem);
+  };
+  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { quiesceRoot, output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
     pid: 1, job: 1, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
     signalState: request.signalState, outcome: request.outcome,
   } : undefined });
@@ -255,17 +261,25 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     finished = true;
     if (outcomeTimer !== null) clearTimeout(outcomeTimer);
     outcomeTimer = null;
+    let quiescence: void | Promise<void> = undefined;
     if (acknowledged) {
+      rootAcknowledged = true;
       options.filesystem.reap(request.filesystem);
-      worker.terminate();
     } else {
-      // Logical exit/revocation is immediate; physical termination must not strand a host lock.
-      void options.filesystem.quiesce(request.filesystem).then(() => worker.terminate());
+      // Outcome/revocation is immediate; confirmation and physical stop require the fence.
+      quiescence = quiesceRoot();
     }
-    subprocess.rootExit(result.code);
+    const rootExit = subprocess.rootExit(result.code);
     helper?.dispose();
     if (moduleCache) void caches.delete(moduleCache);
-    settle(result);
+    const confirm = () => {
+      // The admission fence proves completion. Never make run.done depend on terminate().
+      settle(result);
+      worker.terminate();
+    };
+    if (quiescence || rootExit) void Promise.all([quiescence, rootExit]).then(confirm)
+      .catch(error => console.error("bun-wasm: root teardown failed", error));
+    else confirm();
   };
   worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
