@@ -432,6 +432,9 @@ fn classic(text: &str, parser: &dyn Transpiler) -> Result<Value> {
         }
         yaml.push_str(&classic_line(line));
     }
+    if yaml.is_empty() {
+        return Ok(json!({}));
+    }
     io::parsed(yaml.as_bytes(), "YAML", parser)
 }
 
