@@ -51,6 +51,18 @@ function poll(fd: number[], kind: number, stage: number, hangup = false): number
     check(load(512), 12345, 68), check(load(516), 0, 68), check(load(520), kind, 69),
     hangup ? check(load(524), 1, 70) : []);
 }
+// Nonblocking readiness is not a read reservation. A relay may have queued source bytes but
+// still need this reader's demand publication, and successful stream reads can be short.
+// Keep every byte assertion: only AGAIN and positive short reads are retried; early EOF and any
+// other errno retain the original failing stage. The browser driver bounds the full sequence.
+function readExact(fd: number[], length: number, stage: number): number[] {
+  return c(0).concat(set(7), [0x03, 0x40],
+    call(0, fd, c(4096).concat(get(7), [0x6a]), c(length).concat(get(7), [0x6b])), set(8),
+    get(8), c(-6), [0x46, 0x04, 0x40], poll(fd, 0, stage), [0x0c, 1, 0x0b],
+    check(get(8).concat(c(0), [0x4c]), 0, stage),
+    check(get(8).concat(c(length), get(7), [0x6b, 0x4b]), 0, stage),
+    get(7), get(8), [0x6a, 0x22, 7], c(length), [0x49, 0x0d, 0, 0x0b]);
+}
 // JSON numbers occupy ten spaces, populated right-to-left without relying on allocated fd values.
 function jsonNumber(local: number, end: number): number[] {
   return get(local).concat(set(7), c(end), set(8), [0x03, 0x40],
@@ -79,14 +91,14 @@ export function runtimeProcFixture(): Uint8Array<ArrayBuffer> {
     jsonNumber(0, positions[0]!), jsonNumber(3, positions[1]!), jsonNumber(3, positions[2]!),
     call(4, c(1024), c(encoder.encode(request).length)), set(6), check(get(6).concat(c(0), [0x48]), 0, 48),
     check(call(5, get(6), c(640)), -6, 49), close(get(0), 50), close(get(3), 51),
-    poll(get(5), 0, 52), check(read(get(5), 1), 1, 53), check(c(4096).concat([0x2d, 0, 0]), 82, 54),
+    poll(get(5), 0, 52), readExact(get(5), 1, 53), check(c(4096).concat([0x2d, 0, 0]), 82, 54),
     check(write(get(4), 769, 4), 4, 55), close(get(4), 56),
-    poll(get(5), 0, 57), check(read(get(5), 4), 4, 58), check(load(4096), 0x676e6f70, 59),
+    poll(get(5), 0, 57), readExact(get(5), 4, 58), check(load(4096), 0x676e6f70, 59),
     poll(get(5), 0, 60, true), check(read(get(5), 1), 0, 61), poll(get(6), 2, 62),
     check(call(5, get(6), c(640)), 0, 63), check(load(640), 0, 64), check(load(644), 23, 65),
     close(get(5), 66), check(write(c(1), 777, 16), 16, 67));
   const child = close(c(1), 80).concat(check(write(c(10), 768, 1), 1, 81), poll(c(0), 0, 82),
-    check(read(c(0), 4), 4, 83), check(load(4096), 0x676e6970, 84), poll(c(0), 0, 85, true),
+    readExact(c(0), 4, 83), check(load(4096), 0x676e6970, 84), poll(c(0), 0, 85, true),
     check(read(c(0), 1), 0, 86), close(c(0), 87), check(write(c(10), 773, 4), 4, 88), close(c(10), 89),
     check(write(c(11), 793, 13), 13, 90), check(write(c(2), 806, 13), 13, 91), close(c(11), 92), close(c(2), 93), call(9, c(23)));
   // argc == 1 identifies a recursively launched child; root runner supplies [bun, abi-parent].

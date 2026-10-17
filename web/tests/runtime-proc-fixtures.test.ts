@@ -10,7 +10,7 @@ test("artifact-free process guest has only generic ABI and preview1 imports", ()
   expect(imports.every(item => item.module === "runtime_proc" || item.module === "wasi_snapshot_preview1")).toBe(true);
 });
 
-test("parent fixture builds dynamic descriptor JSON and checks every guest sequence stage", () => {
+test("parent fixture keeps byte checks while retrying nonblocking AGAIN and short reads", () => {
   let memory: WebAssembly.Memory;
   let pipe = 0, reads = 0, waits = 0, polls = 0;
   const closed: number[] = [], writes: string[] = [];
@@ -19,8 +19,9 @@ test("parent fixture builds dynamic descriptor JSON and checks every guest seque
     runtime_proc: {
       read(_fd: number, ptr: number, length: number) {
         reads++;
-        if (reads === 1) return -6;
-        const bytes = new TextEncoder().encode(reads === 2 ? "R" : reads === 3 ? "pong" : "");
+        const response = [-6, "R", -6, "po", -6, "ng", ""][reads - 1];
+        if (typeof response === "number") return response;
+        const bytes = new TextEncoder().encode(response);
         expect(length).toBeGreaterThanOrEqual(bytes.length);
         new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
         return bytes.length;
@@ -36,7 +37,7 @@ test("parent fixture builds dynamic descriptor JSON and checks every guest seque
         const view = new DataView(memory.buffer);
         view.setBigUint64(out, view.getBigUint64(ptr + 8, true), true);
         view.setUint32(out + 8, view.getUint32(ptr, true), true);
-        view.setUint32(out + 12, polls === 3 ? 1 : 0, true);
+        view.setUint32(out + 12, polls === 5 ? 1 : 0, true);
         return 1;
       },
     },
@@ -52,7 +53,7 @@ test("parent fixture builds dynamic descriptor JSON and checks every guest seque
     fds: [{ child: 0, parent: 123 }, { child: 1, parent: 126 }, { child: 10, parent: 126 }, { child: 2, parent: 2 }, { child: 11, parent: 1 }] });
   expect(closed).toEqual([124, 125, 123, 126, 1124, 1125]);
   expect(writes).toEqual(["ping", "runtime-proc-ok\n"]);
-  expect(reads).toBe(4); expect(waits).toBe(2); expect(polls).toBe(4);
+  expect(reads).toBe(7); expect(waits).toBe(2); expect(polls).toBe(6);
 });
 
 test("child fixture closes its inherited alias, waits for stdin EOF and exits with status 23", () => {
@@ -65,8 +66,10 @@ test("child fixture closes its inherited alias, waits for stdin EOF and exits wi
     runtime_proc: {
       read(fd: number, ptr: number, length: number) {
         expect(fd).toBe(0); reads++;
-        if (reads === 2) return 0;
-        expect(length).toBe(4); new Uint8Array(memory.buffer, ptr, 4).set(new TextEncoder().encode("ping")); return 4;
+        if (reads === 1) return -6;
+        if (reads === 4) return 0;
+        const bytes = new TextEncoder().encode(reads === 2 ? "pi" : "ng");
+        expect(length).toBe(reads === 2 ? 4 : 2); new Uint8Array(memory.buffer, ptr, 2).set(bytes); return 2;
       },
       write(fd: number, ptr: number, length: number) {
         expect(fd).toBe(writes.length < 2 ? 10 : writes.length === 2 ? 11 : 2);
@@ -78,7 +81,7 @@ test("child fixture closes its inherited alias, waits for stdin EOF and exits wi
         const view = new DataView(memory.buffer);
         view.setBigUint64(out, view.getBigUint64(ptr + 8, true), true);
         view.setUint32(out + 8, view.getUint32(ptr, true), true);
-        view.setUint32(out + 12, polls === 2 ? 1 : 0, true); return 1;
+        view.setUint32(out + 12, polls === 3 ? 1 : 0, true); return 1;
       },
     },
     wasi_snapshot_preview1: {
@@ -90,5 +93,28 @@ test("child fixture closes its inherited alias, waits for stdin EOF and exits wi
   try { (instance.exports._start as () => void)(); throw new Error("child returned instead of calling proc_exit"); }
   catch (error) { expect(error).toBeInstanceOf(Exit); expect((error as Exit).code).toBe(23); }
   expect(writes).toEqual(["R", "pong", "child-stdout\n", "child-stderr\n"]); expect(closed).toEqual([1, 0, 10, 11, 2]);
-  expect(reads).toBe(2); expect(polls).toBe(2);
+  expect(reads).toBe(4); expect(polls).toBe(3);
+});
+
+for (const returned of [0, -8]) test(`child fixture still fails early EOF or unexpected read errno (${returned})`, () => {
+  let memory: WebAssembly.Memory;
+  class Exit extends Error { constructor(readonly code: number) { super(`exit ${code}`); } }
+  const instance = new WebAssembly.Instance(new WebAssembly.Module(runtimeProcFixture()), {
+    runtime_proc: {
+      read: () => returned, write: (_fd: number, _ptr: number, length: number) => length,
+      pipe: () => 0, dup: () => 0, spawn: () => 0, wait: () => 0, job_of: () => 0,
+      poll(ptr: number, _count: number, _timeout: number, out: number) {
+        const view = new DataView(memory.buffer);
+        view.setBigUint64(out, view.getBigUint64(ptr + 8, true), true);
+        view.setUint32(out + 8, view.getUint32(ptr, true), true); view.setUint32(out + 12, 0, true); return 1;
+      },
+    },
+    wasi_snapshot_preview1: {
+      args_sizes_get(ptr: number) { new DataView(memory.buffer).setUint32(ptr, 1, true); return 0; },
+      fd_close: () => 0, proc_exit(code: number) { throw new Exit(code); },
+    },
+  });
+  memory = instance.exports.memory as WebAssembly.Memory;
+  try { (instance.exports._start as () => void)(); throw new Error("bad child read was accepted"); }
+  catch (error) { expect(error).toBeInstanceOf(Exit); expect((error as Exit).code).toBe(83); }
 });

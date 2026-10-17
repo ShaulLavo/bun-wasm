@@ -6,12 +6,14 @@ import { runtimeProcChecks, runtimeProcFixture, runtimeProcStages } from "./runt
 const NativeWorker = globalThis.Worker;
 const activeWorkers = new Set<Worker>();
 const messages: string[] = [];
+const exits: { worker: number; type: string; code: number; message?: string }[] = [];
 let workersCreated = 0;
 globalThis.Worker = class extends NativeWorker {
   constructor(url: string | URL, options?: WorkerOptions) {
-    super(url, options); activeWorkers.add(this); workersCreated++;
+    super(url, options); activeWorkers.add(this); const worker = ++workersCreated;
     this.addEventListener("message", ({ data }) => {
       if (data.type === "runtime-proc") messages.push(data.operation);
+      if (data.type === "exit" || data.type === "error") exits.push({ worker, type: data.type, code: data.code, message: data.message });
     });
   }
   override terminate() { activeWorkers.delete(this); super.terminate(); }
@@ -60,9 +62,10 @@ try {
   filesystem.dispose(); filesystem = undefined;
   await until(() => activeWorkers.size === 0, "all task-created workers terminated");
   result = { ok: true, mode: explicit ? "explicit" : "automatic", checks: runtimeProcChecks, stdout,
-    messages, cleanup: { activeWorkers: activeWorkers.size, workersCreated } };
+    messages, exits, cleanup: { activeWorkers: activeWorkers.size, workersCreated } };
 } catch (error) {
-  result = { ok: false, stdout, stderr, messages, error: error instanceof Error ? error.stack : String(error) };
+  result = { ok: false, stdout, stderr, messages, exits,
+    error: error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error) };
 } finally {
   if (run && !settled) {
     run.kill(9);
