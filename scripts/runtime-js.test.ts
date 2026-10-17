@@ -33,7 +33,8 @@ fn main() {
 `);
   const compile = Bun.spawnSync(["rustc", harness, "-o", builder]);
   expect(compile.exitCode).toBe(0);
-});
+  // Compiling the harness takes seconds on a loaded machine; the default 5s hook limit kills rustc mid-build.
+}, 120_000);
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 test("embeds TypeScript factories, leaves JavaScript raw, and excludes declarations", () => {
