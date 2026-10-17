@@ -3,6 +3,7 @@ import { oversizedCryptoInput } from "./crypto-inputs.js";
 import { installHostCrypto } from "./crypto-host.js";
 import { memoryViews } from "../../runtime/core/memory-views.js";
 import { transferArrayBuffers } from "./buffer-transfer.ts";
+import { ContentModules } from "./content-modules.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -304,6 +305,10 @@ class EngineHost {
     // Pending writes to o.modules, awaited before the next import().
     this.storing = [];
     this.paths = new Map();
+    this.contentModules = o.moduleUrls === "blob" ? new ContentModules({
+      named: o.modules, source: key => this.moduleSource(key), contentUrl: (source, key) => this.url(source, key),
+      paths: this.paths, storing: this.storing,
+    }) : null;
     this.handoffs = new Map();
     this.asyncContext = undefined;
     if (NativeMessageChannel) {
@@ -511,6 +516,7 @@ class EngineHost {
 
   /** The URL of module `key` (a path or a builtin name), built with its dependencies. */
   ensureModule(key) {
+    if (this.contentModules) return this.contentModules.ensure(key);
     const cached = this.urls.get(key);
     if (cached) return cached;
     const store = this.o.modules;

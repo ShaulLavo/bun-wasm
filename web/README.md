@@ -51,6 +51,10 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
+Browser-engine module loading also creates `blob:` URLs for acyclic modules. If the host sets a
+Content-Security-Policy, its `script-src` must allow `blob:` (alongside the policy's existing
+Wasm and eval permissions). Import cycles use the service worker's same-origin module URLs.
+
 ## Networking
 
 When the page is cross-origin isolated, the program gets the `bun_wasm` host functions
