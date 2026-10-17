@@ -522,6 +522,13 @@ impl Engine for Jsc {
         JsVal::new(unsafe { bunjsc_promise_result(ctx(), v.raw()) })
     }
 
+    fn promise_then(&self, promise: &JsVal, fulfilled: &JsVal, rejected: &JsVal) -> Result<JsVal, JsVal> {
+        let mut exc = ptr::null();
+        // SAFETY: the helper holds the VM lock and checks the promise brand.
+        let result = unsafe { bunjsc_promise_then(ctx(), promise.raw(), fulfilled.raw(), rejected.raw(), &mut exc) };
+        checked(exc, result)
+    }
+
     fn take_unhandled_rejections(&self) -> Vec<(JsVal, JsVal)> {
         REJECTIONS.with(|r| r.borrow_mut().drain(..).collect())
     }

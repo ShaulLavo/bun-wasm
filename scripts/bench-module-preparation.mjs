@@ -11,6 +11,7 @@ const source = readFileSync(modulePath, 'utf8')
   .replace('"waffle/core/memory-views"', JSON.stringify(pathToFileURL(createRequire(modulePath).resolve('waffle/core/memory-views')).href))
   .replace('"./buffer-transfer.ts"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/buffer-transfer.ts')).href))
   .replace('"./content-modules.ts"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/content-modules.ts')).href))
+  .replace('"./promise-reactions.ts"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/promise-reactions.ts')).href))
   .replace('"./crypto-inputs.js"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/crypto-inputs.js')).href))
   .replace('"./crypto-host.js"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/crypto-host.js')).href))
   .concat('\nexport { wasmCaller };\n');

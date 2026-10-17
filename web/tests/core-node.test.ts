@@ -33,7 +33,7 @@ test('unbundled headless hosts load with their installed runtime package', async
   const dir = await mkdtemp(join(base, 'bun-wasm-node-clean-'));
   try {
     for (const path of ['web/package.json',
-      'web/src/crypto-inputs.js', 'web/src/crypto-host.js', 'web/src/content-modules.ts',
+      'web/src/crypto-inputs.js', 'web/src/crypto-host.js', 'web/src/content-modules.ts', 'web/src/promise-reactions.ts',
       'web/scripts/node-host.mjs', 'web/scripts/node-signals.ts', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-process.ts', 'web/scripts/node-install-net.mjs', 'web/src/subprocess.ts', 'web/src/net/trampoline.ts', 'web/src/worker-pipes.ts', 'web/src/buffer-transfer.ts', 'web/src/engine-host.js', 'web/src/native-stream-state.ts']) {
       const target = join(dir, path);
       await mkdir(dirname(target), { recursive: true });

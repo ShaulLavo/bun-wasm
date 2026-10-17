@@ -95,6 +95,9 @@ fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str, ValueFn<E>
         Ok(e.from_val(state.into()))
     })));
     list.push(("promiseResult", Rc::new(|e: &E, args: &[E::Value]| Ok(e.promise_result(&arg(e, args, 0))))));
+    list.push(("promiseThen", Rc::new(|e: &E, args: &[E::Value]| {
+        e.promise_then(&arg(e, args, 0), &arg(e, args, 1), &arg(e, args, 2))
+    })));
     list.push(("isProxy", Rc::new(|e: &E, args: &[E::Value]| Ok(e.from_val(e.is_proxy(&arg(e, args, 0)).into())))));
     list.push(("transferArrayBuffers", Rc::new(|e: &E, args: &[E::Value]| {
         let array = arg(e, args, 0);
