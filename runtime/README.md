@@ -49,6 +49,21 @@ shared memory so a blocked guest can reserve its pid before the page imports the
 `wait` is nonblocking; `waitForExit` and `onChildExit` provide asynchronous completion.
 Missing executables exit 127, and loader/adapter startup failures exit 126.
 
+`WorkerProcessClient` and `WorkerProcessBroker` connect a worker's descriptor table to that same
+supervisor. `createWorkerProcessTransport` reserves shared process identities; spawn retains
+serialized capabilities before posting its admission message. `WorkerDescriptorCodec` keeps the
+transport independent of each resource implementation. `createFilesystemDescriptorCodec` transfers
+file and directory capabilities with independent child pins and one shared open-file cursor, so
+closing, unlinking or terminating the parent cannot invalidate an admitted child's descriptions.
+Duplicate bindings retain their individual rights while sharing their original description.
+Process-specific streams use `forProcess(pid)` once per description; their `revoke()` hook runs
+before descriptor release and before `wait` or child-exit notification becomes observable.
+
+The browser accepts an optional `runtimeProcess` transport in its run request. This path installs
+all inherited bindings, including arbitrary fd numbers, before guest launch and shares the existing
+supervisor with Bun subprocesses. Its codec and broker chunks remain lazy; ordinary Bun startup
+does not load the generic ownership adapters. Startup failure releases the transferred capabilities.
+
 Each process has per-signal default, ignored or handled dispositions. `kill` immediately selects
 SIGINT/SIGTERM/SIGPIPE's default signaled outcome (`128 + signal`) and revokes descriptors when
 no handler is registered. Ignored signals do nothing; handled signals set their own pending bit
@@ -85,6 +100,42 @@ is measured separately and remains in the initial adapter closure until step 4b.
 `runtime_proc` descriptor/pipe imports are also step 4b; CPU-bound QuickJS/JSC interrupt checkpoints
 are step 7a. Handled signals already dispatch during cooperative event-loop turns, while unhandled
 default actions are immediate and do not depend on those future engine hooks.
+
+## Process-owned pipes
+
+`PipeController` owns a bounded pipe with one single-producer ring per writing process.
+`retain(pid, "read" | "write")` creates a process endpoint; dup aliases share that endpoint,
+while `forProcess(pid)` reserves an independent process lifetime before spawn returns.
+`tryRead`/`tryWrite` are nonblocking; the stream `read`/`write` methods wait on shared readiness
+notifications for preview1 hosts. Closing the last writer produces EOF after committed data
+is drained; closing the last reader produces EPIPE.
+
+`PipePublicationRegistry` supplies canonical publication and read-lease cursors. Authorized host
+code marks a process revoked before freezing its linked cursors and exposing its exit. Cursor
+allocation links a new cell and then rechecks revocation before admitting the endpoint, so growth
+cannot escape a concurrent kill. Guest WASM never receives this control memory. A stopped
+producer cannot publish past that frozen watermark, and killed buffers are never recycled.
+
+Registry cells are append-only, 16 bytes each, in a growable shared buffer. A simple same-process
+pipe uses four cells, or 64 bytes of lifetime metadata after its pipe buffers are released.
+Defaults allocate about 2 MiB initially and allow 16,777,216 cells (256 MiB plus the header),
+roughly 4,194,304 simple pipes per service; additional process endpoints consume more cells.
+The separate process directory has 1,024 permanent PID rows. Exhausting either bound returns
+WASI ENFILE (41), not a silent reuse. `cellsPerProcess` is an initial-size hint, not a lifetime cap.
+
+A completed write precedes any write that begins later in another process. Writes of at most
+4 KiB remain contiguous across short reads; deliberately tiny pipes use their capacity as the
+atomic-write bound. Bounded record metadata participates in publication and backpressure.
+A single reader consumes rings directly. Multiple reading processes use one supervisor-owned
+relay rather than contending on a guest-held shared lock. Readiness does not reserve bytes;
+unread deliveries can be recovered from an idle, closed or killed reader. Relay work yields
+between bounded batches so kill and exit messages cannot be starved by continuous traffic.
+
+`WorkerPipeHost` creates pipes and composes endpoint transfer with other descriptor codecs.
+`WorkerPipeBroker` attaches each pipe once using its stable identity and retires its controller
+only after every endpoint lifetime is closed or revoked, including pending transfers. Readers
+may still drain data after writer EOF. Worker-created controllers use manual relay mode; only
+a responsive controller starts the automatic relay.
 
 ## Shared filesystem service
 
