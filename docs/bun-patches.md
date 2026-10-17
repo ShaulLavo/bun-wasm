@@ -123,7 +123,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`web/src/native-stream-state.ts`](#native-browser-stream-completion) | Host feature | Original native completion bridge preserves host hooks on instances as well as prototypes. |
 | [Cross-platform web test adapters](#cross-platform-web-tests) | Host feature | Original scratch, child-process cleanup, command-deadline and existing-browser-cache adapters run the same assertions on Linux and macOS. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
-| [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and support asynchronous stdin with live shared filesystem changes and large files. |
+| [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and support asynchronous stdin through process descriptors with live shared filesystem changes and large files. |
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
@@ -1457,6 +1457,19 @@ The original stdin adapters in `crates/bunwasm-runtime/src/js/node_fs.js`,
 `crates/bunwasm-host/src/process/mod.rs`, `process/stdin.rs`, `process/stdio.rs`,
 its slot and notification hooks,
 and the Waffle process ABI let callback reads wait through the host I/O loop.
+The original `node_fs.js` callback adapter selects `procRead` for fd 0 when the
+process ABI is available, rather than calling the networking `hostRead` slot.
+It registers a descriptor READABLE subscription with the existing `net.js`
+waiter scheduler and retains the waiter for WASI EAGAIN (`-6`). Other negative
+WASI errnos become Node-style read errors: `-2` is EACCES and `-4` is
+EADDRNOTAVAIL, not legacy retry or synchronous-fallback statuses. Completion
+preserves the caller's buffer and captured async context. Synchronous reads,
+non-stdin callback reads, and promise FileHandle reads keep their existing WASI
+native path. The original fixture `scripts/node-fs-runtime-proc.test.ts`
+executes these fs and waiter implementations with a controlled native boundary;
+it covers partial reads, EOF, empty reads, readiness retries, error mapping,
+callback context, and the unchanged synchronous paths. This is a change to our
+original host adapter, not copied Bun, Node, or esbuild code.
 The original browser filesystem service in `waffle/fs/`, connected by
 `web/src/fs-worker.ts` and `web/src/worker.ts`, gives parents and descendants
 one live filesystem identity. Changes are visible before stdin, stdout, or exit
