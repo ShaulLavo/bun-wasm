@@ -41,7 +41,9 @@ function storageWorker(): void {
 
 // Own all resources before setup: ephemeral listener, contexts/workers, profiles and scratch.
 let scratch: string | undefined;
+let scratchCreation: Promise<string> | undefined;
 let firefoxScratch: string | undefined;
+let firefoxScratchCreation: Promise<string> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 let browser: Browser | undefined;
 let launch: Promise<Browser> | undefined;
@@ -71,6 +73,8 @@ function cleanup(): Promise<void> {
     } finally {
       server?.stop(true);
       try {
+        scratch ??= await scratchCreation?.catch(() => undefined);
+        firefoxScratch ??= await firefoxScratchCreation?.catch(() => undefined);
         if (stopped) {
           if (scratch) await rm(scratch, { recursive: true, force: true });
           if (firefoxScratch) await rm(firefoxScratch, { recursive: true, force: true });
@@ -124,9 +128,12 @@ async function inWorker<T>(browser: Browser, request: WorkerRequest, persistent 
 
 try {
   const scratchRoot = process.env.STORAGE_SCRATCH_ROOT ?? (process.platform === "darwin" ? resolve(homedir(), "tmp") : "/work/tmp");
-  scratch = await mkdtemp(resolve(scratchRoot, "bun-wasm-storage-"));
+  scratchCreation = mkdtemp(resolve(scratchRoot, "bun-wasm-storage-"));
+  scratch = await scratchCreation;
+  if (cleaning) throw new Error("Storage runner stopped during scratch creation");
   process.env.TMPDIR = scratch;
   const build = await Bun.build({ entrypoints: [resolve(import.meta.dir, "storage-browser.ts")], target: "browser" });
+  if (cleaning) throw new Error("Storage runner stopped before server setup");
   if (!build.success) throw new AggregateError(build.logs, "Storage test bundle failed");
   const script = build.outputs[0]!;
   const workerScript = `(${storageWorker.toString()})();`;
@@ -143,11 +150,16 @@ try {
   } });
   const failures: string[] = [];
   for (const name of process.argv.slice(2).length ? process.argv.slice(2) : ["chromium"]) {
+    if (cleaning) throw new Error("Storage runner stopped before browser setup");
     const engine = { chromium, firefox, webkit }[name];
     if (!engine) throw new Error(`Unknown browser: ${name}`);
     // Firefox's profile must not live on /work's VDO filesystem. This tmpfs directory is
     // task-owned and removed after its browser stops; downloaded artifacts remain on /work.
-    if (name === "firefox" && process.platform === "linux") firefoxScratch ??= await mkdtemp("/dev/shm/bun-wasm-storage-firefox-");
+    if (name === "firefox" && process.platform === "linux" && !firefoxScratch) {
+      firefoxScratchCreation = mkdtemp("/dev/shm/bun-wasm-storage-firefox-");
+      firefoxScratch = await firefoxScratchCreation;
+    }
+    if (cleaning) throw new Error("Storage runner stopped before browser launch");
     process.env.TMPDIR = name === "firefox" && firefoxScratch ? firefoxScratch : scratch;
     launch = engine.launch({ headless: true, downloadsPath: scratch, tracesDir: scratch }); browser = await launch;
     try {
