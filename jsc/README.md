@@ -26,9 +26,16 @@ Configure copies the shim sources and CMake toolchain file into `inputs/`. Gener
 use these copies, so the checkout that configured JSC can be deleted without breaking later engine builds.
 The stamp also checks those copies for changes or missing files.
 
-To update an existing prebuild, run `JSC_BUILD_DIR=<dir> scripts/build-jsc.sh`. It runs configure
-again with the copied inputs, builds JSC, and writes the new stamp. Re-stamping alone cannot repair
-old compiler flags that refer to a deleted checkout. The build directory must keep its original path.
+To update an existing prebuild, run one fresh configure, then rebuild:
+
+```sh
+JSC_BUILD_DIR=<dir> jsc/configure.sh --fresh
+JSC_BUILD_DIR=<dir> scripts/build-jsc.sh
+```
+
+`--fresh` discards CMake's cached reference to the old toolchain file, which may belong to a deleted
+checkout. Configure copies the inputs, and the build writes the new stamp after it succeeds.
+Re-stamping alone cannot repair old compiler flags. The build directory must keep its original path.
 
 Never copy a configured JSC build directory with `cp -a` to make a new prebuild. Its CMake cache
 and `build.ninja` retain absolute paths to the original directory, so a copied build reconfigures
