@@ -5,15 +5,19 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$root/env.sh"
 scratch="$(mktemp -d /work/tmp/bun-wasm-jsc-inputs-test-XXXXXX)"
 patch_backup="$scratch/webkit-wasi.patch"
+script_backup="$scratch/build-jsc.sh"
 cp "$root/jsc/webkit-wasi.patch" "$patch_backup"
+cp "$root/scripts/build-jsc.sh" "$script_backup"
 cleanup() {
   cp "$patch_backup" "$root/jsc/webkit-wasi.patch"
+  cp "$script_backup" "$root/scripts/build-jsc.sh"
   rm -rf "$scratch"
 }
 trap cleanup EXIT INT TERM
 
 export JSC_BUILD_DIR="$scratch"
 source "$root/jsc/common.sh"
+copy_jsc_config_inputs
 write_jsc_inputs_stamp
 check_jsc_inputs_stamp
 
@@ -25,6 +29,13 @@ if output=$(check_jsc_inputs_stamp 2>&1); then
 fi
 [[ "$output" == "$message" ]] || { printf '%s\n' "$output" >&2; exit 1; }
 cp "$patch_backup" "$root/jsc/webkit-wasi.patch"
+printf '\nchanged orchestrator\n' >> "$root/scripts/build-jsc.sh"
+if output=$(check_jsc_inputs_stamp 2>&1); then
+  echo "changed orchestrator unexpectedly passed" >&2
+  exit 1
+fi
+[[ "$output" == "$message" ]] || { printf '%s\n' "$output" >&2; exit 1; }
+cp "$script_backup" "$root/scripts/build-jsc.sh"
 rm "$JSC_INPUTS_STAMP"
 if output=$(check_jsc_inputs_stamp 2>&1); then
   echo "missing stamp unexpectedly passed" >&2

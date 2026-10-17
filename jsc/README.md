@@ -16,10 +16,16 @@ wasmtime run --dir .::/ dist/bun-jsc.wasm run /app.ts
 
 Everything the build produces goes to `${JSC_BUILD_DIR:-/work/tmp/bun-wasm-jsc}`, never the repo.
 After a successful build, `build/jsc/.bunwasm-inputs` stores a SHA-256 stamp of the build-affecting files under
-`jsc/`, the pinned WebKit and ICU inputs, and the pinned toolchain versions.
+`jsc/`, `scripts/build-jsc.sh`, the pinned WebKit and ICU inputs, the copied configure inputs under
+`inputs/`, and the pinned toolchain versions.
 `scripts/build-bun-jsc.sh` checks that stamp before compiling and fails if the prebuild is missing
 or was made from different inputs. Rebuild it with `JSC_BUILD_DIR=<dir> scripts/build-jsc.sh`,
 or point `JSC_BUILD_DIR` at a fresh directory.
+
+Existing prebuilds can be re-stamped only when `build/jsc/CMakeCache.txt` and
+`build/jsc/compile_commands.json` reference paths under that prebuild and `inputs/` contains the
+copied shim and toolchain files. If either condition fails, remove `build/jsc` and `inputs` from
+that prebuild, then run `JSC_BUILD_DIR=<dir> scripts/build-jsc.sh` once to configure it again.
 
 Never copy a configured JSC build directory with `cp -a` to make a new prebuild. Its CMake cache
 and `build.ninja` retain absolute paths to the original directory, so a copied build reconfigures

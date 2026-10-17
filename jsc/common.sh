@@ -10,6 +10,9 @@ ICU_DIR="$JSC_BUILD_DIR/icu"
 ICU_PREFIX="$ICU_DIR/prefix"
 JSC_OBJ="$JSC_BUILD_DIR/build/jsc"
 SHIM_DIR="$JSC_BUILD_DIR/shim"
+JSC_CONFIG_DIR="$JSC_BUILD_DIR/inputs"
+JSC_CONFIG_SHIM_DIR="$JSC_CONFIG_DIR/shim"
+JSC_TOOLCHAIN_FILE="$JSC_CONFIG_DIR/wasi-jsc.cmake"
 JOBS="${JOBS:-6}"
 # The commit Bun pins (oven-sh/bun scripts/build/deps/webkit.ts) and its ICU (icu/source.json there).
 WEBKIT_COMMIT=3d3257150c40a1aabdc5f8b48d5b33d0413674cb
@@ -32,6 +35,16 @@ jsc_inputs_hash() {
     printf 'WEBKIT_COMMIT=%s\n' "$WEBKIT_COMMIT"
     printf 'ICU_VERSION=%s\n' "$ICU_VERSION"
     printf 'ICU_SHA256=%s\n' "$ICU_SHA256"
+    printf 'scripts/build-jsc.sh='
+    sha256sum "$REPO/scripts/build-jsc.sh" | cut -d' ' -f1
+    for file in wasi-jsc.cmake shim/wasi-compat.h shim/wasi-compat.c shim/madvise.c; do
+      printf 'embedded/%s=' "$file"
+      if [[ -f "$JSC_CONFIG_DIR/$file" ]]; then
+        sha256sum "$JSC_CONFIG_DIR/$file" | cut -d' ' -f1
+      else
+        printf 'missing\n'
+      fi
+    done
     (
       cd "$JSC_SRC"
       find . -type f \
@@ -55,7 +68,27 @@ jsc_inputs_hash() {
   } | sha256sum | cut -d' ' -f1
 }
 
+copy_jsc_config_inputs() {
+  mkdir -p "$JSC_CONFIG_SHIM_DIR"
+  cp "$JSC_SRC/wasi-jsc.cmake" "$JSC_TOOLCHAIN_FILE"
+  for file in wasi-compat.h wasi-compat.c madvise.c; do
+    cp "$JSC_SRC/shim/$file" "$JSC_CONFIG_SHIM_DIR/$file"
+  done
+}
+
+check_jsc_build_paths() {
+  local metadata
+  for metadata in "$JSC_OBJ/CMakeCache.txt" "$JSC_OBJ/compile_commands.json"; do
+    [[ -f "$metadata" ]] || continue
+    if command grep -Fq "$JSC_SRC/" "$metadata"; then
+      echo "error: the JSC prebuild at $JSC_BUILD_DIR still references checkout paths; configure a fresh build directory with JSC_BUILD_DIR=$JSC_BUILD_DIR scripts/build-jsc.sh." >&2
+      return 1
+    fi
+  done
+}
+
 write_jsc_inputs_stamp() {
+  check_jsc_build_paths
   mkdir -p "$(dirname "$JSC_INPUTS_STAMP")"
   jsc_inputs_hash > "$JSC_INPUTS_STAMP"
 }
@@ -75,9 +108,10 @@ check_jsc_inputs_stamp() {
 # (every CMake link test links it), build.sh refreshes it.
 build_shim() {
   mkdir -p "$SHIM_DIR"
-  local c
+  local c shim_src="$JSC_CONFIG_SHIM_DIR"
+  [[ -f "$shim_src/wasi-compat.c" ]] || shim_src="$JSC_SRC/shim"
   for c in wasi-compat madvise; do
-    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 -O2 -c "$JSC_SRC/shim/$c.c" -o "$SHIM_DIR/$c.o"
+    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 -O2 -c "$shim_src/$c.c" -o "$SHIM_DIR/$c.o"
   done
   rm -f "$SHIM_DIR/libwasi-compat.a"
   "$WASI_SDK_PATH/bin/llvm-ar" rcs "$SHIM_DIR/libwasi-compat.a" "$SHIM_DIR/wasi-compat.o" "$SHIM_DIR/madvise.o"

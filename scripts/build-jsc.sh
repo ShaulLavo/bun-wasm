@@ -9,6 +9,7 @@ jsc="$(cd "$(dirname "${BASH_SOURCE[0]}")/../jsc" && pwd)"
 "$jsc/fetch-webkit.sh"
 "$jsc/build-icu.sh"
 source "$jsc/common.sh"
+copy_jsc_config_inputs
 [[ -f "$JSC_OBJ/build.ninja" ]] || "$jsc/configure.sh"
 "$jsc/build.sh"
 "$jsc/finalize.sh" "$JSC_OBJ/bin/jsc" "$JSC_BUILD_DIR/jsc.wasm"
