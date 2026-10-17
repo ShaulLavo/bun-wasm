@@ -1,35 +1,5 @@
 # Browser runtime
 
-### Safari filesystem writer lifecycle follow-up
-
-Status: Approved. PR #62 remains incomplete pending a runtime lifecycle design review.
-
-Real Safari 26.4 and iOS simulator Safari 26.5 cache a document with its dedicated filesystem
-worker still holding the workspace Web Lock. Save and flush, navigate to another same-origin
-page, then reopen the filesystem page in that one tab. Both IndexedDB and OPFS refuse startup;
-Reload also refuses. Closing the entire tab releases the writer and recovers the saved data.
-
-An attempted pagehide/freeze hook revoked shared admission and posted a worker shutdown that
-waited for critical sections, requests and cold preparations before flushing and closing storage.
-The unit tests and typechecks passed, but real Safari froze the worker before shutdown completed.
-Starting shutdown in beforeunload also failed. Those hooks were removed rather than shipped.
-A SharedWorker probe cannot host the existing transport on Safari. Its global had
-`Worker === undefined` and `crossOriginIsolated === false`. A Navigation API cancellation probe
-did not intercept SafariDriver's browser-driven same-tab URL navigation.
-
-Reproduce with `bun web/tests/browser-filesystem-lifecycle.ts --build <directory>` on the PC,
-serve the copied assets on Mac localhost with COOP/COEP, then run
-`bun browser-filesystem-lifecycle.ts safari <url>`. Repeat with `SAFARI_IOS=1` for the booted
-iPhone 17 Pro simulator. The test uses the actual page adapter and filesystem worker without
-guest WASM. It remains red at same-tab reopen. The intended remainder checks Reload, restoration
-of the original cached document, a second live tab, and freeze revocation.
-
-The runtime track (bun-wasm-a8) needs another review of the storage lifetime boundary before a
-broader change. Releasing or stealing the lock while an old backend can resume is unsafe;
-terminating immediately does not flush pending writes. Keep the saved-file and exclusive-writer
-contracts. Evidence, failed candidate patch and probes are retained under
-`/work/reports/bun-wasm-safari-lifecycle-2026-10-17/` until that review resolves PR #62.
-
 Status: Approved (owner, 2026-10-16)
 
 ## Goal
@@ -370,3 +340,33 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
   audit of `web/src`.
 - brush-web `plans/001-brush-dev-shell.md`, `plans/004-own-shell.md` and `docs/external-commands.md`.
 - Spike reports: `/work/reports/browser-runtime/spikes/`.
+
+## Safari filesystem writer lifecycle follow-up
+
+Status: Approved. PR #62 remains incomplete pending a runtime lifecycle design review.
+
+Real Safari 26.4 and iOS simulator Safari 26.5 cache a document with its dedicated filesystem
+worker still holding the workspace Web Lock. Save and flush, navigate to another same-origin
+page, then reopen the filesystem page in that one tab. Both IndexedDB and OPFS refuse startup;
+Reload also refuses. Closing the entire tab releases the writer and recovers the saved data.
+
+An attempted pagehide/freeze hook revoked shared admission and posted a worker shutdown that
+waited for critical sections, requests and cold preparations before flushing and closing storage.
+The unit tests and typechecks passed, but real Safari froze the worker before shutdown completed.
+Starting shutdown in beforeunload also failed. Those hooks were removed rather than shipped.
+A SharedWorker probe cannot host the existing transport on Safari. Its global had
+`Worker === undefined` and `crossOriginIsolated === false`. A Navigation API cancellation probe
+did not intercept SafariDriver's browser-driven same-tab URL navigation.
+
+Reproduce with `bun web/tests/browser-filesystem-lifecycle.ts --build <directory>` on the PC,
+serve the copied assets on Mac localhost with COOP/COEP, then run
+`bun browser-filesystem-lifecycle.ts safari <url>`. Repeat with `SAFARI_IOS=1` for the booted
+iPhone 17 Pro simulator. The test uses the actual page adapter and filesystem worker without
+guest WASM. It remains red at same-tab reopen. The intended remainder checks Reload, restoration
+of the original cached document, a second live tab, and freeze revocation.
+
+The runtime track (bun-wasm-a8) needs another review of the storage lifetime boundary before a
+broader change. Releasing or stealing the lock while an old backend can resume is unsafe;
+terminating immediately does not flush pending writes. Keep the saved-file and exclusive-writer
+contracts. Evidence, failed candidate patch and probes are retained under
+`/work/reports/bun-wasm-safari-lifecycle-2026-10-17/` until that review resolves PR #62.
