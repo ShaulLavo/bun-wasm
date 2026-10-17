@@ -68,11 +68,21 @@ for each engine.
 
 ## Verification and remaining work
 
-All seven new fixtures pass on every engine. The full fixture gates each report
-205 passes and two failures. Both failures reproduce unchanged on pristine main;
-the process follow-up in the approved plan records their exact commands and logs.
-The full web gate passes after its crypto test loader is updated for the real
-TypeScript brand factory. All six Chromium/WebKit HMR runs pass.
+On the measured base, all seven new fixtures pass on every engine. The full
+fixture gates each report 205 passes and two failures. Both failures reproduce
+unchanged on pristine main; the process follow-up in the approved plan records
+their exact commands and logs. The full web gate and all six Chromium/WebKit HMR
+runs pass.
+
+After merging main `b14f536f`, one batched build job rebuilt the native launcher
+and all three wasm artifacts. Each full fixture gate reports 206 passes and one
+failure, `node-misc`. QuickJS/JSC exit zero with the known expectation mismatch;
+the browser run reaches the fixture deadline with exit 124 during spawn.
+All 21 new-fixture engine runs pass. All 80 closed-output checks pass after
+PR #52. The full web gate and all six Chromium/WebKit HMR runs pass again.
+Neither recorded WebKit flake appeared. No known-main test or implementation
+was changed. Exact commands, logs and artifact hashes are in the retained report's
+`merged-main/` directory. The batch teardown removes its three Cargo targets.
 
 The adapters remove the missing-method blockers and improve the remaining
 diagnostics. Some files still reach additional gaps:
