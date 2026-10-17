@@ -5,10 +5,12 @@ import { resolve } from "node:path";
 
 const mode = process.argv[2] ?? "chromium";
 const assets = process.argv[3];
+if (mode === "safari") assert.ok(assets, "Pass the URL of the prebuilt lifecycle fixture");
 async function build(directory: string) {
   const root = resolve(import.meta.dir, "../..");
-  for (const [entry, name] of [["web/tests/fixtures/filesystem-lifecycle.ts", "main"], ["web/src/fs-worker.ts", "fs-worker"]]) {
-    const result = await Bun.build({ entrypoints: [resolve(root, entry!)], outdir: directory, naming: `${name}.js`, target: "browser", format: "esm",
+  const entries: [string, string][] = [["web/tests/fixtures/filesystem-lifecycle.ts", "main"], ["web/src/fs-worker.ts", "fs-worker"]];
+  for (const [entry, name] of entries) {
+    const result = await Bun.build({ entrypoints: [resolve(root, entry)], outdir: directory, naming: `${name}.js`, target: "browser", format: "esm",
       plugins: [{ name: "source-runtime", setup(build) {
         build.onResolve({ filter: /^@bun-wasm\/runtime\/fs$/ }, () => ({ path: resolve(root, "runtime/fs/index.ts") }));
       } }],
@@ -21,7 +23,7 @@ async function build(directory: string) {
 if (mode === "--build") { assert.ok(assets); await build(assets); process.exit(0); }
 
 type Driver = {
-  evaluate(script: string): Promise<any>;
+  evaluate(script: string): Promise<unknown>;
   navigate(url: string): Promise<void>;
   reload(): Promise<void>;
   back(expected: string): Promise<void>;
@@ -35,7 +37,9 @@ type Driver = {
 let stop: (() => Promise<void>) | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 let scratch: string | undefined;
-const report: Record<string, any> = { mode, cases: [] };
+const report: Record<string, unknown> & { cases: unknown[] } = { mode, cases: [] };
+function record(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object"; }
+function text(value: unknown): string { assert.ok(typeof value === "string"); return value; }
 let cleaning: Promise<void> | undefined;
 function cleanup() {
   return cleaning ??= (async () => {
@@ -57,8 +61,9 @@ async function safari(): Promise<Driver> {
   const processHandle = Bun.spawn(["/usr/bin/safaridriver", "--port", String(port)], { stdout: "ignore", stderr: "ignore" });
   async function request(path: string, body?: unknown, method = body === undefined ? "GET" : "POST") {
     const response = await fetch(endpoint + path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(cleaning ? 5_000 : 45_000) });
-    const result = await response.json();
+    const result: unknown = await response.json();
     assert.equal(response.ok, true, JSON.stringify(result));
+    assert.ok(record(result));
     return result.value;
   }
   stop = async () => {
@@ -73,6 +78,7 @@ async function safari(): Promise<Driver> {
     ? { browserName: "safari", platformName: "ios", "safari:useSimulator": true, "safari:deviceType": "iPhone", "safari:deviceName": "iPhone 17 Pro" }
     : { browserName: "safari" };
   const opened = await request("/session", { capabilities: { alwaysMatch: caps } });
+  assert.ok(record(opened) && typeof opened.sessionId === "string");
   session = opened.sessionId;
   report.capabilities = opened.capabilities;
   const path = `/session/${session}`;
@@ -80,6 +86,7 @@ async function safari(): Promise<Driver> {
   async function barrier(expected?: string) {
     for (let attempt = 0; attempt < 600; attempt++) {
       const state = await request(`${path}/execute/sync`, { script: "return {url:location.href,ready:document.readyState}", args: [] });
+      assert.ok(record(state));
       if ((!expected || state.url === expected) && state.ready === "complete") return;
       await Bun.sleep(25);
     }
@@ -88,17 +95,17 @@ async function safari(): Promise<Driver> {
   return {
     async evaluate(script) {
       const result = await request(`${path}/execute/async`, { script: `const done=arguments[arguments.length-1];Promise.resolve().then(async()=>{${script}}).then(value=>done({ok:true,value}),error=>done({ok:false,error:String(error),stack:error?.stack}));`, args: [] });
-      assert.equal(result?.ok, true, JSON.stringify(result)); return result.value;
+      assert.ok(record(result)); assert.equal(result.ok, true, JSON.stringify(result)); return result.value;
     },
     async navigate(url) { await request(`${path}/url`, { url }); await barrier(url); },
     async reload() { await request(`${path}/refresh`, {}); await barrier(); },
     async back(expected) { await request(`${path}/back`, {}); await barrier(expected); },
-    current: () => request(`${path}/window`),
-    async open() { return (await request(`${path}/window/new`, { type: "tab" })).handle; },
+    async current() { return text(await request(`${path}/window`)); },
+    async open() { const result = await request(`${path}/window/new`, { type: "tab" }); assert.ok(record(result)); return text(result.handle); },
     async select(handle) { await request(`${path}/window`, { handle }); },
     async close() { await request(`${path}/window`, undefined, "DELETE"); },
-    handles: () => request(`${path}/window/handles`),
-    async screenshot(file) { await Bun.write(file, Buffer.from(await request(`${path}/screenshot`), "base64")); },
+    async handles() { const result = await request(`${path}/window/handles`); assert.ok(Array.isArray(result)); return result.map(text); },
+    async screenshot(file) { await Bun.write(file, Buffer.from(text(await request(`${path}/screenshot`)), "base64")); },
   };
 }
 
@@ -112,7 +119,7 @@ async function playwright(): Promise<Driver> {
     const file = Bun.file(resolve(directory, path === "/" ? "index.html" : path.slice(1)));
     return new Response(file, { headers: { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" } });
   } });
-  const pw = await import(process.env.PLAYWRIGHT ?? "playwright");
+  const pw: typeof import("playwright") = await import(process.env.PLAYWRIGHT ?? "playwright");
   assert.ok(mode === "chromium" || mode === "webkit");
   const browser = await pw[mode].launch({ headless: true });
   stop = () => browser.close();
@@ -135,7 +142,11 @@ async function playwright(): Promise<Driver> {
 try {
   const driver = mode === "safari" ? await safari() : await playwright();
   const base = assets ?? `http://127.0.0.1:${server!.port}/`;
-  const state = () => driver.evaluate("const end=Date.now()+15000;while(!globalThis.lifecycle?.ready&&!globalThis.lifecycle?.error){if(Date.now()>end)throw Error('filesystem startup timed out');await new Promise(r=>setTimeout(r,25))}return {ready:lifecycle.ready,error:lifecycle.error,id:lifecycle.id,events:JSON.parse(sessionStorage.getItem('lifecycle')??'[]'),locks:await navigator.locks.query()};");
+  async function state() {
+    const value = await driver.evaluate("const end=Date.now()+15000;while(!globalThis.lifecycle?.ready&&!globalThis.lifecycle?.error){if(Date.now()>end)throw Error('filesystem startup timed out');await new Promise(r=>setTimeout(r,25))}return {ready:lifecycle.ready,error:lifecycle.error,id:lifecycle.id,events:JSON.parse(sessionStorage.getItem('lifecycle')??'[]'),locks:await navigator.locks.query()};");
+    assert.ok(record(value) && typeof value.id === "string" && typeof value.ready === "boolean" && typeof value.error === "string" && Array.isArray(value.events));
+    return { id: value.id, ready: value.ready, error: value.error, events: value.events.filter(record), locks: value.locks };
+  }
   for (const storage of ["indexeddb", "opfs"]) {
     report.phase = `${storage} initial`;
     const url = new URL(`?storage=${storage}&name=lifecycle-${crypto.randomUUID()}`, base).href;
@@ -164,7 +175,7 @@ try {
     assert.equal(reopened.ready, true, JSON.stringify(reopened));
     assert.notEqual(reopened.id, first.id, "cached filesystem page must reinitialize before use");
     assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "fresh page edit");
-    if (mode === "safari") assert.ok(reopened.events.some((event: any) => event.type === "pageshow" && event.persisted && event.id === first.id), "real Safari must restore the original cached document");
+    if (mode === "safari") assert.ok(reopened.events.some(event => event.type === "pageshow" && event.persisted && event.id === first.id), "real Safari must restore the original cached document");
     report.phase = `${storage} two live tabs`;
     const owner = await driver.current(), contender = await driver.open();
     await driver.select(contender); await driver.navigate(url);
