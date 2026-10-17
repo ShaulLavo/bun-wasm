@@ -9,7 +9,7 @@ import { join, resolve, sep } from "node:path";
 import { tmpdir, availableParallelism, loadavg } from "node:os";
 import { buildBrowserEntries } from "../../scripts/browser-build";
 import type { Browser } from "playwright";
-import { allocateSafariDriverPort, assertSafariDriverOwnership } from "./engine-interruption-safari";
+import { allocateSafariDriverPort, assertSafariDriverOwnership, ownSafariDriver, stopSafariDriver, type SafariDriverOwnership } from "./engine-interruption-safari";
 
 export interface RunnerCleanup {
   safe: boolean;
@@ -43,11 +43,11 @@ async function boundedCleanup<T>(name: string, run: () => T | Promise<T>, timeou
 }
 // Each resource gets an independent, bounded attempt. One failed/hung close must
 // never skip the session, driver, listener or scratch, nor become safe:true.
-export async function collectRunnerCleanup(steps: readonly { name: string; run: () => unknown | Promise<unknown> }[], timeoutMs = 5_000): Promise<RunnerCleanup> {
+export async function collectRunnerCleanup(steps: readonly { name: string; timeoutMs?: number; run: () => unknown | Promise<unknown> }[], timeoutMs = 5_000): Promise<RunnerCleanup> {
   const result: RunnerCleanup = { safe: true };
   const errors: string[] = [];
   for (const step of steps) {
-    try { await boundedCleanup(step.name, step.run, timeoutMs); result[step.name] = true; }
+    try { await boundedCleanup(step.name, step.run, step.timeoutMs ?? timeoutMs); result[step.name] = true; }
     catch (error) { result[step.name] = false; result.safe = false; errors.push(`${step.name}: ${errorText(error)}`); }
   }
   if (errors.length) result.errors = errors;
@@ -183,6 +183,7 @@ async function main(): Promise<boolean> {
   let server: ReturnType<typeof Bun.serve> | undefined;
   let browser: Browser | undefined, launching: Promise<Browser> | undefined;
   let driver: ReturnType<typeof Bun.spawn> | undefined;
+  let driverOwnership: SafariDriverOwnership | undefined;
   let session: string | undefined;
   let stopping = false;
   let cleanupPromise: Promise<RunnerCleanup> | undefined;
@@ -193,8 +194,8 @@ async function main(): Promise<boolean> {
   const requestedDriverPort = process.env.ENGINE_INTERRUPTION_SAFARI_PORT === undefined ? 0 : Number(process.env.ENGINE_INTERRUPTION_SAFARI_PORT);
   function assertRunning(): void { assert.ok(!stopping, "engine interruption runner is stopping"); }
   async function webdriver(path: string, method = "GET", body?: unknown): Promise<any> {
-    assert.ok(driver, "Safari driver not started");
-    await assertSafariDriverOwnership(driver, driverPort);
+    assert.ok(driverOwnership, "Safari driver not started");
+    await assertSafariDriverOwnership(driverOwnership, driverPort);
     const response = await fetch(`http://127.0.0.1:${driverPort}` + path, { method, body: body === undefined ? undefined : JSON.stringify(body),
       headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(stopping ? 3_000 : benchmark ? 540_000 : functionalDriverTimeoutMs) });
     const result: any = await response.json();
@@ -222,8 +223,12 @@ async function main(): Promise<boolean> {
         if (owned) await webdriver(`/session/${owned}`, "DELETE");
         session = undefined; openingSession = undefined;
       } },
-      { name: "driverStopped", async run() {
-        if (driver) { driver.kill("SIGTERM"); await driver.exited; driver = undefined; }
+      { name: "driverStopped", timeoutMs: driverOwnership ? 15_000 : undefined, async run() {
+        if (driverOwnership) {
+          await stopSafariDriver(driverOwnership, driverPort);
+          await driver?.exited;
+          driver = undefined; driverOwnership = undefined;
+        }
       } },
     ]);
   }
@@ -320,7 +325,9 @@ async function main(): Promise<boolean> {
         if (name === "safari") {
           driverPort = await allocateSafariDriverPort(requestedDriverPort);
           assertRunning();
+          const spawnedAfter = Date.now();
           driver = Bun.spawn(["/usr/bin/safaridriver", "--port", String(driverPort)], { stdout: "ignore", stderr: "inherit" });
+          driverOwnership = ownSafariDriver(driver, spawnedAfter);
           console.log(JSON.stringify({ resources: { safariDriverPort: driverPort, safariDriverPid: driver.pid } }));
           for (let attempt = 0; ; attempt++) {
             try { await webdriver("/status"); break; }

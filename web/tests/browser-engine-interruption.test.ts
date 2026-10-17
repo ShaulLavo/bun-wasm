@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -107,6 +108,15 @@ test("a hanging cleanup step is bounded without skipping later resources or the 
   expect(report.unsafeCleanup).toContain("timed out"); expect(f.written).toEqual([report]);
 });
 
+test("a Safari driver-specific cleanup budget does not change the default bound for other resources", async () => {
+  const cleanup = await collectRunnerCleanup([
+    { name: "driverStopped", timeoutMs: 100, run: async () => { await Bun.sleep(20); } },
+    { name: "otherResource", run: async () => { await Bun.sleep(20); } },
+  ], 5);
+  expect(cleanup.driverStopped).toBe(true);
+  expect(cleanup.otherResource).toBe(false);
+  expect(cleanup.safe).toBe(false);
+});
 test("a hanging browser teardown is unsafe and cannot start another requested browser", async () => {
   const f = fixture({ cleanupTimeoutMs: 10, teardownBrowser: () => new Promise(() => {}) });
   const report = await runBrowserGate(f.options);
@@ -211,7 +221,7 @@ test("CLI validation failure writes ENGINE_INTERRUPTION_OUTPUT without launching
   let child: ReturnType<typeof Bun.spawn> | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
-    directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-runner-test-"));
+    directory = await mkdtemp(join(process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-runner-test-"));
     const output = join(directory, "report.json");
     child = Bun.spawn([process.execPath, join(import.meta.dir, "browser-engine-interruption.ts"), "invalid-browser-for-test"], {
       stdout: "ignore", stderr: "ignore", env: { ...process.env, ENGINE_INTERRUPTION_OUTPUT: output },
