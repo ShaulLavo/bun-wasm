@@ -12,4 +12,6 @@ source "$jsc/common.sh"
 [[ -f "$JSC_OBJ/build.ninja" ]] || "$jsc/configure.sh"
 "$jsc/build.sh"
 "$jsc/finalize.sh" "$JSC_OBJ/bin/jsc" "$JSC_BUILD_DIR/jsc.wasm"
+write_jsc_inputs_stamp
 ls -l "$JSC_BUILD_DIR/jsc.wasm"
+echo "jsc: inputs stamp $JSC_INPUTS_STAMP ($(cat "$JSC_INPUTS_STAMP"))"
