@@ -506,3 +506,41 @@ That dependency has landed in PR #36, and the branch reruns the memory
 and full web gates. Do not reduce the guest allocation, relax its timeout or
 remove assertions to call the gate passing. The owning lane removes retained
 evidence after reproduction, review and merge.
+
+## Wasmtime memfd sealing startup failure during the API gate
+
+Status: Approved. Reproduce before changing the launcher or Wasmtime.
+
+The HTMLRewriter/X509Certificate lane observed one launcher startup failure in the
+full JSC fixture gate on 2026-10-17. `net-route-leading-slash` printed no guest output
+and failed before executing its route assertions:
+
+```text
+bun-wasm: cannot add seals to the memfd: Device or resource busy (os error 16)
+```
+
+The same run passed 200 fixtures, including the new HTMLRewriter and certificate
+fixtures. QuickJS passed all 201 fixtures. The launcher uses Wasmtime 39.0.2, and
+`crates/bunwasm-host/src/main.rs` loads the guest through `Module::from_file`.
+Neither the launcher nor the route implementation changed in this lane. The
+observation does not establish a guest networking or API failure.
+
+Start with a bounded repeat of the unchanged fixture, using a private host build
+and target directory through the heavy wrapper:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+CARGO_TARGET_DIR=/work/tmp/bun-wasm-own-target scripts/test.sh --no-build \
+  --engine jsc net-route-leading-slash
+```
+
+Build `bunwasm-host` into that target before running the command. Keep the exact
+wasm, launcher and cache settings in the reproduction. If it recurs, trace the
+Wasmtime code-memory memfd creation and sealing path and compare cache-enabled
+and cache-disabled controls. Do not add retries to the fixture or launcher.
+
+The original full gate is retained in
+`/work/reports/bun-wasm-htmlrewriter-x509-2026-10-17/round1/gate-jsc.log`.
+The coordinator owns that evidence until the startup failure is reproduced or
+ruled out. Final gate outcomes for this lane are recorded separately in its PR.
