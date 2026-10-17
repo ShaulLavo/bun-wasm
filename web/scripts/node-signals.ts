@@ -1,5 +1,5 @@
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
-import { createSignalState, requestSignal } from "../../runtime/proc/signals.ts";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
+import { createSignalState, requestSignal } from "waffle/proc/signals";
 
 /** The main Node thread and its root guest share the same signal and terminal-decision words. */
 export interface NodeSignalBuffers {

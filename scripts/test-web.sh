@@ -16,9 +16,7 @@ for test_file in "$root"/web/tests/*.mjs; do
 done
 
 cd "$root/web"
-bun run check
-bun x tsc -p tests/engine-interruption.tsconfig.json
-bun test tests/
+bash "$root/scripts/test-web-host.sh" --unit
 bun run build >/dev/null
 
 scratch_root="${BUN_WASM_TEST_TMP:-${TMPDIR:-/tmp}}"
@@ -38,7 +36,7 @@ cleanup() {
     else
       rm -f "$root/$app/bunfig.toml"
     fi
-    # Put back the default layout, or the next typecheck sees two copies of @bun-wasm/runtime.
+    # Put back the default layout, or the next typecheck sees two copies of waffle.
     (cd "$root/$app" && bun install --frozen-lockfile >/dev/null 2>&1) || true
   done
   rm -rf "$scratch" "$isolated_scratch"
@@ -89,7 +87,17 @@ for slots in table imports; do
 done
 
 if [[ $browser == 1 ]]; then
-  node "$root/scripts/test-native-stream-interop.mjs" || failed=1
+  bash "$root/scripts/test-web-host.sh" --browser || failed=1
+  bun tests/browser-editor.ts webkit || failed=1
+  bun tests/browser-filesystem-lifecycle.ts chromium || failed=1
+  bun tests/browser-filesystem-lifecycle.ts webkit || failed=1
+  storage_runner="$(cd "$root/web" && realpath node_modules/waffle/tests/storage-browser-runner.ts)"
+  if [[ -f "$storage_runner" ]]; then
+    bun "$storage_runner" chromium webkit || failed=1
+  else
+    echo "missing installed Waffle storage browser runner: $storage_runner" >&2
+    failed=1
+  fi
   node tests/browser-install.mjs || failed=1
   node tests/browser-shell-stop.ts || failed=1
   node tests/browser-net.mjs || failed=1

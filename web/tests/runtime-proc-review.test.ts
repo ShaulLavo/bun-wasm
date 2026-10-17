@@ -1,12 +1,12 @@
+import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, test } from "bun:test";
-import { DescriptorTable } from "../../runtime/core/descriptors";
-import { createFilesystemIdentity, revokeFilesystem } from "../../runtime/fs";
-import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "../../runtime/proc/worker-client";
+import { DescriptorTable } from "waffle/core/descriptors";
+import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { SharedFilesystem } from "../src/shared-fs";
 import { SubprocessBroker } from "../src/subprocess-broker";
-import { failFirstWorkerImport } from "./worker-start-failure";
-import { claimOutcome, readOutcome } from "../../runtime/proc/outcome";
-import { setSignalDisposition } from "../../runtime/proc/signals";
+import { claimOutcome } from "waffle/proc/outcome";
+import { setSignalDisposition } from "waffle/proc/signals";
 import type { RunRequest, WorkerMessage } from "../src/worker";
 
 const pause = (ms = 1) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -15,9 +15,10 @@ async function until(condition: () => boolean, label: string, milliseconds = 500
   while (!condition()) { if (performance.now() >= end) throw new Error(`${label} timed out`); await pause(); }
 }
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
-function fixture(options?: ConstructorParameters<typeof SubprocessBroker>[2], failPostMessage = false, quiesce?: () => Promise<void>) {
+function fixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("waffle/proc")> }, failPostMessage = false, quiesce?: () => Promise<void>) {
   const NativeWorker = globalThis.Worker;
   const workers: FakeWorker[] = [];
+  const ports: MessagePort[] = [];
   class FakeWorker {
     request?: RunRequest;
     onmessage?: (event: { data: WorkerMessage }) => void;
@@ -32,13 +33,15 @@ function fixture(options?: ConstructorParameters<typeof SubprocessBroker>[2], fa
     terminate() { this.terminated = true; }
   }
   globalThis.Worker = FakeWorker as unknown as typeof Worker;
-  const root = createWorkerProcessTransport(); root.data = { filesystem: createFilesystemIdentity() };
   const filesystem = {
-    connect(identity: object) { const channel = new MessageChannel(); channel.port2.close(); return { ...identity, port: channel.port1 }; },
+    connect(identity: object) { const channel = new MessageChannel(); channel.port2.close(); ports.push(channel.port1); return { ...identity, port: channel.port1 }; },
     revoke: revokeFilesystem, reap() {}, client: { sweep() {} },
     async quiesce(identity: Parameters<typeof revokeFilesystem>[0]) { revokeFilesystem(identity); await quiesce?.(); },
   } as unknown as SharedFilesystem;
-  const broker = new SubprocessBroker("http://localhost/worker.js", filesystem, options);
+  const runtime = processRuntimeFixture(filesystem, { activate: options?.activate });
+  const root = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
+  root.data = { filesystem: createFilesystemIdentity() };
+  const broker = new SubprocessBroker("http://localhost/worker.js", runtime, options);
   const descriptors = new DescriptorTable();
   const messages: WorkerProcessMessage[] = [];
   const codec = { export() { throw new Error("unexpected descriptor export"); }, import() { throw new Error("unexpected descriptor import"); }, discard() {} };
@@ -47,11 +50,11 @@ function fixture(options?: ConstructorParameters<typeof SubprocessBroker>[2], fa
       prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (root.data as { pipeRegistry: unknown }).pipeRegistry } }) });
   }
   const parent = client(root, message => messages.push(message));
-  return { root, broker, workers, parent, client, messages,
+  return { root, runtime, broker, workers, parent, client, messages,
     async dispose() {
       broker.dispose(); descriptors.dispose();
-      try { await until(() => workers.every(worker => worker.terminated), "fixture workers stopped"); }
-      finally { for (const worker of workers) worker.terminate(); globalThis.Worker = NativeWorker; }
+      try { await runtime.dispose(); await until(() => workers.every(worker => worker.terminated), "fixture workers stopped"); }
+      finally { for (const worker of workers) worker.terminate(); for (const port of ports) port.close(); globalThis.Worker = NativeWorker; }
     },
   };
 }
@@ -132,24 +135,7 @@ for (const failure of ["error-event", "initial-post-message"] as const) test(`ge
     // Let every watcher/microtask observe failure; a missing acknowledgement must not strand wait.
     await pause(25);
     expect(Atomics.load(shared.confirmed, 0)).toBe(1);
-    expect(state.parent.wait(1, pid)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
-  } finally { await state.dispose(); }
-});
-
-test("first generic child import failure reaches the broker as typed EACCES", async () => {
-  const state = fixture();
-  try {
-    state.broker.register("child", { adapter: "preview1", cooperative: true, module: emptyModule() });
-    await state.broker.adoptRuntimeRoot(state.root);
-    const pid = state.parent.spawn(1, { executable: "child", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
-    await state.broker.runtimeMessage(state.messages[0]!, 1);
-    await until(() => !!state.workers[0]?.request, "child request");
-    const worker = state.workers[0]!, request = worker.request!;
-    const shared = workerProcessState(request.runtimeProcess!);
-    await failFirstWorkerImport(request, data => worker.onmessage!({ data }));
-    expect(readOutcome(shared.signals.outcome)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
-    await until(() => Atomics.load(shared.confirmed, 0) === 1, "startup failure confirmed");
-    expect(state.parent.wait(1, pid)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
+    expect(state.parent.wait(1, pid)).toEqual({ kind: "exited", code: 126, status: 126 });
   } finally { await state.dispose(); }
 });
 
@@ -164,7 +150,7 @@ test("explicit disposal confirms a selected ordinary child exit only after its f
     await until(() => state.workers.length === 1, "child launch");
     const worker = state.workers[0]!, shared = workerProcessState(worker.request!.runtimeProcess!);
     claimOutcome(shared.signals.outcome, { kind: "exited", code: 23 });
-    state.broker.dispose();
+    void state.runtime.dispose();
     await pause();
     expect(Atomics.load(shared.confirmed, 0)).toBe(0);
     expect(state.parent.wait(1, pid)).toBeNull();
@@ -203,7 +189,7 @@ test("generic worker loaded after first watcher tick still confirms a caught def
 
 test("already-published background spawn survives root exit during lazy supervisor activation", async () => {
   const activation = deferred(); let activating = false;
-  const state = fixture({ activate: async () => { activating = true; await activation.promise; return import("../../runtime/proc"); } });
+  const state = fixture({ activate: async () => { activating = true; await activation.promise; return import("waffle/proc"); } });
   try {
     state.broker.register("child", { adapter: "preview1", cooperative: true, module: emptyModule() });
     await state.broker.adoptRuntimeRoot(state.root);
@@ -215,7 +201,7 @@ test("already-published background spawn survives root exit during lazy supervis
     state.parent.exit(0); state.broker.rootExit(0);
     activation.resolve();
     expect(await outcome).toBeNull();
-    await until(() => state.workers.some(worker => worker.request?.pid === pid), "independent background launch");
+    await until(() => state.workers.some(worker => (worker.request?.runtimeProcess && workerProcessState(worker.request.runtimeProcess).pid === pid)), "independent background launch");
     expect((await state.broker.ready()).get(pid)?.result).toBeNull();
   } finally { activation.resolve(); await state.dispose(); }
 });

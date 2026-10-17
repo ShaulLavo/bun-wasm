@@ -10,7 +10,7 @@ import { MemFS } from "../src/fs";
 import { NetHost } from "../src/net/host";
 import { createRing } from "../src/net/ring";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "../src/net/trampoline";
-import { Wasi } from "@bun-wasm/runtime/core";
+import { Wasi } from "waffle/core";
 
 const [wasmPath, ...args] = process.argv.slice(2);
 if (!wasmPath) {

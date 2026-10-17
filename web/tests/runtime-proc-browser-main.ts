@@ -1,6 +1,6 @@
-import { SharedFilesystem } from "../src/shared-fs";
+import { createRuntime, type ProcessAdmissionEvent, type Runtime } from "waffle";
 import { startRun, type Run } from "../src/runner";
-import { createWorkerProcessTransport } from "../../runtime/proc/worker-client";
+import { createWorkerProcessTransport, workerProcessDirectoryId, workerProcessState } from "waffle/proc/worker-client";
 import { runtimeProcChecks, runtimeProcFixture, runtimeProcStages, runtimeProcJobWaitChecks, runtimeProcJobWaitFixture, runtimeProcJobWaitStages } from "./runtime-proc-fixtures";
 
 // Diagnostic only: identify the exact BufferSource representation rejected by an engine.
@@ -30,7 +30,25 @@ async function instrumentJobWaitWorker(sourceURL: string) {
   let gate: Int32Array | undefined, waitingJob: number | undefined, loaded = false;
   const pending: MessageEvent[] = [];
   const nativeWait = Atomics.wait, NativeInstance = WebAssembly.Instance;
+  let ioTotal = 0, nextReport = 64, launchReported = false;
+  const ioCounts: Record<string, number> = {};
+  const reportIO = (call: { operation: "read" | "poll" | "interrupted"; result: number; fd?: number; length?: number; count?: number; timeout?: number }) => {
+    ioTotal++;
+    const key = `${call.operation}:${call.result}`;
+    ioCounts[key] = (ioCounts[key] ?? 0) + 1;
+    // Diagnose a busy loop without causing one: at most 32 initial posts, then one per
+    // doubling of the call count. Never enqueue one message for every hot ABI import.
+    if (ioTotal <= 32 || ioTotal >= nextReport || ioCounts[key] === 1) {
+      scope.postMessage({ type: "job-wait-test-io", ...call, total: ioTotal, counts: { ...ioCounts } });
+      if (ioTotal >= nextReport) nextReport *= 2;
+    }
+  };
   scope.addEventListener("message", event => {
+    if (!launchReported && event.data?.module instanceof WebAssembly.Module) {
+      launchReported = true;
+      scope.postMessage({ type: "job-wait-test-launch", args: event.data.args, interruptible: event.data.interruptible,
+        slot: event.data.runtimeProcess?.slot });
+    }
     if (event.data?.type === "job-wait-test-gate") {
       gate = new Int32Array(event.data.gate as SharedArrayBuffer);
       event.stopImmediatePropagation();
@@ -49,12 +67,17 @@ async function instrumentJobWaitWorker(sourceURL: string) {
     constructor(module: WebAssembly.Module, imports: WebAssembly.Imports = {}) {
       const runtime = imports.runtime_proc;
       if (runtime) {
-        const waitJob = runtime.wait_job, poll = runtime.poll, read = runtime.read;
+        const waitJob = runtime.wait_job, poll = runtime.poll, read = runtime.read, interrupted = runtime.interrupted;
         // Preserve each return value rather than guessing whether a failed readExact saw EOF,
         // an errno, or a legal zero-ready wake. These messages never change the ABI result.
         if (typeof read === "function") runtime.read = (fd: number, ptr: number, length: number) => {
           const result = Reflect.apply(read, runtime, [fd, ptr, length]);
-          scope.postMessage({ type: "job-wait-test-io", operation: "read", fd, length, result });
+          reportIO({ operation: "read", fd, length, result });
+          return result;
+        };
+        if (typeof interrupted === "function") runtime.interrupted = () => {
+          const result = Reflect.apply(interrupted, runtime, []);
+          reportIO({ operation: "interrupted", result });
           return result;
         };
         if (typeof waitJob === "function") runtime.wait_job = (job: number, flags: number, ptr: number) => {
@@ -73,7 +96,7 @@ async function instrumentJobWaitWorker(sourceURL: string) {
             }
           }
           const result = Reflect.apply(poll, runtime, [ptr, count, timeout, out]);
-          scope.postMessage({ type: "job-wait-test-io", operation: "poll", count, timeout, result });
+          reportIO({ operation: "poll", count, timeout, result });
           return result;
         };
       }
@@ -91,7 +114,12 @@ const jobWaitScenario = new URLSearchParams(location.search).has("job-wait");
 const jobWaitGate = jobWaitScenario ? new SharedArrayBuffer(4) : undefined;
 const bootstrapURLs = new Set<string>();
 const blockingWaitEntries: number[] = [];
-const ioCalls: { worker: number; operation: "read" | "poll"; result: number; fd?: number; length?: number; count?: number; timeout?: number }[] = [];
+const ioCalls: { worker: number; operation: "read" | "poll" | "interrupted"; result: number; fd?: number; length?: number; count?: number; timeout?: number; total: number; counts: Record<string, number> }[] = [];
+const launches: { worker: number; args: string[]; interruptible?: boolean; slot?: number }[] = [];
+const spawns: { worker: number; pid: number; parentPid: number; job: number; directory: string; executable: string; argv: string[] }[] = [];
+const admissions: (ProcessAdmissionEvent & { sequence: number })[] = [];
+let admissionReports = 0;
+let ioReports = 0;
 const NativeWorker = globalThis.Worker;
 const activeWorkers = new Set<Worker>();
 const messages: string[] = [];
@@ -103,7 +131,7 @@ globalThis.Worker = class extends NativeWorker {
   constructor(url: string | URL, options?: WorkerOptions) {
     const sourceURL = new URL(url, location.href);
     let bootstrapURL: string | undefined;
-    if (jobWaitGate && sourceURL.pathname.endsWith("/worker.js")) {
+    if (jobWaitGate && /\/(?:preview1-)?worker\.js$/.test(sourceURL.pathname)) {
       bootstrapURL = URL.createObjectURL(new Blob([`await (${instrumentJobWaitWorker.toString()})(${JSON.stringify(sourceURL.href)})`], { type: "text/javascript" }));
       bootstrapURLs.add(bootstrapURL);
     }
@@ -116,12 +144,22 @@ globalThis.Worker = class extends NativeWorker {
       if (data.type === "job-wait-test-blocking-entry") {
         blockingWaitEntries.push(data.job); event.stopImmediatePropagation(); return;
       }
+      if (data.type === "job-wait-test-launch") {
+        if (launches.length < 32) launches.push({ worker, args: data.args, interruptible: data.interruptible, slot: data.slot });
+        event.stopImmediatePropagation(); return;
+      }
       if (data.type === "job-wait-test-io") {
-        const { operation, result, fd, length, count, timeout } = data;
-        ioCalls.push({ worker, operation, result, fd, length, count, timeout });
+        const { operation, result, fd, length, count, timeout, total, counts } = data;
+        ioReports++;
+        if (ioCalls.length === 256) ioCalls.shift();
+        ioCalls.push({ worker, operation, result, fd, length, count, timeout, total, counts });
         event.stopImmediatePropagation(); return;
       }
       if (data.type === "runtime-proc") {
+        if (data.operation === "spawn" && spawns.length < 32) {
+          const { pid, parentPid, job } = workerProcessState(data.transport);
+          spawns.push({ worker, pid, parentPid, job, directory: workerProcessDirectoryId(data.transport), executable: data.request.executable, argv: data.request.argv.slice() });
+        }
         messages.push(data.operation);
         // A wait_job reaps synchronously in the guest before its notification reaches this page.
         // Capture prior exit messages here: later stream reads must not hide an early wait return.
@@ -142,15 +180,28 @@ async function until(condition: () => boolean, label: string) {
   while (!condition()) { if (performance.now() >= deadline) throw new Error(`${label} timed out`); await pause(); }
 }
 
-let filesystem: SharedFilesystem | undefined;
+let runtime: Runtime | undefined;
 let run: Run | undefined;
 let settled = false;
 let result: Record<string, unknown>;
 let stdout = "", stderr = "";
+// Best-effort live evidence if the driver times out before teardown publishes the final result.
+// Preserve an already-selected failure boundary rather than replacing it with teardown time.
+Reflect.set(globalThis, "runtimeProcDiagnostics", () => result ?? {
+  stdout, stderr, messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns,
+  admissions, admissionReportsAtFailure: admissionReports, admissionReports, workerErrors, bufferDecode,
+  cleanup: { activeWorkers: activeWorkers.size, workersCreated },
+});
 try {
   equal(crossOriginIsolated, true, "SharedArrayBuffer isolation");
-  filesystem = new SharedFilesystem();
-  await filesystem.mkdirp("/home/user"); await filesystem.flush();
+  runtime = createRuntime({ filesystem: { workerURL: new URL("./fs-worker.js", location.href) },
+    onProcessAdmission(event) {
+      admissionReports++;
+      if (admissions.length === 128) admissions.shift();
+      admissions.push({ ...event, sequence: admissionReports });
+    },
+  });
+  await runtime.filesystem.mkdirp("/home/user"); await runtime.filesystem.flush();
   const parameters = new URLSearchParams(location.search);
   const jobWait = parameters.has("job-wait");
   const checks = jobWait ? runtimeProcJobWaitChecks : runtimeProcChecks;
@@ -160,7 +211,9 @@ try {
   // Omitting runtimeProcess is intentional: a generic root must be recognized from real imports,
   // not only when a privileged caller already knows to manufacture the transport.
   run = startRun({ engine: "browser", adapter: "preview1", module, args: ["abi-parent"], env: { PWD: "/" },
-    filesystem, moduleScope: false, ...(explicit ? { runtimeProcess: createWorkerProcessTransport() } : {}) }, {
+    runtime, moduleScope: false, ...(explicit ? { runtimeProcess: createWorkerProcessTransport({
+      pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer,
+    }) } : {}) }, {
     stdout(bytes) { stdout += new TextDecoder().decode(bytes); },
     stderr(bytes) { stderr += new TextDecoder().decode(bytes); },
   });
@@ -175,6 +228,7 @@ try {
   equal(stderr, jobWait ? "" : "child-stderr\n", "inherited stderr target");
   equal(messages.filter(message => message === "pipe").length, jobWait ? 4 : 2, "all guest pipes published to responsive page broker");
   equal(messages.filter(message => message === "spawn").length, jobWait ? 4 : 1, "all guests launched by actual page broker");
+  for (const spawn of spawns) equal(admissions.some(event => event.pid === spawn.pid && event.directory === spawn.directory && event.stage === "received"), true, "each observed spawn reached the process broker with the same directory");
   if (jobWait) {
     equal(messages.filter(message => message === "signal").length, 1, "one real foreground job signal");
     equal(exits.length, 5, "shell, leader, descendant, grandchild and background all completed");
@@ -191,12 +245,12 @@ try {
   if (workersCreated < (jobWait ? 6 : 3)) throw new Error(`expected real filesystem and all guest workers, saw ${workersCreated}`);
   // Completion acknowledges guest descriptor release. The run and broker must stop both guests.
   await until(() => activeWorkers.size === 1, "completed guests terminated before filesystem disposal");
-  filesystem.dispose(); filesystem = undefined;
+  await runtime.dispose(); runtime = undefined;
   await until(() => activeWorkers.size === 0, "all task-created workers terminated");
   result = { ok: true, mode: explicit ? "explicit" : "automatic", scenario: jobWait ? "job-wait" : "pipes", checks, stdout,
-    messages, exits, reaps, blockingWaitEntries, ioCalls, workerErrors, bufferDecode, cleanup: { activeWorkers: activeWorkers.size, workersCreated } };
+    messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, admissions, admissionReports, workerErrors, bufferDecode, cleanup: { activeWorkers: activeWorkers.size, workersCreated } };
 } catch (error) {
-  result = { ok: false, stdout, stderr, messages, exits, reaps, blockingWaitEntries, ioCalls, workerErrors, bufferDecode,
+  result = { ok: false, stdout, stderr, messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, admissions, admissionReportsAtFailure: admissionReports, workerErrors, bufferDecode,
     error: error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error) };
 } finally {
   if (run && !settled) {
@@ -205,11 +259,13 @@ try {
     await Promise.race([run.done, new Promise(resolve => { timeout = setTimeout(resolve, 5000); })])
       .finally(() => { if (timeout) clearTimeout(timeout); });
   }
-  filesystem?.dispose();
+  let teardownError: string | undefined;
+  try { await runtime?.dispose(); }
+  catch (error) { teardownError = String(error); result = { ...result!, ok: false, teardownError }; }
   const forcedWorkers = activeWorkers.size;
   for (const worker of activeWorkers) worker.terminate();
   for (const url of bootstrapURLs) URL.revokeObjectURL(url);
   bootstrapURLs.clear();
   globalThis.Worker = NativeWorker;
-  Object.assign(globalThis, { runtimeProcResult: { ...result!, teardown: { forcedWorkers, activeWorkers: activeWorkers.size } } });
+  Object.assign(globalThis, { runtimeProcResult: { ...result!, admissionReports, teardown: { forcedWorkers, activeWorkers: activeWorkers.size, error: teardownError } } });
 }

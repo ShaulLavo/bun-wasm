@@ -139,6 +139,10 @@ buffer). Network failures (DNS, refused, TLS, CORS in browsers) return `-1`;
 `error(handle, …)` then gives the reason. Headers keep their order; names are
 lower-case; repeated headers appear as separate pairs.
 
+Optional `bodyEncoding`: a host that forwards compressed bytes names the
+compression, and the guest decodes them before exposing the fetch body. Absent or
+null means the bytes are exposed as-is. The Node host uses it for Zstd. The original content-encoding and content-length headers remain visible.
+
 ### `read(handle, buf_ptr, buf_cap) -> n`
 
 For a fetch handle: the response body (after `fetch_head` succeeded),
@@ -280,18 +284,16 @@ The browser registers `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and
 `/usr/local/bin/node` with the page/root command's selected engine and compiled module.
 `bun-quickjs`, `bun-jsc` and `bun-browser` select an engine explicitly. Generic aliases keep
 using the page/root engine even when an explicitly selected child uses another engine.
-Process outcomes distinguish an ordinary exit, signal death and a startup failure.
-The shared int64 uses low-bit tags 1, 2 and 3 respectively. A startup failure carries
-positive POSIX errno 2 for ENOENT or 13 for EACCES and has no exit status.
-The supervisor records this outcome without choosing a guest API's error policy.
+[Waffle #5](https://github.com/ShaulLavo/waffle/pull/5) supplies typed startup
+failures with ENOENT or EACCES and no exit status. The Bun adapter preserves this
+result separately from ordinary program exits of 127 or 126.
 
 The Bun slot adapter waits for the execution worker's startup acknowledgement
 before returning a child. The transport's control int32 at index 2 is zero while
 startup is pending and one after successful instantiation or confirmed completion;
 publication wakes that cell. Failure completion still follows filesystem quiescence.
 The Node host uses a separate supervisor worker to publish pre-bootstrap failures
-and early exits while the spawning thread waits. Generic roots and children share
-their authoritative outcome in the initial request, before dynamic adapter imports.
+and early exits while the spawning thread waits.
 A failed start returns -1 and a host error containing code, negative errno and path.
 Bun's spawn APIs throw ENOENT or EACCES. Node's spawn emits error then close without
 spawn or exit, and its synchronous API returns the error with null status and signal.

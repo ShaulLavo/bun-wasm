@@ -493,7 +493,7 @@ engine/browser combinations. Main's filesystem merge changes no embedded
 runtime or launcher source; that input comparison is retained in
 `/work/reports/bun-wasm-streams-round6-2026-10-16/fs-main-native-input-diff.txt`.
 The new real-browser shared filesystem path is the next boundary to inspect,
-especially `runtime/fs/shared.ts`, `runtime/fs/client.ts` and `runtime/fs/backend.ts`.
+especially Waffle `fs/shared.ts`, `fs/client.ts` and `fs/backend.ts`.
 
 Reproduce after building web assets with `PLAYWRIGHT=<playwright/index.mjs>
 node web/tests/browser-memory.mjs chromium`, or `scripts/test-web.sh` in full,
@@ -724,36 +724,52 @@ of the framework outcomes. A recurring immediate starved I/O on QuickJS/JSC
 and due timers on every wasm engine. The ready-batch and I/O-turn regressions
 now pass on all engines. This does not resolve the React optimized-dependency
 504 or either native JSC fault; their app-level follow-ups remain approved.
-## Node subprocess suite blocked by util.getSystemErrorName
 
-Status: Approved. Owner: compatibility track.
 
-The missing-executable fix passes node-misc and the focused child-process fixtures
-on QuickJS, JSC and the browser engine. Its unchanged three-file upstream sample
-remains 0/3 fully passing before and after, with no timeouts. The browser's
-`test-child-process-spawn-error.js` now passes the undefined-pid assertion and
-reaches line 51, where `util.getSystemErrorName` is not a function. QuickJS and
-JSC also stop at that missing helper. `crates/bunwasm-runtime/src/js/util.js:1471`
-starts the exported helper object, which has no getSystemErrorName entry.
+## JSC native-output buffer transfer
 
-Expose the missing Node helper and verify its errno contract against Bun's tests.
-Do not weaken or edit the upstream script. Reproduce on each built engine through
-the heavy wrapper:
+Status: Approved. The engine/runtime track owns this follow-up.
+
+The PR #59 review-fix gate observed a separate buffer-ownership gap on JSC.
+At task commit `df5c87c7`, `scripts/test.sh --engine jsc transpiler-review`
+reports `DataCloneError: ArrayBuffer is not detachable` at the transfer of a
+TextEncoder-produced buffer. The same fixture passes its mutation, minification
+and import-preservation checks. Native Bun 1.4.2 permits this transfer; a fresh
+JavaScript-owned ArrayBuffer also transfers successfully on our JSC engine.
+The review regression now uses that transferable caller-owned storage, while
+retaining direct TextEncoder and DataView mutation checks on every engine.
+
+Reproduce the external-buffer operation with a rebuilt JSC artifact:
 
 ```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
 source env.sh
-scripts/bun-suite.sh --node-parallel --engine browser --jobs 1 --timeout 15 \
-  --network loopback --output /work/reports/bun-wasm-util-error-name/browser.json \
-  js/node/test/parallel/test-child-process-spawn-error.js
+wasmtime run --dir .::/ dist/bun-jsc.wasm -e 'const bytes = new TextEncoder().encode("const z=3"); structuredClone(bytes.buffer, { transfer: [bytes.buffer] }); console.log(bytes.byteLength);'
 ```
 
-Repeat with quickjs and jsc. The companion files have separate blockers:
-`test-child-process-exec-error.js:33` requires a real shell child pid, and
-`test-child-process-spawnsync.js:34` requires an external sleep executable.
-The host registry provides Bun/Node programs, so those files do not establish
-that direct executable-start errors are wrong.
+Run through the heavy wrapper. Expected native Bun output is zero. The observed
+JSC fixture diagnostic is retained in
+`/work/reports/bun-wasm-small-causes/review-fixes/after-jsc.log`, including the
+source line and exit 1. All ten focused fixtures pass on JSC after changing only
+the detach case to JavaScript-owned storage.
 
-Exact before/after JSON and bounded failure excerpts are retained in
-`/work/reports/bun-wasm-node-misc-browser/upstream-{before,after}-{quickjs,jsc,browser}.json`.
-The compatibility track owns that evidence until this follow-up is reproduced
-and the subprocess behavior is measured again.
+Inspect `crates/bunwasm-runtime/src/engine_jsc.rs`, `uint8_array`: it creates a
+JavaScript Uint8Array, then calls `JSObjectGetTypedArrayBytesPtr` to populate it.
+That C API access may pin the backing store. The detachable check in
+`crates/bunwasm-jsc/cpp/helpers.cpp`, `bunjsc_is_detachable_buffer`, delegates to
+WebKit's `ArrayBuffer::isDetachable`. Confirm the pinning mechanism before
+changing allocation or ownership; do not force-detach locked native storage.
+Cover native-produced byte buffers as well as JavaScript-created buffers.
+The coordinator owns the evidence until this follow-up is reproduced.
+
+## Browser immutable promise limitations
+
+Status: Approved. Ordinary and configurable constructor/species cases are implemented in PR #59. Remaining immutable cases need a host-engine capability if they become required.
+
+`web/src/promise-reactions.ts` temporarily installs an own safe constructor descriptor, calls the captured native reaction operation, then restores the original descriptor in `finally`. Its private data-only species object avoids patched global species getters. This introduces no wrapper promise or additional reaction job. Ordinary frozen promises use the native method when descriptor inspection proves the inherited constructor/species safe. Writable non-configurable constructors and configurable constructors on non-extensible promises are supported.
+
+The browser limitations are a non-configurable constructor accessor; a read-only unsafe constructor/species combination; a non-extensible promise with unsafe inherited constructor/species; and native promises whose modified prototype chain no longer includes Promise.prototype. Constructor inspection never calls these user getters. The first three cases report a named observation error. An already rejected original can remain unhandled because no rejection handler can be attached through the public method. A fresh wrapper resolves through the original public `then`, which still reaches the immutable constructor before attaching a handler. Changing the wrapper's descriptor cannot change that lookup on the original.
+
+`test-promise-intrinsics` retains immutable constructor/species, frozen inherited constructors on non-extensible promises, and missing-prototype-chain cases as browser-only TODOs, while QuickJS/JSC execute the same checks using native reaction APIs. The browser diagnostic test uses a rejection handler attached before locking the constructor to verify the message and zero getter calls. Reproduce via `scripts/test.sh --engine browser test-promise-intrinsics`; inspect the TODO lines rather than treating them as passing coverage. Helper units cover descriptor restoration, global species patches, ordinary frozen promises, exact fulfilled identity and job ordering. Evidence and a fresh-wrapper impossibility control are retained in `/work/reports/bun-wasm-small-causes/browser-constructor-fix/`.
+
+The coordinator owns any future embedding capability and retained evidence cleanup after re-review. Do not filter rejection notifications to hide these limitations. Preserve the existing observer identity and falsy-rejection controls.

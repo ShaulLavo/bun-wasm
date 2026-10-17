@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { WASI } from 'node:wasi';
+import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
@@ -7,9 +8,10 @@ const root = resolve(import.meta.dirname, '..');
 const modulePath = resolve(root, 'web/src/engine-host.js');
 const source = readFileSync(modulePath, 'utf8')
   .replace('import { installNativeStreamState } from "./native-stream-state.ts";', 'const installNativeStreamState = () => () => {};')
-  .replace('"../../runtime/core/memory-views.js"', JSON.stringify(pathToFileURL(resolve(root, 'runtime/core/memory-views.js')).href))
+  .replace('"waffle/core/memory-views"', JSON.stringify(pathToFileURL(createRequire(modulePath).resolve('waffle/core/memory-views')).href))
   .replace('"./buffer-transfer.ts"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/buffer-transfer.ts')).href))
   .replace('"./content-modules.ts"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/content-modules.ts')).href))
+  .replace('"./promise-reactions.ts"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/promise-reactions.ts')).href))
   .replace('"./crypto-inputs.js"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/crypto-inputs.js')).href))
   .replace('"./crypto-host.js"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/crypto-host.js')).href))
   .concat('\nexport { wasmCaller };\n');

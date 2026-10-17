@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createSignalState, publishSignal, setSignalDisposition, signalDisposition, takeSignal } from "../../runtime/proc/signals";
+import { createSignalState, publishSignal, setSignalDisposition, signalDisposition, takeSignal } from "waffle/proc/signals";
 import { processFixture, processFixtureModes, type ProcessFixture } from "./process-fixtures";
 
 test.each(processFixtureModes)("original preview1 %s fixture validates without toolchains", mode => {

@@ -1,16 +1,18 @@
+import { waitStatus } from "waffle/proc/wait-status";
 import { expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { claimOutcome, outcomeWord, processOutcome, readOutcome } from "../../runtime/proc/outcome.ts";
-import { createSignalState, publishSignal, setSignalDisposition } from "../../runtime/proc/signals.ts";
+import { claimOutcome, outcomeWord, processOutcome, readOutcome } from "waffle/proc/outcome";
+import { createSignalState, publishSignal, setSignalDisposition } from "waffle/proc/signals";
 import { SharedPipe, SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "../src/subprocess.ts";
 import type { RunRequest, WorkerMessage } from "../src/worker.ts";
-import type { Stream } from "../../runtime/core/descriptors.ts";
+import type { Stream } from "waffle/core/descriptors";
 import { DefaultSignal } from "../src/default-signal.ts";
 
 // Execute the actual worker lifecycle with host boundaries injected, without replacing runner globals.
 const source = new Bun.Transpiler({ loader: "ts", target: "browser" }).transformSync(
-  readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8")
+  (readFileSync(new URL(import.meta.resolve("waffle/browser/worker")), "utf8") + "\n" +
+    readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8"))
     .replace(/^import .*;\n/gm, "")
     .replace(/^export /gm, ""),
 );
@@ -55,7 +57,7 @@ async function run(options: {
     },
     onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
   };
-  const outcome = options.outcome ?? (options.isolated === false ? undefined : new SharedArrayBuffer(8));
+  const outcome = options.child?.outcome ?? options.outcome ?? (options.isolated === false ? undefined : new SharedArrayBuffer(8));
   const request = {
     engine: "browser", adapter: options.adapter, module: {}, args: ["fixture"], env: {},
     filesystem, trace: false, net: null, moduleCache: null, slots: "off", child: options.child,
@@ -86,7 +88,7 @@ async function run(options: {
       }
     },
     childTransport, wasiPipe,
-    claimOutcome, outcomeWord, processOutcome, readOutcome,
+    claimOutcome, outcomeWord, processOutcome, readOutcome, waitStatus,
     HOST_CALL_FD: 3,
     WasiExit: TestWasiExit,
     DefaultSignal,
@@ -419,10 +421,10 @@ test("a previously selected child fatal outcome suppresses later unrelated diagn
   } finally { parent.dispose(); }
 });
 
-test("worker startup errors retain EACCES while the root shell reports 126 with diagnostics", async () => {
+test("worker startup errors report their selected 126 outcome with diagnostics", async () => {
   const result = await run({ instantiateError: true });
   expect(exits(result.messages)).toMatchObject([{ type: "error", code: 126, message: expect.stringContaining("instantiate diagnostic") }]);
-  expect(readOutcome(outcomeWord(result.outcome!))).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
+  expect(readOutcome(outcomeWord(result.outcome!))).toMatchObject({ kind: "start-failed", code: 13, error: "EACCES", status: null });
 });
 
 test("caught non-isolated fatal defaults notify logical death before the guest releases its turn", async () => {

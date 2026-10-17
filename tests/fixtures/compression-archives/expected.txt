@@ -1,0 +1,9 @@
+archive round trip, filters, writes and safe extraction
+gzip sync, callback and incremental stream
+deflate sync, callback and incremental stream
+deflateRaw sync, callback and incremental stream
+brotliCompress sync, callback and incremental stream
+zstdCompress sync, callback and incremental stream
+zstd frames, Bun functions, validation and seeded crc32
+Web compression round trips on every codec
+fetch decodes concatenated zstd frames

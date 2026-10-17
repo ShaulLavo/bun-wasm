@@ -1,12 +1,11 @@
-import { processOutcome } from "../../runtime/proc/outcome.ts";
-import type { ProcessExit } from "../../runtime/proc/types.ts";
-import type { Stream } from "@bun-wasm/runtime/core";
+import type { ProcessExit } from "waffle/proc/types";
+import type { Stream } from "waffle/core";
 import type { EngineNet } from "./net/host";
 import type { SlotImpls } from "./net/trampoline";
-import { ProcessIdentityAllocator } from "../../runtime/proc/identity.ts";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
-import { createSignalState, publishSignal, requestSignal, setSignalDisposition, takeSignal } from "../../runtime/proc/signals.ts";
-import { memoryViews } from "../../runtime/core/memory-views.js";
+import { ProcessIdentityAllocator } from "waffle/proc/identity";
+import { claimOutcome, outcomeWord, processOutcome, readOutcome } from "waffle/proc/outcome";
+import { createSignalState, publishSignal, requestSignal, setSignalDisposition, takeSignal } from "waffle/proc/signals";
+import { memoryViews } from "waffle/core/memory-views";
 import { InheritedWorkerPipes, workerBuffers } from "./worker-pipes.ts";
 
 export interface SpawnMeta {

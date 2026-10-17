@@ -176,23 +176,25 @@ sections 7 and 8) maps its `ProcessHost` trait onto this layer. The process laye
 
 ### Where it lives
 
-A new `runtime/` directory in bun-wasm: a TypeScript package (`@bun-wasm/runtime`) with one entry
-per layer (`core`, `fs`, `net`, `proc`, `term`) so a bundler includes only what a page imports,
-and `proc` loaded on the first spawn. A guest's `spawn` import can't await an `import()`, so the
+The generic implementation lives in the public MIT-licensed
+[`ShaulLavo/waffle`](https://github.com/ShaulLavo/waffle) repository, package `waffle`, with
+curated layer and browser entry points so a bundler includes only what a page imports. Generic
+filesystem, process, interruption, worker/bootstrap, network and preview services, tests and
+follow-on plan steps live there. Bun's guest engines, executor, native-slot/legacy-pipe adapters
+and application policy remain in `web/` here. The application creates one page-owned Waffle runtime and explicitly passes it to Bun; runs
+borrow its filesystem, identities and lazy process service. `proc` loads on the first spawn. A guest's `spawn` import can't await an `import()`, so the
 guest worker keeps a stub of about 1 KiB gzipped, including identity and atomic terminal-result
 primitives: it reserves a pid, takes the inherited descriptor references and returns at once,
 and the supervisor loads proc and starts the process
-asynchronously. A start failure retains its own typed outcome with ENOENT or EACCES,
-separate from an ordinary exit. The shell and `runtime_proc` wait adapters map it to
-127 or 126. Bun's adapter waits for startup acknowledgement and raises the matching
-error before returning a child, including for `spawnSync`. The supervisor chooses no
-shell-versus-spawn policy, and the shell never blocks on a first spawn. The builds (`web/build.ts`,
+asynchronously. A start failure shows up through `wait` (127 for a missing program, 126 for one
+that can't run) and as a child-exit event in `poll`. A synchronous caller such as Bun's
+`spawnSync` polls afterwards; the shell never blocks on a first spawn. The builds (`web/build.ts`,
 `sandbox/build.ts`) enable code splitting and serve the split chunks under every worker scope.
-Bun's adapter and executor stay in
-`web/`. brush-web and the own shell consume the package as a pinned copy, the way brush-web
-vendors `third-party/bun-wasm/` today, until the product repository exists. Every new file that
-adapts upstream code (brush-web's terminal discipline, SQLite's OPFS bridge pattern) gets its row
-in `docs/bun-patches.md`.
+bun-wasm consumes an explicitly trusted Waffle Git dependency pinned to an exact commit;
+bash-web declares a Waffle peer dependency and uses an exact development pin for its own
+tests. Follow the split plan's ownership, installed-package and cross-repository gates before
+removing the in-tree package. Every new file that adapts upstream code gets its classified row in Waffle's or bun-wasm's
+provenance ledger, including applicable notices.
 
 ### Process ABI (for the shell lane)
 
@@ -300,10 +302,10 @@ the CI gate.
 | # | Step | Estimate |
 |---|---|---:|
 | 1 | **Fix the WASI host bugs in place**, stacked on PR #21: the nine from spike 4, each with a failing test first, reusing spike 4's fixtures. Add the CI gate (GitHub Actions running `web/tests` and an artifact-free headless browser smoke). | 600-900 |
-| 2 | **Package skeleton and core.** Create `runtime/`; move `wasi.ts`, `memory-views.js` and path helpers; one descriptor namespace with file, directory, pipe and terminal kinds and reference-counted open descriptions, so the host no longer holds MemFS nodes; explicit import namespaces instead of ENOSYS stubs; `poll_oneoff` with per-descriptor readiness. Enable code splitting in `web/build.ts` and `sandbox/build.ts`, including chunks under the scoped worker. `web/` consumes it with no behaviour change. CI checks bundle sizes against the budgets and initial downloads. | 1,500-2,200 |
+| 2 | **Package skeleton and core.** Create `waffle/core/` and `waffle/fs/`; use the package's WASI, memory-view and path entrypoints; one descriptor namespace with file, directory, pipe and terminal kinds and reference-counted open descriptions, so the host no longer holds MemFS nodes; explicit import namespaces instead of ENOSYS stubs; `poll_oneoff` with per-descriptor readiness. Enable code splitting in `web/build.ts` and `sandbox/build.ts`, including chunks under the scoped worker. `web/` consumes it with no behaviour change. CI checks bundle sizes against the budgets and initial downloads. | 1,500-2,200 |
 | 3a | **Filesystem worker and protocol.** In-memory tree owned by one worker; non-blocking submit and completion handles over shared memory; blocking preview1 adapter; open-file identity across rename and unlink. Memory-only backend. Replaces copy-at-spawn and merge-at-exit. | 1,500-2,200 |
 | 3b | **Persistence.** Backend interface; IndexedDB backend (default); background batched persistence; `fsync`; checksummed metadata written beside the old copy then swapped; Web Locks for one writer tab; the editor's persisted save. Reload test immediately after a save resolves. | 1,200-1,800 |
-| 3c | **OPFS backend.** One file per immutable revision, lazy loading, bounded total native handles under Safari's 253, per-browser create concurrency, and file-scoped durability. Explicit `storage: "opfs"`; IndexedDB stays default. [Implementation and measured corpus evidence](../runtime/README.md#opfs-corpus-measurements). | 600-1,000 |
+| 3c | **OPFS backend.** One file per immutable revision, lazy loading, bounded total native handles under Safari's 253, per-browser create concurrency, and file-scoped durability. Explicit `storage: "opfs"`; IndexedDB stays default. [Implementation and measured corpus evidence](https://github.com/ShaulLavo/waffle/blob/main/docs/benchmarks/filesystem-persistence-opfs-2026-10-17.json). | 600-1,000 |
 | 4a | **Processes.** Supervisor, process table, generic registry (module plus guest adapter), shared compiled modules, first-spawn stub, spawn/wait/kill/kill_job, jobs, per-signal dispositions and registration, immutable outcomes and revocation. Unhandled signals apply their default action immediately; handled signals retain the guest's own exit. Optional per-browser pool. Tests: delayed first activation while another shell task runs; one Ctrl+C stops an unhandled program with 130; a SIGINT handler exits 0 and keeps 0; removing it restores default; handled EPIPE retains its status. | 1,200-1,800 |
 | 4b | **Pipes.** Per-writer rings built from `SharedPipe`, reader merging, relay mode for multiple reading processes, reference counts, readiness, the `runtime_proc` imports. Tests: inherited concurrent writers, inherited readers, kill between a writer's check and publish, output queued before a kill still drained, a delayed publish after a kill never read, zero-length and partial I/O. | 1,000-1,500 |
 | 4c | **Process gate for the shell.** The own-shell spike's section 8 gate on real workers: external producer and consumer with a builtin filter, bounded flow and early reader close across workers, interrupt while WASM runs, descendant kill with reaping, an inherited nonstandard fd closed by the parent right after spawn, a background job surviving one command and controlled by the next. Runs against a preview1 fixture until the shell lands. | 500-800 |
@@ -319,6 +321,71 @@ Total for this track: about 13,000-19,000 lines across fifteen PRs, plus the she
 work. Order: 1, then 2 and 3a in parallel; 3b after 3a, 3c after 3b; 4a after 2; 4b after 4a;
 4c and 4d after 4b; 5, 6 and 7b after 4b; 7a any time after 1; 9 any time after 2. The shell
 track can start its `ProcessHost` against the ABI as soon as 4b lands.
+
+### Step 4c follow-up: reclaim empty nonroot bookkeeping
+
+**Status: Approved; scheduled with step 4c after the Waffle extraction.** The preparation fixes
+completed-root retention now: 100 finished runs release their reservations, controller callbacks
+and root transport directories. This separate follow-up concerns compact bookkeeping beneath a
+root that deliberately stays alive, not retained workers or 100 shared directories.
+
+A bounded preparation reproduction exited and job-reaped 100 leaf children under one live root.
+It left one process record, one job and one live transport, but retained 100 compact child
+identities and 101 parent edges. All children shared the root's single directory. The 101-entry
+used-PID and used-job ledgers intentionally enforce never-reuse and are **not** this finding.
+Suspect Waffle `proc/worker-broker.ts` (`retainIdentity` / `reapTransports`) and
+`proc/table.ts` (`parents` / `remove`). No worker, channel or filesystem backend is needed.
+
+Reproduce from an exclusive checkout, through the PC light queue (use the matching canonical
+queue on another host). The command creates only in-memory transports and releases them in
+`finally`.
+
+```sh
+source env.sh
+cd web # Resolve bare waffle imports from the installed consumer.
+bun /work/platform-production/heavy/current/run.js --class light waffle-empty-subtrees -- timeout 7200 bun -e "$(cat <<'TS'
+import { DescriptorTable } from 'waffle/core/descriptors';
+import { ProcessIdentityAllocator } from 'waffle/proc/identity';
+import { ProcessTable } from 'waffle/proc/table';
+import { ExecutableRegistry } from 'waffle/proc/registry';
+import { ProcessSupervisor } from 'waffle/proc/supervisor';
+import { WorkerProcessBroker } from 'waffle/proc/worker-broker';
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from 'waffle/proc/worker-client';
+const ids = new ProcessIdentityAllocator(), table = new ProcessTable(ids), registry = new ExecutableRegistry();
+registry.register('fixture', { module: new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0])), adapter: 'fixture' });
+const supervisor = new ProcessSupervisor({ table, registry, retainJobResults: true, launch: () => ({ terminate() {} }) });
+const codec = { export() { throw Error('unused'); }, import() { throw Error('unused'); }, discard() {} };
+const broker = new WorkerProcessBroker({ supervisor: async () => supervisor, codec });
+const root = createWorkerProcessTransport({ pid: ids.pid(), job: ids.job(), identity: ids.buffer });
+const state = workerProcessState(root);
+supervisor.createRoot({ pid: state.pid, job: state.job, ...state.signals });
+broker.adoptRoot(root);
+const messages = [], descriptors = new DescriptorTable();
+const client = new WorkerProcessClient({ transport: root, descriptors, codec, postMessage: message => messages.push(message) });
+try {
+  for (let index = 0; index < 100; index++) {
+    const pid = client.spawn(client.pid, { executable: 'fixture', argv: ['fixture'], env: {}, cwd: '/', job: -1, fds: [] });
+    while (messages.length) await broker.handle(messages.shift(), client.pid);
+    await supervisor.start(pid);
+    const job = supervisor.get(pid).job;
+    supervisor.exit(pid, 0);
+    await supervisor.waitForExit(client.pid, pid);
+    client.waitJob(client.pid, job);
+    while (messages.length) await broker.handle(messages.shift(), client.pid);
+  }
+  console.log({ records: Array.from(table.values()).length, jobs: Reflect.get(table, 'jobs').size,
+    transports: Reflect.get(broker, 'transports').size, identities: Reflect.get(broker, 'identities').size,
+    parents: Reflect.get(table, 'parents').size, usedPids: Reflect.get(table, 'usedPids').size,
+    usedJobs: Reflect.get(table, 'usedJobs').size });
+} finally { descriptors.dispose(); broker.dispose(); supervisor.dispose(); }
+TS
+)"
+```
+
+Reclaim only empty, safely reaped nonroot identity/ancestry entries. Preserve live descendants,
+unreaped independent jobs, pending admission leases and monotonic no-reuse ledgers. Add a bounded
+long-lived-root regression alongside the completed-root and live-background-job controls before
+changing these maps. After extraction, use Waffle's normalized paths for this same reproduction.
 
 ### Before merging runtime PRs
 
@@ -353,3 +420,69 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
   audit of `web/src`.
 - brush-web `plans/001-brush-dev-shell.md`, `plans/004-own-shell.md` and `docs/external-commands.md`.
 - Spike reports: `/work/reports/browser-runtime/spikes/`.
+
+## Safari workspace ownership
+
+Status: Approved. Implemented in PR #62, awaiting independent review.
+
+Safari can freeze a cached document's filesystem worker before pagehide or freeze cleanup can
+flush and release its Web Lock. A fresh page in the same tab then fails to open the workspace.
+The regression reproduced on desktop Safari 26.4 and iOS simulator Safari 26.5.
+
+IndexedDB now requests the workspace lock with `steal: true`. On acquisition, a strict IndexedDB
+transaction increments `metadata["epoch"]`. The new backend loads the current persisted tree;
+it never inherits the previous page's memory. Each commit reads its captured epoch in the same
+strict transaction that writes payloads, appends journals, swaps snapshots and deletes obsolete
+journal records or payloads during compaction. A stale epoch aborts the whole transaction.
+A transaction that committed before takeover remains part of the new owner's saved state.
+
+Loss of the Web Lock rejects its lifetime promise. The displaced storage owner aborts active
+transactions and rejects queued operations. Its worker disposes background checkpoints, reports
+ownership loss and closes; the page revokes the service and terminates the worker. Epoch fencing
+also rejects a stale writer that resumes before receiving the lock-loss notification. Editor text
+stays visible. The complete message says "This workspace was opened in another tab. Reload to
+continue here." It also explains that unsaved changes in that tab weren't kept and can be copied
+before reloading. Saves acknowledged before takeover remain durable.
+
+OPFS keeps `ifAvailable: true`, without stealing. Its writes use native sync access handles and
+cannot be fenced atomically by an IndexedDB transaction. An occupied OPFS workspace explains that
+a tab or browser-history page owns it and asks the user to close those tabs before reopening.
+IndexedDB uses a separate lock namespace so opening that backend cannot steal an OPFS lock.
+The runtime track, bun-wasm-a8, owns review of this persistence boundary.
+
+A cheap cache-header probe found `Cache-Control: no-store` ineffective on isolated localhost
+HTTP in both Safari versions. Over private HTTPS, responses with no-store returned a new
+document on Back on both platforms. The HTTPS proxy also injected no-store on the requested
+control response, so that probe has no cacheable HTTPS control. Static site document headers and
+`web/serve.ts` use no-store as a complement. Correctness still comes from fencing, verified while
+real Safari restores cached documents on localhost HTTP.
+
+`scripts/test-web.sh` runs the storage fencing and Chromium/WebKit lifecycle regressions.
+For real Safari, build the small fixture on the PC through the heavy queue:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+bash /work/tmp/wave-heavy/run.sh --class light safari-lifecycle-assets -- env PATH="$PATH" \
+  bun web/tests/browser-filesystem-lifecycle.ts --build /work/tmp/bun-wasm-safari-assets
+```
+
+Copy the assets and `web/tests/browser-filesystem-lifecycle.ts` into an owned directory under
+Mac `~/tmp`. Reserve `~/tmp/.agent-mac-lock`, record the simulator's boot state and serve the
+assets on an explicit free localhost port with COOP same-origin and COEP require-corp. Run:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$HOME/.bun/bin:$PATH
+SAFARI_DRIVER_PORT=43462 SAFARI_OUTPUT=desktop.json \
+  bun browser-filesystem-lifecycle.ts safari http://127.0.0.1:43463/
+SAFARI_IOS=1 SAFARI_DRIVER_PORT=43462 SAFARI_OUTPUT=ios.json \
+  bun browser-filesystem-lifecycle.ts safari http://127.0.0.1:43463/
+```
+
+The iOS check uses the booted iPhone 17 Pro simulator. Both platforms cover same-tab reopen,
+Reload, restoration of a displaced cached page, Reload after Back with no other tab, newest-wins
+two-tab ownership, preserved visible edits, durable saved files and OPFS no-steal recovery.
+Stop the server and driver, shut down only a simulator booted by the run, and remove transfers
+and the owned lock. Evidence remains under `/work/reports/bun-wasm-safari-fencing-2026-10-17/`
+until the coordinator resolves PR #62. Earlier rejected lifecycle approaches remain in
+`/work/reports/bun-wasm-safari-lifecycle-2026-10-17/` under the same cleanup owner.

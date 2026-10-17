@@ -1,9 +1,10 @@
+import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { Worker } from "node:worker_threads";
-import { createFilesystemIdentity, revokeFilesystem } from "../../runtime/fs";
-import { outcomeWord } from "../../runtime/proc/outcome";
-import { createSignalState, setSignalDisposition, SIGNAL_PENDING } from "../../runtime/proc/signals";
-import { createWorkerProcessTransport, workerProcessState } from "../../runtime/proc/worker-client";
+import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
+import { outcomeWord } from "waffle/proc/outcome";
+import { createSignalState, setSignalDisposition, SIGNAL_PENDING } from "waffle/proc/signals";
+import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { createProcessBudget } from "../src/subprocess";
 import type { SharedFilesystem } from "../src/shared-fs";
@@ -13,13 +14,14 @@ async function proveWake(mode: Mode, operation: "kill" | "killJob", suppressNoti
   // This run owns one worker, delivery/deadline timers, and its broker. Teardown is installed
   // before spawn; shared words are test-local and have no external owner or persistent backing.
   const budget = createProcessBudget();
-  const transport = createWorkerProcessTransport({ capacity: 2 });
+  const filesystem = { revoke: revokeFilesystem, reap() {}, async quiesce(identity: Parameters<typeof revokeFilesystem>[0]) { revokeFilesystem(identity); }, client: { sweep() {} } } as unknown as SharedFilesystem;
+  const runtime = processRuntimeFixture(filesystem);
+  const transport = createWorkerProcessTransport({ capacity: 2, pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   transport.data = { filesystem: createFilesystemIdentity() };
   const state = workerProcessState(transport);
   const signals = mode === "legacy" ? { signalState: createSignalState(), interrupt: new Int32Array(new SharedArrayBuffer(4)),
     requestedSignal: new Int32Array(new SharedArrayBuffer(4)), outcome: outcomeWord() } : state.signals;
-  const filesystem = { revoke: revokeFilesystem, reap() {}, client: { sweep() {} } } as unknown as SharedFilesystem;
-  const broker = new SubprocessBroker("http://localhost/worker.js", filesystem, { budget,
+  const broker = new SubprocessBroker("http://localhost/worker.js", runtime, { budget,
     root: mode === "legacy" ? { pid: 1, job: 1, ...signals } : undefined });
   const selected = mode === "generic-poll" ? state.wake : new Int32Array(budget, 4, 1);
   const before = Atomics.load(selected, 0);
@@ -61,7 +63,7 @@ async function proveWake(mode: Mode, operation: "kill" | "killJob", suppressNoti
     if (deliveryTimer) clearTimeout(deliveryTimer);
     if (deadlineTimer) clearTimeout(deadlineTimer);
     try { if (worker) await worker.terminate(); }
-    finally { broker.dispose(); }
+    finally { broker.dispose(); await runtime.dispose(); }
   }
 }
 

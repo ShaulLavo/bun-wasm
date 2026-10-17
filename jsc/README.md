@@ -15,6 +15,33 @@ wasmtime run --dir .::/ dist/bun-jsc.wasm run /app.ts
 ```
 
 Everything the build produces goes to `${JSC_BUILD_DIR:-/work/tmp/bun-wasm-jsc}`, never the repo.
+After a successful build, `build/jsc/.bunwasm-inputs` stores a SHA-256 stamp of the build-affecting files under
+`jsc/`, `scripts/build-jsc.sh`, `env.sh`, the pinned WebKit and ICU inputs, the copied configure inputs under
+`inputs/`, and the pinned toolchain versions.
+`scripts/build-bun-jsc.sh` checks that stamp before compiling and fails if the prebuild is missing
+or was made from different inputs. Rebuild it with `JSC_BUILD_DIR=<dir> scripts/build-jsc.sh`,
+or point `JSC_BUILD_DIR` at a fresh directory.
+
+Configure copies the shim sources and CMake toolchain file into `inputs/`. Generated compiler flags
+use these copies, so the checkout that configured JSC can be deleted without breaking later engine builds.
+The stamp also checks those copies for changes or missing files.
+
+To update an existing prebuild, run one fresh configure, then rebuild:
+
+```sh
+JSC_BUILD_DIR=<dir> jsc/configure.sh --fresh
+JSC_BUILD_DIR=<dir> scripts/build-jsc.sh
+```
+
+`--fresh` discards CMake's cached reference to the old toolchain file, which may belong to a deleted
+checkout. Configure copies the inputs, and the build writes the new stamp after it succeeds.
+Re-stamping alone cannot repair old compiler flags. The build directory must keep its original path.
+
+Never copy a configured JSC build directory with `cp -a` to make a new prebuild. Its CMake cache
+and `build.ninja` retain absolute paths to the original directory, so a copied build reconfigures
+and writes into the original. Configure a fresh `JSC_BUILD_DIR` instead. This takes about 20 minutes
+on the PC. Reusing a WebKit source checkout is fine after resetting it.
+
 A full build from nothing takes about 10 minutes at `-j6` on this machine (ICU ~3, JSC ~6). Every compile step runs inside
 `systemd-run --user --scope -p MemoryMax=5G -p CPUWeight=20 nice -n 10` (`CAGE=` turns that off,
 `JOBS=` sets the parallelism).

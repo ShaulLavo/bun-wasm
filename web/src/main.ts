@@ -10,13 +10,15 @@ import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
 import { decode, normalize } from "./fs";
-import { SharedFilesystem } from "./shared-fs";
+import { createRuntime } from "waffle";
+import { WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
 import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
 import { type Output, Shell } from "./shell";
 import { enableTerminalCopy } from "./terminal-copy";
 import { linkLocalUrls } from "./terminal-links";
 
+async function main(): Promise<void> {
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const statusEl = $<HTMLSpanElement>("#status");
 const runButton = $<HTMLButtonElement>("#run");
@@ -53,7 +55,23 @@ const previews = new Previews();
 
 // ---------- filesystem ----------
 
-const fs = new SharedFilesystem({ storage });
+let startup: "starting" | "ready" | "failed" = "starting";
+runButton.onclick = () => {
+  if (startup === "failed") { location.reload(); return; }
+  if (startup === "ready") void runCurrent().catch(reportError);
+};
+const runtime = createRuntime({ filesystem: { storage, name: "bun-wasm-workspace" } });
+const fs = runtime.filesystem;
+fs.onOwnershipLost = () => {
+  startup = "failed";
+  setStatus("", "error");
+  runButton.textContent = "Reload";
+  runButton.disabled = false;
+  runButton.title = "Open the latest saved workspace";
+  newFileButton.disabled = true;
+  engineSelect.disabled = true;
+  fileSelect.disabled = true;
+};
 try {
   await fs.mkdirp("/tmp");
   // Background persistence can save a prefix of startup. Publish completion only after
@@ -82,6 +100,10 @@ const pageReady = new Promise<void>((resolve) => { pageSetUp = resolve; });
 const wasmReady = loadWasm();
 
 function setStatus(text: string, kind: "" | "ok" | "error" = ""): void {
+  if (fs.ownershipLost) {
+    text = `${WORKSPACE_TAKEN_OVER} ${UNSAVED_CHANGES_LOST}`;
+    kind = "error";
+  }
   statusEl.textContent = text;
   statusEl.dataset.kind = kind;
 }
@@ -129,7 +151,7 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
   runButton.disabled = true;
   try {
     await fs.drain();
-    const run = startRun({ engine, module: wasm.module, args, env, filesystem: fs, moduleScope: scoped, trace }, {
+    const run = startRun({ engine, module: wasm.module, args, env, runtime, moduleScope: scoped, trace }, {
       stdout: (data) => io.out(data),
       stderr: (data) => io.err(data),
       listening: (port, helper) => {
@@ -380,7 +402,6 @@ async function runCurrent(): Promise<void> {
   }
 }
 
-runButton.addEventListener("click", () => void runCurrent().catch(reportError));
 newFileButton.addEventListener("click", () => {
   const name = prompt("New file name (in ~):", "scratch.ts");
   if (!name) return;
@@ -411,4 +432,24 @@ shell.start([
 ]);
 
 Object.assign(globalThis, { playground: { fs, shell, term, editor, previews } });
+startup = "ready";
 pageSetUp();
+}
+
+void main().catch(error => {
+  console.error(error);
+  const status = document.querySelector<HTMLElement>("#status");
+  if (status) {
+    status.textContent = String(error);
+    status.dataset.kind = "error";
+  }
+  const run = document.querySelector<HTMLButtonElement>("#run");
+  if (run) {
+    run.textContent = "Reload";
+    run.title = "Retry playground startup";
+    run.onclick = () => location.reload();
+  }
+  const newFile = document.querySelector<HTMLButtonElement>("#new-file");
+  if (newFile) newFile.disabled = true;
+  for (const select of document.querySelectorAll<HTMLSelectElement>("#engine, #file-select")) select.disabled = true;
+});

@@ -185,6 +185,7 @@ pub fn table(state: &Rc<State>) -> Table {
     crate::semver::install(&mut t);
     install_encoding(&mut t);
     crate::streams::install(&mut t);
+    crate::archive::install(&mut t);
     install_crypto(&mut t);
     install_url(&mut t);
     install_host(&mut t, state);
@@ -582,6 +583,10 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         Ok(modules::BUN_BUILTIN_ERROR_CODES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
     });
     let st = state.clone();
+    t.add("transpilePublic", move |a| {
+        st.transpiler.public_transpile(a.bytes(0)?, a.str(1)?, a.str(2)?, a.str(3)?).map(Val::from).map_err(NativeError::syntax_error)
+    });
+    let st = state.clone();
     t.add("functionImports", move |a| {
         let args = a.array(0).ok_or_else(|| NativeError::type_error("expected function arguments"))?;
         let strings = args.iter().map(|value| match value {
@@ -598,7 +603,7 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         match st.resolver.resolve(spec, a.str(1)?, kind) {
             Ok(Resolved::Builtin(name)) => Ok(name.into()),
             Ok(Resolved::File(path)) => Ok(path.into()),
-            Err(msg) => Err(crate::modules::resolve_error(&msg, spec, kind)),
+            Err(msg) => Err(crate::modules::resolve_error(&msg, spec, a.str(1)?, kind, st.resolver.notes())),
         }
     });
     let st = state.clone();
@@ -740,23 +745,43 @@ fn install_crypto(t: &mut Table) {
         let seed = a.opt_num(1).unwrap_or(0.0) as u64;
         Ok(Val::BigUint(bun_wyhash::hash_with_seed(seed, a.bytes(0)?)))
     });
-    t.add("compress", |a| {
-        let format = a.str(2)?;
-        let wrapper = crate::encoding::Wrapper::parse(format)
-            .ok_or_else(|| NativeError::type_error(format!("unknown compression format {format}")))?;
-        let level = a.num(1)?;
-        let level = if level < 0.0 { 6 } else { level.min(10.0) as u8 };
-        Ok(Val::Bytes(crate::encoding::compress(a.bytes(0)?, level, wrapper)))
+    // node:zlib's processChunkSync for the sync and callback convenience
+    // functions and Bun.gzipSync/deflateSync: (data, mode, options JSON,
+    // dictionary, flush, chunkSize, maxOutputLength).
+    t.add("zlibConvert", |a| {
+        use crate::compression::{convert, Mode, Options};
+        let mode = Mode::parse(a.str(1)?)?;
+        let options = Options::parse(a.opt_str(2), a.opt_bytes(3).unwrap_or(&[]))?;
+        let flush = a.opt_num(4).map_or(mode.finish_flush(), |n| n as i32);
+        let chunk = a.opt_num(5).unwrap_or(16384.0) as usize;
+        let limit = a.opt_num(6).unwrap_or(f64::MAX) as usize;
+        convert(mode, &options, a.bytes(0)?, flush, chunk, limit).map(Val::Bytes)
     });
-    t.add("decompress", |a| {
-        let format = a.str(1)?;
-        let wrapper = crate::encoding::Wrapper::parse(format)
-            .ok_or_else(|| NativeError::type_error(format!("unknown compression format {format}")))?;
-        crate::encoding::decompress(a.bytes(0)?, wrapper)
-            .map(Val::Bytes)
-            .map_err(|msg| NativeError::error(msg).prop("code", "Z_DATA_ERROR").prop("errno", -3))
+    // Bun.zstdCompressSync/zstdDecompressSync use Bun's own one-shot Zstd calls
+    // (src/runtime/api/BunObject.rs, JSZstd).
+    t.add("zstdCompress", |a| {
+        let input = a.bytes(0)?;
+        let bound = bun_zstd::compress_bound(input.len());
+        if bun_zstd::is_error(bound) {
+            return Err(NativeError::error("Input is too large to compress").prop("code", "ERR_ZSTD"));
+        }
+        let mut output = Vec::new();
+        output.try_reserve_exact(bound).map_err(|_| crate::compression::out_of_memory())?;
+        if let bun_zstd::Result::Err(error) = bun_zstd::compress_append(&mut output, input, Some(a.i32(1)?)) {
+            let message = String::from_utf8_lossy(error.as_bytes()).into_owned();
+            return Err(NativeError::error(message).prop("code", "ERR_ZSTD"));
+        }
+        Ok(Val::Bytes(output))
     });
-    t.add("crc32", |a| Ok(Val::Num(f64::from(crate::encoding::crc32(a.bytes(0)?)))));
+    t.add("zstdDecompress", |a| match bun_zstd::decompress_alloc(a.bytes(0)?) {
+        Ok(output) => Ok(Val::Bytes(output)),
+        Err(bun_zstd::ZstdError::OutOfMemory) => Err(crate::compression::out_of_memory()),
+        Err(error) => {
+            let name: &'static str = error.into();
+            Err(NativeError::error(format!("Decompression failed: {name}")).prop("code", "ERR_ZSTD"))
+        }
+    });
+    t.add("crc32", |a| Ok(Val::Num(f64::from(crate::encoding::crc32_seed(a.bytes(0)?, a.opt_num(1).unwrap_or(0.0) as u32)))));
     t.add("adler32", |a| Ok(Val::Num(f64::from(crate::encoding::adler32(a.bytes(0)?)))));
 }
 

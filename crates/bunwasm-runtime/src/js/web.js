@@ -1145,8 +1145,10 @@
     }
   }
 
+  const performanceNow = () => internal.fakeTimers?.active ? internal.fakeTimers.elapsedNanoseconds / 1e6 : native.now();
+
   function markTime(name) {
-    if (name === undefined) return native.now();
+    if (name === undefined) return performanceNow();
     if (typeof name === "number") return name;
     const mark = perfEntries.findLast((e) => e.entryType === "mark" && e.name === name);
     if (!mark) throw new DOMException(`The mark '${name}' does not exist.`, "SyntaxError");
@@ -1154,10 +1156,10 @@
   }
 
   const performance = {
-    now: () => native.now(),
-    timeOrigin,
+    now: performanceNow,
+    get timeOrigin() { return internal.fakeTimers?.timeOrigin ?? timeOrigin; },
     mark(name, options = {}) {
-      const entry = new PerformanceEntry(String(name), "mark", options.startTime ?? native.now(), 0, options.detail);
+      const entry = new PerformanceEntry(String(name), "mark", options.startTime ?? performanceNow(), 0, options.detail);
       perfEntries.push(entry);
       return entry;
     },
@@ -1178,7 +1180,7 @@
     clearMeasures(name) {
       removeEntries("measure", name);
     },
-    toJSON: () => ({ timeOrigin }),
+    toJSON: () => ({ timeOrigin: performance.timeOrigin }),
     eventLoopUtilization: () => ({ idle: 0, active: 0, utilization: 0 }),
     timerify: (fn) => fn,
   };
@@ -1284,6 +1286,8 @@
   };
 
   // --- install ----------------------------------------------------------------
+
+  internal.require("web_brand")({ AbortController, AbortSignal, Event, EventTarget, CustomEvent, ErrorEvent, MessageEvent, CloseEvent });
 
   internal.web = { Blob, File, Headers, Request, Response, URL, URLSearchParams, Event, EventTarget, DOMException, AbortController, AbortSignal, TextEncoder, TextDecoder, ReadableStream, performance, crypto, fetch };
 

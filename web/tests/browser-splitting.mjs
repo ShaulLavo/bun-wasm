@@ -47,7 +47,7 @@ try {
   await Bun.write(join(scratch, "lazy.ts"), "export const lazy = 'dynamic chunk';\n");
   await Bun.write(join(scratch, "main.ts"), "import { shared } from './shared'; globalThis.pageResult = shared('page');");
   await Bun.write(join(scratch, "worker.ts"), `
-    import { Wasi, memoryViews } from '@bun-wasm/runtime/core';
+    import { Wasi, memoryViews } from 'waffle/core';
     import { MemFS, shared } from './shared';
     // Tiny real guest: one memory and a no-op _start, assembled without a toolchain.
     const module = new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,2,1,0,5,3,1,0,1,7,19,2,6,109,101,109,111,114,121,2,0,6,95,115,116,97,114,116,0,0,10,4,1,2,0,11]));
