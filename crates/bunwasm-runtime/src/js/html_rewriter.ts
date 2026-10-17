@@ -18,7 +18,7 @@
     if ((typeof value !== "object" || value === null) && typeof value !== "function") return;
     const then = Reflect.get(value, "then");
     if (typeof then !== "function") return;
-    return new Promise((resolve, reject) => Reflect.apply(then, value, [resolve, reject]));
+    return new Promise<void>((resolve, reject) => Reflect.apply(then, value, [() => resolve(undefined), reject]));
   }
 
   class Token {
@@ -70,8 +70,13 @@
       if (!this.#rewrite) return this;
       if (typeof callback !== "function") throw new TypeError("Expected a function");
       const index = this.#rewrite.registerEndTag(callback, this);
-      const replaced = this.call("onEndTag", "", undefined, index);
-      if (replaced !== undefined) this.#rewrite.unregisterEndTag(replaced);
+      try {
+        const replaced = this.call("onEndTag", "", undefined, index);
+        if (replaced !== undefined) this.#rewrite.unregisterEndTag(replaced);
+      } catch (error) {
+        this.#rewrite.unregisterEndTag(index);
+        throw error;
+      }
       return this;
     }
   }

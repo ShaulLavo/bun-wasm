@@ -256,6 +256,9 @@ fn element_token(
             let index = a.u32(4)? as usize;
             let event = event.clone();
             let previous = token.user_data().downcast_ref::<usize>().copied();
+            if token.end_tag_handlers().is_none() {
+                return Err(error("No end tag."));
+            }
             token.set_user_data(index);
             let handlers = token
                 .end_tag_handlers()
