@@ -235,8 +235,8 @@ No upstream implementation is copied. The reference contracts are Bun's
 Bun's implementation calls its JSC global object, native timer heap and virtual machine.
 Those cannot run through the portable builtin loader. The adapter keeps fake timer handles
 in a separate queue, advances a nanosecond clock, and exposes the controls through `jest`
-and `vi`. Global timers and `node:timers` share scheduling and cancellation. Runtime-owned callbacks use
-the real timer interface, so filesystem, worker, crypto, compression, readline, and subprocess
+and `vi`. Global timers and `node:timers` share scheduling and cancellation. Runtime-owned
+callbacks use the real timer interface, so filesystem, worker, crypto, compression, readline, and subprocess
 work survives fake-clock restoration. Host wakeups use the captured native clock. Timers
 created before fake-clock activation keep their real ownership.
 
@@ -246,8 +246,8 @@ Intl formatters when callers omit the date. `setSystemTime` rebases wall time wi
 timer deadlines. Performance and process high-resolution time use the fake monotonic clock.
 `runOnlyPendingTimers` uses Bun's latest pending deadline as its horizon. Timer callbacks
 drain the runtime-owned `process.nextTick` queue synchronously. Browser native Promise jobs
-remain deferred until the synchronous host drain returns. The portable scheduler bounds a single drain at 100,000 callbacks to
-reject an endless interval or recursive timer.
+remain deferred until the synchronous host drain returns. The portable scheduler bounds a single
+drain at 100,000 callbacks to reject an endless interval or recursive timer.
 
 ## OPFS storage adapter
 

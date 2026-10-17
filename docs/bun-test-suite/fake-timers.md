@@ -34,3 +34,18 @@ scripts/bun-suite.sh --engine quickjs --jobs 1 --timeout 15 --network loopback \
 Repeat with `--engine jsc` and `--engine browser`, using fresh output paths.
 Raw results, per-file logs, hashes and the baseline source check are retained in
 `/work/reports/bun-wasm-fake-timers/`. The coordinator owns their removal after review.
+
+The review regressions run separately from the unchanged upstream selection:
+
+```sh
+scripts/test.sh --no-build --engine quickjs \
+  fake-timers fake-timers-review fake-timers-runtime test-fake-watchdog
+bun test web/tests/fake-timers-host.test.ts
+```
+
+Repeat the fixtures with `--engine jsc` and `--engine browser` through the heavy runner.
+They check runtime callbacks and subprocess deadlines without advancing fake time, restoration
+with callbacks pending, interval reentry and refresh, nextTick ordering, handled exceptions,
+and repeated activation. The host tests check an armed wakeup across Date restoration and
+the synchronous nextTick checkpoint. Browser native Promise jobs remain deferred until the
+synchronous host drain returns.
