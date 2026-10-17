@@ -263,7 +263,11 @@ export class ProcessSupervisor {
     } catch (error) { this.failStart(record.pid, error); }
   }
   failStart(pid: number, error: unknown): void {
-    this.finish(pid, { kind: "exited", code: error instanceof ExecutableNotFound ? 127 : 126 });
+    const record = this.table.get(pid);
+    if (!record) return;
+    const starting = record.state !== "running" || readOutcome(record.outcome)?.kind === "start-failed";
+    const missing = error instanceof ExecutableNotFound || error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT";
+    this.finish(pid, starting ? { kind: "start-failed", code: missing ? 2 : 13 } : { kind: "exited", code: 126 });
   }
   exit(pid: number, code: number): void {
     if (!Number.isInteger(code)) throw new ProcessError(ProcessErrno.INVAL, "exit code must be an integer");
@@ -408,7 +412,7 @@ export class ProcessSupervisor {
     const winner = claimOutcome(record.outcome, result);
     // Check the immutable winner, not an earlier read: a worker may ordinary-exit while a
     // signal observer is entering this function. Its queued output must still drain first.
-    if (winner.kind === "exited" && !this.disposed) {
+    if (winner.kind !== "signaled" && !this.disposed) {
       let canConfirm: boolean;
       try { canConfirm = this.options.canConfirmExit?.(pid) !== false; }
       catch (error) { this.finishing.delete(pid); throw error; }

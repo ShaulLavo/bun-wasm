@@ -376,11 +376,11 @@
     const { Readable, Writable } = internal.builtin("node:stream");
 
     function spawnError(error, command, args, sync) {
-      if (error.code !== "ENOENT") return error;
+      if (error.code !== "ENOENT" && error.code !== "EACCES") return error;
       const path = String(command);
       const syscall = `${sync ? "spawnSync" : "spawn"} ${path}`;
-      return Object.assign(new Error(`${syscall} ENOENT`), {
-        code: "ENOENT", errno: -2, syscall, path, spawnargs: args.map(String),
+      return Object.assign(new Error(`${syscall} ${error.code}`), {
+        code: error.code, errno: error.code === "ENOENT" ? -2 : -13, syscall, path, spawnargs: args.map(String),
       });
     }
 
@@ -491,7 +491,7 @@
       if (options.input !== undefined) config.stdio = [options.input].concat(options.stdio.slice(1));
       const result = spawnSync(argv, config);
       if (result.error) result.error = spawnError(result.error, command, args, true);
-      const missing = result.pid === 0 && result.error && result.error.code === "ENOENT";
+      const missing = result.pid === 0 && result.error && (result.error.code === "ENOENT" || result.error.code === "EACCES");
       const signal = result.signalCode;
       if (result.exitedDueToTimeout) result.error = Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT", errno: -110, syscall: "spawnSync", path: String(command) });
       const encoding = options.encoding;
@@ -582,7 +582,7 @@
 
   return { spawn, spawnSync(cmd, options) {
     const result = spawnSync(cmd, options);
-    if (result.error && result.error.code === "ENOENT") throw result.error;
+    if (result.error && (result.error.code === "ENOENT" || result.error.code === "EACCES")) throw result.error;
     return result;
   }, nodeChildProcess };
 })

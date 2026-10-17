@@ -1,3 +1,4 @@
+import { waitStatus } from "../../runtime/proc/wait-status.ts";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
 // and the sandbox (../sandbox/).
@@ -206,6 +207,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     net: ring,
     moduleCache,
     slots: slotsMode(),
+    spawnBroker: true,
     pid: 1,
     jobId: 1,
     interrupt: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
@@ -242,7 +244,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     : { module: moduleFor(options.engine), adapter: "bun" as const, engine: options.engine };
   for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, rootExecutable);
   for (const engine of ["quickjs", "jsc", "browser"] as const) subprocess.register(`bun-${engine}`, { module: moduleFor(engine), adapter: "bun", engine });
-  request.spawnBroker = { executables: subprocess.executableNames() };
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
   let settle: (result: RunResult) => void = () => {};
@@ -255,7 +256,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       const winner = claimOutcome(rootOutcome, signal === undefined
         ? { kind: "exited", code: result.code } : { kind: "signaled", code: signal });
       result = winner.kind === "exited" && winner.code === result.code && result.error
-        ? { code: winner.status, error: result.error } : { code: winner.status };
+        ? { code: waitStatus(winner), error: result.error } : { code: waitStatus(winner) };
     }
     subprocess.revokeRuntimeProcess(rootPid);
     finished = true;
@@ -362,7 +363,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       const result = readOutcome(rootOutcome!);
       // A guest can catch a default-signal unwind and keep running. Its already selected fatal
       // outcome is authority to revoke, not an acknowledgement that filesystem locks are free.
-      if (result?.kind === "signaled") finish({ code: result.status }, false, result.code);
+      if (result?.kind === "signaled") finish({ code: waitStatus(result) }, false, result.code);
       else watchOutcome();
     }, 4);
   }
@@ -379,7 +380,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     // HANDLE/IGNORE stays alive; DEFAULT selects its typed outcome without guest cooperation.
     void subprocess.killJob(rootJob, signal).catch(error => console.error("bun-wasm: job signal failed", error));
     const result = readOutcome(rootOutcome!);
-    if (result) finish({ code: result.status }, false, result.kind === "signaled" ? result.code : undefined);
+    if (result) finish({ code: waitStatus(result) }, false, result.kind === "signaled" ? result.code : undefined);
   };
   return { done, kill };
 }

@@ -264,15 +264,23 @@ The browser registers `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and
 `/usr/local/bin/node` with the page/root command's selected engine and compiled module.
 `bun-quickjs`, `bun-jsc` and `bun-browser` select an engine explicitly. Generic aliases keep
 using the page/root engine even when an explicitly selected child uses another engine.
-An unregistered Bun or Node executable makes `spawn` return -1. The host error
-contains `code: "ENOENT"`, `errno: -2` and the executable in `path`. The page sends
-its registered names to each Bun worker so this rejection is synchronous, including
-for `Bun.spawnSync`. Bun's APIs throw this error. Node's `spawn` emits `error`
-followed by `close` without `spawn` or `exit`; `spawnSync` returns it in `.error`.
-Node errors also contain `syscall` and `spawnargs`.
-A registered executable that cannot start still reports status 126 through
-`child_wait`. The generic `runtime_proc` adapter used by the shell retains its
-missing-program status 127.
+Process outcomes distinguish an ordinary exit, signal death and a startup failure.
+The shared int64 uses low-bit tags 1, 2 and 3 respectively. A startup failure carries
+positive POSIX errno 2 for ENOENT or 13 for EACCES and has no exit status.
+The supervisor records this outcome without choosing a guest API's error policy.
+
+The Bun slot adapter waits for the execution worker's startup acknowledgement
+before returning a child. The transport's control int32 at index 2 is zero while
+startup is pending and one after successful instantiation or confirmed completion;
+publication wakes that cell. Failure completion still follows filesystem quiescence.
+A failed start returns -1 and a host error containing code, negative errno and path.
+Bun's spawn APIs throw ENOENT or EACCES. Node's spawn emits error then close without
+spawn or exit, and its synchronous API returns the error with null status and signal.
+Node errors also contain syscall and spawnargs. No exit-127 child is returned.
+
+The shell and `runtime_proc` wait adapters map the same typed startup failure to
+an ordinary wait status 127 for ENOENT or 126 for EACCES. Ordinary program exits
+of 127 or 126 retain their own exit kind.
 `env` replaces the child environment; the host sets `PWD` to `cwd` because the
 WASI guest changes directory there at startup. Each stdio mode is `pipe`,
 `inherit`, or `ignore`. Inheritance refers to the immediate parent's stream,
