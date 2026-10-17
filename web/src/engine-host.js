@@ -1,5 +1,6 @@
 import { installNativeStreamState } from "./native-stream-state.ts";
 import { memoryViews } from "../../runtime/core/memory-views.js";
+import { transferArrayBuffers } from "./buffer-transfer.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -32,7 +33,6 @@ const NativeMessageChannel = globalThis.MessageChannel;
 const NativeAbortController = globalThis.AbortController;
 const NativePromise = globalThis.Promise;
 const NativeString = globalThis.String;
-const nativeStructuredClone = globalThis.structuredClone.bind(globalThis);
 const PENDING = Object.freeze({ state: "pending", value: undefined });
 const nativeProcess = typeof process === "object" && process && process.versions && process.versions.node ? process : null;
 const nativeAddEventListener = typeof globalThis.addEventListener === "function" ? globalThis.addEventListener.bind(globalThis) : null;
@@ -414,7 +414,7 @@ class EngineHost {
       promiseState: (p) => (host.promiseStates.get(p) || PENDING).state,
       promiseResult: (p) => (host.promiseStates.get(p) || PENDING).value,
       isProxy: () => false,
-      transferArrayBuffers: (buffers) => nativeStructuredClone(undefined, { transfer: buffers }),
+      transferArrayBuffers,
       getProxyTarget: () => undefined,
       isPromise: (v) => v instanceof Promise,
       isError: (v) => (typeof Error.isError === "function" ? Error.isError(v) : v instanceof Error),
