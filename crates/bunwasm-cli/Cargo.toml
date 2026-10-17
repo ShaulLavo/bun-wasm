@@ -19,7 +19,11 @@ engine-jsc = ["bunwasm-runtime/engine-jsc"]
 engine-host = ["bunwasm-runtime/engine-host", "bun-transpiler"]
 # Bun's real transpiler (crates/bunwasm-transpiler) for .ts/.tsx/.jsx/.toml.
 # Without it only plain JavaScript runs.
-bun-transpiler = ["dep:bunwasm-transpiler", "dep:bunwasm-glue"]
+bun-transpiler = [
+  "dep:bunwasm-transpiler", "dep:bunwasm-glue", "dep:bun_lint_driver",
+  "dep:bun_sema_driver", "dep:bun_alloc", "dep:bun_ast", "dep:bun_parsers",
+  "dep:bun_paths", "dep:bun_clap", "dep:bun_core", "dep:bun_zstd", "dep:bunwasm-lint-native",
+]
 # `bun build`: Bun's bundler (crates/bunwasm-build).
 bun-build = ["dep:bunwasm-build", "dep:bunwasm-glue"]
 
@@ -28,5 +32,17 @@ bunwasm-runtime = { path = "../bunwasm-runtime", default-features = false }
 bunwasm-transpiler = { path = "../bunwasm-transpiler", optional = true }
 bunwasm-build = { path = "../bunwasm-build", optional = true }
 
+bun_lint_driver = { path = "../../vendor/bun/src/lint/driver", optional = true }
+bun_sema_driver = { path = "../../vendor/bun/src/sema/driver", optional = true }
+bun_alloc = { path = "../../vendor/bun/src/bun_alloc", optional = true }
+bun_ast = { path = "../../vendor/bun/src/ast", optional = true }
+bun_parsers = { path = "../../vendor/bun/src/parsers", optional = true }
+bun_paths = { path = "../../vendor/bun/src/paths", optional = true }
+bun_clap = { path = "../../vendor/bun/src/clap", optional = true }
+bun_core = { path = "../../vendor/bun/src/bun_core", optional = true }
+bun_zstd = { path = "../../vendor/bun/src/zstd", optional = true }
+serde_json = "1"
+
 [target.'cfg(target_os = "wasi")'.dependencies]
+bunwasm-lint-native = { path = "../bunwasm-lint-native", optional = true }
 bunwasm-glue = { path = "../bunwasm-glue", optional = true }

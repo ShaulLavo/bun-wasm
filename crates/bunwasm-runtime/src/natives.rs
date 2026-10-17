@@ -590,6 +590,13 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         Ok(Val::Array(offsets.into_iter().map(|items| Val::Array(items.into_iter().map(|i| (i as u32).into()).collect())).collect()))
     });
     let st = state.clone();
+    t.add("registerObjectModule", move |a| Ok(st.resolver.register_object_module(a.str(0)?).into()));
+    let st = state.clone();
+    t.add("clearObjectModules", move |_| {
+        st.resolver.clear_object_modules();
+        Ok(Val::Undefined)
+    });
+    let st = state.clone();
     t.add("resolve", move |a| {
         let spec = a.str(0)?;
         let kind = if a.bool(2) { Kind::Require } else { Kind::Import };

@@ -12,6 +12,8 @@ Commands:
   run       ./my-script.ts       Execute a file with Bun
   test      [filters]            Run unit tests with Bun's test runner
   build     ./a.ts --outdir out  Bundle TypeScript & JavaScript into a single file
+  lint      [files]              Lint JavaScript and TypeScript
+  fmt       [files]              Format source files
   install, i                     Install dependencies
   add       <package>           Add dependencies
   remove    <package>           Remove dependencies
@@ -354,9 +356,13 @@ fn build(_: Vec<String>) -> i32 {
     1
 }
 
+#[cfg(feature = "bun-transpiler")]
+mod lint_command;
+
 enum Command {
     Run(Entry, Vec<String>),
     Build(Vec<String>),
+    Lint(String, Vec<String>, Option<String>),
     Install(String, Vec<String>),
     Print(String),
     Exit(i32),
@@ -369,6 +375,10 @@ fn usage_error(message: &str) -> Command {
 }
 
 fn parse(args: Vec<String>) -> Command {
+    #[cfg(feature = "bun-transpiler")]
+    if let Some(command) = lint_command::before_command(&args) {
+        return command;
+    }
     let mut rest = args.into_iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -393,13 +403,14 @@ fn parse(args: Vec<String>) -> Command {
                 let Some(code) = rest.next() else { return usage_error("--print requires code") };
                 return Command::Print(code);
             }
+            "lint" | "fmt" => return Command::Lint(arg, rest.collect(), None),
             "test" => return Command::Run(Entry::Test(rest.collect()), Vec::new()),
             "build" | "bun" => return Command::Build(rest.collect()),
             "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm" =>
                 return Command::Install(arg, rest.collect()),
             "x" | "bunx" | "create" | "c" | "init" | "update" | "upgrade" | "link" | "unlink"
             | "outdated" | "publish" | "patch" | "patch-commit" | "repl" | "info" | "why"
-            | "audit" | "completions" | "getcompletes" | "discord" | "exec" | "up" | "dedupe" | "prune" | "check" | "lint" | "fmt"
+            | "audit" | "completions" | "getcompletes" | "discord" | "exec" | "up" | "dedupe" | "prune" | "check"
             | "deploy" | "cloud" | "config" | "use" | "auth" | "login" | "logout" => {
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
@@ -450,6 +461,16 @@ fn main() {
     let command = parse(std::env::args().skip(1).collect());
     let (entry, args) = match command {
         Command::Exit(code) => std::process::exit(code),
+        Command::Lint(command, args, bunfig) => {
+            #[cfg(feature = "bun-transpiler")]
+            std::process::exit(lint_command::run(&command, args, bunfig));
+            #[cfg(not(feature = "bun-transpiler"))]
+            {
+                let _ = (args, bunfig);
+                eprintln!("error: bun {command} requires the bun-transpiler feature");
+                std::process::exit(1);
+            }
+        }
         Command::Build(args) => std::process::exit(build(args)),
         Command::Install(command, args) => std::process::exit(
             bunwasm_runtime::install::run(&command, args, transpiler().as_ref())

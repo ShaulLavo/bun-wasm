@@ -14,6 +14,11 @@ fn main() {
     polyfills::embed(Path::new(&manifest), Path::new(&out));
 
     let bun_dir = Path::new(&manifest).join("../../vendor/bun");
+    for path in [bun_dir.join(".git/HEAD"), bun_dir.join(".git/refs/heads"), bun_dir.join(".git/packed-refs")] {
+        if path.exists() {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
     let package_json = bun_dir.join("package.json");
     println!("cargo:rerun-if-changed={}", package_json.display());
     let version = fs::read_to_string(&package_json)

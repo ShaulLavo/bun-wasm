@@ -1,0 +1,91 @@
+From 5e0baa66516f3af00b008cdf1521c681317741e8 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Sat, 17 Oct 2026 08:24:52 +0300
+Subject: [PATCH 12/12] wasm: embed lint rule docs with native generators
+
+---
+ src/lint/driver/Cargo.toml |  1 +
+ src/lint/driver/build.rs   | 38 ++++++++++++++++++++++++++++++++++++++
+ src/lint/driver/explain.rs | 12 +++++++++++-
+ 3 files changed, 50 insertions(+), 1 deletion(-)
+ create mode 100644 src/lint/driver/build.rs
+
+diff --git a/src/lint/driver/Cargo.toml b/src/lint/driver/Cargo.toml
+index 62c9f7db..51ebb4fa 100644
+--- a/src/lint/driver/Cargo.toml
++++ b/src/lint/driver/Cargo.toml
+@@ -2,6 +2,7 @@
+ name = "bun_lint_driver"
+ version.workspace = true
+ edition.workspace = true
++build = "build.rs"
+ 
+ [lib]
+ path = "lib.rs"
+diff --git a/src/lint/driver/build.rs b/src/lint/driver/build.rs
+new file mode 100644
+index 00000000..d162835d
+--- /dev/null
++++ b/src/lint/driver/build.rs
+@@ -0,0 +1,38 @@
++use std::env;
++use std::path::PathBuf;
++use std::process::Command;
++
++fn main() {
++    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("wasi") {
++        return;
++    }
++    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../..");
++    let codegen = root.join("src/codegen");
++    let docs = root.join("docs/lint/rules");
++    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
++    let pages = out.join("lint-rule-pages.txt");
++    let compressed = out.join("lint-rule-pages.txt.zst");
++    for path in [
++        codegen.join("generate-lint-docs.ts"),
++        codegen.join("compress-embed.ts"),
++        codegen.join("helpers.ts"),
++        docs.clone(),
++    ] {
++        println!("cargo:rerun-if-changed={}", path.display());
++    }
++    let status = Command::new("bun")
++        .arg(codegen.join("generate-lint-docs.ts"))
++        .arg(&docs)
++        .arg(&pages)
++        .status()
++        .expect("Bun for lint docs codegen");
++    assert!(status.success(), "generating lint docs");
++    let status = Command::new("bun")
++        .arg(codegen.join("compress-embed.ts"))
++        .arg(&compressed)
++        .arg(&pages)
++        .status()
++        .expect("Bun for lint docs compression");
++    assert!(status.success(), "compressing lint docs");
++    println!("cargo:rustc-env=BUN_LINT_DOCS={}", compressed.display());
++}
+diff --git a/src/lint/driver/explain.rs b/src/lint/driver/explain.rs
+index c0bdaef1..aff646e0 100644
+--- a/src/lint/driver/explain.rs
++++ b/src/lint/driver/explain.rs
+@@ -28,7 +28,17 @@ macro_rules! pretty {
+ /// Every page: a NUL, its [name](Meta::page), a newline, then its Markdown. That's the description on one line, an empty
+ /// line, then the rest.
+ fn pages() -> &'static [u8] {
+-    bun_zstd::embed_compressed!(codegen "lint-rule-pages.txt")
++    #[cfg(target_os = "wasi")]
++    {
++        static PAGES: bun_core::Once<Box<[u8]>> = bun_core::Once::new();
++        PAGES.get_or_init(|| {
++            bun_zstd::inflate_embedded(include_bytes!(env!("BUN_LINT_DOCS")))
++        })
++    }
++    #[cfg(not(target_os = "wasi"))]
++    {
++        bun_zstd::embed_compressed!(codegen "lint-rule-pages.txt")
++    }
+ }
+ 
+ /// Descriptions by page name.

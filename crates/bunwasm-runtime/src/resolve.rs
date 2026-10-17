@@ -2,7 +2,7 @@
 //! probing, `node_modules` packages (`exports`, `imports`, `module`, `main`) and
 //! built-in module names.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs;
 use std::rc::Rc;
@@ -43,7 +43,7 @@ const BUN_BUILTINS: &[&str] = &["bun", "bun:jsc", "bun:test", "bun:sqlite", "bun
 const EXTENSIONS: &[&str] = &[".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts", ".json"];
 
 pub fn builtin_name(spec: &str) -> Option<String> {
-    if BUN_BUILTINS.contains(&spec) {
+    if spec.starts_with("bun:plugin:") || BUN_BUILTINS.contains(&spec) {
         return Some(spec.to_owned());
     }
     let bare = spec.strip_prefix("node:").unwrap_or(spec);
@@ -121,6 +121,8 @@ pub fn percent_decode(s: &str) -> String {
 
 #[derive(Default)]
 pub struct Resolver {
+    object_modules: RefCell<HashMap<String, String>>,
+    next_object_module: Cell<u64>,
     /// package.json contents by directory (`None` = no package.json there).
     package_json: RefCell<HashMap<String, Option<Rc<Json>>>>,
 }
@@ -130,9 +132,25 @@ impl Resolver {
         Self::default()
     }
 
+    pub fn register_object_module(&self, name: &str) -> String {
+        let mut modules = self.object_modules.borrow_mut();
+        let next = self.next_object_module.get();
+        self.next_object_module.set(next + 1);
+        let key = format!("bun:plugin:{next}");
+        modules.insert(name.to_owned(), key.clone());
+        key
+    }
+
+    pub fn clear_object_modules(&self) {
+        self.object_modules.borrow_mut().clear();
+    }
+
     /// Resolve `spec` imported from the file `from` (or a directory path ending
     /// in `/` for the entry point / eval code).
     pub fn resolve(&self, spec: &str, from: &str, kind: Kind) -> Result<Resolved, String> {
+        if let Some(key) = self.object_modules.borrow().get(spec) {
+            return Ok(Resolved::Builtin(key.clone()));
+        }
         if let Some(name) = builtin_name(spec) {
             return Ok(Resolved::Builtin(name));
         }
