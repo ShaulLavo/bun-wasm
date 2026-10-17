@@ -660,14 +660,13 @@ async function boot(): Promise<void> {
   ]);
   await tree.render();
   await editor.open(await fs.lookup(abs(START_FILE)) ? START_FILE : ((await fs.listFiles(APP)).map(rel)[0] ?? START_FILE));
+  if (startup === "starting") startup = "ready";
   if (wasm) {
     setStatus(`starting the dev server on ${ENGINES[engine].name}…`);
     await startDevServer();
   }
 }
 
-void boot().then(() => {
-  if (startup === "starting") startup = "ready";
-}, error => { showStartupFailure(error); reportError(error); });
+void boot().catch(error => { showStartupFailure(error); reportError(error); });
 
 Object.assign(globalThis, { sandbox: { fs, editor, term, restart: startDevServer, server: () => server, engine, template } });
