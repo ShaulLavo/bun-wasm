@@ -74,6 +74,10 @@ h1 {
 
 #status[data-kind="error"] {
   color: #fca5a5;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: pre-wrap;
 }
 
 button {
@@ -357,4 +361,3 @@ a.nav:hover {
     display: block;
   }
 }
-

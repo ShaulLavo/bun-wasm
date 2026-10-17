@@ -14,7 +14,7 @@ const server = Bun.serve({
     const url = new URL(req.url);
     let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");
     if (path.endsWith("/")) path += "index.html";
-    const headers: Record<string, string> = { "cache-control": "no-cache" };
+    const headers: Record<string, string> = { "cache-control": path.endsWith(".html") ? "no-store" : "no-cache" };
     // .wasm files may be published only as their .gz twin (Mesh apps cap source size).
     const gz = Bun.file(join(root, `${path}.gz`));
     if (path.endsWith(".wasm") && (await gz.exists())) {
