@@ -59,7 +59,7 @@
     let file: string | undefined;
     if ("bin" in meta && typeof meta.bin === "string") {
       if ("name" in meta && typeof meta.name === "string" && meta.name.split("/").pop() === name) file = binPath(base, meta.bin);
-    } else if ("bin" in meta && meta.bin && typeof meta.bin === "object") {
+    } else if ("bin" in meta && meta.bin && typeof meta.bin === "object" && !Array.isArray(meta.bin)) {
       if (Object.prototype.hasOwnProperty.call(meta.bin, name)) file = binPath(base, Reflect.get(meta.bin, name));
     } else if ("directories" in meta && meta.directories && typeof meta.directories === "object" && "bin" in meta.directories) {
       file = path.resolve(binPath(base, meta.directories.bin), name);
@@ -76,7 +76,7 @@
       if (!name.startsWith("@")) { packages.push(base); continue; }
       for (const [child] of native.readdir(base)) packages.push(path.resolve(base, child));
     }
-    return packages.sort();
+    return packages.sort().reverse();
   }
 
   function binary(cwd: string, name: string): string | undefined {

@@ -164,7 +164,7 @@ mod tests {
                 Ok(BinLink::Unsupported)
             ));
         }
-        for code in [libc::EACCES, libc::ENOENT, libc::EIO, libc::EEXIST] {
+        for code in [libc::EACCES, libc::ENOENT, libc::EIO, libc::EEXIST, 76] {
             assert!(bin_link_result(Err(std::io::Error::from_raw_os_error(code))).is_err());
         }
         assert!(bin_link_result(Err(std::io::ErrorKind::PermissionDenied.into())).is_err());
