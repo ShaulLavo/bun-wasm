@@ -91,18 +91,17 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 
 // ---------- filesystem ----------
 
+let startup: "starting" | "ready" | "failed" = "starting";
 const fs = new SharedFilesystem({ name: `bun-wasm-sandbox-${template}` });
-fs.onOwnershipLost = () => {
-  setStatus("", "error");
+function showStartupFailure(error: unknown): void {
+  startup = "failed";
+  setStatus(String(error), "error");
   restartButton.textContent = "Reload";
   restartButton.disabled = false;
   restartButton.title = "Open the latest saved workspace";
   resetButton.disabled = engineSelect.disabled = templateSelect.disabled = fileSelect.disabled = true;
-};
-await fs.mkdirp("/tmp").catch((error) => {
-  setStatus(String(error), "error");
-  throw error;
-});
+}
+fs.onOwnershipLost = () => showStartupFailure("");
 const rel = (path: string) => path.slice(APP.length + 1);
 const abs = (relPath: string) => `${APP}/${relPath}`;
 
@@ -603,7 +602,8 @@ const editor = new Editor($<HTMLDivElement>("#editor"));
 fileSelect.addEventListener("change", () => void editor.open(fileSelect.value).catch(reportError));
 
 restartButton.addEventListener("click", () => {
-  if (fs.ownershipLost) { location.reload(); return; }
+  if (startup === "failed") { location.reload(); return; }
+  if (startup === "starting") return;
   term.write("\r\n");
   void startDevServer().catch(reportError);
 });
@@ -641,6 +641,7 @@ if (vv) {
 // ---------- start ----------
 
 async function boot(): Promise<void> {
+  await fs.mkdirp("/tmp");
   setServerState("starting", "loading…");
   if (!globalThis.crossOriginIsolated) {
     setStatus("this page is not cross-origin isolated: the dev server can't serve previews", "error");
@@ -665,6 +666,8 @@ async function boot(): Promise<void> {
   }
 }
 
-void boot().catch(reportError);
+void boot().then(() => {
+  if (startup === "starting") startup = "ready";
+}, error => { showStartupFailure(error); reportError(error); });
 
 Object.assign(globalThis, { sandbox: { fs, editor, term, restart: startDevServer, server: () => server, engine, template } });

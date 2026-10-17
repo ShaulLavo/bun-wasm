@@ -438,7 +438,9 @@ now send startup failures as plain message and stack fields before revoking pend
 Unprintable rejection reasons and throwing stack getters still produce a diagnostic, and a
 failed diagnostic transfer still dispatches the worker error fallback.
 The playground catches startup rejection, displays the complete diagnostic, and offers Reload.
-An occupied Web Lock still refuses a second writer and explains how to release it.
+OPFS refuses an occupied Web Lock and explains how to release it. IndexedDB uses an original
+takeover adapter. A new holder steals the lock, allocates a persisted epoch, and checks that epoch
+inside every write transaction. A displaced page stops persistence and preserves visible editor text.
 These changes extend bun-wasm's own adapters at `b14f536f`; no upstream implementation is copied.
 The original persistence browser fixtures in `web/tests/persistence-browser-{main,worker}.ts`
 and their Playwright/Safari runners exercise these adapters without a wasm build. The corpus

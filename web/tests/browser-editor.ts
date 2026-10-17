@@ -60,6 +60,7 @@ async function startupSteal(base: string, app: string, rejectPending: boolean) {
     await button.waitFor();
     assert.equal(await button.innerText(), "Reload");
     assert.equal(await button.isEnabled(), true);
+    if (process.env.STARTUP_ERROR_SCREENSHOT) await owner.screenshot({ path: `${process.env.STARTUP_ERROR_SCREENSHOT}-${app}-${rejectPending ? "rejected" : "pending"}.png` });
     await Promise.all([owner.waitForNavigation({ timeout: 4_000 }), button.click()]);
     await owner.waitForFunction(app => !!(globalThis as any)[app]?.editor, app);
     assert.equal(await owner.evaluate(async app => new TextDecoder().decode(await (globalThis as any)[app].fs.readFile("/startup-saved")), app), "saved during takeover");

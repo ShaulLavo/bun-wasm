@@ -54,8 +54,14 @@ const previews = new Previews();
 
 // ---------- filesystem ----------
 
+let startup: "starting" | "ready" | "failed" = "starting";
+runButton.onclick = () => {
+  if (startup === "failed") { location.reload(); return; }
+  if (startup === "ready") void runCurrent().catch(reportError);
+};
 const fs = new SharedFilesystem({ storage });
 fs.onOwnershipLost = () => {
+  startup = "failed";
   setStatus("", "error");
   runButton.textContent = "Reload";
   runButton.disabled = false;
@@ -394,10 +400,6 @@ async function runCurrent(): Promise<void> {
   }
 }
 
-runButton.addEventListener("click", () => {
-  if (fs.ownershipLost) { location.reload(); return; }
-  void runCurrent().catch(reportError);
-});
 newFileButton.addEventListener("click", () => {
   const name = prompt("New file name (in ~):", "scratch.ts");
   if (!name) return;
@@ -428,6 +430,7 @@ shell.start([
 ]);
 
 Object.assign(globalThis, { playground: { fs, shell, term, editor, previews } });
+startup = "ready";
 pageSetUp();
 }
 
