@@ -1,0 +1,1 @@
+table exports, imports, identity, indirect calls, growth and externref pass
