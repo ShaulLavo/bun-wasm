@@ -1,0 +1,1186 @@
+{
+  "provenance": {
+    "date": "2026-10-17T03:10:24.412Z",
+    "revision": "ec213e8ee326336f31feea9ef5763e793b9e2d60",
+    "nativeBun": "1.4.2",
+    "options": {
+      "cache": "/work/cache/bun-wasm-app-matrix",
+      "output": "/work/reports/bun-wasm-main-2026-10-17/app-matrix-record",
+      "launcher": "/work/reports/bun-wasm-main-2026-10-17/bun-wasm-launcher",
+      "engines": [
+        "quickjs",
+        "jsc",
+        "browser"
+      ],
+      "hosts": [
+        "native",
+        "playground"
+      ],
+      "timeout": 90000,
+      "record": true,
+      "reference": true
+    },
+    "fixtures_sha256": "0483b996f4f1365c14ab4543197ad7ab72f5c7efe5b426ac76e444b805ae6006",
+    "artifacts": {
+      "quickjs": "639050a0c57a032bba6faf902ccd0cc10b6baff070428b1503832f5aa34df32c",
+      "jsc": "5fe717047ff801443f9cbbebc6e62b72bc443a608235879269deac1c9b94bfb3",
+      "browser": "4bc3f2754a9bfc59c613f36c5c4009cf345e5a46455453227ce67423b65d81f6"
+    },
+    "runner_sources": {
+      "run.mjs": "40c5c19666b07c30fa3df893e653bc49453e57a68e4fdbfc4a718df4a093e8bd",
+      "apps.mjs": "0483b996f4f1365c14ab4543197ad7ab72f5c7efe5b426ac76e444b805ae6006",
+      "registry.mjs": "a86d1e9aa07e95223f567742e02508032586892f1ab93935bb45c8c86c5ec5a8",
+      "browser.mjs": "bdc2a8091b1fa3eb94911653252e176ab9b82f6acbe30dbb8532f72aeca1c152",
+      "checks.mjs": "a80a7526246bcd312b02fd0f088ee37c1b9fe857d63603512929d0c3c5fdb377",
+      "classify.mjs": "6cd7ac9e52425175185820b561289b30f0ccc7d9cb1899a9cec17c64c04ed45b",
+      "isolate.mjs": "74dd9ec3da769b0baee1db0af280bef8d02712807e55c71f79b48548d4453ff6"
+    },
+    "playground_builds": {
+      "bun.wasm": "639050a0c57a032bba6faf902ccd0cc10b6baff070428b1503832f5aa34df32c",
+      "bun-jsc.wasm": "5fe717047ff801443f9cbbebc6e62b72bc443a608235879269deac1c9b94bfb3",
+      "bun-browser.wasm": "4bc3f2754a9bfc59c613f36c5c4009cf345e5a46455453227ce67423b65d81f6"
+    },
+    "launcher_sha256": "0b61ddaa7e30cbe3e26fbed3d3c78d529e8727462efd9f9eb302de7dcd38b300",
+    "registry": {
+      "entries": 1295,
+      "sha256": "5428da1454a78fbfa8dc868114365c5a448fc2ad2556b2977caa17520890a7d2",
+      "requests": 4029,
+      "misses": [],
+      "errors": []
+    }
+  },
+  "results": [
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\"}"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "pass",
+      "assertion": "#app renders \"bun-wasm app matrix\""
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"files\",\"paths\":[\"dist/index.html\"],\"text\":\"bun-wasm app matrix\"}"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\"}"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\"}"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\"}"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "vite-vanilla",
+      "versions": {
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\",\"react\":\"19.1.1\",\"react-dom\":\"19.1.1\"}"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "pass",
+      "assertion": "#app renders \"bun-wasm app matrix\""
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"files\",\"paths\":[\"dist/index.html\"],\"text\":\"bun-wasm app matrix\"}"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\",\"react\":\"19.1.1\",\"react-dom\":\"19.1.1\"}"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\",\"react\":\"19.1.1\",\"react-dom\":\"19.1.1\"}"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\",\"react\":\"19.1.1\",\"react-dom\":\"19.1.1\"}"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\",\"react\":\"19.1.1\",\"react-dom\":\"19.1.1\"}"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "dev: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "quickjs",
+      "host": "playground",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\",\"react\":\"19.1.1\",\"react-dom\":\"19.1.1\"}"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "dev: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "jsc",
+      "host": "playground",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\",\"react\":\"19.1.1\",\"react-dom\":\"19.1.1\"}"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "dev: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-react",
+      "versions": {
+        "vite": "7.1.12",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "engine": "browser",
+      "host": "playground",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\",\"vue\":\"3.5.22\"}"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "pass",
+      "assertion": "#app renders \"bun-wasm app matrix\""
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"files\",\"paths\":[\"dist/index.html\"],\"text\":\"bun-wasm app matrix\"}"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\",\"vue\":\"3.5.22\"}"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\",\"vue\":\"3.5.22\"}"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vite\":\"7.1.12\",\"vue\":\"3.5.22\"}"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "vite-vue",
+      "versions": {
+        "vite": "7.1.12",
+        "vue": "3.5.22"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"astro\":\"5.14.1\"}"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/astro/astro.js build",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"files\",\"paths\":[\"dist/index.html\"],\"text\":\"bun-wasm app matrix\"}"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"astro\":\"5.14.1\"}"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/astro/astro.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"astro\":\"5.14.1\"}"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/astro/astro.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"astro\":\"5.14.1\"}"
+    },
+    {
+      "app": "astro",
+      "versions": {
+        "astro": "5.14.1"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/astro/astro.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"@sveltejs/kit\":\"2.43.1\",\"@sveltejs/adapter-static\":\"3.0.9\",\"@sveltejs/vite-plugin-svelte\":\"6.2.1\",\"svelte\":\"5.39.11\",\"vite\":\"7.1.12\"}"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "pass",
+      "assertion": "h1 renders \"bun-wasm app matrix\""
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"files\",\"paths\":[\"build/index.html\"],\"text\":\"bun-wasm app matrix\"}"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"@sveltejs/kit\":\"2.43.1\",\"@sveltejs/adapter-static\":\"3.0.9\",\"@sveltejs/vite-plugin-svelte\":\"6.2.1\",\"svelte\":\"5.39.11\",\"vite\":\"7.1.12\"}"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"@sveltejs/kit\":\"2.43.1\",\"@sveltejs/adapter-static\":\"3.0.9\",\"@sveltejs/vite-plugin-svelte\":\"6.2.1\",\"svelte\":\"5.39.11\",\"vite\":\"7.1.12\"}"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"@sveltejs/kit\":\"2.43.1\",\"@sveltejs/adapter-static\":\"3.0.9\",\"@sveltejs/vite-plugin-svelte\":\"6.2.1\",\"svelte\":\"5.39.11\",\"vite\":\"7.1.12\"}"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "dev",
+      "command": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port {port}",
+      "status": "fail",
+      "category": "d",
+      "blocker": "server: No diagnostic before exit or deadline",
+      "output": "23723 | }\n23724 | \n23725 | //#endregion\n23726 | //#region src/node/server/ws.ts\n23727 | var import_picocolors$16 = /* @__PURE__ */ __toESM(require_picocolors(), 1);\n23728 | const WebSocketServerRaw = process.versions.bun ? import.meta.require(\"ws\").WebSocketServer : import_websocket_server.default;\n                                                                      ^\nENOENT: no such file or directory, open 'ws'\n    path: \"ws\",\n syscall: \"open\",\n   errno: -2,\n    code: \"ENOENT\"\n\n      at /node_modules/vite/dist/node/chunks/config.js:23728:63\n\nBun v1.4.4 (WASI wasm32)\n"
+    },
+    {
+      "app": "sveltekit",
+      "versions": {
+        "@sveltejs/kit": "2.43.1",
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/vite-plugin-svelte": "6.2.1",
+        "svelte": "5.39.11",
+        "vite": "7.1.12"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "build",
+      "command": "bun run node_modules/vite/bin/vite.js build",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "build: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vitest\":\"3.2.4\"}"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "test",
+      "command": "bun run node_modules/vitest/vitest.mjs run --maxWorkers=1 --no-file-parallelism",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"1 passed\"}"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "reference",
+      "host": "native",
+      "stage": "threads",
+      "command": "bun run node_modules/vitest/vitest.mjs run --pool=threads --maxWorkers=1 --no-file-parallelism",
+      "status": "pass",
+      "exit": 0,
+      "assertion": "{\"kind\":\"stdout\",\"text\":\"1 passed\"}"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vitest\":\"3.2.4\"}"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "test",
+      "command": "bun run node_modules/vitest/vitest.mjs run --maxWorkers=1 --no-file-parallelism",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "test: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "quickjs",
+      "host": "native",
+      "stage": "threads",
+      "command": "bun run node_modules/vitest/vitest.mjs run --pool=threads --maxWorkers=1 --no-file-parallelism",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "threads: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vitest\":\"3.2.4\"}"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "test",
+      "command": "bun run node_modules/vitest/vitest.mjs run --maxWorkers=1 --no-file-parallelism",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "test: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "jsc",
+      "host": "native",
+      "stage": "threads",
+      "command": "bun run node_modules/vitest/vitest.mjs run --pool=threads --maxWorkers=1 --no-file-parallelism",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "threads: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "install",
+      "command": "bun install",
+      "status": "pass",
+      "assertion": "Verified package versions and entry points: {\"vitest\":\"3.2.4\"}"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "test",
+      "command": "bun run node_modules/vitest/vitest.mjs run --maxWorkers=1 --no-file-parallelism",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "test: No diagnostic before exit or deadline"
+    },
+    {
+      "app": "vitest",
+      "versions": {
+        "vitest": "3.2.4"
+      },
+      "engine": "browser",
+      "host": "native",
+      "stage": "threads",
+      "command": "bun run node_modules/vitest/vitest.mjs run --pool=threads --maxWorkers=1 --no-file-parallelism",
+      "status": "fail",
+      "exit": 1,
+      "timedOut": false,
+      "category": "d",
+      "blocker": "threads: No diagnostic before exit or deadline"
+    }
+  ]
+}
