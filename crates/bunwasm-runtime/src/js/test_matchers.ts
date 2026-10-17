@@ -50,24 +50,25 @@
     const records = new Map<Promise<unknown>, Record>();
     function track<T>(value: T): T {
       if (!isPromise<unknown>(value) || records.has(value)) return value;
-      const descriptor = Object.getOwnPropertyDescriptor(value, "constructor");
-      const prototype: object = Object.getPrototypeOf(value);
+      const promise: Promise<unknown> = value;
+      const descriptor = Object.getOwnPropertyDescriptor(promise, "constructor");
+      const prototype: object = Object.getPrototypeOf(promise);
       function restore() {
-        if (Object.getOwnPropertyDescriptor(value, "constructor")?.get !== observedConstructor) return;
-        return descriptor ? Reflect.defineProperty(value, "constructor", descriptor) : Reflect.deleteProperty(value, "constructor");
+        if (Object.getOwnPropertyDescriptor(promise, "constructor")?.get !== observedConstructor) return;
+        return descriptor ? Reflect.defineProperty(promise, "constructor", descriptor) : Reflect.deleteProperty(promise, "constructor");
       }
-      const record: Record = { observed: false, restore, result: react<unknown, Settlement>(value,
+      const record: Record = { observed: false, restore, result: react<unknown, Settlement>(promise,
         () => ({ kind: "fulfilled" }), error => ({ kind: "rejected", error }),
       ) };
       // Await reads constructor before retaining a native promise's fulfillment without re-assimilation.
       function observedConstructor() {
         record.observed = true;
         restore();
-        if (!descriptor) return Reflect.get(prototype, "constructor", value);
-        return "value" in descriptor ? descriptor.value : descriptor.get?.call(value);
+        if (!descriptor) return Reflect.get(prototype, "constructor", promise);
+        return "value" in descriptor ? descriptor.value : descriptor.get?.call(promise);
       }
-      Object.defineProperty(value, "constructor", { configurable: true, get: observedConstructor });
-      records.set(value, record);
+      Object.defineProperty(promise, "constructor", { configurable: true, get: observedConstructor });
+      records.set(promise, record);
       return value;
     }
     function finishPending<T>(result: T, finish: (value: T) => void) {
