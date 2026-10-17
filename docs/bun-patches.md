@@ -14,6 +14,7 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
 | [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
 | [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, async handler dispatch and streaming wrappers on all engines. |
@@ -115,7 +116,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming, Agent pool and upgrade response adapters shared by all engines. |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
 | [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns and bounded immediate batches. |
-| [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations. |
+| [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations, with Node listener identity. |
 | [`src/js/exit_provenance.ts` and lifecycle hooks](#runtime-exit-provenance) | Host feature | Original opt-in exit diagnostics over the existing event loop and error handlers. |
 | [`scripts/generate-ws.sh` and builtin resolution](#portable-ws-builtin) | Host feature | Original module wrapper supplies Bun's builtin ws import and require on every engine. |
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
@@ -285,6 +286,33 @@ Children use independent process revocation identities while
 sharing the filesystem service's root revocation word. New browser fixtures and timing
 harnesses are original test programs, not copies of the spike implementations.
 
+## Test fake clock
+
+Class **Host feature**, **original adapter** in `crates/bunwasm-runtime/src/js/fake_timers.ts`,
+with routing in `bootstrap.js`, `bun_test.js`, `process.js` and `web.js`.
+No upstream implementation is copied. The reference contracts are Bun's
+`src/runtime/test_runner/timers/FakeTimers.rs` and
+`src/jsc/bindings/JSMockFunction.cpp` at `cd95fa7a13b3f13be73e512b38ec111c1c228084`.
+
+Bun's implementation calls its JSC global object, native timer heap and virtual machine.
+Those cannot run through the portable builtin loader. The adapter keeps fake timer handles
+in a separate queue, advances a nanosecond clock, and exposes the controls through `jest`
+and `vi`. Global timers and `node:timers` share scheduling and cancellation. Runtime-owned
+callbacks use the real timer interface, so filesystem, worker, crypto, compression, readline, and subprocess
+work survives fake-clock restoration. Host wakeups use the captured native clock. Timers
+created before fake-clock activation keep their real ownership. A separate running-callback
+stack keeps numeric handles discoverable during nested drains. Cancellation and `clearAllTimers`
+close those running handles without including them in the pending timer count.
+
+A stable Date constructor wrapper preserves references saved before activation, explicit
+constructor arguments, subclasses and Date instances. Its current time also supplies native
+Intl formatters when callers omit the date. `setSystemTime` rebases wall time without changing
+timer deadlines. Performance and process high-resolution time use the fake monotonic clock.
+`runOnlyPendingTimers` uses Bun's latest pending deadline as its horizon. Timer callbacks
+drain the runtime-owned `process.nextTick` queue synchronously. Browser native Promise jobs
+remain deferred until the synchronous host drain returns. The portable scheduler bounds a single
+drain at 100,000 callbacks to reject an endless interval or recursive timer.
+
 ## OPFS storage adapter
 
 Class **Host feature**, original adapter in `runtime/fs/opfs.ts`, informed by SLICC-kernel
@@ -381,6 +409,11 @@ and rename events. Recursive traversal does not follow directory symlinks.
 `close`, `ref`, `unref`, persistent options and abort signals control the actual
 timer. Closing a watcher releases its timer and signal listener. Polling can
 coalesce changes between samples and does not promise an OS event count.
+Both `watch(path, callback)` and `watch(path, options, callback)` register the
+original callback directly, matching Node v22.14.0 `lib/fs.js` `watch()` and
+`lib/internal/fs/watchers.js` EventEmitter dispatch. No Node source is copied.
+The fixture checks raw listener identity, single registration, `once`, `off`,
+removal by the original callback, and callback receiver on both overloads.
 `watchFile` and the promise-based watcher remain unsupported.
 
 ## Runtime exit provenance

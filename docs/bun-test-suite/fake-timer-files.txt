@@ -1,0 +1,12 @@
+js/bun/test/fake-timers/sinonjs/issue-187.test.ts
+js/bun/test/fake-timers/sinonjs/issue-207.test.ts
+js/bun/test/fake-timers/sinonjs/issue-315.test.ts
+js/bun/test/fake-timers/sinonjs/issue-368.test.ts
+js/bun/test/fake-timers/sinonjs/issue-437.test.ts
+js/bun/test/fake-timers/sinonjs/issue-504.test.ts
+js/bun/test/fake-timers/sinonjs/issue-67.test.ts
+js/bun/test/fake-timers/sinonjs/issue-73.test.ts
+js/bun/test/test-timers.test.ts
+regression/issue/25869.test.ts
+regression/issue/26284.test.ts
+regression/issue/32793.test.ts

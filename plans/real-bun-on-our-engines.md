@@ -251,3 +251,36 @@ Remaining files at this change:
 - `crates/bunwasm-runtime/src/js/web.js`
 - `crates/bunwasm-runtime/src/js/webassembly.js`
 - `crates/bunwasm-runtime/src/js/websocket.js`
+
+## Browser occupied-port follow-up after fake timers
+
+Status: Approved.
+
+The 12-file fake-timer after measurement passes 42 tests on QuickJS and JSC.
+Browser passes 41, with one 2-second timeout in
+`js/bun/test/test-timers.test.ts`, test
+`http.Server#listen() while fake timers are active > emits 'error' for a port that is in use without fake time being advanced`.
+The other ten tests in that file pass. This is one observed failure in one
+bounded measurement, without a retry or a longer timeout.
+
+Inspect `web/scripts/node-net.mjs:hostListen`: it obtains a port with a temporary
+synchronous listener, closes that probe, then binds the actual named-host listener
+asynchronously. `crates/bunwasm-runtime/src/js/net.js:Server.listen` publishes
+`listening` immediately through `internal.nextTick`; its accept loop does not
+forward a later listener error. Verify this suspected bind/error-delivery race
+with fake timers both disabled and enabled before changing the networking adapter.
+No networking implementation or test expectation was changed by the timer lane.
+
+Reproduce with built artifacts and the standard dependencies, through the suite-class runner:
+
+```sh
+source env.sh
+scripts/bun-suite.sh --engine browser --jobs 1 --timeout 15 --network loopback \
+  --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" \
+  --output /work/tmp/bun-wasm-listen-review/browser.json \
+  js/bun/test/test-timers.test.ts
+```
+
+Raw output is retained in
+`/work/reports/bun-wasm-fake-timers/after-browser-logs/js/bun/test/test-timers.test.ts.log`.
+The coordinator owns this evidence until the networking follow-up is verified.
