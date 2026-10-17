@@ -11,4 +11,4 @@ export AR_wasm32_wasip1=$WASI_SDK_PATH/bin/llvm-ar
 export CFLAGS_wasm32_wasip1="--sysroot=$WASI_SDK_PATH/share/wasi-sysroot"
 export CXXFLAGS_wasm32_wasip1="--sysroot=$WASI_SDK_PATH/share/wasi-sysroot"
 # Bun denies warnings workspace-wide; wasi cfg gaps leave unused items behind.
-export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--cap-lints=warn"
+export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--cap-lints=warn -C link-self-contained=no"

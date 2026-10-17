@@ -6,3 +6,4 @@ node_modules
 !/tests/build/*/node_modules/
 !/tests/jsc/*/node_modules/
 __pycache__/
+/vendor/boringssl

@@ -10,6 +10,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$root/jsc/common.sh"
+"$root/scripts/sync-crypto.sh"
 export CARGO_TARGET_DIR="${JSC_CARGO_TARGET_DIR:-$JSC_BUILD_DIR/target}"
 export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--cap-lints=warn -C link-self-contained=no"
 export JSC_BUILD_DIR

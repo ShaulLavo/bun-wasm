@@ -9,6 +9,8 @@ const source = readFileSync(modulePath, 'utf8')
   .replace('import { installNativeStreamState } from "./native-stream-state.ts";', 'const installNativeStreamState = () => () => {};')
   .replace('"../../runtime/core/memory-views.js"', JSON.stringify(pathToFileURL(resolve(root, 'runtime/core/memory-views.js')).href))
   .replace('"./buffer-transfer.ts"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/buffer-transfer.ts')).href))
+  .replace('"./crypto-inputs.js"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/crypto-inputs.js')).href))
+  .replace('"./crypto-host.js"', JSON.stringify(pathToFileURL(resolve(root, 'web/src/crypto-host.js')).href))
   .concat('\nexport { wasmCaller };\n');
 const { wasmCaller } = await import('data:text/javascript;base64,'.concat(Buffer.from(source).toString('base64')));
 if (process.argv[2] === '--check') process.exit(0);

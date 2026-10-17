@@ -1,0 +1,1 @@
+HMAC derivation requires hash before deriving material

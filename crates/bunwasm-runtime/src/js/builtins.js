@@ -83,32 +83,8 @@
       throw err;
     }
 
-    const secretKeys = new WeakMap();
-    class KeyObject {
-      constructor() {
-        throw new TypeError("Illegal constructor");
-      }
-      get type() { return "secret"; }
-      get symmetricKeySize() { return secretKeys.get(this).length; }
-      export(options) {
-        const bytes = secretKeys.get(this);
-        if (options?.format === "jwk") return { kty: "oct", k: bytes.toString("base64url") };
-        return Buffer.from(bytes);
-      }
-      equals(other) {
-        if (!(other instanceof KeyObject)) throw Object.assign(new TypeError('The "otherKeyObject" argument must be a KeyObject'), { code: "ERR_INVALID_ARG_TYPE" });
-        const left = secretKeys.get(this);
-        const right = secretKeys.get(other);
-        return left.length === right.length && timingSafeEqual(left, right);
-      }
-    }
-
-    function createSecretKey(key, encoding) {
-      const bytes = Buffer.from(inputBytes(key, encoding));
-      const result = Object.create(KeyObject.prototype);
-      secretKeys.set(result, bytes);
-      return result;
-    }
+    const keyApi = internal.require("crypto_keys")(Buffer, inputBytes, timingSafeEqual);
+    const { KeyObject, createSecretKey } = keyApi;
 
     class Hash {
       #algorithm;
@@ -150,7 +126,7 @@
     }
 
     function createHmac(algorithm, key) {
-      const keyBytes = typeof key === "string" ? Buffer.from(key) : internal.toUint8(key && key.export ? key.export() : key).slice();
+      const keyBytes = internal.crypto.isKey(key) ? internal.crypto.decode(internal.crypto.record(key).key.k) : typeof key === "string" ? Buffer.from(key) : internal.toUint8(key && key.export ? key.export() : key).slice();
       try {
         return new Hash(algorithm, keyBytes);
       } catch {
@@ -191,9 +167,7 @@
       if (x.byteLength !== y.byteLength) {
         throw Object.assign(new RangeError("Input buffers must have the same byte length"), { code: "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH" });
       }
-      let diff = 0;
-      for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
-      return diff === 0;
+      return native.timingSafeEqual(x,y);
     }
 
     function randomFillSync(buffer, offset = 0, size) {
@@ -203,8 +177,8 @@
       return buffer;
     }
 
-    const unsupportedCrypto = ["createCipheriv", "createDecipheriv", "createSign", "createVerify", "generateKeyPair", "generateKeyPairSync", "createECDH", "createDiffieHellman", "pbkdf2", "pbkdf2Sync", "scrypt", "scryptSync", "publicEncrypt", "privateDecrypt", "sign", "verify", "createPublicKey", "createPrivateKey", "hkdf", "hkdfSync"];
-    return unsupportedModule("crypto", "only hashes, HMAC and random numbers are implemented", unsupportedCrypto, {
+    const unsupportedCrypto = ["createCipheriv", "createDecipheriv", "createECDH", "createDiffieHellman", "scrypt", "scryptSync", "privateEncrypt", "publicDecrypt"];
+    return unsupportedModule("crypto", "this Node crypto operation is not implemented", unsupportedCrypto, {
       createHash,
       createHmac,
       KeyObject,
@@ -227,7 +201,7 @@
       getCurves: () => [],
       webcrypto,
       subtle: webcrypto.subtle,
-      constants: {},
+      ...keyApi,
       Hash,
       Hmac: Hash,
     });

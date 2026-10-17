@@ -8,6 +8,9 @@
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 #![feature(linkage)]
 
+#[cfg(target_os = "wasi")]
+extern crate bunwasm_crypto_sys;
+
 mod bun_native;
 mod bundler;
 mod extra;

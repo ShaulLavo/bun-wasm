@@ -1,4 +1,6 @@
 import { installNativeStreamState } from "./native-stream-state.ts";
+import { oversizedCryptoInput } from "./crypto-inputs.js";
+import { installHostCrypto } from "./crypto-host.js";
 import { memoryViews } from "../../runtime/core/memory-views.js";
 import { transferArrayBuffers } from "./buffer-transfer.ts";
 
@@ -21,6 +23,14 @@ import { transferArrayBuffers } from "./buffer-transfer.ts";
 // Plain JS (no TypeScript) so Node can import it directly.
 
 // The host's own versions of what the polyfills replace on globalThis.
+const nativeSubtleCrypto = globalThis.crypto?.subtle;
+const NativeDOMException = globalThis.DOMException;
+const NativeCryptoKey = globalThis.CryptoKey;
+const NativeSubtleCrypto = globalThis.SubtleCrypto;
+const nativeSubtleOperations = nativeSubtleCrypto && Object.fromEntries(
+  ["digest", "generateKey", "importKey", "exportKey", "sign", "verify", "encrypt", "decrypt", "deriveBits", "deriveKey", "wrapKey", "unwrapKey"]
+    .map(name => [name, nativeSubtleCrypto[name]]),
+);
 const NativeTextEncoder = globalThis.TextEncoder;
 const NativeTextDecoder = globalThis.TextDecoder;
 const NativeBlob = globalThis.Blob;
@@ -319,6 +329,7 @@ class EngineHost {
       return this.exit(70);
     }
     this.internal = internal;
+    installHostCrypto(nativeSubtleCrypto,NativeCryptoKey,internal.crypto,native);
     // Module URLs show as their paths; frames of this host itself (and the
     // worker bundle it lives in) are internal, like the polyfills.
     internal.displayName = (file, evalFrame = false) => {
@@ -369,8 +380,31 @@ class EngineHost {
       net.onNews(() => this.schedule(0));
     }
     native.engine = "host";
+    this.installSubtleCrypto();
+    native.subtleCrypto = nativeSubtleCrypto;
+    native.DOMException = NativeDOMException;
+    native.CryptoKey = NativeCryptoKey;
+    native.SubtleCrypto = NativeSubtleCrypto;
     Object.assign(native, this.valueNatives());
     return native;
+  }
+
+  installSubtleCrypto() {
+    if (!nativeSubtleCrypto) return;
+    const host = this;
+    for (const [name, operation] of Object.entries(nativeSubtleOperations)) {
+      const wrapper = { [name](...args) {
+        let result;
+        try {
+          if (oversizedCryptoInput(name,args)) throw new NativeDOMException("Crypto input is too large","OperationError");
+          result = Reflect.apply(operation,this,args);
+        } catch (error) { result = NativePromise.reject(error); }
+        // Tracking observes rejection; the returned promise must still report an unhandled rejection.
+        return host.track(result).then(value => value);
+      } }[name];
+      Object.defineProperty(wrapper, "length", { value: operation.length });
+      Object.defineProperty(nativeSubtleCrypto, name, { value: wrapper, writable: true, configurable: true });
+    }
   }
 
   valueNatives() {

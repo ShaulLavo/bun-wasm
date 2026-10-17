@@ -14,13 +14,13 @@
     QuotaExceededError: 22, TimeoutError: 23, InvalidNodeTypeError: 24, DataCloneError: 25,
   };
 
-  class DOMException extends Error {
+  const DOMException = native.DOMException || class DOMException extends Error {
     constructor(message = "", name = "Error") {
       super(message);
       Object.defineProperty(this, "name", { value: String(name), configurable: true, writable: true });
       Object.defineProperty(this, "code", { value: DOM_CODES[name] || 0, configurable: true, writable: true });
     }
-  }
+  };
   internal.DOMException = DOMException;
 
   // --- encoding ---------------------------------------------------------------
@@ -1219,18 +1219,7 @@
   }
   internal.randomUUID = randomUUID;
 
-  const subtle = {
-    async digest(algorithm, data) {
-      const name = typeof algorithm === "string" ? algorithm : algorithm.name;
-      const digest = native.hash(String(name), toUint8(data).slice());
-      return digest.buffer;
-    },
-  };
-  for (const op of ["encrypt", "decrypt", "sign", "verify", "generateKey", "deriveKey", "deriveBits", "importKey", "exportKey", "wrapKey", "unwrapKey"]) {
-    subtle[op] = () => Promise.reject(new DOMException(`crypto.subtle.${op} is not supported in bun-wasm`, "NotSupportedError"));
-  }
-
-  const crypto = { getRandomValues, randomUUID, subtle };
+  const crypto = { getRandomValues, randomUUID };
 
   // --- FormData / MessageChannel / navigator ----------------------------------
 
