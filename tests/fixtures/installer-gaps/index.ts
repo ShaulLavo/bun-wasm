@@ -47,7 +47,7 @@ const server = Bun.serve({ port: 0, fetch(req) {
   ) });
 } });
 async function run(cwd: string, ...args: string[]) {
-  const child = Bun.spawn([process.execPath, ...args], { cwd, env: { ...process.env,
+  const child = Bun.spawn([process.execPath].concat(args), { cwd, env: { ...process.env,
     NPM_CONFIG_REGISTRY: String(server.url), BUN_INSTALL_CACHE_DIR: join(cwd, ".cache"),
   }, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([child.stdout.text(), child.stderr.text(), child.exited]);
@@ -69,7 +69,7 @@ const cases: Record<string, () => Promise<void>> = {
     const cwd = project("workspace", { "package.json": { name: "root", workspaces: ["packages/*"], dependencies: { a: "workspace:*", "fixture-cli": "1.0.0" } },
       "packages/a/package.json": { name: "a", version: "1.0.0", main: "index.ts", dependencies: { b: "workspace:^", plain: "link:./plain" } },
       "packages/a/index.ts": 'import { value } from "b"; import plain from "plain"; console.log(value + plain);',
-      "packages/a/plain/index.js": 'module.exports = "-linked";',
+      "packages/a/plain/index.ts": 'export default "-linked";',
       "packages/b/package.json": { name: "b", version: "1.0.0", main: "index.ts" },
       "packages/b/index.ts": 'export const value = "workspace-ok";',
     });
