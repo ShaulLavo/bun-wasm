@@ -298,6 +298,13 @@ fn cstr(p: *const c_char) -> String {
     unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
 }
 
+// Called at saved C-loop trap points. This only polls fatal host cancellation;
+// handled signals stay pending and guest JavaScript must never run from here.
+#[unsafe(no_mangle)]
+extern "C" fn bunjsc_host_interrupt() -> bool {
+    with_host(|host| host.interrupt())
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn bunjsc_host_resolve(specifier: *const c_char, referrer: *const c_char, exception: *mut JSValueRef) -> *mut c_char {
     let specifier = cstr(specifier);
@@ -356,6 +363,7 @@ impl Engine for Jsc {
         CTX.with(|x| x.set(c));
         // Hold the API lock so microtasks only run in run_jobs.
         unsafe { bunjsc_enter(c) };
+        let has_interrupt_handler = host.has_interrupt_handler();
         HOST.with(|h| *h.borrow_mut() = Some(host));
         let tracker = Jsc.new_function(
             "unhandledRejection",
@@ -369,6 +377,11 @@ impl Engine for Jsc {
         // SAFETY: the context was created by bunjsc_create_context.
         unsafe { JSGlobalContextSetUnhandledRejectionCallback(c as JSGlobalContextRef, tracker.object(), ptr::null_mut()) };
         std::mem::forget(tracker);
+        if has_interrupt_handler {
+            // SAFETY: the context and its host are fully installed; the C++
+            // adapter enables polling only at saved interpreter trap points.
+            unsafe { bunjsc_set_interrupt_handler(c, true) };
+        }
         Jsc
     }
 

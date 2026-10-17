@@ -254,6 +254,18 @@ impl<E: Engine> Core<E> {
 
 #[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 impl<E: Engine> ModuleHost<E> for Core<E> {
+    fn has_interrupt_handler(&self) -> bool {
+        host::provided(host::Slot::Signal as usize)
+    }
+
+    fn interrupt(&self) -> bool {
+        // Never call guest JS here: QuickJS also polls during native operations,
+        // and interpreter checkpoints may interrupt runtime JS bookkeeping.
+        // Mode 4 leaves handled signals pending for the next event-loop turn,
+        // matching Node. Fatal host outcomes unwind Wasm without catch/finally.
+        host::signal(0, 4) < 0
+    }
+
     fn resolve(&self, e: &E, specifier: &str, referrer: &str) -> Result<String, E::Value> {
         let from = if referrer.is_empty() || resolve::builtin_name(referrer).is_some() {
             format!("{}/", self.state.cwd())

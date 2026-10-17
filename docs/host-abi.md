@@ -219,7 +219,10 @@ A plain preview1 host may leave the slot unset. The browser's ordinary WASI adap
   `runtime_proc.interrupted()` consumes that same queue, not a second copy. If signal death has
   already been selected, entering this checkpoint instead unwinds through that typed default
   action; an empty handled queue cannot hide a selected fatal outcome.
-- Set/raise returns 0 on success; invalid arguments return -22. A selected default action may
+- `(0, 4)` polls selected fatal cancellation without consuming or changing handled pending
+  signals. A live process returns 0. Engine callbacks use this operation and never call guest JS.
+  Mode 4 with a nonzero signal is invalid.
+- Set/raise/poll returns 0 on success; invalid arguments return -22. A selected default action may
   instead unwind the current execution through the host's typed signal termination path.
 
 This layer supports SIGINT (2), SIGKILL (9), SIGPIPE (13) and SIGTERM (15). For a default
@@ -236,8 +239,17 @@ pending state; distinct pending signals cannot overwrite one another, while repe
 standard signal may coalesce. Dequeue clears pending before a once-listener removes itself.
 The existing interrupt word is only a wake hint. Native stores use the same disposition and
 pending rules under their process-state synchronization. Polling/listener registration alone
-does not keep an otherwise idle guest alive. Cooperative guest event-loop turns deliver handlers;
-CPU-bound engine checkpoints remain step 7a. Unhandled default actions do not wait for that step.
+does not keep an otherwise idle guest alive. Like Node, handled signal callbacks run only on
+ordinary guest event-loop turns, never in the middle of synchronous JavaScript. QuickJS/JSC
+engine checkpoints make one nonblocking `signal(0, 4)` call: live processes resume, leaving all
+handled pending signals in the authoritative host set. This also preserves immediate default
+and ignored transitions if a handler is removed before delivery. A selected fatal outcome
+unwinds through the host's typed default action, outside guest catch/finally blocks, including
+when a handled callback is itself CPU-bound. An infinite loop with a handled signal does not
+run that handler without yielding; a default signal or SIGKILL can still stop it. Idle event-loop
+waits wake for handled signals. This adds one mode to slot 18, not a slot, import, retry, or
+timeout. Unhandled default actions remain immediate supervisor decisions; the engine hooks stop
+physical execution even when the browser cannot terminate busy Wasm.
 
 An EPIPE remains an error through guest stream callbacks/listeners or try/catch. If it escapes
 all guest error handling, the adapter raises SIGPIPE through mode 3; a handled EPIPE keeps the

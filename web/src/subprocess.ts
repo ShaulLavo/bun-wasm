@@ -488,10 +488,12 @@ export class SubprocessHost {
     this.children.delete(id);
     this.options.onChildClose?.(child.transport.pid);
   }
-  /** Current-process disposition, handled-pending dequeue, and mode 3 RAISE (Bun host slot 18). */
+  /** Current-process dispositions, dequeue, RAISE, and non-dequeue poll (Bun host slot 18). */
   signal(signal: number, mode: number): number {
     if (!this.admit()) return 0;
-    if (signal === 0) return mode === 0 ? takeSignal(this.signalState) : -22;
+    // Admission above observes selected fatal outcomes. Engine polling must not
+    // consume handled pending signals before the ordinary guest event loop.
+    if (signal === 0) return mode === 0 ? takeSignal(this.signalState) : mode === 4 ? 0 : -22;
     let applyDefault: boolean;
     try {
       applyDefault = mode === 3

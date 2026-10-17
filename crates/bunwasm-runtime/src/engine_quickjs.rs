@@ -49,6 +49,10 @@ struct Inner {
     rejections: RefCell<Vec<(V, V)>>,
 }
 
+// QuickJS already polls every 10,000 backedges/calls. Amortize host crossings
+// over eight such polls; no clocks, allocations, or JS calls on the idle path.
+const INTERRUPT_POLLS: u32 = 8;
+
 /// QuickJS-ng. Cheap to clone (a reference to the engine).
 #[derive(Clone)]
 pub struct QuickJs(Rc<Inner>);
@@ -141,7 +145,22 @@ impl Engine for QuickJs {
         let context = Context::full(&runtime).expect("create QuickJS context");
         // SAFETY: single-threaded; the context lives as long as the process.
         let ctx: Ctx<'static> = unsafe { Ctx::from_raw(context.as_raw()) };
-        let engine = QuickJs(Rc::new(Inner { _runtime: runtime.clone(), _context: context, ctx, host, rejections: RefCell::new(Vec::new()) }));
+        let has_interrupt_handler = host.has_interrupt_handler();
+        let engine = QuickJs(Rc::new(Inner {
+            _runtime: runtime.clone(), _context: context, ctx, host, rejections: RefCell::new(Vec::new()),
+        }));
+        if has_interrupt_handler {
+            let weak = Rc::downgrade(&engine.0);
+            let mut countdown = INTERRUPT_POLLS;
+            runtime.set_interrupt_handler(Some(Box::new(move || {
+                countdown -= 1;
+                if countdown != 0 { return false; }
+                countdown = INTERRUPT_POLLS;
+                // Never enter JS: QuickJS also invokes this during native regexp
+                // matching. Handled signals stay in the host pending set until the event loop.
+                weak.upgrade().is_some_and(|inner| inner.host.interrupt())
+            })));
+        }
 
         let weak = Rc::downgrade(&engine.0);
         runtime.set_host_promise_rejection_tracker(Some(Box::new(move |_ctx, promise, reason, is_handled| {
@@ -488,6 +507,47 @@ fn unerase<'js>(v: V) -> Value<'js> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct InterruptHost {
+        polls: std::cell::Cell<u32>,
+        terminate: bool,
+    }
+
+    impl ModuleHost<QuickJs> for InterruptHost {
+        fn resolve(&self, _: &QuickJs, _: &str, _: &str) -> Result<String, V> { unreachable!() }
+        fn load(&self, _: &QuickJs, _: &str) -> Result<String, V> { unreachable!() }
+        fn init_meta(&self, _: &QuickJs, _: &str, _: &V) -> Result<(), V> { Ok(()) }
+        fn has_interrupt_handler(&self) -> bool { true }
+        fn interrupt(&self) -> bool {
+            self.polls.set(self.polls.get() + 1);
+            self.terminate
+        }
+    }
+
+    #[test]
+    fn cpu_bound_script_polls_and_resumes_without_js_dispatch() {
+        let host = Rc::new(InterruptHost { polls: std::cell::Cell::new(0), terminate: false });
+        let engine = QuickJs::new(host.clone());
+        let value = engine.eval_script("let value = 0; for (let i = 0; i < 1000000; i++) value++; value;", "loop", 1).unwrap();
+        assert_eq!(engine.to_val(&value), Val::Num(1000000.0));
+        assert!(host.polls.get() > 0);
+        let previous = host.polls.get();
+        engine.eval_script("for (let i = 0; i < 100000; i++) {}", "later", 1).unwrap();
+        assert!(host.polls.get() > previous);
+        std::mem::forget(engine);
+    }
+
+    #[test]
+    fn cpu_bound_interrupt_bypasses_catch_and_finally() {
+        let host = Rc::new(InterruptHost { polls: std::cell::Cell::new(0), terminate: true });
+        let engine = QuickJs::new(host.clone());
+        let result = engine.eval_script("globalThis.caught = false; globalThis.finalized = false; try { while (true) {} } catch { caught = true; } finally { finalized = true; }", "loop", 1);
+        assert!(result.is_err());
+        assert!(host.polls.get() > 0);
+        assert_eq!(engine.to_val(&engine.ctx().globals().get::<_, V>("caught").unwrap()), Val::Bool(false));
+        assert_eq!(engine.to_val(&engine.ctx().globals().get::<_, V>("finalized").unwrap()), Val::Bool(false));
+        std::mem::forget(engine);
+    }
 
     #[test]
     fn data_arrays_leave_no_exception() {

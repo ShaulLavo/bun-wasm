@@ -1,0 +1,254 @@
+import { expect, test } from "bun:test";
+import { WasiExit } from "@bun-wasm/runtime/core";
+import { assertNativeEngineCompletion, observeEngineImports, observeEventLoopWait, observedEngineStart, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
+
+function fixture() {
+  const probe = new Int32Array(new SharedArrayBuffer(probeLength * 4));
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const requested = new Int32Array(new SharedArrayBuffer(4));
+  const pending = new Int32Array(new SharedArrayBuffer(65 * 4));
+  const view = new DataView(memory.buffer);
+  const packet = 64, result = 96;
+  view.setInt32(packet, 18, true); view.setInt32(packet + 8, 4, true);
+  return { probe, memory, requested, pending, view, packet, result };
+}
+test("mode4 checkpoint observes selected signal and preserves real shared pending bit", () => {
+  const f = fixture(); let calls = 0;
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+    sock_send() { calls++; f.view.setInt32(f.result, 0, true); return 0; }, fd_write() { return 0; },
+  } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  Atomics.store(f.requested, 0, 2); Atomics.store(f.pending, 2, 6);
+  expect((imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toBe(0);
+  expect(calls).toBe(1);
+  const evidence = snapshotProbe(f.probe);
+  expect(evidence.checkpoints).toBe(1); expect(evidence.checkpointAfterSignal).toBe(1);
+  expect(evidence.checkpointSignal).toBe(2); expect(evidence.checkpointReturned).toBe(1);
+  expect(evidence.handledSignal).toBe(0); expect(evidence.checkpointThrew).toBe(0);
+  expect(evidence.pendingPreservedBeforeLoopFinished).toBe(1);
+  expect(evidence.pendingLostAtCheckpoint).toBe(0); expect(evidence.checkpointNonzero).toBe(0);
+  expect(Atomics.load(f.pending, 2)).toBe(6);
+});
+test("probe rejects fake mode4 preservation and distinguishes mode0 dequeue after yield", () => {
+  const f = fixture();
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+    sock_send() { Atomics.store(f.pending, 2, 2); f.view.setInt32(f.result, 2, true); return 0; }, fd_write() { return 0; },
+  } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const send = imports.wasi_snapshot_preview1!.sock_send as Function;
+  Atomics.store(f.pending, 2, 6);
+  send(0x7fffb0b0, f.packet, 5, 0, f.result);
+  expect(snapshotProbe(f.probe).pendingLostAtCheckpoint).toBe(1);
+  expect(snapshotProbe(f.probe).checkpointNonzero).toBe(1);
+  expect(snapshotProbe(f.probe).handledSignal).toBe(0);
+  f.view.setInt32(f.packet + 8, 0, true);
+  send(0x7fffb0b0, f.packet, 5, 0, f.result);
+  expect(snapshotProbe(f.probe).handledBeforeLoopFinished).toBe(1);
+  Atomics.store(f.probe, probeCell.loopFinishedWrites, 1);
+  send(0x7fffb0b0, f.packet, 5, 0, f.result);
+  expect(snapshotProbe(f.probe).handledBeforeLoopFinished).toBe(1);
+  expect(snapshotProbe(f.probe).handledSignal).toBe(2);
+  expect(snapshotProbe(f.probe).checkpoints).toBe(1);
+});
+test("unrelated host calls cannot fabricate checkpoint evidence", () => {
+  const f = fixture();
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const send = imports.wasi_snapshot_preview1!.sock_send as Function;
+  send(0, f.packet, 5, 0, f.result);
+  send(0x7fffb0b0, f.packet, 4, 0, f.result);
+  f.view.setInt32(f.packet + 4, 2, true);
+  send(0x7fffb0b0, f.packet, 5, 0, f.result);
+  expect(snapshotProbe(f.probe).checkpoints).toBe(0);
+});
+test("probe preserves the typed host exception and records actual callback unwind", () => {
+  const f = fixture(), fatal = new Error("typed default action");
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { throw fatal; }, fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  Atomics.store(f.requested, 0, 15);
+  expect(() => (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toThrow(fatal);
+  expect(snapshotProbe(f.probe).checkpointThrew).toBe(1);
+  expect(snapshotProbe(f.probe).checkpointReturned).toBe(0);
+});
+test("catch/finally writes are visible even when real revoked stdio throws", () => {
+  const f = fixture(), fatal = new Error("revoked stdio");
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { throw fatal; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const bytes = new TextEncoder().encode("CATCH-RAN FINALLY-RAN AFTER-RAN\n");
+  new Uint8Array(f.memory.buffer, 512, bytes.length).set(bytes);
+  f.view.setUint32(256, 512, true); f.view.setUint32(260, bytes.length, true);
+  expect(() => (imports.wasi_snapshot_preview1!.fd_write as Function)(1, 256, 1, 300)).toThrow(fatal);
+  const evidence = snapshotProbe(f.probe);
+  expect(evidence.catchWrites).toBe(1); expect(evidence.finallyWrites).toBe(1); expect(evidence.afterWrites).toBe(1);
+});
+test("output observation accepts a resizable wasm memory buffer", () => {
+  const f = fixture();
+  const buffer = Reflect.construct(ArrayBuffer, [65536, { maxByteLength: 131072 }]) as ArrayBuffer;
+  expect(Reflect.get(buffer, "resizable")).toBe(true);
+  Object.defineProperty(f.memory, "buffer", { value: buffer });
+  const view = new DataView(buffer), bytes = new TextEncoder().encode("ready\n");
+  new Uint8Array(buffer, 512, bytes.length).set(bytes);
+  view.setUint32(256, 512, true); view.setUint32(260, bytes.length, true);
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  expect((imports.wasi_snapshot_preview1!.fd_write as Function)(2, 256, 1, 300)).toBe(0);
+  expect(snapshotProbe(f.probe).readyWrites).toBe(1);
+});
+test("baseline masks only optional slot18 before _start and still observes unwind", () => {
+  const f = fixture(), pointer = 1024, fatal = new Error("start unwind");
+  f.view.setUint32(pointer, 1, true); f.view.setUint32(pointer + 4, 19, true);
+  for (let slot = 0; slot < 19; slot++) f.view.setUint32(pointer + 8 + slot * 4, 0xffffffff, true);
+  const start = observedEngineStart({ memory: f.memory, bun_wasm_host_slots: () => pointer,
+    _start() { expect(f.view.getUint32(pointer + 8 + 18 * 4, true)).toBe(0); throw fatal; },
+  }, f.probe, false);
+  expect(() => start()).toThrow(fatal);
+  expect(f.view.getUint32(pointer + 8 + 17 * 4, true)).toBe(0xffffffff);
+  const evidence = snapshotProbe(f.probe);
+  expect(evidence.slotMasked).toBe(1); expect(evidence.startEntered).toBe(1); expect(evidence.startLeft).toBe(1);
+});
+test("timed samples leave the production checkpoint import completely untouched", () => {
+  const f = fixture();
+  const send = () => 0;
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send: send, fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending, false);
+  expect(imports.wasi_snapshot_preview1!.sock_send).toBe(send);
+  expect(snapshotProbe(f.probe).checkpoints).toBe(0);
+});
+test("enabled run preserves slot18 and the actual _start result", () => {
+  const f = fixture();
+  const start = observedEngineStart({ _start: () => 42 }, f.probe, true);
+  expect(start()).toBe(42);
+  const evidence = snapshotProbe(f.probe);
+  expect(evidence.slotMasked).toBe(0); expect(evidence.startLeft).toBe(1);
+});
+test("idle evidence observes only actual event-loop budget waits and restores the native function", () => {
+  const f = fixture(), budget = new SharedArrayBuffer(16), cells = new Int32Array(budget);
+  let observed = false;
+  const target: Pick<typeof Atomics, "wait"> = { wait() {
+    if (observed) expect(Atomics.load(f.probe, probeCell.idleWaiting)).toBe(1);
+    return "timed-out";
+  } };
+  const original = target.wait, restore = observeEventLoopWait(f.probe, budget, target);
+  target.wait(new Int32Array(new SharedArrayBuffer(16)), 1, 0, 4);
+  target.wait(cells, 0, 0, 4); target.wait(cells, 1, 0, 0);
+  expect(snapshotProbe(f.probe).idleWaitEntries).toBe(0);
+  observed = true;
+  expect(target.wait(cells, 1, 0, 4)).toBe("timed-out");
+  const evidence = snapshotProbe(f.probe);
+  expect(evidence.idleWaitEntries).toBe(1); expect(evidence.idleWaitReturns).toBe(1);
+  expect(evidence.idleWaitBlocked).toBe(1); expect(evidence.idleWaiting).toBe(0);
+  expect(evidence.idleWaitTimedOut).toBe(1); expect(evidence.idleWaitOk).toBe(0);
+  restore(); expect(target.wait).toBe(original);
+});
+test("idle evidence clears waiting state on throw and excludes not-equal from real blocking proof", () => {
+  const f = fixture(), budget = new SharedArrayBuffer(16), cells = new Int32Array(budget);
+  const target: Pick<typeof Atomics, "wait"> = { wait: () => "not-equal" };
+  const restore = observeEventLoopWait(f.probe, budget, target);
+  try {
+    target.wait(cells, 1, 0, 4);
+    expect(snapshotProbe(f.probe).idleWaitBlocked).toBe(0);
+    expect(snapshotProbe(f.probe).idleWaitNotEqual).toBe(1);
+    expect(snapshotProbe(f.probe).idleWaiting).toBe(0);
+  } finally { restore(); }
+  const thrown: Pick<typeof Atomics, "wait"> = { wait() { throw new Error("wait failed"); } };
+  const restoreThrown = observeEventLoopWait(f.probe, budget, thrown);
+  try {
+    expect(() => thrown.wait(cells, 1, 0, 4)).toThrow("wait failed");
+    expect(snapshotProbe(f.probe).idleWaiting).toBe(0);
+    expect(snapshotProbe(f.probe).idleWaitReturns).toBe(1);
+  } finally { restoreThrown(); }
+});
+test("idle evidence records native ok separately without claiming signal-notify causality", () => {
+  const f = fixture(), budget = new SharedArrayBuffer(16), cells = new Int32Array(budget);
+  const target: Pick<typeof Atomics, "wait"> = { wait: () => "ok" };
+  const restore = observeEventLoopWait(f.probe, budget, target);
+  try {
+    target.wait(cells, 1, 0, 4);
+    const evidence = snapshotProbe(f.probe);
+    expect(evidence.idleWaitOk).toBe(1); expect(evidence.idleWaitTimedOut).toBe(0);
+    expect(evidence.idleWaitNotEqual).toBe(0); expect(evidence.idleWaitBlocked).toBe(1);
+  } finally { restore(); }
+});
+test("one-shot native interrupt injection returns real op4 negative without host send or throw", () => {
+  const f = fixture(); let calls = 0;
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+    sock_send() { calls++; f.view.setInt32(f.result, 0, true); return 0; }, fd_write() { return 0; },
+  } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  Atomics.store(f.probe, probeCell.nativeInterruptRequested, 1);
+  const send = imports.wasi_snapshot_preview1!.sock_send as Function;
+  f.view.setInt32(f.packet + 8, 0, true);
+  send(0x7fffb0b0, f.packet, 5, 0, f.result);
+  expect(Atomics.load(f.probe, probeCell.nativeInterruptRequested)).toBe(1);
+  f.view.setInt32(f.packet + 8, 4, true);
+  expect(send(0x7fffb0b0, f.packet, 5, 0, f.result)).toBe(0);
+  expect(f.view.getInt32(f.result, true)).toBe(-1);
+  expect(calls).toBe(1);
+  const injected = snapshotProbe(f.probe);
+  expect(injected.nativeInterruptInjected).toBe(1); expect(injected.checkpointNonzero).toBe(1);
+  expect(injected.checkpointReturned).toBe(1); expect(injected.checkpointThrew).toBe(0);
+  expect(Atomics.load(f.requested, 0)).toBe(0);
+  send(0x7fffb0b0, f.packet, 5, 0, f.result);
+  expect(calls).toBe(2); expect(f.view.getInt32(f.result, true)).toBe(0);
+  expect(snapshotProbe(f.probe).nativeInterruptInjected).toBe(1);
+});
+test("idle timeout stretching preserves foreign, non-budget-cell and zero-time waits", () => {
+  const f = fixture(), budget = new SharedArrayBuffer(16), cells = new Int32Array(budget), timeouts: (number | undefined)[] = [];
+  const target: Pick<typeof Atomics, "wait"> = { wait(_array, _index, _value, timeout) { timeouts.push(timeout); return "timed-out"; } };
+  const restore = observeEventLoopWait(f.probe, budget, target, 1_000);
+  try {
+    target.wait(new Int32Array(new SharedArrayBuffer(16)), 1, 0, 4);
+    target.wait(cells, 0, 0, 4); target.wait(cells, 1, 0, 0); target.wait(cells, 1, 0, 4);
+    expect(timeouts).toEqual([4, 4, 0, 1_000]);
+  } finally { restore(); }
+});
+test("notify mutation touches only the exact process-budget wake cell and restores native notify", () => {
+  const budget = new SharedArrayBuffer(16), cells = new Int32Array(budget);
+  let calls = 0;
+  const target: Pick<typeof Atomics, "notify"> = { notify() { calls++; return 3; } };
+  const native = target.notify, mutation = suppressBudgetNotifications(budget, target);
+  try {
+    expect(target.notify(cells, 1)).toBe(0);
+    expect(target.notify(cells, 0)).toBe(3);
+    expect(target.notify(new Int32Array(new SharedArrayBuffer(16)), 1)).toBe(3);
+    expect(calls).toBe(2); expect(mutation.count()).toBe(1);
+    expect(Atomics.load(cells, 1)).toBe(0);
+  } finally { mutation.restore(); }
+  expect(target.notify).toBe(native);
+});
+test("native completion admission accepts normal return and actual imported WasiExit only", () => {
+  const normal = fixture(), returned = observedEngineStart({ _start: () => 42 }, normal.probe, true);
+  expect(returned()).toBe(42);
+  expect(snapshotProbe(normal.probe).startNormalReturn).toBe(1);
+  expect(() => assertNativeEngineCompletion(snapshotProbe(normal.probe))).not.toThrow();
+  const exited = fixture(), wasiExit = new WasiExit(1);
+  const start = observedEngineStart({ _start() { throw wasiExit; } }, exited.probe, true);
+  expect(() => start()).toThrow(wasiExit);
+  expect(snapshotProbe(exited.probe).startWasiExit).toBe(1);
+  expect(snapshotProbe(exited.probe).startWasiExitCode).toBe(1);
+  expect(snapshotProbe(exited.probe).startOtherException).toBe(0);
+  expect(() => assertNativeEngineCompletion(snapshotProbe(exited.probe))).not.toThrow();
+  const forged = fixture(), fakeExit = Object.assign(new Error("exit 1"), { name: "WasiExit", code: 1 });
+  expect(() => observedEngineStart({ _start() { throw fakeExit; } }, forged.probe, true)()).toThrow(fakeExit);
+  expect(() => assertNativeEngineCompletion(snapshotProbe(forged.probe))).toThrow("unexpected exception");
+});
+test("native-path RuntimeError mutant after negative callback cannot pass as engine unwind", () => {
+  const f = fixture(), trap = new WebAssembly.RuntimeError("unreachable mutant");
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+    sock_send() { throw new Error("negative injection must bypass host"); }, fd_write() { return 0; },
+  } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  Atomics.store(f.probe, probeCell.nativeInterruptRequested, 1);
+  const start = observedEngineStart({ _start() {
+    (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result);
+    throw trap;
+  } }, f.probe, true);
+  expect(() => start()).toThrow(trap);
+  // Model production catching the crash and finishing with ordinary status1.
+  Atomics.store(f.probe, probeCell.runReturned, 1);
+  const evidence = snapshotProbe(f.probe);
+  expect(evidence.nativeInterruptInjected).toBe(1); expect(evidence.checkpointNonzero).toBe(1);
+  expect(evidence.checkpointThrew).toBe(0); expect(evidence.startLeft).toBe(1); expect(evidence.runReturned).toBe(1);
+  expect(evidence.startOtherException).toBe(1);
+  expect(() => assertNativeEngineCompletion(evidence)).toThrow("unexpected exception");
+});

@@ -197,19 +197,7 @@
       for (const signal of Object.keys(signals)) publishSignalDisposition(signal);
     } else if (Object.hasOwn(signals, name)) publishSignalDisposition(name);
   };
-  internal.pumpSignals = function pumpSignals() {
-    let progress = false;
-    for (;;) {
-      const number = native.hostSignal(0, 0);
-      if (number <= 0) return progress;
-      const name = signalNames.get(number);
-      if (!name) throw new Error(`Cannot dispatch signal ${number}`);
-      // The host clears pending first. A once listener can therefore restore DEFAULT before
-      // its callback runs without reclassifying this already delivered, handled signal.
-      process.emit(name, name);
-      progress = true;
-    }
-  };
+  internal.pumpSignals = internal.require("process_signals")(process, signalNames);
 
   const props = {
     title: "bun",
