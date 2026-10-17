@@ -46,13 +46,7 @@
     const path = parseRoute(value.route);
     if (typeof value.envGroup !== "string" || !Array.isArray(value.argv) || !value.argv.every(arg => typeof arg === "string") || !Array.isArray(value.execArgv) || !value.execArgv.every(arg => typeof arg === "string")) throw new TypeError("Invalid worker initialization");
     return { route: path, envGroup: value.envGroup, argv: value.argv, execArgv: value.execArgv,
-      graph: value.graph, resourceLimits: limits(value.resourceLimits), web: webOptions(value.web) };
-  }
-  function webOptions(value: unknown): BunWasm.WebWorkerOptions | null {
-    if (value === undefined || value === null) return null;
-    const input = record(value);
-    if (typeof input.name !== "string" || !Array.isArray(input.preload) || !input.preload.every(path => typeof path === "string")) throw new TypeError("Invalid web worker initialization");
-    return { name: input.name, preload: input.preload };
+      graph: value.graph, resourceLimits: limits(value.resourceLimits) };
   }
   function invalidArgument(name: string) {
     return Object.assign(new TypeError(`The "${name}" argument has an invalid type`), { code: "ERR_INVALID_ARG_TYPE" });
@@ -68,14 +62,10 @@
     return value !== null && (typeof value === "object" || typeof value === "function") && untransferable.has(value);
   }
   internal.isMarkedAsUntransferable = isMarkedAsUntransferable;
-  function messageEvent(data: unknown, ports: MessagePort[] = []) {
-    const event = new MessageEvent("message", { data, ports });
+  function messageEvent(data: unknown) {
+    const event = new MessageEvent("message", { data });
     messagePayloads.set(event, data);
     return event;
-  }
-  function webMessageEvent(event: MessageEvent) {
-    const data = messagePayloads.has(event) ? messagePayloads.get(event) : event.data;
-    return Object.assign(new MessageEvent("message", { data }), { data, ports: event.ports });
   }
   function transfers(value: unknown) {
     if (value == null) return [];
@@ -205,11 +195,6 @@
     return progress;
   }
 
-  function messagePacket(value: unknown) {
-    const packet = record(value);
-    if (!("data" in packet) || !Array.isArray(packet.ports) || !packet.ports.every(port => port instanceof MessagePort)) throw new Error("Invalid worker message packet");
-    return { data: packet.data, ports: packet.ports };
-  }
   interface DeliveryBatch { queue: unknown[]; remaining: number; }
   interface PortState {
     id: string; peer: string | null; version: number; sent: number; received: number;
@@ -269,7 +254,7 @@
     }
     static #receive(port: MessagePort) {
       if (!port.#state?.queue.length) return undefined;
-      const message = messagePacket(port.#state.queue.shift()).data;
+      const message = port.#state.queue.shift();
       port.#maybeClose();
       return { message };
     }
@@ -283,14 +268,14 @@
         if (!Array.isArray(value.nodes) || typeof value.root !== "number") throw new Error("Invalid graph");
         state.pending.set(sequence, graph as Graph);
         port.#accept();
-      } catch (error) { setImmediate(() => port.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
+      } catch (error) { internal.realTimers.setImmediate(() => port.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
     }
     #accept() {
       const state = this.#value();
       while (state.pending.has(state.received)) {
         const graph = state.pending.get(state.received);
         state.pending.delete(state.received++);
-        state.queue.push(messagePacket(codec.decode(graph)));
+        state.queue.push(codec.decode(graph));
       }
       this.#schedule();
       this.#maybeClose();
@@ -331,9 +316,7 @@
       if (!arguments.length) throw Object.assign(new TypeError("Not enough arguments to MessagePort.postMessage"), { code: "ERR_MISSING_ARGS" });
       const state = this.#state;
       if (!state || state.phase !== "open" || !state.peer) return;
-      const list = transfers(transfer);
-      const packet = { data: value, ports: list.filter(item => item instanceof MessagePort) };
-      const graph = codec.encode(packet, list, [state.id, state.peer]);
+      const graph = codec.encode(value, transfers(transfer), [state.id, state.peer]);
       const sequence = state.sent++;
       const other = localPorts.get(state.peer);
       if (other) { portOps.receivePacket(other, "port-data", sequence, graph); return; }
@@ -342,7 +325,7 @@
     #schedule() {
       const state = this.#state;
       if (!state || state.phase !== "open" || !state.started || state.scheduled || state.batch || !state.queue.length) return;
-      state.scheduled = true; setImmediate(() => this.#deliver(state));
+      state.scheduled = true; internal.realTimers.setImmediate(() => this.#deliver(state));
     }
     #deliver(state: PortState) {
       state.scheduled = false;
@@ -356,19 +339,18 @@
       state.scheduled = false;
       if (!batch.remaining || !batch.queue.length) { this.#continueBatch(state, batch); return; }
       batch.remaining--;
-      const packet = messagePacket(batch.queue.shift());
-      try { this.dispatchEvent(messageEvent(packet.data, packet.ports)); }
+      try { this.dispatchEvent(messageEvent(batch.queue.shift())); }
       finally { this.#continueBatch(state, batch); }
     }
     #continueBatch(state: PortState, batch: DeliveryBatch) {
       if (this.#state !== state) return;
       if (!batch.remaining || !batch.queue.length) {
         state.batch = null;
-        if (state.phase === "closing") { setImmediate(() => this.#finishLocalClose(state)); return; }
+        if (state.phase === "closing") { internal.realTimers.setImmediate(() => this.#finishLocalClose(state)); return; }
         this.#schedule(); this.#maybeClose(); return;
       }
       state.scheduled = true;
-      queueMicrotask(() => this.#deliverBatch(state, batch));
+      internal.realTimers.setImmediate(() => this.#deliverBatch(state, batch));
     }
     start() { if (this.#state) { this.#state.started = true; this.#schedule(); } }
     ref() { if (this.#state?.phase === "open" && !this.#state.ref) { this.#state.ref = true; internal.messagePortRefs++; } }
@@ -379,7 +361,7 @@
       const state = this.#state;
       if (!state || state.phase !== "open") return;
       state.phase = "closing"; state.queue = []; state.pending.clear(); this.unref();
-      if (!state.batch) setImmediate(() => this.#finishLocalClose(state));
+      if (!state.batch) internal.realTimers.setImmediate(() => this.#finishLocalClose(state));
     }
     #finishLocalClose(state: PortState) {
       if (this.#state !== state || state.phase === "closed") return;
@@ -395,7 +377,7 @@
       if (state.phase === "closed") return;
       state.phase = "closed"; state.queue = []; state.pending.clear(); this.unref(); localPorts.delete(state.id);
       root({ kind: "closed", id: state.id });
-      setImmediate(() => this.#finishClose(state));
+      internal.realTimers.setImmediate(() => this.#finishClose(state));
     }
     #finishClose(state: PortState) {
       if (this.#state !== state) return;
@@ -475,7 +457,7 @@
     }
     static receive(channel: BroadcastChannel, value: unknown) {
       if (channel.#closed) return;
-      channel.#queue.push(value); setImmediate(() => channel.#deliver());
+      channel.#queue.push(value); internal.realTimers.setImmediate(() => channel.#deliver());
     }
     postMessage(value: unknown) {
       if (this.#closed) throw new DOMException("BroadcastChannel is closed.", "InvalidStateError");
@@ -527,13 +509,8 @@
       throw Object.assign(new TypeError("Worker filename must be absolute or begin with './' or '../'." + hint), { code: "ERR_WORKER_PATH" });
     }
     const path = internal.require("path").resolve(process.cwd(), filename);
-    if (!options._web && !/\.(?:[cm]?[jt]s|[jt]sx)$/.test(path)) throw Object.assign(new TypeError("Unsupported worker file extension"), { code: "ERR_WORKER_UNSUPPORTED_EXTENSION" });
+    if (!/\.(?:[cm]?[jt]s|[jt]sx)$/.test(path)) throw Object.assign(new TypeError("Unsupported worker file extension"), { code: "ERR_WORKER_UNSUPPORTED_EXTENSION" });
     return { argv: ["run", path], name: path };
-  }
-  function webEntry(target: { argv: string[]; name: string }, web: BunWasm.WebWorkerOptions) {
-    if (target.argv[0] === "run") return target;
-    const preloads = web.preload.map(path => `await import(${JSON.stringify(path)});`).join("\n");
-    return { argv: ["-e", preloads + "\n;import.meta.__bunwasm_workerEntry?.();\n" + target.argv[1]], name: target.name };
   }
   function execArguments(value: unknown) {
     if (value === undefined) return process.execArgv.slice();
@@ -557,9 +534,7 @@
     constructor(filename: unknown, rawOptions?: unknown) {
       super();
       const options = rawOptions == null ? {} : record(rawOptions);
-      const requested = entry(filename, options);
-      const web = webOptions(options._web);
-      const target = web ? webEntry(requested, web) : requested;
+      const target = entry(filename, options);
       if (options.argv !== undefined && !Array.isArray(options.argv)) throw invalidArgument("argv");
       const argv = options.argv === undefined ? [] : Array.from(options.argv as unknown[], String);
       const execArgv = execArguments(options.execArgv);
@@ -579,7 +554,7 @@
       catch (error) { publicPort.close(); childPort.close(); throw error; }
       const graph = transferPlan.graph;
       const group = options.env === SHARE_ENV ? envGroup : routeKey(this.#path);
-      env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv, graph, resourceLimits: this.resourceLimits, web });
+      env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv, graph, resourceLimits: this.resourceLimits });
       const memoryLimitMb = (this.resourceLimits.maxOldGenerationSizeMb || 0) + (this.resourceLimits.maxYoungGenerationSizeMb || 0);
       let child: BunWasm.WorkerChild;
       try { child = internal.require("spawn").spawn(["bun"].concat(target.argv, argv), {
@@ -605,9 +580,6 @@
         if (!options.stderr) this.stderr.pipe(process.stderr);
         this.#drained = Promise.all([out.drained, err.drained]);
         publicPort.on("message", value => this.emit("message", value));
-        if (web) EventTarget.prototype.addEventListener.call(publicPort, "message", event => {
-          if (event instanceof MessageEvent) this.emit("_webmessage", webMessageEvent(event));
-        });
         publicPort.on("messageerror", error => this.emit("messageerror", error)); publicPort.unref();
         child.exited.then(code => this.#settled(code), error => { this.#settled(1); this.#error = true; this.emit("error", error); });
       } catch (error) {
@@ -622,7 +594,7 @@
     #schedule() {
       if (this.#scheduled || this.#exited) return;
       this.#scheduled = true;
-      setImmediate(() => { this.#scheduled = false; this.#pump(); });
+      internal.realTimers.setImmediate(() => { this.#scheduled = false; this.#pump(); });
     }
     get threadId() { return this.#exited ? -1 : this.#path.reduce((parent, counter) => (parent + counter) * (parent + counter + 1) / 2 + counter + 1, 0); }
     postMessage(value: unknown, transfer?: unknown) { this.#port.postMessage(value, transfer); }
@@ -640,12 +612,12 @@
         if (typeof frame.messages !== "number" || !Number.isSafeInteger(frame.messages) || frame.messages < 0) throw new Error("Invalid worker exit sequence");
         this.#graceful = true; this.#expectedMessages = frame.messages; return;
       }
-      if (frame.kind === "online") { setImmediate(() => this.emit("online")); return; }
+      if (frame.kind === "online") { internal.realTimers.setImmediate(() => this.emit("online")); return; }
       if (frame.kind === "error") {
         this.#error = true;
         const error = codec.decode(frame.graph);
         if (error instanceof Error && typeof frame.code === "string") Object.assign(error, { code: frame.code });
-        setImmediate(() => this.emit("error", error)); return;
+        internal.realTimers.setImmediate(() => this.emit("error", error)); return;
       }
       throw new Error("Unknown worker lifecycle event");
     }
@@ -653,17 +625,17 @@
       if (this.#exited) return false;
       let progress = false;
       try { progress = this.#channel.pump(incoming); }
-      catch (error) { this.#channel.close(); this.#child.kill(9); setImmediate(() => this.emit("messageerror", error)); }
+      catch (error) { this.#channel.close(); this.#child.kill(9); internal.realTimers.setImmediate(() => this.emit("messageerror", error)); }
       if (this.#code !== null && !this.#channel.ended) this.#schedule();
       if (this.#code !== null && this.#channel.ended && !this.#finishing) {
         this.#finishing = true;
-        this.#drained.then(() => setImmediate(() => this.#finish()));
+        this.#drained.then(() => internal.realTimers.setImmediate(() => this.#finish()));
         progress = true;
       }
       return progress;
     }
     #finish() {
-      if (!portOps.drained(this.#port) || portOps.received(this.#port) < this.#expectedMessages) { setImmediate(() => this.#finish()); return; }
+      if (!portOps.drained(this.#port) || portOps.received(this.#port) < this.#expectedMessages) { internal.realTimers.setImmediate(() => this.#finish()); return; }
       this.#exited = true;
       this.#port.close(); this.#channel.close(); this.#child._finishWorker(); children.delete(this.#id);
       root({ kind: "gone", path: this.#path });
@@ -694,7 +666,6 @@
     exports.workerData = initial[0]; parentPort = initial[2]; exports.parentPort = parentPort;
     for (const pair of initial[1]) if (Array.isArray(pair) && pair.length === 2) environmentData.set(pair[0], pair[1]);
     process.argv = config.argv; process.execArgv = config.execArgv;
-    internal.require("bun").isMainThread = false;
     root({ kind: "member", path: route, group: envGroup });
     internal.workerExit = code => {
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "exiting", child: route[route.length - 1], code, messages: parentPort ? portOps.sent(parentPort) : 0 } });
@@ -707,10 +678,6 @@
       const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "error", child: route[route.length - 1], graph, code } });
     };
-    if (config.web) {
-      internal.require("web_worker").initialize(parentPort, config.web, webMessageEvent);
-      parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
-    }
     const requirePreload = internal.builtin("node:module").createRequire(process.cwd() + "/__worker_preload__.cjs");
     for (let index = 0; index < config.execArgv.length; index++) {
       const arg = config.execArgv[index];
@@ -719,7 +686,7 @@
       if (arg === "--expose-gc") Object.defineProperty(globalThis, "gc", { configurable: true, writable: true, value: () => native.gc() });
       if (arg === "--no-warnings") internal.workerNoWarnings = true;
     }
-    if (!config.web) parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
+    parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
   }
   const initialState: { parentPort: MessagePort | null; workerData: unknown } = { parentPort, workerData: null };
   const exports = Object.assign(initialState, {

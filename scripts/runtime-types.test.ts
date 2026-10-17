@@ -1,9 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
-const scratch = mkdtempSync(join(process.env.RUNNER_TEMP ?? "/work/tmp", "bun-wasm-runtime-types-"));
+const scratch = mkdtempSync(join(process.env.RUNNER_TEMP ?? process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-runtime-types-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const probe = join(scratch, "probe.ts");
 const config = join(scratch, "tsconfig.json");
