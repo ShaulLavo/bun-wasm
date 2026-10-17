@@ -174,7 +174,7 @@ async function checkMigration(name: string, source: string) {
   const nativeExpected = readFileSync(join(reference, "bun.lock"), "utf8");
   const expected = name === "classic-sha1"
     ? nativeExpected.replace('"lockfileVersion": 1', '"lockfileVersion": 2').replace(/, ""\],/g, ', "sha1-PrXtYmInVteaXw4qIh3+utdcL34="],')
-    : name === "classic-workspace-only" || nativeBerryUnavailable ? actualText : nativeExpected;
+    : name === "classic-workspace-only" && !nativeExpected.includes("packages/member") ? undefined : nativeExpected;
   if (name === "classic-workspace-only") {
     assert.match(actualText, /member@workspace:packages\/member/);
     assert.match(actualText, /mkdirp@1\.0\.4/);
