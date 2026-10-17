@@ -35,8 +35,10 @@ jsc_inputs_hash() {
     printf 'WEBKIT_COMMIT=%s\n' "$WEBKIT_COMMIT"
     printf 'ICU_VERSION=%s\n' "$ICU_VERSION"
     printf 'ICU_SHA256=%s\n' "$ICU_SHA256"
-    printf 'scripts/build-jsc.sh='
-    sha256sum "$REPO/scripts/build-jsc.sh" | cut -d' ' -f1
+    for file in scripts/build-jsc.sh env.sh; do
+      printf '%s=' "$file"
+      sha256sum "$REPO/$file" | cut -d' ' -f1
+    done
     for file in wasi-jsc.cmake shim/wasi-compat.h shim/wasi-compat.c shim/madvise.c; do
       printf 'embedded/%s=' "$file"
       if [[ -f "$JSC_CONFIG_DIR/$file" ]]; then
@@ -76,19 +78,7 @@ copy_jsc_config_inputs() {
   done
 }
 
-check_jsc_build_paths() {
-  local metadata
-  for metadata in "$JSC_OBJ/CMakeCache.txt" "$JSC_OBJ/compile_commands.json"; do
-    [[ -f "$metadata" ]] || continue
-    if command grep -Fq "$JSC_SRC/" "$metadata"; then
-      echo "error: the JSC prebuild at $JSC_BUILD_DIR still references checkout paths; configure a fresh build directory with JSC_BUILD_DIR=$JSC_BUILD_DIR scripts/build-jsc.sh." >&2
-      return 1
-    fi
-  done
-}
-
 write_jsc_inputs_stamp() {
-  check_jsc_build_paths
   mkdir -p "$(dirname "$JSC_INPUTS_STAMP")"
   jsc_inputs_hash > "$JSC_INPUTS_STAMP"
 }
@@ -108,10 +98,10 @@ check_jsc_inputs_stamp() {
 # (every CMake link test links it), build.sh refreshes it.
 build_shim() {
   mkdir -p "$SHIM_DIR"
-  local c shim_src="$JSC_CONFIG_SHIM_DIR"
-  [[ -f "$shim_src/wasi-compat.c" ]] || shim_src="$JSC_SRC/shim"
+  copy_jsc_config_inputs
+  local c
   for c in wasi-compat madvise; do
-    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 -O2 -c "$shim_src/$c.c" -o "$SHIM_DIR/$c.o"
+    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 -O2 -c "$JSC_CONFIG_SHIM_DIR/$c.c" -o "$SHIM_DIR/$c.o"
   done
   rm -f "$SHIM_DIR/libwasi-compat.a"
   "$WASI_SDK_PATH/bin/llvm-ar" rcs "$SHIM_DIR/libwasi-compat.a" "$SHIM_DIR/wasi-compat.o" "$SHIM_DIR/madvise.o"

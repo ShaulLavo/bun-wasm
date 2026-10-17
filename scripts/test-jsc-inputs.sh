@@ -36,6 +36,22 @@ if output=$(check_jsc_inputs_stamp 2>&1); then
 fi
 [[ "$output" == "$message" ]] || { printf '%s\n' "$output" >&2; exit 1; }
 cp "$script_backup" "$root/scripts/build-jsc.sh"
+printf '\nchanged embedded header\n' >> "$JSC_CONFIG_SHIM_DIR/wasi-compat.h"
+if output=$(check_jsc_inputs_stamp 2>&1); then
+  echo "changed embedded header unexpectedly passed" >&2
+  exit 1
+fi
+[[ "$output" == "$message" ]] || { printf '%s\n' "$output" >&2; exit 1; }
+copy_jsc_config_inputs
+check_jsc_inputs_stamp
+rm "$JSC_TOOLCHAIN_FILE"
+if output=$(check_jsc_inputs_stamp 2>&1); then
+  echo "missing embedded toolchain unexpectedly passed" >&2
+  exit 1
+fi
+[[ "$output" == "$message" ]] || { printf '%s\n' "$output" >&2; exit 1; }
+copy_jsc_config_inputs
+check_jsc_inputs_stamp
 rm "$JSC_INPUTS_STAMP"
 if output=$(check_jsc_inputs_stamp 2>&1); then
   echo "missing stamp unexpectedly passed" >&2
