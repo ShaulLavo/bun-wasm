@@ -28,6 +28,10 @@ export async function checkWorkers(page: Parameters<typeof writeFile>[0], label:
     for (const line of test.output) assert.ok(checked.output.includes(line), `${label} ${test.name}: missing ${line}\n${checked.output}`);
     if (test.error) assert.ok(checked.output.includes(test.error), checked.output);
   }
+  console.log(`ok ${label}: isolated Worker guests, transfers, lifecycle, nested workers, termination and stdio`);
+}
+
+export async function checkWebWorkers(page: Parameters<typeof writeFile>[0], label: string) {
   const webWorker = new URL("../../tests/fixtures/web-worker/", import.meta.url);
   for (const name of ["index.ts", "worker.ts", "preload.ts", "preload-entry.ts", "gated-preload.ts", "echo.ts"]) {
     await writeFile(page, `/home/user/${name}`, readFileSync(new URL(name, webWorker), "utf8"));
@@ -37,5 +41,5 @@ export async function checkWorkers(page: Parameters<typeof writeFile>[0], label:
   for (const line of readFileSync(new URL("expected.txt", webWorker), "utf8").trim().split("\n")) {
     assert.ok(webResult.output.includes(line), `${label}: missing ${line}\n${webResult.output}`);
   }
-  console.log(`ok ${label}: isolated Worker guests, transfers, lifecycle, nested workers, termination, stdio and web Workers`);
+  console.log(`ok ${label}: global Web Worker fixture`);
 }

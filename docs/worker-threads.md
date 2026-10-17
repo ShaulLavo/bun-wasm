@@ -326,5 +326,6 @@ that startup. This differs from Bun's deferred blob lookup. Cross-worker object 
 support.
 
 The focused fixture runs with `scripts/test.sh --no-build web-worker`, repeated
-with `--engine jsc` and `--engine browser`. The full web gate also runs it in
+with `--engine jsc` and `--engine browser`. The full web gate also runs
+`web/tests/browser-web-workers.ts` in
 Chromium and WebKit on all engines.

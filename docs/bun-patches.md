@@ -1781,7 +1781,7 @@ unchanged.
 
 `tests/fixtures/web-worker` exercises URL entry points, options, transfer lists,
 worker-global events, preload, errors, natural close, termination and nested
-workers. `web/tests/browser-workers.ts` runs the same fixture in Chromium and
+workers. `web/tests/browser-web-workers.ts` runs the same fixture in Chromium and
 WebKit on every engine. Cross-guest shared memory remains unsupported by the
 existing transport. Object URLs are local to their creating guest and their
 contents are captured when constructing a worker.
