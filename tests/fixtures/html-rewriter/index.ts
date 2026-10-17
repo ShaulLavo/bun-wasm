@@ -53,7 +53,7 @@ assert.equal(stale.removed, undefined);
 assert.throws(() => asyncRewriter.transform(response));
 console.log("async handlers, order, and response metadata pass");
 
-for (const value of [undefined, null, false, 0, "failure", { error: true }]) {
+for (const value of [undefined, null, false, 0, "", new Error("rejection sentinel"), "failure", { error: true }]) {
   const output = new HTMLRewriter().on("p", { async element() { await Promise.resolve(); throw value; } }).transform(new Response("<p>x</p>"));
   const observed = await output.text().then(() => ({ resolved: true }), error => ({ error }));
   assert.equal("error" in observed, true);

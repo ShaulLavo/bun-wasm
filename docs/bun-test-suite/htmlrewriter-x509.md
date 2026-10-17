@@ -169,3 +169,31 @@ rebuilt branch, including the main merge.
 Raw native references, all-engine failing runs, per-gate logs, commands and
 rebuilt artifacts are retained in
 `/work/reports/bun-wasm-htmlrewriter-x509-review-2026-10-17/`.
+
+## Second review: fulfilled handlers and failed end tags
+
+Current main through `b14f536f` is merged for this review. The targeted run adds
+an already-fulfilled native Promise whose value has a stateful `then` getter.
+Completion now discards that value, so successful handlers do not read its
+accessor twice. A streamed void-element regression catches `No end tag.`, forces
+collection while the output remains open, and verifies its callback is released
+before cancellation. Failed registrations roll back their JavaScript map entry;
+native token user data changes only after end-tag handlers validate.
+
+The exact retained `0fbec4d` artifacts fail both new groups on QuickJS, JSC and
+browser. All three rebuilt engines pass `html-rewriter`, `html-rewriter-review`,
+`crypto-x509` and `crypto-x509-options`, **4 passed, 0 failed** per engine. The
+first fixture includes undefined, null, false, zero, empty-string and Error
+rejection identities. Native Bun 1.4.2 passes all six groups in the expanded
+HTML review fixture. Runtime typechecks and their 35 tests pass.
+
+Builds and focused runs use the heavy queue. One build attempt found a Rust
+borrow conflict in the native ordering change; after correction, all three
+builds and the targeted gates pass. Full suites are not repeated in this round;
+the earlier full-gate observations above describe their earlier source heads.
+
+Commands, reviewed-artifact hashes, red/green logs and fresh wasm files are in
+`/work/reports/bun-wasm-htmlrewriter-x509-review-2026-10-17/second/`.
+The coordinator owns these review artifacts until integration. `red-*.log` is
+the authoritative second-review reproduction; exploratory runs against older
+artifacts are separate under `superseded/`.

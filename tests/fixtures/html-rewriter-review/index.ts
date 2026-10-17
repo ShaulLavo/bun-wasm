@@ -43,15 +43,19 @@ await check("void end-tag registration releases callback", async () => {
   const output = new HTMLRewriter().on("img", { element(element) {
     const callback = () => {};
     weak = new WeakRef(callback);
-    try { element.onEndTag(callback); } catch (error) { assert.equal((error as Error).message, "No end tag."); }
+    assert.throws(() => element.onEndTag(callback), { name: "HTMLRewriterError", message: "No end tag." });
   } }).transform(new Response(source));
   const reader = output.body!.getReader();
-  sourceController!.enqueue(new TextEncoder().encode("<img>"));
-  await reader.read();
-  const collect = typeof Bun !== "undefined" ? () => Bun.gc(true) : () => globalThis.gc?.();
-  for (let i = 0; i < 4 && weak!.deref() !== undefined; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
-  assert.equal(weak!.deref(), undefined);
-  await reader.cancel("done");
+  let closed = false;
+  void reader.closed.then(() => { closed = true; });
+  try {
+    sourceController!.enqueue(new TextEncoder().encode("<img>"));
+    await reader.read();
+    const collect = typeof Bun !== "undefined" ? () => Bun.gc(true) : () => globalThis.gc?.();
+    for (let i = 0; i < 4 && weak!.deref() !== undefined; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
+    assert.equal(closed, false);
+    assert.equal(weak!.deref(), undefined);
+  } finally { await reader.cancel("done"); }
 });
 await check("response header snapshot", async () => {
   const input = new Response("<p>x</p>", { headers: { "x-test": "before" } });
