@@ -683,6 +683,9 @@ fn finalize_updates(manifest: &mut Value, opts: &Options, resolver: &Resolver, m
 fn link_bins(resolver: &Resolver) -> Result<()> {
     for package in resolver.packages.values() {
         let path = package.path();
+        if package.local.is_some() && !path.join("package.json").exists() {
+            continue;
+        }
         let meta: Value = serde_json::from_slice(&fs::read(path.join("package.json")).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
         let bins = binary_entries(&meta, &path)?;

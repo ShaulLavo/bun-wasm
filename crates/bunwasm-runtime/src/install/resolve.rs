@@ -197,6 +197,9 @@ impl Resolver {
     }
 
     fn target(&mut self, parent: &Package, name: &str, range: &str, optional: bool) -> Result<Option<String>> {
+        if self.local_package(name, range)?.is_some() {
+            return Ok(Some(range.into()));
+        }
         if let Some(version) = self.locked_child(parent, name, range) {
             return Ok(Some(version));
         }
@@ -239,6 +242,7 @@ impl Resolver {
         peer: bool,
         optional: bool,
     ) -> Option<Vec<String>> {
+        let target = self.local_package(name, range).ok().flatten();
         for level in (0..=parent.chain.len()).rev() {
             let mut candidate = parent.chain[..level].to_vec();
             candidate.push(name.into());
@@ -246,10 +250,12 @@ impl Resolver {
             let Some(found) = self.packages.get_mut(&key) else {
                 continue;
             };
-            if matches(&found.version, range)
-                || found.local.is_some()
-                    && (range.starts_with("workspace:") || range.starts_with("link:") || range.starts_with("file:"))
-            {
+            let satisfies = if let Some(target) = &target {
+                found.local.as_ref().is_some_and(|local| local.path == target.path)
+            } else {
+                matches(&found.version, range)
+            };
+            if satisfies {
                 self.require(&key, optional);
                 return None;
             }
@@ -308,7 +314,7 @@ impl Resolver {
         }
         if let Some(local) = self.local_package(name, range)? {
             return Ok(Package {
-                name: name.into(),
+                name: local.meta["name"].as_str().unwrap_or(name).into(),
                 version: local.meta["version"].as_str().unwrap_or("0.0.0").into(),
                 chain,
                 source_chain: None,
@@ -384,8 +390,16 @@ impl Resolver {
             return Ok(None);
         };
         let path = std::env::current_dir().map_err(|e| e.to_string())?.join(path);
-        let meta = serde_json::from_slice(&std::fs::read(path.join("package.json")).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+        let path = PathBuf::from(crate::resolve::normalize(&path.to_string_lossy()));
+        if !path.is_dir() {
+            return Err(format!("Local dependency is not a directory: {}", path.display()));
+        }
+        let file = path.join("package.json");
+        let meta = if file.exists() {
+            serde_json::from_slice(&std::fs::read(file).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?
+        } else {
+            json!({"name": name})
+        };
         Ok(Some(Local {
             path,
             meta,
