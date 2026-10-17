@@ -1,7 +1,7 @@
 # Installing npm packages
 
 `bun install` (`bun i`, or `bun ci` for a frozen lockfile), `bun add` (`bun a`), `bun remove` (`bun rm`, `bun r`,
-`bun uninstall`) and `bun pm ls` run in all three engines. The installer runs in
+`bun uninstall`), `bun update`, `bun x` and `bun pm ls` run in all three engines. The installer runs in
 Rust before starting the JS engine. The native launcher supplies network access;
 the playground and sandbox use their existing page fetch bridge. Plain wasmtime
 without a network host cannot download packages.
@@ -11,10 +11,13 @@ bun install
 bun add react react-dom
 bun add -D --exact typescript@5.9.3
 bun remove typescript
+bun update react
+bun update react --latest
+bun x prettier@3.6.2 --version
 bun pm ls
 ```
 
-Set `NPM_CONFIG_REGISTRY` (or `npm_config_registry`), `--registry`, or
+Set `BUN_CONFIG_REGISTRY`, `NPM_CONFIG_REGISTRY` or `npm_config_registry`, `--registry`, or
 `bunfig.toml` to use a different registry:
 
 ```toml
@@ -49,11 +52,44 @@ a default of 300. Failed downloads are not retried.
 
 Lifecycle scripts are always skipped, including scripts on trusted dependencies
 and the root project. Packages with install hooks produce a `Blocked N
-postinstalls` message. No native executables run. Workspace, git, local-file,
-alias and isolated-linker installs, registry authentication, package binaries,
-patches and overrides are not implemented. Symlinks and hardlinks inside npm
+postinstalls` message. No native executables run. Workspace members and local directory links use the
+hoisted graph. npm aliases select the target package without changing its files.
+Git and isolated-linker installs, registry authentication, patches and overrides
+are not implemented. Symlinks and hardlinks inside npm
 tarballs are rejected. Downloads and expanded packages are limited to 256 MiB;
 the graph is limited to 10,000 packages and 128 nesting levels.
+
+## Workspaces, commands and migration
+
+The installer discovers `workspaces` arrays and object-form `packages` patterns.
+Members are linked into `node_modules`. Local `link:` and directory `file:`
+dependencies resolve relative to the declaring manifest. Running `bun add` from
+a member updates its manifest and the root lockfile.
+
+Declared `bin` entries and `directories.bin` files get links under
+`node_modules/.bin`. `bun run dev` resolves a package script and executes its
+JavaScript or TypeScript binary in the selected engine. Quoted arguments,
+environment assignments and extra command arguments are supported. Shell
+pipelines, redirections and native commands remain unsupported.
+
+`bun update` refreshes selected dependencies within their declared ranges.
+`--latest` selects the latest tag. `bun x` and the `bunx` executable alias prefer an installed
+binary for an unversioned request, then use an isolated cache installation.
+They leave the project's manifest and lockfile unchanged. Concurrent installs
+publish complete cache directories through an atomic rename.
+
+Without `bun.lock`, the installer reads npm `package-lock.json`, pnpm
+`pnpm-lock.yaml`, Yarn classic or Yarn Berry `yarn.lock` before resolution.
+Migrated registry versions remain pinned. `bun pm migrate` writes the converted
+lock without installing packages. Unsupported dependency protocols produce an
+error rather than silently replacing a lockfile pin. `--lockfile-only` skips
+package extraction. Registries may omit integrity, but supplied SHA-512 or
+SHA-1 hashes are checked.
+
+The [installer selection](bun-test-suite/installer-files.txt) lists the 25
+upstream files assigned to this change. The `installer-gaps` runtime fixture
+checks a synthetic registry, all four lockfile formats, workspace imports,
+member changes, binaries, updates, and concurrent package execution.
 
 ## Real Bun installer spike
 

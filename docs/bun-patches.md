@@ -15,6 +15,7 @@ Each row has one class. A file with independent changes has separate rows.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Third-party interrupt instrumentation](#third-party-interrupt-instrumentation) | Host feature | Original TypeScript binary rewriter, content-addressed loader and rescued browser fixtures; module-internal countdowns avoid per-entry host calls. |
+| [Portable installer and package command adapters](#portable-installer-and-package-commands) | Host feature | Original filesystem, lockfile and command adapters over Bun's matcher, parsers and semver. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
@@ -1654,3 +1655,38 @@ complete without waiting for that acknowledgment. A late kill cannot bypass the 
 ordinary outcome has already won. Unknown callback terminals are rejected rather than pretending
 their input can be shared. No new upstream patch, copied
 implementation or compatibility branch is introduced.
+
+## Portable installer and package commands
+
+Class **Host feature**. Original adapters in `crates/bunwasm-runtime/src/install/`,
+`src/js/package_scripts.ts`, and `crates/bunwasm-cli/src/main.rs`. No upstream
+source is copied or changed by these adapters. They use Bun's `src/glob/` walker,
+`src/semver/` parser, and the existing transpiler data parser from revision
+`4ceda2c2868d3a7703c7737ddd9de7244ec384df`.
+
+The manifest Accept value follows Bun's registry request contract, also checked
+by `test/cli/install/dummy.registry.ts` at that revision. Cache refresh uses the
+Cache-Control header, so it does not change content negotiation.
+
+Workspace discovery reads declared member manifests, resolves local dependencies
+relative to their declaring package, and creates filesystem links. The native
+installer retains its hoisted graph and tarball validation. Lockfile migration
+parses npm package locks, pnpm YAML, Yarn classic entries, and Yarn Berry YAML
+into that graph before resolution, so migrated versions remain pinned.
+
+`bun update` resolves selected dependencies again, within their declared ranges
+unless `--latest` is supplied. `bun x` prefers a local binary and otherwise
+installs into an atomically published cache directory. Concurrent cold installs
+have separate staging directories. Installed binaries use relative links so a
+published cache directory remains movable.
+
+The TypeScript package-script dispatcher runs JavaScript and TypeScript binaries
+inside the selected engine. It handles quoted arguments and environment
+assignments. Shell pipelines, redirections, command substitution, and native
+executables remain outside this adapter. Install lifecycle scripts and security
+scanner execution retain their existing limitations.
+
+`tests/fixtures/installer-gaps/` uses an in-process fixture registry and synthetic
+tarballs. It checks the header, workspace imports, a frozen reinstall, binary
+links, script argument forwarding, update ranges, migration pins, and `bun x`
+without public-registry access.

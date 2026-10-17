@@ -12,7 +12,7 @@ declare namespace BunWasm {
 
   interface Internal {
     readonly native: Native;
-    require(name: "path"): { resolve(...paths: string[]): string };
+    require(name: "path"): { resolve(...paths: string[]): string; dirname(path: string): string; basename(path: string): string };
   }
   type EventListener = (...args: unknown[]) => void;
   interface NodeEmitter {

@@ -108,14 +108,16 @@ fn request(url: &str, tarball: bool, refresh: bool) -> Result<Vec<u8>> {
     let accept = if tarball {
         "application/vnd.bun.install-tarball"
     } else {
-        "application/vnd.npm.install-v1+json"
+        "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*"
     };
-    let accept = if refresh {
-        format!("{accept}; no-cache")
-    } else {
-        accept.into()
-    };
-    let meta = json!({"method":"GET", "url":url, "headers":[["accept",accept],["accept-encoding","gzip"]], "redirect":"follow"});
+    let mut headers = json!([["accept", accept], ["accept-encoding", "gzip"]]);
+    if refresh {
+        headers
+            .as_array_mut()
+            .unwrap()
+            .push(json!(["cache-control", "no-cache"]));
+    }
+    let meta = json!({"method":"GET", "url":url, "headers":headers, "redirect":"follow"});
     let handle = host::fetch(meta.to_string().as_bytes(), &[]);
     if handle < 0 {
         return Err(network_error(handle));
@@ -184,6 +186,9 @@ fn network_error(handle: i32) -> String {
 }
 
 pub fn integrity(bytes: &[u8], sri: &str) -> Result<()> {
+    if sri.is_empty() {
+        return Ok(());
+    }
     let hashes: Vec<_> = sri
         .split_whitespace()
         .filter_map(|s| s.strip_prefix("sha512-"))

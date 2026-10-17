@@ -415,17 +415,17 @@ fn install_fs(t: &mut Table) {
 }
 
 #[cfg(target_os = "wasi")]
-fn symlink(target: &str, path: &str) -> io::Result<()> {
+pub(crate) fn symlink(target: &str, path: &str) -> io::Result<()> {
     std::os::wasi::fs::symlink_path(target, path)
 }
 
 #[cfg(unix)]
-fn symlink(target: &str, path: &str) -> io::Result<()> {
+pub(crate) fn symlink(target: &str, path: &str) -> io::Result<()> {
     std::os::unix::fs::symlink(target, path)
 }
 
 #[cfg(not(any(unix, target_os = "wasi")))]
-fn symlink(_: &str, _: &str) -> io::Result<()> {
+pub(crate) fn symlink(_: &str, _: &str) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
 }
 

@@ -7,7 +7,10 @@ use std::{
 use bun_semver::{SlicedString, Version, query};
 use serde_json::{Value, json};
 
-use super::io::{self, Result};
+use super::{
+    io::{self, Result},
+    local::Local,
+};
 
 #[derive(Clone)]
 pub struct Package {
@@ -18,6 +21,7 @@ pub struct Package {
     pub meta: Value,
     pub integrity: String,
     pub tarball: String,
+    pub local: Option<Local>,
     pub optional: bool,
 }
 
@@ -50,7 +54,9 @@ pub fn valid_name(name: &str) -> Result<()> {
 }
 
 pub fn spec(input: &str) -> Result<(String, String)> {
-    let split = input.rfind('@').filter(|i| *i > 0);
+    let split = input
+        .char_indices()
+        .find_map(|(i, ch)| (i > 0 && ch == '@').then_some(i));
     let (name, range) = split.map_or((input, "latest"), |i| (&input[..i], &input[i + 1..]));
     valid_name(name)?;
     if range.is_empty() {
@@ -129,6 +135,8 @@ pub struct Resolver {
     pub refresh: bool,
     packuments: BTreeMap<String, Value>,
     pending: VecDeque<String>,
+    pub workspaces: BTreeMap<String, Local>,
+    production: bool,
 }
 
 impl Resolver {
@@ -140,10 +148,17 @@ impl Resolver {
             refresh,
             packuments: BTreeMap::new(),
             pending: VecDeque::new(),
+            workspaces: BTreeMap::new(),
+            production: false,
         }
     }
 
     pub fn resolve(&mut self, manifest: &Value, production: bool) -> Result<()> {
+        self.production = production;
+        let members: Vec<_> = self.workspaces.keys().cloned().collect();
+        for name in members {
+            self.add(&name, "workspace:*", vec![name.clone()], false)?;
+        }
         for (name, (range, optional, _)) in dependencies(manifest, production, true) {
             self.add(&name, &range, vec![name.clone()], optional)?;
         }
@@ -155,7 +170,20 @@ impl Resolver {
     }
 
     fn children(&mut self, parent: &Package) -> Result<()> {
-        for (name, (range, optional, peer)) in dependencies(&parent.meta, false, false) {
+        for (name, (range, optional, peer)) in dependencies(
+            &parent.meta,
+            self.production,
+            parent.local.as_ref().is_some_and(|p| p.workspace),
+        ) {
+            let range = if let Some(local) = &parent.local {
+                if let Some(path) = range.strip_prefix("link:").or_else(|| range.strip_prefix("file:")) {
+                    format!("link:{}", local.path.join(path).display())
+                } else {
+                    range
+                }
+            } else {
+                range
+            };
             let Some(target) = self.target(parent, &name, &range, optional || parent.optional)? else {
                 continue;
             };
@@ -172,7 +200,7 @@ impl Resolver {
         if let Some(version) = self.locked_child(parent, name, range) {
             return Ok(Some(version));
         }
-        if !is_tag(range) {
+        if !is_tag(range) || self.workspaces.contains_key(name) {
             return Ok(Some(range.into()));
         }
         match self.package(name, range, vec![name.into()], optional) {
@@ -218,7 +246,10 @@ impl Resolver {
             let Some(found) = self.packages.get_mut(&key) else {
                 continue;
             };
-            if matches(&found.version, range) {
+            if matches(&found.version, range)
+                || found.local.is_some()
+                    && (range.starts_with("workspace:") || range.starts_with("link:") || range.starts_with("file:"))
+            {
                 self.require(&key, optional);
                 return None;
             }
@@ -271,6 +302,23 @@ impl Resolver {
     }
 
     fn package(&mut self, name: &str, range: &str, chain: Vec<String>, optional: bool) -> Result<Package> {
+        if let Some(alias) = range.strip_prefix("npm:") {
+            let (target, version) = spec(alias)?;
+            return self.package(&target, &version, chain, optional);
+        }
+        if let Some(local) = self.local_package(name, range)? {
+            return Ok(Package {
+                name: name.into(),
+                version: local.meta["version"].as_str().unwrap_or("0.0.0").into(),
+                chain,
+                source_chain: None,
+                meta: local.meta.clone(),
+                integrity: String::new(),
+                tarball: String::new(),
+                optional,
+                local: Some(local),
+            });
+        }
         if let Some(package) = self.from_lock(name, range, &chain, optional) {
             return Ok(package);
         }
@@ -312,9 +360,37 @@ impl Resolver {
             source_chain: None,
             meta,
             tarball,
+            local: None,
             integrity,
             optional,
         })
+    }
+
+    fn local_package(&self, name: &str, range: &str) -> Result<Option<Local>> {
+        if let Some(local) = self.workspaces.get(name) {
+            let version = local.meta["version"].as_str().unwrap_or("0.0.0");
+            if range.starts_with("workspace:") || range == "*" || matches(version, range) {
+                let requested = range.strip_prefix("workspace:").unwrap_or("*");
+                if !["*", "^", "~"].contains(&requested) && !matches(version, requested) {
+                    return Err(format!("Workspace {name}@{version} does not satisfy {range}"));
+                }
+                return Ok(Some(local.clone()));
+            }
+        }
+        if range.starts_with("workspace:") {
+            return Err(format!("Workspace dependency not found: {name}@{range}"));
+        }
+        let Some(path) = range.strip_prefix("link:").or_else(|| range.strip_prefix("file:")) else {
+            return Ok(None);
+        };
+        let path = std::env::current_dir().map_err(|e| e.to_string())?.join(path);
+        let meta = serde_json::from_slice(&std::fs::read(path.join("package.json")).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        Ok(Some(Local {
+            path,
+            meta,
+            workspace: false,
+        }))
     }
 
     fn from_lock(&self, name: &str, range: &str, chain: &[String], optional: bool) -> Option<Package> {
@@ -339,17 +415,12 @@ impl Resolver {
         }
         let source = row[1].as_str()?;
         let tarball = if source.is_empty() {
-            if self.registry != "https://registry.npmjs.org" {
-                return None;
-            }
             format!(
-                "https://registry.npmjs.org/{resolved_name}/-/{}-{version}.tgz",
+                "{}/{resolved_name}/-/{}-{version}.tgz",
+                self.registry,
                 resolved_name.rsplit('/').next()?
             )
         } else {
-            if !source.starts_with(&format!("{}/", self.registry)) {
-                return None;
-            }
             source.into()
         };
         if !row[2].is_object() {
@@ -365,6 +436,7 @@ impl Resolver {
             source_chain: Some(chain.to_vec()),
             meta,
             tarball,
+            local: None,
             integrity: row[3].as_str()?.into(),
             optional,
         })
@@ -406,7 +478,9 @@ fn package_integrity(meta: &Value) -> Result<String> {
     if let Some(sri) = meta["dist"]["integrity"].as_str() {
         return Ok(sri.into());
     }
-    let shasum = meta["dist"]["shasum"].as_str().ok_or("Missing package integrity")?;
+    let Some(shasum) = meta["dist"]["shasum"].as_str() else {
+        return Ok(String::new());
+    };
     let bytes: Option<Vec<u8>> = (0..shasum.len())
         .step_by(2)
         .map(|i| shasum.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok()))

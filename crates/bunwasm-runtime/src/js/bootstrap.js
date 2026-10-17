@@ -650,7 +650,7 @@
 
   internal.runMain = function runMain(requested) {
     // `bun run ./app` finds app.ts, app/index.js, ... like an import would.
-    let path = requested;
+    let path = internal.require("package_scripts").resolve(requested);
     if (!native.exists(path) || native.stat(path).mode & 0o040000) {
       try {
         path = native.resolve(requested, "/", false);
