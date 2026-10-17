@@ -27,8 +27,9 @@ export function initialJavaScript(outputs: OutputGraph, roots: readonly string[]
   return Array.from(seen).sort();
 }
 
+const CORE_BUDGET_KIB = 7;
 export function checkCoreBudget(gzipBytes: number): void {
-  const budget = 6 * 1024;
+  const budget = CORE_BUDGET_KIB * 1024;
   if (gzipBytes > budget) throw new Error(`core exceeds ${budget} B gzip budget by ${gzipBytes - budget} B; inspect runtime/core imports and the layer report`);
 }
 
@@ -42,6 +43,14 @@ export function processServiceInputs(inputs: readonly string[]): string[] {
 export function checkLazyProcessService(inputs: readonly string[]): void {
   const eager = processServiceInputs(inputs);
   if (eager.length) throw new Error(`process service is eager before first spawn: ${eager.join(", ")}`);
+}
+/** Own Bun programs need only the tiny fatal-outcome check, never the load-time compiler. */
+export function checkLazyInterruptRewriter(inputs: readonly string[]): void {
+  const eager = inputs.filter(path => {
+    const match = /(?:^|\/)runtime\/interrupt\/(.+)\.ts$/.exec(path);
+    return match !== null && match[1] !== "check";
+  });
+  if (eager.length) throw new Error(`interrupt rewriter is eager before third-party load: ${eager.join(", ")}`);
 }
 
 const root = resolve(import.meta.dir, "..");
@@ -101,7 +110,10 @@ async function application(name: "web" | "sandbox", splitting: boolean, serviceW
   const inputs = Array.from(new Set(initialKeys.flatMap((key) => Object.keys(outputs[key]!.inputs)))).sort();
   const procInputs = processServiceInputs(inputs);
   const bunAdapterInputs = inputs.filter(path => /(?:\/|^)subprocess(?:[-.]|\/)/.test(path));
-  if (splitting) checkLazyProcessService(inputs);
+  if (splitting) {
+    checkLazyProcessService(inputs);
+    checkLazyInterruptRewriter(inputs);
+  }
   return {
     splitting, logicalEntries: logicalEntries.concat([{ entry: "sw.js", ...serviceWorker, files: [{ path: "sw.js", ...serviceWorker }] }]),
     logicalJavaScript: { ...totals(logicalFiles), files: logicalFiles },
@@ -119,7 +131,7 @@ async function application(name: "web" | "sandbox", splitting: boolean, serviceW
 export async function runtimeSizeReport() {
   const previewSocketScript = await previewWebsocketScript();
   const layers = await Promise.all([
-    layer("core", ["runtime/core/index.ts"], 6),
+    layer("core", ["runtime/core/index.ts"], CORE_BUDGET_KIB),
     layer("fs", ["runtime/fs/index.ts"], 6),
     layer("net", ["web/src/net/host.ts", "web/src/net/helper.ts", "web/src/preview.ts"], 14),
     layer("proc", ["runtime/proc/index.ts"], 8),

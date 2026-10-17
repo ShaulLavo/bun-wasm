@@ -20,13 +20,17 @@ bun run check
 bun test tests/
 bun run build >/dev/null
 
-scratch="$(mktemp -d /work/tmp/bun-wasm-web-net-XXXXXX)"
-isolated_scratch="$(mktemp -d /work/tmp/bun-wasm-web-isolated-XXXXXX)"
+scratch_root="${BUN_WASM_TEST_TMP:-${TMPDIR:-/tmp}}"
+scratch=""
+isolated_scratch=""
 isolated_backups=()
 server_pid=""
 cleanup() {
-  if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; fi
-  for app in "${isolated_backups[@]}"; do
+  if [[ -n "$server_pid" ]]; then
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+  for app in ${isolated_backups[@]+"${isolated_backups[@]}"}; do
     backup="$isolated_scratch/$app.bunfig.toml"
     if [[ -f "$backup" ]]; then
       cp "$backup" "$root/$app/bunfig.toml"
@@ -37,6 +41,10 @@ cleanup() {
   rm -rf "$scratch" "$isolated_scratch"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+scratch="$(mktemp -d "$scratch_root/bun-wasm-web-net-XXXXXX")"
+isolated_scratch="$(mktemp -d "$scratch_root/bun-wasm-web-isolated-XXXXXX")"
 
 printf '[install]\nlinker = "isolated"\n' >"$isolated_scratch/bunfig.toml"
 for app in web sandbox site; do
@@ -65,7 +73,7 @@ for slots in table imports; do
     dir="$root/tests/fixtures/$fixture"
     output="$scratch/$fixture-$slots.out"
     comparison="$scratch/$fixture-$slots.diff"
-    if SLOTS=$slots timeout 60 bun scripts/run.ts "$root/dist/bun.wasm" -e "$(cat "$dir/index.js")" >"$output" 2>&1 &&
+    if SLOTS=$slots node "$root/scripts/run-with-timeout.mts" 60 bun scripts/run.ts "$root/dist/bun.wasm" -e "$(cat "$dir/index.js")" >"$output" 2>&1 &&
       diff -u "$dir/expected.txt" "$output" >"$comparison"; then
       echo "ok   cli $fixture ($slots)"
     else
@@ -83,8 +91,11 @@ if [[ $browser == 1 ]]; then
   node tests/browser-shell-stop.ts || failed=1
   node tests/browser-net.mjs || failed=1
   bun tests/browser-subprocess.ts || failed=1
+  bun tests/browser-interrupt.ts chromium firefox webkit || failed=1
+  bun tests/browser-runtime-proc.ts chromium webkit || failed=1
   node tests/browser-stack.mjs || failed=1
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
+    node tests/browser-worker-modules.ts || failed=1
     node tests/browser-engine.mjs || failed=1
     node tests/browser-crypto.mjs || failed=1
     node tests/browser-memory.mjs || failed=1
