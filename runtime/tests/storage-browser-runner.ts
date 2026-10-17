@@ -26,7 +26,15 @@ function storageWorker(): void {
         globalThis.postMessage({ result: label });
       }
     } catch (error) {
-      globalThis.postMessage({ error: error instanceof Error ? error.stack ?? error.message : String(error) });
+      // WebKit's stack contains locations only: never let it replace the actual error message.
+      const detail = error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error);
+      const environment = {
+        secureContext: globalThis.isSecureContext, crossOriginIsolated: globalThis.crossOriginIsolated,
+        getDirectory: typeof navigator.storage?.getDirectory,
+        syncAccess: typeof FileSystemFileHandle === "undefined" ? "undefined"
+          : typeof (FileSystemFileHandle.prototype as FileSystemFileHandle & { createSyncAccessHandle?: unknown }).createSyncAccessHandle,
+      };
+      globalThis.postMessage({ error: `${detail}\nWorker environment: ${JSON.stringify(environment)}` });
     }
   };
 }

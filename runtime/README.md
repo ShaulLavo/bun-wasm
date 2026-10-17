@@ -230,8 +230,9 @@ metadata work is proportional to workspace size even when only one file changed.
 | File `fsync` / editor `fs.flush(path)` | Waits for the strict transaction; it may also persist other dirty files | Flushes that file's immutable payload, then the snapshot naming it; unrelated payloads are not promised durable |
 | Workspace `fs.flush()` | Waits for strict transactions | Flushes all current outstanding payloads, then the naming snapshot |
 
-These are browser API guarantees, not an independent promise about hardware, browser eviction,
-private-browsing retention, or quota. OPFS close-only checkpoints survive normal document reloads,
+These are the requested browser durability boundaries: IndexedDB transactions with
+`durability: "strict"` and explicit OPFS `SyncAccessHandle.flush()` calls. They are not an independent
+promise about hardware, browser eviction, private-browsing retention, or quota. OPFS close-only checkpoints survive normal document reloads,
 but are not a power-loss guarantee for payloads. After a device/browser crash, a flushed file must
 remain named even if an unrelated unsynced payload is absent or short. Recovery therefore does not
 reject an otherwise valid naming snapshot because of unrelated payload damage; accessing that
@@ -252,6 +253,44 @@ The explicit runtime option keeps IndexedDB the default and permits host policy 
 second filesystem implementation. The demo query parameter is a reproducible, bookmarkable opt-in
 without a browser-wide setting or automatic migration. `SharedFilesystem({ persistence: false })`
 selects disposable memory-only storage. Closing a page without a completed flush may lose edits.
+
+### OPFS corpus measurements
+
+The [2026-10-17 evidence](../docs/benchmarks/filesystem-persistence-opfs-2026-10-17.json)
+records the spike's exact geometry: 10,003 files and 92,687,646 bytes, with deterministic synthetic
+contents and full byte validation. These are single-sample diagnostics on one M1 MacBook Air,
+on AC power but with owner activity and nonzero background load; they are not performance gates.
+The artifact records exact source commits and hashes for each run.
+
+| Browser | Background persist | One-file fsync | Index reload | First payload | Full read | Raw OPFS persist |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Chromium 156.0.8078.4 | 7,510.6 ms | 0.8 ms | 47.5 ms | 1.9 ms | 7,431.3 ms | 3,837.2 ms |
+| Firefox 157.0 | 36,008.1 ms | 4.1 ms | 66.0 ms | 2.8 ms | 22,248.9 ms | 37,359.7 ms |
+| Real Safari 26.4 | 3,930.5 ms | 1.6 ms | 55.0 ms | 1.9 ms | 3,427.1 ms | 2,700.2 ms |
+
+Background persist includes forty 256-file-or-smaller checkpoints and the initial empty baseline,
+with zero payload flushes. The separately measured file fsync flushes exactly one payload and one
+snapshot. A workspace-wide flush happens outside persist timing, before reload. Index reload opens
+no payload handles; cache churn revisits files after 1,200 distinct reads, and the observed read
+handle peak stays at 64. Reload, writer exclusion and interruption after half an actual native payload
+or snapshot write pass in Chromium, Firefox and real Safari. These interruption tests terminate the
+page; they do not simulate power loss.
+
+The earlier IndexedDB ledger reports 1.1–1.8 s persist and 45–72 ms index reload. OPFS index reload
+is in that range, but writes are slower, so IndexedDB remains the default. Those ledger timings are
+historical rather than a paired same-load rerun. The same-host raw comparator uses identical paths,
+sizes and bytes, 32 create/write/close workers, and one final minimal naming snapshot; it omits the
+runtime, checksums, rollback snapshots and garbage collection. Against it, the adapter is about
+1.96x slower on Chromium and 1.46x on Safari, with no measured regression on Firefox. Firefox's
+native file operations serialize even for the raw parallel writer.
+
+The adapter serializes, validates and checksums a growing full index forty times, rather than one
+minimal manifest. Timed storage batches account for about 5.79 s of Chromium's 7.51 s, with about
+1.72 s outside storage (including 0.063 s generating contents). Native metadata calls alone account
+for only about 0.06 s there, so they do not explain the whole gap. Cloning, validation, checksumming
+and truncation are not individually timed. Native asynchronous duration sums overlap and must not
+be added as critical-path time. The artifact retains the per-batch and native measurements rather
+than claiming an unmeasured cause.
 
 Ports schedule requests; each request owns a SharedArrayBuffer with a 32-byte completion header,
 JSON operation/arguments and optional binary input. Results overwrite the data region. Large
