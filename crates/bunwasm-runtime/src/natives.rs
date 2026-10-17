@@ -852,10 +852,12 @@ fn install_url(t: &mut Table) {
 /// byte results come back as Uint8Array / strings.
 fn install_host(t: &mut Table, state: &Rc<State>) {
     use crate::host;
+    // Slot capabilities, plus the process ABI: runtime_proc is a wasm import namespace, not a slot.
     let caps = host::SLOT_NAMES
         .iter()
         .enumerate()
         .map(|(i, name)| ((*name).to_owned(), Val::Bool(host::provided(i))))
+        .chain(std::iter::once(("proc_spawn".to_owned(), Val::Bool(host::PROCESS_ABI))))
         .collect();
     t.constants.push(("hostCaps", Val::Object(caps)));
     // String on success, the negative code otherwise.
@@ -865,10 +867,46 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
             Err(code) => code.into(),
         })
     }
-    t.add("hostSpawn", |a| Ok(host::spawn(a.str(0)?.as_bytes()).into()));
-    t.add("hostChildWait", |a| Ok(host::child_wait(a.i32(0)?).into()));
-    t.add("hostChildPipe", |a| Ok(host::child_pipe(a.i32(0)?, a.i32(1)?).into()));
-    t.add("hostChildKill", |a| Ok(host::child_kill(a.i32(0)?, a.i32(1)?).into()));
+    // runtime_proc process ABI (docs/host-abi.md, "Process imports"). Results are `>= 0` or a
+    // negative WASI errno; byte results come back as Uint8Array.
+    t.add("procSpawn", |a| Ok(host::proc_spawn(a.bytes(0)?).into()));
+    t.add("procJobOf", |a| Ok(host::proc_job_of(a.i32(0)?).into()));
+    t.add("procPipe", |_| {
+        Ok(match host::proc_pipe() {
+            Ok((read, write)) => Val::Array(vec![Val::Num(read as f64), Val::Num(write as f64)]),
+            Err(code) => code.into(),
+        })
+    });
+    t.add("procClose", |a| Ok(host::proc_close(a.i32(0)?).into()));
+    t.add("procRead", |a| {
+        let cap = a.opt_num(1).unwrap_or(65536.0).clamp(1.0, 16.0 * 1024.0 * 1024.0) as usize;
+        Ok(match host::proc_read(a.i32(0)?, cap) {
+            Ok(bytes) if bytes.is_empty() => 0.into(),
+            Ok(bytes) => Val::Bytes(bytes),
+            Err(code) => code.into(),
+        })
+    });
+    t.add("procWrite", |a| Ok(host::proc_write(a.i32(0)?, a.bytes(1)?).into()));
+    t.add("procWait", |a| {
+        Ok(match host::proc_wait(a.i32(0)?) {
+            Ok((kind, code)) => Val::Array(vec![Val::Num(kind as f64), Val::Num(code as f64)]),
+            Err(code) => code.into(),
+        })
+    });
+    t.add("procWaitJob", |a| {
+        Ok(match host::proc_wait_job(a.i32(0)?, a.i32(1)?) {
+            Ok(status) => status.into(),
+            Err(code) => code.into(),
+        })
+    });
+    t.add("procKill", |a| Ok(host::proc_kill(a.i32(0)?, a.i32(1)?).into()));
+    t.add("procKillJob", |a| Ok(host::proc_kill_job(a.i32(0)?, a.i32(1)?).into()));
+    t.add("procPoll", |a| {
+        Ok(match host::proc_poll(a.bytes(0)?, a.i32(1)?) {
+            Ok(events) => Val::Bytes(events),
+            Err(code) => code.into(),
+        })
+    });
     let st = state.clone();
     t.add("hostSignal", move |a| Ok(st.signal(a.i32(0)?, a.i32(1)?).into()));
     t.add("hostPoll", |a| Ok(host::poll(a.i32(0)?).into()));

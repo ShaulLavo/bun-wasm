@@ -480,7 +480,16 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
             }
             core.state.flush();
             let wait = if next < 0.0 { 25 } else { (next.ceil() as i32).clamp(1, 25) };
-            if host::poll(wait) == host::UNSUPPORTED {
+            // Waiters that only watch runtime_proc descriptors and children sleep in
+            // proc_poll for exactly what they watch; anything else uses the host poll.
+            let slept = match core.call_internal(e, "ioWait", &[e.from_val(wait.into())]) {
+                Ok(value) => matches!(e.to_val(&value), Val::Bool(true)),
+                Err(err) => {
+                    core.uncaught(e, err);
+                    continue;
+                }
+            };
+            if !slept && host::poll(wait) == host::UNSUPPORTED {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
             if let Err(err) = core.call_internal(e, "pumpIo", &[]) {

@@ -1,10 +1,10 @@
 # bun.wasm host ABI (`bun_wasm`, version 1)
 
 WASI preview1 has no sockets. Hosts that want to give bun.wasm networking
-(`fetch`, `Bun.serve`, `node:http`, `node:net`) and bun child processes provide
-the extra functions described here. Hosts that don't (plain `wasmtime run`) need to do
-nothing: bun.wasm runs exactly as before and network APIs reject or throw
-"not supported".
+(`fetch`, `Bun.serve`, `node:http`, `node:net`) provide the extra functions described here.
+Hosts that don't need to do nothing for them: network APIs reject or throw "not supported".
+Child processes are different: they use the `runtime_proc` import namespace
+([Process imports](#process-imports)), which every host instantiating bun.wasm provides.
 
 ## Why not plain imports
 
@@ -89,13 +89,12 @@ reads as `UNSUPPORTED`. The playground and sandbox use this by default (`web/src
 | 9    | `connect`    | `(host_ptr, host_len, port) -> handle`                           |
 | 10   | `error`      | `(handle, buf_ptr, buf_cap) -> len`                              |
 | 11   | `peer_addr`  | `(handle, buf_ptr, buf_cap) -> len`                              |
-| 12   | `spawn`      | `(meta_ptr, meta_len) -> child`                                  |
-| 13   | `child_wait` | `(child) -> exit_code`                                          |
-| 14   | `child_pipe` | `(child, selector) -> pipe_or_final_signal`                       |
-| 15   | `child_kill` | `(child, signal) -> i32`                                         |
-| 16   | `shutdown` | `(connection) -> i32`                                            |
-| 17   | `local_addr` | `(handle, buf_ptr, buf_cap) -> len`                              |
-| 18   | `signal`     | `(signal, mode) -> i32`                                         |
+| 12   | `shutdown`   | `(connection) -> i32`                                            |
+| 13   | `local_addr` | `(handle, buf_ptr, buf_cap) -> len`                              |
+| 14   | `signal`     | `(signal, mode) -> i32`                                          |
+
+Version 1 has 15 slots. The Bun-specific child slots (`spawn`, `child_wait`, `child_pipe`,
+`child_kill`) no longer exist; slots after `peer_addr` were renumbered when they went away.
 
 ### `poll(timeout_ms) -> i32`
 
@@ -210,8 +209,8 @@ connection, same length protocol as `fetch_head`.
 
 ## Signal dispositions
 
-Optional slot 18, `signal(sig, mode)`, connects Node/Bun signal listeners to the process host
-without adding mandatory WebAssembly imports. ABI version 1 and slots 0–17 retain their meaning.
+Optional slot 14, `signal(sig, mode)`, connects Node/Bun signal listeners to the process host
+without adding mandatory WebAssembly imports. ABI version 1 and slots 0–13 retain their meaning.
 A plain preview1 host may leave the slot unset. The browser's ordinary WASI adapter also exposes
 `runtime_proc.signal(sig, mode)` with the same operations.
 
@@ -268,123 +267,85 @@ handled EPIPE keeps the guest's own status. Error handling never synthesizes SIG
 unrelated pending signals. An explicit parent SIGPIPE request uses the target disposition immediately,
 just like SIGINT or SIGTERM.
 
-## Bun child processes
+## Process imports
 
-`spawn` returns a child handle without waiting for execution. The browser starts a fresh worker
-using a registered compiled module and guest adapter; it never invokes a native executable.
-The native launcher and Node adapter support their configured Bun executables. Metadata is JSON:
+Bun's `Bun.spawn`, `node:child_process` and `worker_threads` run on the generic `runtime_proc`
+process ABI, the same imports preview1 programs use, so Bun children are ordinary members of the
+runtime's process directory. Unlike the network slots they are real wasm imports: the guest
+imports exactly these functions, all `i32` parameters and an `i32` result, with Waffle's
+`ProcessABI` semantics (`proc/abi.ts` in the Waffle repository; the table in
+[the runtime plan](../plans/browser-runtime.md#process-abi-for-the-shell-lane) is the summary):
+
+| import | signature |
+|---|---|
+| `runtime_proc.spawn` | `(desc_ptr, desc_len) -> pid` |
+| `runtime_proc.job_of` | `(pid) -> job` |
+| `runtime_proc.pipe` | `(out_ptr) -> 0` (two `u32`: read end, write end) |
+| `runtime_proc.read` | `(fd, buf, len) -> n` |
+| `runtime_proc.write` | `(fd, buf, len) -> n` |
+| `runtime_proc.wait` | `(pid, out_ptr) -> 0` (`u32 kind`, `i32 code`) |
+| `runtime_proc.wait_job` | `(job, flags, status_ptr) -> errno` |
+| `runtime_proc.kill` | `(pid, sig) -> 0` |
+| `runtime_proc.kill_job` | `(job, sig) -> 0` |
+| `runtime_proc.poll` | `(subs_ptr, n, timeout_ms, out_ptr) -> n_ready` |
+| `wasi_snapshot_preview1.fd_close` | `(fd) -> errno`, the only way to close a pipe end |
+
+The guest does not import `dup`, `interrupted`, `signal` or `default_signal` (signals keep slot
+14). A host that instantiates bun.wasm must provide the namespace; a plain `wasmtime run` of
+bun.wasm no longer links. Results are `>= 0` or a negative WASI errno (`EAGAIN` is `-6`, `EPIPE`
+`-64`); they are not the network slots' `-2 AGAIN`.
+
+The guest never chooses descriptor numbers for itself. `spawn` takes UTF-8 JSON:
 
 ```json
-{"argv":["bun","run","/app.ts"],"cwd":"/","env":{"HOME":"/"},
- "stdin":"pipe","stdout":"pipe","stderr":"pipe"}
+{"executable":"bun","argv":["bun","run","/app.ts"],"cwd":"/","env":{"HOME":"/"},"job":0,
+ "fds":[{"child":0,"parent":7},{"child":1,"parent":8},{"child":2,"parent":2}]}
 ```
 
-The guest preserves `argv[0]`; executable selection belongs to the host's registry.
-The browser registers `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and
-`/usr/local/bin/node` with the page/root command's selected engine and compiled module.
-`bun-quickjs`, `bun-jsc` and `bun-browser` select an engine explicitly. Generic aliases keep
-using the page/root engine even when an explicitly selected child uses another engine.
-A browser start failure appears through `child_wait`: 127 for an
-unregistered executable, 126 for a registered executable that cannot start.
-`env` replaces the child environment; the host sets `PWD` to `cwd` because the
-WASI guest changes directory there at startup. Each stdio mode is `pipe`,
-`inherit`, or `ignore`. Inheritance refers to the immediate parent's stream,
-including pipes when the parent is itself a child. No OS descriptor inheritance
-or IPC channel is implied.
+- `argv[0]` is preserved and `executable` is `argv[0]`; the host's registry selects the program.
+  Bun registers `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and `/usr/local/bin/node`
+  and the explicit `bun-quickjs`, `bun-jsc` and `bun-browser` engine names; generic aliases keep
+  the page or root engine. No native executable is ever started.
+- `env` replaces the child environment; the host sets `PWD` to `cwd`.
+- `job` is always `0`: each Bun child is a new foreground job owned by its parent. The guest
+  reaps it with `wait_job(job, NOHANG)` after observing the exit.
+- `fds` binds child descriptors to parent descriptors. Stdio `pipe` creates a fresh pipe whose
+  child end is bound to fd 0, 1 or 2 and whose other end the parent keeps. `inherit` binds
+  `{child: n, parent: n}`, the parent's own stream, including a pipe when the parent is itself a
+  child. `ignore` has no `/dev/null`: stdin is a pipe whose only writer closed, and output is a
+  pipe the parent reads and discards. `spawn` takes its references before it returns, so the
+  guest closes the child ends at once; nothing else is inherited.
+- A `worker_threads` child additionally carries `"worker": {"resourceLimits": ..., "memoryLimitMb": ...}`
+  (hosts may ignore it) and two extra bindings, one pipe in each direction. Each child number is
+  the parent's own descriptor number for that end, and the child learns both from
+  `BUNWASM_WORKER_CONTROL={"input":N,"output":M}` (it reads `N` and writes `M`, then deletes the
+  variable). These are ordinary bindings: no reserved numbers, and a grandchild inherits them only
+  if its own request lists them.
 
-`child_pipe(child, fd)` returns the stdin, stdout, or stderr pipe for fd 0, 1, or
-2. It returns 0 for an inherited or ignored stream. Use the existing `write`,
-`read`, and `close` functions on these pipe handles. Closing stdin sends EOF;
-closing an output read end discards remaining output and makes child writes fail.
-Reads return `AGAIN` until bytes or EOF arrive. Pipe buffers are bounded to 1 MiB
-on the native launcher and apply backpressure.
+`wait` reports `-6` while the child runs, then `kind` 0 (exited, `code` the byte-sized exit
+status) or 1 (signaled, `code` the signal number) and stays observable until the job is reaped.
+That is the only way a signal death is classified: `process.exit(143)` is `exitCode: 143,
+signalCode: null`, a selected SIGTERM is `exitCode: null, signalCode: "SIGTERM"`, and requests or
+timeout flags never relabel an outcome. Start failures arrive through `wait` as 127 (executable
+not registered) or 126 (registered but unable to start). `kill` examines the target's
+disposition as described under [Signal dispositions](#signal-dispositions); the runtime
+supports SIGINT, SIGTERM, SIGKILL and SIGPIPE, and signal 0 is answered by `wait`. Closing the
+parent's end of an output pipe makes child writes fail with `EPIPE`; closing stdin sends EOF.
 
-Slot 14 also reserves the named selector `CHILD_FINAL_SIGNAL = 3`:
-`child_pipe(child, 3)` returns `AGAIN` until completion is published, then 0 for
-an ordinary exit or the signal number for a selected signal death. An unknown
-child or unsupported selector returns `BADF`. This is a metadata query, not a pipe
-handle, and does not allocate or close a descriptor. Slots 12–15 retain their
-numbers and integer signatures; selectors 0–2 retain their existing meaning.
-The guest reads the final signal after `child_wait` completes and before closing
-the child. Both queries remain repeatable. Status 143 alone never implies SIGTERM:
-ordinary `process.exit(143)` reports `exitCode: 143, signalCode: null`, whereas
-selected SIGTERM reports `exitCode: null, signalCode: "SIGTERM"`. Signal requests
-and timeout flags do not classify the final outcome.
+While children are running the event loop sleeps in `poll` on exactly what its waiters watch
+(readable output pipes, a blocked stdin pipe as writable, child exit kind 2, job-empty kind 4)
+instead of the network `poll(timeout)` slot, so child output and exits wake it directly.
+`Bun.spawnSync` polls the same way until completion. Pipe capacity, the number of concurrent
+children and per-process memory belong to the process service, not to this guest contract.
 
-Separate-guest workers use two additional control-pipe selectors, without reusing
-signal metadata selector 3. Selector 4 is parent-to-worker input (parent writes,
-worker reads); selector 5 is worker-to-parent output (worker writes, parent reads).
-The parent queries these with the worker's child handle; a worker queries its own
-endpoints with child handle 0. Handle 0 does not turn selector 3 into a pipe or
-provide root completion metadata. These private channels do not change stdio
-selectors 0–2 or their inheritance modes. Native worker completion closes its incoming
-reader and outgoing writer before publishing completion, so pending parent writes
-observe EPIPE and readers can reach EOF.
-
-`child_wait` is nonblocking and repeatable: `AGAIN` while running, then the exit
-code. Waiting does not close the child or its pipes. Drain and close the pipes,
-then `close(child)` to release the handle. Closing a running child kills it.
-`child_kill(..., 0)` checks whether the child is alive. SIGINT, SIGTERM and SIGPIPE examine the
-child's registered disposition: default immediately selects `128 + sig` and revokes; ignored
-does nothing; handled queues delivery and preserves the guest's own exit code. An explicit
-`runtime_proc.default_signal(sig)` also records a typed default action. SIGKILL immediately
-selects 137 and revokes regardless of disposition. Late worker messages cannot override a
-selected outcome. There are no escalation timers. Timeouts and abort signals use the same
-operation; a prior request or timeout flag is not evidence of the eventual signal kind.
-
-The native launcher shares the compiled module and preopened host directories
-between independent stores on child threads. Filesystem changes are visible
-immediately to both sides, as with native processes. A shared budget permits at
-most four active children, including descendants; another spawn fails `EAGAIN`.
-Each store's linear memory is limited to 512 MiB. A 10 ms epoch ticker interrupts
-CPU-bound children; cancellation also wakes blocked WASI stdio and host polling.
-Parent teardown kills and joins its remaining children, including descendants.
-Handles are virtual identifiers, not host process IDs. Native process/pipe and
-network handle ranges are disjoint and bounded; exhaustion returns `EAGAIN` before
-creating a child, pipe or network operation, never a wrapped or misrouted handle.
-Guest timer waits and `Bun.sleepSync` use host polling so cancellation also interrupts long sleeps.
-A native unhandled signal selects typed signal death immediately; epoch, poll and stdio
-checkpoints observe that selected cancellation to stop execution. A handled request instead
-queues delivery without fatal cancellation, so an ordinary guest exit keeps its code.
-SIGKILL selects signal 9 immediately if no outcome has already won. Selection is
-immutable and precedes pipe closure and completion publication. A signal request
-against a selected but not yet observed native child is a successful no-op, even
-while publication is pending. Once a successful wait or final-signal query observes
-completion, further native signal requests return `BADF`; the completion metadata
-remains available for repeatable queries until `close(child)`.
-
-Root and child stores share a native WASI `proc_exit` adapter that retains ordinary
-exit codes 126–255 instead of Wasmtime's default trap for those values. It applies
-the launcher's byte-sized OS exit convention (-1 becomes 255, 256 becomes 0), then
-reports a typed ordinary exit. The browser WASI and host-JS engine exit adapters use the same
-byte-sized convention, keeping negative values out of the child-control result namespace.
-Thus `process.exit(143)` is an ordinary exit with status 143 and no signal, not a
-trap or a SIGTERM result. The guest flushes buffered stdout before a blocking stdin
-read, allowing the parent to wait for readiness output before sending input.
-
-Browser and Node hosts implement the same process slots. The browser uses a page
-broker to start child workers while their parent is blocked in `spawnSync`. The broker lazily
-activates the generic process service on first spawn and shares compiled modules across workers.
-Processes register independent identities with the live filesystem service; no snapshots or
-merge-at-exit are used. Revocation is immediate at logical death. Before lock reaping and physical
-termination, a shared critical-section admission fence proves host filesystem operations quiescent;
-an ordinary guest exit acknowledgement also provides that proof. Merely calling
-`Worker.terminate()` does not.
-Node workers share their real preopens. See
-[the browser host notes](../web/README.md#bun-subprocess-workers) for networking and isolation.
-
-The guest exposes Bun spawn APIs and Node spawn/exec/fork wrappers over these
-slots. Fork launches a bun child; IPC channels and native descriptors are not
-implemented. Shell execution accepts a single quoted bun command, without shell
-operators or expansion. `$` remains unsupported.
-
-Plain `wasmtime run` has no child slots and reports that spawning is not supported
-in bun-wasm. It never falls back to a native program.
+Fork launches a bun child; IPC channels and inherited native descriptors are not implemented.
+Shell execution accepts a single quoted bun command, without shell operators or expansion. `$`
+remains unsupported.
 
 ## Hosts
 
 - `crates/bunwasm-host` (`bun-wasm` binary): native launcher on wasmtime,
-  implements every slot.
+  implements every slot and the `runtime_proc` namespace.
 - `web/`: the browser playground implements `poll`, `fetch`, `fetch_head`,
   `read`, `close`, `error`, and for `Bun.serve` previews `listen`,
   `local_port`, `accept`, `write` and `peer_addr` on virtual connections fed
@@ -394,7 +355,9 @@ in bun-wasm. It never falls back to a native program.
   the page must be cross-origin isolated; without isolation no slots are
   installed. `scripts/run.ts` offers the same slots when running the shim
   in Bun.
-- `wasmtime run`: no slots; network APIs report "not supported".
+- `wasmtime run`: cannot instantiate bun.wasm, which imports `runtime_proc`. A host without
+  networking provides the namespace and leaves every network slot unset; network APIs then report
+  "not supported".
 
 
 ## TCP half-close and local addresses
