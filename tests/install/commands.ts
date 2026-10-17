@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createRegistry, packageFixture, tarEntry } from "./registry.mjs";
 
@@ -66,6 +66,42 @@ const cases: Record<string, () => Promise<void>> = {
     const cwd = project("script", { "package.json": '{"scripts":{"start":"bun src/main"}}', "src/main.ts": '#!/usr/bin/env bun\nconsole.log("expanded-main", process.argv[1].endsWith("/src/main.ts"), import.meta.main);' });
     assert.match(await success(cwd, "run", "start"), /expanded-main true true/);
   },
+  async scriptCommandPrecedence() {
+    const cwd = project("script-command", {
+      "package.json": JSON.stringify({ dependencies: { tool: "1.0.0" }, scripts: { bare: "tool", explicit: "./tool", runtime: "bun tool", node: "node tool", path: "PATH=./tools:$PATH path-tool" } }),
+      tool: '#!/usr/bin/env bun\nconsole.log("source-file");',
+      "tools/path-tool": '#!/usr/bin/env bun\nconsole.log("path-bin");',
+      "path-tool.ts": 'throw new Error("cwd source must not run");',
+    });
+    chmodSync(join(cwd, "tool"), 0o755);
+    chmodSync(join(cwd, "tools/path-tool"), 0o755);
+    await success(cwd, "install");
+    for (const linked of [true, false]) {
+      if (!linked) rmSync(join(cwd, "node_modules/.bin"), { recursive: true });
+      assert.equal((await success(cwd, "run", "bare")).trim(), "bin-tool");
+      for (const name of ["explicit", "runtime", "node", "tool"]) assert.equal((await success(cwd, "run", name)).trim(), "source-file");
+      assert.equal((await success(cwd, "run", "path")).trim(), "path-bin");
+      if (process.env.INSTALL_ENGINE === "native") break;
+    }
+  },
+  async malformedManifestFallback() {
+    for (const target of [42, "", "../outside.ts", "/outside.ts"]) {
+      const cwd = project(`malformed-${String(target).replaceAll("/", "_")}`, {
+        "package.json": '{"dependencies":{"tool":"1.0.0"},"scripts":{"start":"tool"}}',
+      });
+      await success(cwd, "install");
+      project(`malformed-${String(target).replaceAll("/", "_")}`, {
+        "node_modules/z-bad/package.json": JSON.stringify({ name: "z-bad", bin: { tool: target } }),
+      });
+      if (process.env.INSTALL_ENGINE !== "native") rmSync(join(cwd, "node_modules/.bin"), { recursive: true });
+      for (const name of ["tool", "start"]) {
+        const result = await run(cwd, "run", name);
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.stdout.trim(), "bin-tool");
+        assert.doesNotMatch(result.stderr, /warn|invalid|malformed/i);
+      }
+    }
+  },
   async binSelection() {
     const cwd = project("bins", { "package.json": '{"dependencies":{"@fixture/multiple":"1.0.0","only":"1.0.0","@fixture/string":"1.0.0"}}' });
     await success(cwd, "install");
@@ -106,6 +142,7 @@ try {
     packageFixture("@fixture/string", "1.0.0", { bin: "cli.ts" }, undefined, [tarEntry("package/cli.ts", '#!/usr/bin/env bun\nconsole.log("string-bin");')]),
   ]);
   for (const [name, check] of Object.entries(cases)) {
+    if (process.env.INSTALL_CASES && !process.env.INSTALL_CASES.split(",").includes(name)) continue;
     try { await check(); console.log(`PASS ${name}`); }
     catch (error) { console.error(`FAIL ${name}`, error); process.exitCode = 1; }
   }

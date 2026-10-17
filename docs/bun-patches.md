@@ -1968,7 +1968,14 @@ selected lock entries, leaving unrelated root pins intact.
 
 The TypeScript package-script dispatcher runs JavaScript and TypeScript binaries
 inside the selected engine. It handles quoted arguments and environment
-assignments. Shell pipelines, redirections, command substitution, and native
+assignments. Runtime entries preserve source-file precedence. Bare executables
+expanded from package scripts use installed bins and PATH; explicit relative
+paths address the file directly. Manifest bin fallback applies the installer's
+target validation and silently skips malformed entries before continuing to
+other packages. Host native Bun controls and rebuilt engine/page regressions
+cover command collisions and malformed declarations. These are original adapter
+changes rather than a copied shell implementation.
+Shell pipelines, redirections, command substitution, and native
 executables remain outside this adapter. Install lifecycle scripts and security
 scanner execution retain their existing limitations.
 

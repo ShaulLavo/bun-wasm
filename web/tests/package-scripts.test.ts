@@ -31,8 +31,8 @@ function dispatched(cwd: string, name: string, env: Record<string, string> = {})
     require: (name: string) => name === "path" ? path : process,
   }).resolve(resolve(cwd, name));
 }
-function native(cwd: string, name: string) {
-  const result = Bun.spawnSync([process.execPath, "run", name], { cwd, env: { ...process.env, BUN_INSTALL_AUTO: "0" }, stdout: "pipe", stderr: "pipe" });
+function native(cwd: string, name: string, env: Record<string, string> = {}) {
+  const result = Bun.spawnSync([process.execPath, "run", name], { cwd, env: { ...process.env, ...env, BUN_INSTALL_AUTO: "0" }, stdout: "pipe", stderr: "pipe" });
   expect(result.exitCode).toBe(0);
   return { stdout: result.stdout.toString().trim(), stderr: result.stderr.toString() };
 }
@@ -71,6 +71,7 @@ test("bare script commands use PATH and never infer a cwd source file", () => fi
   write(cwd, "package.json", '{"scripts":{"start":"tool"}}');
   write(cwd, "tool.ts", 'throw new Error("cwd source must not run");');
   write(cwd, "tools/tool", '#!/usr/bin/env bun\nconsole.log("path-bin");');
+  expect(native(cwd, "start", { PATH: join(cwd, "tools") + ":" + process.env.PATH }).stdout).toBe("path-bin");
   expect(dispatched(cwd, "start", { PATH: join(cwd, "tools") })).toBe(join(cwd, "tools/tool"));
   expect(() => dispatched(cwd, "start")).toThrow(/not found/i);
 }));
