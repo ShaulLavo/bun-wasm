@@ -74,6 +74,9 @@ pub fn matches(version: &str, range: &str) -> bool {
     let Ok(group) = query::parse(range_bytes, SlicedString::init(range_bytes, range_bytes)) else {
         return false;
     };
+    if group.has_skipped() {
+        return false;
+    }
     match group.get_exact_version() {
         Some(exact) => version.eql(exact),
         None => group.satisfies(version, range_bytes, version_bytes),

@@ -1664,6 +1664,12 @@ source is copied or changed by these adapters. They use Bun's `src/glob/` walker
 `src/semver/` parser, and the existing transpiler data parser from revision
 `4ceda2c2868d3a7703c7737ddd9de7244ec384df`.
 
+The installer checks `Group::has_skipped()` from Bun's
+`src/semver/SemverQuery.rs` before matching a registry range. The parser reports
+allocation errors through its result and records unrecognised tokens separately.
+A dist tag such as `latest` must reach tag resolution instead of matching a locked
+version as a wildcard.
+
 The manifest Accept value follows Bun's registry request contract, also checked
 by `test/cli/install/dummy.registry.ts` at that revision. Cache refresh uses the
 Cache-Control header, so it does not change content negotiation.

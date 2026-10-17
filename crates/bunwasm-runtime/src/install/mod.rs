@@ -240,7 +240,7 @@ fn remove_name(manifest: &mut Value, name: &str) {
         "optionalDependencies",
         "peerDependencies",
     ] {
-        if let Some(deps) = manifest[field].as_object_mut() {
+        if let Some(deps) = manifest.get_mut(field).and_then(Value::as_object_mut) {
             deps.remove(name);
         }
     }
