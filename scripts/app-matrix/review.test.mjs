@@ -93,3 +93,13 @@ test("playground server exiting during the page assertion also fails", async () 
   const result = await serverCommand({ page, context: { newPage: async () => preview }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run server.ts\nuser@bun:~$" });
   expect(result).toMatchObject({ status: "fail", exit: 0 });
 });
+
+test("rejection diagnostics recognize bracketed errors", () => {
+  for (const prefix of ["unhandledRejection", "uncaughtException"]) {
+    for (const wrapped of [false, true]) {
+      const error = "ReferenceError: WebAssembly is not defined";
+      const output = "warning: unsupported architecture\n" + prefix + " " + (wrapped ? "[" + error + "]" : error);
+      expect(failure(output, "build")).toEqual({ category: "d", blocker: "build: " + error });
+    }
+  }
+});

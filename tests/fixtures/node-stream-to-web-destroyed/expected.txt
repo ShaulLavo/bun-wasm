@@ -1,0 +1,3 @@
+queued destroy error
+closed destroy error
+cancel reaches close

@@ -620,259 +620,12 @@
     };
   }
 
-  // --- stream (minimal) -----------------------------------------------------
+  // --- portable Node streams -----------------------------------------------------
 
   function streamModule() {
-    const EventEmitter = internal.require("events");
-    // A small subset of Node streams: push/pipe/data/end, write/end/finish
-    // and Transform. Backpressure is not modelled.
-    function Stream(options) {
-      EventEmitter.call(this, options);
-    }
-    Object.setPrototypeOf(Stream, EventEmitter);
-    Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
-    Stream.prototype.pipe = function pipe(dest) {
-      this.on("data", (chunk) => dest.write(chunk));
-      this.on("end", () => {
-        if (dest !== globalThis.process.stdout && dest !== globalThis.process.stderr && dest.end) dest.end();
-      });
-      return dest;
-    };
-    class Readable extends Stream {
-      constructor(options = {}) {
-        super();
-        this.readable = true;
-        this._buffer = [];
-        this._ended = false;
-        this._flowing = false;
-        this._encoding = options.encoding || null;
-        this._objectMode = Boolean(options.objectMode || options.readableObjectMode);
-        if (typeof options.read === "function") this._read = options.read;
-        this.on("newListener", (event) => {
-          if (event === "data") setImmediate(() => this.resume());
-        });
-      }
-      static from(iterable, options) {
-        const stream = new Readable(Object.assign({ objectMode: true }, options));
-        (async () => {
-          try {
-            for await (const chunk of iterable) stream.push(chunk);
-            stream.push(null);
-          } catch (err) {
-            stream.destroy(err);
-          }
-        })();
-        return stream;
-      }
-      _read() {}
-      push(chunk) {
-        if (chunk === null) {
-          this._ended = true;
-          setImmediate(() => this._flush());
-          return false;
-        }
-        this._buffer.push(this._encoding && typeof chunk !== "string" ? String(chunk) : chunk);
-        if (this._flowing) setImmediate(() => this._flush());
-        return true;
-      }
-      _flush() {
-        if (!this._flowing) return;
-        while (this._buffer.length) this.emit("data", this._buffer.shift());
-        if (this._ended && !this._endEmitted) {
-          this._endEmitted = true;
-          this.emit("end");
-          this.emit("close");
-        }
-      }
-      resume() {
-        if (!this._flowing) {
-          this._flowing = true;
-          this._read();
-        }
-        this._flush();
-        return this;
-      }
-      pause() {
-        this._flowing = false;
-        return this;
-      }
-      setEncoding(enc) {
-        this._encoding = enc;
-        return this;
-      }
-      read() {
-        return this._buffer.length ? this._buffer.shift() : null;
-      }
-      destroy(err) {
-        if (err) setImmediate(() => this.emit("error", err));
-        setImmediate(() => this.emit("close"));
-        return this;
-      }
-      async *[Symbol.asyncIterator]() {
-        const queue = [];
-        let done = false;
-        let failure = null;
-        let wake = null;
-        const notify = () => wake && wake();
-        this.on("data", (c) => {
-          queue.push(c);
-          notify();
-        });
-        this.on("end", () => {
-          done = true;
-          notify();
-        });
-        this.on("error", (e) => {
-          failure = e;
-          notify();
-        });
-        while (true) {
-          if (failure) throw failure;
-          if (queue.length) {
-            yield queue.shift();
-            continue;
-          }
-          if (done) return;
-          await new Promise((r) => (wake = r));
-        }
-      }
-    }
-    class Writable extends Stream {
-      constructor(options = {}) {
-        super();
-        this.writable = true;
-        this.destroyed = false;
-        this._writableState = { length: 0, needDrain: false, finished: false, errorEmitted: false, autoDestroy: options.autoDestroy !== false };
-        if (typeof options.write === "function") this._write = options.write;
-        if (typeof options.final === "function") this._final = options.final;
-        if (typeof options.destroy === "function") this._destroy = options.destroy;
-      }
-      _write(chunk, encoding, callback) {
-        callback();
-      }
-      write(chunk, encoding, callback) {
-        if (typeof encoding === "function") callback = encoding;
-        this._write(chunk, typeof encoding === "string" ? encoding : "utf8", (err) => {
-          if (typeof callback === "function") callback(err || null);
-          if (err && !this._writableState.errorEmitted) {
-            this._writableState.errorEmitted = true;
-            this.emit("error", err);
-          }
-        });
-        return true;
-      }
-      end(chunk, encoding, callback) {
-        if (typeof chunk === "function") callback = chunk;
-        else if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
-        const finish = () => {
-          this.writable = false;
-          this._writableState.finished = true;
-          this.emit("finish");
-          if (typeof callback === "function") callback();
-          if (this._writableState.autoDestroy) this.destroy();
-        };
-        if (this._final) this._final(() => setImmediate(finish));
-        else setImmediate(finish);
-        return this;
-      }
-      _destroy(error, callback) {
-        callback(error);
-      }
-      destroy(error = null) {
-        if (this.destroyed) return this;
-        this.destroyed = true;
-        this.writable = false;
-        this._destroy(error, (err) => setImmediate(() => this._emitDestroy(err)));
-        return this;
-      }
-      _emitDestroy(error) {
-        if (error && !this._writableState.errorEmitted) {
-          this._writableState.errorEmitted = true;
-          this.emit("error", error);
-        }
-        this.emit("close");
-      }
-    }
-    class Duplex extends Readable {
-      constructor(options = {}) {
-        super(options);
-        this.writable = true;
-        this.destroyed = false;
-        this._writableState = { length: 0, needDrain: false, finished: false, errorEmitted: false, autoDestroy: options.autoDestroy !== false };
-        if (typeof options.write === "function") this._write = options.write;
-        if (typeof options.final === "function") this._final = options.final;
-        if (typeof options.destroy === "function") this._destroy = options.destroy;
-      }
-    }
-    for (const key of ["write", "end", "_write", "destroy", "_destroy", "_emitDestroy"]) Duplex.prototype[key] = Writable.prototype[key];
-    class Transform extends Duplex {
-      constructor(options = {}) {
-        super(options);
-        if (typeof options.transform === "function") this._transform = options.transform;
-        if (typeof options.flush === "function") this._flushTransform = options.flush;
-      }
-      _transform(chunk, encoding, callback) {
-        callback(null, chunk);
-      }
-      _write(chunk, encoding, callback) {
-        this._transform(chunk, encoding, (err, out) => {
-          if (out !== undefined && out !== null) this.push(out);
-          callback(err);
-        });
-      }
-      end(chunk, encoding, callback) {
-        if (typeof chunk === "function") callback = chunk;
-        else if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
-        const done = () => {
-          this.push(null);
-          this.emit("finish");
-          if (typeof callback === "function") callback();
-        };
-        if (this._flushTransform) {
-          this._flushTransform((err, out) => {
-            if (out !== undefined && out !== null) this.push(out);
-            done();
-          });
-        } else done();
-        return this;
-      }
-    }
-    class PassThrough extends Transform {}
-    function finished(stream, callback) {
-      let called = false;
-      const done = (err) => {
-        if (called) return;
-        called = true;
-        callback(err);
-      };
-      stream.on("end", () => done());
-      stream.on("finish", () => done());
-      stream.on("error", done);
-      return () => {};
-    }
-    function pipeline(...streams) {
-      const callback = typeof streams[streams.length - 1] === "function" ? streams.pop() : null;
-      for (let i = 0; i < streams.length - 1; i++) streams[i].pipe(streams[i + 1]);
-      const last = streams[streams.length - 1];
-      if (callback) finished(last, callback);
-      return last;
-    }
-    const promises = {
-      pipeline: (...streams) => new Promise((resolve, reject) => pipeline(...streams, (err) => (err ? reject(err) : resolve()))),
-      finished: (stream) => new Promise((resolve, reject) => finished(stream, (err) => (err ? reject(err) : resolve()))),
-    };
-    Stream.Readable = Readable;
-    Stream.Writable = Writable;
-    Stream.Duplex = Duplex;
-    Stream.Transform = Transform;
-    Stream.PassThrough = PassThrough;
-    Stream.Stream = Stream;
-    Stream.finished = finished;
-    Stream.pipeline = pipeline;
-    Stream.promises = promises;
-    Stream.isReadable = (s) => Boolean(s && s.readable);
-    Stream.isErrored = () => false;
-    return Stream;
+    const bundle = internal.require("node_stream_core");
+    internal.require("node_stream_web")(bundle);
+    return bundle.Stream;
   }
 
   // --- zlib (deflate/gzip via miniz_oxide; no brotli) -------------------------
@@ -1036,7 +789,7 @@
     "node:readline/promises": () => internal.builtin("node:readline").promises,
     "node:stream": streamModule,
     "node:stream/promises": () => internal.builtin("node:stream").promises,
-    "node:stream/web": () => ({ ReadableStream: globalThis.ReadableStream }),
+    "node:stream/web": () => internal.require("streams"),
     "node:perf_hooks": () => ({
       performance: globalThis.performance,
       PerformanceObserver: class PerformanceObserver {
@@ -1130,6 +883,7 @@
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
       directoryCount: () => native.directoryCount(),
     }),
+    "node:test": () => internal.require("node_test"),
     "bun:test": () => internal.require("bun_test").exports,
     "bun:sqlite": () => internal.require("bun_sqlite"),
     "bun:ffi": () => unsupportedModule("bun:ffi", "no native libraries in wasm", ["dlopen", "CString", "ptr", "toArrayBuffer", "toBuffer", "linkSymbols", "cc"], { FFIType: {}, suffix: "so" }),

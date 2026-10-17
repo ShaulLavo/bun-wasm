@@ -1,0 +1,1 @@
+Retained bun-wasm options.destroy contract. Native Node/Bun fromWeb whitelist options and omit this hook; bun-wasm preserves it after Web teardown and propagates its failures through Node destruction.

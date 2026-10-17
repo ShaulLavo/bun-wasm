@@ -432,3 +432,71 @@ The original Step 2 run reported this blocker in
 PR #36 fixed the shared filesystem capacity problem. It is merged into the #37
 review-fix branch. The repeated memory gate now passes all six Chromium/WebKit
 and engine combinations. This is no longer a Worker delivery blocker.
+
+### Node stream adapter census after unavailable worker detection
+
+The PR12 round-5 merge includes main `0cffef1`. All 22 selected Node adapter
+files are currently nonpassing on QuickJS, JSC and Node-host browser. The shared
+upstream harness imports `worker_threads` at `test/js/node/test/common/index.js:34`
+and receives `ERR_NOT_SUPPORTED_IN_WASM`. Main intentionally changed that module
+to reject loading so packages can detect absent worker support. Do not restore
+the earlier fabricated worker constructor to make this harness collect.
+
+Reproduce with `scripts/bun-suite.sh --node-parallel --engine quickjs --jobs 1
+--timeout 15 --network loopback --output <fresh-output.json>
+js/node/test/parallel/test-readable-from-web-enqueue-then-close.js`, repeated for
+JSC and browser. The full fixed selection is
+`docs/bun-test-suite/stream-adapter-files.txt`. Exact outcomes and wasm provenance
+are retained at `/work/reports/bun-wasm-streams-round5-2026-10-16/final-adapter-*.json`.
+All three current full fixture gates pass 152/152. Runtime stream behavior is
+not established by these non-collecting upstream files. The compatibility track
+owns resolving the upstream harness/capability boundary and removes the retained
+evidence after reproduction and independent review.
+
+### Native stream construction overhead
+
+The PR12 round-5 bounded probe creates, closes and cancels 10,000 native
+readables, then repeats through the construction bridge. On the M1 Mac with
+Chromium 153 it measured 14.1ms native and 35.3ms bridged; WebKit 26.6 measured
+19ms and 45ms. These single-run timings include serial cancellation awaits,
+have no warmup/GC control and are labeled noisy, not a performance improvement.
+Reproduce with `node scripts/test-native-stream-interop.mjs --benchmark` using
+Playwright Chromium and WebKit. Raw source and browser/version provenance are
+in `/work/reports/bun-wasm-streams-round5-2026-10-16/mac-final30.log`.
+
+Completion records are currently allocated eagerly by `construct` in
+`web/src/native-stream-state.ts`. If stream construction is hot in a real app,
+measure lazy completion-record allocation while retaining eager controller
+capture, pre-start abort propagation, native brands and both Transform ports.
+The 30-case browser fixture and all-engine lifecycle fixtures must stay green.
+The compatibility/performance track owns that work and evidence removal after
+reproduction. Round 5 deliberately leaves allocation behavior unchanged.
+
+### Browser memory-growth gate after shared filesystem main
+
+The Streams/TCP integration at `c0793417` merges main through `c7f08312`.
+All 167 CLI fixtures pass on QuickJS, JSC and Node-host browser, including
+`memory-grow`, and networking/Streams/browser/HMR checks pass. The full web gate
+still times out in `web/tests/browser-memory.mjs:65`: the first Chromium guest
+never completes, yielding `code: null` and `^C` after the unchanged 120-second
+limit. The guest at `tests/fixtures/memory-grow/index.js` writes and reads a
+48 MiB file. Native memory-view checks pass before it stalls.
+
+Before the filesystem merge, the same Streams/TCP tree passed all six memory
+engine/browser combinations. Main's filesystem merge changes no embedded
+runtime or launcher source; that input comparison is retained in
+`/work/reports/bun-wasm-streams-round6-2026-10-16/fs-main-native-input-diff.txt`.
+The new real-browser shared filesystem path is the next boundary to inspect,
+especially `runtime/fs/shared.ts`, `runtime/fs/client.ts` and `runtime/fs/backend.ts`.
+
+Reproduce after building web assets with `PLAYWRIGHT=<playwright/index.mjs>
+node web/tests/browser-memory.mjs chromium`, or `scripts/test-web.sh` in full,
+through the heavy wrapper. The exact failed web log, full gate script, artifact
+hashes and all passing stage logs are retained in
+`/work/reports/bun-wasm-streams-round6-2026-10-16/`.
+The runtime-filesystem/crypto landing lane already has a separate candidate
+`fix/browser-memory-shared-fs` at `fae037bff367bca0f15be73b4d952207c885da6f`.
+The coordinator should review and land that dependency, then rerun the memory
+and full web gates. Do not reduce the guest allocation, relax its timeout or
+remove assertions to call the gate passing. The owning lane removes retained
+evidence after reproduction, review and merge.

@@ -29,6 +29,8 @@ md-5 = "0.10"
 hmac = "0.12"
 getrandom = "0.3"
 miniz_oxide = "0.8"
+encoding_rs = "0.8"
+brotli = "=8.0.4"
 libsqlite3-sys = { version = "0.38", features = ["bundled"] }
 libc = "0.2"
 
