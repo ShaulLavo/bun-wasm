@@ -8,13 +8,14 @@ cd "$root/web"
 if [[ "$phase" != --browser ]]; then
   bun install --frozen-lockfile
   node_modules/.bin/tsc -p ../crates/bunwasm-runtime/tsconfig.json
-  bun test ../scripts/runtime-emission.test.ts ../scripts/runtime-types.test.ts ../scripts/worker-codec.test.ts ../scripts/worker-selectors.test.ts ../scripts/worker-outcome.test.ts
+  bun test ../scripts/runtime-emission.test.ts ../scripts/runtime-types.test.ts ../scripts/runtime-signal-dispatch.test.ts ../scripts/worker-codec.test.ts ../scripts/worker-selectors.test.ts ../scripts/worker-outcome.test.ts
   bun install --cwd ../runtime --frozen-lockfile
   bun install --cwd ../sandbox --frozen-lockfile
   bun run test
   bun test ../runtime/tests ../scripts/runtime-size.test.ts
   PYTHONDONTWRITEBYTECODE=1 python3 ../scripts/test-bun-suite.py ReportTests.test_browser_provenance_hashes_runtime_core
   bun run check
+  bun x tsc -p tests/engine-interruption.tsconfig.json
   bun run --cwd ../runtime check
   bun run --cwd ../sandbox check
   bun ../scripts/runtime-size.ts

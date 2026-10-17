@@ -47,6 +47,9 @@ char* bunjsc_host_resolve(const char* specifier, const char* referrer, JSValueRe
 char* bunjsc_host_fetch(const char* key, JSValueRef* exception);
 void bunjsc_host_init_meta(JSValueRef meta, const char* key, JSValueRef* exception);
 void bunjsc_host_free(char*);
+// Polls fatal host cancellation without entering JS or consuming handled signals.
+// True requests native, uncatchable termination after the callback has returned.
+bool bunjsc_host_interrupt();
 }
 
 static std::string utf8(const String& s)
@@ -169,6 +172,13 @@ static JSObject* createImportMeta(JSGlobalObject* globalObject, JSModuleLoader*,
     return meta;
 }
 
+// Invoked only by the C loop's trap slow path, after its PC and stack
+// pointer have been saved. Rust only polls fatal cancellation; it must not enter JS.
+static bool interruptScriptBeforeTimeout(const JSGlobalObject*)
+{
+    return bunjsc_host_interrupt();
+}
+
 extern "C" {
 
 // A global context whose global object has the module loader hooks above.
@@ -182,6 +192,7 @@ JSGlobalContextRef bunjsc_create_context()
     static GlobalObjectMethodTable table = [&] {
         JSGlobalObject* plain = JSGlobalObject::create(vm.get(), JSGlobalObject::createStructure(vm.get(), jsNull()));
         GlobalObjectMethodTable t = *plain->globalObjectMethodTable();
+        t.shouldInterruptScriptBeforeTimeout = interruptScriptBeforeTimeout;
         t.moduleLoaderImportModule = importModule;
         t.moduleLoaderResolve = resolveModule;
         t.moduleLoaderFetch = fetchModule;
@@ -190,6 +201,20 @@ JSGlobalContextRef bunjsc_create_context()
     }();
     JSGlobalObject* globalObject = JSGlobalObject::createWithCustomMethodTable(vm.get(), JSGlobalObject::createStructure(vm.get(), jsNull()), &table);
     return JSGlobalContextRetain(toGlobalRef(globalObject));
+}
+
+// Hosts without external signals leave polling disabled. The countdown is
+// consumed at ordinary C-loop function-entry and loop trap checks, so fatal
+// cancellation does not need the busy script to return to the event loop.
+void bunjsc_set_interrupt_handler(JSContextRef ctx, bool enabled)
+{
+    VM& vm = toJS(ctx)->vm();
+    JSLockHolder lock(vm);
+    if (enabled) {
+        vm.ensureTerminationException();
+        vm.forbidExecutionOnTermination();
+    }
+    vm.traps().setHostInterruptInterval(enabled ? 1024 : 0);
 }
 
 // `import(specifier)` from the top level (referrer: none); a promise of the
