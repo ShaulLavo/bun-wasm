@@ -529,7 +529,7 @@
   function webEntry(target: { argv: string[]; name: string }, web: BunWasm.WebWorkerOptions) {
     if (target.argv[0] === "run" || !web.preload.length) return target;
     const preloads = web.preload.map(path => `await import(${JSON.stringify(path)});`).join("\n");
-    return { argv: ["-e", preloads + "\n" + target.argv[1]], name: target.name };
+    return { argv: ["-e", preloads + '\n;(await import("node:worker_threads")).parentPort.start();\n' + target.argv[1]], name: target.name };
   }
   function execArguments(value: unknown) {
     if (value === undefined) return process.execArgv.slice();

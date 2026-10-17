@@ -61,6 +61,7 @@
         argv: "argv" in options ? options.argv : undefined,
         env: "env" in options ? options.env : undefined,
         execArgv: "execArgv" in options ? options.execArgv : undefined,
+        workerData: "data" in options ? options.data : undefined,
         eval: entry.eval, _web: { name, preload },
       });
       this.threadId = this.#worker.threadId;

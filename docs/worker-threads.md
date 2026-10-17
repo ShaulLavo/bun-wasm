@@ -300,7 +300,10 @@ The global `Worker` constructor wraps the same guest execution as
 `node:worker_threads.Worker`. It accepts file paths, file URL strings and objects,
 data URLs, and object URLs made from Blob or File. TypeScript entry points use
 Bun's transpiler. `name`, `argv`, `env`, `preload`, and `ref: false` configure the
-worker. `preload` accepts a path or an array of paths.
+worker. `preload` accepts a path or an array of paths. `data` is cloned at
+construction and is available through `node:worker_threads.workerData`.
+Entries are modules, including when `type: "module"` is specified. `smol` is
+accepted as a memory-use hint. It does not change the guest engine's heap policy.
 
 The parent receives EventTarget `open`, `message`, `messageerror`, `error`, and
 `close` events. Property handlers work alongside event listeners. `MessageEvent.ports` contains

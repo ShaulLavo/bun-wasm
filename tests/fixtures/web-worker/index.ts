@@ -10,7 +10,9 @@ function message(worker: Worker) {
   });
 }
 
-const worker = new Worker(new URL("./worker.ts", import.meta.url), { name: "echo", argv: ["arg"], env: { WORKER_ONLY: "yes" } });
+const initialData = { value: 17 };
+const worker = new Worker(new URL("./worker.ts", import.meta.url), { name: "echo", argv: ["arg"], env: { WORKER_ONLY: "yes" }, type: "module", smol: true, data: initialData });
+initialData.value = 99;
 assert.ok(worker instanceof EventTarget);
 assert.ok(worker.threadId > 0);
 const order: string[] = [];
@@ -24,7 +26,7 @@ const result = message(worker);
 const data = new Uint8Array([42]);
 worker.postMessage({ data }, [data.buffer]);
 assert.equal(data.byteLength, 0);
-assert.deepEqual(await result, { byte: 42, main: false, arg: "arg", env: "yes", same: true, entry: false });
+assert.deepEqual(await result, { byte: 42, main: false, arg: "arg", env: "yes", same: true, entry: false, initial: 17 });
 const close = closed(worker);
 worker.terminate();
 worker.postMessage(() => {});
@@ -155,3 +157,18 @@ assert.equal(await queued, "queued during preload");
 preloadGate.close();
 await gatedClose;
 console.log("messages wait for asynchronous preload");
+
+for (const entry of ["data:text/javascript,onmessage=e=>{postMessage(e.data);close()}", URL.createObjectURL(new Blob(["onmessage=e=>{postMessage(e.data);close()}"], { type: "application/javascript" }))]) {
+  const gate = new BroadcastChannel("web-worker-preload");
+  const child = new Worker(entry, { preload: new URL("./gated-preload.ts", import.meta.url).href });
+  const childClose = closed(child);
+  assert.equal(await message(child), "preload ready");
+  const reply = message(child);
+  child.postMessage("queued for eval worker");
+  gate.postMessage("continue");
+  assert.equal(await reply, "queued for eval worker");
+  gate.close();
+  await childClose;
+  URL.revokeObjectURL(entry);
+}
+console.log("data and blob workers resume messages after preload");
