@@ -1410,7 +1410,8 @@ Class **Host feature**, **original adapters** in `crates/bunwasm-crypto-sys/src/
 
 BoringSSL remains pinned by `scripts/sync-crypto.sh` to
 `41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f`. The Rust declarations call its existing
-certificate, name, extension, key and signature functions. These declarations contain no
+certificate, name, extension, key and signature functions declared in `include/openssl/`
+`{x509,asn1,evp,bio,obj,stack,mem,err}.h`. These declarations contain no
 copied implementation. Certificates retain owned DER bytes. Checks parse those bytes and
 release their native allocations on every return. Public keys use the existing Node
 KeyObject implementation via a SPKI export. No new host slot is used.

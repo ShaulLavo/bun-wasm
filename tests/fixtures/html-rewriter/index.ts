@@ -22,6 +22,8 @@ assert.equal(new TextDecoder().decode(rewriter.transform(new TextEncoder().encod
 assert.equal(new TextDecoder().decode(rewriter.transform(new DataView(new TextEncoder().encode(input).buffer))), expected);
 assert.throws(() => rewriter.on("div[", {}));
 assert.throws(() => rewriter.on("div", null));
+assert.throws(() => rewriter.on(Symbol("selector"), {}), TypeError);
+assert.throws(() => new HTMLRewriter().on("p", { element(e) { e.append(Symbol("text")); } }).transform("<p>x</p>"), TypeError);
 assert.throws(() => new HTMLRewriter().on("p", { element() { throw 42; } }).transform("<p>x</p>"), e => e === 42);
 console.log("sync tokens, selectors, and binary inputs pass");
 

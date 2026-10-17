@@ -9,6 +9,11 @@
   const empty = new Uint8Array();
   const finalizers = new FinalizationRegistry<number>(id => native.htmlClose(id));
 
+  function domString(value: unknown) {
+    if (typeof value === "symbol") throw new TypeError("Cannot convert a Symbol value to a string");
+    return String(value);
+  }
+
   function promise(value: unknown): Promise<unknown> | undefined {
     if ((typeof value !== "object" || value === null) && typeof value !== "function") return;
     const then = Reflect.get(value, "then");
@@ -25,20 +30,20 @@
       if (!this.#rewrite) return undefined;
       return native.htmlToken(this.#rewrite.id, action, value, !!options?.html, extra);
     }
-    before(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("before", String(content), options); return this; }
-    after(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("after", String(content), options); return this; }
-    replace(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("replace", String(content), options); return this; }
-    prepend(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("prepend", String(content), options); return this; }
-    append(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("append", String(content), options); return this; }
-    setInnerContent(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("setInnerContent", String(content), options); return this; }
+    before(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("before", domString(content), options); return this; }
+    after(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("after", domString(content), options); return this; }
+    replace(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("replace", domString(content), options); return this; }
+    prepend(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("prepend", domString(content), options); return this; }
+    append(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("append", domString(content), options); return this; }
+    setInnerContent(content: unknown, options?: Options) { if (!this.#rewrite) return this; this.call("setInnerContent", domString(content), options); return this; }
     remove() { this.call("remove"); return this; }
     removeAndKeepContent() { this.call("removeAndKeepContent"); return this; }
-    getAttribute(name: unknown) { if (!this.#rewrite) return undefined; return this.call("getAttribute", String(name)); }
-    hasAttribute(name: unknown) { if (!this.#rewrite) return undefined; return this.call("hasAttribute", String(name)); }
-    setAttribute(name: unknown, value: unknown) { if (!this.#rewrite) return this; this.call("setAttribute", String(name), undefined, String(value)); this.#attributesVersion++; return this; }
-    removeAttribute(name: unknown) { if (!this.#rewrite) return this; this.call("removeAttribute", String(name)); this.#attributesVersion++; return this; }
+    getAttribute(name: unknown) { if (!this.#rewrite) return undefined; return this.call("getAttribute", domString(name)); }
+    hasAttribute(name: unknown) { if (!this.#rewrite) return undefined; return this.call("hasAttribute", domString(name)); }
+    setAttribute(name: unknown, value: unknown) { if (!this.#rewrite) return this; this.call("setAttribute", domString(name), undefined, domString(value)); this.#attributesVersion++; return this; }
+    removeAttribute(name: unknown) { if (!this.#rewrite) return this; this.call("removeAttribute", domString(name)); this.#attributesVersion++; return this; }
     get tagName() { return this.call("tagName"); }
-    set tagName(name: unknown) { if (!this.#rewrite) return; this.call("setTagName", String(name)); }
+    set tagName(name: unknown) { if (!this.#rewrite) return; this.call("setTagName", domString(name)); }
     get removed() { return this.call("removed"); }
     get selfClosing() { return this.call("selfClosing"); }
     get canHaveContent() { return this.call("canHaveContent"); }
@@ -55,10 +60,10 @@
       })();
     }
     get text() { return this.call("text"); }
-    set text(text: unknown) { if (!this.#rewrite) return; this.call("setText", String(text)); }
+    set text(text: unknown) { if (!this.#rewrite) return; this.call("setText", domString(text)); }
     get lastInTextNode() { return this.call("lastInTextNode"); }
     get name() { return this.call("name"); }
-    set name(name: unknown) { if (!this.#rewrite) return; this.call("setName", String(name)); }
+    set name(name: unknown) { if (!this.#rewrite) return; this.call("setName", domString(name)); }
     get publicId() { return this.call("publicId"); }
     get systemId() { return this.call("systemId"); }
     onEndTag(callback: Callback) {
@@ -196,7 +201,7 @@
   class HTMLRewriter {
     #registrations: Registration[] = [];
     on(selector: unknown, handlers: unknown) {
-      const pattern = String(selector);
+      const pattern = domString(selector);
       native.htmlValidateSelector(pattern);
       this.#registrations.push(registration(pattern, handlers));
       return this;

@@ -63,6 +63,6 @@ class Certificate extends X509Certificate {}
 assert.equal(new Certificate(cert.raw) instanceof Certificate, true);
 console.log("legacy fields and subclassing pass");
 const escaped = new X509Certificate(readFileSync(import.meta.dir + "/escaped-san.pem"));
-assert.equal(escaped.subjectAltName.includes('\\u002c'), true);
+assert.equal(escaped.subjectAltName, 'DNS:"good.example.com\\u002c DNS:evil.example.com"');
 assert.equal(escaped.toLegacyObject().subjectaltname, escaped.subjectAltName);
 console.log("alternative name escaping passes");
