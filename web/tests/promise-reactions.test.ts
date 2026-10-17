@@ -49,6 +49,28 @@ test("modifiable existing constructors work on locked or non-extensible promises
   }
 });
 
+
+
+test("deleted intrinsic species is safe on frozen and non-extensible promises", async () => {
+  const before = Object.getOwnPropertyDescriptor(Promise, Symbol.species);
+  assert.ok(before);
+  try {
+    Reflect.deleteProperty(Promise, Symbol.species);
+    await observePromise(Object.freeze(Promise.resolve(1)), value => assert.equal(value, 1));
+    await observePromise(Object.preventExtensions(Promise.resolve(2)), value => assert.equal(value, 2));
+  } finally {
+    Object.defineProperty(Promise, Symbol.species, before);
+  }
+});
+
+test("frozen intrinsic constructor is safe without temporary mutation", async () => {
+  const promise = Promise.resolve(1);
+  Object.defineProperty(promise, "constructor", { value: Promise, writable: false, configurable: false });
+  const before = Object.getOwnPropertyDescriptor(promise, "constructor");
+  await observePromise(promise, value => assert.equal(value, 1));
+  assert.deepEqual(Object.getOwnPropertyDescriptor(promise, "constructor"), before);
+});
+
 test("ordinary frozen promises need no constructor mutation", async () => {
   const promise = Object.freeze(Promise.resolve(1));
   await observePromise(promise, value => assert.equal(value, 1));
@@ -94,6 +116,13 @@ test("constructor restoration also runs when native attachment rejects a receive
   const fake = Object.create(Promise.prototype);
   assert.throws(() => observePromise(fake), TypeError);
   assert.equal(Object.hasOwn(fake, "constructor"), false);
+});
+
+
+test("frozen intrinsic Promise.prototype is safe", async () => {
+  Object.freeze(Promise.prototype);
+  const promise = Object.freeze(Promise.resolve(1));
+  await observePromise(promise, value => assert.equal(value, 1));
 });
 
 test("immutable unsafe species and frozen inherited constructors report zero getter reads", () => {

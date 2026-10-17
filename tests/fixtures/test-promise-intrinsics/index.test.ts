@@ -69,9 +69,34 @@ test("toThrow bypasses a replaced Promise.prototype.then", async () => {
   assert.equal(calls, 0);
 });
 
+
+test("deleted intrinsic species is safe on frozen and non-extensible promises", async () => {
+  const before = Object.getOwnPropertyDescriptor(Promise, Symbol.species);
+  assert.ok(before);
+  try {
+    Reflect.deleteProperty(Promise, Symbol.species);
+    await expect(() => Object.freeze(Promise.resolve(1))).not.toThrow();
+    await expect(() => Object.preventExtensions(Promise.resolve(2))).not.toThrow();
+  } finally {
+    Object.defineProperty(Promise, Symbol.species, before);
+  }
+});
+
+test("frozen intrinsic constructor is safe without temporary mutation", async () => {
+  const promise = Promise.resolve(1);
+  Object.defineProperty(promise, "constructor", { value: Promise, writable: false, configurable: false });
+  await expect(() => promise).not.toThrow();
+});
+
 test("toThrow handles ordinary frozen promises", async () => {
   const reason = new Error("frozen rejection");
   await expect(() => Object.freeze(Promise.reject(reason))).toThrow(reason);
+});
+
+
+test("frozen intrinsic Promise.prototype is safe", async () => {
+  Object.freeze(Promise.prototype);
+  await expect(() => Object.freeze(Promise.resolve(1))).not.toThrow();
 });
 
 test("toThrow bypasses an inherited constructor getter", async () => {

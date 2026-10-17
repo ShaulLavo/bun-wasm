@@ -10,33 +10,67 @@ const remove = Reflect.deleteProperty;
 const extensible = Object.isExtensible;
 const prototype = Object.getPrototypeOf;
 const species = Symbol.species;
-const speciesGetter = descriptor(NativePromise, species)?.get;
+const nativeSpeciesDescriptor = descriptor(NativePromise, species);
+const nativeSpeciesGetter = nativeSpeciesDescriptor && "get" in nativeSpeciesDescriptor ? nativeSpeciesDescriptor.get : undefined;
 const speciesConstructor = Object.freeze({ [species]: NativePromise });
 
-function safeSpecies(): boolean {
-  const own = descriptor(NativePromise, species);
-  if (!own) return false;
-  if ("value" in own) return own.value == null || own.value === NativePromise;
-  return own.get === undefined || own.get === speciesGetter;
+type DescriptorLocation = { owner: object; descriptor: PropertyDescriptor };
+
+function findDescriptor(value: object, key: PropertyKey): DescriptorLocation | undefined {
+  const seen = new Set<object>();
+  let current: object | null = value;
+  while (current !== null) {
+    if (seen.has(current)) return undefined;
+    seen.add(current);
+    const own = descriptor(current, key);
+    if (own) return { owner: current, descriptor: own };
+    current = prototype(current);
+  }
+  return undefined;
 }
 
-function safeConstructor(own: PropertyDescriptor): boolean {
-  if (!("value" in own)) return own.get === undefined;
-  return own.value === undefined || (own.value === NativePromise && safeSpecies());
+function safeNativeSpecies(): boolean {
+  const found = findDescriptor(NativePromise, species);
+  if (!found) return true;
+  const own = found.descriptor;
+  if ("value" in own) return own.value === undefined || own.value === null || own.value === NativePromise;
+  if (own.get === undefined) return true;
+  return found.owner === NativePromise && own.get === nativeSpeciesGetter && own.set === nativeSpeciesDescriptor?.set;
 }
 
-function safeLockedPromise(promise: Promise<unknown>, own: PropertyDescriptor | undefined): boolean {
-  if (own) return safeConstructor(own);
-  if (prototype(promise) !== promisePrototype) return false;
-  const inherited = descriptor(promisePrototype, "constructor");
-  return inherited !== undefined && safeConstructor(inherited);
+function safeSpeciesValue(value: unknown, constructor: object): boolean {
+  if (value === undefined || value === null) return true;
+  if (value === NativePromise) return safeNativeSpecies();
+  if (typeof value !== "object" && typeof value !== "function") return false;
+  const found = findDescriptor(value, species);
+  if (!found) return true;
+  const own = found.descriptor;
+  if ("value" in own) return own.value === undefined || own.value === null || own.value === NativePromise;
+  if (own.get !== undefined) return constructor === NativePromise && found.owner === NativePromise && own.get === nativeSpeciesGetter && own.set === nativeSpeciesDescriptor?.set;
+  return true;
+}
+
+function safeConstructorDescriptor(found: DescriptorLocation): boolean {
+  const own = found.descriptor;
+  if (!('value' in own)) return own.get === undefined;
+  return safeSpeciesValue(own.value, own.value as object);
+}
+
+function safePromiseShape(promise: Promise<unknown>, own: PropertyDescriptor | undefined): boolean {
+  if (own) {
+    const found = { owner: promise, descriptor: own } satisfies DescriptorLocation;
+    return safeConstructorDescriptor(found);
+  }
+  const inherited = findDescriptor(promise, "constructor");
+  if (!inherited) return true;
+  return safeConstructorDescriptor(inherited);
 }
 
 export function observePromise(promise: Promise<unknown>, fulfilled?: Reaction, rejected?: Reaction): Promise<unknown> {
   const own = descriptor(promise, "constructor");
+  if (safePromiseShape(promise, own)) return apply(then, promise, [fulfilled, rejected]);
   const replaceable = own ? own.configurable || ("value" in own && own.writable) : extensible(promise);
   if (!replaceable) {
-    if (safeLockedPromise(promise, own)) return apply(then, promise, [fulfilled, rejected]);
     const cause = own
       ? ("value" in own ? "read-only constructor with unsafe species" : "non-configurable constructor accessor")
       : "non-extensible promise with unsafe constructor or species";
