@@ -11,7 +11,7 @@ export function checkTransferValidation(send: Sender) {
     cases.push({ make: () => [entry], name: "TypeError", message: "Type error" });
     cases.push({ make: () => [{}, entry], name: "TypeError", message: "Type error" });
   }
-  for (const make of [() => ({}), () => () => {}, () => new Uint8Array(1), () => new Blob(["x"])]) {
+  for (const make of [() => ({}), () => () => {}, () => new Uint8Array(1), () => new Blob(["x"]), () => Object.create(ArrayBuffer.prototype), () => new WebAssembly.Memory({ initial: 1 })]) {
     cases.push({ make: () => [make()], name: "DataCloneError", message: cloneError });
   }
   cases.push({
