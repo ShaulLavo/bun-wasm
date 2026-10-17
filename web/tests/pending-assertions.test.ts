@@ -44,3 +44,14 @@ test("pending assertion observers report unawaited falsy rejection identities", 
     });
   }
 });
+
+test("pending assertion cleanup preserves a caller's constructor replacement", async () => {
+  const observer = support.pending();
+  const promise = Promise.resolve(1);
+  expect(observer.track(promise)).toBe(promise);
+  expect(await promise).toBe(1);
+  class Replacement extends Promise<unknown> {}
+  Object.defineProperty(promise, "constructor", { value: Replacement, configurable: true });
+  await observer.complete({ ok: true }, result => expect(result).toEqual({ ok: true }));
+  expect(promise.constructor).toBe(Replacement);
+});
