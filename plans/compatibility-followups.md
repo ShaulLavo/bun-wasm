@@ -578,3 +578,40 @@ of the framework outcomes. A recurring immediate starved I/O on QuickJS/JSC
 and due timers on every wasm engine. The ready-batch and I/O-turn regressions
 now pass on all engines. This does not resolve the React optimized-dependency
 504 or either native JSC fault; their app-level follow-ups remain approved.
+
+
+## JSC native-output buffer transfer
+
+Status: Approved. The engine/runtime track owns this follow-up.
+
+The PR #59 review-fix gate observed a separate buffer-ownership gap on JSC.
+At task commit `df5c87c7`, `scripts/test.sh --engine jsc transpiler-review`
+reports `DataCloneError: ArrayBuffer is not detachable` at the transfer of a
+TextEncoder-produced buffer. The same fixture passes its mutation, minification
+and import-preservation checks. Native Bun 1.4.2 permits this transfer; a fresh
+JavaScript-owned ArrayBuffer also transfers successfully on our JSC engine.
+The review regression now uses that transferable caller-owned storage, while
+retaining direct TextEncoder and DataView mutation checks on every engine.
+
+Reproduce the external-buffer operation with a rebuilt JSC artifact:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+wasmtime run --dir .::/ dist/bun-jsc.wasm -e 'const bytes = new TextEncoder().encode("const z=3"); structuredClone(bytes.buffer, { transfer: [bytes.buffer] }); console.log(bytes.byteLength);'
+```
+
+Run through the heavy wrapper. Expected native Bun output is zero. The observed
+JSC fixture diagnostic is retained in
+`/work/reports/bun-wasm-small-causes/review-fixes/after-jsc.log`, including the
+source line and exit 1. All ten focused fixtures pass on JSC after changing only
+the detach case to JavaScript-owned storage.
+
+Inspect `crates/bunwasm-runtime/src/engine_jsc.rs`, `uint8_array`: it creates a
+JavaScript Uint8Array, then calls `JSObjectGetTypedArrayBytesPtr` to populate it.
+That C API access may pin the backing store. The detachable check in
+`crates/bunwasm-jsc/cpp/helpers.cpp`, `bunjsc_is_detachable_buffer`, delegates to
+WebKit's `ArrayBuffer::isDetachable`. Confirm the pinning mechanism before
+changing allocation or ownership; do not force-detach locked native storage.
+Cover native-produced byte buffers as well as JavaScript-created buffers.
+The coordinator owns the evidence until this follow-up is reproduced.
