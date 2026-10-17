@@ -345,6 +345,24 @@ Fork launches a bun child; IPC channels and inherited native descriptors are not
 Shell execution accepts a single quoted bun command, without shell operators or expansion. `$`
 remains unsupported.
 
+## Native process resource limits
+
+The native `bun-wasm` launcher admits at most four active children across the root and all
+its descendants. Each instance defaults to 512 MiB of linear memory; a worker's
+`memoryLimitMb` extension can select its own memory limit. Each native guest thread reserves
+a 16 MiB Wasm stack plus 8 MiB of host-call headroom. `BUN_WASM_HOST_STACK_KIB` changes the
+Wasm portion for the root and children; `BUN_WASM_MEMORY_INIT_COW=0|1` controls Wasmtime's
+copy-on-write memory initialization (use `0` for file-size-limit fixtures).
+
+Children run the launcher's same compiled guest module under the Bun/Node aliases listed
+above, never a native executable. They share the root's filesystem preopens, and their
+absolute `cwd` must map into a preopen without parent-directory traversal. Process stream
+bindings support arbitrary nonnegative child descriptors and share their open description
+across spawn and duplication. A private Wasmtime filesystem descriptor cannot currently be
+transferred through `fds`; the launcher rejects that request with `-8` (`EBADF`) rather than
+silently replacing or dropping it. Process descriptors support ordinary WASI read, write,
+close and renumber operations as well as the direct process imports.
+
 ## Hosts
 
 - `crates/bunwasm-host` (`bun-wasm` binary): native launcher on wasmtime,
