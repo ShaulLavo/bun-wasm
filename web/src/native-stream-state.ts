@@ -329,7 +329,10 @@ function streamMethods(Ctor: typeof ReadableStream | typeof WritableStream, read
 }
 
 export function installNativeStreamState() {
-  if (closedKey in Native.ReadableStream.prototype && !constructors) return () => {};
+  // Native hosts may expose these hooks on instances rather than the prototype.
+  // Check before installing accessors: native constructors can assign own hooks.
+  if (!constructors && (closedKey in Native.ReadableStream.prototype ||
+    closedKey in new Native.ReadableStream({ start(controller) { controller.close(); } }))) return () => {};
   if (!constructors) {
     streamMethods(Native.ReadableStream, true);
     streamMethods(Native.WritableStream, false);
