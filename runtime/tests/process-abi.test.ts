@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Worker } from "node:worker_threads";
 import type { PipeEndpointHandle } from "../proc/pipes";
 import { DescriptorTable, type Stream } from "../core/descriptors";
@@ -53,6 +53,34 @@ test("spawn snapshots JSON and retains arbitrary fd bindings before returning", 
   expect(f.abi.imports.job_of!(child)).toBe(f.supervisor.jobOf(child));
   expect(f.abi.imports.wait!(child, 64)).toBe(-6);
   expect(f.waits()).toBe(0);
+});
+
+test("spawn decodes resizable guest memory through a fixed WebIDL buffer", () => {
+  const f = fixture();
+  const memory = f.memory as WebAssembly.Memory & { toResizableBuffer(): ArrayBuffer };
+  const buffer = memory.toResizableBuffer();
+  expect(buffer.resizable).toBe(true);
+  const nativeDecode = TextDecoder.prototype.decode;
+  // TextDecoder's BufferSource does not permit resizable buffers. Enforce that WebIDL
+  // contract even on hosts whose decoder currently accepts them.
+  const strictDecode = spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, input, options) {
+    const storage = ArrayBuffer.isView(input) ? input.buffer : input;
+    if (storage instanceof ArrayBuffer && storage.resizable) throw new TypeError("resizable BufferSource is not allowed");
+    return nativeDecode.call(this, input, options);
+  });
+  try {
+    expect(() => decoder.decode(new Uint8Array(buffer, 2048, 1))).toThrow("resizable BufferSource is not allowed");
+    const request = { executable: "fixture", argv: ["fixture", "日本語"], env: { A: "é" }, cwd: "/tmp", job: 0, fds: [] };
+    const child = f.abi.imports.spawn!(2048, f.put(JSON.stringify(request)));
+    expect(child).toBeGreaterThan(0);
+    expect(f.supervisor.get(child)!.request!.argv).toEqual(request.argv);
+    expect(f.supervisor.get(child)!.request!.env).toEqual(request.env);
+    f.memory.grow(1);
+    expect(f.spawn()).toBeGreaterThan(0);
+    expect(f.abi.imports.spawn!(2048, f.put("not json"))).toBe(-28);
+    f.bytes()[2048] = 0xff;
+    expect(f.abi.imports.spawn!(2048, 1)).toBe(-28);
+  } finally { strictDecode.mockRestore(); }
 });
 
 test("spawn rejects malformed descriptions, invalid bindings and out-of-bounds memory", () => {

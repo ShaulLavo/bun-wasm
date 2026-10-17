@@ -122,7 +122,8 @@ export class ProcessABI {
     return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   }
   private spawnRequest(ptr: number, length: number): SpawnRequest {
-    const bytes = this.span(ptr, length);
+    // Guest memory may be resizable; TextDecoder's WebIDL input requires a fixed buffer.
+    const bytes = this.span(ptr, length).slice();
     let request: unknown;
     try { request = JSON.parse(decode.decode(bytes)); }
     catch { throw new ProcessError(ProcessErrno.INVAL, "invalid spawn JSON"); }
