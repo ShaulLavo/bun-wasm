@@ -100,7 +100,9 @@ setSystemTime();
 expect(Date.now()).toBeGreaterThanOrEqual(realBefore);
 expect(() => jest.advanceTimersByTime(1)).toThrow("Fake timers");
 
-jest.useFakeTimers({ now: 0 });
+let optionReads = 0;
+jest.useFakeTimers({ get now() { optionReads++; return 0; } });
+expect(optionReads).toBe(1);
 let defaultDelay = false;
 setTimeout(() => defaultDelay = true);
 jest.advanceTimersByTime(0);

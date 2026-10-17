@@ -82,7 +82,8 @@
     let initial = realNow();
     if (options !== undefined && typeof options !== "string") {
       if (options === null || typeof options !== "object") throw new TypeError("useFakeTimers() expects an options object");
-      if ("now" in options && options.now !== undefined) initial = timestamp(options.now, "'now'");
+      const value = "now" in options ? options.now : undefined;
+      if (value !== undefined) initial = timestamp(value, "'now'");
     }
     if (clock) clock.timers.clear();
     clock = { elapsed: 0, origin: Math.floor(initial), firing: 0, timers: new Map() };
