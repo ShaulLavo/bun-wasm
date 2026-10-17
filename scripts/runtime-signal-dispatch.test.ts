@@ -8,10 +8,12 @@ const sources = join(import.meta.dir, "../crates/bunwasm-runtime/src/js");
 
 function runtime(pending: number[], reject: Record<number, number> = {}, guestEvents = false) {
   let dequeues = 0;
+  const signals: [number, number][] = [];
   const internal: any = {
     native: {
       platformInfo: {}, env: () => ({}), argv: () => [],
       hostSignal(signal: number, mode: number) {
+        signals.push([signal, mode]);
         if (signal in reject) return reject[signal];
         if (signal !== 0 || mode !== 0) return 0;
         dequeues++;
@@ -26,7 +28,7 @@ function runtime(pending: number[], reject: Record<number, number> = {}, guestEv
     },
   };
   const process = internal.require("process");
-  return { internal, process, dequeues: () => dequeues };
+  return { internal, process, signals, dequeues: () => dequeues };
 }
 
 test("every signal pump serializes handlers, including a nested broken-pipe pump", () => {
@@ -141,5 +143,136 @@ test("a failing publication restores single and multiple listener states exactly
     expect(() => add(third)).toThrow("rejected"); // several previous listeners (array state)
     expect(process.listeners("boom")).toEqual([first, second]);
     expect(process.listenerCount("boom")).toBe(2);
+  }
+});
+
+// Linux os.constants.signals in Node 26.7 and Bun 1.4.2. Node accepts the two
+// exposed aliases too; neither accepts SIGCLD, SIGUNUSED or realtime spellings.
+const namedSignals: Record<string, number> = {
+  SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGIOT: 6,
+  SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12,
+  SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGSTKFLT: 16, SIGCHLD: 17, SIGCONT: 18,
+  SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24,
+  SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 29, SIGPOLL: 29,
+  SIGPWR: 30, SIGSYS: 31,
+};
+
+test("every standard signal name and accepted alias reaches its canonical number", () => {
+  const { process, signals } = runtime([], {}, true);
+  for (const [name, number] of Object.entries(namedSignals)) {
+    expect(process.kill(process.pid, name)).toBe(true);
+    expect(signals.at(-1)).toEqual([number, 3]);
+    expect(process.kill(process.pid, name.toLowerCase())).toBe(true);
+    expect(signals.at(-1)).toEqual([number, 3]);
+  }
+});
+
+test("all supported named listeners publish handlers and dispatch their own event once", () => {
+  for (const [name, number] of Object.entries(namedSignals)) {
+    if (number === 9 || (number >= 19 && number <= 22)) continue;
+    const { internal, process, signals } = runtime([number], {}, true);
+    const calls: string[] = [];
+    process.on(name, (signal: string) => calls.push(signal));
+    expect(signals).toContainEqual([number, 2]);
+    expect(internal.pumpSignals()).toBe(true);
+    expect(calls).toEqual([name]);
+    process.removeAllListeners(name);
+    expect(signals.at(-1)).toEqual([number, 0]);
+  }
+});
+
+test("default-ignored and fatal signals use the registered guest handlers", () => {
+  const { internal, process, signals } = runtime([17, 28, 11], {}, true);
+  const calls: string[] = [];
+  for (const name of ["SIGCHLD", "SIGWINCH", "SIGSEGV"]) {
+    process.once(name, (signal: string) => calls.push(signal));
+  }
+  expect(signals).toEqual([[13, 1], [17, 2], [28, 2], [11, 2]]);
+  expect(internal.pumpSignals()).toBe(true);
+  expect(calls).toEqual(["SIGCHLD", "SIGWINCH", "SIGSEGV"]);
+  expect(process.eventNames()).toEqual([]);
+  for (const number of [17, 28, 11]) expect(signals).toContainEqual([number, 0]);
+});
+
+test("alias listeners share one disposition without losing or duplicating events", () => {
+  for (const [canonical, alias, number] of [["SIGABRT", "SIGIOT", 6], ["SIGIO", "SIGPOLL", 29]] as const) {
+    const { internal, process, signals } = runtime([number], {}, true);
+    const calls: string[] = [];
+    const first = (name: string) => calls.push(name);
+    process.on(canonical, first);
+    process.once(alias, (name: string) => calls.push(name));
+    expect(signals).toEqual([[13, 1], [number, 2]]);
+    expect(internal.pumpSignals()).toBe(true);
+    expect(calls).toEqual([canonical, alias]);
+    expect(signals.filter(([signal, mode]) => signal === number && mode === 0)).toEqual([]);
+    expect(process.listenerCount(canonical)).toBe(1);
+    expect(process.listenerCount(alias)).toBe(0);
+    process.removeListener(canonical, first);
+    expect(signals.at(-1)).toEqual([number, 0]);
+    process.on(alias, first);
+    process.on(canonical, first);
+    process.removeAllListeners();
+    expect(process.eventNames()).toEqual([]);
+    expect(signals.filter(([signal, mode]) => signal === number && mode === 0)).toEqual([[number, 0], [number, 0]]);
+  }
+});
+
+test("unsupported stop registrations roll back every guest EventEmitter adder", () => {
+  const { process, signals } = runtime([], { 19: -58, 20: -58, 21: -58, 22: -58 }, true);
+  process.on("ordinary", () => {});
+  for (const name of ["SIGSTOP", "SIGTSTP", "SIGTTIN", "SIGTTOU"]) {
+    for (const method of ["on", "addListener", "once", "prependListener", "prependOnceListener"]) {
+      let error: unknown;
+      try { process[method](name, () => {}); } catch (caught) { error = caught; }
+      expect(error).toMatchObject({ code: "ENOTSUP", errno: -95, syscall: "uv_signal_start", message: "uv_signal_start ENOTSUP" });
+      expect(process.listenerCount(name)).toBe(0);
+      expect(process.eventNames()).toEqual(["ordinary"]);
+    }
+    let error: unknown;
+    try { process.kill(process.pid, name); } catch (caught) { error = caught; }
+    expect(error).toMatchObject({ code: "ENOTSUP", errno: -95, syscall: "kill" });
+    expect(signals.at(-1)).toEqual([namedSignals[name], 3]);
+  }
+  process.removeAllListeners();
+  expect(process.eventNames()).toEqual([]);
+  expect(signals.filter(([, mode]) => mode === 0)).toEqual([]);
+});
+
+test("numeric bounds and unsupported names retain their existing validation", () => {
+  const { process, signals } = runtime([], { 32: -28, 33: -28 }, true);
+  for (const number of Array.from({ length: 64 }, (_, index) => index + 1)) {
+    if (number === 32 || number === 33) {
+      let error: unknown;
+      try { process.kill(process.pid, number); } catch (caught) { error = caught; }
+      expect(error).toMatchObject({ code: "EINVAL", errno: -22, syscall: "kill" });
+    } else {
+      expect(process.kill(process.pid, number)).toBe(true);
+    }
+    expect(signals.at(-1)).toEqual([number, 3]);
+  }
+  const beforeProbe = signals.length;
+  expect(process.kill(process.pid, 0)).toBe(true);
+  expect(signals.length).toBe(beforeProbe);
+  for (const value of [-1, 65, 1.5, NaN, Infinity, "SIGUNKNOWN", "SIGCLD", "SIGUNUSED", "SIGRTMIN", "SIGRTMAX", "34"]) {
+    expect(() => process.kill(process.pid, value)).toThrow("Unknown signal:");
+    expect(signals.length).toBe(beforeProbe);
+  }
+  process.on("SIGUNKNOWN", () => {});
+  expect(signals.length).toBe(beforeProbe);
+});
+
+test("a prepended once alias keeps handling after its canonical listener is removed", () => {
+  for (const [canonical, alias, number] of [["SIGABRT", "SIGIOT", 6], ["SIGIO", "SIGPOLL", 29]] as const) {
+    const { internal, process, signals } = runtime([number], {}, true);
+    const calls: string[] = [];
+    const listener = (name: string) => calls.push(name);
+    process.on(canonical, listener);
+    process.prependOnceListener(alias, listener);
+    process.removeListener(canonical, listener);
+    expect(signals).toEqual([[13, 1], [number, 2]]);
+    expect(internal.pumpSignals()).toBe(true);
+    expect(calls).toEqual([alias]);
+    expect(process.eventNames()).toEqual([]);
+    expect(signals.filter(([signal, mode]) => signal === number && mode === 0)).toEqual([[number, 0]]);
   }
 });
