@@ -408,6 +408,15 @@
   };
   internal.pendingIo = 0;
   internal.messagePortRefs = 0;
+  internal.loopState = () => ({
+    refedTimers,
+    immediates: immediates.length,
+    ticks: tickQueue.length,
+    pendingIo: internal.pendingIo,
+    messagePortRefs: internal.messagePortRefs,
+    networkHandles: internal.ioPending(),
+  });
+  internal.require("exit_provenance");
   // Replaced by net.js when a networking host is present.
   internal.ioPending = () => 0;
   internal.pumpIo = () => false;
@@ -506,7 +515,7 @@
   }
 
   function isBuiltinId(id) {
-    return id.startsWith("node:") || id === "bun" || id.startsWith("bun:");
+    return Object.prototype.hasOwnProperty.call(internal.builtinFactories, id) || id.startsWith("node:") || id === "bun" || id.startsWith("bun:");
   }
 
   function loadModule(path, format) {
@@ -755,6 +764,7 @@
       return true;
     }
     if (internal.workerError) internal.workerError(err);
+    internal.traceExit("uncaught-exception", 1, err);
     printFatal(err);
     globalThis.process.exitCode = 1;
     emitExit(1);
@@ -767,6 +777,7 @@
       return true;
     }
     if (internal.workerError) internal.workerError(reason);
+    internal.traceExit("unhandled-rejection", 1, reason);
     printFatal(reason);
     // Bun reports exit code 0 to "exit" listeners here (and still exits 1).
     emitExit(0);
@@ -784,7 +795,9 @@
     const process = globalThis.process;
     const code = (process.exitCode | 0) || 0;
     emitExit(code);
-    return (process.exitCode | 0) || 0;
+    const finalCode = (process.exitCode | 0) || 0;
+    internal.traceExit("event-loop-drained", finalCode);
+    return finalCode;
   };
 
   // --- globals ----------------------------------------------------------------

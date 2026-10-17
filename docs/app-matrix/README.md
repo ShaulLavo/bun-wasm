@@ -666,3 +666,9 @@ workers have no forced-GC hook. The Chromium/WebKit web and HMR gates are separa
 checks of browser behavior, not evidence of forced collection in those workers.
 The second-review red/green logs are retained in
 `/work/reports/bun-wasm-rv28-round2-20261016/`.
+
+## Framework exit provenance
+
+[Framework exits and Vite reloads](exit-provenance.md) traces the shared `ws`
+lookup failure, Vite's stdin-triggered exit and the new runtime exit records.
+Native Vite dev checks also edit the source and verify the browser update.
