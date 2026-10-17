@@ -143,3 +143,15 @@ assert.equal(await secondPortMessage, "round trip");
 returnedEvent.ports[0].close();
 channel.port1.close();
 console.log("message event ports survive worker exit");
+
+const preloadGate = new BroadcastChannel("web-worker-preload");
+const gated = new Worker(new URL("./echo.ts", import.meta.url), { preload: new URL("./gated-preload.ts", import.meta.url).href });
+const gatedClose = closed(gated);
+assert.equal(await message(gated), "preload ready");
+const queued = message(gated);
+gated.postMessage("queued during preload");
+preloadGate.postMessage("continue");
+assert.equal(await queued, "queued during preload");
+preloadGate.close();
+await gatedClose;
+console.log("messages wait for asynchronous preload");

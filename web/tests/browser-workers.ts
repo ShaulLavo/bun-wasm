@@ -29,7 +29,7 @@ export async function checkWorkers(page: Parameters<typeof writeFile>[0], label:
     if (test.error) assert.ok(checked.output.includes(test.error), checked.output);
   }
   const webWorker = new URL("../../tests/fixtures/web-worker/", import.meta.url);
-  for (const name of ["index.ts", "worker.ts", "preload.ts", "preload-entry.ts"]) {
+  for (const name of ["index.ts", "worker.ts", "preload.ts", "preload-entry.ts", "gated-preload.ts", "echo.ts"]) {
     await writeFile(page, `/home/user/${name}`, readFileSync(new URL(name, webWorker), "utf8"));
   }
   const webResult = await run(page, "bun run index.ts", 120000);

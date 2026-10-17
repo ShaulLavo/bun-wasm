@@ -7,3 +7,4 @@ TypeScript blob worker
 nested web worker
 unreferenced worker releases parent
 message event ports survive worker exit
+messages wait for asynchronous preload
