@@ -1,5 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
+import { homedir } from "node:os";
 import { chromium, firefox, webkit, type Browser } from "../../web/node_modules/playwright";
 
 type Backend = "indexeddb" | "opfs";
@@ -76,7 +77,8 @@ async function inWorker<T>(browser: Browser, request: WorkerRequest): Promise<T>
 }
 
 try {
-  scratch = await mkdtemp("/work/tmp/bun-wasm-storage-");
+  const scratchRoot = process.env.STORAGE_SCRATCH_ROOT ?? (process.platform === "darwin" ? resolve(homedir(), "tmp") : "/work/tmp");
+  scratch = await mkdtemp(resolve(scratchRoot, "bun-wasm-storage-"));
   process.env.TMPDIR = scratch;
   const build = await Bun.build({ entrypoints: [resolve(import.meta.dir, "storage-browser.ts")], target: "browser" });
   if (!build.success) throw new AggregateError(build.logs, "Storage test bundle failed");
@@ -94,8 +96,8 @@ try {
     if (!engine) throw new Error(`Unknown browser: ${name}`);
     // Firefox's profile must not live on /work's VDO filesystem. This tmpfs directory is
     // task-owned and removed after its browser stops; downloaded artifacts remain on /work.
-    if (name === "firefox") firefoxScratch ??= await mkdtemp("/dev/shm/bun-wasm-storage-firefox-");
-    process.env.TMPDIR = name === "firefox" ? firefoxScratch! : scratch;
+    if (name === "firefox" && process.platform === "linux") firefoxScratch ??= await mkdtemp("/dev/shm/bun-wasm-storage-firefox-");
+    process.env.TMPDIR = name === "firefox" && firefoxScratch ? firefoxScratch : scratch;
     launch = engine.launch({ headless: true, downloadsPath: scratch, tracesDir: scratch }); browser = await launch;
     try {
       const listed = await inWorker<TestList>(browser, { kind: "list" });
