@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { webcrypto } from "node:crypto";
 
 function brandFactory() {
   let scratch: string | undefined;
   try {
-    scratch = mkdtempSync("/work/tmp/bun-wasm-crypto-brand-");
+    scratch = mkdtempSync(join(tmpdir(), "bun-wasm-crypto-brand-"));
     const output = join(scratch, "web-brand.js");
     const compiled = Bun.spawnSync([
       "node", new URL("../../scripts/transpile-runtime.ts", import.meta.url).pathname,
