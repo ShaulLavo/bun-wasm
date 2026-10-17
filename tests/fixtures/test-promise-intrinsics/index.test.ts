@@ -139,6 +139,8 @@ test("matcher promise classification uses startup intrinsics", async () => {
     Object.defineProperty(globalThis, "Promise", { value: class Replacement {}, configurable: true, writable: true });
     Object.defineProperty(NativePromise, key, { configurable: true, get() { reads++; throw new Error("public hasInstance"); } });
     result = expect(() => NativePromise.reject(reason)).toThrow(reason);
+    globalThis.Promise = NativePromise;
+    await result;
   } finally {
     globalThis.Promise = NativePromise;
     if (descriptor) Object.defineProperty(NativePromise, key, descriptor);

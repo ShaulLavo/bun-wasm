@@ -695,7 +695,7 @@ class EngineHost {
     // promise passes on its known state. `in` instead of reading `then`,
     // which may be a getter.
     const settleWith = (promise, value) => {
-      if (value instanceof NativePromise) {
+      if (nativePromiseHasInstance(value)) {
         const known = states.get(value);
         if (known && known.state !== "pending") states.set(promise, known);
         return;
