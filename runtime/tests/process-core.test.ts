@@ -1082,3 +1082,15 @@ test("failed endpoint inheritance removes only the reservation's new empty job",
   expect(supervisor.job(job)!.members.has(child)).toBe(true);
   supervisor.dispose();
 });
+
+for (const [error, code] of [["ENOENT", 2], ["EACCES", 13]] as const) {
+  test(`a provisional worker handle can report typed startup failure ${error}`, async () => {
+    const { supervisor, root, contexts } = fixture();
+    try {
+      const pid = supervisor.reserveSpawn(root, request());
+      await supervisor.start(pid);
+      contexts.get(pid)!.startFailed(Object.assign(new Error("could not start"), { code: error }));
+      expect(await supervisor.waitForExit(root, pid)).toEqual({ kind: "start-failed", code, error, status: null });
+    } finally { supervisor.dispose(); }
+  });
+}
