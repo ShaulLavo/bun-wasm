@@ -4,69 +4,22 @@ import { expect, spyOn, test } from "bun:test";
 import { ENGINES, startRun, type Engine } from "../src/runner";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import type { SharedFilesystem } from "../src/shared-fs";
-import type { RunRequest } from "../src/worker";
-import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
-import { createSignalState, setSignalDisposition, takeSignal } from "waffle/proc/signals";
-import { SubprocessHost, type ChildTransport } from "../src/subprocess";
+import type { RunRequest } from "../src/bun-executor";
+import { claimOutcome, readOutcome } from "waffle/proc/outcome";
+import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
+import { WorkerProcessClient, workerProcessState } from "waffle/proc/worker-client";
+import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity } from "waffle/fs";
+
+/** The shared signal words of the process a request roots. */
+const signalsOf = (request: RunRequest) => workerProcessState(request.runtimeProcess!).signals;
+const pidOf = (request: RunRequest) => workerProcessState(request.runtimeProcess!).pid;
 
 function runConfirmation(run: ReturnType<typeof startRun>) {
   let confirmed = false;
   const result = run.done.then(value => { confirmed = true; return value; });
   return { result, confirmed: () => confirmed };
 }
-
-test.each([{ signal: undefined, code: 130 }, { signal: 9 as const, code: 137 }])("non-isolated root commands start without SharedArrayBuffer and stop with $code", async ({ signal, code }) => {
-  const originalWorker = globalThis.Worker;
-  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
-  const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
-  const originalShared = globalThis.SharedArrayBuffer;
-  let sent: RunRequest | undefined;
-  let posted!: () => void;
-  const ready = new Promise<void>(resolve => { posted = resolve; });
-  let terminated = 0;
-  let revoked = 0;
-  const channel = new MessageChannel();
-  let release!: () => void;
-  const section = new Promise<void>(resolve => { release = resolve; });
-  const filesystem = { fork: () => ({ port: channel.port1 }), async quiesce() { revoked++; await section; } } as unknown as SharedFilesystem;
-  const runtime = processRuntimeFixture(filesystem);
-  let run: ReturnType<typeof startRun> | undefined;
-  try {
-    Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
-    Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: false });
-    globalThis.SharedArrayBuffer = undefined as unknown as typeof SharedArrayBuffer;
-    globalThis.Worker = class {
-      postMessage(request: RunRequest) { sent = request; posted(); }
-      terminate() { terminated++; }
-    } as unknown as typeof Worker;
-    const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-    run = startRun({ engine: "browser", module, args: ["-e", "0"], env: {}, runtime, moduleScope: false }, { stdout() {}, stderr() {} });
-    await ready;
-    expect(sent?.interrupt).toBeUndefined();
-    expect(sent?.net).toBeNull();
-    const waiting = runConfirmation(run);
-    run.kill(signal);
-    await Promise.resolve();
-    expect(waiting.confirmed()).toBe(false);
-    expect(terminated).toBe(0);
-    expect(revoked).toBe(1);
-    release();
-    expect(await waiting.result).toEqual({ code });
-    expect(terminated).toBe(1);
-  } finally {
-    release();
-    run?.kill(9);
-    globalThis.SharedArrayBuffer = originalShared;
-    try { await run?.done; await runtime.dispose(); }
-    finally {
-      globalThis.Worker = originalWorker;
-      if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation); else Reflect.deleteProperty(globalThis, "location");
-      if (originalIsolation) Object.defineProperty(globalThis, "crossOriginIsolated", originalIsolation); else Reflect.deleteProperty(globalThis, "crossOriginIsolated");
-      channel.port1.close(); channel.port2.close();
-    }
-  }
-});
 
 function isolatedRoot(isolated = true, engine: Engine = "browser", options: Parameters<typeof processRuntimeFixture>[1] = {}) {
   const originalWorker = globalThis.Worker;
@@ -93,8 +46,8 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
     onmessage: ((event: MessageEvent) => void) | null = null;
     terminated = 0;
     postMessage(value: RunRequest) {
-      request ??= value; worker ??= this; requests.set(value.pid!, value); workers.set(value.pid!, this);
-      pending.get(value.pid!)?.(value); posted();
+      request ??= value; worker ??= this; const pid = pidOf(value); requests.set(pid, value); workers.set(pid, this);
+      pending.get(pid)?.(value); posted();
     }
     terminate() { this.terminated++; }
     exit(code: number, signal?: number) { this.onmessage?.({ data: { type: "exit", code, signal, sleep: "atomics" } } as MessageEvent); }
@@ -149,39 +102,42 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
   };
 }
 
+/** A worker-side client for the root a run adopted; its spawn messages go to the run's handler. */
+function rootClient(request: RunRequest, deliver: (message: object) => void) {
+  const transport = request.runtimeProcess!;
+  const descriptors = new DescriptorTable();
+  const client = new WorkerProcessClient({ transport, descriptors,
+    codec: { export() { throw new Error("unexpected export"); }, import() { throw new Error("unexpected import"); }, discard() {} },
+    postMessage: message => deliver(message),
+    prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (transport.data as { pipeRegistry: unknown }).pipeRegistry } }),
+  });
+  return { client, spawn: (executable: string) => client.spawn(client.pid, { executable, argv: [executable], cwd: "/", env: {}, job: -1, fds: [] }), dispose: () => descriptors.dispose() };
+}
+
 const engines: Engine[] = ["quickjs", "jsc", "browser"];
 
 for (const engine of engines) {
   test(`${engine} roots launch bun/node aliases with their selected engine and existing module`, async () => {
     const fetch = spyOn(globalThis, "fetch").mockRejectedValue(new Error("Root engine aliases must not download another guest"));
     const state = isolatedRoot(false, engine);
-    const host = new SubprocessHost({
-      identity: state.runtime.identities.buffer, pid: 1, jobId: 1, output() {},
-      launch(meta, child) {
-        state.worker.onmessage?.({ data: { type: "spawn", request: {
-          executable: meta.argv[0]!, argv: meta.argv, cwd: "/", env: {}, pid: child.pid, parentPid: child.parentPid,
-          jobId: child.jobId, child, filesystem: createFilesystemIdentity(), trace: false, spawnBroker: true,
-        } } } as MessageEvent);
-        return { terminate() {} };
-      },
-    });
+    let root: ReturnType<typeof rootClient> | undefined;
     try {
       await state.ready;
+      root = rootClient(state.request, message => state.worker.onmessage?.({ data: message } as MessageEvent));
+      state.release();
       for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) {
-        const pid = host.spawn(JSON.stringify({ argv: [name] }));
+        const pid = root.spawn(name);
         const entry = await state.requestFor(pid);
         expect(entry.engine).toBe(engine);
         expect(entry.adapter).toBe("bun");
         expect(entry.module).toBe(state.request.module);
         state.workerFor(pid).exit(0);
-        const deadline = performance.now() + 1000;
-        while (host.wait(pid) === -2 && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
-        expect(host.wait(pid)).toBe(0);
-        host.close(pid);
+        const supervisor = await state.runtime.processes().then(service => service.ready());
+        expect((await supervisor.waitForExit(root.client.pid, pid)).status).toBe(0);
       }
       expect(fetch).not.toHaveBeenCalled();
     } finally {
-      try { host.detach(); host.dispose(); await state.dispose(); }
+      try { root?.dispose(); await state.dispose(); }
       finally { fetch.mockRestore(); }
     }
   });
@@ -233,7 +189,7 @@ test("concurrent roots on one runtime keep engine-correct aliases without replac
   const workers: FakeWorker[] = [];
   const requests = new Map<number, RunRequest>();
   const runs: ReturnType<typeof startRun>[] = [];
-  const hosts: SubprocessHost[] = [];
+  const clients: ReturnType<typeof rootClient>[] = [];
   const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
   const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) =>
     String(input).endsWith(".gz") ? new Response(null, { status: 404 })
@@ -248,7 +204,7 @@ test("concurrent roots on one runtime keep engine-correct aliases without replac
     request!: RunRequest;
     terminated = false;
     constructor() { workers.push(this); }
-    postMessage(request: RunRequest) { this.request = request; requests.set(request.pid!, request); }
+    postMessage(request: RunRequest) { this.request = request; requests.set(pidOf(request), request); }
     terminate() { this.terminated = true; }
   }
   async function received(pid: number): Promise<RunRequest> {
@@ -271,31 +227,21 @@ test("concurrent roots on one runtime keep engine-correct aliases without replac
       while (!worker.request && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
       expect(worker.request).toBeDefined();
       const root = worker.request;
-      const host = new SubprocessHost({ identity: runtime.identities.buffer, pid: root.pid, jobId: root.jobId, output() {},
-        launch(meta, child) {
-          worker.onmessage?.({ data: { type: "spawn", request: {
-            executable: meta.argv[0]!, argv: meta.argv, cwd: "/", env: {}, pid: child.pid, parentPid: child.parentPid,
-            jobId: child.jobId, child, filesystem: createFilesystemIdentity(), trace: false, spawnBroker: true,
-          } } } as MessageEvent);
-          return { terminate() {} };
-        },
-      });
-      hosts.push(host);
+      const client = rootClient(root, message => worker.onmessage?.({ data: message } as MessageEvent));
+      clients.push(client);
       for (const alias of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) {
-        const pid = host.spawn(JSON.stringify({ argv: [alias] }));
+        const pid = client.spawn(alias);
         const child = await received(pid);
         expect(child.engine).toBe(root.engine);
         expect(child.adapter).toBe("bun");
-        workers.find(worker => worker.request?.pid === pid)!.onmessage?.({ data: { type: "exit", code: 0, sleep: "atomics" } } as MessageEvent);
-        const deadline = performance.now() + 1000;
-        while (host.wait(pid) === -2 && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
-        expect(host.wait(pid)).toBe(0);
-        host.close(pid);
+        workers.find(candidate => candidate.request && pidOf(candidate.request) === pid)!.onmessage?.({ data: { type: "exit", code: 0, sleep: "atomics" } } as MessageEvent);
+        const supervisor = await runtime.processes().then(service => service.ready());
+        expect((await supervisor.waitForExit(client.client.pid, pid)).status).toBe(0);
       }
     }
     expect(roots.every(worker => !worker.terminated)).toBe(true);
   } finally {
-    for (const host of hosts) { host.detach(); host.dispose(); }
+    for (const client of clients) client.dispose();
     for (const run of runs) run.kill(9);
     try { await Promise.all(runs.map(run => run.done)); await runtime.dispose(); }
     finally {
@@ -313,12 +259,11 @@ test("one isolated Ctrl-C claims DEFAULT 130 immediately before quiescent physic
   const state = isolatedRoot();
   try {
     await state.ready;
-    expect(state.request.signalState).toBeInstanceOf(SharedArrayBuffer);
-    expect(state.request.outcome).toBeInstanceOf(SharedArrayBuffer);
+    expect(signalsOf(state.request).signalState).toBeInstanceOf(Int32Array);
     const waiting = runConfirmation(state.run);
     state.run.kill();
-    expect(readOutcome(outcomeWord(state.request.outcome))).toEqual({ kind: "signaled", code: 2, status: 130 });
-    await Promise.resolve();
+    expect(readOutcome(signalsOf(state.request).outcome)).toEqual({ kind: "signaled", code: 2, status: 130 });
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(waiting.confirmed()).toBe(false);
     expect(state.revoked()).toBe(1);
     expect(state.worker.terminated).toBe(0);
@@ -336,16 +281,16 @@ for (const code of [0, 23, 130]) {
     const state = isolatedRoot();
     try {
       await state.ready;
-      const signalState = createSignalState(state.request.signalState);
+      const signalState = signalsOf(state.request).signalState;
       setSignalDisposition(signalState, 2, 2);
       state.run.kill();
       expect(takeSignal(signalState)).toBe(2);
       expect(takeSignal(signalState)).toBe(0);
-      expect(readOutcome(outcomeWord(state.request.outcome))).toBeNull();
+      expect(readOutcome(signalsOf(state.request).outcome)).toBeNull();
       expect(state.revoked()).toBe(0);
       state.worker.exit(code);
       expect(await state.run.done).toEqual({ code });
-      expect(readOutcome(outcomeWord(state.request.outcome))).toEqual({ kind: "exited", code, status: code });
+      expect(readOutcome(signalsOf(state.request).outcome)).toEqual({ kind: "exited", code, status: code });
       expect(state.reaped()).toBe(1);
     } finally { await state.dispose(); }
   });
@@ -355,12 +300,12 @@ test("root IGNORE leaves no pending signal or terminal result", async () => {
   const state = isolatedRoot();
   try {
     await state.ready;
-    const signalState = createSignalState(state.request.signalState);
+    const signalState = signalsOf(state.request).signalState;
     setSignalDisposition(signalState, 2, 1);
     state.run.kill();
     expect(takeSignal(signalState)).toBe(0);
-    expect(Atomics.load(new Int32Array(state.request.interrupt!), 0)).toBe(0);
-    expect(readOutcome(outcomeWord(state.request.outcome))).toBeNull();
+    expect(Atomics.load(signalsOf(state.request).interrupt, 0)).toBe(0);
+    expect(readOutcome(signalsOf(state.request).outcome)).toBeNull();
     expect(state.revoked()).toBe(0);
     state.worker.exit(0);
     expect(await state.run.done).toEqual({ code: 0 });
@@ -371,7 +316,7 @@ test("removing a root handler restores the next explicit INT default", async () 
   const state = isolatedRoot();
   try {
     await state.ready;
-    const signalState = createSignalState(state.request.signalState);
+    const signalState = signalsOf(state.request).signalState;
     setSignalDisposition(signalState, 2, 2);
     state.run.kill(2);
     expect(takeSignal(signalState)).toBe(2);
@@ -379,7 +324,7 @@ test("removing a root handler restores the next explicit INT default", async () 
     state.run.kill(2);
     state.release();
     expect(await state.run.done).toEqual({ code: 130 });
-    expect(readOutcome(outcomeWord(state.request.outcome))?.kind).toBe("signaled");
+    expect(readOutcome(signalsOf(state.request).outcome)?.kind).toBe("signaled");
   } finally { await state.dispose(); }
 });
 
@@ -387,11 +332,11 @@ test.each([0, 143])("a root exit already claimed as %s wins a later default sign
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "exited", code });
+    claimOutcome(signalsOf(state.request).outcome, { kind: "exited", code });
     state.run.kill(2);
     state.release();
     expect(await state.run.done).toEqual({ code });
-    expect(readOutcome(outcomeWord(state.request.outcome))).toEqual({ kind: "exited", code, status: code });
+    expect(readOutcome(signalsOf(state.request).outcome)).toEqual({ kind: "exited", code, status: code });
   } finally { await state.dispose(); }
 });
 
@@ -399,10 +344,10 @@ test("root acknowledgement adopts a previously claimed typed signal rather than 
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "signaled", code: 15 });
+    claimOutcome(signalsOf(state.request).outcome, { kind: "signaled", code: 15 });
     state.worker.exit(143);
     expect(await state.run.done).toEqual({ code: 143 });
-    expect(readOutcome(outcomeWord(state.request.outcome))).toEqual({ kind: "signaled", code: 15, status: 143 });
+    expect(readOutcome(signalsOf(state.request).outcome)).toEqual({ kind: "signaled", code: 15, status: 143 });
   } finally { await state.dispose(); }
 });
 
@@ -412,7 +357,7 @@ for (const signal of [2, 9, 13, 15]) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await state.ready;
-      claimOutcome(outcomeWord(state.request.outcome), { kind: "signaled", code: signal });
+      claimOutcome(signalsOf(state.request).outcome, { kind: "signaled", code: signal });
       const timeout = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("root signal outcome was not observed")), 250); });
       const waiting = runConfirmation(state.run);
       await new Promise(resolve => setTimeout(resolve, 12));
@@ -431,7 +376,7 @@ test("root capability messages cannot cross a selected fatal outcome before its 
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "signaled", code: 15 });
+    claimOutcome(signalsOf(state.request).outcome, { kind: "signaled", code: 15 });
     state.worker.onmessage?.({ data: { type: "stdout", data: new TextEncoder().encode("late output") } } as MessageEvent);
     state.worker.onmessage?.({ data: { type: "phase", name: "late-phase", duration: 0 } } as MessageEvent);
     expect(state.output).toEqual([]);
@@ -442,40 +387,19 @@ test("root capability messages cannot cross a selected fatal outcome before its 
   } finally { await state.dispose(); }
 });
 
-test.each([false, true])("an unadmitted spawn after root fatal selection releases its transport (already observed: %s)", async observed => {
-  const state = isolatedRoot();
-  await state.ready;
-  let transport!: ChildTransport;
-  const host = new SubprocessHost({ identity: state.runtime.identities.buffer, output() {}, launch(_meta, child) { transport = child; return { terminate() {} }; } });
-  try {
-    const pid = host.spawn(JSON.stringify({ argv: ["fixture"] }));
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "signaled", code: 15 });
-    if (observed) { state.run.kill(2); state.release(); await state.run.done; }
-    state.worker.onmessage?.({ data: { type: "spawn", request: {
-      executable: "fixture", argv: ["fixture"], cwd: "/", env: {}, pid, parentPid: 1,
-      jobId: transport.jobId, child: transport, filesystem: createFilesystemIdentity(), trace: false, spawnBroker: true,
-    } } } as MessageEvent);
-    expect(host.wait(pid)).toBe(137);
-    expect(state.rejected()).toBe(1);
-    expect(Atomics.load(new Int32Array(transport.budget), transport.slot + 2)).toBe(0);
-    state.release();
-    expect(await state.run.done).toEqual({ code: 143 });
-  } finally { host.detach(); host.dispose(); await state.dispose(); }
-});
-
 test("a second implicit UI stop still force-kills a root that handled the first Ctrl-C", async () => {
   const state = isolatedRoot();
   try {
     await state.ready;
-    const signalState = createSignalState(state.request.signalState);
+    const signalState = signalsOf(state.request).signalState;
     setSignalDisposition(signalState, 2, 2);
     state.run.kill();
     expect(takeSignal(signalState)).toBe(2);
-    expect(readOutcome(outcomeWord(state.request.outcome))).toBeNull();
+    expect(readOutcome(signalsOf(state.request).outcome)).toBeNull();
     state.run.kill();
     state.release();
     expect(await state.run.done).toEqual({ code: 137 });
-    expect(readOutcome(outcomeWord(state.request.outcome))).toEqual({ kind: "signaled", code: 9, status: 137 });
+    expect(readOutcome(signalsOf(state.request).outcome)).toEqual({ kind: "signaled", code: 9, status: 137 });
   } finally { await state.dispose(); }
 });
 
@@ -484,7 +408,7 @@ for (const code of [1, 126]) {
     const state = isolatedRoot();
     try {
       await state.ready;
-      claimOutcome(outcomeWord(state.request.outcome), { kind: "exited", code });
+      claimOutcome(signalsOf(state.request).outcome, { kind: "exited", code });
       state.worker.onmessage?.({ data: { type: "error", code, message: "crash details\nstack frame", sleep: "atomics" } } as MessageEvent);
       expect(await state.run.done).toEqual({ code, error: "bun.wasm crashed: crash details\r\nstack frame" });
       expect(state.reaped()).toBe(1);
@@ -496,40 +420,17 @@ test("typed fatal winner suppresses a later ordinary crash diagnostic", async ()
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "signaled", code: 15 });
+    claimOutcome(signalsOf(state.request).outcome, { kind: "signaled", code: 15 });
     state.worker.onmessage?.({ data: { type: "error", code: 1, message: "stale crash", sleep: "atomics" } } as MessageEvent);
     expect(await state.run.done).toEqual({ code: 143 });
   } finally { await state.dispose(); }
 });
 
-for (const signal of [2, 9, 13, 15]) {
-  test(`non-isolated default ${signal} notification is terminal but not a quiescent acknowledgement`, async () => {
-    const state = isolatedRoot(false);
-    try {
-      await state.ready;
-      expect(state.request.outcome).toBeUndefined();
-      const waiting = runConfirmation(state.run);
-      state.worker.onmessage?.({ data: { type: "default-signal", signal } } as MessageEvent);
-      await Promise.resolve();
-      expect(waiting.confirmed()).toBe(false);
-      expect(state.revoked()).toBe(1);
-      expect(state.reaped()).toBe(0);
-      expect(state.worker.terminated).toBe(0);
-      state.worker.exit(0);
-      await Promise.resolve();
-      expect(waiting.confirmed()).toBe(false);
-      state.release();
-      expect(await waiting.result).toEqual({ code: 128 + signal });
-      expect(state.worker.terminated).toBe(1);
-    } finally { await state.dispose(); }
-  });
-}
-
 test("an earlier ordinary root winner does not inherit a losing crash diagnostic", async () => {
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "exited", code: 0 });
+    claimOutcome(signalsOf(state.request).outcome, { kind: "exited", code: 0 });
     state.worker.onmessage?.({ data: { type: "error", code: 1, message: "losing crash", sleep: "atomics" } } as MessageEvent);
     expect(await state.run.done).toEqual({ code: 0 });
   } finally { await state.dispose(); }
@@ -590,9 +491,12 @@ test("run.done waits for deferred root activation and descriptor release", async
   // Install the descriptor before readiness resolves: the generic owner may observe the
   // selected root outcome before a caller's subsequent .then callback runs.
   const state = isolatedRoot(true, "browser", { activate: async () => { await activation; return { ...proc, ProcessSupervisor: DescriptorSupervisor }; } });
-  const supervisor = broker.ready();
+  let supervisor!: ReturnType<SubprocessBroker["ready"]>;
   try {
     await state.ready;
+    // The service adopts a root before it activates; adoption of a root waits for any
+    // activation already requested, so the deferred activation starts after the worker did.
+    supervisor = broker.ready();
     const waiting = runConfirmation(state.run);
     state.run.kill(9);
     state.release();
@@ -611,7 +515,7 @@ test("run.done waits for deferred root activation and descriptor release", async
     expect(state.worker.terminated).toBe(1);
   } finally {
     activate();
-    await supervisor;
+    await supervisor?.catch(() => {});
     register.mockRestore();
     await state.dispose();
     broker.dispose();
@@ -644,11 +548,12 @@ for (const partial of [false, true]) test(`run.done safely handles rejected defe
   });
   const report = spyOn(console, "error").mockImplementation(() => {});
   const state = isolatedRoot(true, "browser", { activate: () => activation });
-  // Observe the explicit ready request too; rootExit must handle only its activation
-  // rejection, while the runner's own filesystem fence remains mandatory.
-  const attempted = broker.ready().catch(error => error);
+  let attempted!: Promise<unknown>;
   try {
     await state.ready;
+    // Observe the explicit ready request too; rootExit must handle only its activation
+    // rejection, while the runner's own filesystem fence remains mandatory.
+    attempted = broker.ready().catch(error => error);
     const waiting = runConfirmation(state.run);
     state.run.kill(9);
     failActivation();

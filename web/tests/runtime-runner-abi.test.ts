@@ -74,9 +74,9 @@ for (const name of ["pipe", "read", "spawn", "poll"]) test(`runner automatically
     expect((state.request().runtimeProcess!.data as { pipeRegistry: unknown }).pipeRegistry).toBeDefined();
   } finally { await await state.dispose(); }
 });
-for (const name of ["signal", "interrupted", "default_signal"]) test(`runner preserves legacy Bun for runtime_proc.${name} alone`, async () => {
+for (const name of ["signal", "interrupted", "default_signal"]) test(`runner supplies generic ownership even for runtime_proc.${name} alone`, async () => {
   const state = fixture(imported(name));
-  try { await state.ready; expect(state.request().runtimeProcess).toBeUndefined(); }
+  try { await state.ready; expect(state.request().runtimeProcess).toBeDefined(); }
   finally { await await state.dispose(); }
 });
 
@@ -350,7 +350,7 @@ for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
 });
 
 for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery of ["kill", "killJob"] as const) {
-  test(`generic ${engine} ${delivery} wakes the actual Bun host-poll budget without replaying handled SIGINT`, async () => {
+  test(`generic ${engine} ${delivery} wakes the shared process wake word without replaying handled SIGINT`, async () => {
     const nativeWorker = globalThis.Worker;
     const requests: RunRequest[] = [];
     globalThis.Worker = class {
@@ -373,10 +373,10 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
       expect(request.engine).toBe(engine);
       const shared = workerProcessState(request.runtimeProcess!);
       setSignalDisposition(shared.signals.signalState, 2, 2);
-      const word = new Int32Array(request.budget!, 4, 1);
+      const word = shared.wake;
       const generation = Atomics.load(word, 0);
       // Reuse the browser causal-wake negative control on the real production request,
-      // never a manufactured budget. Even suppressed notify must advance this generation.
+      // never a manufactured word. Even suppressed notify must advance this generation.
       mutation = suppressBudgetNotifications(word);
       if (delivery === "kill") await state.broker.kill(pid, 2);
       else await state.broker.killJob(shared.job, 2);
