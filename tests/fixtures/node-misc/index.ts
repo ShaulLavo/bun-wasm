@@ -31,22 +31,30 @@ for (const [name, fn] of [
 }
 
 const missingChild = childProcess.spawn("ls");
-await new Promise((resolve) => missingChild.on("error", (error) => {
-  console.log("child_process.spawn ENOENT:", error.code === "ENOENT");
-  resolve();
-}));
+const missing = await new Promise<boolean>((resolve) => {
+  missingChild.once("error", (error) => resolve(error.code === "ERR_NOT_SUPPORTED_IN_WASM"));
+  missingChild.once("exit", (code) => resolve(code === 127));
+});
+console.log("child_process unavailable:", missing);
 
-// Things WASI can't do: they fail loudly instead of hanging or lying.
 console.log("Bun.which:", Bun.which("ls"));
 const spawned = Bun.spawnSync({ cmd: ["ls"] });
-console.log("Bun.spawnSync unsupported:", !spawned.success && spawned.exitCode !== 0 && spawned.error.code === "ENOENT");
-for (const name of ["spawn", "serve"]) {
-  try {
-    Bun[name]({ cmd: ["ls"], fetch() {} });
-    console.log(`Bun.${name} ran`);
-  } catch (err) {
-    console.log(`Bun.${name} throws:`, err.code === "ENOENT" || err.message.includes("not supported in bun-wasm"));
-  }
+console.log("Bun.spawnSync unavailable:", !spawned.success &&
+  (spawned.error?.code === "ERR_NOT_SUPPORTED_IN_WASM" || spawned.exitCode === 127));
+let spawnUnavailable = false;
+try {
+  const child = Bun.spawn({ cmd: ["ls"], stdout: "ignore", stderr: "pipe" });
+  await new Response(child.stderr).text();
+  spawnUnavailable = await child.exited === 127;
+} catch (error) {
+  spawnUnavailable = error.code === "ERR_NOT_SUPPORTED_IN_WASM";
+}
+console.log("Bun.spawn unavailable:", spawnUnavailable);
+try {
+  Bun.serve({ fetch() {} });
+  console.log("Bun.serve ran");
+} catch (error) {
+  console.log("Bun.serve throws:", error.message.includes("not supported in bun-wasm"));
 }
 try {
   await fetch("http://127.0.0.1:9/");

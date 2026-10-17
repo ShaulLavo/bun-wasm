@@ -218,6 +218,7 @@
   // Pending timers sorted by (when, seq).
   let timerQueue = [];
   const immediates = [];
+  let immediateBatchRemaining = null;
   let refedTimers = 0;
 
   function insertTimer(timer) {
@@ -382,25 +383,28 @@
   }
 
   // Called by the Rust event loop. Runs at most one callback so microtasks
-  // drain between callbacks. Returns 0 when something ran, the delay in ms
+  // drain between callbacks. Returns 0 when another turn is ready, the delay in ms
   // until the next timer, or -1 when nothing keeps the process alive.
   internal.runTimers = function runTimers() {
     const workerProgress = internal.workerPump && internal.workerPump();
     // Immediates first: like Bun, setImmediate callbacks queued by the
     // main script run before even a due setTimeout(0).
-    while (immediates.length > 0) {
+    if (immediateBatchRemaining === null) immediateBatchRemaining = immediates.length;
+    while (immediateBatchRemaining > 0 && immediates.length > 0) {
+      immediateBatchRemaining--;
       const immediate = immediates.shift();
       if (!immediate._active) continue;
       immediate._active = false;
       runInContext(immediate._context, immediate._callback, immediate, immediate._args);
       return 0;
     }
+    immediateBatchRemaining = null;
     const now = native.now();
     if (timerQueue.length > 0 && timerQueue[0]._when <= now) {
       runOneTimer(now);
       return 0;
     }
-    if (workerProgress || internal.pendingIo > 0) return 0;
+    if (immediates.length > 0 || workerProgress || internal.pendingIo > 0) return 0;
     if (refedTimers <= 0 && internal.messagePortRefs <= 0) return -1;
     // Unref'd timers at the front don't keep us alive but still fire if a
     // ref'd one is pending later.
@@ -408,9 +412,19 @@
   };
   internal.pendingIo = 0;
   internal.messagePortRefs = 0;
+  internal.loopState = () => ({
+    refedTimers,
+    immediates: immediates.length,
+    ticks: tickQueue.length,
+    pendingIo: internal.pendingIo,
+    messagePortRefs: internal.messagePortRefs,
+    networkHandles: internal.ioPending(),
+  });
+  internal.require("exit_provenance");
   // Replaced by net.js when a networking host is present.
   internal.ioPending = () => 0;
   internal.pumpIo = () => false;
+  internal.require("loop_scheduler");
 
   // --- process.nextTick -------------------------------------------------------
 
@@ -506,7 +520,7 @@
   }
 
   function isBuiltinId(id) {
-    return id.startsWith("node:") || id === "bun" || id.startsWith("bun:");
+    return Object.prototype.hasOwnProperty.call(internal.builtinFactories, id) || id.startsWith("node:") || id === "bun" || id.startsWith("bun:");
   }
 
   function loadModule(path, format) {
@@ -675,6 +689,7 @@
   // `bun test [args]`: the runner lives in bun_test.js. It sets
   // process.exitCode when tests fail.
   internal.runTests = function runTests(args) {
+    internal.exitReason = "test-complete";
     return internal.require("bun_test").run(args);
   };
   internal.importModule = (path) => native.importModule(path);
@@ -755,6 +770,7 @@
       return true;
     }
     if (internal.workerError) internal.workerError(err);
+    internal.traceExit("uncaught-exception", 1, err);
     printFatal(err);
     globalThis.process.exitCode = 1;
     emitExit(1);
@@ -767,6 +783,7 @@
       return true;
     }
     if (internal.workerError) internal.workerError(reason);
+    internal.traceExit("unhandled-rejection", 1, reason);
     printFatal(reason);
     // Bun reports exit code 0 to "exit" listeners here (and still exits 1).
     emitExit(0);
@@ -784,7 +801,9 @@
     const process = globalThis.process;
     const code = (process.exitCode | 0) || 0;
     emitExit(code);
-    return (process.exitCode | 0) || 0;
+    const finalCode = (process.exitCode | 0) || 0;
+    internal.traceExit(internal.exitReason || "event-loop-drained", finalCode);
+    return finalCode;
   };
 
   // --- globals ----------------------------------------------------------------

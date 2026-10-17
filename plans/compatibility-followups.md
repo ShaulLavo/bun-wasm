@@ -653,3 +653,74 @@ or certificate APIs. The worker track owns isolating it against native Bun and
 checking WebKit module/Blob URL lifetime. Its exact log is
 `remaining/gate-web-free-port.log:1100` in the report above. HMR still passes all
 six Chromium/WebKit engine runs. The lane leaves this gate failure visible.
+## Framework follow-ups after exit provenance, 2026-10-17
+
+Status: Approved.
+
+The shared `ws` require-dispatch failure and Vite's stdin-triggered shutdown are
+fixed. Vanilla installs, renders, reloads source edits and builds on QuickJS,
+JSC and browser. React and Vue pass all browser-engine stages. The current
+90-second replay records 32/51 passing stages. [The exit report](../docs/app-matrix/exit-provenance.md)
+separates current integration outcomes from earlier checkpoints. Preserve the
+passing controls when following up.
+
+Reproduce with a rebuilt private launcher through the heavy wrapper:
+
+```sh
+scripts/app-matrix.sh --apps=vite-react,vite-vue,sveltekit,astro,vitest \
+  --engines=quickjs,jsc,browser --hosts=native --timeout=90 \
+  --cache=/work/cache/bun-wasm-app-matrix \
+  --launcher="$CARGO_TARGET_DIR/release/bun-wasm" --output=<fresh-directory>
+```
+
+The report destination is `/work/reports/bun-wasm-silent-exits-2026-10-17/`.
+`landing-matrix/results.json` retains exit codes, signals, deadlines, guest exit
+records and browser request failures. Current source is `0c154d04`, including
+main through `390bda6d` and the runtime track's process, pipe and signal changes.
+The earlier `scheduler-matrix/results.json` at `e4b4ea0f` remains historical
+evidence.
+
+- **React and Vue optimizer requests.** QuickJS and JSC dev stay alive but leave
+  optimized `react.js`, `react-dom_client.js` or `vue.js` requests pending until the
+  deadline. No browser error or HTTP failure is recorded. Inspect the optimizer
+  context and esbuild service replies; a deadlock or a performance cause is not
+  established by this bounded observation. A 300-second replay completes
+  QuickJS dev/reload/build; JSC instead receives HTTP 504 `Outdated Optimize Dep`
+  for both React dependency URLs. The 180-second scheduler replay reproduces
+  that distinction. Preserve the longer-run evidence alongside the 90-second
+  failures; do not call the QuickJS result a permanent deadlock. Vue passed at
+  the earlier checkpoint but hits the same pending-request deadline now.
+- **JSC React and Vue builds.** Current builds hit the deadline after 22 and 8
+  transformed modules respectively, without guest exit records. Historical
+  `scheduler-matrix/vite-react-jsc-build.log` contains `JSLock::unlock` through
+  `JSObjectSetProperty` and `engine_jsc::from_val`. The current timeout does not
+  reproduce that trap or prove it fixed. Keep package sources unchanged and
+  investigate native value lifetime, lock ownership and GC during conversion.
+- **SvelteKit completion.** Current QuickJS build reaches the deadline after
+  `179 modules transformed` and `rendering chunks`. JSC dev reaches ready,
+  reports `vite.config.js changed`, then times out. JSC build times out with no
+  output. Browser dev repeatedly restarts config and loses its SSR `fetchModule`
+  transport, then remains alive until the deadline. None records a guest exit.
+  Trace which file or config dependency causes the restart and why in-flight
+  optimizer work survives service shutdown. A temporary watcher trace saw no
+  direct notification for `vite.config.js` itself.
+  Historical QuickJS builds drain with all loop counters zero but no output.
+  Historical JSC dev faults in `JSRopeString::resolveToBufferSlow<char16_t>`
+  through `resolveModule`, with an out-of-bounds access at `0x6f6e6e69` in
+  `0x4640000` bytes of linear memory. That stack differs from React's JSLock
+  failure. Start with module resolve string/value lifetime around
+  `engine_jsc.rs:302`; no cause is proved. Historical browser dev exits on an
+  unhandled esbuild `The service was stopped` rejection with live handles.
+  Do not assume these engine outcomes have one cause.
+- **Astro module loading.** The original QuickJS circular `Fragment` binding and
+  JSC/browser missing `Http2ServerResponse` export are reached again after fixing
+  builtin dispatch. Their plain-message errors are now retained by classification.
+- **Vitest events adapter.** Both configured pools stop at the missing
+  `EventEmitterAsyncResource` export on every engine, before a worker pool starts.
+  Implement its async-context behavior rather than inferring another worker gap.
+
+The same investigation reproduced and fixed callback starvation independently
+of the framework outcomes. A recurring immediate starved I/O on QuickJS/JSC
+and due timers on every wasm engine. The ready-batch and I/O-turn regressions
+now pass on all engines. This does not resolve the React optimized-dependency
+504 or either native JSC fault; their app-level follow-ups remain approved.
