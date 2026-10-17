@@ -1,15 +1,27 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
-import { posix } from "node:path";
+import { join, posix } from "node:path";
 
 const require = createRequire(import.meta.url);
 const source = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/spawn.js", import.meta.url), "utf8");
 
-const packageSource = new Bun.Transpiler({ loader: "ts" }).transformSync(
-  readFileSync(new URL("../../crates/bunwasm-runtime/src/js/package_scripts.ts", import.meta.url), "utf8"),
-);
+function emittedPackageSource() {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-spawn-normalization-"));
+  try {
+    const destination = join(scratch, "package_scripts.js");
+    const compiled = Bun.spawnSync(["node",
+      fileURLToPath(new URL("../../scripts/transpile-runtime.ts", import.meta.url)),
+      fileURLToPath(new URL("../../crates/bunwasm-runtime/src/js/package_scripts.ts", import.meta.url)), destination,
+    ], { stdout: "pipe", stderr: "pipe" });
+    if (compiled.exitCode !== 0) throw new Error(compiled.stderr.toString());
+    return readFileSync(destination, "utf8");
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+}
+const packageSource = emittedPackageSource();
 type Context = { process: { env: Record<string, string>; execPath?: string; argv0?: string }; URL: typeof URL };
 type Internal = { require(name: string): unknown; native: { cwd(): string } & Record<string, unknown> } & Record<string, unknown>;
 function spawnFactory(context: Context) {
