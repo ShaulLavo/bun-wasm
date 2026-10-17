@@ -36,7 +36,7 @@ for (const version of ["1.0.0", "1.1.0", "2.0.0"]) {
 }
 const server = Bun.serve({ port: 0, fetch(req) {
   const path = new URL(req.url).pathname;
-  requests.push(path);
+  requests.push(`${latest}:${path}`);
   const archive = archives.get(path.slice(1).replace(/\.tgz$/, ""));
   if (archive) return new Response(archive);
   if (path !== "/fixture-cli") return new Response("missing", { status: 404 });
@@ -78,9 +78,10 @@ const cases: Record<string, () => Promise<void>> = {
     await run(cwd, "install", "--frozen-lockfile");
     await run(join(cwd, "packages/a"), "install", "--frozen-lockfile");
     latest = "2.0.0";
-    await run(join(cwd, "packages/a"), "add", "fixture-cli");
+    const added = await run(join(cwd, "packages/a"), "add", "fixture-cli");
     latest = "1.0.0";
-    check(JSON.parse(readFileSync(join(cwd, "packages/a/package.json"), "utf8")).dependencies["fixture-cli"] === "^2.0.0", "workspace add writes member resolution");
+    const member = JSON.parse(readFileSync(join(cwd, "packages/a/package.json"), "utf8"));
+    check(member.dependencies["fixture-cli"] === "^2.0.0", `workspace add writes member resolution: ${JSON.stringify({ member, added, requests })}`);
     check(JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).dependencies["fixture-cli"] === "1.0.0", "workspace add changed root");
   },
   async registry() {
