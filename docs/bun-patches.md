@@ -1697,7 +1697,8 @@ creation degrade to a warning; preparation failures and other errno values
 remain fatal. Required workspace links retain their original failure behavior.
 When a bin link is absent, the command adapters select the real installed entry
 through its package manifest, including scoped packages. These are original
-adapter changes, with no additional upstream source or patch.
+adapter changes, with no additional upstream source or patch. The playground
+shell dispatches its `bunx` alias through the same `bun x` command path.
 
 The TypeScript package-script dispatcher runs JavaScript and TypeScript binaries
 inside the selected engine. It handles quoted arguments and environment
