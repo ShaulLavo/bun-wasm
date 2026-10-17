@@ -75,11 +75,10 @@ try {
   console.log("Bun.spawn throws:", error.code === missingCode && (!processHost || error.errno === -2 && error.path === "ls"));
 }
 try {
-  Bun.serve({ fetch() {} });
-  console.log("Bun.serve ran");
-} catch (error) {
-  console.log("Bun.serve throws:", error.message.includes("not supported in bun-wasm"));
-}
+  const server = Bun.serve({ port: 0, fetch() { return new Response("unexpected"); } });
+  server.stop(true);
+  console.log("Bun.serve throws:", false);
+} catch (error) { console.log("Bun.serve throws:", error instanceof Error && error.message.includes("not supported in bun-wasm")); }
 try {
   await fetch("http://127.0.0.1:9/");
   console.log("fetch resolved");
