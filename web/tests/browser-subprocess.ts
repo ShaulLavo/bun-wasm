@@ -12,7 +12,7 @@ const ipcParent = readFileSync(new URL("../../tests/fixtures/child-process-ipc/i
 const ipcBusy = readFileSync(new URL("../../tests/fixtures/child-process-ipc-busy/index.ts", import.meta.url), "utf8");
 const ipcChild = readFileSync(new URL("../../tests/fixtures/child-process-ipc/child.ts", import.meta.url), "utf8");
 const tableSource = readFileSync(new URL("../../tests/fixtures/webassembly-table/index.ts", import.meta.url), "utf8");
-const tableBinaries = ["module", "import", "references", "callbacks"].map(name => [name, Array.from(readFileSync(new URL(`../../tests/fixtures/webassembly-table/${name}.wasm`, import.meta.url)))] as const);
+const tableBinaries = ["module", "import", "references", "callbacks", "duplicate"].map(name => [name, Array.from(readFileSync(new URL(`../../tests/fixtures/webassembly-table/${name}.wasm`, import.meta.url)))] as const);
 const apiProgram = `
 import { spawnSync, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";

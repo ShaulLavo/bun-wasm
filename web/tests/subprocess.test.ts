@@ -164,3 +164,36 @@ for (const bridge of ["engine", "slots"]) {
     } finally { state.host.dispose(); }
   });
 }
+
+
+test("inherited output published with exit is forwarded before wait succeeds", () => {
+  let transport: ChildTransport | undefined;
+  let output = "";
+  const host = new SubprocessHost({
+    output(fd, bytes) { if (fd === 2) output += decoder.decode(bytes); },
+    launch(_meta, child) { transport = child; return { terminate() {} }; },
+  });
+  const read = SharedPipe.prototype.read;
+  try {
+    const id = host.spawn(JSON.stringify({ argv: ["bun", "-e", "0"], stderr: "inherit", stdout: "ignore", stdin: "ignore" }));
+    if (!transport) throw new Error("child was not launched");
+    const child = childTransport(transport);
+    const stderr = transport.pipes[2];
+    let injected = false;
+    SharedPipe.prototype.read = function(capacity) {
+      const value = read.call(this, capacity);
+      if (this.buffer === stderr && value === -2 && !injected) {
+        injected = true;
+        child.stderr.write(encoder.encode("last"));
+        child.finish(0);
+      }
+      return value;
+    };
+    const status = host.wait(id);
+    expect(status === -2 ? host.wait(id) : status).toBe(0);
+    expect(output).toBe("last");
+  } finally {
+    SharedPipe.prototype.read = read;
+    host.dispose();
+  }
+});

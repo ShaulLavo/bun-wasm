@@ -72,4 +72,21 @@ rejectCallback = true;
 for (const invoke of [() => callbackExports.callback(1), () => callbackExports.invoke(1), () => cross.invoke(0, 1)]) {
   assert.throws(invoke, error => error === sentinel);
 }
+const tablePrototype = Object.getPrototypeOf(standalone);
+Object.setPrototypeOf(standalone, null);
+const branded = new WebAssembly.Instance(new WebAssembly.Module(readFileSync("./import.wasm")), { env: { table: standalone } }).exports as any;
+assert.equal(branded.table, standalone);
+Object.setPrototypeOf(standalone, tablePrototype);
+assert.throws(() => new WebAssembly.Instance(new WebAssembly.Module(readFileSync("./import.wasm")), { env: {
+  table: Object.create(WebAssembly.Table.prototype),
+} }), WebAssembly.LinkError);
+const first = new WebAssembly.Table({ element: "anyfunc", initial: 2, maximum: 5 });
+const second = new WebAssembly.Table({ element: "anyfunc", initial: 2, maximum: 5 });
+let reads = 0;
+const duplicate = new WebAssembly.Instance(new WebAssembly.Module(readFileSync("./duplicate.wasm")), { env: {
+  get table() { return reads++ === 0 ? first : second; },
+} }).exports as any;
+assert.equal(duplicate.first, first);
+assert.equal(duplicate.second, second);
+assert.equal(reads, 2);
 console.log("table exports, imports, identity, indirect calls, growth and externref pass");
