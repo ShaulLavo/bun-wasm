@@ -14,13 +14,13 @@
     QuotaExceededError: 22, TimeoutError: 23, InvalidNodeTypeError: 24, DataCloneError: 25,
   };
 
-  class DOMException extends Error {
+  const DOMException = native.DOMException || class DOMException extends Error {
     constructor(message = "", name = "Error") {
       super(message);
       Object.defineProperty(this, "name", { value: String(name), configurable: true, writable: true });
       Object.defineProperty(this, "code", { value: DOM_CODES[name] || 0, configurable: true, writable: true });
     }
-  }
+  };
   internal.DOMException = DOMException;
 
   // --- encoding ---------------------------------------------------------------
@@ -1219,18 +1219,7 @@
   }
   internal.randomUUID = randomUUID;
 
-  const subtle = {
-    async digest(algorithm, data) {
-      const name = typeof algorithm === "string" ? algorithm : algorithm.name;
-      const digest = native.hash(String(name), toUint8(data).slice());
-      return digest.buffer;
-    },
-  };
-  for (const op of ["encrypt", "decrypt", "sign", "verify", "generateKey", "deriveKey", "deriveBits", "importKey", "exportKey", "wrapKey", "unwrapKey"]) {
-    subtle[op] = () => Promise.reject(new DOMException(`crypto.subtle.${op} is not supported in bun-wasm`, "NotSupportedError"));
-  }
-
-  const crypto = { getRandomValues, randomUUID, subtle };
+  const crypto = { getRandomValues, randomUUID };
 
   // --- FormData / MessageChannel / navigator ----------------------------------
 
@@ -1285,33 +1274,6 @@
     return String(value);
   }
 
-  // Ports deliver messages asynchronously on the same thread.
-  class MessagePort extends EventTarget {
-    _other = null;
-    onmessage = null;
-    postMessage(data) {
-      const target = this._other;
-      if (!target) return;
-      const copy = internal.require("structured_clone").structuredClone(data);
-      setImmediate(() => target.dispatchEvent(new MessageEvent("message", { data: copy })));
-    }
-    start() {}
-    close() {
-      this._other = null;
-    }
-    ref() {}
-    unref() {}
-  }
-
-  class MessageChannel {
-    constructor() {
-      this.port1 = new MessagePort();
-      this.port2 = new MessagePort();
-      this.port1._other = this.port2;
-      this.port2._other = this.port1;
-    }
-  }
-
   const navigator = {
     userAgent: `Bun/${native.platformInfo.version}`,
     hardwareConcurrency: 1,
@@ -1329,11 +1291,13 @@
     const globals = {
       DOMException, TextEncoder, TextDecoder, btoa, atob, URL, URLSearchParams, Event, CustomEvent,
       ErrorEvent, MessageEvent, CloseEvent, EventTarget, AbortController, AbortSignal, Blob, File, Headers,
-      Request, Response, fetch, ReadableStream, performance, crypto, FormData, MessageChannel,
-      MessagePort, navigator,
+      Request, Response, fetch, ReadableStream, performance, crypto, FormData, navigator,
     };
     Object.assign(globals, streamWeb);
     for (const name of Object.keys(globals)) defineGlobal(name, globals[name]);
+    for (const name of ["MessageChannel", "MessagePort", "BroadcastChannel"]) {
+      defineLazyGlobal(name, () => internal.require("worker_threads")[name]);
+    }
     defineLazyGlobal("WebSocket", () => internal.require("net").WebSocket);
   };
 })

@@ -1,0 +1,3 @@
+peer posts before close notification
+both endpoints close once and disentangle
+repeated close does not emit another event or callback

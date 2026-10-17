@@ -1,0 +1,1 @@
+HMAC requires hash with and without length

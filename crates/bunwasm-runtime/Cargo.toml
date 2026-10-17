@@ -14,6 +14,7 @@ engine-jsc = ["dep:bunwasm-jsc"]
 engine-host = []
 
 [dependencies]
+bunwasm-crypto-sys = { path = "../bunwasm-crypto-sys" }
 bun_glob = { path = "../../vendor/bun/src/glob" }
 bun_semver = { path = "../../vendor/bun/src/semver" }
 bunwasm-semver = { path = "../bunwasm-semver" }
@@ -37,6 +38,23 @@ libc = "0.2"
 tar = { version = "0.4", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 wasmi = { version = "0.46.0", default-features = false, features = ["std"] }
+
+aes = "0.8"
+aes-kw = { version = "0.2", features = ["alloc"] }
+ghash = "0.5"
+subtle = "2"
+cbc = { version = "0.1", features = ["alloc", "block-padding"] }
+ctr = "0.9"
+pbkdf2 = "0.12"
+hkdf = "0.12"
+p256 = { version = "0.13", features = ["ecdsa", "ecdh", "jwk"] }
+p384 = { version = "0.13", features = ["ecdsa", "ecdh", "jwk"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+pkcs8 = { version = "0.10", features = ["alloc"] }
+spki = { version = "0.7", features = ["alloc"] }
+signature = "2"
 
 [dev-dependencies]
 bunwasm-glue = { path = "../bunwasm-glue" }

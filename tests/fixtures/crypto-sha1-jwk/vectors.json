@@ -1,0 +1,113 @@
+[
+  {
+    "algorithm": {
+      "name": "HMAC",
+      "hash": "SHA-1"
+    },
+    "operation": {
+      "name": "HMAC",
+      "hash": "SHA-1",
+      "saltLength": 20
+    },
+    "alg": "HS1",
+    "private": {
+      "key_ops": [
+        "sign",
+        "verify"
+      ],
+      "ext": true,
+      "alg": "HS1",
+      "kty": "oct",
+      "k": "5J8V-cSkB1ommP2K7Hze7yg8ll3Nb7LRu9ziM6LAVX5Bi6jD9HHFVQVjI5-WMqVugcNUyPYbvpKoiEyNbbfu3g"
+    },
+    "public": {
+      "key_ops": [
+        "sign",
+        "verify"
+      ],
+      "ext": true,
+      "alg": "HS1",
+      "kty": "oct",
+      "k": "5J8V-cSkB1ommP2K7Hze7yg8ll3Nb7LRu9ziM6LAVX5Bi6jD9HHFVQVjI5-WMqVugcNUyPYbvpKoiEyNbbfu3g"
+    },
+    "signature": "YCRwkmjt7SR+Wcjkprd6NaHl/NQ="
+  },
+  {
+    "algorithm": {
+      "name": "RSASSA-PKCS1-v1_5",
+      "hash": "SHA-1"
+    },
+    "operation": {
+      "name": "RSASSA-PKCS1-v1_5",
+      "hash": "SHA-1",
+      "saltLength": 20
+    },
+    "alg": "RS1",
+    "private": {
+      "key_ops": [
+        "sign"
+      ],
+      "ext": true,
+      "alg": "RS1",
+      "kty": "RSA",
+      "n": "yTAqoB7hR0uchhRWry7mn5h5p0M8DrhFfjn3N28k0HeP9qd5td0Q2Yhxezlq_R9NxrVQDwFSlGNbMeIlyRvfJmVwW3LhzcSzcADg_lJLZuQjSmuzL07Oa03Io_v-z3d25ZL2BMc7eu42cgOSLAKi9rmXX4-ZerJ2ylQGpzITpP8",
+      "e": "AQAB",
+      "d": "lDJRw77bbNwKgU1sCQEASqFTQ10oWSNttSxXqVLKiHD579OvuMINjl-OUBmccLXlYbDfNx5fSQTjARy3fqt0NJCsUnNb5ptBdMun_9wt3koyYRhdpx7-ooCGGYWEF3sTKhSTAyC4Ujrva0E3am15cDm8cn1V206cxNMe-AgzoBE",
+      "p": "_0x_cGDFmZAGGLwx6ds7G3QNW37no_5I0nKf7jZs6xq5FQJpxtpz39CTql6jKuhzK1BMNWFJF_q6W-Sq4sGQSQ",
+      "q": "yb2fhqgzHyB3CUyDzIsePsGqLEIXcFKgiZOX7b6PAIXpmhlioez-cryn2L0yHQ4FZG8MTPcxK-LHOrDycgkbBw",
+      "dp": "d95AG9CkFrUD18tNGENCHmK__sy4EEzNflopc1yEiWLTseSfK6nYLCcvnhevPu9DW_vovEuAWUz1AT59adh-WQ",
+      "dq": "COledaVSdMqLV5bQr6VplZ4adVAKFwUfYFRrvq3PRVelBRCgAcUlTE43H-TjpNLsvA4HvhKhUm33HQmZ_B2Y2w",
+      "qi": "FcG6ww9GSXQL_g9eON2ONzV1Ayl1oHoma-daLayaPFbWHNCch68S7UOmJ4lo-J4FLVGaCnhO7ipv-3TViOkKEw"
+    },
+    "public": {
+      "key_ops": [
+        "verify"
+      ],
+      "ext": true,
+      "alg": "RS1",
+      "kty": "RSA",
+      "n": "yTAqoB7hR0uchhRWry7mn5h5p0M8DrhFfjn3N28k0HeP9qd5td0Q2Yhxezlq_R9NxrVQDwFSlGNbMeIlyRvfJmVwW3LhzcSzcADg_lJLZuQjSmuzL07Oa03Io_v-z3d25ZL2BMc7eu42cgOSLAKi9rmXX4-ZerJ2ylQGpzITpP8",
+      "e": "AQAB"
+    },
+    "signature": "cxoeX91ZsDf9Xjs8UGrk5kyonslgfjqJLy6rNXrQQk/BWUkhHrB/BchqnqOlMPnFxVTKDs5rbtQo45dI6c3hVebiYLO6sUBGJt2TZTUkiHFrgq3AVwSvyUbfp8QVciWeLZv4xIPQtL4oSeAecOSQ3GJvzMRgWiA6WWm/Ei6QI0Q="
+  },
+  {
+    "algorithm": {
+      "name": "RSA-PSS",
+      "hash": "SHA-1"
+    },
+    "operation": {
+      "name": "RSA-PSS",
+      "hash": "SHA-1",
+      "saltLength": 20
+    },
+    "alg": "PS1",
+    "private": {
+      "key_ops": [
+        "sign"
+      ],
+      "ext": true,
+      "alg": "PS1",
+      "kty": "RSA",
+      "n": "1ZSD60CqUVOFCiC0rHe6zTZvWgQfu3moaHujt_bEk-Rjh0MHZSaVxMnJXydzhUCXEst9q7cBVT74fYhXGTOkSaPg7FeL77oRIhbQqqnWLS-QKOOuBIkaQCMGjm7bmzt4ClP8C4RpE5XRFuDNMAmjjcGmWr7340p8Uk6noHvctXk",
+      "e": "AQAB",
+      "d": "OJCt44dr1EAncwg4cZkAK0tocFG5ScCtvoZIVPeRFo4dYfx5n-t5LPY4U_Ax4y-5Eyw7q1e7jaUw0KZkUvNfZfkkUP6zAC7lSl_JbH3CTOJ5ZaYh23kHo0VqXCTcUKQh7NFqxRKiN1n2Bq6SkEa-aYOGBkAfFbLgxdDBYEO2WxU",
+      "p": "_uZW3ze7Q-M7gu0WaafjQz1uePuu1HHruhJAIsFjrvZd6tv9Nxt4vH-w0fZI2cQBzP4hfpMkH8ykurQPSMVIOw",
+      "q": "1oCEszjcod-2NtrMnnmPAt7QMYHFmA6y4Iufj7_uLiXzGRaFTnMGBycPLU62UZggt0r_eikpvoYxgDMXWyQR2w",
+      "dp": "6lArAz5j8l_r0MrIk481JhZOewBBEiE2o_Eq68gCLk9ivgZDmmiyb_ShQiC3jxbS4PGrMINp7aFcvBPRCP_xCQ",
+      "dq": "RN0dvSwUKSPZK-Myre34q8M8s6gl95tAcjZhE5VashYc5YEFaxoiZUl05ebPQYLFfhLl0iJE9JXAbpf4d5os4Q",
+      "qi": "N8qvmS53hG-dNebEOs-4eXoe5YMI5cQJnWLr2s1fyFz-w0uTvIcpbiDNTm3mrvGNvA4pe94rUDeLiUBblIQd2g"
+    },
+    "public": {
+      "key_ops": [
+        "verify"
+      ],
+      "ext": true,
+      "alg": "PS1",
+      "kty": "RSA",
+      "n": "1ZSD60CqUVOFCiC0rHe6zTZvWgQfu3moaHujt_bEk-Rjh0MHZSaVxMnJXydzhUCXEst9q7cBVT74fYhXGTOkSaPg7FeL77oRIhbQqqnWLS-QKOOuBIkaQCMGjm7bmzt4ClP8C4RpE5XRFuDNMAmjjcGmWr7340p8Uk6noHvctXk",
+      "e": "AQAB"
+    },
+    "signature": "RpyL846SCREvtYDOKbm9rk1VnBn4ULpgvyaMMPPgbceQLXk/C52wxuARd6KwmfoN7g3lOoYmiN6wlvU3byw1ERAPnp8Va04bQUF2QbozexfoqnYyzfwi26SuGd57ZU4fPX5wMAf0Xbv0ue795XACbLLuHLoDxR7eeaCpcBgPTJU="
+  }
+]

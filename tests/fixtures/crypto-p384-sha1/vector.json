@@ -1,0 +1,24 @@
+{
+  "private": {
+    "key_ops": [
+      "sign"
+    ],
+    "ext": true,
+    "kty": "EC",
+    "x": "kY2HGM178GsvjXg4upmuj7c612r2Dfkyr5YoCtaz2QPMUJTK7tU9dHY7I0wC7yZI",
+    "y": "BQvDFY5whJ6Y-kUl7HVjplHJUKGwmGw3VyGdYZuVU03p0GhmuJk-F9B6qPliJvSq",
+    "crv": "P-384",
+    "d": "qC8zRUFDPvFplo5Dzu0lTd-1ZqShepj7tRy-QPSxuviG-sJAP6nJQAjvcVav1fp2"
+  },
+  "public": {
+    "key_ops": [
+      "verify"
+    ],
+    "ext": true,
+    "kty": "EC",
+    "x": "kY2HGM178GsvjXg4upmuj7c612r2Dfkyr5YoCtaz2QPMUJTK7tU9dHY7I0wC7yZI",
+    "y": "BQvDFY5whJ6Y-kUl7HVjplHJUKGwmGw3VyGdYZuVU03p0GhmuJk-F9B6qPliJvSq",
+    "crv": "P-384"
+  },
+  "signature": "eELaXLQ9vVnfOQ5ELa3jaQwZ91SCiaGJ0lvBGRPlEbJe8MhfAXZ6ueahaIcUhXFsGo7dWzRMqY2L+Utj5epMRM1PodTw1Nf2BKB8YUaxllo2hoUKjK5RKqjJt3ykcApc"
+}
