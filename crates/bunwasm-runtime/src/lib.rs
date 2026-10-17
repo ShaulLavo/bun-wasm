@@ -98,7 +98,6 @@ pub(crate) struct State {
     /// file on disk (transpiled code, injected ESM prologue).
     positions: RefCell<HashMap<String, modules::PositionMap>>,
     stdout: RefCell<BufWriter<io::Stdout>>,
-    signals: RefCell<host::LocalSignals>,
     /// Set when `process.nextTick` queued work.
     tick_pending: Cell<bool>,
     fds: RefCell<natives::FdTable>,
@@ -121,7 +120,6 @@ impl State {
             cjs_sources: RefCell::new(HashMap::new()),
             positions: RefCell::new(HashMap::new()),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
-            signals: RefCell::new(host::LocalSignals::default()),
             tick_pending: Cell::new(false),
             fds: RefCell::new(natives::FdTable::default()),
             directories: Rc::new(RefCell::new(directory::Directories::default())),
@@ -156,15 +154,9 @@ impl State {
         let _ = self.flush_stdout();
     }
 
+    /// Signal dispositions and delivery live in the process service (`runtime_proc.signal`).
     pub(crate) fn signal(&self, signal: i32, operation: i32) -> i32 {
-        if host::provided(host::Slot::Signal as usize) {
-            return host::signal(signal, operation);
-        }
-        let action = self.signals.borrow_mut().signal(signal, operation);
-        match action {
-            host::SignalAction::Value(value) => value,
-            host::SignalAction::Default(signal) => self.exit(128 + signal),
-        }
+        host::signal(signal, operation)
     }
 
     pub(crate) fn exit(&self, code: i32) -> ! {
@@ -260,7 +252,7 @@ impl<E: Engine> Core<E> {
 #[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 impl<E: Engine> ModuleHost<E> for Core<E> {
     fn has_interrupt_handler(&self) -> bool {
-        host::provided(host::Slot::Signal as usize)
+        host::PROCESS_ABI
     }
 
     fn interrupt(&self) -> bool {
