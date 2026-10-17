@@ -208,6 +208,7 @@
     const buffers = Array.from(transfer);
     const seen = new Set();
     for (const item of buffers) {
+      if (internal.isMarkedAsUntransferable && internal.isMarkedAsUntransferable(item)) throw dataCloneError("Object is not transferable");
       if (!isArrayBuffer(item)) throw new TypeError("Type error");
       if (seen.has(item)) throw dataCloneError("Transfer list contains duplicate ArrayBuffer");
       seen.add(item);

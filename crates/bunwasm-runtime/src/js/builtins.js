@@ -30,7 +30,6 @@
 
   const NO_PROCESSES = "WASI has no processes";
   const NO_NETWORK = "WASI has no network access";
-  const NO_THREADS = "bun.wasm is single-threaded";
 
   // --- os -------------------------------------------------------------------
 
@@ -781,7 +780,7 @@
       WriteStream: thrower("tty.WriteStream", "no terminal streams"),
     }),
     "node:constants": () => Object.assign({}, internal.builtin("node:os").constants.signals, internal.builtin("node:fs").constants),
-    "node:worker_threads": thrower("worker_threads", NO_THREADS),
+    "node:worker_threads": lazy("worker_threads"),
     "node:child_process": () => internal.require("spawn").nodeChildProcess(),
     "node:cluster": () => unsupportedModule("cluster", NO_PROCESSES, ["fork", "setupPrimary", "setupMaster", "disconnect"], { isPrimary: true, isMaster: true, isWorker: false, workers: {} }),
     "ws": () => internal.require("ws_builtin"),
