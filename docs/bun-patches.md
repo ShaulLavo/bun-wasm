@@ -102,6 +102,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, write-side shutdown and bounded native handle allocation over the existing host ABI. |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming, Agent pool and upgrade response adapters shared by all engines. |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
+| [`src/js/signal_defaults.ts` and process initialization](#bun-signal-defaults) | Host feature | Original Bun guest startup signal policy over the shared ABI. |
 | [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns and bounded immediate batches. |
 | [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations. |
 | [`src/js/exit_provenance.ts` and lifecycle hooks](#runtime-exit-provenance) | Host feature | Original opt-in exit diagnostics over the existing event loop and error handlers. |
@@ -247,6 +248,16 @@ the real-browser subprocess check cancels those readers on all three engines.
 The regression fixtures and Python OS-pipe driver are original test code.
 The driver checks QuickJS and JSC under both the native launcher and Node's
 worker host, plus the host engine under Node.
+## Bun signal defaults
+
+Class **Host feature**, **original adapter** in `src/js/signal_defaults.ts`, wired
+by `process.js`. No upstream implementation is copied, so there is no upstream
+path or revision. The generic process runtime keeps its normal signal defaults;
+Bun guests initialize SIGPIPE as ignored so a broken output reports EPIPE through
+JavaScript instead of terminating first. Explicit listener removal keeps the
+existing default-restoration behavior, matching the native Bun control. The
+adapter uses signal slot 18 already provided by the process runtime.
+
 ## Fair loop scheduling
 
 Class **Host feature**, **original adapter** in `src/js/loop_scheduler.ts` and
