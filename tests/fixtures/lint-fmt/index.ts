@@ -79,3 +79,24 @@ const config = command("fmt", ["--cwd", "project", "--log-level=warn", "input.ts
 assert.equal(config.code, 0, config.stderr);
 assert.equal(readFileSync("project/input.ts", "utf8"), "const value = 1;\n");
 console.log("fmt config evaluation uses the guest runtime");
+
+writeFileSync("project/bunfig.toml", '[fmt]\nsemi = "yes"\n');
+const invalid = command("fmt", ["--cwd", "project", "input.ts"]);
+assert.equal(invalid.code, 2);
+assert.ok(invalid.stderr.includes("bunfig.toml:2:"), invalid.stderr);
+console.log("bunfig diagnostics include source locations");
+
+writeFileSync("project/bunfig.toml", "[fmt]\nsemi = true\n");
+const doctor = command("fmt", ["--cwd", "project", "--doctor"]);
+assert.equal(doctor.code, 0, doctor.stderr);
+assert.ok(doctor.stdout.includes("Using bunfig.toml ([fmt])"), doctor.stdout);
+console.log("doctor uses relative bunfig paths");
+
+writeFileSync("project/input.ts", "const value=2;");
+const colored = Bun.spawnSync([process.execPath, "fmt", "--cwd", "project", "--check"], {
+  env: { ...process.env, AGENT: "0", FORCE_COLOR: "1", NO_COLOR: "0" },
+  stdout: "pipe", stderr: "pipe",
+});
+assert.equal(colored.exitCode, 1, colored.stderr.toString());
+assert.match(colored.stderr.toString(), /\x1b\[/);
+console.log("formatter honors FORCE_COLOR");

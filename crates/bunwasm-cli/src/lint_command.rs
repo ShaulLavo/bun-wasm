@@ -40,7 +40,39 @@ pub(super) fn before_command(args: &[String]) -> Option<super::Command> {
     None
 }
 
+enum CommandError {
+    Usage(Vec<u8>),
+    Config(Vec<u8>),
+}
+
+impl From<Vec<u8>> for CommandError {
+    fn from(message: Vec<u8>) -> Self {
+        Self::Usage(message)
+    }
+}
+
+fn configure_output() {
+    use bun_core::Output;
+    use std::sync::atomic::Ordering;
+    let force = bun_core::env_var::FORCE_COLOR
+        .get()
+        .is_some_and(|value| value > 0);
+    let disabled = bun_core::env_var::NO_COLOR.get().unwrap_or(false);
+    let color = if force {
+        Some(true)
+    } else if disabled {
+        Some(false)
+    } else {
+        None
+    };
+    Output::ENABLE_ANSI_COLORS_STDOUT
+        .store(color.unwrap_or(Output::is_stdout_tty()), Ordering::Relaxed);
+    Output::ENABLE_ANSI_COLORS_STDERR
+        .store(color.unwrap_or(Output::is_stderr_tty()), Ordering::Relaxed);
+}
+
 pub fn run(command: &str, args: Vec<String>, bunfig: Option<String>) -> i32 {
+    configure_output();
     let argv: Vec<&[u8]> = args.iter().map(|arg| arg.as_bytes()).collect();
     match execute(command, &argv, bunfig.as_deref()) {
         Ok(outcome) => {
@@ -48,7 +80,11 @@ pub fn run(command: &str, args: Vec<String>, bunfig: Option<String>) -> i32 {
             let _ = std::io::stderr().write_all(&outcome.stderr);
             i32::from(outcome.exit_code)
         }
-        Err(message) => {
+        Err(CommandError::Config(message)) => {
+            let _ = std::io::stderr().write_all(&message);
+            2
+        }
+        Err(CommandError::Usage(message)) => {
             eprintln!("error: {}", String::from_utf8_lossy(&message));
             eprintln!("note: run 'bun {command} --help' for more information");
             2
@@ -56,7 +92,7 @@ pub fn run(command: &str, args: Vec<String>, bunfig: Option<String>) -> i32 {
     }
 }
 
-fn execute(command: &str, args: &[&[u8]], bunfig: Option<&str>) -> Result<Outcome, Vec<u8>> {
+fn execute(command: &str, args: &[&[u8]], bunfig: Option<&str>) -> Result<Outcome, CommandError> {
     let (cwd, help, all) = match command {
         "lint" => {
             let options = cli::Options::parse(args).map_err(|err| err.0)?;
@@ -119,42 +155,62 @@ fn execute(command: &str, args: &[&[u8]], bunfig: Option<&str>) -> Result<Outcom
     Ok(bun_lint_driver::run(&options, &environment))
 }
 
+fn config_error(log: &bun_ast::Log) -> CommandError {
+    let mut message = String::new();
+    log.print(&mut message)
+        .expect("formatting diagnostics into a String");
+    CommandError::Config(message.into_bytes())
+}
+
+fn config_refusal(source: &bun_ast::Source, refusal: bunfig::Refusal) -> CommandError {
+    let mut log = bun_ast::Log::init();
+    log.add_error(Some(source), refusal.at, refusal.message);
+    config_error(&log)
+}
+
 fn read_bunfigs(
     cwd: &Path,
     linting: bool,
     named: Option<&str>,
-) -> Result<(Option<cli::Options>, Option<fmt::cli::Options>), Vec<u8>> {
+) -> Result<(Option<cli::Options>, Option<fmt::cli::Options>), CommandError> {
     let (mut lint, mut format) = (None, None);
     let paths = match named {
-        Some(path) => vec![cwd.join(path)],
+        Some(path) => vec![(cwd.join(path), path.to_owned())],
         None => cwd
             .ancestors()
-            .map(|directory| directory.join("bunfig.toml"))
+            .enumerate()
+            .map(|(depth, directory)| {
+                (
+                    directory.join("bunfig.toml"),
+                    format!("{}bunfig.toml", "../".repeat(depth)),
+                )
+            })
             .collect(),
     };
-    for path in paths {
+    for (path, label) in paths {
         let text = match std::fs::read(&path) {
             Ok(text) => text,
             Err(error) if named.is_none() && error.kind() == std::io::ErrorKind::NotFound => {
                 continue;
             }
-            Err(error) => return Err(error.to_string().into_bytes()),
+            Err(error) => {
+                return Err(CommandError::Config(
+                    format!("error: Cannot read {label}: {error}\n").into_bytes(),
+                ));
+            }
         };
         let arena = bun_alloc::Arena::new();
         let mut ast = bun_ast::ASTMemoryAllocator::borrowing(&arena);
         let _scope = ast.enter();
         let mut log = bun_ast::Log::init();
-        let path = path.to_string_lossy();
-        let source = bun_ast::Source::init_path_string(path.as_bytes(), text.as_slice());
+        let source = bun_ast::Source::init_path_string(label.as_bytes(), text.as_slice());
         let file = bun_parsers::toml::TOML::parse(&source, &mut log, &arena, false)
-            .map_err(|_| format!("failed to parse {path}").into_bytes())?;
-        let refusal = |error: bunfig::Refusal| {
-            format!("{path}: {}", String::from_utf8_lossy(&error.message)).into_bytes()
-        };
+            .map_err(|_| config_error(&log))?;
+        let refusal = |error| config_refusal(&source, error);
         if linting && lint.is_none() {
             lint = bunfig::lint(&file).map_err(refusal)?.map(|options| {
                 options.of_bunfig_at(
-                    path.as_bytes(),
+                    label.as_bytes(),
                     named.is_some(),
                     cwd.as_os_str().as_encoded_bytes(),
                 )
@@ -163,7 +219,7 @@ fn read_bunfigs(
         if format.is_none() {
             format = bunfig::format(&file)
                 .map_err(refusal)?
-                .map(|options| options.of_bunfig_at(path.as_bytes(), named.is_some()));
+                .map(|options| options.of_bunfig_at(label.as_bytes(), named.is_some()));
         }
         if format.is_some() && (!linting || lint.is_some()) {
             break;

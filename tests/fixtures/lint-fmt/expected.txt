@@ -6,3 +6,6 @@ fmt upstream TypeScript printer and bunfig
 fmt check preserves input and reports changes
 fmt stdin
 fmt config evaluation uses the guest runtime
+bunfig diagnostics include source locations
+doctor uses relative bunfig paths
+formatter honors FORCE_COLOR
