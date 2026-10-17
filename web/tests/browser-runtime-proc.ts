@@ -10,6 +10,15 @@ import { join, resolve, sep } from "node:path";
 import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
 import { buildBrowserEntries } from "../../scripts/browser-build";
 import { runtimeProcChecks, runtimeProcJobWaitChecks } from "./runtime-proc-fixtures";
+import { runtimeProcFailure } from "./runtime-proc-browser-diagnostics";
+
+type RuntimeProcResult = Record<string, unknown> & {
+  ok: boolean;
+  checks: string[];
+  admissionReports: number;
+  cleanup: { activeWorkers: number };
+  teardown: { forcedWorkers: number; activeWorkers: number };
+};
 
 const iterations = Number(process.env.RUNTIME_PROC_ITERATIONS ?? "1");
 assert.ok(Number.isSafeInteger(iterations) && iterations > 0 && iterations <= 1000, "bounded positive repeat count required");
@@ -78,29 +87,28 @@ try {
       const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
       page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+      let result: RuntimeProcResult | undefined;
       try {
         // slots=off also lets the pre-wiring baseline fail on missing ABI imports, rather than
         // on unrelated Bun slot setup; the production preview1 adapter independently skips slots.
         await page.goto(`http://127.0.0.1:${server.port}/?slots=off${mode === "explicit" ? "&explicit=1" : ""}${scenario === "job-wait" ? "&job-wait=1" : ""}`);
         await page.waitForFunction(() => (globalThis as any).runtimeProcResult, undefined, { timeout: 40_000 });
-        const result: { ok: boolean; checks: string[]; admissionReports: number; cleanup: { activeWorkers: number };
-          teardown: { forcedWorkers: number; activeWorkers: number } } = await page.evaluate(() => (globalThis as any).runtimeProcResult);
-        try {
-          assert.equal(result.ok, true, JSON.stringify(result));
-          assert.deepEqual(result.checks, Array.from<string>(scenario === "job-wait" ? runtimeProcJobWaitChecks : runtimeProcChecks));
-          assert.equal(result.cleanup.activeWorkers, 0);
-          assert.equal(result.teardown.forcedWorkers, 0);
-          assert.equal(result.teardown.activeWorkers, 0);
-          assert.deepEqual(errors, []);
-          console.log(JSON.stringify({ browser: name, version: browser.version(), iteration, mode, scenario, ok: true,
-            checks: result.checks, admissionReports: result.admissionReports, cleanup: result.cleanup, teardown: result.teardown, pageErrors: errors }));
-        } catch (error) {
-          failed = true;
-          console.error(JSON.stringify({ browser: name, version: browser.version(), iteration, mode, scenario, ...result,
-            ok: false, assertionError: String(error), pageErrors: errors }));
-          console.error(error);
-          if (iterations > 1) break repeatedRuns;
-        }
+        const completed: RuntimeProcResult = await page.evaluate(() => (globalThis as any).runtimeProcResult);
+        result = completed;
+        assert.equal(completed.ok, true, JSON.stringify(completed));
+        assert.deepEqual(completed.checks, Array.from<string>(scenario === "job-wait" ? runtimeProcJobWaitChecks : runtimeProcChecks));
+        assert.equal(completed.cleanup.activeWorkers, 0);
+        assert.equal(completed.teardown.forcedWorkers, 0);
+        assert.equal(completed.teardown.activeWorkers, 0);
+        assert.deepEqual(errors, []);
+        console.log(JSON.stringify({ browser: name, version: browser.version(), iteration, mode, scenario, ok: true,
+          checks: completed.checks, admissionReports: completed.admissionReports, cleanup: completed.cleanup, teardown: completed.teardown, pageErrors: errors }));
+      } catch (error) {
+        failed = true;
+        console.error(await runtimeProcFailure({ browser: name, version: browser.version(), iteration, mode, scenario, pageErrors: errors }, error, result,
+          () => page.evaluate(() => (globalThis as any).runtimeProcDiagnostics?.())));
+        console.error(error);
+        if (iterations > 1) break repeatedRuns;
       } finally { await page.close(); }
     }
     await browser.close(); browser = undefined; launch = undefined;

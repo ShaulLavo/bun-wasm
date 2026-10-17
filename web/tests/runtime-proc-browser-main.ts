@@ -185,6 +185,13 @@ let run: Run | undefined;
 let settled = false;
 let result: Record<string, unknown>;
 let stdout = "", stderr = "";
+// Best-effort live evidence if the driver times out before teardown publishes the final result.
+// Preserve an already-selected failure boundary rather than replacing it with teardown time.
+Reflect.set(globalThis, "runtimeProcDiagnostics", () => result ?? {
+  stdout, stderr, messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns,
+  admissions, admissionReportsAtFailure: admissionReports, admissionReports, workerErrors, bufferDecode,
+  cleanup: { activeWorkers: activeWorkers.size, workersCreated },
+});
 try {
   equal(crossOriginIsolated, true, "SharedArrayBuffer isolation");
   runtime = createRuntime({ filesystem: { workerURL: new URL("./fs-worker.js", location.href) },
