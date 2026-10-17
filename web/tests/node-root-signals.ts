@@ -18,7 +18,8 @@ async function check(signal: "SIGINT" | "SIGTERM" | "SIGPIPE", mode: "handled" |
     const handler = () => ${mode === "once" ? 'console.log("handled")' : `process.exit(${code})`};
     ${mode === "default" || mode === "caught-self" ? "" : `process.${mode === "once" ? "once" : "on"}(${JSON.stringify(signal)}, handler);`}
     ${mode === "removed" ? `process.off(${JSON.stringify(signal)}, handler);` : ""}
-    console.log("ready");
+    // Default signal death must not depend on buffered console output flushing.
+    process.stdout.write("ready\\n");
     ${mode === "caught-self" ? `
       try { process.kill(process.pid, ${JSON.stringify(signal)}); } catch {}
       process.stdout.write("forbidden post-default I/O\\n");
