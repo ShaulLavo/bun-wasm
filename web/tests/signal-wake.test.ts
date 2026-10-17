@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { Worker } from "node:worker_threads";
 import { createFilesystemIdentity, revokeFilesystem } from "../../runtime/fs";
 import { outcomeWord } from "../../runtime/proc/outcome";
@@ -9,9 +9,9 @@ import { createProcessBudget } from "../src/subprocess";
 import type { SharedFilesystem } from "../src/shared-fs";
 
 type Mode = "legacy" | "generic-host" | "generic-poll";
-async function proveWake(mode: Mode, operation: "kill" | "killJob", suppressNotify: boolean) {
-  // This run owns one worker, one delivery timer, and its broker. Teardown is installed before spawn;
-  // shared words are test-local and have no external owner or persistent backing.
+async function proveWake(mode: Mode, operation: "kill" | "killJob", suppressNotify: boolean, deadlineMilliseconds = 2500) {
+  // This run owns one worker, delivery/deadline timers, and its broker. Teardown is installed
+  // before spawn; shared words are test-local and have no external owner or persistent backing.
   const budget = createProcessBudget();
   const transport = createWorkerProcessTransport({ capacity: 2 });
   transport.data = { filesystem: createFilesystemIdentity() };
@@ -25,6 +25,7 @@ async function proveWake(mode: Mode, operation: "kill" | "killJob", suppressNoti
   const before = Atomics.load(selected, 0);
   const nativeNotify = Atomics.notify;
   let worker: Worker | undefined, deliveryTimer: ReturnType<typeof setTimeout> | undefined;
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let sampledGeneration = 0, suppressed = 0;
   try {
     if (mode !== "legacy") await broker.adoptRuntimeRoot(transport);
@@ -34,6 +35,7 @@ async function proveWake(mode: Mode, operation: "kill" | "killJob", suppressNoti
       return nativeNotify(word, index, count);
     }) as typeof Atomics.notify;
     const result = await new Promise<{ generation: number; result: string; pending: number; interrupt: number; sequence: number }>((resolve, reject) => {
+      deadlineTimer = setTimeout(() => reject(new Error("signal wait deadline exceeded")), deadlineMilliseconds);
       worker = new Worker(new URL("./fixtures/signal-wake-worker.ts", import.meta.url), { workerData: { mode, budget, signals, wake: state.wake } });
       worker.on("error", reject);
       worker.on("exit", code => { if (code !== 0) reject(new Error(`signal wait worker exited ${code}`)); });
@@ -57,10 +59,41 @@ async function proveWake(mode: Mode, operation: "kill" | "killJob", suppressNoti
   } finally {
     Atomics.notify = nativeNotify;
     if (deliveryTimer) clearTimeout(deliveryTimer);
-    if (worker) await worker.terminate();
-    broker.dispose();
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    try { if (worker) await worker.terminate(); }
+    finally { broker.dispose(); }
   }
 }
+
+test("lost signal publication rejects on its owned deadline and tears down the worker and broker", async () => {
+  const nativeKill = SubprocessBroker.prototype.kill, nativeTerminate = Worker.prototype.terminate;
+  let terminated = false;
+  const terminate = spyOn(Worker.prototype, "terminate").mockImplementation(function(this: Worker) {
+    return nativeTerminate.call(this).then(code => { terminated = true; return code; });
+  });
+  const dispose = spyOn(SubprocessBroker.prototype, "dispose");
+  let rescueTimer: ReturnType<typeof setTimeout> | undefined, rescued = false;
+  // Test-only rescue bounds the RED run too: before the owned deadline exists, publish the
+  // deliberately lost signal so proveWake still reaches its teardown rather than leaking.
+  const kill = spyOn(SubprocessBroker.prototype, "kill").mockImplementation(function(this: SubprocessBroker) {
+    rescueTimer = setTimeout(() => { rescued = true; void nativeKill.call(this, 1, 2); }, 1000);
+    return Promise.resolve();
+  });
+  try {
+    let error: unknown;
+    try { await proveWake("generic-poll", "kill", false, 500); } catch (caught) { error = caught; }
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(terminate).toHaveBeenCalledTimes(1);
+    expect(terminated).toBe(true);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("signal wait deadline exceeded");
+    expect(rescued).toBe(false);
+  } finally {
+    if (rescueTimer) clearTimeout(rescueTimer);
+    kill.mockRestore(); terminate.mockRestore(); dispose.mockRestore();
+  }
+});
 
 for (const mode of ["legacy", "generic-host", "generic-poll"] as const) {
   for (const operation of ["kill", "killJob"] as const) {
