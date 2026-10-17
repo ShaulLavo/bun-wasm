@@ -62,6 +62,13 @@ incomplete recognized prefix is also retired rather than held for another
 request. The Agent guards the draining interval before stream consumption as
 well as the idle interval after release.
 
+The subsequent Streams merge required the HTTP client to use Writable lifecycle
+hooks. The transport retains end-body framing and abort cleanup inside those
+hooks. `net-http-close-order` additionally compares an HTTP request stream and
+its destroyed TCP socket against Node. Completing TCP destruction in a later
+check phase preserves request-close before socket-close and prevents the
+Streams integration from changing that order.
+
 ## Measurements
 
 | Engine | Fully passing upstream files, before → after | Observed passes, before → after | File timeouts, before → after |
@@ -101,13 +108,18 @@ report `0 passed, 5 failed` per engine on the original artifacts, then
 The retained WASMs contain the current HTTP JavaScript and erased TypeScript
 factories; `source-check.log` and `artifacts.json` record the checks and hashes.
 
-Round 2 passes all 161 fixtures on QuickJS, JSC and browser. Both new fixtures
+Round 2 initially passed 161 fixtures before the concurrent Streams merge.
+The final integrated branch passes all 178 fixtures on QuickJS, JSC and browser,
+including the Node close-order regression and the new main fixtures. Both framing fixtures
 fail on each original artifact and pass on each rebuilt engine. The expanded
 twenty-file upstream selection adds `test-http-extra-response.js` and
 `test-http-response-multi-content-length.js`. Before/after counts remain identical
 on all engines: 0/20 fully passing files, 3 observed tests passing, 11 failing,
 2 skipped, one error and zero file timeouts. The Node shared harness remains the
 first blocker for its assertion scripts.
+The Streams integration briefly lost two observed upgrade-body passes; the
+failing-first TCP close-order correction restores both on all engines. Final
+upstream summaries match the original round-2 baseline.
 The complete round-2 web gate passes, including memory growth on Chromium and
 WebKit with all three engines. The framework matrix again passes 24/24 stages.
 

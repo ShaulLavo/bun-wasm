@@ -335,6 +335,10 @@ reproduction. Round 5 deliberately leaves allocation behavior unchanged.
 
 ### Browser memory-growth gate after shared filesystem main
 
+Status: Resolved by PR #36. The round-2 HTTP branch includes the Streams and
+filesystem merges and has passed the full web gate without the old exemption.
+The following measurements describe the historical failure.
+
 The Streams/TCP integration at `c0793417` merges main through `c7f08312`.
 All 167 CLI fixtures pass on QuickJS, JSC and Node-host browser, including
 `memory-grow`, and networking/Streams/browser/HMR checks pass. The full web gate
@@ -357,7 +361,6 @@ hashes and all passing stage logs are retained in
 `/work/reports/bun-wasm-streams-round6-2026-10-16/`.
 The runtime-filesystem/crypto landing lane already has a separate candidate
 `fix/browser-memory-shared-fs` at `fae037bff367bca0f15be73b4d952207c885da6f`.
-The coordinator should review and land that dependency, then rerun the memory
-and full web gates. Do not reduce the guest allocation, relax its timeout or
-remove assertions to call the gate passing. The owning lane removes retained
-evidence after reproduction, review and merge.
+That dependency has landed in PR #36. Its memory and full web gates pass without
+reducing the guest allocation, relaxing the timeout or removing assertions.
+The owning lane removes the historical evidence after independent acceptance.

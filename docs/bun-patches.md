@@ -1114,7 +1114,8 @@ or typecheck is added to the wasm runtime.
 ## HTTP framing
 
 Class **Host feature**, **original adapters** in `src/js/net.js`,
-`src/js/http_common.ts`, `src/js/http_body.ts`, `src/js/http_agent.ts`, and the `node:http` registry
+`src/js/http_common.ts`, `src/js/http_body.ts`, `src/js/http_agent.ts`, socket-close
+completion in `src/js/node_net.js`, and the `node:http` registry
 in `src/js/builtins.js`. No upstream implementation is copied or patched.
 Bun's `src/js/node/http.ts` depends on native HTTP bindings, so this change keeps
 the existing portable adapter over the socket ABI.
