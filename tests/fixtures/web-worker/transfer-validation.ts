@@ -60,21 +60,33 @@ export function checkTransferValidation(send: Sender) {
 
 function checkInvalidTransfer(send: Sender, test: InvalidTransfer) {
   for (const options of [false, true]) {
-    for (const first of [false, true]) {
-      const buffer = new ArrayBuffer(16);
-      const prefix: unknown[] = [buffer];
-      const transfer = first ? prefix.concat(test.make()) : test.make().concat(prefix);
-      let serialized = false;
-      const value = { get payload() { serialized = true; return buffer; } };
-      assert.throws(() => send(value, options ? { transfer } : transfer), error => {
-        assert.ok(error instanceof Error);
-        assert.equal(error.name, test.name);
-        assert.equal(error.constructor.name, test.name === "TypeError" ? "TypeError" : "DOMException");
-        assert.equal(error.message, test.message);
-        return true;
-      });
-      assert.equal(buffer.byteLength, 16);
-      assert.equal(serialized, false);
-    }
+    for (const first of [false, true]) checkTransferVariant(send, test, options, first);
   }
+}
+
+function attachedBuffers(transfer: unknown[]) {
+  const buffers = new Map<ArrayBuffer, number>();
+  for (const item of transfer) {
+    if (!(item instanceof ArrayBuffer)) continue;
+    try { buffers.set(item, new DataView(item).byteLength); } catch { continue; }
+  }
+  return buffers;
+}
+
+function checkTransferVariant(send: Sender, test: InvalidTransfer, options: boolean, first: boolean) {
+  const buffer = new ArrayBuffer(16);
+  const prefix: unknown[] = [buffer];
+  const transfer = first ? prefix.concat(test.make()) : test.make().concat(prefix);
+  const buffers = attachedBuffers(transfer);
+  let serialized = false;
+  const value = { get payload() { serialized = true; return buffer; } };
+  assert.throws(() => send(value, options ? { transfer } : transfer), error => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.name, test.name);
+    assert.equal(error.constructor.name, test.name === "TypeError" ? "TypeError" : "DOMException");
+    assert.equal(error.message, test.message);
+    return true;
+  });
+  for (const [buffer, length] of buffers) assert.equal(buffer.byteLength, length);
+  assert.equal(serialized, false);
 }
