@@ -44,6 +44,7 @@ export class WasmMissing extends Error {}
  * 3-4x smaller) and the page decompresses it; a plain .wasm URL works too. Throws WasmMissing on 404.
  */
 export async function loadWasm(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string | null }> {
+  if (url.endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
   progress("loading bun.wasm…");
   const build = assetBuild(url);
   const key = new URL(url, location.href).href;
@@ -113,6 +114,48 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   const engine = { module, size };
   if (build) setTimeout(() => void cacheIfExpected(key, build, chunks, size), 0);
   return { ...engine, build };
+}
+
+async function loadVerifiedTools(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string }> {
+  const build = assetBuild(url);
+  if (!build) throw new Error("bun-tools.wasm: build manifest fingerprint is missing");
+  const key = new URL(url, location.href).href;
+  const cached = await cachedEngine(key, build);
+  if (cached) {
+    const bytes = new Uint8Array(await cached.arrayBuffer());
+    try {
+      await verifyArtifact("bun-tools.wasm", bytes, build);
+    } catch (error) {
+      await evictEngine(key);
+      throw error;
+    }
+    progress(`compiling cached bun-tools.wasm (${mb(bytes.length)})…`);
+    return { module: await WebAssembly.compile(bytes), size: bytes.length, build };
+  }
+
+  progress("downloading bun-tools.wasm…");
+  const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
+  let response = await fetch(`${gzUrl}?v=${build}`);
+  const gzipped = response.ok;
+  if (!gzipped) response = await fetch(url);
+  if (response.status === 404) throw new WasmMissing(`${url}: HTTP 404`);
+  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  if (!response.body) throw new Error(`${url}: empty response body`);
+  const body = gzipped ? response.body.pipeThrough(new DecompressionStream("gzip")) : response.body;
+  const wasm = new Uint8Array(await new Response(body).arrayBuffer());
+  await verifyArtifact("bun-tools.wasm", wasm, build);
+  progress(`compiling bun-tools.wasm (${mb(wasm.length)})…`);
+  const module = await WebAssembly.compile(wasm);
+  if (await cacheEngine(key, build, new Response(wasm, { headers: { "content-type": "application/wasm", "content-length": String(wasm.length) } }))) {
+    performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
+  }
+  return { module, size: wasm.length, build };
+}
+
+async function verifyArtifact(name: string, bytes: Uint8Array<ArrayBuffer>, expected: string): Promise<void> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  const actual = Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("");
+  if (actual !== expected) throw new Error(`${name} integrity mismatch: expected ${expected}, received ${actual}`);
 }
 
 /** Caches the downloaded engine only if its bytes are the build the page expects. */
