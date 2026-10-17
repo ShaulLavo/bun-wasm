@@ -232,7 +232,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
     return module;
   };
-  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, { module: moduleFor(options.engine), adapter: options.adapter ?? "bun", engine: options.engine });
+  const rootExecutable = options.adapter === "preview1"
+    ? { module: moduleFor(options.engine), adapter: "preview1" as const, cooperative: true as const }
+    : { module: moduleFor(options.engine), adapter: "bun" as const, engine: options.engine };
+  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, rootExecutable);
   for (const engine of ["quickjs", "jsc", "browser"] as const) subprocess.register(`bun-${engine}`, { module: moduleFor(engine), adapter: "bun", engine });
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
