@@ -41,6 +41,7 @@ export interface FetchHead {
   statusText: string;
   url: string;
   redirected: boolean;
+  bodyEncoding: string | null;
   headers: [string, string][];
 }
 
