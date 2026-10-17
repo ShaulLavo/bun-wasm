@@ -26,6 +26,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
 | [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, browser module loading and stream adapters over separate host guest instances, with distinct control-pipe and final-signal selectors. |
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
+| [Missing executable errors](#missing-executable-errors) | Host feature | Typed startup outcomes preserve ENOENT/EACCES and shell wait statuses 127/126 across Bun, Node and the generic process adapter. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, reader relay and descriptor-transfer adapters. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original runtime_proc imports, nonblocking filesystem preparation, preview1 notification waits and lazy browser process integration. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
@@ -1756,3 +1757,24 @@ matching path and numeric flags, removes the TLS-only mode and BunString output,
 and uses our existing BoringSSL accessors and owned UTF-8 names. SAN parsing
 errors suppress subject fallback; an email-only SAN does not suppress a CN
 hostname match. The BoringSSL source remains unchanged.
+
+## Missing executable errors
+
+Class **Host feature**, original adapters. `runtime/proc/types.ts`, `outcome.ts`,
+`supervisor.ts`, `worker-client.ts` and `worker-broker.ts` retain a typed startup
+failure with ENOENT or EACCES, separate from an ordinary exit or signal. The generic
+process adapter maps it to shell wait status 127 or 126. The Bun adapter waits for
+worker startup acknowledgement before returning a child. Node emits error then close
+without spawn or exit, and spawnSync returns a null status with the startup error.
+
+`crates/bunwasm-runtime/src/js/spawn.js`, `web/src/subprocess.ts`,
+`web/src/subprocess-broker.ts`, `web/src/worker.ts`, `web/scripts/node-spawn.ts`
+and `web/scripts/node-host.mjs` implement the original host adapters. No upstream
+implementation is copied. The existing JavaScript factory stays in place until the
+separate runtime TypeScript conversion.
+
+Behavior references at Bun revision `5e0baa66516f3af00b008cdf1521c681317741e8`
+are `src/runtime/api/bun/js_bun_spawn_bindings.rs::throw_command_not_found`,
+`src/js/node/child_process.ts`, `test/js/node/test/parallel/test-child-process-spawn-error.js`,
+`test/js/node/test/parallel/test-child-process-spawnsync.js` and the spawn-failure
+close-event tests in `test/js/node/child_process/child_process.test.ts`.
