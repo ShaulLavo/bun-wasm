@@ -6,6 +6,8 @@ import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess
 import { WorkerPipeBroker } from "../../runtime/proc/worker-pipes";
 import { PipeController, attachPipePublicationRegistry, type PipePublicationRegistryHandle } from "../../runtime/proc/pipes";
 import { setSignalDisposition } from "../../runtime/proc/signals";
+import { failFirstWorkerImport } from "./worker-start-failure";
+import { readOutcome } from "../../runtime/proc/outcome";
 import { startRun, type RunOptions } from "../src/runner";
 import type { RunRequest } from "../src/worker";
 import type { SharedFilesystem } from "../src/shared-fs";
@@ -72,6 +74,18 @@ for (const name of ["signal", "interrupted", "default_signal"]) test(`runner pre
   const state = fixture(imported(name));
   try { await state.ready; expect(state.request().runtimeProcess).toBeUndefined(); }
   finally { await state.dispose(); }
+});
+
+test("generic root shares its authoritative outcome before the first worker import", async () => {
+  const state = fixture(imported("pipe"));
+  try {
+    await state.ready;
+    const request = state.request();
+    const shared = workerProcessState(request.runtimeProcess!);
+    await failFirstWorkerImport(request, data => state.message(data));
+    expect(readOutcome(shared.signals.outcome)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
+    expect(await state.run.done).toMatchObject({ code: 126 });
+  } finally { await state.dispose(); }
 });
 
 test("preview1 runner choice explicitly trusts its own aliases without changing Bun defaults", async () => {

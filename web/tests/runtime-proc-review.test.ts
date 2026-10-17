@@ -4,7 +4,8 @@ import { createFilesystemIdentity, revokeFilesystem } from "../../runtime/fs";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "../../runtime/proc/worker-client";
 import type { SharedFilesystem } from "../src/shared-fs";
 import { SubprocessBroker } from "../src/subprocess-broker";
-import { claimOutcome } from "../../runtime/proc/outcome";
+import { failFirstWorkerImport } from "./worker-start-failure";
+import { claimOutcome, readOutcome } from "../../runtime/proc/outcome";
 import { setSignalDisposition } from "../../runtime/proc/signals";
 import type { RunRequest, WorkerMessage } from "../src/worker";
 
@@ -131,6 +132,23 @@ for (const failure of ["error-event", "initial-post-message"] as const) test(`ge
     // Let every watcher/microtask observe failure; a missing acknowledgement must not strand wait.
     await pause(25);
     expect(Atomics.load(shared.confirmed, 0)).toBe(1);
+    expect(state.parent.wait(1, pid)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
+  } finally { await state.dispose(); }
+});
+
+test("first generic child import failure reaches the broker as typed EACCES", async () => {
+  const state = fixture();
+  try {
+    state.broker.register("child", { adapter: "preview1", cooperative: true, module: emptyModule() });
+    await state.broker.adoptRuntimeRoot(state.root);
+    const pid = state.parent.spawn(1, { executable: "child", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
+    await state.broker.runtimeMessage(state.messages[0]!, 1);
+    await until(() => !!state.workers[0]?.request, "child request");
+    const worker = state.workers[0]!, request = worker.request!;
+    const shared = workerProcessState(request.runtimeProcess!);
+    await failFirstWorkerImport(request, data => worker.onmessage!({ data }));
+    expect(readOutcome(shared.signals.outcome)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
+    await until(() => Atomics.load(shared.confirmed, 0) === 1, "startup failure confirmed");
     expect(state.parent.wait(1, pid)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
   } finally { await state.dispose(); }
 });

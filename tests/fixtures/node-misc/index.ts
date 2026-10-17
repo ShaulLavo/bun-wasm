@@ -50,6 +50,8 @@ const failedSpawn = await new Promise((resolve) => {
     clearTimeout(timer);
     events.push("close");
     resolve(validError(error, "spawn ls") && missingChild.pid === undefined && code === -2 && signal === null &&
+      missingChild.exitCode === -2 && missingChild.stdin?.destroyed === true &&
+      missingChild.stdout?.readableEnded === true && missingChild.stderr?.readableEnded === true &&
       JSON.stringify(events) === '["error","close"]');
   });
 });

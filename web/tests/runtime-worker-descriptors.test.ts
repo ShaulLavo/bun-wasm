@@ -195,7 +195,8 @@ for (const failure of ["client", "codec", "protocol", "pipes", "abi", "terminals
     });
     await expect(context.onmessage({ data: {
       engine: "browser", adapter: "preview1", module: {} as WebAssembly.Module, args: [], env: {},
-      filesystem, runtimeProcess: transport, trace: false, net: null, moduleCache: null,
+      filesystem, runtimeProcess: transport, outcome: client.workerProcessState(transport).signals.outcome,
+      trace: false, net: null, moduleCache: null,
     } })).resolves.toBeUndefined();
     expect(launched).toBe(false);
     expect(disposed).toBe(true);
@@ -207,8 +208,8 @@ for (const failure of ["client", "codec", "protocol", "pipes", "abi", "terminals
     if (failure === "binding") {
       expect(events).toEqual(["dispose default", "dispose inherited", "dispose fs"]);
       expect(descriptors!.get(17)).toBeUndefined();
-      expect(readOutcome(client.workerProcessState(transport).signals.outcome)).toMatchObject({ kind: "start-failed", code: 13, error: "EACCES", status: null });
     }
+    expect(readOutcome(client.workerProcessState(transport).signals.outcome)).toMatchObject({ kind: "start-failed", code: 13, error: "EACCES", status: null });
   } finally { descriptors?.dispose(); filesystem.port.close(); connection.server.port.close(); }
 });
 
