@@ -100,8 +100,13 @@ const cases: Record<string, () => Promise<void>> = {
     require("node:fs").writeFileSync(join(cwd, "package.json"), JSON.stringify(pkg));
     check((await run(cwd, "run", "dev", "tail")).trim() === "fixture-1.1.0 two words|tail", "package script binary");
     check((await run(cwd, "run", "fixture-cli", "direct")).trim() === "fixture-1.1.0 direct", "direct binary");
+    rmSync(join(cwd, "node_modules/.bin/fixture-cli"));
+    check((await run(cwd, "run", "fixture-cli", "manifest")).trim() === "fixture-1.1.0 manifest", "direct manifest binary");
+    check((await run(cwd, "run", "dev", "manifest")).trim() === "fixture-1.1.0 two words|manifest", "package script manifest binary");
+    check((await run(cwd, "x", "--no-install", "fixture-cli", "manifest")).trim() === "fixture-1.1.0 manifest", "bun x installed manifest");
     symlinkSync("../fixture-cli/cli.ts", join(cwd, "node_modules/.bin/constructor"));
     check((await run(cwd, "run", "constructor", "proto")).trim() === "fixture-1.1.0 proto", "inherited script property masked a binary");
+    symlinkSync("../fixture-cli/cli.ts", join(cwd, "node_modules/.bin/fixture-cli"));
   },
   async update() {
     const cwd = project("update", { "package.json": { dependencies: { "fixture-cli": "1.0.0" } } });

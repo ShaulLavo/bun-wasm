@@ -90,6 +90,7 @@ done
 if [[ $browser == 1 ]]; then
   node "$root/scripts/test-native-stream-interop.mjs" || failed=1
   node tests/browser-install.mjs || failed=1
+  node tests/browser-installer-links.ts || failed=1
   node tests/browser-shell-stop.ts || failed=1
   node tests/browser-net.mjs || failed=1
   bun tests/browser-subprocess.ts || failed=1
