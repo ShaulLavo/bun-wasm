@@ -506,3 +506,48 @@ That dependency has landed in PR #36, and the branch reruns the memory
 and full web gates. Do not reduce the guest allocation, relax its timeout or
 remove assertions to call the gate passing. The owning lane removes retained
 evidence after reproduction, review and merge.
+
+## Next SWC package after tables and IPC
+
+Status: Approved
+
+The table and child IPC change moves Next 15.5.6 past the former table-export
+rejection and unsupported IPC error. The first complete replay is retained in
+`/work/reports/bun-wasm-next-table-ipc/next-initial/`. Installation passes on all
+three engines. QuickJS and JSC builds exit 1 with both SWC wasm packages absent.
+Dev on all three engines tries to download `@next/swc-wasm-nodejs`, then reports
+`Failed to get registry from "npm"` with `ENOENT` for the `npm` executable.
+Production starts remain blocked by failed builds. Browser build reports only
+`Next.js build worker exited with code: 1 and signal: null` in that replay, so
+its immediate cause needs its own diagnostic after package setup.
+
+Next's unmodified `dist/lib/helpers/get-registry.js:24` runs the package manager's
+`config get registry` command. `dist/build/swc/index.js:823` tries
+`@next/swc-wasm-nodejs` and `@next/swc-wasm-web` before the download fallback.
+These paths are from the published Next 15.5.6 archive in the offline mirror.
+The mirror has no `swc-wasm` entries at this measurement. The replay makes 213
+registry requests with zero misses and errors because normal installation never
+requests either wasm package.
+
+The next unit owns portable SWC package selection and its offline fixture data.
+Inspect `crates/bunwasm-runtime/src/install/resolve.rs`, especially
+`Resolver::children`, `dependencies`, and the existing `platform_package`
+selection for esbuild and Rollup. Install the official SWC wasm distribution at
+the matching Next version while preserving Next's package source. Keep the
+missing compiler package separate from support for external OS executables.
+Do not supply a fake successful `npm` command or suppress Next's error.
+
+After the official package is recorded, replay with freshly built artifacts:
+
+```sh
+export CARGO_TARGET_DIR=/work/tmp/bun-wasm-next-swc-target
+source env.sh
+scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser --hosts=native \
+  --cache=/work/cache/bun-wasm-app-matrix --timeout=90 \
+  --launcher="$CARGO_TARGET_DIR/release/bun-wasm" --output=<fresh-report-directory>
+```
+
+Run through the heavy wrapper. Inspect each raw dev and build log and verify
+`.next/BUILD_ID` before counting build or start as passing. The task's final
+replay and verification record are in `docs/app-matrix/README.md`. The coordinator
+owns removal of the retained reports after accepting this change and its follow-up.
