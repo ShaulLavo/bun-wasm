@@ -77,6 +77,8 @@ test("worker installs arbitrary file, dup and directory bindings before launch w
     const context = {
       crossOriginIsolated: true, location: { href: "http://localhost/worker.js" },
       postMessage(message: WorkerMessage) { sent.push(message); },
+      addEventListener() {},
+      removeEventListener() {},
       onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
     };
     const memory = new WebAssembly.Memory({ initial: 1 });
@@ -159,6 +161,8 @@ for (const failure of ["client", "codec", "protocol", "pipes", "abi", "terminals
   const context = {
     crossOriginIsolated: true, location: { href: "http://localhost/worker.js" },
     postMessage(message: WorkerMessage) { sent.push(message); },
+    addEventListener() {},
+    removeEventListener() {},
     onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
   };
   let descriptors: DescriptorTable | undefined;
@@ -241,6 +245,7 @@ for (const mode of ["sync", "caught", "error", "rejection"] as const) test(`gene
     fetch: async () => new Response(),
     postMessage(message: WorkerMessage) { sent.push(message); },
     addEventListener(name: string, listener: (event: { error?: unknown; reason?: unknown; preventDefault(): void }) => void) { listeners.set(name, listener); },
+    removeEventListener(name: string) { listeners.delete(name); },
     onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
   };
   try {
@@ -314,6 +319,8 @@ for (const kind of ["wasi", "abi"] as const) for (const phase of ["before", "aft
   const context = {
     crossOriginIsolated: true, location: { href: "http://localhost/worker.js" },
     postMessage(message: WorkerMessage) { sent.push(message); },
+    addEventListener() {},
+    removeEventListener() {},
     onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
   };
   try {
@@ -368,6 +375,8 @@ for (const kind of ["signaled", "exited"] as const) test(`injected runtime worke
   const context = {
     crossOriginIsolated: true, location: { href: "http://localhost/worker.js" },
     postMessage(message: WorkerMessage) { sent.push(message); },
+    addEventListener() {},
+    removeEventListener() {},
     onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
   };
   try {
