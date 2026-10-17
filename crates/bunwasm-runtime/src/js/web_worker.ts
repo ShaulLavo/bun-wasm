@@ -100,17 +100,19 @@
   function initialize(port: BunWasm.WebParentPort, options: BunWasm.WebWorkerOptions, webMessageEvent: (event: MessageEvent) => MessageEvent) {
     const scope = new EventTarget();
     const initImportMeta = internal.initImportMeta;
-    internal.initImportMeta = (meta, path) => initImportMeta(meta, path, false);
-    if (options.preload.length) {
-      const runMain = internal.runMain;
-      internal.runMain = async path => {
-        for (const preload of options.preload) await internal.importModule(internal.native.resolve(preload, process.cwd() + "/", false));
-        port.start();
-        return runMain(path);
-      };
-    } else {
-      port.start();
-    }
+    const start = port.start.bind(port);
+    const ready = () => queueMicrotask(start);
+    internal.initImportMeta = (meta, path) => {
+      initImportMeta(meta, path, false);
+      Object.defineProperty(meta, "__bunwasm_workerEntry", { value: ready, configurable: true });
+    };
+    const runMain = internal.runMain;
+    internal.runMain = async path => {
+      for (const preload of options.preload) await internal.importModule(internal.native.resolve(preload, process.cwd() + "/", false));
+      const result = runMain(path);
+      if (!(result instanceof Promise)) start();
+      return result;
+    };
     const listeners = new Map<string, Map<EventListenerOrEventListenerObject, { capture: boolean; wrapped: EventListener }[]>>();
     const handlers = new Map<string, GlobalHandler | null>();
     function receive(event: Event) {

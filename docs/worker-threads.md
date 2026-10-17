@@ -313,6 +313,10 @@ Messages sent before natural exit drain before `close`. `terminate()` requests
 termination and suppresses later messages. The final `close` event follows host
 completion. `ref()` and `unref()` control the parent's lifetime.
 
+Incoming messages stay queued while dependencies and preloads load. Delivery
+starts after the entry's synchronous code runs, including before a top-level
+`await` settles. After that point, messages with no handler are dropped.
+
 Inside a web worker, `self` is the global object. `postMessage`, `onmessage`,
 `onmessageerror`, `addEventListener`, `removeEventListener`, `dispatchEvent`,
 `close`, and `name` are available. A message handler keeps the child alive.

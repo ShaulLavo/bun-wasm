@@ -1772,6 +1772,12 @@ before the guest installs its own `postMessage`. The original `workerSource`
 data native calls Bun's Rust transpiler for blob entries, including TypeScript
 File names. The shared worker initializer installs worker globals and sets `Bun.isMainThread` to false. Web entries import preloads before the requested module.
 
+The original module adapter marks entry-body startup through an import-meta hook.
+The TypeScript worker initializer opens its incoming port at the next microtask,
+after synchronous entry code installs handlers. Eval entries mark startup after
+their generated preloads. This prevents delivery during asynchronous module
+loading and still permits message handling during top-level await.
+
 The reference contracts are Bun's `src/js/node/worker_threads.ts` and
 `src/jsc/bindings/webcore/Worker.cpp` at the pinned revision in this ledger's opening
 paragraph. Their implementation depends on JavaScriptCore native bindings and

@@ -9,3 +9,6 @@ unreferenced worker releases parent
 message event ports survive worker exit
 messages wait for asynchronous preload
 data and blob workers resume messages after preload
+messages wait for worker entry evaluation
+message delivery starts before top-level await settles
+started workers drop messages without a handler

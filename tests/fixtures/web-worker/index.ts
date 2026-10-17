@@ -176,3 +176,49 @@ for (const entry of ["data:text/javascript,onmessage=e=>{postMessage(e.data);clo
   URL.revokeObjectURL(entry);
 }
 console.log("data and blob workers resume messages after preload");
+
+const entryGate = new BroadcastChannel("web-worker-entry");
+const delayedEntry = new Worker(new URL("./delayed-entry.ts", import.meta.url));
+const delayedClose = closed(delayedEntry);
+assert.equal(await message(delayedEntry), "dependency ready");
+const delayedReply = message(delayedEntry);
+delayedEntry.postMessage("queued during entry loading");
+entryGate.postMessage("continue");
+assert.equal(await delayedReply, "queued during entry loading");
+entryGate.close();
+await delayedClose;
+console.log("messages wait for worker entry evaluation");
+
+const waiting = new Worker("data:text/javascript," + encodeURIComponent(`
+  onmessage = event => { postMessage(event.data); close(); };
+  await new Promise(() => {});
+`));
+const waitingClose = closed(waiting);
+const waitingReply = message(waiting);
+waiting.postMessage("before await settles");
+assert.equal(await waitingReply, "before await settles");
+await waitingClose;
+console.log("message delivery starts before top-level await settles");
+
+const lateGateName = "web-worker-late-handler";
+const lateGate = new BroadcastChannel(lateGateName);
+const late = new Worker("data:text/javascript," + encodeURIComponent(`
+  const gate = new BroadcastChannel(${JSON.stringify(lateGateName)});
+  const ready = new Promise(resolve => { gate.onmessage = () => { gate.close(); resolve(); }; });
+  postMessage("entry waiting");
+  await ready;
+  onmessage = event => { postMessage(event.data); close(); };
+  postMessage("installed");
+`));
+const lateClose = closed(late);
+assert.equal(await message(late), "entry waiting");
+const installed = message(late);
+late.postMessage("dropped while no handler exists");
+lateGate.postMessage("continue");
+assert.equal(await installed, "installed");
+const lateReply = message(late);
+late.postMessage("late message");
+assert.equal(await lateReply, "late message");
+lateGate.close();
+await lateClose;
+console.log("started workers drop messages without a handler");
