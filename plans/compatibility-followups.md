@@ -593,3 +593,63 @@ Exact results and logs are retained in
 `/work/reports/bun-wasm-htmlrewriter-x509-2026-10-17/verified/after-*.json` and
 `after-*-logs/`. The coordinator owns that evidence until the follow-up is
 reproduced and independently reviewed.
+
+## Full fixture gates after the process-signal integration
+
+Status: Approved. Runtime track owns the subprocess/error contract follow-up.
+
+PR #41's review-fix branch, after merging main through `b7cf06cd` and rebuilding
+the native launcher plus all three guests, reports **202 passed, 2 failed** on
+each engine. Both new HTML/X.509 review fixtures pass. The failed fixtures are
+`node-misc` and `pipe-closed-output`; the earlier pre-PR-33 build passed all 201
+fixtures then present.
+
+`node-misc` prints `child_process.spawn ENOENT: false` and
+`Bun.spawnSync unsupported: false`, where its manual expectation has `true`.
+Inspect `tests/fixtures/node-misc/index.mjs`, the calls of `spawn("ls")` and
+`Bun.spawnSync({ cmd: ["ls"] })`, against the new disabled-host subprocess error
+contract. No HTML or certificate API runs in that fixture.
+
+`pipe-closed-output` observes SIGPIPE exit 141 instead of 1 in its unhandled
+stream probes. Its Node-host batch probe also exits 141 without the expected
+output. Inspect `crates/bunwasm-runtime/src/js/bootstrap.js::handleBrokenPipe`,
+which raises signal 13 for escaping EPIPE, together with callback delivery and
+signal disposition in the host. Compare native Bun/Node before changing the
+fixture's expectations. The same failures recur in the first QuickJS gate and
+the subsequent complete three-engine batch; the API fixes do not touch these
+paths.
+
+After building a matching launcher and guests into private targets, reproduce
+through the heavy wrapper with:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+scripts/test.sh --no-build --engine quickjs node-misc pipe-closed-output
+scripts/test.sh --no-build --engine jsc node-misc pipe-closed-output
+scripts/test.sh --no-build --engine browser node-misc pipe-closed-output
+```
+
+Exact commands, source heads and logs are retained under
+`/work/reports/bun-wasm-htmlrewriter-x509-review-2026-10-17/`.
+`remaining/gate-{quickjs,jsc,browser}.log` contains the full gate diagnostics.
+The coordinator owns this evidence until the runtime follow-up is reproduced
+and the full gates pass. No assertion or runtime behavior was changed to hide
+these failures in the HTML/X.509 lane.
+
+The same review run's first full web gate hit a transient EADDRINUSE at the
+subprocess helper's fixed default port 4183. Concurrent test callers should set
+`BUN_WASM_TEST_PORT=0`; `web/tests/playground.mjs::serve` already supports it.
+The lane reruns the full web gate with that setting and retains both logs rather
+than terminating another job's server. See `remaining/gate-web-free-port.log` in
+the same report.
+
+The free-port full web recheck reaches `webkit browser atomic-transfer` and
+fails at `web/tests/browser-workers.ts:27` with `atomic transfer attached`,
+followed by `TypeError: Importing a module script failed.` and guest exit 1
+instead of 0. Chromium and WebKit's QuickJS/JSC worker checks pass first. The
+failure occurs in `tests/fixtures/worker-review/cases.ts`, without invoking HTML
+or certificate APIs. The worker track owns isolating it against native Bun and
+checking WebKit module/Blob URL lifetime. Its exact log is
+`remaining/gate-web-free-port.log:1100` in the report above. HMR still passes all
+six Chromium/WebKit engine runs. The lane leaves this gate failure visible.

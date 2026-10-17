@@ -72,7 +72,7 @@ These are optimized, uncompressed distribution files.
 
 ## Verification and reproduction
 
-The final build passes `scripts/test.sh` on QuickJS, JSC and browser, 201 fixtures
+The initial pre-review build passes `scripts/test.sh` on QuickJS, JSC and browser, 201 fixtures
 per engine, `scripts/test-web.sh` in full, and all six Chromium/WebKit engine runs
 of `sandbox/tests/hmr-check.mjs`. The native launcher was rebuilt into the lane's
 private target directory. Emitted HTMLRewriter and X509 TypeScript factories
@@ -99,3 +99,73 @@ wasm artifacts are retained in
 `verified/`; earlier failing probes remain separate. The coordinator owns removal
 of retained evidence and artifacts after review and integration. Private build
 targets, execution snapshots, preview server and worktree are removed by this lane.
+
+## PR #41 review regressions
+
+The review fixes merge main through PR #43, including PR #33's runtime changes.
+`crypto-x509-options` covers all hostname options and a standalone self-signed
+certificate. `html-rewriter-review` covers void-element end tags, error Responses
+and both nullish selector values. The regression commit precedes the fixes.
+
+The same certificate fixture passes on Bun 1.4.2 and Node 26.7.0. The HTML fixture
+passes on Bun 1.4.2; Node has no HTMLRewriter API. Run the native references with:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+bun tests/fixtures/crypto-x509-options/index.ts
+node tests/fixtures/crypto-x509-options/index.ts
+bun tests/fixtures/html-rewriter-review/index.ts
+```
+
+Both new fixtures fail against each reviewed wasm artifact, 0 passing and 2
+failing fixtures per engine. The X.509 diagnostic reports missing multi-label,
+partial, subject and suffix-match behavior and the wrong standalone issuer.
+The HTML diagnostic reports the missing void/selector exceptions and status-0
+constructor failure. Bun's exact void-element error message is `No end tag.`.
+
+The pinned BoringSSL defines four requested OpenSSL flags as zero compatibility
+macros. Bun's own native code therefore uses a Rust matcher. This PR adapts its
+OpenSSL matching path over the existing BoringSSL certificate accessors, without
+changing BoringSSL or shared vendor source. The TypeScript response wrapper uses
+the existing error-response factory and body storage, preserving document-end
+handlers as Bun does.
+
+Both new fixtures pass on all three rebuilt engines, including an additional
+header-snapshot regression checked against Bun. The intermediate QuickJS artifact
+fails that new header regression before the rebuild. Each full fixture gate
+reports **202 passed, 2 failed**. `node-misc` expects the old subprocess errors,
+and `pipe-closed-output` observes SIGPIPE exit 141. The
+[compatibility follow-up](../../plans/compatibility-followups.md#full-fixture-gates-after-the-process-signal-integration)
+records reproduction and the runtime track's remaining work.
+
+The original fail-fast batch stopped at the first QuickJS gate. A continuation
+builds all three engines and collects every remaining check. HMR passes all six
+Chromium/WebKit engine runs. The first web gate hits EADDRINUSE at the subprocess
+browser helper's fixed default port 4183; its recheck uses
+`BUN_WASM_TEST_PORT=0`. The recheck gets past subprocess startup but fails
+`webkit browser atomic-transfer` with `TypeError: Importing a module script
+failed.` at `web/tests/browser-workers.ts:27`. The full web gate therefore also
+remains red. No fixture expectation is changed to hide a failure.
+
+The same 21-file selection has identical counts before and after these review
+fixes. The comparison includes the main merge and is not an isolated measurement
+of the API changes.
+
+| Engine | Fully passing files | Observed passes | File timeouts |
+| --- | --- | --- | --- |
+| QuickJS | 9 → 9 | 145 → 145 | 2 → 2 |
+| JSC | 10 → 10 | 136 → 136 | 2 → 2 |
+| Browser | 10 → 10 | 143 → 143 | 1 → 1 |
+
+The optimized artifact sizes below compare the reviewed artifacts with the
+rebuilt branch, including the main merge.
+
+| Artifact | Reviewed bytes | Rebuilt bytes | Delta bytes |
+| --- | --- | --- | --- |
+| `bun.wasm` | 15,244,020 | 15,259,713 | +15,693 |
+| `bun-jsc.wasm` | 51,821,976 | 51,839,966 | +17,990 |
+| `bun-browser.wasm` | 14,532,209 | 14,542,507 | +10,298 |
+
+Raw native references, all-engine failing runs, per-gate logs, commands and
+rebuilt artifacts are retained in
+`/work/reports/bun-wasm-htmlrewriter-x509-review-2026-10-17/`.
