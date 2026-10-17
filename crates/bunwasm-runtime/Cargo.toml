@@ -22,6 +22,8 @@ bun_sys = { path = "../../vendor/bun/src/sys" }
 bunwasm-jsc = { path = "../bunwasm-jsc", optional = true }
 rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"], optional = true }
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
+bun_zstd = { path = "../../vendor/bun/src/zstd" }
+zstd = { version = "=0.13.3", default-features = false, features = ["no_asm"] }
 url = "2"
 serde_json = { version = "1", features = ["preserve_order"] }
 sha1 = "0.10"

@@ -16,6 +16,10 @@ Each row has one class. A file with independent changes has separate rows.
 | --- | --- | --- |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
+| [Compression and archive adapters](#compression-and-archive-adapters) | Host feature | Original TypeScript API adapters over Bun's Rust Zstd and portable Rust codec and tar libraries. |
+| [`third_party/tar/src/entry.rs`, symlink timestamp adapter](#tar-wasi-extraction) | Host feature | Original Rust adapter for no-follow WASI timestamp updates. |
+| [`third_party/tar/`, WASI extraction](#tar-wasi-extraction) | Port | WASI symlink support and permission handling over the unchanged tar extractor. |
+| [Compression constants](#compression-and-archive-adapters) | Port | Public Brotli and Zstd constant names and integer values for the Node adapter. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
 | [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing and stream adapters over separate host guest instances, with distinct control-pipe and final-signal selectors. |
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
@@ -1551,3 +1555,63 @@ complete without waiting for that acknowledgment. A late kill cannot bypass the 
 ordinary outcome has already won. Unknown callback terminals are rejected rather than pretending
 their input can be shared. No new upstream patch, copied
 implementation or compatibility branch is introduced.
+
+
+## Compression and archive adapters
+
+Class **Host feature**. The original factories `src/js/zlib.ts` and `src/js/archive.ts`
+and the Rust `src/archive.rs` adapter live under `crates/bunwasm-runtime/`.
+No upstream implementation is copied into these files.
+
+The Brotli and Zstd constants in `src/js/zlib.ts` and parameter IDs in `src/streams.rs` are
+**Port** data corresponding to Bun's
+`src/jsc/bindings/ProcessBindingConstants.cpp` at upstream
+`9510e74152073d850a18758ca41114d8f214ffa6`. The adapter exposes the subset used by
+its codecs. It does not copy that binding's engine setup or object code.
+
+The Zstd one-shot calls and streaming decompressor use Bun's unchanged
+`src/zstd/lib.rs` at upstream `9510e74152073d850a18758ca41114d8f214ffa6`
+plus the exported WASI patches, local revision `cd95fa7a13b3f13be73e512b38ec111c1c228084`. The encoder stream uses
+`zstd` 0.13.3 with default features disabled and `no_asm` enabled. Its `zstd-sys`
+dependency supplies the C library that Bun's Rust wrapper also calls. Legacy
+formats, dictionary training and compressor threads are disabled. Native fetch
+uses the same dependency to decode Zstd HTTP bodies. The Node host forwards raw
+Zstd bodies through the fetch head's `bodyEncoding` field to Bun's Rust stream
+decoder. Node 26.7.0's sync and streaming decoders both stop after the first
+concatenated frame. Browser HTTP continues to use its host's content decoder;
+virtual loopback responses declare their raw body encoding for guest decoding.
+
+Brotli uses the existing pinned `brotli` 8.0.4 Rust dependency. Deflate and gzip
+streams reuse the existing `flate2` Rust backend. Archives reuse the existing
+`tar` 0.4.46 dependency with its default features disabled and the
+[WASI extraction port](#tar-wasi-extraction). Archive extraction uses
+`Entry::unpack_in`, including its destination, symlink and sparse-file handling.
+The adapter supports tar and gzip tar input, creation, filtering, extraction,
+byte/Blob conversion and static writes. Other libarchive formats are not added.
+
+Bun's `src/js/node/zlib.ts` at that same revision depends on `$rust` constructors
+from `src/runtime/node/zlib/`, engine object bindings, and private native handles.
+Bun's `src/runtime/api/Archive.rs` similarly owns JavaScriptCore values and
+libarchive callbacks. These APIs cannot currently load through our engine-neutral
+builtin loader. The TypeScript adapters provide public codec and archive APIs
+without fabricating Bun's private native handles. Private binding instrumentation
+and complete option parity remain outside these adapters.
+
+
+## Tar WASI extraction
+
+Class **Port**. `third_party/tar/` copies the published `tar` 0.4.46 package,
+upstream `composefs/tar-rs` revision `fc459c149f83bf4daceaa52e17d351989002e1a9`.
+Its MIT and Apache licenses are retained. Cargo resolves both runtime and installer
+tar consumers through this local crate. Registry cache marker files are omitted.
+
+`src/lib.rs`, `src/entry.rs` and the Cargo manifests change. The library enables
+Rust's WASI filesystem extensions on WASI. Extraction creates symlinks with
+`std::os::wasi::fs::symlink_path`. An original adapter sets symlink timestamps
+through `wasi` 0.11's `path_filestat_set_times`, with no-follow lookup flags and
+checked nanosecond conversion. `filetime` has no wasm implementation of that
+operation. Permission application succeeds without changing mode bits because
+WASI Preview 1 exposes no chmod operation. Upstream rejects these filesystem
+operations on every wasm target, causing otherwise valid extraction to fail.
+Other targets keep their original behavior. Header parsing, destination checks,
+link checks, sparse-file handling and archive writing remain upstream code.

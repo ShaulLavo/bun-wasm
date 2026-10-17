@@ -449,6 +449,7 @@
 
   const Bun = {
     ArrayBufferSink,
+    Archive: internal.require("archive").Archive,
 
     jest: () => internal.require("bun_test").exports,
     semver,
@@ -490,6 +491,10 @@
     gunzipSync: (data) => native.decompress(hashInput(data), "gzip"),
     deflateSync: (data, options) => native.compress(hashInput(data), options && options.level !== undefined ? options.level : -1, "raw"),
     inflateSync: (data) => native.decompress(hashInput(data), "raw"),
+    zstdCompressSync: (data, options) => internal.require("zlib").bunCompress(data, options),
+    zstdDecompressSync: (data) => internal.require("zlib").bunDecompress(data),
+    zstdCompress: (data, options) => Promise.resolve(internal.require("zlib").bunCompress(data, options)),
+    zstdDecompress: (data) => Promise.resolve(internal.require("zlib").bunDecompress(data)),
     readableStreamToBytes,
     readableStreamToArrayBuffer: async (s) => (await readableStreamToBytes(s)).buffer,
     readableStreamToText: async (s) => native.utf8Decode(await readableStreamToBytes(s)),

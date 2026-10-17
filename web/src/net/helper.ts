@@ -207,6 +207,7 @@ export class NetHelper {
       statusText: response.statusText,
       url: response.url,
       redirected: response.redirected,
+      bodyEncoding: null,
       headers: Array.from(response.headers),
     };
     await this.ring.write(req.id, Kind.Head, json(head));
@@ -261,7 +262,10 @@ export class NetHelper {
     const url = new URL(req.url);
     this.request(port, { method: req.method, target: url.pathname + url.search, headers: req.headers, body: req.body }, {
       head: (head) => {
-        if (live()) void this.ring.write(id, Kind.Head, json({ ...head, url: req.url, redirected: false } satisfies FetchHead));
+        const encoding = head.headers.filter(([name]) => name === "content-encoding").map(([, value]) => value.trim().toLowerCase()).join(", ");
+        const supported = ["gzip", "x-gzip", "deflate", "br", "zstd"];
+        const bodyEncoding = supported.includes(encoding) ? encoding : null;
+        if (live()) void this.ring.write(id, Kind.Head, json({ ...head, url: req.url, redirected: false, bodyEncoding } satisfies FetchHead));
       },
       data: (chunk) => {
         if (live()) void this.writeChunks(id, chunk);

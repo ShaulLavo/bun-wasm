@@ -183,6 +183,7 @@ pub fn table(state: &Rc<State>) -> Table {
     crate::semver::install(&mut t);
     install_encoding(&mut t);
     crate::streams::install(&mut t);
+    crate::archive::install(&mut t);
     install_crypto(&mut t);
     install_url(&mut t);
     install_host(&mut t, state);
@@ -740,6 +741,21 @@ fn install_crypto(t: &mut Table) {
     });
     t.add("compress", |a| {
         let format = a.str(2)?;
+        if matches!(format, "brotli" | "zstd") && a.opt_str(3).is_some() {
+            return crate::streams::compress(a.bytes(0)?, format, a.i32(1)?, a.opt_str(3)).map(Val::Bytes);
+        }
+        if format == "zstd" {
+            let mut output = Vec::new();
+            output.try_reserve_exact(bun_zstd::compress_bound(a.bytes(0)?.len()))
+                .map_err(|_| NativeError::error("ZstdCompressionError: OutOfMemory"))?;
+            if let bun_zstd::Result::Err(error) = bun_zstd::compress_append(&mut output, a.bytes(0)?, Some(a.i32(1)?)) {
+                return Err(NativeError::error(format!("ZstdCompressionError: {}", String::from_utf8_lossy(error.as_bytes()))));
+            }
+            return Ok(Val::Bytes(output));
+        }
+        if format == "brotli" {
+            return crate::streams::compress(a.bytes(0)?, format, a.i32(1)?, None).map(Val::Bytes);
+        }
         let wrapper = crate::encoding::Wrapper::parse(format)
             .ok_or_else(|| NativeError::type_error(format!("unknown compression format {format}")))?;
         let level = a.num(1)?;
@@ -748,13 +764,27 @@ fn install_crypto(t: &mut Table) {
     });
     t.add("decompress", |a| {
         let format = a.str(1)?;
+        if let Some(limit) = a.opt_num(2) {
+            return crate::streams::decompress_limited(a.bytes(0)?, format, limit as usize).map(Val::Bytes);
+        }
+        if format == "zstd" {
+            return bun_zstd::decompress_alloc(a.bytes(0)?)
+                .map(Val::Bytes)
+                .map_err(|e| NativeError::error(format!("ZstdDecompressionError: {e:?}")));
+        }
+        if format == "brotli" {
+            let mut output = Vec::new();
+            brotli::BrotliDecompress(&mut a.bytes(0)?, &mut output)
+                .map_err(|e| NativeError::error(e.to_string()))?;
+            return Ok(Val::Bytes(output));
+        }
         let wrapper = crate::encoding::Wrapper::parse(format)
             .ok_or_else(|| NativeError::type_error(format!("unknown compression format {format}")))?;
         crate::encoding::decompress(a.bytes(0)?, wrapper)
             .map(Val::Bytes)
             .map_err(|msg| NativeError::error(msg).prop("code", "Z_DATA_ERROR").prop("errno", -3))
     });
-    t.add("crc32", |a| Ok(Val::Num(f64::from(crate::encoding::crc32(a.bytes(0)?)))));
+    t.add("crc32", |a| Ok(Val::Num(f64::from(crate::encoding::crc32_seed(a.bytes(0)?, a.opt_num(1).unwrap_or(0.0) as u32)))));
     t.add("adler32", |a| Ok(Val::Num(f64::from(crate::encoding::adler32(a.bytes(0)?)))));
 }
 

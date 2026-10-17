@@ -41,3 +41,52 @@ declare namespace BunWasm {
 declare const process: { cwd(): string };
 declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
+
+declare namespace BunWasm {
+  interface BufferBytes extends Uint8Array { toString(encoding?: string): string }
+  interface BufferConstructor { from(data: unknown, encodingOrOffset?: string | number, length?: number): BufferBytes }
+  interface CompressionTransform extends NodeEmitter {
+    push(chunk: unknown): boolean;
+    write(chunk: unknown, callback?: () => void): boolean;
+    destroy(error?: unknown): this;
+    _transform(chunk: unknown, encoding: string, callback: (error: unknown, result?: unknown) => void): void;
+    _flush(callback: (error: unknown, result?: unknown) => void): void;
+    _destroy(error: unknown, callback: (error: unknown, result?: unknown) => void): void;
+  }
+  interface CompressionConstructor { new(options?: object): CompressionTransform }
+  interface WorkerReadable extends NodeEmitter {
+    push(chunk: unknown): boolean;
+    pipe(target: { write(chunk: unknown): unknown }): unknown;
+    destroy(error?: unknown): void;
+  }
+  interface WorkerWritable extends NodeEmitter {
+    write(chunk: unknown): unknown;
+    end(): unknown;
+  }
+  interface Native {
+    compress(data: Uint8Array, level: number, format: string, parameters?: string): Uint8Array;
+    decompress(data: Uint8Array, format: string, maxOutputLength?: number): Uint8Array;
+    crc32(data: Uint8Array, initial?: number): number;
+    streams: {
+      codec(format: string, decompress: boolean, level?: number, parameters?: string): number;
+      push(handle: number, data: Uint8Array, last: boolean): Uint8Array;
+      release(handle: number): void;
+    };
+    archive: {
+      create(entries: [string, Uint8Array][], gzip: boolean, level: number, mtime: number): Uint8Array;
+      files(bytes: Uint8Array, patterns: string[]): { name: string; bytes: Uint8Array; mtime: number }[];
+      extract(bytes: Uint8Array, path: string, patterns: string[]): number;
+    };
+  }
+  interface Internal {
+    toUint8(value: ArrayBuffer | ArrayBufferView): Uint8Array;
+    concatBytes(chunks: Uint8Array[]): Uint8Array;
+    require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
+    require(name: "bun"): { write(path: unknown, data: Uint8Array): Promise<number> };
+    builtin(name: "node:stream"): {
+      Transform: CompressionConstructor;
+      Readable: new(options: { read(): void }) => WorkerReadable;
+      Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: () => void): void }) => WorkerWritable;
+    };
+  }
+}
