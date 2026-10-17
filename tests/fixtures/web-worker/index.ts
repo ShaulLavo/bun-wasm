@@ -24,7 +24,7 @@ const result = message(worker);
 const data = new Uint8Array([42]);
 worker.postMessage({ data }, [data.buffer]);
 assert.equal(data.byteLength, 0);
-assert.deepEqual(await result, { byte: 42, main: false, arg: "arg", env: "yes", same: true });
+assert.deepEqual(await result, { byte: 42, main: false, arg: "arg", env: "yes", same: true, entry: false });
 const close = closed(worker);
 worker.terminate();
 worker.postMessage(() => {});
@@ -56,8 +56,11 @@ assert.deepEqual(missingOrder, ["open", "error"]);
 console.log("worker errors, missing entry, open before error");
 
 const scope = new Worker("data:text/javascript," + encodeURIComponent(`
-  const handler = function(event) { postMessage(event.data); close(); };
-  addEventListener('message', handler, { once: true });
+  const handler = function(event) { postMessage(event.data); };
+  const options = { once: true, capture: false };
+  addEventListener('message', handler, options);
+  options.once = false;
+  options.capture = true;
 `));
 const scopeResult = message(scope);
 const scopeClose = closed(scope);
@@ -83,7 +86,7 @@ console.log("worker global event listeners and close");
 
 const preloaded = new Worker(new URL("./preload-entry.ts", import.meta.url), { preload: new URL("./preload.ts", import.meta.url).href });
 const preloadClose = closed(preloaded);
-assert.equal(await message(preloaded), 23);
+assert.deepEqual(await message(preloaded), { value: 23, entry: false });
 await preloadClose;
 const badPreload = new Worker("data:text/javascript,postMessage('should not run')", { preload: "./missing-preload.ts" });
 const badPreloadClose = closed(badPreload);
@@ -108,3 +111,35 @@ const nestedClose = closed(nested);
 assert.equal(await message(nested), false);
 await nestedClose;
 console.log("nested web worker");
+
+const unreferenced = Bun.spawn([process.execPath, "-e", "new Worker('data:text/javascript,setInterval(()=>{},100000)', {ref:false});console.log('unreferenced')"], { stdout: "pipe", stderr: "pipe" });
+const [unreferencedOutput, unreferencedError, unreferencedCode] = await Promise.all([new Response(unreferenced.stdout).text(), new Response(unreferenced.stderr).text(), unreferenced.exited]);
+assert.equal(unreferencedOutput, "unreferenced\n");
+assert.equal(unreferencedError, "");
+assert.equal(unreferencedCode, 0);
+console.log("unreferenced worker releases parent");
+
+const channel = new MessageChannel();
+const portWorker = new Worker("data:text/javascript," + encodeURIComponent(`
+  onmessage = event => {
+    const port = event.ports[0];
+    port.postMessage(event.data);
+    postMessage('returned', [port]);
+    close();
+  };
+`));
+const portWorkerClose = closed(portWorker);
+const returnedPort = new Promise<MessageEvent>(resolve => portWorker.addEventListener("message", resolve, { once: true }));
+const firstPortMessage = new Promise<unknown>(resolve => { channel.port1.onmessage = event => resolve(event.data); });
+portWorker.postMessage("through transfer", { transfer: [channel.port2] });
+assert.equal(await firstPortMessage, "through transfer");
+const returnedEvent = await returnedPort;
+assert.equal(returnedEvent.data, "returned");
+assert.equal(returnedEvent.ports.length, 1);
+await portWorkerClose;
+const secondPortMessage = new Promise<unknown>(resolve => { channel.port1.onmessage = event => resolve(event.data); });
+returnedEvent.ports[0].postMessage("round trip");
+assert.equal(await secondPortMessage, "round trip");
+returnedEvent.ports[0].close();
+channel.port1.close();
+console.log("message event ports survive worker exit");

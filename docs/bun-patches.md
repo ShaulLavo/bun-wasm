@@ -24,6 +24,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
+| [Global Web Worker adapter](#web-worker-adapter) | Host feature | Original TypeScript EventTarget and worker-global adapters over the existing thread transport. |
 | [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, browser module loading and stream adapters over separate host guest instances, with distinct control-pipe and final-signal selectors. |
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, reader relay and descriptor-transfer adapters. |
@@ -1756,3 +1757,31 @@ matching path and numeric flags, removes the TLS-only mode and BunString output,
 and uses our existing BoringSSL accessors and owned UTF-8 names. SAN parsing
 errors suppress subject fallback; an email-only SAN does not suppress a CN
 hostname match. The BoringSSL source remains unchanged.
+
+<a id="web-worker-adapter"></a>
+
+## Global Web Worker adapter
+
+Class **Host feature**, original adapters. `crates/bunwasm-runtime/src/js/web_worker.ts`
+implements the global `Worker` constructor and the worker-global message API.
+It wraps the separate-guest execution, clone, port, reference and termination
+contracts in `worker_threads.ts`. Port packets retain transferred ports for
+web events while Node listeners and synchronous receives still return the data. `web.js` installs the constructor and blob URL
+entry points. `web/src/worker.ts` captures the physical browser worker sender
+before the guest installs its own `postMessage`. The original `workerSource`
+data native calls Bun's Rust transpiler for blob entries, including TypeScript
+File names. The shared worker initializer installs worker globals and sets `Bun.isMainThread` to false. Web entries import preloads before the requested module.
+
+The reference contracts are Bun's `src/js/node/worker_threads.ts` and
+`src/jsc/bindings/webcore/Worker.cpp` at the pinned revision in this ledger's opening
+paragraph. Their implementation depends on JavaScriptCore native bindings and
+cannot run through our portable builtin loader. This adapter copies no upstream
+implementation. It adds no host ABI slots and leaves browser module serving
+unchanged.
+
+`tests/fixtures/web-worker` exercises URL entry points, options, transfer lists,
+worker-global events, preload, errors, natural close, termination and nested
+workers. `web/tests/browser-workers.ts` runs the same fixture in Chromium and
+WebKit on every engine. Cross-guest shared memory remains unsupported by the
+existing transport. Object URLs are local to their creating guest and their
+contents are captured when constructing a worker.

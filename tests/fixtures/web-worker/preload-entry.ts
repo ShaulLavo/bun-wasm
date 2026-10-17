@@ -1,1 +1,1 @@
-postMessage(globalThis.preloaded);
+postMessage({ value: globalThis.preloaded, entry: import.meta.main });

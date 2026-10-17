@@ -5,3 +5,5 @@ worker global event listeners and close
 worker preload
 TypeScript blob worker
 nested web worker
+unreferenced worker releases parent
+message event ports survive worker exit

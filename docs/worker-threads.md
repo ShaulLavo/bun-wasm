@@ -292,3 +292,36 @@ bash /work/tmp/wave-heavy/run.sh --class suite worker-threads-census -- \
 Use `jsc` or `browser` for the other engines. Raw before/after JSON, JSONL, build
 logs, gate logs, selection, and artifact hashes are retained in
 `/work/reports/bun-wasm-worker-threads/` until coordinator acceptance.
+
+
+## Global Web Worker
+
+The global `Worker` constructor wraps the same guest execution as
+`node:worker_threads.Worker`. It accepts file paths, file URL strings and objects,
+data URLs, and object URLs made from Blob or File. TypeScript entry points use
+Bun's transpiler. `name`, `argv`, `env`, `preload`, and `ref: false` configure the
+worker. `preload` accepts a path or an array of paths.
+
+The parent receives EventTarget `open`, `message`, `messageerror`, `error`, and
+`close` events. Property handlers work alongside event listeners. `MessageEvent.ports` contains
+transferred ports in transfer-list order, including ports absent from the data. `open` precedes
+entry execution, so a missing entry still produces `open` before `error`.
+Messages sent before natural exit drain before `close`. `terminate()` requests
+termination and suppresses later messages. The final `close` event follows host
+completion. `ref()` and `unref()` control the parent's lifetime.
+
+Inside a web worker, `self` is the global object. `postMessage`, `onmessage`,
+`onmessageerror`, `addEventListener`, `removeEventListener`, `dispatchEvent`,
+`close`, and `name` are available. A message handler keeps the child alive.
+`Bun.isMainThread` is false in both web and Node workers.
+
+The adapter uses original TypeScript because Bun's implementation requires
+JavaScriptCore C++ bindings. The existing four-child host budget and shared
+memory limitations apply. Object URL registries are local to a guest. Creating
+a worker captures the blob's contents, so immediate revocation does not cancel
+that startup. This differs from Bun's deferred blob lookup. Cross-worker object URLs and shared buffers need separate lifetime and sharing
+support.
+
+The focused fixture runs with `scripts/test.sh --no-build web-worker`, repeated
+with `--engine jsc` and `--engine browser`. The full web gate also runs it in
+Chromium and WebKit on all engines.

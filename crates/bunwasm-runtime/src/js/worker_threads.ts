@@ -46,7 +46,13 @@
     const path = parseRoute(value.route);
     if (typeof value.envGroup !== "string" || !Array.isArray(value.argv) || !value.argv.every(arg => typeof arg === "string") || !Array.isArray(value.execArgv) || !value.execArgv.every(arg => typeof arg === "string")) throw new TypeError("Invalid worker initialization");
     return { route: path, envGroup: value.envGroup, argv: value.argv, execArgv: value.execArgv,
-      graph: value.graph, resourceLimits: limits(value.resourceLimits) };
+      graph: value.graph, resourceLimits: limits(value.resourceLimits), web: webOptions(value.web) };
+  }
+  function webOptions(value: unknown): BunWasm.WebWorkerOptions | null {
+    if (value === undefined || value === null) return null;
+    const input = record(value);
+    if (typeof input.name !== "string" || !Array.isArray(input.preload) || !input.preload.every(path => typeof path === "string")) throw new TypeError("Invalid web worker initialization");
+    return { name: input.name, preload: input.preload };
   }
   function invalidArgument(name: string) {
     return Object.assign(new TypeError(`The "${name}" argument has an invalid type`), { code: "ERR_INVALID_ARG_TYPE" });
@@ -62,8 +68,8 @@
     return value !== null && (typeof value === "object" || typeof value === "function") && untransferable.has(value);
   }
   internal.isMarkedAsUntransferable = isMarkedAsUntransferable;
-  function messageEvent(data: unknown) {
-    const event = new MessageEvent("message", { data });
+  function messageEvent(data: unknown, ports: MessagePort[] = []) {
+    const event = Object.assign(new MessageEvent("message", { data, ports }), { data });
     messagePayloads.set(event, data);
     return event;
   }
@@ -195,6 +201,11 @@
     return progress;
   }
 
+  function messagePacket(value: unknown) {
+    const packet = record(value);
+    if (!("data" in packet) || !Array.isArray(packet.ports) || !packet.ports.every(port => port instanceof MessagePort)) throw new Error("Invalid worker message packet");
+    return { data: packet.data, ports: packet.ports };
+  }
   interface DeliveryBatch { queue: unknown[]; remaining: number; }
   interface PortState {
     id: string; peer: string | null; version: number; sent: number; received: number;
@@ -254,7 +265,7 @@
     }
     static #receive(port: MessagePort) {
       if (!port.#state?.queue.length) return undefined;
-      const message = port.#state.queue.shift();
+      const message = messagePacket(port.#state.queue.shift()).data;
       port.#maybeClose();
       return { message };
     }
@@ -275,7 +286,7 @@
       while (state.pending.has(state.received)) {
         const graph = state.pending.get(state.received);
         state.pending.delete(state.received++);
-        state.queue.push(codec.decode(graph));
+        state.queue.push(messagePacket(codec.decode(graph)));
       }
       this.#schedule();
       this.#maybeClose();
@@ -316,7 +327,9 @@
       if (!arguments.length) throw Object.assign(new TypeError("Not enough arguments to MessagePort.postMessage"), { code: "ERR_MISSING_ARGS" });
       const state = this.#state;
       if (!state || state.phase !== "open" || !state.peer) return;
-      const graph = codec.encode(value, transfers(transfer), [state.id, state.peer]);
+      const list = transfers(transfer);
+      const packet = { data: value, ports: list.filter(item => item instanceof MessagePort) };
+      const graph = codec.encode(packet, list, [state.id, state.peer]);
       const sequence = state.sent++;
       const other = localPorts.get(state.peer);
       if (other) { portOps.receivePacket(other, "port-data", sequence, graph); return; }
@@ -339,7 +352,8 @@
       state.scheduled = false;
       if (!batch.remaining || !batch.queue.length) { this.#continueBatch(state, batch); return; }
       batch.remaining--;
-      try { this.dispatchEvent(messageEvent(batch.queue.shift())); }
+      const packet = messagePacket(batch.queue.shift());
+      try { this.dispatchEvent(messageEvent(packet.data, packet.ports)); }
       finally { this.#continueBatch(state, batch); }
     }
     #continueBatch(state: PortState, batch: DeliveryBatch) {
@@ -509,8 +523,13 @@
       throw Object.assign(new TypeError("Worker filename must be absolute or begin with './' or '../'." + hint), { code: "ERR_WORKER_PATH" });
     }
     const path = internal.require("path").resolve(process.cwd(), filename);
-    if (!/\.(?:[cm]?[jt]s|[jt]sx)$/.test(path)) throw Object.assign(new TypeError("Unsupported worker file extension"), { code: "ERR_WORKER_UNSUPPORTED_EXTENSION" });
+    if (!options._web && !/\.(?:[cm]?[jt]s|[jt]sx)$/.test(path)) throw Object.assign(new TypeError("Unsupported worker file extension"), { code: "ERR_WORKER_UNSUPPORTED_EXTENSION" });
     return { argv: ["run", path], name: path };
+  }
+  function webEntry(target: { argv: string[]; name: string }, web: BunWasm.WebWorkerOptions) {
+    if (target.argv[0] === "run" || !web.preload.length) return target;
+    const preloads = web.preload.map(path => `await import(${JSON.stringify(path)});`).join("\n");
+    return { argv: ["-e", preloads + "\n" + target.argv[1]], name: target.name };
   }
   function execArguments(value: unknown) {
     if (value === undefined) return process.execArgv.slice();
@@ -534,7 +553,9 @@
     constructor(filename: unknown, rawOptions?: unknown) {
       super();
       const options = rawOptions == null ? {} : record(rawOptions);
-      const target = entry(filename, options);
+      const requested = entry(filename, options);
+      const web = webOptions(options._web);
+      const target = web ? webEntry(requested, web) : requested;
       if (options.argv !== undefined && !Array.isArray(options.argv)) throw invalidArgument("argv");
       const argv = options.argv === undefined ? [] : Array.from(options.argv as unknown[], String);
       const execArgv = execArguments(options.execArgv);
@@ -554,7 +575,7 @@
       catch (error) { publicPort.close(); childPort.close(); throw error; }
       const graph = transferPlan.graph;
       const group = options.env === SHARE_ENV ? envGroup : routeKey(this.#path);
-      env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv, graph, resourceLimits: this.resourceLimits });
+      env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv, graph, resourceLimits: this.resourceLimits, web });
       const memoryLimitMb = (this.resourceLimits.maxOldGenerationSizeMb || 0) + (this.resourceLimits.maxYoungGenerationSizeMb || 0);
       let child: BunWasm.WorkerChild;
       try { child = internal.require("spawn").spawn(["bun"].concat(target.argv, argv), {
@@ -580,6 +601,7 @@
         if (!options.stderr) this.stderr.pipe(process.stderr);
         this.#drained = Promise.all([out.drained, err.drained]);
         publicPort.on("message", value => this.emit("message", value));
+        if (web) EventTarget.prototype.addEventListener.call(publicPort, "message", event => this.emit("_webmessage", event));
         publicPort.on("messageerror", error => this.emit("messageerror", error)); publicPort.unref();
         child.exited.then(code => this.#settled(code), error => { this.#settled(1); this.#error = true; this.emit("error", error); });
       } catch (error) {
@@ -666,6 +688,7 @@
     exports.workerData = initial[0]; parentPort = initial[2]; exports.parentPort = parentPort;
     for (const pair of initial[1]) if (Array.isArray(pair) && pair.length === 2) environmentData.set(pair[0], pair[1]);
     process.argv = config.argv; process.execArgv = config.execArgv;
+    internal.require("bun").isMainThread = false;
     root({ kind: "member", path: route, group: envGroup });
     internal.workerExit = code => {
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "exiting", child: route[route.length - 1], code, messages: parentPort ? portOps.sent(parentPort) : 0 } });
@@ -678,6 +701,10 @@
       const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "error", child: route[route.length - 1], graph, code } });
     };
+    if (config.web) {
+      internal.require("web_worker").initialize(parentPort, config.web);
+      parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
+    }
     const requirePreload = internal.builtin("node:module").createRequire(process.cwd() + "/__worker_preload__.cjs");
     for (let index = 0; index < config.execArgv.length; index++) {
       const arg = config.execArgv[index];
@@ -686,7 +713,7 @@
       if (arg === "--expose-gc") Object.defineProperty(globalThis, "gc", { configurable: true, writable: true, value: () => native.gc() });
       if (arg === "--no-warnings") internal.workerNoWarnings = true;
     }
-    parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
+    if (!config.web) parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
   }
   const initialState: { parentPort: MessagePort | null; workerData: unknown } = { parentPort, workerData: null };
   const exports = Object.assign(initialState, {
