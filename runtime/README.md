@@ -147,7 +147,7 @@ The browser loads this adapter lazily for modules importing the extended process
 `adapter: "preview1"` runs a generic WASI executable without Bun's slot adapter. Existing Bun
 slots and the signal-only preview1 path remain available.
 
-Every call is nonblocking except `poll`. Descriptor I/O returns a byte count, zero for EOF or
+Every call is nonblocking except `poll` and `wait_job` without NOHANG. Descriptor I/O returns a byte count, zero for EOF or
 zero-length I/O, or a negative WASI errno; a partial write is permitted. EAGAIN is -6 and EPIPE
 is -64. Spawn reserves inherited capabilities before returning the child PID.
 
@@ -158,6 +158,7 @@ is -64. Spawn reserves inherited capabilities before returning the child PID.
 | `dup(fd)` | Returns a new fd sharing the open description and offset. Use preview1 `fd_close` to close either binding. |
 | `read(fd, ptr, len)`, `write(fd, ptr, len)` | Use the same fd namespace as preview1. Filesystem cold reads/growth prepare asynchronously and return EAGAIN without consuming bytes or advancing the shared offset. |
 | `wait(pid, out)` | Returns 0 and writes u32 kind (0 exited, 1 signaled), then i32 code; returns EAGAIN before confirmed cleanup. |
+| `wait_job(job, flags, status_ptr)` | Flag 1 is NOHANG: returns -6 until the entire job is safely complete; flag 0 blocks. Success writes one little-endian i32 leader status (ordinary exit code or 128 + signal) and reaps the job and all remaining process records. |
 | `kill(pid, sig)`, `kill_job(job, sig)` | Return 0 or negative errno. PID targets require self/ancestor authority; a job requires its exact owner. |
 | `job_of(pid)` | Returns the job ID or negative errno. |
 | `poll(subs, count, timeout_ms, out)` | Returns event count; 0 on timeout or a pending signal. Timeout -1 has no deadline. |
@@ -165,13 +166,81 @@ is -64. Spawn reserves inherited capabilities before returning the child PID.
 
 Poll subscriptions are 16 bytes: u32 kind, u32 id, u64 userdata. Output events are 16 bytes:
 u64 userdata, u32 kind, u32 flags. All fields are little-endian. Kinds are readable fd (0),
-writable fd (1), child exit (2), and filesystem completion (3); flag bit 0 means hangup.
+writable fd (1), child exit (2), filesystem completion (3), and job-empty (4, id = job ID); flag bit 0 means hangup.
 Signals wake poll without being consumed. Pipe publication notifies a shared readiness sequence;
 independent signal, local child and filesystem sources are also rescanned within 10 ms until
 all publishers guarantee the same wake address. The wait hook receives the sequence observed
 before scanning, preserving publications that race the scan. Terminal adapters must expose
 `tryRead`/`tryWrite` for directions that are safe to call without blocking; the ABI never calls
 a preview1 blocking stdin callback accidentally.
+
+Job wait authority belongs to the job owner and ancestors of that owner, including retained
+ancestry through individually reaped processes. Other callers receive -63 (EPERM), unknown job
+IDs -71 (ESRCH), and already-reaped jobs -12 (ECHILD). Only flags 0 and 1 are valid (-28 EINVAL
+otherwise); an invalid output pointer returns -21 without consuming the job. A handled signal
+interrupts blocking wait with -27 (EINTR) without consuming the delivery or reaping the job.
+
+The first member is the leader; its immutable outcome survives ordinary child reap, and later
+descendant signal deaths never replace it. Membership cannot move: a spawn either joins an open
+job or creates another job, whose lifetime is independent. A safely completed job cannot be
+reopened. Job-empty is level readiness until successful `wait_job`; observation does not reap.
+It follows outcome selection, revocation, descriptor release and filesystem admission fences
+for every member, including accepted spawns still queued for page-side admission. Individual
+`wait(pid)` and child-exit readiness also wait for that process's `quiesce` hook, which fences
+admitted filesystem and adapter work such as terminal critical sections. Neither process nor
+job confirmation waits for physical worker termination. Registration followed by a sequence
+capture and readiness scan prevents missed completion wakeups.
+
+## Interrupting third-party programs
+
+`./interrupt` exposes `rewriteInterrupts(bytes)` and `compileInterruptible(bytes)`. The latter
+validates, rewrites and compiles a preview1 module once per SHA-256 content hash; concurrent
+loads share the work and the shared content-cache LRU retains at most 16 compiled modules.
+Active executable registries additionally retain their resolved registrations for their own
+lifetime, so that limit is not a bound on all live executable modules. Each process instantiates
+its own module-global countdown. No process state is cached with compiled modules.
+
+The rewriter inserts a private mutable i32 countdown at every defined function entry and loop
+header, including tail-call cycles. Every 4,096 checkpoints it resets the counter and calls
+`runtime_proc.interrupted()`. A nonzero result executes `unreachable`. The host supplies only
+an already recorded fatal signal to these injected checks; the supervisor's immutable outcome
+sets 130 for Ctrl+C or 143 for SIGTERM. A random trap is not reclassified as signal death.
+Cooperative programs keep their existing handled-signal delivery path.
+
+The page-side `SubprocessBroker` registers third-party preview1 executables with
+`{ adapter: "preview1", bytes }`, where `bytes` is a `Uint8Array` or an asynchronous loader.
+Compiled-only third-party registrations fail closed with a source-bytes diagnostic and status
+126. Our own Bun engines use `adapter: "bun"`; the own shell may explicitly assert
+`{ adapter: "preview1", cooperative: true, module }`. These are trusted host assertions, not
+filename exemptions: an arbitrary guest named `bun.wasm` is still rewritten when registered
+with source bytes. The compiler is dynamically loaded only when a third-party executable is
+resolved, so loading Bun light does not download the rewriter.
+
+Supported modules use the explicitly decoded core instruction/type/section set, including
+multi-value blocks, reference tables, bulk-memory operations and direct/indirect tail calls.
+Native validation runs before and after rewriting. Unsupported instructions or proposals,
+including SIMD, GC/typed references, exception handling, memory64, multiple memories and
+blocking atomic waits, are refused rather than passed through. The `runtime_proc` import
+namespace is reserved for the injected check; third-party programs requiring those process
+extensions must be cooperative programs reviewed by the host. Linking, relocation and dynamic
+linking metadata are refused. Other custom sections (including names and debugging offsets)
+are deliberately stripped because injection invalidates their offsets and function indices.
+
+This is a cancellation checkpoint policy, not instruction metering or a hard wall-clock
+execution limit. Large straight-line regions, memory growth, bulk operations or long host
+calls can delay a check. Hosts must expose only their trusted implementations of guest imports;
+imported uninstrumented Wasm functions or external table entries could otherwise escape the
+policy. `Worker.terminate()` remains a backstop; revocation is the shared-state safety boundary.
+
+The artifact-free browser gate runs with `bun web/tests/browser-interrupt.ts chromium firefox
+webkit`; it exercises five loop shapes, foreground-job Ctrl+C and per-process SIGTERM, checks
+both shared-memory and message trap acknowledgements, and independently proves teardown rescue
+works on the original programs. `--benchmark` additionally requires `INTERRUPT_BUN_WASM`,
+`INTERRUPT_BRUSH_WASM` and `INTERRUPT_PROTOTYPE` paths to existing artifacts. It compares warmed,
+interleaved original/countdown/spike-per-entry execution with matching checksums, records rewrite
+times, and removes its listener, browser sessions and build/profile scratch on every exit. On the
+reserved Mac, `safari` uses the real Safari WebDriver, not Playwright WebKit. Set
+`INTERRUPT_OUTPUT` to retain the small JSON results outside disposable scratch.
 
 ## Shared filesystem service
 
