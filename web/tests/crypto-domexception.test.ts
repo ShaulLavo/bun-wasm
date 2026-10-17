@@ -1,53 +1,30 @@
-import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { webcrypto } from "node:crypto";
-
-function brandFactory() {
-  let scratch: string | undefined;
-  try {
-    scratch = mkdtempSync(join(tmpdir(), "bun-wasm-crypto-brand-"));
-    const output = join(scratch, "web-brand.js");
-    const compiled = Bun.spawnSync([
-      "node", new URL("../../scripts/transpile-runtime.ts", import.meta.url).pathname,
-      new URL("../../crates/bunwasm-runtime/src/js/web_brand.ts", import.meta.url).pathname, output,
-    ]);
-    expect(compiled.exitCode).toBe(0);
-    return (0, eval)(readFileSync(output, "utf8"));
-  } finally {
-    if (scratch) rmSync(scratch, { recursive: true, force: true });
-  }
-}
-
+import {test, expect} from "bun:test";
+import {existsSync, mkdtempSync, readFileSync, rmSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {fileURLToPath} from "node:url";
+import {join} from "node:path";
+import {webcrypto} from "node:crypto";
 test("host crypto errors retain the DOMException brand", async () => {
-  const source = (name: string) => readFileSync(new URL(`../../crates/bunwasm-runtime/src/js/${name}`, import.meta.url), "utf8");
-  const streams = (0, eval)(source("streams.js"));
-  const webBrand = brandFactory();
-  const modules = new Map<string, () => unknown>([
-    ["streams", () => streams({ native: { engine: "host" } })],
-    ["web_brand", () => webBrand()],
-  ]);
-  const internal: {
-    require(name: string): unknown;
-    native: { DOMException: typeof DOMException; timeOrigin(): number; platformInfo: { version: string; arch: string } };
-    DOMException?: typeof DOMException;
-  } = {
-    require(name) {
-      const load = modules.get(name);
-      if (!load) throw new Error(`Unexpected runtime factory ${name}`);
-      return load();
-    },
-    native: { DOMException, timeOrigin: () => 0, platformInfo: { version: "test", arch: "wasm" } },
-  };
-  (0, eval)(source("web.js"))(internal);
-  let error: unknown;
+  const streams = (0, eval)(readFileSync(new URL("../../crates/bunwasm-runtime/src/js/streams.js", import.meta.url), "utf8"));
+  const native = {engine: "host", DOMException, timeOrigin: () => 0, platformInfo: {version: "test", arch: "wasm"}};
+  // /work/tmp is this repository's local scratch preference; CI runners lack it.
+  const root = process.env.BUN_WASM_TEST_TMP ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  const scratch = mkdtempSync(join(root, "bun-wasm-compression-crypto-"));
+  let compression;
   try {
-    await webcrypto.subtle.importKey("raw", new Uint8Array(1), "AES-GCM", false, ["encrypt"]);
-  } catch (caught) {
-    error = caught;
-  }
-  if (!internal.DOMException) throw new Error("Web factory did not install DOMException");
+    const output = join(scratch, "compression.js");
+    const compiled = Bun.spawnSync(["node", "--no-warnings", fileURLToPath(new URL("../../scripts/transpile-runtime.ts", import.meta.url)),
+      fileURLToPath(new URL("../../crates/bunwasm-runtime/src/js/compression_streams.ts", import.meta.url)), output]);
+    expect(compiled.exitCode).toBe(0);
+    compression = (0, eval)(readFileSync(output, "utf8"))({native});
+  } finally { rmSync(scratch, {recursive: true, force: true}); }
+  const streamExports = streams({native, require(name: string) { expect(name).toBe("compression_streams"); return compression; }});
+  const internal = {require(name: string) { expect(name).toBe("streams"); return streamExports; }, native};
+  const factory = (0, eval)(readFileSync(new URL("../../crates/bunwasm-runtime/src/js/web.js", import.meta.url),"utf8"));
+  factory(internal);
+  let error;
+  try { await webcrypto.subtle.importKey("raw",new Uint8Array(1),"AES-GCM",false,["encrypt"]); }
+  catch (caught) { error = caught; }
   expect(error).toBeInstanceOf(DOMException);
   expect(error).toBeInstanceOf(internal.DOMException);
 });

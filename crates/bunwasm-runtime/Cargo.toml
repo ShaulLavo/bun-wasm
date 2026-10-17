@@ -22,6 +22,8 @@ bun_sys = { path = "../../vendor/bun/src/sys" }
 bunwasm-jsc = { path = "../bunwasm-jsc", optional = true }
 rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"], optional = true }
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
+bun_zstd = { path = "../../vendor/bun/src/zstd" }
+zstd-sys = { version = "=2.0.16", default-features = false, features = ["no_asm"] }
 url = "2"
 serde_json = { version = "1", features = ["preserve_order"] }
 sha1 = "0.10"
@@ -29,9 +31,8 @@ sha2 = "0.10"
 md-5 = "0.10"
 hmac = "0.12"
 getrandom = "0.3"
-miniz_oxide = "0.8"
 encoding_rs = "0.8"
-brotli = "=8.0.4"
+bun_brotli_sys = { path = "../../vendor/bun/src/brotli_sys" }
 libsqlite3-sys = { version = "0.38", features = ["bundled"] }
 libc = "0.2"
 lol_html = { path = "../../vendor/bun/vendor/lolhtml" }
@@ -60,3 +61,6 @@ signature = "2"
 [dev-dependencies]
 bunwasm-glue = { path = "../bunwasm-glue" }
 bunwasm-posix = { path = "../bunwasm-posix" }
+
+[build-dependencies]
+cc = "1"

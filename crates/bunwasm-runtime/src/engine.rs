@@ -189,6 +189,9 @@ impl<'a> Args<'a> {
             ))),
         }
     }
+    pub fn opt_bytes(&self, i: usize) -> Option<&'a [u8]> {
+        if self.is_missing(i) { None } else { self.bytes(i).ok() }
+    }
     pub fn num(&self, i: usize) -> Result<f64, NativeError> {
         match self.get(i) {
             Val::Num(n) => Ok(*n),
