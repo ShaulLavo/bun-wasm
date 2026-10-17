@@ -55,12 +55,13 @@ function poll(fd: number[], kind: number, stage: number, hangup = false, onEmpty
 }
 // Nonblocking readiness is not a read reservation. A relay may have queued source bytes but
 // still need this reader's demand publication, and successful stream reads can be short.
-// Keep every byte assertion: only AGAIN and positive short reads are retried; early EOF and any
-// other errno retain the original failing stage. The browser driver bounds the full sequence.
+// Keep every byte assertion: AGAIN, zero-ready wake hints, and positive short reads continue the
+// readiness loop; early EOF and every other errno retain the original failing stage. A shared
+// service wake can belong to another process. The browser driver bounds the full sequence.
 function readExact(fd: number[], length: number, stage: number, onEmpty?: number[]): number[] {
   return c(0).concat(set(7), [0x03, 0x40],
     call(0, fd, c(4096).concat(get(7), [0x6a]), c(length).concat(get(7), [0x6b])), set(8),
-    get(8), c(-6), [0x46, 0x04, 0x40], poll(fd, 0, stage, false, onEmpty), [0x0c, 1, 0x0b],
+    get(8), c(-6), [0x46, 0x04, 0x40], poll(fd, 0, stage, false, onEmpty ?? []), [0x0c, 1, 0x0b],
     check(get(8).concat(c(0), [0x4c]), 0, stage),
     check(get(8).concat(c(length), get(7), [0x6b, 0x4b]), 0, stage),
     get(7), get(8), [0x6a, 0x22, 7], c(length), [0x49, 0x0d, 0, 0x0b]);
@@ -138,7 +139,7 @@ export const runtimeProcJobWaitChecks = [
 
 export const runtimeProcJobWaitStages: Readonly<Record<number, string>> = {
   100: "job fixture args", 101: "job fixture pipe", 102: "job fixture spawn", 103: "job identity",
-  104: "publish job identity", 105: "leader reservation ready", 106: "descendant ready bytes",
+  104: "publish job identity", 105: "descendants ready", 106: "descendant ready bytes",
   107: "leader completion", 108: "leader kind", 109: "leader ordinary exit zero",
   110: "job NOHANG must return AGAIN", 111: "NOHANG leaves status untouched", 112: "job poll must not report leader-only exit",
   113: "postleader release", 114: "postleader descendant output", 115: "descendant output remains open",
@@ -147,7 +148,6 @@ export const runtimeProcJobWaitStages: Readonly<Record<number, string>> = {
   123: "background unaffected", 124: "release background", 125: "background empty poll", 126: "background wait",
   127: "job fixture marker", 128: "descendant inherited job", 129: "install handled TERM",
   130: "descendant signal", 131: "safe exit gate", 132: "safe exit delay", 133: "background gate",
-  134: "leader publishes descendant reservation",
 };
 
 /** A shell, an ordinary-exiting leader, its child/grandchild and an independent background job.
@@ -175,10 +175,6 @@ export function runtimeProcJobWaitFixture(): Uint8Array<ArrayBuffer> {
   const grandchildRequest = request(3072, 4, inherited, "@job@");
   const backgroundRequest = request(3584, 5, [{ child: 0, parent: "@input@" }, { child: 2, parent: 2 }]);
   memory.set(encoder.encode("DGLLXXppxxb"), 768);
-  // The leader publishes its descendant reservation before returning. Without this fence the
-  // root can observe EOF after the leader closes while the descendant worker has not yet started;
-  // that is a valid pipe result, but not a readiness test for the whole fixture.
-  memory.set(encoder.encode("R"), 779);
   const blockingMarker = "job-wait-blocking\n", finalMarker = "job-wait-ok\n";
   memory.set(encoder.encode(blockingMarker + finalMarker), 800);
   const spawn = (spec: ReturnType<typeof request>, local: number) => call(4, c(spec.pointer), c(spec.length)).concat(set(local),
@@ -196,7 +192,7 @@ export function runtimeProcJobWaitFixture(): Uint8Array<ArrayBuffer> {
     spawn(leaderRequest, 12), call(6, get(12)), set(13), check(get(13).concat(c(0), [0x4c]), 0, 103),
     store(704, get(13)), store(708, get(13)), check(write(get(3), 704, 8), 8, 104),
     close(get(2), 101), close(get(3), 101), close(get(1), 101), close(get(4), 101),
-    readExact(get(0), 1, 105), check(load(4096), 82, 105), readExact(get(0), 2, 106),
+    readExact(get(0), 2, 105),
     check(load(4096).concat(c(65535), [0x71], c(0x4744), [0x46],
       load(4096), c(65535), [0x71], c(0x4447), [0x46, 0x72]), 1, 106),
     poll(get(12), 2, 107), check(call(5, get(12), c(640)), 0, 107), check(load(640), 0, 108), check(load(644), 0, 109),
@@ -214,7 +210,7 @@ export function runtimeProcJobWaitFixture(): Uint8Array<ArrayBuffer> {
     check(write(c(1), 800 + blockingMarker.length, finalMarker.length), finalMarker.length, 127));
   const inheritJob = (spec: ReturnType<typeof request>) => readExact(c(0), 4, 128).concat(load(4096), set(13),
     jsonNumber(13, spec.slots.job!), spawn(spec, 12));
-  const leader = inheritJob(descendantRequest).concat(check(write(c(1), 779, 1), 1, 134)); // Publish the reservation before returning so the root cannot sample EOF too early.
+  const leader = inheritJob(descendantRequest); // Return normally: its descendants must not die.
   const descendant = (grandchild: boolean) => check(call(13, c(15), c(2)), 0, 129).concat(
     grandchild ? [] : inheritJob(grandchildRequest), check(write(c(1), grandchild ? 769 : 768, 1), 1, 105),
     readExact(c(10), 1, 113), check(c(4096).concat([0x2d, 0, 0]), 112, 113), check(write(c(1), 770, 1), 1, 114),

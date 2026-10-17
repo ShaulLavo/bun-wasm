@@ -152,9 +152,10 @@ for (const returned of [0, -8]) test(`child fixture still fails early EOF or une
 
 // These stubs validate the encoded guest itself, not the implementation under test. The browser
 // gate below runs the same bytes through actual guest-created workers and the real broker.
-function jobWaitShell(options: { pending?: number; status?: number; eof?: number } = {}) {
+function jobWaitShell(options: { pending?: number; status?: number; eof?: number; ready?: readonly (string | number)[]; polls?: readonly number[] } = {}) {
   let memory: WebAssembly.Memory;
-  const reads: (string | number)[] = ["R", "DG", "LL", -6, "XX", options.eof ?? 0];
+  const reads: (string | number)[] = (options.ready ?? ["DG"]).concat(["LL", -6, "XX", options.eof ?? 0]);
+  const polls = Array.from(options.polls ?? []);
   const spawned: SpawnRequest[] = [], waits: [number, number][] = [], operations: string[] = [];
   let nextFd = 20;
   class Exit extends Error { constructor(readonly code: number) { super(`exit ${code}`); } }
@@ -188,6 +189,10 @@ function jobWaitShell(options: { pending?: number; status?: number; eof?: number
       poll(ptr: number, _count: number, timeout: number, out: number) {
         const view = new DataView(memory.buffer), kind = view.getUint32(ptr, true);
         if (kind === 4 && timeout === 0) { expect(view.getUint32(ptr + 4, true)).toBe(33); return 0; }
+        if (kind === 0 && timeout === 5000 && polls.length) {
+          const result = polls.shift()!; operations.push(`poll:${result}`);
+          if (result !== 1) return result;
+        }
         view.setBigUint64(out, view.getBigUint64(ptr + 8, true), true); view.setUint32(out + 8, kind, true); view.setUint32(out + 12, kind === 0 ? 1 : 0, true); return 1;
       },
     },
@@ -225,7 +230,15 @@ test("shell checks leader zero, pending job, postleader output, safe exit and in
   expect(result.operations.at(-1)).toBe("write:1:job-wait-ok\n");
 });
 
-for (const [options, stage] of [[{ pending: 0 }, 110], [{ status: 143 }, 120], [{ eof: -6 }, 122]] as const) {
+test("shell readExact ignores unrelated zero-ready wakes without reading stale poll events", () => {
+  const result = jobWaitShell({ ready: [-6, -6, "D", "G"], polls: [0, 1] });
+  expect(result.stage).toBeUndefined();
+  expect(result.operations.filter(operation => operation.startsWith("read:") || operation.startsWith("poll:")).slice(0, 6))
+    .toEqual(["read:-6", "poll:0", "read:-6", "poll:1", "read:D", "read:G"]);
+});
+
+for (const [options, stage] of [[{ ready: [0] }, 105], [{ ready: [-8] }, 105], [{ ready: [-6], polls: [-8] }, 105],
+  [{ ready: [-6], polls: [2] }, 105], [{ pending: 0 }, 110], [{ status: 143 }, 120], [{ eof: -6 }, 122]] as const) {
   test(`job fixture rejects early job completion, overwritten leader or unsafe EOF (${stage})`, () => {
     expect(jobWaitShell(options).stage).toBe(stage);
   });
@@ -278,7 +291,7 @@ for (const argc of [1, 3, 4, 5]) for (const lateWake of argc === 3 || argc === 4
   expect(emptyPolls).toBe(lateWake ? 1 : 0); expect(readyPolls).toBe(lateWake ? 1 : 0);
   if (argc === 3 || argc === 4) expect(deliveries).toBe(lateWake ? 3 : 2);
   expect(chunks).toEqual([]);
-  expect(writes).toEqual(argc === 1 ? ["R"] : argc === 3 ? ["D", "L", "X"] : argc === 4 ? ["G", "L", "X"] : []);
+  expect(writes).toEqual(argc === 3 ? ["D", "L", "X"] : argc === 4 ? ["G", "L", "X"] : []);
   expect(signals).toEqual(argc === 3 || argc === 4 ? [[15, 2]] : []);
   expect(spawned.length).toBe(argc === 1 || argc === 3 ? 1 : 0);
   if (spawned.length) {
