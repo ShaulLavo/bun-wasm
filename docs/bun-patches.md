@@ -14,6 +14,11 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, async handler dispatch and streaming wrappers on all engines. |
+| [X509Certificate adapters](#x509certificate) | Host feature | Original BoringSSL data bindings and Node certificate wrapper over existing KeyObjects. |
+| [X.509 alternative name formatting](#x509-alternative-name-formatting) | Port | Translate Bun and Node certificate-name quoting to Rust without JSC. |
+| [Certificate regression fixtures](#certificate-regression-fixtures) | Port | Retain unchanged upstream certificate and test-key data for metadata, signature and escaping checks. |
+| [`third_party/licenses/lol-html-LICENSE`](#htmlrewriter) | Port | Retain the vendored parser's BSD license for wasm distribution. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
@@ -1377,3 +1382,66 @@ count. Checking the queue only before accepting an entire large write allowed
 the first write to bypass the limit. The bounded host test fails with that
 implementation and passes with capacity-aware writes, including full-queue,
 zero-length and owned-copy cases. No upstream implementation is copied.
+
+## HTMLRewriter
+
+Class **Host feature**, **original adapters** in `crates/bunwasm-runtime/src/html_rewriter.rs`,
+`src/js/html_rewriter.ts`, the native table and global registry.
+The runtime links the unchanged `vendor/bun/vendor/lolhtml` Rust crate at Bun revision
+`cd95fa7a13b3f13be73e512b38ec111c1c228084`. The vendored crate is lol-html 2.7.2,
+including Bun's token suspension support. No vendor file changes.
+
+Each transform owns a parser session. Content handlers suspend the parser and return a
+plain-data event. TypeScript invokes the registered handler, waits for its promise for a
+Response input, then resumes the parser. String and buffer inputs remain synchronous and
+reject handlers that need asynchronous work. Response inputs consume the source reader
+incrementally, forward cancellation and preserve handler rejection values. Tokens and
+attribute iterators detach when their handler ends. The wrapper is original bun-wasm code.
+Bun's corresponding implementation, `src/runtime/api/html_rewriter.rs`, depends on Bun's
+JSC-specific generated classes and stream sinks and cannot run through the builtin loader.
+
+`third_party/licenses/lol-html-LICENSE` is copied unchanged from that vendored crate.
+
+## X509Certificate
+
+Class **Host feature**, **original adapters** in `crates/bunwasm-crypto-sys/src/x509.rs`,
+`crates/bunwasm-runtime/src/x509.rs` except the alternative-name formatting below,
+`src/js/x509.ts`, the native table and the Node crypto registry.
+
+BoringSSL remains pinned by `scripts/sync-crypto.sh` to
+`41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f`. The Rust declarations call its existing
+certificate, name, extension, key and signature functions. These declarations contain no
+copied implementation. Certificates retain owned DER bytes. Checks parse those bytes and
+release their native allocations on every return. Public keys use the existing Node
+KeyObject implementation via a SPKI export. No new host slot is used.
+
+Bun's `src/js/node/crypto.ts` exports its native X509Certificate binding. That binding lives
+in `src/jsc/bindings/JSX509Certificate*.cpp`, so it cannot be loaded as an engine-independent
+JavaScript wrapper. The new TypeScript wrapper implements the same public certificate
+contract using the shared native table.
+
+## X.509 alternative name formatting
+
+Class **Port**, **adapted implementation** in `crates/bunwasm-runtime/src/x509.rs`,
+`alternative_name`, `general_name`, `ip_name`, and extension-list formatting.
+The upstream source is Bun `src/jsc/bindings/ncrypto.cpp`, `IsSafeAltName`, `PrintAltName`,
+`PrintGeneralName`, `SafeX509SubjectAltNamePrint`, and `SafeX509InfoAccessPrint` at
+`cd95fa7a13b3f13be73e512b38ec111c1c228084`, inherited from Node's ncrypto.
+
+The Rust translation uses BoringSSL accessors and owned strings instead of C++ BIO
+writers and JSC strings. It retains JSON-compatible quoting for names containing commas,
+quotes, controls or non-ASCII IA5 bytes. Distinguished names keep UTF-8. This prevents one
+certificate name from looking like multiple alternative names. BoringSSL's unsupported
+otherName, X400 and EDI names retain the upstream unsupported descriptions.
+
+## Certificate regression fixtures
+
+Class **Port**, **copied upstream fixture data** in `tests/fixtures/crypto-x509/`.
+The sources are Bun `test/js/node/test/fixtures/keys/{agent1-cert.pem,agent1-key.pem,
+ca1-cert.pem,ca2-cert.pem}` and `test/js/node/test/fixtures/x509-escaping/alt-0-cert.pem`
+at `cd95fa7a13b3f13be73e512b38ec111c1c228084`.
+
+The PEM bytes are unchanged. `alt-0-cert.pem` is named `escaped-san.pem` locally.
+They are public test data, including a test private key. The standalone TypeScript fixture
+is original and checks the real wasm parser, certificate names, fingerprints, signatures,
+KeyObjects, issuer checks and legacy fields on every engine.
