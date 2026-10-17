@@ -1443,7 +1443,7 @@ Without this dispatch, collected directory owners retain their native cursors.
 Class **Host feature**. The distribution selector in
 `crates/bunwasm-runtime/src/install/resolve.rs` maps `esbuild` to the matching
 `esbuild-wasm` version. The original subprocess adapter in
-`crates/bunwasm-runtime/src/js/spawn.js` accepts `node` as a guest runtime name.
+`crates/bunwasm-runtime/src/js/spawn.ts` accepts `node` as a guest runtime name.
 The original stdin adapters in `crates/bunwasm-runtime/src/js/node_fs.js`,
 `crates/bunwasm-runtime/src/natives.rs`,
 `crates/bunwasm-host/src/process/mod.rs`, `process/stdin.rs`, `process/stdio.rs`,
@@ -1925,6 +1925,18 @@ complete without waiting for that acknowledgment. A late kill cannot bypass the 
 ordinary outcome has already won. Unknown callback terminals are rejected rather than pretending
 their input can be shared. No new upstream patch, copied
 implementation or compatibility branch is introduced.
+
+The Bun guest's child-process adapter is original code over that ABI.
+`crates/bunwasm-runtime/src/host.rs` declares the `runtime_proc` imports and `natives.rs` exposes
+them as `procSpawn`, `procPipe`, `procRead`, `procWrite`, `procWait`, `procWaitJob`, `procKill`,
+`procKillJob` and `procPoll`. `js/spawn.ts` (converted from the earlier `spawn.js` adapter) keeps
+the Bun JSON and pipe metadata surface (`Bun.spawn`, `Bun.spawnSync`, `node:child_process`
+wrappers, readable stream helpers, `maxBuffer`, `timeout`, `killSignal`) and now builds every
+child from descriptor bindings, classifies outcomes only from typed `wait` results, and reaps
+each child's job with `wait_job`. `js/worker_channel.ts` and `js/worker_threads.ts` carry worker
+control frames over two ordinary bound pipes. This replaces the Bun-only spawn, child wait, child
+pipe and child kill slots without any compatibility path. Bun's `spawn` option names and result
+shapes are the behavior being preserved; no Bun source is copied.
 
 ## Portable installer and package commands
 

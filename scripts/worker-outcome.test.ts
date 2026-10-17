@@ -13,7 +13,7 @@ function receiver() {
   let closed = 0;
   let resolveExit!: (status: number) => void;
   const child = {
-    pid: 71, signalCode: null as string | null,
+    pid: 71, signalCode: null as string | null, _workerChannel: { input: 21, output: 22 },
     stdout: {}, stderr: {}, stdin: null,
     exited: new Promise<number>(resolve => { resolveExit = resolve; }),
     kill() {}, ref() {}, unref() {}, _finishWorker() { closed++; }, _abortWorker() {},
@@ -36,7 +36,7 @@ function receiver() {
   };
   const implementation = factory({
     realTimers: { setImmediate(callback: () => void) { immediate.push(callback); } },
-    native: { hostChildPipe: (_pid: number, selector: number) => selector },
+    native: {},
     require(name: string) {
       if (!(name in modules)) throw new Error(`Unexpected module ${name}`);
       return modules[name];

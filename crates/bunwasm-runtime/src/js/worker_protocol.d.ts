@@ -54,23 +54,46 @@ declare namespace BunWasm {
   interface Native {
     gc(): void;
     hostCaps: Record<string, boolean>;
-    hostSpawn(meta: string): number;
     hostRead(handle: number, capacity?: number): Uint8Array | number;
     hostWrite(handle: number, bytes: Uint8Array): number;
     hostClose(handle: number): number;
-    hostChildPipe(handle: number, fd: number): number;
-    hostChildWait(handle: number): number;
-    hostChildKill(handle: number, signal: number): number;
     hostError(handle: number): string;
+    cwd(): string;
+    now(): number;
+    /** runtime_proc process ABI. Results are >= 0 or a negative WASI errno (-6 EAGAIN). */
+    procSpawn(request: string): number;
+    procJobOf(pid: number): number;
+    procPipe(): [read: number, write: number] | number;
+    /** WASI fd_close on a runtime descriptor. */
+    procClose(fd: number): number;
+    /** Bytes, 0 at end of file, or a negative errno. */
+    procRead(fd: number, capacity?: number): Uint8Array | number;
+    procWrite(fd: number, bytes: Uint8Array): number;
+    /** [kind, code] of a finished child (kind 0 exited, 1 signaled), or a negative errno. */
+    procWait(pid: number): [kind: number, code: number] | number;
+    procWaitJob(job: number, flags: number): number;
+    procKill(pid: number, signal: number): number;
+    procKillJob(job: number, signal: number): number;
+    /** 16-byte subscriptions in, 16-byte events out. */
+    procPoll(subscriptions: Uint8Array, timeoutMs: number): Uint8Array | number;
     base64Encode(bytes: Uint8Array, url: boolean): string;
     base64Decode(value: string): Uint8Array;
     transferArrayBuffers(buffers: ArrayBuffer[]): void;
     isWasmMemoryBuffer?(value: unknown): boolean;
     hostPoll(timeout: number): number;
   }
+  /** `subscriptions` lists what the idle event loop may sleep on (procPoll format); see net.js ioWait. */
+  interface IoWaiter {
+    ref: boolean;
+    step(): boolean | "progress";
+    fail(error: unknown): void;
+    subscriptions?(): Uint8Array;
+  }
   interface WorkerChannel {
     send(frame: unknown): void;
     drain(): void;
+    /** What the idle loop sleeps on: the input, plus the output while frames are queued. */
+    subscriptions(): Uint8Array;
     pump(receive: (frame: unknown) => void): boolean;
     close(): void;
     readonly pending: boolean;
@@ -83,7 +106,7 @@ declare namespace BunWasm {
     require(name: "worker_threads"): { initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
     require(name: "net"): unknown;
     require(name: "node_url"): { fileURLToPath(url: URL): string };
-    addIoWaiter(waiter: { ref: boolean; step(): boolean | "progress"; fail(error: unknown): void }): unknown;
+    addIoWaiter<W extends IoWaiter>(waiter: W): W;
     workerPump?: () => boolean;
     workerError?: (error: unknown) => void;
     workerExit?: (code: number) => void;
@@ -115,6 +138,8 @@ declare namespace BunWasm {
     unref(): unknown;
     _finishWorker(): void;
     _abortWorker(): void;
+    /** Parent descriptors: `input` is read for frames from the worker, `output` is written to it. */
+    _workerChannel: { input: number; output: number };
   }
   interface Internal {
     builtin(name: "node:module"): { createRequire(path: string): (specifier: string) => unknown };
