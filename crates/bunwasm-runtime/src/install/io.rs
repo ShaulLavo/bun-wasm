@@ -69,12 +69,14 @@ pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).map_err(|e| e.to_string())?;
     let temp = path.with_extension(format!("bun-wasm-tmp-{:x}", u128::from_le_bytes(random)));
-    let result = (|| {
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
-        file.write_all(bytes)?;
-        drop(file);
-        fs::rename(&temp, path)
-    })();
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|e| e.to_string())?;
+    let written = file.write_all(bytes);
+    drop(file);
+    let result = written.and_then(|()| fs::rename(&temp, path));
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
