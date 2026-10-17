@@ -2,7 +2,7 @@
 // descriptors, signals and filesystem fences; these only describe the worker to start.
 import type { GuestLauncher, ProcessService } from "waffle";
 import type { ProcessContext } from "waffle/proc";
-import type { Engine, RunRequest } from "./bun-executor";
+import type { Engine, RunRequest } from "./bun-executor.js";
 
 export interface BunLauncherOptions {
   /** The module worker URL that runs createBunExecutor (worker.ts). */

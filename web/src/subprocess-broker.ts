@@ -7,8 +7,8 @@ import type { SignalTransport } from "waffle/proc/signals";
 import type { Runtime, ProcessService, RuntimeSupervisor } from "waffle";
 import type { WorkerProcessMessage, WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { FilesystemIdentity } from "waffle/fs";
-import { bunLauncher, preview1Launcher } from "./bun-launcher";
-import type { Engine } from "./bun-executor";
+import { bunLauncher, preview1Launcher } from "./bun-launcher.js";
+import type { Engine } from "./bun-executor.js";
 
 type CompiledExecutable = WebAssembly.Module | (() => Promise<WebAssembly.Module>);
 export type ExecutableRegistration =
