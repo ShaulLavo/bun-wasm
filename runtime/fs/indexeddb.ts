@@ -4,6 +4,8 @@ import {
   type PersistenceBatch, type PersistedIndex, type PersistedNode, type StorageBackend,
 } from "./storage";
 
+const OWNERSHIP_LOST_MESSAGE = "This workspace was opened in another tab. Reload to continue here.";
+
 /** The subset of Web Locks needed by this backend; injectable without an unsafe fallback. */
 export interface StorageLockManager {
   request<T>(name: string, options: { mode: "exclusive"; ifAvailable: true } | { mode: "exclusive"; steal: true },
@@ -238,7 +240,9 @@ export class IndexedDBStorage implements StorageBackend {
       lost = true;
       try { allocation?.abort(); } catch { /* A completed allocation is already durable. */ }
       owner?.loseOwnership();
-      refused(owner?.ownershipError ?? error);
+      const stolen = error instanceof DOMException && error.name === "AbortError";
+      refused(owner?.ownershipError ?? (stolen ? new Error(OWNERSHIP_LOST_MESSAGE) : error));
+      if (stolen && !owner) options.onOwnershipLost?.();
     });
     try { return await ready; }
     catch (error) { release(); db.close(); throw error; }
@@ -246,7 +250,7 @@ export class IndexedDBStorage implements StorageBackend {
 
   private loseOwnership(): Error {
     if (this.ownershipError) return this.ownershipError;
-    const error = new Error("This workspace was opened in another tab. Reload to continue here.");
+    const error = new Error(OWNERSHIP_LOST_MESSAGE);
     this.ownershipError = error;
     for (const tx of this.transactions) { try { tx.abort(); } catch {} }
     this.db.close();
