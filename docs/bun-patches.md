@@ -1395,7 +1395,8 @@ Each transform owns a parser session. Content handlers suspend the parser and re
 plain-data event. TypeScript invokes the registered handler, waits for its promise for a
 Response input, then resumes the parser. String and buffer inputs remain synchronous and
 reject handlers that need asynchronous work. Response inputs consume the source reader
-incrementally, forward cancellation and preserve handler rejection values. Tokens and
+incrementally, keep the native-consumer reader lock after completion, forward cancellation
+and preserve handler rejection values. Tokens and
 attribute iterators detach when their handler ends. The wrapper is original bun-wasm code.
 Bun's corresponding implementation, `src/runtime/api/html_rewriter.rs`, depends on Bun's
 JSC-specific generated classes and stream sinks and cannot run through the builtin loader.

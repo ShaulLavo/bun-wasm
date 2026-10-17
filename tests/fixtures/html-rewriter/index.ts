@@ -48,6 +48,7 @@ assert.equal(result.headers.get("content-length"), "100");
 assert.equal(await result.text(), '<p id="1"><b>async</b></p>!<p id="2"><b>async</b></p>!');
 assert.deepEqual(order, ["start:1", "end:1", "start:2", "end:2"]);
 assert.equal(response.bodyUsed, true);
+assert.equal(response.body.locked, true);
 assert.equal(stale.removed, undefined);
 assert.throws(() => asyncRewriter.transform(response));
 console.log("async handlers, order, and response metadata pass");

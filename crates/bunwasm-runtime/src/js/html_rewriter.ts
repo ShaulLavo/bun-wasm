@@ -177,7 +177,6 @@
         if (this.closed) return;
         this.close();
         controller.close();
-        reader?.releaseLock();
         return;
       }
       const bytes = typeof chunk.value === "string" ? encoder.encode(chunk.value) : chunk.value;
