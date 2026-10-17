@@ -23,7 +23,6 @@ declare namespace BunWasm {
     };
     require(name: "path"): { resolve(...paths: string[]): string };
     runInContext(context: unknown, callback: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]): unknown;
-    runTicks(): void;
     handleUncaught(error: unknown): boolean;
   }
   type EventListener = (...args: unknown[]) => void;

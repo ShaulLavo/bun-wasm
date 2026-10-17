@@ -427,6 +427,7 @@ class EngineHost {
         nativeQueueMicrotask(() => host.drainTicks());
       },
       runMicrotasks() {
+        // Native Promise jobs cannot run until the synchronous guest drain returns.
         host.drainTicks();
       },
       // A timer or immediate was added, maybe while the loop waits on a

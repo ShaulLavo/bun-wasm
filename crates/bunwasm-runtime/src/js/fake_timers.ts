@@ -189,13 +189,12 @@
     current.timers.delete(timer.id);
     current.firing++;
     try {
-      internal.runInContext(timer.context, timer.callback, timer, timer.args);
-      internal.runTicks();
-      // The runtime-owned nextTick queue is synchronous here. Native Promise jobs
-      // keep each engine's existing checkpoint behavior.
+      try {
+        internal.runInContext(timer.context, timer.callback, timer, timer.args);
+      } catch (error) {
+        if (!internal.handleUncaught(error)) internal.native.exit(1);
+      }
       internal.native.runMicrotasks();
-    } catch (error) {
-      if (!internal.handleUncaught(error)) internal.native.exit(1);
     } finally {
       current.firing--;
     }
