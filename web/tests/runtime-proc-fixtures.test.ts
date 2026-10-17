@@ -230,7 +230,7 @@ test("shell checks leader zero, pending job, postleader output, safe exit and in
   expect(result.operations.at(-1)).toBe("write:1:job-wait-ok\n");
 });
 
-test("shell readExact ignores unrelated zero-ready wakes without reading stale poll events", () => {
+test("shell readExact tolerates zero-ready polls without reading stale poll events", () => {
   const result = jobWaitShell({ ready: [-6, -6, "D", "G"], polls: [0, 1] });
   expect(result.stage).toBeUndefined();
   expect(result.operations.filter(operation => operation.startsWith("read:") || operation.startsWith("poll:")).slice(0, 6))
