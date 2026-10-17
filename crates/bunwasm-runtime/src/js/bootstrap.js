@@ -781,9 +781,9 @@
     return false;
   };
 
-  internal.handleRejection = function handleRejection(reason) {
+  internal.handleRejection = function handleRejection(reason, promise) {
     if (listenerCount("unhandledRejection") > 0) {
-      globalThis.process.emit("unhandledRejection", reason, undefined);
+      globalThis.process.emit("unhandledRejection", reason, promise);
       return true;
     }
     if (internal.workerError) internal.workerError(reason);

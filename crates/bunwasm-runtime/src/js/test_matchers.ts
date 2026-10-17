@@ -1,9 +1,10 @@
-(function (internal: { isPromise(value: unknown): boolean }) {
+(function (internal: { isPromise(value: unknown): boolean; promiseState(value: Promise<unknown>): string }) {
   type Context = { not?: boolean; promise?: string };
   type Outcome = { invalid: true } | { invalid?: false; threw: boolean; value: unknown };
   type Failure = { params?: string; body: string; raw?: boolean } | null;
 
   const promiseThen = Promise.prototype.then;
+  const schedule = setTimeout.bind(globalThis);
 
   function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
     return internal.isPromise(value);
@@ -45,46 +46,50 @@
   }
 
   function pending() {
-    type Settlement = { kind: "fulfilled" } | { kind: "rejected"; error: unknown };
-    type Record = { observed: boolean; result: Promise<Settlement>; restore(): void };
-    const records = new Map<Promise<unknown>, Record>();
+    type Rejection = { kind: "none" } | { kind: "unhandled"; error: unknown };
+    const records = new Map<Promise<unknown>, Rejection>();
+    let closed = false;
     function track<T>(value: T): T {
-      if (!isPromise<unknown>(value) || records.has(value)) return value;
-      const promise: Promise<unknown> = value;
-      const descriptor = Object.getOwnPropertyDescriptor(promise, "constructor");
-      const prototype: object = Object.getPrototypeOf(promise);
-      function restore() {
-        if (Object.getOwnPropertyDescriptor(promise, "constructor")?.get !== observedConstructor) return;
-        return descriptor ? Reflect.defineProperty(promise, "constructor", descriptor) : Reflect.deleteProperty(promise, "constructor");
-      }
-      const record: Record = { observed: false, restore, result: react<unknown, Settlement>(promise,
-        () => ({ kind: "fulfilled" }), error => ({ kind: "rejected", error }),
-      ) };
-      // Await reads constructor before retaining a native promise's fulfillment without re-assimilation.
-      function observedConstructor() {
-        record.observed = true;
-        restore();
-        if (!descriptor) return Reflect.get(prototype, "constructor", promise);
-        return "value" in descriptor ? descriptor.value : descriptor.get?.call(promise);
-      }
-      Object.defineProperty(promise, "constructor", { configurable: true, get: observedConstructor });
-      records.set(promise, record);
+      if (!closed && isPromise<unknown>(value) && !records.has(value)) records.set(value, { kind: "none" });
       return value;
     }
-    function finishPending<T>(result: T, finish: (value: T) => void) {
-      for (const record of records.values()) record.restore();
-      finish(result);
+    function unhandled(error: unknown, promise: unknown): boolean {
+      if (closed || !isPromise<unknown>(promise) || !records.has(promise)) return false;
+      records.set(promise, { kind: "unhandled", error });
+      return true;
+    }
+    function close(consume: boolean) {
+      closed = true;
+      if (consume) consumeRemaining();
+      records.clear();
+    }
+    function consumeRemaining() {
+      for (const [promise, rejection] of records) {
+        if (rejection.kind === "unhandled") continue;
+        react(promise, () => undefined, () => undefined);
+      }
+    }
+    function tick(): Promise<void> {
+      return new Promise(resolve => schedule(resolve, 0));
     }
     async function complete<T extends { ok?: boolean }>(result: T, finish: (value: T | { error: unknown }) => void) {
-      if (!result.ok) return finishPending(result, finish);
-      for (const record of records.values()) {
-        const settled = await record.result;
-        record.restore();
-        if (!record.observed && settled.kind === "rejected") return finishPending({ error: settled.error }, finish);
+      if (closed) return;
+      if (!result.ok || records.size === 0) {
+        close(!result.ok);
+        return finish(result);
       }
-      finishPending(result, finish);
+      do {
+        await tick();
+        if (closed) return;
+      } while (Array.from(records.keys()).some(promise => internal.promiseState(promise) === "pending"));
+      // Rejection notifications belong to the engine's checkpoint after settlement.
+      await tick();
+      if (closed) return;
+      const rejection = Array.from(records.values()).find(value => value.kind === "unhandled");
+      close(false);
+      finish(rejection?.kind === "unhandled" ? { error: rejection.error } : result);
     }
-    return { track, complete };
+    return { track, unhandled, complete };
   }
 
   return { settle, throwOutcome, within, pending };

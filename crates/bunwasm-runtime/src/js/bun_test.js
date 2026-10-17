@@ -2335,7 +2335,10 @@
       else reportUnhandledError(error);
     };
     process.on("uncaughtException", onError);
-    process.on("unhandledRejection", onError);
+    process.on("unhandledRejection", (error, promise) => {
+      if (activeInvocation) activeInvocation.unhandled(error, promise);
+      onError(error);
+    });
   }
 
   async function runFile(abs, cwd) {

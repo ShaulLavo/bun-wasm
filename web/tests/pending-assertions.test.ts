@@ -5,7 +5,7 @@ import { types } from "node:util";
 type Completion = { ok: true } | { error: unknown };
 type Observer = { track<T>(value: T): T; complete(result: { ok: true }, finish: (result: Completion) => void): Promise<void> };
 const factory = new Bun.Transpiler({ loader: "ts", deadCodeElimination: false }).transformSync(readFileSync(new URL("../../crates/bunwasm-runtime/src/js/test_matchers.ts", import.meta.url), "utf8"));
-const support: { pending(): Observer } = (0, eval)(factory)({ isPromise: types.isPromise });
+const support: { pending(): Observer } = (0, eval)(factory)({ isPromise: types.isPromise, promiseState: Bun.peek.status });
 
 test("pending assertion observers retain fulfilled accessor identity", async () => {
   let reads = 0;
@@ -34,15 +34,10 @@ test("pending assertion observers preserve caught falsy rejection identities", a
   }
 });
 
-test("pending assertion observers report unawaited falsy rejection identities", async () => {
-  for (const reason of [undefined, null, false, 0, ""]) {
-    const observer = support.pending();
-    observer.track(Promise.reject(reason));
-    await observer.complete({ ok: true }, result => {
-      expect("error" in result).toBe(true);
-      if ("error" in result) expect(result.error).toBe(reason);
-    });
-  }
+test("native rejection tracking retains unawaited falsy reasons and ignores inspection", () => {
+  const result = Bun.spawnSync(["node", new URL("../../scripts/check-await-observer.ts", import.meta.url).pathname]);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString()).toContain("falsy controls: 10 PASS; inspection and delayed catch: PASS");
 });
 
 test("pending assertion cleanup preserves a caller's constructor replacement", async () => {

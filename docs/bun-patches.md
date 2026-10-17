@@ -1659,10 +1659,12 @@ The test adapter handles returned promises and tracks assertions through test
 completion. An async `toThrow` returns a thenable; the runner waits for
 unawaited checks before completing the invocation. Returned values use the
 existing native promise brand and captured reactions, without reading `then`.
-The pending observer retains the original native promise. A temporary constructor
-accessor observes await's native PromiseResolve fast path, then restores the
-original descriptor. This is original runner bookkeeping; it avoids resolving a
-fulfilled accessor value through a second thenable.
+The pending observer retains the original native promise. It reads the existing
+native promise state across engine checkpoints and uses native rejection events
+to distinguish unhandled errors from caught rejections. Native engine and browser
+host adapters preserve the original promise in the process rejection event.
+This is original runner bookkeeping; it neither wraps fulfilled accessor values
+nor changes promise properties.
 Web interface prototypes receive their standard `toStringTag`.
 `Bun.version_with_sha` uses the existing embedded version and revision.
 

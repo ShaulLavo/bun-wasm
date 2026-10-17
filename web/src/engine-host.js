@@ -775,9 +775,9 @@ class EngineHost {
 
 
   watchRejections() {
-    const onRejection = (reason) => {
+    const onRejection = (reason, promise) => {
       if (this.exited || reason instanceof ExitSignal) return;
-      if (!this.guard(() => this.internal.handleRejection(reason))) this.exit(1);
+      if (!this.guard(() => this.internal.handleRejection(reason, promise))) this.exit(1);
     };
     if (nativeProcess) {
       nativeProcess.on("unhandledRejection", onRejection);
@@ -785,7 +785,7 @@ class EngineHost {
     } else if (nativeAddEventListener) {
       nativeAddEventListener("unhandledrejection", (event) => {
         event.preventDefault();
-        onRejection(event.reason);
+        onRejection(event.reason, event.promise);
       });
       nativeAddEventListener("error", (event) => {
         event.preventDefault();

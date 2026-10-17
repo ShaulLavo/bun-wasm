@@ -157,7 +157,7 @@ accessor/overridden then methods, and unawaited checks. The standalone await
 observer probe fails before the fix with `second-assimilation`, then preserves
 fulfilled object identity with one getter read and ten falsy rejection controls.
 Four observer unit tests also verify caught/unawaited rejection identity and
-cleanup ownership when a caller replaces the promise constructor.
+native promise identity when a caller replaces the promise constructor.
 
 Byte tests cover direct TextEncoder results, offset views, DataViews, mutation
 after calling transform and transfer of JavaScript-owned backing storage.
