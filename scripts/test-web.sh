@@ -95,6 +95,7 @@ if [[ $browser == 1 ]]; then
   bun tests/browser-runtime-proc.ts chromium webkit || failed=1
   node tests/browser-stack.mjs || failed=1
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
+    node tests/browser-worker-modules.ts || failed=1
     node tests/browser-engine.mjs || failed=1
     node tests/browser-crypto.mjs || failed=1
     node tests/browser-memory.mjs || failed=1
