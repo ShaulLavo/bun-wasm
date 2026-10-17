@@ -72,7 +72,7 @@ try {
       if (!pageOnly) {
         row.storageTests = await direct(page, "storageTests", { storage, filter: process.env.PERSIST_STORAGE_FILTER });
         assert.ok(row.storageTests.length > 0, "selected storage contract suite must execute cases");
-        if (storage === "indexeddb" && !process.env.PERSIST_STORAGE_FILTER) assert.equal(row.storageTests.length, 13);
+        if (storage === "indexeddb" && !process.env.PERSIST_STORAGE_FILTER) assert.equal(row.storageTests.length, 16);
       }
       if (!storageOnly) {
       // This test is deliberately available before backend integration: the old memory-only
