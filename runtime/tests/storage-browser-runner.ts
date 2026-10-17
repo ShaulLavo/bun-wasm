@@ -94,9 +94,14 @@ try {
   const workerScript = `(${storageWorker.toString()})();`;
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === "/tests.js") return new Response(script, { headers: { "content-type": "text/javascript" } });
-    if (path === "/worker.js") return new Response(workerScript, { headers: { "content-type": "text/javascript" } });
-    return new Response("<!doctype html><title>Storage tests</title>", { headers: { "content-type": "text/html" } });
+    // Match the existing persistence harness's document and worker isolation policy.
+    const headers = {
+      "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp",
+      "content-type": path === "/tests.js" || path === "/worker.js" ? "text/javascript" : "text/html",
+    };
+    if (path === "/tests.js") return new Response(script, { headers });
+    if (path === "/worker.js") return new Response(workerScript, { headers });
+    return new Response("<!doctype html><title>Storage tests</title>", { headers });
   } });
   const failures: string[] = [];
   for (const name of process.argv.slice(2).length ? process.argv.slice(2) : ["chromium"]) {
