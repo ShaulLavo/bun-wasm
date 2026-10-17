@@ -17,6 +17,7 @@ import { type Output, Shell } from "./shell";
 import { enableTerminalCopy } from "./terminal-copy";
 import { linkLocalUrls } from "./terminal-links";
 
+async function main(): Promise<void> {
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const statusEl = $<HTMLSpanElement>("#status");
 const runButton = $<HTMLButtonElement>("#run");
@@ -412,3 +413,22 @@ shell.start([
 
 Object.assign(globalThis, { playground: { fs, shell, term, editor, previews } });
 pageSetUp();
+}
+
+void main().catch(error => {
+  console.error(error);
+  const status = document.querySelector<HTMLElement>("#status");
+  if (status) {
+    status.textContent = String(error);
+    status.dataset.kind = "error";
+  }
+  const run = document.querySelector<HTMLButtonElement>("#run");
+  if (run) {
+    run.textContent = "Reload";
+    run.title = "Retry playground startup";
+    run.onclick = () => location.reload();
+  }
+  const newFile = document.querySelector<HTMLButtonElement>("#new-file");
+  if (newFile) newFile.disabled = true;
+  for (const select of document.querySelectorAll<HTMLSelectElement>("#engine, #file-select")) select.disabled = true;
+});

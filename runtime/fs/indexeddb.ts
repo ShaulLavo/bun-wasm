@@ -198,7 +198,7 @@ export class IndexedDBStorage implements StorageBackend {
     let acquired!: () => void, refused!: (error: unknown) => void;
     const ready = new Promise<void>((resolve, reject) => { acquired = resolve; refused = reject; });
     const lifetime = locks.request(`bun-wasm:filesystem:${name}`, { mode: "exclusive", ifAvailable: true }, async lock => {
-      if (lock === null) { refused(new Error("Filesystem already has a writer in another tab")); return; }
+      if (lock === null) { refused(new Error("Filesystem already has a writer in another tab. Close that tab, then reload this page.")); return; }
       acquired(); await held;
     });
     void lifetime.catch(refused);

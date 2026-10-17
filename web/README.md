@@ -90,6 +90,13 @@ runs it on another engine), or `scripts/test-web.sh` for everything. `node tests
 [chromium|webkit]` prints a table comparing the engines (wasm size, startup, `tests/bench/micro.js`,
 which examples pass).
 
+Build the playground on the PC, copy `web/dist` to a task directory on the Mac, and serve it with COOP/COEP headers.
+Run `bun web/tests/browser-startup-safari.ts <playground-url>` on the Mac to check fresh startup, three durable reloads, and recovery after closing a competing tab.
+Set `SAFARI_IOS=1` for the iPhone 17 Pro simulator, `SAFARI_OUTPUT=<path>` for the JSON report, and `SAFARI_SCREENSHOT=<path>` for the error screenshot.
+If the simulator is shut down, run `xcrun simctl boot "iPhone 17 Pro"` and `xcrun simctl bootstatus "iPhone 17 Pro" -b` before starting the driver.
+Set `SAFARI_SEED_URL=https://bun.sprockt.dev/playground/` to import a workspace created by the live build before testing the candidate.
+The test uses a task-owned Safari automation session and driver. It preserves normal browser profiles.
+
 ## Without a browser
 
 `bun scripts/run.ts <file.wasm> [args…]` runs a wasm binary under the same WASI shim and seeded

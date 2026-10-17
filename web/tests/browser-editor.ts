@@ -86,7 +86,8 @@ try {
   });
   browserLaunch = browserType.launch({ headless: true, downloadsPath: join(scratch, "downloads"), tracesDir: join(scratch, "traces") });
   browser = await browserLaunch;
-  const page = await browser.newPage();
+  const context = await browser.newContext();
+  const page = await context.newPage();
   page.setDefaultTimeout(15_000);
   const errors: string[] = [];
   page.on("pageerror", error => { errors.push(error.message); console.error(`Page error: ${error.message}`); });
@@ -185,7 +186,7 @@ try {
     return { text: new TextDecoder().decode(await fs.readFile("/home/user/index.ts")), deleted: await fs.lookup("/home/user/math.test.ts") };
   }), { text: "console.log('saved playground');", deleted: undefined });
 
-  const contender = await page.context().newPage();
+  const contender = await context.newPage();
   const startupErrors: string[] = [];
   contender.on("pageerror", error => startupErrors.push(error.message));
   await contender.setViewportSize({ width: 390, height: 844 });
@@ -200,12 +201,14 @@ try {
   assert.equal(await contender.locator("#run").isEnabled(), true);
   assert.equal(await contender.locator("#new-file").isDisabled(), true);
   assert.equal(await contender.locator("#engine").isDisabled(), true);
+  assert.equal(await contender.locator("#file-select").isDisabled(), true);
   assert.deepEqual(startupErrors, []);
   if (process.env.STARTUP_ERROR_SCREENSHOT) await contender.screenshot({ path: process.env.STARTUP_ERROR_SCREENSHOT });
   await page.close();
   await contender.locator("#run").click();
   await contender.waitForFunction(() => (globalThis as any).playground?.editor.path === "/home/user/index.ts");
   assert.equal(await contender.evaluate(async () => new TextDecoder().decode(await (globalThis as any).playground.fs.readFile("/home/user/index.ts"))), "console.log('saved playground');");
+  assert.deepEqual(startupErrors, []);
   await contender.close();
   assert.deepEqual(errors, []);
   console.log(`${engine} ${browser.version()}: durable saves, reload, seed/reset recovery, complete mobile startup errors, writer release and preserved edits passed`);

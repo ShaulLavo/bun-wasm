@@ -376,19 +376,23 @@ export class FilesystemService {
 }
 /** Installs the service in a browser/Bun worker without importing any app code. */
 export function installFilesystemWorker(
-  scope: { onmessage: ((event: MessageEvent<any>) => void) | null; },
+  scope: { onmessage: ((event: MessageEvent<any>) => void) | null; postMessage: (message: unknown) => void; },
   backendFactory: (options: any) => FilesystemBackend | Promise<FilesystemBackend> = () => new MemoryBackend(),
 ): void {
   // Selection belongs to the controller, never to guest filesystem requests.
   let service: Promise<FilesystemService> | undefined;
+  let errorReported = false;
   scope.onmessage = ({ data }) => {
     service ??= Promise.resolve().then(() => backendFactory(data)).then(backend => new FilesystemService(backend));
     void service.then(owner => {
       if (data.connect) owner.connect(data.connect);
       else if (data.sweep) owner.sweep();
     }).catch(error => {
-      // A worker load/storage-open error must reach the controller's error event, which
-      // revokes shared waiters. A rejected async message handler alone does not do that.
+      if (!errorReported) {
+        errorReported = true;
+        scope.postMessage({ type: "filesystem-error", message: String(error), stack: error instanceof Error ? error.stack : undefined });
+      }
+      // A rejected async message handler alone does not dispatch a worker error event.
       setTimeout(() => { throw error; }, 0);
     });
   };
