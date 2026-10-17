@@ -658,8 +658,16 @@
   callbackApi.opendir = opendir;
   callbackApi.writev = writev;
   const readCallback = callbackify("read", readSync, (cb, err, n, args) => cb(err, n, args[1]));
+  // runtime_proc reports negative WASI errnos, not the networking slot status codes.
+  // Match the Node error names/errnos used by the synchronous filesystem natives.
+  const stdinReadErrors = {
+    2: ["EACCES", -13], 4: ["EADDRNOTAVAIL", -99], 8: ["EBADF", -9],
+    21: ["EFAULT", -14], 27: ["EINTR", -4], 28: ["EINVAL", -22], 29: ["EIO", -5],
+    31: ["EISDIR", -21], 48: ["ENOMEM", -12], 52: ["ENOSYS", -38], 58: ["ENOTSUP", -95],
+    61: ["EOVERFLOW", -75], 63: ["EPERM", -1], 64: ["EPIPE", -32], 76: ["ENOTCAPABLE", undefined],
+  };
   callbackApi.read = function (...args) {
-    if (args[0] !== 0 || !native.hostCaps.read) return readCallback(...args);
+    if (args[0] !== 0 || !native.hostCaps.proc_spawn) return readCallback(...args);
     const callback = args.pop();
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
     const context = native.getAsyncContext();
@@ -668,19 +676,21 @@
     const options = readOptions(buffer, offsetOrOptions, length, position);
     if (options.length === 0) return later(() => complete(null, 0, buffer));
     const step = () => {
-      const chunk = native.hostRead(0, options.length);
-      if (chunk === -2) return false;
-      if (chunk === -4) {
-        readCallback(fd, buffer, offsetOrOptions, length, position, complete);
-        return true;
+      const chunk = native.procRead(fd, options.length);
+      if (chunk === -6) return false; // WASI EAGAIN: leave the waiter registered.
+      if (typeof chunk === "number" && chunk < 0) {
+        const [code, errno] = stdinReadErrors[-chunk] || [`E${-chunk}`, undefined];
+        throw Object.assign(new Error(`read ${code}`), { code, syscall: "read", errno });
       }
-      if (typeof chunk === "number" && chunk < 0) throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO", syscall: "read", errno: -5 });
       if (chunk !== 0) internal.toUint8(buffer).set(chunk, options.offset);
       later(() => complete(null, chunk === 0 ? 0 : chunk.length, buffer));
       return true;
     };
+    // One 16-byte runtime_proc subscription: u32 READABLE (0), u32 fd, u64 userdata.
+    const subscription = new Uint8Array(16);
+    new DataView(subscription.buffer).setUint32(4, fd, true);
     internal.require("net");
-    internal.addIoWaiter({ step, fail: error => later(() => complete(error, 0, buffer)) });
+    internal.addIoWaiter({ step, subscriptions: () => subscription, fail: error => later(() => complete(error, 0, buffer)) });
   };
   callbackApi.write = callbackify("write", writeSync, (cb, err, n, args) => cb(err, n, args[1]));
 
