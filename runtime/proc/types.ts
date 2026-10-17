@@ -53,8 +53,9 @@ export interface ProcessContext {
   /** Shared immutable terminal outcome, atomically arbitrated with synchronous parent stubs. */
   readonly outcome: BigInt64Array;
   exit(code: number): void;
-  /** Startup failures retain errno; a running guest failure exits 126. */
+  /** An execution failure after startup keeps the existing ordinary status 126. */
   fail(error: unknown): void;
+  startFailed(error: unknown): void;
   defaultSignal(signal?: number): void;
   registerRevocation(hook: () => void): () => void;
 }
