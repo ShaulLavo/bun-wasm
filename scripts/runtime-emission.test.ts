@@ -1,9 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
-const source = mkdtempSync(join(process.env.RUNNER_TEMP ?? "/work/tmp", "bun-wasm-runtime-emission-"));
+const source = mkdtempSync(join(process.env.RUNNER_TEMP ?? process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-runtime-emission-"));
 afterAll(() => rmSync(source, { recursive: true, force: true }));
 
 function emit(path: string) {

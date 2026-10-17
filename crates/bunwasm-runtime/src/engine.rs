@@ -189,6 +189,9 @@ impl<'a> Args<'a> {
             ))),
         }
     }
+    pub fn opt_bytes(&self, i: usize) -> Option<&'a [u8]> {
+        if self.is_missing(i) { None } else { self.bytes(i).ok() }
+    }
     pub fn num(&self, i: usize) -> Result<f64, NativeError> {
         match self.get(i) {
             Val::Num(n) => Ok(*n),
@@ -319,6 +322,8 @@ pub trait Engine: Sized + 'static {
     fn run_jobs(&self) -> bool;
     fn promise_state(&self, v: &Self::Value) -> Option<PromiseState>;
     fn promise_result(&self, v: &Self::Value) -> Self::Value;
+    /// Attach reactions without looking up public then, constructor or species.
+    fn promise_then(&self, promise: &Self::Value, fulfilled: &Self::Value, rejected: &Self::Value) -> Result<Self::Value, Self::Value>;
     /// Rejections that had no handler when the job queue drained:
     /// (promise, reason) pairs, in order. Drains the list.
     fn take_unhandled_rejections(&self) -> Vec<(Self::Value, Self::Value)>;
