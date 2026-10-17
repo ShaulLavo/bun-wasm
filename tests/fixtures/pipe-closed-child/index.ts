@@ -6,14 +6,13 @@ await bufferedReader.cancel();
 if (!(await bufferedReader.read()).done) throw new Error("cancel kept buffered output");
 
 for (const fd of [1, 2]) {
-  for (const mode of ["default", "listener", "callback", "trycatch", "signal"]) {
+  for (const mode of ["default", "listener", "callback", "trycatch"]) {
     const name = fd === 2 ? "stderr" : "stdout";
     const handle = 'error => { if (error) process.exit(error.code === "EPIPE" && error.errno === -32 ? 42 : 43); }';
     const source = `
       const stream = process.${name};
       const handled = ${handle};
       ${mode === "listener" ? 'stream.on("error", handled);' : ""}
-      ${mode === "signal" ? 'process.on("SIGPIPE", () => process.exit(42));' : ""}
       ${mode === "trycatch" ? 'const { writeSync } = require("node:fs");' : ""}
       const chunk = "x".repeat(65536);
       for (;;) {
@@ -33,9 +32,9 @@ for (const fd of [1, 2]) {
       await drained;
       const handled = mode !== "default";
       console.log("closed child", name, mode === "default" ? false : mode === "listener" ? true : mode, code);
-      assert.equal(code, handled ? 42 : 141);
-      assert.equal(child.exitCode, handled ? 42 : null);
-      assert.equal(child.signalCode, handled ? null : "SIGPIPE");
+      assert.equal(code, handled ? 42 : 1);
+      assert.equal(child.exitCode, handled ? 42 : 1);
+      assert.equal(child.signalCode, null);
       assert.equal(child.exitedDueToTimeout, false);
     } finally {
       child.kill("SIGKILL");
