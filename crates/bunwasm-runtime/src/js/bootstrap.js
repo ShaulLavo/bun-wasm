@@ -218,6 +218,7 @@
   // Pending timers sorted by (when, seq).
   let timerQueue = [];
   const immediates = [];
+  let immediateBatchRemaining = null;
   let refedTimers = 0;
 
   function insertTimer(timer) {
@@ -388,19 +389,22 @@
     const workerProgress = internal.workerPump && internal.workerPump();
     // Immediates first: like Bun, setImmediate callbacks queued by the
     // main script run before even a due setTimeout(0).
-    while (immediates.length > 0) {
+    if (immediateBatchRemaining === null) immediateBatchRemaining = immediates.length;
+    while (immediateBatchRemaining > 0 && immediates.length > 0) {
+      immediateBatchRemaining--;
       const immediate = immediates.shift();
       if (!immediate._active) continue;
       immediate._active = false;
       runInContext(immediate._context, immediate._callback, immediate, immediate._args);
       return 0;
     }
+    immediateBatchRemaining = null;
     const now = native.now();
     if (timerQueue.length > 0 && timerQueue[0]._when <= now) {
       runOneTimer(now);
       return 0;
     }
-    if (workerProgress || internal.pendingIo > 0) return 0;
+    if (immediates.length > 0 || workerProgress || internal.pendingIo > 0) return 0;
     if (refedTimers <= 0 && internal.messagePortRefs <= 0) return -1;
     // Unref'd timers at the front don't keep us alive but still fire if a
     // ref'd one is pending later.
@@ -420,6 +424,7 @@
   // Replaced by net.js when a networking host is present.
   internal.ioPending = () => 0;
   internal.pumpIo = () => false;
+  internal.require("loop_scheduler");
 
   // --- process.nextTick -------------------------------------------------------
 

@@ -95,6 +95,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets and write-side shutdown over the existing host ABI. |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming, Agent pool and upgrade response adapters shared by all engines. |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
+| [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns and bounded immediate batches. |
 | [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations. |
 | [`src/js/exit_provenance.ts` and lifecycle hooks](#runtime-exit-provenance) | Host feature | Original opt-in exit diagnostics over the existing event loop and error handlers. |
 | [`scripts/generate-ws.sh` and builtin resolution](#portable-ws-builtin) | Host feature | Original module wrapper supplies Bun's builtin ws import and require on every engine. |
@@ -166,6 +167,18 @@ the real-browser subprocess check cancels those readers on all three engines.
 The regression fixtures and Python OS-pipe driver are original test code.
 The driver checks QuickJS and JSC under both the native launcher and Node's
 worker host, plus the host engine under Node.
+## Fair loop scheduling
+
+Class **Host feature**, **original adapter** in `src/js/loop_scheduler.ts` and
+`bootstrap.js`. No upstream implementation is copied, so there is no upstream
+path or revision.
+
+The scheduler gives I/O a turn between callback turns, even when callbacks keep
+queuing immediates or timers remain due. Immediate callbacks queued during an
+existing batch wait for the next batch, so due timers can run. Microtasks still
+drain between callbacks. This uses the existing I/O waiter interface and adds
+no host ABI slot.
+
 ## Portable filesystem watcher
 
 Class **Host feature**, **original adapter** in `src/js/fs_watch.ts`, wired by
