@@ -25,5 +25,7 @@ export async function waitForHmrConnection(page: HmrPage, selector: string | nul
   await page.waitForFunction(selector => {
     const target = selector ? document.querySelector<HTMLIFrameElement>(selector)?.contentWindow : globalThis;
     return target !== null && target !== undefined && Reflect.get(target, "__testHmrConnected") === true;
-  }, selector, { timeout });
+  }, selector, { timeout }).catch(error => {
+    throw new Error(`Bun HMR WebSocket did not report connected in ${selector ?? "this page"}`, { cause: error });
+  });
 }
