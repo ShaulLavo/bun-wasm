@@ -46,13 +46,13 @@ class ProvenanceTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
         (self.package / "package.json").write_text(json.dumps({
-            "name": "@bun-wasm/runtime", "version": "0.0.19", "type": "module",
+            "name": "waffle", "version": "0.0.19", "type": "module",
             "exports": {"./core": {"bun": "./core/index.ts", "import": "./dist/core/index.js", "default": "./dist/fallback.js"}},
         }))
-        installed = self.root / "web/node_modules/@bun-wasm/runtime"
+        installed = self.root / "web/node_modules/waffle"
         installed.parent.mkdir(parents=True)
         installed.symlink_to(self.package, target_is_directory=True)
-        (self.root / "web/package.json").write_text(json.dumps({"type": "module", "dependencies": {"@bun-wasm/runtime": self.pin}}))
+        (self.root / "web/package.json").write_text(json.dumps({"type": "module", "dependencies": {"waffle": self.pin}}))
         (self.root / "web/bun.lock").write_text("consumer lock and exact revision\n")
         for name in ["web/scripts/node-host.mjs", "web/src/engine-host.js", "web/scripts/node-net.mjs", "web/scripts/node-stdio.ts", "web/scripts/node-spawn.ts", "web/src/subprocess.ts", "web/src/fs.ts"]:
             path = self.root / name
@@ -72,7 +72,7 @@ class ProvenanceTests(unittest.TestCase):
     def test_browser_provenance_hashes_installed_source_and_node_generated_modules(self):
         meta = self.provenance()
         runtime = meta["runtime_package"]
-        self.assertEqual(runtime["name"], "@bun-wasm/runtime")
+        self.assertEqual(runtime["name"], "waffle")
         self.assertEqual(runtime["version"], "0.0.19")
         self.assertEqual(runtime["node_entry"], "dist/core/index.js")
         self.assertEqual(runtime["package_sha256"], suite.digest(self.package / "package.json"))
@@ -116,7 +116,7 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(self.provenance(), original)
 
     def test_missing_installed_package_refuses_provenance(self):
-        (self.root / "web/node_modules/@bun-wasm/runtime").unlink()
+        (self.root / "web/node_modules/waffle").unlink()
         with self.assertRaisesRegex(RuntimeError, "runtime"):
             self.provenance()
 
@@ -149,7 +149,7 @@ class ProvenanceTests(unittest.TestCase):
         original = self.provenance()
         manifest = self.root / "web/package.json"
         data = json.loads(manifest.read_text())
-        data["dependencies"]["@bun-wasm/runtime"] = "file:../another-runtime"
+        data["dependencies"]["waffle"] = "file:../another-runtime"
         manifest.write_text(json.dumps(data))
         self.assertNotEqual(self.provenance(), original)
 
@@ -159,7 +159,7 @@ class ProvenanceTests(unittest.TestCase):
             self.provenance()
 
     def test_nonbrowser_provenance_does_not_require_runtime_installation(self):
-        (self.root / "web/node_modules/@bun-wasm/runtime").unlink()
+        (self.root / "web/node_modules/waffle").unlink()
         self.opts.engine = "quickjs"
         self.opts.launcher = self.wasm
         meta = self.provenance()

@@ -45,7 +45,7 @@ The root API is `createRuntime(options)`. A runtime exposes its borrowed filesys
 
 ## Package and tooling
 
-- Before extraction, the local package remains `@bun-wasm/runtime`. Rename to `waffle` during normalization.
+- Before extraction, the local package remains `waffle`. Rename to `waffle` during normalization.
 - Export TypeScript for Bun/browser and source types; export ignored per-module JavaScript for Node. Browser-worker-only entries are not Node exports.
 - Curate the adapter-only `RuntimeConsumer` type explicitly at the root; synchronous consumer retention must not eagerly import process implementations or interruption compilation.
 - `build` emits one module for each source module, preserving class/state identity across exports, and validates Node-safe relative specifiers. `prepare` invokes it.

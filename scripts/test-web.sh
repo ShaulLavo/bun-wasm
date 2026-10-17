@@ -36,7 +36,7 @@ cleanup() {
     else
       rm -f "$root/$app/bunfig.toml"
     fi
-    # Put back the default layout, or the next typecheck sees two copies of @bun-wasm/runtime.
+    # Put back the default layout, or the next typecheck sees two copies of waffle.
     (cd "$root/$app" && bun install --frozen-lockfile >/dev/null 2>&1) || true
   done
   rm -rf "$scratch" "$isolated_scratch"

@@ -31,7 +31,7 @@ test("baseline setup preserves the selected revision's own measurement harness",
 
   await prepareBaselineSource(directory);
 
-  expect(await readlink(join(directory, "web/node_modules/@bun-wasm/runtime"))).toBe(join(directory, "runtime"));
+  expect(await readlink(join(directory, "web/node_modules/waffle"))).toBe(join(directory, "runtime"));
   for (const name of fixtures) {
     expect(await readFile(join(directory, "web/tests", name), "utf8")).toBe(`// Frozen ${name}; do not inject the current harness.\n`);
   }

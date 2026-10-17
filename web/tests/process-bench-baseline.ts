@@ -1,6 +1,6 @@
 // Compiled against a frozen main snapshot by browser-process.ts, not against the edited source.
 // The selected snapshot must implement the page-owned runtime contract.
-import { createRuntime } from "@bun-wasm/runtime";
+import { createRuntime } from "waffle";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { SubprocessHost } from "../src/subprocess.js";
 import { measureProcessStarts } from "./process-benchmark";

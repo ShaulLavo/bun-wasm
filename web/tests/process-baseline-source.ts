@@ -10,5 +10,5 @@ export async function prepareBaselineSource(snapshot: string): Promise<void> {
     }
   }
   await mkdir(join(snapshot, "web/node_modules/@bun-wasm"), { recursive: true });
-  await symlink(join(snapshot, "runtime"), join(snapshot, "web/node_modules/@bun-wasm/runtime"));
+  await symlink(join(snapshot, "runtime"), join(snapshot, "web/node_modules/waffle"));
 }

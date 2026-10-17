@@ -1,7 +1,7 @@
 import { installNativeStreamState } from "./native-stream-state.ts";
 import { oversizedCryptoInput } from "./crypto-inputs.js";
 import { installHostCrypto } from "./crypto-host.js";
-import { memoryViews } from "@bun-wasm/runtime/core/memory-views";
+import { memoryViews } from "waffle/core/memory-views";
 import { transferArrayBuffers } from "./buffer-transfer.ts";
 import { ContentModules } from "./content-modules.ts";
 

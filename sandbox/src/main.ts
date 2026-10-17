@@ -13,7 +13,7 @@ import { basicSetup } from "codemirror";
 import { decode } from "../../web/src/fs";
 import type { NetHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
-import { createRuntime } from "@bun-wasm/runtime";
+import { createRuntime } from "waffle";
 import { WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../web/src/shared-fs";
 import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
 import { enableTerminalCopy } from "../../web/src/terminal-copy";

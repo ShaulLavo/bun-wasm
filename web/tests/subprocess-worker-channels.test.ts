@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { CHILD_FINAL_SIGNAL, SharedPipe, SubprocessHost, childTransport, type ChildTransport, type SpawnMeta } from "../src/subprocess.ts";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
-import { createSignalState, takeSignal } from "../../runtime/proc/signals.ts";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
+import { createSignalState, takeSignal } from "waffle/proc/signals";
 
 const TO_WORKER = 4;
 const FROM_WORKER = 5;

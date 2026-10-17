@@ -345,13 +345,13 @@ queue on another host). The command creates only in-memory transports and releas
 ```sh
 source env.sh
 bun /work/platform-production/heavy/current/run.js --class light waffle-empty-subtrees -- timeout 7200 bun -e "$(cat <<'TS'
-import { DescriptorTable } from './runtime/core/descriptors.ts';
-import { ProcessIdentityAllocator } from './runtime/proc/identity.ts';
-import { ProcessTable } from './runtime/proc/table.ts';
-import { ExecutableRegistry } from './runtime/proc/registry.ts';
-import { ProcessSupervisor } from './runtime/proc/supervisor.ts';
-import { WorkerProcessBroker } from './runtime/proc/worker-broker.ts';
-import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from './runtime/proc/worker-client.ts';
+import { DescriptorTable } from 'waffle/core/descriptors';
+import { ProcessIdentityAllocator } from 'waffle/proc/identity';
+import { ProcessTable } from 'waffle/proc/table';
+import { ExecutableRegistry } from 'waffle/proc/registry';
+import { ProcessSupervisor } from 'waffle/proc/supervisor';
+import { WorkerProcessBroker } from 'waffle/proc/worker-broker';
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from 'waffle/proc/worker-client';
 const ids = new ProcessIdentityAllocator(), table = new ProcessTable(ids), registry = new ExecutableRegistry();
 registry.register('fixture', { module: new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0])), adapter: 'fixture' });
 const supervisor = new ProcessSupervisor({ table, registry, retainJobResults: true, launch: () => ({ terminate() {} }) });

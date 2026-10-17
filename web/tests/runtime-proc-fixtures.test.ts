@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { SpawnRequest } from "../../runtime/proc/types";
+import type { SpawnRequest } from "waffle/proc/types";
 import { runtimeProcFixture, runtimeProcJobWaitFixture } from "./runtime-proc-fixtures";
 
 test("failed spawn reports its exact negative return and request without changing stage48", () => {

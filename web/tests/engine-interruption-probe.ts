@@ -1,5 +1,5 @@
-import { WasiExit } from "@bun-wasm/runtime/core";
-import { ProcessSignalExit } from "../../runtime/proc/abi";
+import { WasiExit } from "waffle/core";
+import { ProcessSignalExit } from "waffle/proc/abi";
 import { DefaultSignal } from "../src/default-signal";
 
 // Test-only evidence shared between the page and the instrumented guest worker.

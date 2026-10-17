@@ -1,14 +1,14 @@
-import type { RootProcessOptions } from "../../runtime/proc";
+import type { RootProcessOptions } from "waffle/proc";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { ENGINES, startRun, type Engine } from "../src/runner";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { RunRequest } from "../src/worker";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
-import { createSignalState, setSignalDisposition, takeSignal } from "../../runtime/proc/signals";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
+import { createSignalState, setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { SubprocessHost, type ChildTransport } from "../src/subprocess";
-import { createFilesystemIdentity } from "../../runtime/fs";
+import { createFilesystemIdentity } from "waffle/fs";
 
 function runConfirmation(run: ReturnType<typeof startRun>) {
   let confirmed = false;
@@ -567,7 +567,7 @@ for (const acknowledged of [false, true]) test(`runner root job completion uses 
 });
 
 test("run.done waits for deferred root activation and descriptor release", async () => {
-  const proc = await import("../../runtime/proc");
+  const proc = await import("waffle/proc");
   let broker!: SubprocessBroker;
   let activate!: () => void;
   const activation = new Promise<void>(resolve => { activate = resolve; });
@@ -619,7 +619,7 @@ test("run.done waits for deferred root activation and descriptor release", async
 });
 
 for (const partial of [false, true]) test(`run.done safely handles rejected deferred process activation (partial root ${partial})`, async () => {
-  const proc = await import("../../runtime/proc");
+  const proc = await import("waffle/proc");
   let broker!: SubprocessBroker;
   let failActivation!: () => void;
   const failure = new Error("process module could not initialize");

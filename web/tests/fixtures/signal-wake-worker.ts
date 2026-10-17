@@ -1,8 +1,8 @@
 import { parentPort, workerData } from "node:worker_threads";
-import { DescriptorTable } from "../../../runtime/core/descriptors";
-import { MemFS } from "../../../runtime/fs/memory";
-import { ProcessABI } from "../../../runtime/proc/abi";
-import type { SignalTransport } from "../../../runtime/proc/signals";
+import { DescriptorTable } from "waffle/core/descriptors";
+import { MemFS } from "waffle/fs/memory";
+import { ProcessABI } from "waffle/proc/abi";
+import type { SignalTransport } from "waffle/proc/signals";
 import { SubprocessHost } from "../../src/subprocess";
 
 const { mode, budget, signals, wake } = workerData as {

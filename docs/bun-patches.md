@@ -595,7 +595,7 @@ names do not trigger Bun's double-dot plugin-path rejection. No upstream code is
 ## Browser package resolution
 
 Class **Host feature** for the original adapter in `scripts/browser-build.ts`. The adapter resolves
-the consuming app's `@bun-wasm/runtime` exports with Bun, then maps the resolved file back through
+the consuming app's `waffle` exports with Bun, then maps the resolved file back through
 the consumer's package path. This keeps the returned path absolute without exposing Bun's isolated
 package-cache spelling to the build plugin. No upstream source is copied.
 
