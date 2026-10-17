@@ -56,6 +56,7 @@ console.log("async handlers, order, and response metadata pass");
 for (const value of [undefined, null, false, 0, "failure", { error: true }]) {
   const output = new HTMLRewriter().on("p", { async element() { await Promise.resolve(); throw value; } }).transform(new Response("<p>x</p>"));
   const observed = await output.text().then(() => ({ resolved: true }), error => ({ error }));
+  assert.equal("error" in observed, true);
   assert.equal(observed.error, value);
 }
 console.log("handler rejection identity passes");
