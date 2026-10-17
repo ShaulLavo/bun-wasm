@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
-import { chromium, firefox, webkit, type Browser } from "../../web/node_modules/playwright";
+import { chromium, firefox, webkit, type Browser, type BrowserContext } from "../../web/node_modules/playwright";
 
 type Backend = "indexeddb" | "opfs";
 type WorkerRequest = { kind: "list" } | { kind: "run"; backend: Backend; label: string };
@@ -45,12 +45,16 @@ let firefoxScratch: string | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 let browser: Browser | undefined;
 let launch: Promise<Browser> | undefined;
+let persistentContext: BrowserContext | undefined;
+let persistentLaunch: Promise<BrowserContext> | undefined;
 let cleaning: Promise<void> | undefined;
 const previousTmp = process.env.TMPDIR;
 function cleanup(): Promise<void> {
   return cleaning ??= (async () => {
-    try { await (browser ?? await launch?.catch(() => undefined))?.close(); }
-    finally {
+    try {
+      try { await (persistentContext ?? await persistentLaunch?.catch(() => undefined))?.close(); }
+      finally { await (browser ?? await launch?.catch(() => undefined))?.close(); }
+    } finally {
       server?.stop(true);
       try { if (scratch) await rm(scratch, { recursive: true, force: true }); }
       finally {
@@ -64,9 +68,16 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => 
 const deadline = setTimeout(() => { console.error("storage browser tests timed out"); void cleanup().finally(() => process.exit(1)); }, 600_000);
 
 /** Each case gets a fresh context/origin store, so browser quotas and leaked state cannot cross cases. */
-async function inWorker<T>(browser: Browser, request: WorkerRequest): Promise<T> {
-  const context = await browser.newContext();
+async function inWorker<T>(browser: Browser, request: WorkerRequest, persistent = false): Promise<T> {
+  let profile: string | undefined;
+  let context: BrowserContext | undefined;
   try {
+    if (persistent) {
+      // A fresh task-owned on-disk data store, never the owner's Safari/browser profile.
+      profile = await mkdtemp(resolve(scratch!, "webkit-opfs-profile-"));
+      persistentLaunch = webkit.launchPersistentContext(profile, { headless: true, downloadsPath: scratch, tracesDir: scratch });
+      context = persistentContext = await persistentLaunch;
+    } else context = await browser.newContext();
     const page = await context.newPage();
     await page.goto(`http://127.0.0.1:${server!.port}`);
     return await page.evaluate(request => new Promise<T>((resolve, reject) => {
@@ -81,7 +92,15 @@ async function inWorker<T>(browser: Browser, request: WorkerRequest): Promise<T>
       worker.onmessageerror = () => { finish(); reject(new Error("Could not decode storage worker response")); };
       worker.postMessage(request);
     }), request);
-  } finally { await context.close(); }
+  } finally {
+    try { await context?.close(); }
+    finally {
+      if (profile) {
+        persistentContext = undefined; persistentLaunch = undefined;
+        await rm(profile, { recursive: true, force: true });
+      }
+    }
+  }
 }
 
 try {
@@ -119,12 +138,14 @@ try {
       for (const backend of ["indexeddb", "opfs"] as const) for (const label of listed[backend]) {
         if (process.env.STORAGE_TEST_FILTER && !label.includes(process.env.STORAGE_TEST_FILTER)) continue;
         selected++;
+        const persistent = name === "webkit" && backend === "opfs" && process.env.STORAGE_WEBKIT_OPFS_PERSISTENT === "1";
+        const contextMode = persistent ? " [fresh persistent profile]" : "";
         try {
-          await inWorker<string>(browser, { kind: "run", backend, label });
+          await inWorker<string>(browser, { kind: "run", backend, label }, persistent);
           passed[backend].push(label);
-          console.log(`  PASS ${name} ${backend}: ${label}`);
+          console.log(`  PASS ${name} ${backend}${contextMode}: ${label}`);
         } catch (error) {
-          const failure = `${name} ${backend}: ${label}\n${String(error)}`;
+          const failure = `${name} ${backend}${contextMode}: ${label}\n${String(error)}`;
           failures.push(failure); console.error(`  FAIL ${failure}`);
         }
       }
