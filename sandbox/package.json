@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm-sandbox",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,7 +18,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "codemirror": "^6.0.2",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#95ebf29a96cb0c967924071e4c68c6b02bf3ff5a"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#7525b16bef712a89cf3106a15768e45d06da198a"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
