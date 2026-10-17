@@ -173,7 +173,7 @@ def runs_as_script(opts, source, path):
 
 def command(opts, wasm, work, preloads, path):
     dirs = ["--dir", f"{work}/bun::/bun", "--dir", f"{work}/tmp::/tmp"]
-    env = {"PWD": "/bun/test", "HOME": "/tmp", "TMPDIR": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin", "CI": "1", "AGENT": "0", "NO_COLOR": "1", "BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING": "1", "BUNWASM_TEST": "1"}
+    env = {"PWD": "/bun", "HOME": "/tmp", "TMPDIR": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin", "CI": "1", "AGENT": "0", "NO_COLOR": "1", "BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING": "1", "BUNWASM_TEST": "1"}
     flags = [part for key, value in env.items() for part in ["--env", f"{key}={value}"]]
     script = runs_as_script(opts, work / "bun/test" / path, path)
     tests = ["run", "/bun/test/" + path] if script else ["test", "--timeout", str(opts.test_timeout)]

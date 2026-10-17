@@ -82,6 +82,10 @@ pub enum ModuleImportKind {
 /// settings lookups). Errors are returned as a human readable message, which
 /// the runtime throws as a `SyntaxError`-like error in JS.
 pub trait Transpiler {
+    fn public_transpile(&self, _source: &[u8], _options: &str, _action: &str, _loader: &str) -> Result<String, String> {
+        Err("Bun.Transpiler needs Bun's parser, which this bun.wasm was built without".to_owned())
+    }
+
     fn function_imports(&self, _args: &[String], _kind: &str) -> Result<Vec<Vec<usize>>, String> {
         Err("generated imports need Bun's parser".to_owned())
     }

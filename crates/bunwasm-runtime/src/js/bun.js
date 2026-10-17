@@ -455,6 +455,8 @@
     TOML, YAML, JSON5, JSONC, Glob, Cookie, CookieMap, JSONL: internal.require("jsonl"),
     version: info.version,
     revision: info.revision,
+    version_with_sha: `v${info.version} (${info.revision.slice(0, 9)})`,
+    Transpiler: internal.require("bun_transpiler").Transpiler,
     get argv() {
       return globalThis.process.argv;
     },

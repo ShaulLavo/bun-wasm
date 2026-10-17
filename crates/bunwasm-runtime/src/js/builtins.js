@@ -862,7 +862,7 @@
     "bun:test": () => internal.require("bun_test").exports,
     "bun:sqlite": () => internal.require("bun_sqlite"),
     "bun:ffi": () => unsupportedModule("bun:ffi", "no native libraries in wasm", ["dlopen", "CString", "ptr", "toArrayBuffer", "toBuffer", "linkSymbols", "cc"], { FFIType: {}, suffix: "so" }),
-    "bun:wrap": () => ({}),
+    "bun:wrap": () => internal.require("bun_wrap"),
   };
   Object.assign(reg, entries);
   return reg;

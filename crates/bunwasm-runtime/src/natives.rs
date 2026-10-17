@@ -582,6 +582,10 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         Ok(modules::BUN_BUILTIN_ERROR_CODES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
     });
     let st = state.clone();
+    t.add("transpilePublic", move |a| {
+        st.transpiler.public_transpile(a.bytes(0)?, a.str(1)?, a.str(2)?, a.str(3)?).map(Val::from).map_err(NativeError::syntax_error)
+    });
+    let st = state.clone();
     t.add("functionImports", move |a| {
         let args = a.array(0).ok_or_else(|| NativeError::type_error("expected function arguments"))?;
         let strings = args.iter().map(|value| match value {
@@ -598,7 +602,7 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         match st.resolver.resolve(spec, a.str(1)?, kind) {
             Ok(Resolved::Builtin(name)) => Ok(name.into()),
             Ok(Resolved::File(path)) => Ok(path.into()),
-            Err(msg) => Err(crate::modules::resolve_error(&msg, spec, kind)),
+            Err(msg) => Err(crate::modules::resolve_error(&msg, spec, a.str(1)?, kind, st.resolver.notes())),
         }
     });
     let st = state.clone();

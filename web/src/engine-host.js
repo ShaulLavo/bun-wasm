@@ -1,3 +1,4 @@
+import { observePromise } from "./promise-reactions.ts";
 import { installNativeStreamState } from "./native-stream-state.ts";
 import { oversizedCryptoInput } from "./crypto-inputs.js";
 import { installHostCrypto } from "./crypto-host.js";
@@ -43,6 +44,8 @@ const nativeGc = typeof globalThis.gc === "function" ? globalThis.gc.bind(global
 const NativeMessageChannel = globalThis.MessageChannel;
 const NativeAbortController = globalThis.AbortController;
 const NativePromise = globalThis.Promise;
+const nativePromiseThen = Function.prototype.call.bind(NativePromise.prototype.then);
+const nativePromiseHasInstance = Function.prototype.call.bind(Function.prototype[Symbol.hasInstance], NativePromise);
 const NativeString = globalThis.String;
 const PENDING = Object.freeze({ state: "pending", value: undefined });
 const nativeProcess = typeof process === "object" && process && process.versions && process.versions.node ? process : null;
@@ -453,10 +456,11 @@ class EngineHost {
       // others print as pending.
       promiseState: (p) => (host.promiseStates.get(p) || PENDING).state,
       promiseResult: (p) => (host.promiseStates.get(p) || PENDING).value,
+      promiseThen: (promise, fulfilled, rejected) => host.promiseThen(promise, fulfilled, rejected),
       isProxy: () => false,
       transferArrayBuffers,
       getProxyTarget: () => undefined,
-      isPromise: (v) => v instanceof Promise,
+      isPromise: nativePromiseHasInstance,
       isError: (v) => (typeof Error.isError === "function" ? Error.isError(v) : v instanceof Error),
       iteratorEntries: () => undefined,
       ownKeysInOrder: () => undefined,
@@ -691,7 +695,7 @@ class EngineHost {
     // promise passes on its known state. `in` instead of reading `then`,
     // which may be a getter.
     const settleWith = (promise, value) => {
-      if (value instanceof NativePromise) {
+      if (nativePromiseHasInstance(value)) {
         const known = states.get(value);
         if (known && known.state !== "pending") states.set(promise, known);
         return;
@@ -724,14 +728,17 @@ class EngineHost {
         }
       };
     };
-    const nativeThen = NativePromise.prototype.then;
+    const attach = (react, promise, onFulfilled, onRejected) => {
+      const box = { promise: null };
+      box.promise = react(promise, wrap(onFulfilled, box, false), wrap(onRejected, box, true));
+      return box.promise;
+    };
     const { then } = {
       then(onFulfilled, onRejected) {
-        const box = { promise: null };
-        box.promise = nativeThen.call(this, wrap(onFulfilled, box, false), wrap(onRejected, box, true));
-        return box.promise;
+        return attach(nativePromiseThen, this, onFulfilled, onRejected);
       },
     };
+    host.promiseThen = (promise, fulfilled, rejected) => attach(observePromise, promise, fulfilled, rejected);
     Object.defineProperty(NativePromise.prototype, "then", { value: then, configurable: true, writable: true, enumerable: false });
 
     // Statics whose result state is known at once. `this` stays the caller's
@@ -775,9 +782,9 @@ class EngineHost {
 
 
   watchRejections() {
-    const onRejection = (reason) => {
+    const onRejection = (reason, promise) => {
       if (this.exited || reason instanceof ExitSignal) return;
-      if (!this.guard(() => this.internal.handleRejection(reason))) this.exit(1);
+      if (!this.guard(() => this.internal.handleRejection(reason, promise))) this.exit(1);
     };
     if (nativeProcess) {
       nativeProcess.on("unhandledRejection", onRejection);
@@ -785,7 +792,7 @@ class EngineHost {
     } else if (nativeAddEventListener) {
       nativeAddEventListener("unhandledrejection", (event) => {
         event.preventDefault();
-        onRejection(event.reason);
+        onRejection(event.reason, event.promise);
       });
       nativeAddEventListener("error", (event) => {
         event.preventDefault();

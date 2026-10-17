@@ -227,11 +227,11 @@ impl<E: Engine> Core<E> {
     /// An uncaught error: `process.on("uncaughtException")` handlers get it
     /// first, otherwise it is printed the way Bun does and the process exits 1.
     pub(crate) fn uncaught(&self, e: &E, err: E::Value) {
-        self.uncaught_value(e, "handleUncaught", err);
+        self.uncaught_values(e, "handleUncaught", &[err]);
     }
 
-    fn uncaught_value(&self, e: &E, handler: &str, value: E::Value) {
-        match self.call_internal(e, handler, &[value]) {
+    fn uncaught_values(&self, e: &E, handler: &str, values: &[E::Value]) {
+        match self.call_internal(e, handler, values) {
             Ok(handled) if e.to_val(&handled) == Val::Bool(true) => return,
             Ok(_) => {}
             Err(fallback) => {
@@ -248,8 +248,8 @@ impl<E: Engine> Core<E> {
     /// Report promises that are still unhandled once the microtask queue
     /// drained (Bun treats an unhandled rejection as fatal).
     fn check_rejections(&self, e: &E) {
-        for (_, reason) in e.take_unhandled_rejections() {
-            self.uncaught_value(e, "handleRejection", reason);
+        for (promise, reason) in e.take_unhandled_rejections() {
+            self.uncaught_values(e, "handleRejection", &[reason, promise]);
         }
     }
 }
@@ -265,7 +265,7 @@ impl<E: Engine> ModuleHost<E> for Core<E> {
         match self.state.resolver.resolve(specifier, &from, resolve::Kind::Import) {
             Ok(resolve::Resolved::Builtin(b)) => Ok(b),
             Ok(resolve::Resolved::File(f)) => Ok(f),
-            Err(msg) => Err(e.error_value(&modules::resolve_error(&msg, specifier, resolve::Kind::Import))),
+            Err(msg) => Err(e.error_value(&modules::resolve_error(&msg, specifier, &from, resolve::Kind::Import, self.state.resolver.notes()))),
         }
     }
 
@@ -509,9 +509,9 @@ fn check_main_promise<E: Engine>(e: &E, core: &Core<E>, promise: E::Value) -> Op
                 .into_iter()
                 .filter(|(p, _)| !e.same_value(p, &promise))
                 .collect();
-            core.uncaught_value(e, "handleUncaught", reason);
-            for (_, r) in others {
-                core.uncaught_value(e, "handleRejection", r);
+            core.uncaught_values(e, "handleUncaught", &[reason]);
+            for (promise, reason) in others {
+                core.uncaught_values(e, "handleRejection", &[reason, promise]);
             }
             None
         }

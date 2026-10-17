@@ -708,23 +708,26 @@
    * The Error is created when the matcher is called so its stack points at
    * the `expect(...)` line, even for `.resolves`/`.rejects`.
    */
+  const matcherSupport = internal.require("test_matchers");
+
   function defineMatcher(name, params, impl) {
     matcherParams[name] = params;
     expectProto[name] = function (...args) {
       const error = new Error();
       if (this.flags.promise) return matchPromise(this, name, impl, args, error);
       countExpectation();
-      applyMatcher(this.flags, this.received, name, impl, args, error);
-      return undefined;
+      const result = applyMatcher(this.flags, this.received, name, impl, args, error);
+      return activeInvocation ? activeInvocation.track(result) : result;
     };
   }
 
   function applyMatcher(flags, received, name, impl, args, error) {
-    const failure = impl({ not: flags.not, promise: flags.promise, error }, received, ...args);
-    if (!failure) return;
-    const params = failure.params === undefined ? matcherParams[name] : failure.params;
-    error.message = failure.raw ? failure.body : signature(name, params, flags.not) + failure.body;
-    throw error;
+    return matcherSupport.settle(impl({ not: flags.not, promise: flags.promise, error }, received, ...args), (failure) => {
+      if (!failure) return;
+      const params = failure.params === undefined ? matcherParams[name] : failure.params;
+      error.message = failure.raw ? failure.body : signature(name, params, flags.not) + failure.body;
+      throw error;
+    });
   }
 
   async function matchPromise(expectation, name, impl, args, error) {
@@ -747,7 +750,7 @@
       return fail("\n\nExpected promise that resolves\nReceived promise that rejected: Promise { <rejected> }\n");
     }
     countExpectation();
-    applyMatcher({ not: flags.not, promise: flags.promise }, settled.value, name, impl, args, error);
+    await applyMatcher({ not: flags.not, promise: flags.promise }, settled.value, name, impl, args, error);
     return undefined;
   }
 
@@ -891,6 +894,8 @@
       return { body: `\n\nExpected: ${not}${op} ${inspect(expected)}\nReceived: ${inspect(received)}\n` };
     });
   }
+
+  defineMatcher("toBeWithin", "start, end", matcherSupport.within);
 
   defineOrderingMatcher("toBeGreaterThan", ">", (a, b) => a > b);
   defineOrderingMatcher("toBeGreaterThanOrEqual", ">=", (a, b) => a >= b);
@@ -1096,16 +1101,7 @@
 
   // ── toThrow ──
 
-  function throwOutcome(ctx, received) {
-    // With .rejects the rejection value is the thrown value.
-    if (ctx.promise) return { threw: ctx.promise === "rejects", value: received };
-    if (typeof received !== "function") return { invalid: true };
-    try {
-      return { threw: false, value: received() };
-    } catch (err) {
-      return { threw: true, value: err };
-    }
-  }
+  const throwOutcome = matcherSupport.throwOutcome;
 
   // Bun reads `.message` from thrown objects and stringifies primitives.
   function thrownMessage(value) {
@@ -1137,11 +1133,12 @@
         throw new Error(`Expected value must be string or Error: ${inspect(rawExpected)}`);
       }
       const expected = normalizeThrowExpectation(rawExpected);
-      const outcome = throwOutcome(ctx, received);
-      if (outcome.invalid) throw new Error("Expected value must be a function");
-      if (ctx.not) return notThrowFailure(outcome, expected);
-      if (!outcome.threw) return didNotThrowFailure(outcome, expected);
-      return wrongThrowFailure(outcome.value, expected);
+      return matcherSupport.settle(throwOutcome(ctx, received), (outcome) => {
+        if (outcome.invalid) throw new Error("Expected value must be a function");
+        if (ctx.not) return notThrowFailure(outcome, expected);
+        if (!outcome.threw) return didNotThrowFailure(outcome, expected);
+        return wrongThrowFailure(outcome.value, expected);
+      });
     });
   }
 
@@ -1488,12 +1485,13 @@
       if (ctx.not) return { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used with not\n" };
       if (args.length > 1) throw new Error("\n\nMatcher error: Expected zero or one arguments\n");
       if (args.length === 1 && typeof args[0] !== "string") throw new Error("\n\nMatcher error: Expected first argument to be a string\n");
-      const outcome = typeof received === "function" ? throwOutcome({}, received) : throwOutcome(ctx, received);
-      if (outcome.invalid) throw new Error("Expected value must be a function");
-      const threw = outcome.threw || outcome.value instanceof Error || (ctx.promise && typeof received !== "function");
-      if (!threw) return { params: "", body: "\n\nMatcher error: Received function did not throw\n" };
-      const message = outcome.value instanceof Error ? outcome.value.message || undefined : undefined;
-      return inline ? matchInlineSnapshot(ctx, message, ...args) : matchFileSnapshot(ctx, message, ...args);
+      return matcherSupport.settle(typeof received === "function" ? throwOutcome({}, received) : throwOutcome(ctx, received), (outcome) => {
+        if (outcome.invalid) throw new Error("Expected value must be a function");
+        const threw = outcome.threw || outcome.value instanceof Error || (ctx.promise && typeof received !== "function");
+        if (!threw) return { params: "", body: "\n\nMatcher error: Received function did not throw\n" };
+        const message = outcome.value instanceof Error ? outcome.value.message || undefined : undefined;
+        return inline ? matchInlineSnapshot(ctx, message, ...args) : matchFileSnapshot(ctx, message, ...args);
+      });
     });
   }
 
@@ -1869,8 +1867,9 @@
   function invoke(fn, args, usesDone, timeout) {
     return new Promise((resolve) => {
       let timer = null;
-      const invocation = {};
-      const finish = (result) => {
+      const invocation = matcherSupport.pending();
+      const finish = (result) => invocation.complete(result, finalize);
+      const finalize = (result) => {
         if (invocation.settled) return;
         invocation.settled = true;
         if (timer !== null) clearTimeout(timer);
@@ -1890,9 +1889,9 @@
           if (isThenable(result)) result.then(null, (err) => finish({ error: err }));
           return;
         }
+        startTimer();
         const result = fn(...args);
         if (!isThenable(result)) return finish({ ok: true });
-        startTimer();
         result.then(() => finish({ ok: true }), (err) => finish({ error: err }));
       } catch (err) {
         finish({ error: err });
@@ -2336,7 +2335,10 @@
       else reportUnhandledError(error);
     };
     process.on("uncaughtException", onError);
-    process.on("unhandledRejection", onError);
+    process.on("unhandledRejection", (error, promise) => {
+      if (activeInvocation) activeInvocation.unhandled(error, promise);
+      onError(error);
+    });
   }
 
   async function runFile(abs, cwd) {

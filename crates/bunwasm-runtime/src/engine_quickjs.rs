@@ -277,6 +277,11 @@ impl Engine for QuickJs {
         unsafe { Value::from_raw(self.ctx().clone(), qjs::JS_PromiseResult(self.raw(), v.as_raw())) }
     }
 
+    fn promise_then(&self, promise: &V, fulfilled: &V, rejected: &V) -> Result<V, V> {
+        // SAFETY: the embedding API borrows the inputs and returns a new reference.
+        self.wrap(unsafe { qjs::JS_PromiseThen(self.raw(), promise.as_raw(), fulfilled.as_raw(), rejected.as_raw()) })
+    }
+
     fn take_unhandled_rejections(&self) -> Vec<(V, V)> {
         self.0.rejections.borrow_mut().drain(..).collect()
     }
