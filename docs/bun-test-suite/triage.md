@@ -102,72 +102,113 @@ Every row has a 15-second wall deadline. A completed report can also come from a
 | js/web/websocket/websocket-upgrade.test.ts | existing | False | 0 | no named failure | no error captured |
 | regression/issue/42989.test.ts | existing | False | 0 | no named failure | no error captured |
 
+
 ## Ranked next fixes
 
-Rank is the number of suite files with the same first blocker. Each item has a bounded reproducer and the first suspected implementation location.
+The two former catch-all buckets now break down into the 25 most common normalized first-error signatures. Counts are failing suite files, and locations come from the first throwing frame in the bounded QuickJS record. The source location is the test or harness frame that throws; the suspected location names the runtime area to inspect.
 
-1. **test runner/assertion or runtime semantics**. Unblocks 720 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/bunfig-test-options.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`; example `cli/bunfig-test-options.test.ts`. First observed error: `error: expect(received).not.toEqual(expected)`.
+1. **error: expect(received).toBe(expected)**. Unblocks 151 suite files.
+   Throwing source `[eval]:3`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/format/bunfig.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `cli/format/bunfig.test.ts`.
 
-2. **HTTP/server/fetch/WebSocket semantics**. Unblocks 180 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" bake/dev/ecosystem.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/net.js:1`; example `bake/dev/ecosystem.test.ts`. First observed error: `<see JSON excerpt; no error line>`.
+2. **TypeError: not a function**. Unblocks 80 suite files.
+   Throwing source `js/bun/test/fake-timers/sinonjs/helpers/setup-tests.ts:14`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/install/GHSA-pfwx-36v6-832x.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/engine_quickjs.rs:238`. Example `cli/install/GHSA-pfwx-36v6-832x.test.ts`.
 
-3. **database, Redis or S3 clients**. Unblocks 128 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/bun/image/image.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/bun_sqlite.js:1`; example `js/bun/image/image.test.ts`. First observed error: `SyntaxError: Could not find export 'S3Client' in module 'bun'`.
+3. **error: expect(received).toContain(expected)**. Unblocks 68 suite files.
+   Throwing source `cli/install/dummy.registry.ts:63`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/check/check.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `cli/check/check.test.ts`.
 
-4. **private native-engine/compiler instrumentation has no portable equivalent**. Unblocks 93 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" bake/deinitialization.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/builtins.js:1`; example `bake/deinitialization.test.ts`. First observed error: `SyntaxError: Could not find export 'getDevServerDeinitCount' in module 'bun:internal-for-testing'`.
+4. **error: expect(received).toEqual(expected)**. Unblocks 65 suite files.
+   Throwing source `js/deno/harness.ts:105`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/format/oxfmt-cli/oxfmt-cli.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `cli/format/oxfmt-cli/oxfmt-cli.test.ts`.
 
-5. **TLS or HTTP/2**. Unblocks 84 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/install/bun-install-stalled-tls.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/net.js:598`; example `cli/install/bun-install-stalled-tls.test.ts`. First observed error: `error: expect(received).toEqual(expected)`.
+5. **error: expect(received).toMatchInlineSnapshot(expected)**. Unblocks 37 suite files.
+   Throwing source `cli/install/bun-install-patch.test.ts:155`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/install/bun-install-patch.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `cli/install/bun-install-patch.test.ts`.
 
-6. **unresolved runtime/module semantics, inspect the recorded failure first**. Unblocks 72 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" bake/hmr-socket-protocol.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/modules.rs:1`; example `bake/hmr-socket-protocol.test.ts`. First observed error: `  ^ this test timed out after 2000ms.`.
+6. **error: expect(received).toThrow(expected)**. Unblocks 26 suite files.
+   Throwing source `js/bun/cron/in-process-cron.test.ts:7`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/bun/cron/in-process-cron.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `js/bun/cron/in-process-cron.test.ts`.
 
-7. **bundler options, plugins or compiler output**. Unblocks 71 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" bake/app-options.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/builtins.js:1`; example `bake/app-options.test.ts`. First observed error: `error: expect(received).toMatchInlineSnapshot(expected)`.
+7. **error: expect(received).not.toContain(expected)**. Unblocks 18 suite files.
+   Throwing source `harness.ts:1717`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/install/bun-install-link-path.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `cli/install/bun-install-link-path.test.ts`.
 
-8. **Bun shell parser and execution**. Unblocks 63 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" bake/dev/production.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/spawn.js:1`; example `bake/dev/production.test.ts`. First observed error: `error: Bun.$ is not supported in bun-wasm: WASI has no processes`.
+8. **<no error captured>**. Unblocks 17 suite files.
+   Throwing source `bundler/bun-build-compile-wasm.test.ts:?`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" bundler/bun-build-compile-wasm.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/spawn.js:370`. Example `bundler/bun-build-compile-wasm.test.ts`.
 
-9. **native addons or FFI**. Unblocks 62 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/bun/ffi/cc.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/builtins.js:1`; example `js/bun/ffi/cc.test.ts`. First observed error: `SyntaxError: Could not find export 'JSCallback' in module 'bun:ffi'`.
+9. **^ this test timed out after Nms.**. Unblocks 14 suite files.
+   Throwing source `bake/hmr-socket-protocol.test.ts:393`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" bake/hmr-socket-protocol.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `bake/hmr-socket-protocol.test.ts`.
 
-10. **uninstalled suite dependency, setup work before API triage**. Unblocks 49 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" bundler/bundler_edgecase.test.ts`.
-   Suspected location `docs/bun-test-suite/dependencies/package.json:1`; example `bundler/bundler_edgecase.test.ts`. First observed error: `error: Cannot find package 'aws-cdk-lib' from '/bun/test/bundler/bundler_edgecase.test.ts'`.
+10. **AssertionError: Expected values to be strictly equal:**. Unblocks 11 suite files.
+   Throwing source `js/bun/perf_hooks/histogram.test.ts:10`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/bun/perf_hooks/histogram.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `js/bun/perf_hooks/histogram.test.ts`.
 
-11. **CLI option or command implementation**. Unblocks 46 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" bundler/bundler_bun.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/builtins.js:1`; example `bundler/bundler_bun.test.ts`. First observed error: `error: Bundle Failed`.
+11. **SyntaxError: Unexpected end of JSON input**. Unblocks 11 suite files.
+   Throwing source `cli/lint/bun-rules.test.ts:2267`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/lint/bun-rules.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/builtins.js:1`. Example `cli/lint/bun-rules.test.ts`.
 
-12. **runtime behavior or regression fixture in a child program**. Unblocks 35 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" bake/dev-and-prod.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/spawn.js:57`; example `bake/dev-and-prod.test.ts`. First observed error: `error: Child process IPC is not supported in bun-wasm`.
+12. **error: Expected process to exit with code 0 but got 1**. Unblocks 7 suite files.
+   Throwing source `js/bun/resolve/bun-lock.test.ts:26`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/bun/resolve/bun-lock.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/spawn.js:370`. Example `js/bun/resolve/bun-lock.test.ts`.
 
-13. **Node/Web stream semantics**. Unblocks 29 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/install/symlink-path-traversal.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/streams_polyfill.js:1`; example `cli/install/symlink-path-traversal.test.ts`. First observed error: `error: expect(received).toContain(expected)`.
+13. **error: Network is unreachable (os error N)**. Unblocks 7 suite files.
+   Throwing source `integration/expo-app/expo.test.ts:21`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" integration/expo-app/expo.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/net.js:1`. Example `integration/expo-app/expo.test.ts`.
 
-14. **crypto algorithms and WebCrypto**. Unblocks 23 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/bun/crypto/cipheriv-decipheriv.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/crypto.js:1`; example `js/bun/crypto/cipheriv-decipheriv.test.ts`. First observed error: `error: crypto.createCipheriv is not supported in bun-wasm: this Node crypto operation is not implemented`.
+14. **error: expect(received).toMatch(expected)**. Unblocks 7 suite files.
+   Throwing source `cli/install/public-hoist-pattern.test.ts:38`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/install/public-hoist-pattern.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `cli/install/public-hoist-pattern.test.ts`.
 
-15. **process lifecycle, exit and signal handling**. Unblocks 20 suite files.
-   Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/bun/http/fetch-abort-ssl-context-eviction.test.ts`.
-   Suspected location `crates/bunwasm-runtime/src/js/spawn.js:370`; example `js/bun/http/fetch-abort-ssl-context-eviction.test.ts`. First observed error: `error: bun-wasm child concurrency limit reached (4 active children)`.
+15. **error: expect(received).toMatchObject(expected)**. Unblocks 7 suite files.
+   Throwing source `cli/inspect/inspect.test.ts:263`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/inspect/inspect.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `cli/inspect/inspect.test.ts`.
+
+16. **ReferenceError: HTMLRewriter is not defined**. Unblocks 6 suite files.
+   Throwing source `js/web/html/html-rewriter-doctype.test.ts:9`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/web/html/html-rewriter-doctype.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/web.js:1`. Example `js/web/html/html-rewriter-doctype.test.ts`.
+
+17. **error: expect(received).toBeGreaterThan(expected)**. Unblocks 6 suite files.
+   Throwing source `cli/install/bun-install-env-file.test.ts:83`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/install/bun-install-env-file.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `cli/install/bun-install-env-file.test.ts`.
+
+18. **error: expect(received).toMatchSnapshot(expected)**. Unblocks 6 suite files.
+   Throwing source `cli/install/migration/npm-arborist.test.ts:?`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" cli/install/migration/npm-arborist.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `cli/install/migration/npm-arborist.test.ts`.
+
+19. **ReferenceError: Worker is not defined**. Unblocks 5 suite files.
+   Throwing source `js/bun/util/bun-isMainThread.test.js:13`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/bun/util/bun-isMainThread.test.js`.
+   Suspected location `crates/bunwasm-runtime/src/js/spawn.js:1`. Example `js/bun/util/bun-isMainThread.test.js`.
+
+20. **SyntaxError: Could not find export 'X509Certificate' in module 'node:crypto'**. Unblocks 5 suite files.
+   Throwing source `js/web/websocket/websocket-client.test.ts:?`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/web/websocket/websocket-client.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/builtins.js:1`. Example `js/web/websocket/websocket-client.test.ts`.
+
+21. **SyntaxError: Could not find export 'estimateShallowMemoryUsageOf' in module 'bun:jsc'**. Unblocks 5 suite files.
+   Throwing source `js/bun/util/heap-snapshot.test.ts:?`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/bun/util/heap-snapshot.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/builtins.js:1`. Example `js/bun/util/heap-snapshot.test.ts`.
+
+22. **error: expect(received).toThrow()**. Unblocks 5 suite files.
+   Throwing source `js/bun/console/console-table.test.ts:29`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/bun/console/console-table.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `js/bun/console/console-table.test.ts`.
+
+23. **SyntaxError: Could not find export '__decorateElement' in module 'bun:wrap'**. Unblocks 4 suite files.
+   Throwing source `bundler/transpiler/decorator-metadata.test.ts:?`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" bundler/transpiler/decorator-metadata.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/builtins.js:1`. Example `bundler/transpiler/decorator-metadata.test.ts`.
+
+24. **TypeError: cannot read property 'html' of undefined**. Unblocks 4 suite files.
+   Throwing source `js/bun/md/gfm-compat.test.ts:16`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/bun/md/gfm-compat.test.ts`.
+   Suspected location `crates/bunwasm-runtime/src/js/builtins.js:1`. Example `js/bun/md/gfm-compat.test.ts`.
+
+25. **^ this test timed out after Nms, before its done callback was called. If a done callback was not intended, remove the last parameter from the test callback function**. Unblocks 4 suite files.
+   Throwing source `js/third_party/jsonwebtoken/claim-exp.test.js:?`. Reproduce with `scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" js/third_party/jsonwebtoken/claim-exp.test.js`.
+   Suspected location `crates/bunwasm-runtime/src/js/bun_test.js:1`. Example `js/third_party/jsonwebtoken/claim-exp.test.js`.
 
 App matrix causes are separate because they unblock app stages rather than suite files.
 
-- **Offline registry missing `esbuild-wasm`**. Unblocks 51 blocked stages across Vite, Astro, SvelteKit and Vitest. Reproduce with `scripts/app-matrix.sh --apps=vite-vanilla,vite-react,vite-vue,astro,sveltekit,vitest --engines=quickjs,jsc,browser --hosts=native,playground --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/app-matrix-rerun`. Suspected location `scripts/app-matrix/registry.mjs:1`.
-- **WebAssembly export tables in Next**. Unblocks 6 native Next dev/build stages. Reproduce with `scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser --hosts=native --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/next-rerun`. Suspected location `crates/bunwasm-runtime/src/js/webassembly.js:139`.
-- **Prisma install memory ceiling**. Unblocks 12 Prisma stages. Reproduce with `scripts/app-matrix.sh --apps=prisma --engines=quickjs,jsc,browser --hosts=native --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/prisma-rerun`. Suspected location `crates/bunwasm-runtime/src/engine.rs:1`.
+- **Next WebAssembly export tables**. Unblocks 6 failed and 3 blocked Next stages. Reproduce with `scripts/app-matrix.sh --apps=next --engines=quickjs,jsc,browser --hosts=native --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/next-rerun`. Suspected location `crates/bunwasm-runtime/src/js/webassembly.js:139`.
+- **Prisma install memory ceiling**. Unblocks 9 blocked Prisma stages. Reproduce with `scripts/app-matrix.sh --apps=prisma --engines=quickjs,jsc,browser --hosts=native --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/prisma-rerun`. Suspected location `crates/bunwasm-runtime/src/engine.rs:1`.
+- **Vite, Astro, SvelteKit and Vitest runtime failures after mirror repair**. Recording removed all 51 mirror blocks. Reproduce each app with `scripts/app-matrix.sh --apps=<app> --engines=quickjs,jsc,browser --hosts=native,playground --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/<app>-rerun`. Suspected locations are the first blocker listed in the app table in `docs/app-matrix/README.md`.

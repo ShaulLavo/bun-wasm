@@ -668,31 +668,52 @@ The second-review red/green logs are retained in
 `/work/reports/bun-wasm-rv28-round2-20261016/`.
 
 
-## Current full replay
 
-The 2026-10-17 offline replay ran all 17 apps across QuickJS, JSC and browser engines on native and playground hosts. It used runtime commit `6e93c80c6f9bccc879990bedb999c3efdcd3166f`, the three artifact hashes in `results.json`, and registry digest `bff1211cea1f8aed1dacd80b53b81b8a75a1a63987c8b053e426021269389b59`. The replay produced 180 stage records.
 
-| Engine / host | Pass | Fail | Blocked |
-|---|---:|---:|---:|
-| quickjs / native | 21 | 9 | 15 |
-| quickjs / playground | 12 | 1 | 2 |
-| jsc / native | 21 | 9 | 15 |
-| jsc / playground | 12 | 1 | 2 |
-| browser / native | 21 | 9 | 15 |
-| browser / playground | 12 | 1 | 2 |
+## Current full replay after mirror recording
 
-| Run | Pass | Fail | Blocked |
-|---|---:|---:|---:|
-| Current full replay | 99 | 30 | 51 |
+The 2026-10-17 run first recorded the six apps that had missing `esbuild-wasm` metadata, then reran all 17 apps offline. Recording had zero registry misses and zero registry errors. The offline replay also had zero misses and zero errors. It used runtime commit `6e93c80c6f9bccc879990bedb999c3efdcd3166f`, registry digest `5428da1454a78fbfa8dc868114365c5a448fc2ad2556b2977caa17520890a7d2`, and produced 180 stage records.
 
-The previous committed census recorded 63 pass, 51 fail and 12 blocked native stages across the three wasm engines, plus 19 pass, 8 fail and 0 blocked playground stages. The current replay records 63 pass, 27 fail and 45 blocked native stages, plus 36 pass, 3 fail and 6 blocked playground stages.
+| App | Pass | Fail | Blocked | First blocker |
+|---|---:|---:|---:|---|
+| astro | 3 | 3 | 0 | quickjs/native/build: build: No diagnostic before exit or deadline |
+| drizzle | 12 | 0 | 0 | - |
+| elysia | 6 | 0 | 0 | - |
+| eslint | 18 | 0 | 0 | - |
+| express | 6 | 0 | 0 | - |
+| fastify | 6 | 0 | 0 | - |
+| hono | 12 | 0 | 0 | - |
+| koa | 6 | 0 | 0 | - |
+| next | 3 | 6 | 3 | quickjs/native/dev: server: LinkError: Unsupported WebAssembly export table |
+| prettier | 12 | 0 | 0 | - |
+| prisma | 0 | 3 | 9 | quickjs/native/install: install: memory allocation of 16770432 bytes failed |
+| sveltekit | 3 | 6 | 0 | quickjs/native/dev: server: No diagnostic before exit or deadline |
+| typescript | 18 | 0 | 0 | - |
+| vite-react | 6 | 12 | 0 | quickjs/native/dev: server: No diagnostic before exit or deadline |
+| vite-vanilla | 3 | 6 | 0 | quickjs/native/dev: server: No diagnostic before exit or deadline |
+| vite-vue | 3 | 6 | 0 | quickjs/native/dev: server: No diagnostic before exit or deadline |
+| vitest | 3 | 6 | 0 | quickjs/native/test: test: No diagnostic before exit or deadline |
 
-The dominant app blockers were missing offline `esbuild-wasm` registry records (51 blocked stages), Next WebAssembly export-table support (6 failed stages), and Prisma’s 16 MiB allocation ceiling (12 blocked stages). The matrix classified each first blocker with the same a–f rules as the suite.
+| Overall | 120 | 48 | 12 | - |
 
-Raw evidence is retained in `/work/reports/bun-wasm-main-2026-10-17/app-matrix/`. The exact replay command was:
+Before recording, all 51 blocked stages were mirror misses for `esbuild-wasm`. After recording, those installs pass. The remaining blocked stages are only Next production starts blocked by failed builds and Prisma commands blocked by its install failure. The remaining failures are runtime or app behavior results.
+
+| Scope | Before | After |
+|---|---:|---:|
+| Native stages | 63 pass / 27 fail / 45 blocked | 72 pass / 45 fail / 6 blocked |
+| Playground stages | 36 pass / 3 fail / 6 blocked | 36 pass / 3 fail / 6 blocked |
+| All stages | 99 pass / 30 fail / 51 blocked | 120 pass / 48 fail / 12 blocked |
+
+Recording command:
 
 ```sh
-scripts/app-matrix.sh --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/app-matrix --timeout=90 --launcher=/work/tmp/bun-wasm-measure-suite-matrix/quickjs-target/release/bun-wasm
+scripts/app-matrix.sh --record --reference --apps=vite-vanilla,vite-react,vite-vue,astro,sveltekit,vitest --engines=quickjs,jsc,browser --hosts=native,playground --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/app-matrix-record --timeout=90 --launcher=/work/reports/bun-wasm-main-2026-10-17/bun-wasm-launcher
 ```
 
-The ranked next-fix list, including suite file counts, app stage counts, reproduction commands and suspected source locations, is in [`docs/bun-test-suite/triage.md`](../bun-test-suite/triage.md#ranked-next-fixes).
+Offline replay command:
+
+```sh
+scripts/app-matrix.sh --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/app-matrix-after-record --timeout=90 --launcher=/work/reports/bun-wasm-main-2026-10-17/bun-wasm-launcher
+```
+
+Raw records and logs are retained in `/work/reports/bun-wasm-main-2026-10-17/app-matrix-record/` and `/work/reports/bun-wasm-main-2026-10-17/app-matrix-after-record/`. The suite cause ranking is in [`docs/bun-test-suite/triage.md`](../bun-test-suite/triage.md#ranked-next-fixes).
