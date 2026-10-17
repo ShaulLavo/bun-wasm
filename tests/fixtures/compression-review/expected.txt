@@ -1,45 +1,70 @@
-PASS gzip sync
-PASS gzip none
-PASS gzip sync
-PASS gzip full
-PASS deflate sync
-PASS deflate sync dictionary
-PASS deflate none
-PASS deflate sync
-PASS deflate full
-PASS deflate-raw sync
-PASS deflate-raw sync dictionary
-PASS deflate-raw none
-PASS deflate-raw sync
-PASS deflate-raw full
-PASS brotli sync
-PASS brotli sync dictionary
-PASS brotli none
-PASS brotli sync
-PASS zstd sync
-PASS zstd sync dictionary
-PASS zstd none
-PASS zstd sync
-PASS deflate none dictionary
-PASS deflate-raw none dictionary
-PASS brotli none dictionary
-PASS zstd none dictionary
-PASS Bun Zstd dictionary
-PASS gzip corrupt ffffffffff
-PASS gzip corrupt 1f8b0800
-PASS deflate corrupt ffffffffff
-PASS deflate corrupt 789ccb48
-PASS deflate-raw corrupt ffffffffff
-PASS deflate-raw corrupt cb48cdc9
-PASS brotli corrupt ffffffffff
-PASS brotli corrupt 1b1000f8
-PASS zstd corrupt ffffffffff
-PASS zstd corrupt 28b52ffd
-PASS native limit before expansion
-PASS Archive gzip expansion ceiling
-PASS Web bounded pieces
-PASS Web compression levels
-PASS Web queuing strategy
-PASS dictionary snapshot
-PASS dictionary validation
-PASS cancel parked Web expansion
+PASS zlib gzip sync
+PASS zlib gzip stream none
+PASS zlib gzip stream sync flush
+PASS zlib gzip stream full flush
+PASS zlib deflate sync
+PASS zlib deflate sync dictionary
+PASS zlib deflate stream dictionary
+PASS zlib deflate stream none
+PASS zlib deflate stream sync flush
+PASS zlib deflate stream full flush
+PASS zlib deflateRaw sync
+PASS zlib deflateRaw sync dictionary
+PASS zlib deflateRaw stream dictionary
+PASS zlib deflateRaw stream none
+PASS zlib deflateRaw stream sync flush
+PASS zlib deflateRaw stream full flush
+PASS zlib brotliCompress sync
+PASS zlib brotliCompress sync dictionary
+PASS zlib brotliCompress stream dictionary
+PASS zlib brotliCompress stream none
+PASS zlib brotliCompress stream flush
+PASS zlib zstdCompress sync
+PASS zlib zstdCompress sync dictionary
+PASS zlib zstdCompress stream dictionary
+PASS zlib zstdCompress stream none
+PASS zlib zstdCompress stream flush
+PASS zlib gzip stream pieces
+PASS Bun.gzipSync
+PASS Bun.deflateSync
+PASS Bun.zstdCompressSync
+PASS Bun.zstdCompressSync level 19
+PASS Bun.zstdCompressSync level 0
+PASS Bun.zstdDecompressSync garbage
+PASS Bun.gunzipSync garbage
+PASS zlib dictionary is snapshotted
+PASS zlib dictionary validation
+PASS zlib inflate missing dictionary
+PASS zlib inflate bad dictionary
+PASS zlib corrupt gunzip garbage
+PASS zlib corrupt gunzip truncated
+PASS zlib corrupt gunzip empty
+PASS zlib corrupt inflate garbage
+PASS zlib corrupt inflate truncated
+PASS zlib corrupt inflate empty
+PASS zlib corrupt inflateRaw garbage
+PASS zlib corrupt inflateRaw truncated
+PASS zlib corrupt inflateRaw empty
+PASS zlib corrupt brotliDecompress garbage
+PASS zlib corrupt brotliDecompress truncated
+PASS zlib corrupt brotliDecompress empty
+PASS zlib corrupt zstdDecompress garbage
+PASS zlib corrupt zstdDecompress truncated
+PASS zlib corrupt zstdDecompress empty
+PASS zlib zstd stream frame boundaries
+PASS zlib gunzipSync maxOutputLength
+PASS zlib _processChunk maxOutputLength
+PASS zlib gunzip callback maxOutputLength
+PASS zlib stream expands only as it is read
+PASS Archive rejects a truncated entry without allocating its size
+PASS Archive extracts a large expansion in bounded memory
+PASS Web level selects the compression level
+PASS Web level validation
+PASS Web queuing strategy validation
+PASS Web decompression steps as the reader pulls
+PASS Web highWaterMark sets the step size
+PASS Web writes wait for the reader
+PASS Web cancel settles the write in flight
+PASS Web abort settles the write and errors the readable
+PASS Web abort during close keeps the flush
+PASS Web errors keep Bun's codes

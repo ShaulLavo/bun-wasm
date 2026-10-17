@@ -69,10 +69,10 @@
       if (!options || typeof options !== "object") throw new TypeError("Expected options to be an object");
       return native.extract(await this.bytes(), internal.require("path").resolve(path), patterns(options.glob));
     }
-    static async write(path: unknown, source: Source | Archive, options?: Options): Promise<number> {
+    static async write(path: unknown, source: Source | Archive, options?: Options): Promise<void> {
       if (arguments.length < 2) throw new TypeError("Expected path and archive data");
       const archive = source instanceof Archive ? source : new Archive(source, options);
-      return internal.require("bun").write(path, await archive.bytes());
+      await internal.require("bun").write(path, await archive.bytes());
     }
     get [Symbol.toStringTag]() { return "Archive"; }
   }

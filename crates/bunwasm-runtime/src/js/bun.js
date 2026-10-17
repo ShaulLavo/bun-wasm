@@ -249,6 +249,19 @@
     return String(data);
   }
 
+  // Bun.gzipSync/gunzipSync/deflateSync/inflateSync (BunObject.rs JSZlib) with
+  // zlib: Bun's errors carry only zlib's message.
+  function bunZlib(data, options, mode) {
+    const settings = options && typeof options === "object" ? options : {};
+    const config = { level: settings.level ?? -1, windowBits: settings.windowBits ?? 15, memLevel: settings.memLevel ?? 8, strategy: settings.strategy ?? 0 };
+    try {
+      return native.zlibConvert(hashInput(data), mode, JSON.stringify(config), undefined, 4, 64 * 1024, 2 ** 32);
+    } catch (error) {
+      if (error && typeof error === "object" && "errno" in error) throw new Error(error.message);
+      throw error;
+    }
+  }
+
   hash.wyhash = hash;
   hash.crc32 = (data) => native.crc32(hashInput(data));
   hash.adler32 = (data) => native.adler32(hashInput(data));
@@ -488,14 +501,14 @@
     fileURLToPath: (url) => internal.require("node_url").fileURLToPath(url),
     pathToFileURL: (path) => internal.require("node_url").pathToFileURL(path),
     concatArrayBuffers,
-    gzipSync: (data, options) => native.compress(hashInput(data), options && options.level !== undefined ? options.level : -1, "gzip"),
-    gunzipSync: (data) => native.decompress(hashInput(data), "gzip"),
-    deflateSync: (data, options) => native.compress(hashInput(data), options && options.level !== undefined ? options.level : -1, "raw"),
-    inflateSync: (data) => native.decompress(hashInput(data), "raw"),
+    gzipSync: (data, options) => bunZlib(data, options, "gzip"),
+    gunzipSync: (data, options) => bunZlib(data, options, "gunzip"),
+    deflateSync: (data, options) => bunZlib(data, options, "deflateRaw"),
+    inflateSync: (data, options) => bunZlib(data, options, "inflateRaw"),
     zstdCompressSync: (data, options) => internal.require("zlib").bunCompress(data, options),
     zstdDecompressSync: (data) => internal.require("zlib").bunDecompress(data),
     zstdCompress: (data, options) => Promise.resolve(internal.require("zlib").bunCompress(data, options)),
-    zstdDecompress: (data) => Promise.resolve(internal.require("zlib").bunDecompress(data)),
+    zstdDecompress: (data) => new Promise(resolve => resolve(internal.require("zlib").bunDecompress(data))),
     readableStreamToBytes,
     readableStreamToArrayBuffer: async (s) => (await readableStreamToBytes(s)).buffer,
     readableStreamToText: async (s) => native.utf8Decode(await readableStreamToBytes(s)),

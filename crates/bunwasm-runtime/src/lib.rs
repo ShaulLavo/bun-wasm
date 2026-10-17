@@ -19,6 +19,8 @@ mod directory;
 mod encoding;
 mod streams;
 mod archive;
+mod compression;
+mod zlib_ffi;
 mod crypto;
 mod glob;
 pub mod engine;

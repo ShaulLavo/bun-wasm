@@ -17,7 +17,11 @@ Each row has one class. A file with independent changes has separate rows.
 | [Third-party interrupt instrumentation](#third-party-interrupt-instrumentation) | Host feature | Original TypeScript binary rewriter, content-addressed loader and rescued browser fixtures; module-internal countdowns avoid per-entry host calls. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
-| [Compression and archive adapters](#compression-and-archive-adapters) | Host feature | Original TypeScript API adapters over Bun's Rust Zstd and portable Rust codec and tar libraries. |
+| [Compression and archive adapters](#compression-and-archive-adapters) | Host feature | Original Web stream driver, Bun function wrappers, archive reader and native handle registry. |
+| [`src/js/zlib.ts`, Node zlib streams](#compression-and-archive-adapters) | Port | Node's `lib/zlib.js` stream, flush, limit and validation logic over the native handle. |
+| [`src/compression.rs`, native codec contexts](#compression-and-archive-adapters) | Port | Bun's native zlib, Brotli and Zstd handle calls and its Web stream coder steps. |
+| [`third_party/brotli/`](#compression-and-archive-adapters) | Port | Google Brotli 1.2.0 C source at Bun's pinned revision, built by `build.rs`. |
+| [`third_party/zlib-ng/`](#compression-and-archive-adapters) | Port | zlib-ng 2.3.3 portable C source, Bun's pinned zlib, built by `build.rs`. |
 | [`third_party/tar/src/entry.rs`, symlink timestamp adapter](#tar-wasi-extraction) | Host feature | Original Rust adapter for no-follow WASI timestamp updates. |
 | [`third_party/tar/src/pax_sparse.rs`, GNU PAX sparse adapter](#tar-wasi-extraction) | Host feature | Original GNU PAX sparse 1.0 parser that feeds the upstream sparse block reader. |
 | [`third_party/tar/`, WASI extraction](#tar-wasi-extraction) | Port | WASI symlink support and permission handling over the unchanged tar extractor. |
@@ -1618,44 +1622,74 @@ implementation or compatibility branch is introduced.
 
 ## Compression and archive adapters
 
-Class **Host feature**. The original factories `src/js/zlib.ts` and `src/js/archive.ts`
-and the Rust `src/archive.rs` adapter live under `crates/bunwasm-runtime/`.
-No upstream implementation is copied into these files.
+Class **Port**, `crates/bunwasm-runtime/src/js/zlib.ts`. node:zlib follows Node's
+`lib/zlib.js` (Node v26.7.0; Bun's `src/js/node/zlib.ts` at upstream
+`9510e74152073d850a18758ca41114d8f214ffa6` is the same code over `$rust` handles):
+`ZlibBase`, `processChunk`, `processCallback`, `processChunkSync`, the flush
+buffers and `maxFlush`, `params`, the option validators and the Brotli and Zstd
+parameter tables. Local changes: TypeScript classes instead of prototype
+functions, a JavaScript `Handle` object in place of the C++ binding that calls
+the native context once per write (`setImmediate` stands in for the thread
+pool), and the sync convenience functions call the same loop in Rust
+(`zlibConvert`) instead of building a stream, unless `info` asks for the engine.
+The Brotli and Zstd constants are Bun's `ProcessBindingConstants.cpp` values.
 
-The Brotli and Zstd constants in `src/js/zlib.ts` and parameter IDs in `src/streams.rs` are
-**Port** data corresponding to Bun's
-`src/jsc/bindings/ProcessBindingConstants.cpp` at upstream
-`9510e74152073d850a18758ca41114d8f214ffa6`. The adapter exposes the subset used by
-its codecs. It does not copy that binding's engine setup or object code.
+Class **Port**, `crates/bunwasm-runtime/src/compression.rs`. `Handle` ports the
+per-write logic of Bun's `src/runtime/node/zlib/Native{Zlib,Brotli,Zstd}.rs`
+(Node's `node_zlib.cc`) at the same revision: one codec call per write into a
+caller-sized buffer, gzip member and UNZIP detection, dictionary loading, and
+Node's error messages, codes and errnos. Local change: Node's `unexpected end of
+file` (`Z_BUF_ERROR`) for an unfinished Zstd frame at `ZSTD_e_end`, which Bun
+omits (it returns empty output). `WebCoder` ports
+`src/runtime/webcore/CompressionStreamCoder.rs`: steps bounded by
+`max(highWaterMark, chunk length)`, trailing-junk and Zstd frame checks, and the
+error mapping. Its off-thread path and native sink delivery are not ported. The
+contexts call Bun's unchanged FFI declarations in `vendor/bun/src/zstd/lib.rs` and
+`vendor/bun/src/brotli_sys/`, and zlib through the original declarations in
+`src/zlib_ffi.rs`. Output bytes therefore match Bun's; Node's Chromium zlib differs
+from both on larger inputs and after full flushes, while headers, flush markers and
+small-input bytes match all three (tests/fixtures/compression-review).
 
-The Zstd one-shot calls and streaming decompressor use Bun's unchanged
-`src/zstd/lib.rs` at upstream `9510e74152073d850a18758ca41114d8f214ffa6`
-plus the exported WASI patches, local revision `cd95fa7a13b3f13be73e512b38ec111c1c228084`. The encoder stream uses
-`zstd` 0.13.3 with default features disabled and `no_asm` enabled. Its `zstd-sys`
-dependency supplies the C library that Bun's Rust wrapper also calls. Legacy
-formats, dictionary training and compressor threads are disabled. Native fetch
-uses the same dependency to decode Zstd HTTP bodies. The Node host forwards raw
-Zstd bodies through the fetch head's `bodyEncoding` field to Bun's Rust stream
-decoder. Node 26.7.0's sync and streaming decoders both stop after the first
+Class **Port**, `third_party/zlib-ng/`: zlib-ng 2.3.3 (`ZLIBNG_VERSION`), the
+release Bun pins in `scripts/build/deps/zlib.ts` (tag commit
+`12731092979c6d07f42da27da673a9f6c7b13586`), copied from the copy bundled in the
+`libz-sys` 1.1.25 crate. Only the portable C
+sources, `arch/generic/`, the header templates and `LICENSE.md` are kept; gzip file
+I/O, the one-shot `compress`/`uncompress` files (bunwasm-glue already exports a
+`compress2`), CMake files and the SIMD kernels are omitted, and no file is modified. The
+original `build.rs` adapter writes `zlib.h` and `zconf.h` from their templates with
+Bun's substitutions and compiles them with Bun's defines plus `WITH_ALL_FALLBACKS`
+(the portable kernels), since wasm has no SIMD dispatch.
+
+Class **Port**, `third_party/brotli/c/` and `LICENSE`: Google Brotli 1.2.0 at
+`028fb5a23661f123017c060daa546b55cf4bde29`, the revision in Bun's
+`scripts/build/deps/brotli.ts`, unchanged except that `c/tools/` (the command-line
+tool) is omitted. The original `build.rs` adapter compiles `common`, `dec` and `enc`
+with `BROTLI_BUILD_PORTABLE`. The Rust `brotli` crate, the runtime's `miniz_oxide`
+helpers and the crates.io `zstd` encoder are no longer runtime codecs.
+
+Class **Host feature**, original adapters: `src/js/compression_streams.ts` drives
+`WebCoder` the way Bun's `JSCompressionStreamShared.cpp` does (readable
+high-water mark 1, a write settles once its expansion is read, cancel and abort
+settle a parked step, an abort during close keeps the flush) and parses Bun's
+`level` and queuing-strategy options; the `Bun.gzipSync` family and
+`Bun.zstd*` wrappers in `bun.js`, `zlib.ts` and `natives.rs` call the same
+contexts and Bun's own `bun_zstd::compress_append`/`decompress_alloc`;
+`src/streams.rs` keeps the handle registry. `src/js/archive.ts` and
+`src/archive.rs` are original: gzip tar input is decoded as the tar parser reads
+it, `files()` reads each entry in 64 KiB fallible steps like Bun's
+`Archive.rs`, and extraction streams entries to disk with the tar crate's
+`Entry::unpack_in`. Expansion is bounded by Node's `maxOutputLength` for the
+convenience functions, by read demand for streams, and by available memory
+(a catchable out-of-memory error) for Bun's functions and `files()`, as in Bun.
+
+Native fetch decodes Zstd HTTP bodies with the same `zstd-sys` library. The Node
+host forwards raw Zstd bodies through the fetch head's `bodyEncoding` field to the
+guest's DecompressionStream, because Node 26.7.0's decoders stop after the first
 concatenated frame. Browser HTTP continues to use its host's content decoder;
 virtual loopback responses declare their raw body encoding for guest decoding.
-
-Brotli uses the existing pinned `brotli` 8.0.4 Rust dependency. Deflate and gzip
-streams reuse the existing `flate2` Rust backend. Archives reuse the existing
-`tar` 0.4.46 dependency with its default features disabled and the
-[WASI extraction port](#tar-wasi-extraction). Archive extraction uses
-`Entry::unpack_in`, including its destination, symlink and sparse-file handling.
-The adapter supports tar and gzip tar input, creation, filtering, extraction,
-byte/Blob conversion and static writes. Other libarchive formats are not added.
-
-Bun's `src/js/node/zlib.ts` at that same revision depends on `$rust` constructors
-from `src/runtime/node/zlib/`, engine object bindings, and private native handles.
-Bun's `src/runtime/api/Archive.rs` similarly owns JavaScriptCore values and
-libarchive callbacks. These APIs cannot currently load through our engine-neutral
-builtin loader. The TypeScript adapters provide public codec and archive APIs
-without fabricating Bun's private native handles. Private binding instrumentation
-and complete option parity remain outside these adapters.
-
+Archives reuse `tar` 0.4.46 with default features disabled and the
+[WASI extraction port](#tar-wasi-extraction). Other libarchive formats are not added.
 
 ## Tar WASI extraction
 
@@ -1682,3 +1716,4 @@ payload length, then builds the upstream `EntryIo::Pad` and `EntryIo::Data` list
 `src/archive.rs` dispatches PAX members to it. Existing GNU sparse parsing and the
 upstream extraction and seeking paths remain intact. Other GNU PAX sparse
 versions report an unsupported-format error.
+

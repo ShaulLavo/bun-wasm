@@ -3,7 +3,7 @@
   const names = ["ReadableStream", "ReadableStreamDefaultReader", "ReadableStreamBYOBReader", "ReadableStreamBYOBRequest", "ReadableByteStreamController", "ReadableStreamDefaultController", "WritableStream", "WritableStreamDefaultWriter", "WritableStreamDefaultController", "TransformStream", "TransformStreamDefaultController", "ByteLengthQueuingStrategy", "CountQueuingStrategy", "TextEncoderStream", "TextDecoderStream", "CompressionStream", "DecompressionStream"];
   if (internal.native.engine === "host") {
     return Object.assign(Object.fromEntries(names.map(name => [name, globalThis[name]])),
-      internal.require("compression_streams").create(globalThis.TransformStream));
+      internal.require("compression_streams").create(globalThis.TransformStream, globalThis.ReadableStream, globalThis.WritableStream));
   }
   const streams = internal.require("streams_polyfill");
   const native = internal.native.streams;
@@ -100,7 +100,7 @@
   }
 
   const adapters = Object.assign({ TextEncoderStream, TextDecoderStream },
-    internal.require("compression_streams").create(streams.TransformStream));
+    internal.require("compression_streams").create(streams.TransformStream, streams.ReadableStream, streams.WritableStream));
   for (const [name, constructor] of Object.entries(adapters)) {
     for (const key of Object.getOwnPropertyNames(constructor.prototype)) {
       if (key === "constructor") continue;

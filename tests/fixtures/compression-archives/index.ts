@@ -20,9 +20,9 @@ assert.deepEqual(Buffer.from(await files.get("src/a.ts")!.arrayBuffer()), source
 assert.equal(await restored.extract("out", { glob: ["**", "!**/*.test.ts"] }), 2);
 assert.equal(readFileSync("out/hello.txt", "utf8"), "hello");
 assert.equal(existsSync("out/src/a.test.ts"), false);
-assert.equal(await new Bun.Archive({ "empty/": "", "package/file.txt": "package" }).extract("directories"), 1);
+assert.equal(await new Bun.Archive({ "empty/": "", "package/file.txt": "package" }).extract("directories"), 2);
 assert.equal(statSync("directories/empty").isDirectory(), true);
-assert.equal(await Bun.Archive.write("saved.tar", new Bun.Archive({ "saved.txt": "saved" })), (await Bun.file("saved.tar").bytes()).length);
+assert.equal(await Bun.Archive.write("saved.tar", new Bun.Archive({ "saved.txt": "saved" })), undefined);
 assert.equal((await new Bun.Archive(await Bun.file("saved.tar").bytes()).files()).size, 1);
 const originalData = new Uint8Array([1, 2, 3]);
 const originalEntries = { "data.bin": originalData };
@@ -92,8 +92,9 @@ for (const [compress, decompress] of [
   const chunks: Buffer[] = [];
   stream.on("data", chunk => chunks.push(chunk));
   const ended = new Promise<void>((resolve, reject) => { stream.on("end", resolve); stream.on("error", reject); });
-  await new Promise<void>((resolve, reject) => stream.write(source.subarray(0, 100), error => error ? reject(error) : resolve()));
-  assert.ok(chunks.length > 0, `${compress} emits data before end`);
+  stream.write(source.subarray(0, 100));
+  await new Promise<void>(resolve => stream.flush(() => resolve()));
+  assert.ok(chunks.length > 0, `${compress} emits flushed data before end`);
   stream.end(source.subarray(100));
   await ended;
   assert.equal(stream.bytesWritten, source.length);
@@ -109,7 +110,8 @@ assert.equal(Bun.zstdDecompressSync(Buffer.concat([first, second])).toString(), 
 assert.deepEqual(await Bun.zstdDecompress(await Bun.zstdCompress(source)), source);
 assert.throws(() => Bun.zstdCompressSync(source, { level: 0 }));
 assert.throws(() => zlib.createBrotliCompress({ params: { 99999: 1 } }), { code: "ERR_BROTLI_INVALID_PARAM" });
-assert.throws(() => zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_NPOSTFIX]: 4 } }), RangeError);
+// Node and Bun store Brotli parameters unchecked; the encoder clamps them.
+zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_NPOSTFIX]: 4 } }).destroy();
 assert.throws(() => zlib.zstdCompressSync(source, { params: { 99999: 1 } }), { code: "ERR_ZSTD_INVALID_PARAM" });
 assert.equal(zlib.crc32("world", zlib.crc32("hello ")), zlib.crc32("hello world"));
 console.log("zstd frames, Bun functions, validation and seeded crc32");

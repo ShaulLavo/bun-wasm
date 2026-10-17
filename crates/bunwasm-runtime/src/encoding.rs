@@ -98,62 +98,6 @@ pub fn hmac(alg: &str, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Container around deflate data: raw, zlib (RFC 1950) or gzip (RFC 1952).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Wrapper {
-    Raw,
-    Zlib,
-    Gzip,
-}
-
-impl Wrapper {
-    pub fn parse(name: &str) -> Option<Wrapper> {
-        match name {
-            "raw" | "deflateRaw" => Some(Wrapper::Raw),
-            "zlib" | "deflate" => Some(Wrapper::Zlib),
-            "gzip" => Some(Wrapper::Gzip),
-            _ => None,
-        }
-    }
-}
-
-pub fn compress(data: &[u8], level: u8, wrapper: Wrapper) -> Vec<u8> {
-    use miniz_oxide::deflate::{compress_to_vec, compress_to_vec_zlib};
-    match wrapper {
-        Wrapper::Raw => compress_to_vec(data, level),
-        Wrapper::Zlib => compress_to_vec_zlib(data, level),
-        Wrapper::Gzip => {
-            // Fixed 10-byte header (no name, mtime 0, OS unknown), then the
-            // raw stream, CRC-32 and input size, as gzip(1) writes them.
-            let mut out = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
-            out.extend(compress_to_vec(data, level));
-            out.extend(crc32(data).to_le_bytes());
-            out.extend((data.len() as u32).to_le_bytes());
-            out
-        }
-    }
-}
-
-pub fn decompress(data: &[u8], wrapper: Wrapper) -> Result<Vec<u8>, String> {
-    use miniz_oxide::inflate::{decompress_to_vec, decompress_to_vec_zlib};
-    let result = match wrapper {
-        Wrapper::Raw => decompress_to_vec(data),
-        Wrapper::Zlib => decompress_to_vec_zlib(data),
-        Wrapper::Gzip => return gunzip(data),
-    };
-    result.map_err(|e| format!("{:?}", e.status))
-}
-
-fn gunzip(data: &[u8]) -> Result<Vec<u8>, String> {
-    if data.len() < 18 || data[0] != 0x1f || data[1] != 0x8b || data[2] != 8 {
-        return Err("incorrect header check".to_owned());
-    }
-    use std::io::Read;
-    let mut output = Vec::new();
-    flate2::read::MultiGzDecoder::new(data).read_to_end(&mut output).map_err(|e| e.to_string())?;
-    Ok(output)
-}
-
 pub fn crc32(data: &[u8]) -> u32 {
     crc32_seed(data, 0)
 }
@@ -197,16 +141,6 @@ mod tests {
     fn checksums() {
         assert_eq!(crc32(b"hello"), 907060870);
         assert_eq!(adler32(b"hello"), 103547413);
-    }
-
-    #[test]
-    fn compression_roundtrip() {
-        let input = b"hello hello hello hello compression".repeat(20);
-        for w in [Wrapper::Raw, Wrapper::Zlib, Wrapper::Gzip] {
-            let packed = compress(&input, 6, w);
-            assert!(packed.len() < input.len());
-            assert_eq!(decompress(&packed, w).unwrap(), input);
-        }
     }
 
     #[test]

@@ -46,12 +46,18 @@ declare namespace BunWasm {
   interface BufferBytes extends Uint8Array { toString(encoding?: string): string }
   interface BufferConstructor { from(data: unknown, encodingOrOffset?: string | number, length?: number): BufferBytes }
   interface CompressionTransform extends NodeEmitter {
+    readonly destroyed: boolean;
+    readonly writableEnded: boolean;
+    readonly writableFinished: boolean;
+    readonly writableLength: number;
     push(chunk: unknown): boolean;
-    write(chunk: unknown, callback?: () => void): boolean;
+    write(chunk: unknown, encoding?: string | (() => void), callback?: (error?: unknown) => void): boolean;
+    end(chunk?: unknown): unknown;
     destroy(error?: unknown): this;
-    _transform(chunk: unknown, encoding: string, callback: (error: unknown, result?: unknown) => void): void;
-    _flush(callback: (error: unknown, result?: unknown) => void): void;
-    _destroy(error: unknown, callback: (error: unknown, result?: unknown) => void): void;
+    _read(size: number): void;
+    _transform(chunk: unknown, encoding: string, callback: (error?: unknown, result?: unknown) => void): void;
+    _flush(callback: (error?: unknown, result?: unknown) => void): void;
+    _destroy(error: unknown, callback: (error?: unknown, result?: unknown) => void): void;
   }
   interface CompressionConstructor { new(options?: object): CompressionTransform }
   interface WorkerReadable extends NodeEmitter {
@@ -64,12 +70,21 @@ declare namespace BunWasm {
     end(): unknown;
   }
   interface Native {
-    compress(data: Uint8Array, level: number, format: string, parameters?: string): Uint8Array;
-    decompress(data: Uint8Array, format: string, maxOutputLength?: number): Uint8Array;
+    /** node:zlib processChunkSync: (data, mode, options JSON, dictionary, flush, chunkSize, maxOutputLength). */
+    zlibConvert(data: Uint8Array, mode: string, options?: string, dictionary?: Uint8Array, flush?: number, chunkSize?: number, maxOutputLength?: number): Uint8Array;
+    zstdCompress(data: Uint8Array, level: number): Uint8Array;
+    zstdDecompress(data: Uint8Array): Uint8Array;
     crc32(data: Uint8Array, initial?: number): number;
     streams: {
-      codec(format: string, decompress: boolean, level?: number, parameters?: string): number;
-      push(handle: number, data: Uint8Array, last: boolean): Uint8Array;
+      /** A node:zlib native handle: (mode, options JSON, dictionary). */
+      codec(mode: string, options?: string, dictionary?: Uint8Array): number;
+      /** One codec call into an `outLength` buffer. */
+      write(handle: number, data: Uint8Array, flush: number, outLength: number): { bytes: Uint8Array; availIn: number };
+      params(handle: number, level: number, strategy: number): void;
+      /** Bun's CompressionStreamCoder: (format, decompress, highWaterMark, level). */
+      webCodec(format: string, decompress: boolean, highWaterMark: number, level?: number): number;
+      webStep(handle: number, data: Uint8Array, finish: boolean): { bytes: Uint8Array; more: boolean };
+      push(handle: number, data: Uint8Array, last: boolean): string;
       release(handle: number): void;
     };
     archive: {
@@ -79,6 +94,9 @@ declare namespace BunWasm {
     };
   }
   interface Internal {
+    /** Short description of a value for ERR_INVALID_ARG_TYPE messages. */
+    describe(value: unknown): string;
+    nextTick(callback: (...args: unknown[]) => void, ...args: unknown[]): void;
     toUint8(value: ArrayBuffer | ArrayBufferView): Uint8Array;
     concatBytes(chunks: Uint8Array[]): Uint8Array;
     require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
