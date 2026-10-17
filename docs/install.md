@@ -289,7 +289,9 @@ workspace, manifest-header, lock-migration, update and bunx cause assigned by PR
 Each unchanged upstream file has a 15-second deadline and 2-second initial test
 timeout, one worker, with loopback-only networking. The before artifacts are main
 `390bda6d`; both sides use the same suite, launcher, runner, host sources,
-dependencies and deadlines. Only the wasm hash differs within each engine pair.
+dependencies and deadlines. Only the wasm hash differs within each engine pair. This measurement predates
+the rebase onto main `63aae226` and the later selected-workspace update fix; it
+does not measure those subsequent changes.
 
 | Engine | Observed passes before / after | Fully passing files before / after | Timeouts before / after |
 |---|---|---|---|
@@ -318,11 +320,11 @@ capabilities, so the browser and native pass gains are not interchangeable.
 Security scanners, interactive update tables, global links, additional lockfile
 protocols and exact upstream diagnostics remain outside this adapter.
 
-The focused synthetic checks pass on each engine: 20 existing installer cases,
-the update-pruning regression, and seven installer/command scenarios. Standard
-runtime fixtures pass 201/201 per engine. The full web script passes, including
-817 unit tests and Chromium/WebKit checks; HMR passes all six engine/browser
-combinations. The separate `browser-installer-links.ts` scenario checks the
+At the measured revision, the focused synthetic checks passed on each engine:
+20 existing installer cases, the update-pruning regression, and seven
+installer/command scenarios. Standard runtime fixtures passed 201/201 per
+engine. The full web script passed, including 817 unit tests and Chromium/WebKit
+checks; HMR passed all six engine/browser combinations. The separate `browser-installer-links.ts` scenario checks the
 browser-page filesystem prerequisite instead of treating headless results as
 proof of page support.
 

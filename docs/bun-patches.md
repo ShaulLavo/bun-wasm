@@ -1681,7 +1681,8 @@ parses npm package locks, pnpm YAML, Yarn classic entries, and Yarn Berry YAML
 into that graph before resolution, so migrated versions remain pinned.
 
 `bun update` resolves selected dependencies again, within their declared ranges
-unless `--latest` is supplied. `bun x` prefers a local binary and otherwise
+unless `--latest` is supplied. Selected member updates clear their nested
+resolution pins before resolving the workspace graph. `bun x` prefers a local binary and otherwise
 installs into an atomically published cache directory. Concurrent cold installs
 have separate staging directories. Download cache writes also use unique temporary
 files and publish complete bytes through an atomic rename. Installed binaries use relative links so a

@@ -386,10 +386,15 @@ The headless browser comparison has a separate native Node WASI limitation. In
 `/tmp` reports `Capabilities insufficient (os error 76)` on Node, while native
 QuickJS/JSC proceed to later diagnostic assertions. Reproduce with
 `scripts/bun-suite.sh --engine browser --jobs 1 --timeout 15 --network loopback
-cli/install/bun-install-link-path.test.ts --output <fresh-json>`. Isolate this in a
-small WASI-only control before preparing an upstream Node report or changing the
-Node host. Do not replace workspace links with stale copies or claim that the
-single-root fixture establishes multi-preopen conformance.
+cli/install/bun-install-link-path.test.ts --output <fresh-json>`. A preview1-only
+control now reproduces that divergence on Node v26.7.0: creating the relative
+link `project/node_modules/dep -> ../packages/dep` returns errno 76 with a `/tmp`
+preopen, while Node's root preopen and wasmtime 49.0.3 with the same `/tmp`
+preopen both succeed. The source and output are retained in
+`/work/reports/upstream-bugs/node-wasi-relative-symlink-2026-10-17/` and the shared
+upstream report index, ready for the owner to file. Nothing was posted upstream.
+Do not broaden the suite runner's capabilities, replace workspace links with
+stale copies, or claim single-root fixtures establish multi-preopen conformance.
 
 The focused Chromium/browser probe was run on 2026-10-17. Plain installation
 exited 0; the guest confirmed `bin["is-odd"] === "index.js"`; the next install
