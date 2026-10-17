@@ -1569,6 +1569,9 @@ contexts. Each public request owns its parser configuration and arena.
 and native registration are original bun-wasm adapters. They validate JS input
 and pass bytes and JSON options to the real parser. Public output is printed
 without the module loader's source-preserving and async-context rewrites.
+The async adapter snapshots the selected input bytes before deferring work.
+Minification follows `Config::from_js` boolean/object normalization, and unused
+import trimming explicitly defaults to the public API's tree-shaking setting.
 This does not implement Bun's macro callbacks or worker-pool scheduling.
 
 ## Bun wrap helpers
@@ -1591,6 +1594,12 @@ JSC cell roots, property slots and typed-array storage access with engine-neutra
 objects, iterators and reflection. The existing assertion module supplies
 `AssertionError`, argument checks and diff rendering.
 Object prototypes are ignored, and boxed primitive slots use `Object.is`.
+URL comparisons read the intrinsic href; KeyObjects use the existing private
+brand and the public equals method, followed by own-property subset checks.
+Typed-array storage and brands come from intrinsics, independently of an own
+iterator or toStringTag. DataView and ArrayBuffer numeric own properties remain
+part of object comparison. Map identity entries are consumed only after their
+values match; a mismatch can fall back to an unconsumed partial key/value match.
 
 Bun's `src/js/node/assert.ts` calls a native JSC function for this comparison,
 so loading that module alone cannot supply an engine-independent implementation.
@@ -1603,7 +1612,12 @@ Class **Host feature**. `src/js/test_matchers.ts`, `web_brand.ts` and
 `resolve_message.ts` are original bun-wasm implementations of public contracts.
 The test adapter handles returned promises and tracks assertions through test
 completion. An async `toThrow` returns a thenable; the runner waits for
-unawaited checks before completing the invocation.
+unawaited checks before completing the invocation. Returned values use the
+existing native promise brand and captured reactions, without reading `then`.
+The pending observer retains the original native promise. A temporary constructor
+accessor observes await's native PromiseResolve fast path, then restores the
+original descriptor. This is original runner bookkeeping; it avoids resolving a
+fulfilled accessor value through a second thenable.
 Web interface prototypes receive their standard `toStringTag`.
 `Bun.version_with_sha` uses the existing embedded version and revision.
 

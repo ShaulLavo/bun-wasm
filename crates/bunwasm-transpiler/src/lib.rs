@@ -155,7 +155,7 @@ fn configure_public(state: &mut State, options: &serde_json::Value, tsconfig: &[
     opts.repl_mode = options["replMode"].as_bool().unwrap_or(false);
     opts.dead_code_elimination = options["deadCodeElimination"].as_bool().unwrap_or(true) && !opts.repl_mode;
     opts.tree_shaking = options["treeShaking"].as_bool().unwrap_or(false);
-    opts.trim_unused_imports = options["trimUnusedImports"].as_bool();
+    opts.trim_unused_imports = Some(options["trimUnusedImports"].as_bool().unwrap_or(opts.tree_shaking));
     opts.minify_whitespace = options["minifyWhitespace"].as_bool().unwrap_or(false);
     opts.minify_syntax = options["minifySyntax"].as_bool().unwrap_or(false);
     opts.minify_identifiers = options["minifyIdentifiers"].as_bool().unwrap_or(false);

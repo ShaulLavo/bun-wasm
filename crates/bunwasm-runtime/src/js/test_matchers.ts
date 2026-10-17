@@ -1,34 +1,37 @@
-(function () {
+(function (internal: { isPromise(value: unknown): boolean }) {
   type Context = { not?: boolean; promise?: string };
   type Outcome = { invalid: true } | { invalid?: false; threw: boolean; value: unknown };
   type Failure = { params?: string; body: string; raw?: boolean } | null;
 
-  function isThenable<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
-    return value !== null && (typeof value === "object" || typeof value === "function") && "then" in value && typeof value.then === "function";
+  const promiseThen = Promise.prototype.then;
+
+  function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
+    return internal.isPromise(value);
   }
 
-  function settle<T, U>(value: T | PromiseLike<T>, consume: (value: T) => U): U | PromiseLike<U> {
-    if (isThenable(value)) {
-      return Promise.resolve(value).then(consume);
-    }
+  function react<T, U>(value: Promise<T>, fulfilled: (value: T) => U, rejected?: (error: unknown) => U): Promise<U> {
+    return Reflect.apply(promiseThen, value, [fulfilled, rejected]);
+  }
+
+  function settle<T, U>(value: T | Promise<T>, consume: (value: T) => U): U | Promise<U> {
+    if (isPromise(value)) return react(value, consume);
     return consume(value);
   }
 
-  function throwOutcome(ctx: Context, received: unknown): Outcome | PromiseLike<Outcome> {
+  function throwOutcome(ctx: Context, received: unknown): Outcome | Promise<Outcome> {
     if (ctx.promise) return { threw: ctx.promise === "rejects", value: received };
     if (typeof received !== "function") return { invalid: true };
+    let result: unknown;
     try {
-      const result: unknown = received();
-      if (result !== null && (typeof result === "object" || typeof result === "function") && "then" in result && typeof result.then === "function") {
-        return Promise.resolve(result).then(
-          value => ({ threw: false, value }),
-          value => ({ threw: true, value }),
-        );
-      }
-      return { threw: false, value: result };
+      result = received();
     } catch (value) {
       return { threw: true, value };
     }
+    if (!isPromise(result)) return { threw: false, value: result };
+    return react<unknown, Outcome>(result,
+      value => ({ threw: false, value }),
+      value => ({ threw: true, value }),
+    );
   }
 
   function within(ctx: Context, received: unknown, ...bounds: unknown[]): Failure {
@@ -42,22 +45,39 @@
   }
 
   function pending() {
-    type Record = { observed: boolean; result: Promise<{ error?: unknown }> };
-    const records: Record[] = [];
-    function track<T>(value: T | PromiseLike<T>): T | PromiseLike<T> {
-      if (!isThenable(value)) return value;
-      const promise = Promise.resolve(value);
-      const record: Record = { observed: false, result: promise.then(() => ({}), error => ({ error })) };
-      records.push(record);
-      return { then(onfulfilled, onrejected) { record.observed = true; return promise.then(onfulfilled, onrejected); } };
+    type Settlement = { kind: "fulfilled" } | { kind: "rejected"; error: unknown };
+    type Record = { observed: boolean; result: Promise<Settlement>; restore(): void };
+    const records = new Map<Promise<unknown>, Record>();
+    function track<T>(value: T): T {
+      if (!isPromise<unknown>(value) || records.has(value)) return value;
+      const descriptor = Object.getOwnPropertyDescriptor(value, "constructor");
+      const prototype: object = Object.getPrototypeOf(value);
+      const restore = () => descriptor ? Reflect.defineProperty(value, "constructor", descriptor) : Reflect.deleteProperty(value, "constructor");
+      const record: Record = { observed: false, restore, result: react<unknown, Settlement>(value,
+        () => ({ kind: "fulfilled" }), error => ({ kind: "rejected", error }),
+      ) };
+      // Await reads constructor before retaining a native promise's fulfillment without re-assimilation.
+      Object.defineProperty(value, "constructor", { configurable: true, get() {
+        record.observed = true;
+        restore();
+        if (!descriptor) return Reflect.get(prototype, "constructor", value);
+        return "value" in descriptor ? descriptor.value : descriptor.get?.call(value);
+      } });
+      records.set(value, record);
+      return value;
+    }
+    function finishPending<T>(result: T, finish: (value: T) => void) {
+      for (const record of records.values()) record.restore();
+      finish(result);
     }
     async function complete<T extends { ok?: boolean }>(result: T, finish: (value: T | { error: unknown }) => void) {
-      if (!result.ok) return finish(result);
-      for (let i = 0; i < records.length; i++) {
-        const record = records[i], settled = await record.result;
-        if (!record.observed && "error" in settled) return finish({ error: settled.error });
+      if (!result.ok) return finishPending(result, finish);
+      for (const record of records.values()) {
+        const settled = await record.result;
+        record.restore();
+        if (!record.observed && settled.kind === "rejected") return finishPending({ error: settled.error }, finish);
       }
-      finish(result);
+      finishPending(result, finish);
     }
     return { track, complete };
   }

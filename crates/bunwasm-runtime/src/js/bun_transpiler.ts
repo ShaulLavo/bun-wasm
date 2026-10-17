@@ -10,6 +10,19 @@
   const stringify = JSON.stringify, parse = JSON.parse;
   const forwardedOptions = ["define", "treeShaking", "trimUnusedImports", "replMode", "deadCodeElimination", "minifyWhitespace", "minifySyntax", "minifyIdentifiers", "allowBunRuntime", "autoImportJSX"];
 
+  function minification(config: Options, minify: unknown) {
+    if (minify === undefined || minify === null) return;
+    if (typeof minify === "boolean") {
+      config.minifyWhitespace = config.minifySyntax = config.minifyIdentifiers = minify;
+      return;
+    }
+    if (typeof minify !== "object" && typeof minify !== "function") throw new TypeError("Expected minify to be a boolean or an object");
+    for (const [field, option] of [["whitespace", "minifyWhitespace"], ["syntax", "minifySyntax"], ["identifiers", "minifyIdentifiers"]]) {
+      const value: unknown = Reflect.get(minify, field);
+      if (value !== undefined) config[option] = !!value;
+    }
+  }
+
   class BuildMessage extends Error {
     name = "BuildMessage";
     level = "error";
@@ -64,6 +77,7 @@
         const value = options[key];
         if (value !== undefined) config[key] = value;
       }
+      minification(config, options.minify);
       this.#options = stringify(config);
       this.#request("", this.#loader, "validate");
     }
@@ -81,7 +95,7 @@
       return this.#request(code, value, "transform");
     }
     transform(code: unknown, value?: unknown) {
-      const bytes = source(code), selected = loader(value, this.#loader);
+      const bytes = new Uint8Array(source(code)), selected = loader(value, this.#loader);
       return Promise.resolve().then(() => this.#request(bytes, selected, "transform"));
     }
     scan(code: unknown, value?: unknown) {
