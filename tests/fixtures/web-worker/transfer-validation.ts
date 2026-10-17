@@ -10,6 +10,10 @@ function memory() {
 }
 
 export function checkTransferValidation(send: Sender) {
+  let iteratorReads = 0;
+  const transfer = { get [Symbol.iterator]() { iteratorReads++; return function* () { yield null; }; } };
+  assert.throws(() => send(null, { transfer }), { name: "TypeError", message: "Type error" });
+  assert.equal(iteratorReads, 1);
   const cloneError = "The object can not be cloned.";
   const cases: InvalidTransfer[] = [];
   for (const entry of [null, undefined, false, 1, "buffer", 1n, Symbol("buffer")]) {
