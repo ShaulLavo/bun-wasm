@@ -1,9 +1,13 @@
-(function (internal: { isPromise(value: unknown): boolean; promiseState(value: Promise<unknown>): string }) {
+(function (internal: {
+  isPromise(value: unknown): boolean;
+  promiseState(value: Promise<unknown>): string;
+  promiseThen<T, U>(value: Promise<T>, fulfilled: (value: T) => U, rejected?: (error: unknown) => U): Promise<U>;
+}) {
   type Context = { not?: boolean; promise?: string };
   type Outcome = { invalid: true } | { invalid?: false; threw: boolean; value: unknown };
   type Failure = { params?: string; body: string; raw?: boolean } | null;
 
-  const promiseThen = Promise.prototype.then;
+  const promiseThen = internal.promiseThen;
   const schedule = setTimeout.bind(globalThis);
 
   function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
@@ -11,7 +15,7 @@
   }
 
   function react<T, U>(value: Promise<T>, fulfilled: (value: T) => U, rejected?: (error: unknown) => U): Promise<U> {
-    return Reflect.apply(promiseThen, value, [fulfilled, rejected]);
+    return promiseThen(value, fulfilled, rejected);
   }
 
   function settle<T, U>(value: T | Promise<T>, consume: (value: T) => U): U | Promise<U> {

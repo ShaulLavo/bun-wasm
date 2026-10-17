@@ -291,6 +291,26 @@ JSValueRef bunjsc_promise_result(JSContextRef ctx, JSValueRef value)
     return toRef(global, promise->result());
 }
 
+JSValueRef bunjsc_promise_then(JSContextRef ctx, JSValueRef value, JSValueRef fulfilled, JSValueRef rejected, JSValueRef* exception)
+{
+    JSGlobalObject* global = toJS(ctx);
+    VM& vm = global->vm();
+    JSLockHolder lock(vm);
+    auto scope = DECLARE_CATCH_SCOPE(vm);
+    auto* promise = dynamicDowncast<JSPromise>(toJS(global, value));
+    if (!promise) {
+        *exception = toRef(global, createTypeError(global, "Expected a promise"_s));
+        return toRef(global, jsUndefined());
+    }
+    auto* result = JSPromise::create(vm, global->promiseStructure());
+    promise->performPromiseThenExported(vm, global, toJS(global, fulfilled), toJS(global, rejected), result);
+    if (scope.exception()) {
+        *exception = toRef(global, scope.exception()->value());
+        scope.clearException();
+    }
+    return toRef(global, result);
+}
+
 // The Proxy's target, or null if the value is not a Proxy.
 JSValueRef bunjsc_proxy_target(JSContextRef ctx, JSValueRef value)
 {

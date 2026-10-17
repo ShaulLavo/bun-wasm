@@ -43,6 +43,7 @@ const nativeGc = typeof globalThis.gc === "function" ? globalThis.gc.bind(global
 const NativeMessageChannel = globalThis.MessageChannel;
 const NativeAbortController = globalThis.AbortController;
 const NativePromise = globalThis.Promise;
+const nativePromiseThen = Function.prototype.call.bind(NativePromise.prototype.then);
 const NativeString = globalThis.String;
 const PENDING = Object.freeze({ state: "pending", value: undefined });
 const nativeProcess = typeof process === "object" && process && process.versions && process.versions.node ? process : null;
@@ -453,6 +454,7 @@ class EngineHost {
       // others print as pending.
       promiseState: (p) => (host.promiseStates.get(p) || PENDING).state,
       promiseResult: (p) => (host.promiseStates.get(p) || PENDING).value,
+      promiseThen: (promise, fulfilled, rejected) => host.promiseThen(promise, fulfilled, rejected),
       isProxy: () => false,
       transferArrayBuffers,
       getProxyTarget: () => undefined,
@@ -724,14 +726,14 @@ class EngineHost {
         }
       };
     };
-    const nativeThen = NativePromise.prototype.then;
     const { then } = {
       then(onFulfilled, onRejected) {
         const box = { promise: null };
-        box.promise = nativeThen.call(this, wrap(onFulfilled, box, false), wrap(onRejected, box, true));
+        box.promise = nativePromiseThen(this, wrap(onFulfilled, box, false), wrap(onRejected, box, true));
         return box.promise;
       },
     };
+    host.promiseThen = Function.prototype.call.bind(then);
     Object.defineProperty(NativePromise.prototype, "then", { value: then, configurable: true, writable: true, enumerable: false });
 
     // Statics whose result state is known at once. `this` stays the caller's

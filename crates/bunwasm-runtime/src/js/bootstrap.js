@@ -14,6 +14,7 @@
   Object.assign(internal, {
     promiseState: native.promiseState,
     promiseResult: native.promiseResult,
+    promiseThen: native.promiseThen,
     isProxy: native.isProxy,
     getProxyTarget: native.getProxyTarget,
     iteratorEntries: native.iteratorEntries,

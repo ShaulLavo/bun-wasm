@@ -17,7 +17,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Bun public transpiler adapter](#public-transpiler-adapter) | Port | Adapt the real Rust parse/print and scan paths to the engine-independent native boundary. |
 | [Generated `bun:wrap` helpers](#bun-wrap-helpers) | Host feature | Load Bun's unmodified runtime helpers through the builtin registry. |
 | [Partial strict comparison](#partial-strict-comparison) | Port | Translate Bun's native partial-comparison rules to TypeScript for all engines. |
-| [Small public runtime adapters](#small-public-runtime-adapters) | Host feature | Original matcher, version, web-brand and resolver-diagnostic adapters. |
+| [Small public runtime adapters](#small-public-runtime-adapters) | Host feature | Original matcher, native promise reaction, version, web-brand and resolver-diagnostic adapters. |
 | [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, async handler dispatch and streaming wrappers on all engines. |
 | [X509Certificate adapters](#x509certificate) | Host feature | Original BoringSSL data bindings and Node certificate wrapper over existing KeyObjects. |
 | [X.509 hostname option matcher](#x509-hostname-option-matcher) | Port | Adapt Bun's OpenSSL-compatible Rust matcher because BoringSSL removed four option behaviors. |
@@ -1664,7 +1664,17 @@ Class **Host feature**. `src/js/test_matchers.ts`, `web_brand.ts` and
 The test adapter handles returned promises and tracks assertions through test
 completion. An async `toThrow` returns a thenable; the runner waits for
 unawaited checks before completing the invocation. Returned values use the
-existing native promise brand and captured reactions, without reading `then`.
+existing native promise brand and the engine reaction hook. QuickJS calls its
+embedding `JS_PromiseThen` API. `crates/bunwasm-jsc/cpp/helpers.cpp` calls
+`JSPromise::performPromiseThenExported` from WebKit's
+`Source/JavaScriptCore/runtime/JSPromise.cpp` at the pinned revision above,
+with a fresh intrinsic result promise,
+matching Bun's direct reaction registration without inspecting public `then`,
+`constructor` or species. These are original adapters to upstream embedding APIs,
+not copies of their implementations. The browser host captures and uncurries its
+original `Promise.prototype.then` at startup. That public operation still reads
+constructor/species; the browser backend cannot yet satisfy poisoned constructor
+or species cases without a lower-level host capability.
 The pending observer retains the original native promise. It reads the existing
 native promise state across engine checkpoints and uses native rejection events
 to distinguish unhandled errors from caught rejections. Native engine and browser

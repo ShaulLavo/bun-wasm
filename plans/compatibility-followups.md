@@ -761,3 +761,13 @@ WebKit's `ArrayBuffer::isDetachable`. Confirm the pinning mechanism before
 changing allocation or ownership; do not force-detach locked native storage.
 Cover native-produced byte buffers as well as JavaScript-created buffers.
 The coordinator owns the evidence until this follow-up is reproduced.
+
+## Browser intrinsic promise reactions
+
+Status: Approved. PR #59's reaction follow-up needs a host-engine capability before it can pass for arbitrary native promises.
+
+`web/src/engine-host.js` captures and uncurries the original `Promise.prototype.then` at startup. That bypasses a patched public `then`, but the method itself still performs `SpeciesConstructor`, which reads the observed promise's `constructor` and species. A non-configurable throwing own constructor getter prevents attachment and leaves the original rejection unhandled. Reading native state and filtering rejection notifications would not mark that promise handled.
+
+Reproduce with `scripts/test.sh --engine browser test-promise-intrinsics` after building the browser artifact. The constructor and species cases fail. Compare the native control with `bun test tests/fixtures/test-promise-intrinsics/index.test.ts`. The standalone public-method control and logs are retained in `/work/reports/bun-wasm-small-causes/reaction-fix/`. QuickJS has `JS_PromiseThen`; JSC has `JSPromise::performPromiseThenExported`. Standard browser JavaScript exposes neither operation. A global Promise constructor wrapper alone cannot cover native async-function promises, and changing a caller's constructor cannot cover non-configurable descriptors.
+
+The coordinator owns the next architecture decision. Supply a host embedding operation with intrinsic reaction semantics, or explicitly record the host-backend limitation. Do not suppress rejection events to make the fixture pass. Keep the existing observer identity and falsy-rejection controls passing.
