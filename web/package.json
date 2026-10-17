@@ -1,10 +1,6 @@
 {
   "name": "bun-wasm-web",
-<<<<<<< HEAD
-  "version": "0.0.31",
-=======
   "version": "0.0.35",
->>>>>>> origin/main
   "private": true,
   "type": "module",
   "scripts": {

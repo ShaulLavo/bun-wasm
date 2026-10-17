@@ -252,7 +252,6 @@ Remaining files at this change:
 - `crates/bunwasm-runtime/src/js/webassembly.js`
 - `crates/bunwasm-runtime/src/js/websocket.js`
 
-<<<<<<< HEAD
 ## Pristine process gate failures during small API verification
 
 Status: Approved. The process/runtime track owns the remaining gate failures.
@@ -294,7 +293,7 @@ uniquely, so they do not explain these failures.
 The full web gate and all six Chromium/WebKit HMR runs pass on the API lane.
 The coordinator owns retaining the report evidence until the process follow-up
 has reproduced and resolved these blockers.
-=======
+
 ## Browser occupied-port follow-up after fake timers
 
 Status: Approved.
@@ -327,4 +326,3 @@ scripts/bun-suite.sh --engine browser --jobs 1 --timeout 15 --network loopback \
 Raw output is retained in
 `/work/reports/bun-wasm-fake-timers/after-browser-logs/js/bun/test/test-timers.test.ts.log`.
 The coordinator owns this evidence until the networking follow-up is verified.
->>>>>>> origin/main
