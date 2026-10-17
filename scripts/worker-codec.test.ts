@@ -1,8 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 
-const scratch = mkdtempSync("/work/tmp/bun-wasm-worker-codec-");
+const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-worker-codec-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const emitted = Bun.spawnSync(["node", new URL("./transpile-runtime.ts", import.meta.url).pathname,
   new URL("../crates/bunwasm-runtime/src/js/worker_codec.ts", import.meta.url).pathname, `${scratch}/codec.js`]);

@@ -3,12 +3,13 @@
 // BUN_WASM_PROCESS_DIST=/absolute/existing/dist bun tests/browser-process.ts --artifact chromium firefox webkit
 // BUN_WASM_PROCESS_DIST=/absolute/existing/dist bun tests/browser-process.ts --benchmark chromium firefox webkit
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, copyFile, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { createServer } from "node:net";
 import { availableParallelism, loadavg } from "node:os";
 import { chromium, firefox, webkit, type Browser } from "playwright";
 import { buildBrowserEntries } from "../../scripts/browser-build";
+import { prepareBaselineSource } from "./process-baseline-source";
 
 const args = process.argv.slice(2);
 const benchmark = args.includes("--benchmark");
@@ -74,11 +75,7 @@ try {
     const archive = archivePath ? undefined : track(Bun.spawn(["git", "-C", root, "archive", baselineRevision, "web/src", "runtime"], { stdout: "pipe", stderr: "inherit" }));
     const unpack = track(Bun.spawn(["tar", "-x", "-C", snapshot], { stdin: archivePath ? Bun.file(archivePath).stream() : archive!.stdout, stdout: "inherit", stderr: "inherit" }));
     assert.equal(await unpack.exited, 0, "unpack baseline"); if (archive) assert.equal(await archive.exited, 0, "archive baseline");
-    await mkdir(join(snapshot, "web/tests"));
-    await mkdir(join(snapshot, "web/node_modules/@bun-wasm"), { recursive: true });
-    await symlink(join(snapshot, "runtime"), join(snapshot, "web/node_modules/@bun-wasm/runtime"));
-    await copyFile(join(import.meta.dir, "process-bench-baseline.ts"), join(snapshot, "web/tests/process-bench-baseline.ts"));
-    await copyFile(join(import.meta.dir, "process-benchmark.ts"), join(snapshot, "web/tests/process-benchmark.ts"));
+    await prepareBaselineSource(snapshot, import.meta.dir);
     const baseline = join(scratch, "baseline");
     await buildBrowserEntries([join(snapshot, "web/tests/process-bench-baseline.ts"), join(snapshot, "web/src/worker.ts"), join(snapshot, "web/src/fs-worker.ts")], baseline);
     await Bun.write(join(baseline, "index.html"), '<!doctype html><script type="module" src="./process-bench-baseline.js"></script>');
