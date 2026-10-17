@@ -67,14 +67,16 @@ test("Safari cannot prove cleanup when startup never confirmed a listener and it
   })).rejects.toThrow("startup listener never confirmed");
   expect(signalled).toEqual([34128]);
 });
-test("Safari retains an observed but unconfirmed XPC across failed startup and an already closed port", async () => {
+test("Safari retains an observed but unconfirmed XPC after failed startup, a closed port and a process group change", async () => {
   const f = darwinProbe(), signalled: number[] = [];
   await expect(assertSafariDriverOwnership(f.owned, 51265, { ...f.inspection, executable: async () => {
     throw new Error("executable inspection failed");
   } })).rejects.toThrow("executable inspection failed");
   expect(f.owned.observed.has(34130)).toBe(true);
+  const moved = { ...f.rows[1]!, group: 34131 };
+  f.replace([f.rows[0]!, moved]);
   await expect(stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => [] }, pid => {
-    signalled.push(pid); f.replace([f.rows[1]!]);
+    signalled.push(pid); f.replace([moved]);
   })).rejects.toThrow("observed=34130");
   expect(signalled).toEqual([34128]);
 }, 8_000);
@@ -122,11 +124,13 @@ test("Safari stops only its driver and requires the associated XPC process to di
   });
   expect(signalled).toEqual([34128]);
 });
-test("Safari never signals an associated XPC that survives driver shutdown, even after its port closes", async () => {
+test("Safari never signals an associated XPC that survives shutdown after closing its port and changing its process group", async () => {
   const f = darwinProbe(), signalled: number[] = [];
   await assertSafariDriverOwnership(f.owned, 51265, f.inspection);
+  const moved = { ...f.rows[1]!, group: 34131 };
+  f.replace([f.rows[0]!, moved]);
   await expect(stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => [] }, pid => {
-    signalled.push(pid); f.replace([f.rows[1]!]);
+    signalled.push(pid); f.replace([moved]);
   })).rejects.toThrow("associated=34130");
   expect(signalled).toEqual([34128]);
 }, 8_000);
@@ -175,13 +179,16 @@ for (const [name, processes] of [
     await expect(assertSafariDriverOwnership(scope(), 43186, inspect([42], processes))).rejects.toThrow("not owned");
   });
 }
-test("Safari rejects a root that predates spawn or changes birth/group identity", async () => {
+test("Safari rejects a root that predates spawn or changes birth identity", async () => {
   await expect(assertSafariDriverOwnership(scope(), 43186, inspect([41], [row(41, 1, 7, 0)]))).rejects.toThrow("identity changed");
   const owned = scope();
   await assertSafariDriverOwnership(owned, 43186, inspect([41]));
-  for (const replacement of [row(41, 1, 7, 2_000), row(41, 1, 8)]) {
-    await expect(assertSafariDriverOwnership(owned, 43186, inspect([41], [replacement]))).rejects.toThrow("identity changed");
-  }
+  await expect(assertSafariDriverOwnership(owned, 43186, inspect([41], [row(41, 1, 7, 2_000)]))).rejects.toThrow("identity changed");
+});
+test("Safari keeps the same root lifetime when its process group changes", async () => {
+  const owned = scope();
+  await assertSafariDriverOwnership(owned, 43186, inspect([41]));
+  await expect(assertSafariDriverOwnership(owned, 43186, inspect([41], [row(41, 1, 8)]))).resolves.toBeUndefined();
 });
 test("Safari allows the spawn second's coarse ps timestamp but not an earlier second", async () => {
   const owned = ownSafariDriver(driver(), 1_999);
@@ -204,6 +211,22 @@ test("Safari checks child health again after asynchronous listener and process i
   await expect(assertSafariDriverOwnership(owned, 43186, { ...inspect([41]), processes: async () => {
     owned.driver.signalCode = "SIGTERM"; return [row()];
   } })).rejects.toThrow("exited");
+});
+test("Safari teardown still stops a verified child after its process group changes", async () => {
+  const owned = scope(), signalled: number[] = [];
+  let processes = [row(), row(42, 41)];
+  const inspection: SafariInspection = { processes: async () => processes, listeners: async () => [] };
+  await assertSafariDriverOwnership(owned, 43186, { ...inspection, listeners: async () => [42] });
+  processes = [row(), row(42, 41, 42)];
+  await stopSafariDriver(owned, 43186, inspection, pid => { signalled.push(pid); processes = processes.filter(row => row.pid !== pid); });
+  expect(signalled).toEqual([42, 41]);
+  expect(processes).toEqual([]);
+});
+test("Safari accepts an already verified listener after its process group changes, but not an unknown child in that group", async () => {
+  const owned = scope();
+  await assertSafariDriverOwnership(owned, 43186, inspect([42], [row(), row(42, 41)]));
+  await expect(assertSafariDriverOwnership(owned, 43186, inspect([42], [row(), row(42, 41, 42)]))).resolves.toBeUndefined();
+  await expect(assertSafariDriverOwnership(owned, 43186, inspect([43], [row(), row(42, 41, 42), row(43, 42, 42)]))).rejects.toThrow("not owned");
 });
 test("Safari teardown remembers a verified child after reparenting and stops it before the parent", async () => {
   const owned = scope(), signalled: number[] = [];

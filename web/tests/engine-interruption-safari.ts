@@ -100,7 +100,9 @@ async function executablePath(pid: number, deadline = Infinity): Promise<string 
 const inspection: SafariInspection = { listeners: listenerPids, processes: processIdentities, executable: executablePath };
 
 function sameProcess(left: SafariProcessIdentity, right: SafariProcessIdentity): boolean {
-  return left.pid === right.pid && left.group === right.group && left.started === right.started;
+  // Process groups can change during a process's lifetime. They constrain initial
+  // adoption, but cannot make a verified or observed process disappear at exit.
+  return left.pid === right.pid && left.started === right.started;
 }
 
 function rememberTree(owned: SafariDriverOwnership, processes: readonly SafariProcessIdentity[]): Map<number, SafariProcessIdentity> {
@@ -115,8 +117,10 @@ function rememberTree(owned: SafariDriverOwnership, processes: readonly SafariPr
   for (let changed = true; changed;) {
     changed = false;
     for (const row of processes) {
-      const parent = tree.get(row.ppid);
-      if (!tree.has(row.pid) && parent && row.group === root.group && row.started >= owned.spawnedAfter && row.started >= parent.started) {
+      const parent = tree.get(row.ppid), verified = owned.verified.get(row.pid);
+      const knownLifetime = verified !== undefined && sameProcess(verified, row);
+      if (!tree.has(row.pid) && parent && (row.group === root.group || knownLifetime)
+        && row.started >= owned.spawnedAfter && row.started >= parent.started) {
         tree.set(row.pid, row); changed = true;
       }
     }
@@ -162,7 +166,7 @@ export async function assertSafariDriverOwnership(owned: SafariDriverOwnership, 
   owned.confirmed = true;
 }
 
-// Keep birth/group identities after a child is reparented, but revalidate each
+// Keep lifetime identities after reparenting or group changes, but revalidate each
 // one before signalling. Never kill a replacement PID or an unrelated listener.
 export async function stopSafariDriver(owned: SafariDriverOwnership, port: number,
   inspect: SafariInspection = inspection, signal: (pid: number, signal: "SIGTERM" | "SIGKILL") => void = (pid, signal) => process.kill(pid, signal)): Promise<void> {
