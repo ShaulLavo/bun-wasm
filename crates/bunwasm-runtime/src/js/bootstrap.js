@@ -684,6 +684,7 @@
   // `bun test [args]`: the runner lives in bun_test.js. It sets
   // process.exitCode when tests fail.
   internal.runTests = function runTests(args) {
+    internal.exitReason = "test-complete";
     return internal.require("bun_test").run(args);
   };
   internal.importModule = (path) => native.importModule(path);
@@ -796,7 +797,7 @@
     const code = (process.exitCode | 0) || 0;
     emitExit(code);
     const finalCode = (process.exitCode | 0) || 0;
-    internal.traceExit("event-loop-drained", finalCode);
+    internal.traceExit(internal.exitReason || "event-loop-drained", finalCode);
     return finalCode;
   };
 

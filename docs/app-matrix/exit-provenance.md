@@ -32,7 +32,8 @@ loop completion. It includes `reason`, `code`, `stack` and a `loop` snapshot.
 The snapshot contains referenced timers, immediates, ticks, pending I/O,
 message-port references and network handles. Fatal errors use their original
 stack. Explicit exits capture the caller stack. Loop completion captures the
-stack at the exit boundary.
+stack at the exit boundary. Test-runner completion has a separate
+`test-complete` reason because it can intentionally finish with live handles.
 
 Native app-matrix rows now retain the host `exit`, `signal`, `timedOut`,
 `stoppedByHarness` and parsed `runtimeExits`. A successful server assertion ends
