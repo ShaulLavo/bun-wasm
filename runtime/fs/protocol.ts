@@ -191,7 +191,7 @@ export function pack(value: unknown): Uint8Array {
 }
 export function unpack(bytes: Uint8Array): any {
   // Revivers returning undefined delete object properties, which is correct for resolved paths.
-  return JSON.parse(decoder.decode(bytes.buffer instanceof SharedArrayBuffer ? bytes.slice() : bytes), (_key, item) => item?.$undefined ? undefined : item?.$map ? new Map(item.$map) : item);
+  return JSON.parse(decoder.decode(bytes.buffer instanceof ArrayBuffer && !Reflect.get(bytes.buffer, "resizable") ? bytes : bytes.slice()), (_key, item) => item?.$undefined ? undefined : item?.$map ? new Map(item.$map) : item);
 }
 export type RequestMessage = { id: number; buffer: SharedArrayBuffer } | { connect: FilesystemConnection } | { sweep: true } | { trim: true } | { discard: number };
 export function errno(error: unknown): number {
