@@ -1,0 +1,24 @@
+import assert from "node:assert/strict";
+import http from "node:http";
+import net from "node:net";
+const events = [];
+const server = net.createServer(socket => {
+  const req = new http.IncomingMessage(socket);
+  req.socket = socket;
+  req.complete = true;
+  req.on("data", () => { events.push("data"); socket.destroy(); });
+  req.on("end", () => events.push("end"));
+  req.on("close", () => events.push("request close"));
+  socket.on("close", () => { events.push("socket close"); });
+  req.push(Buffer.from("x"));
+  req.push(null);
+});
+await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+const client = net.connect(server.address().port, "127.0.0.1");
+client.on("error", () => {});
+client.resume();
+await new Promise(resolve => client.on("close", resolve));
+await new Promise(resolve => server.close(resolve));
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(events, ["data", "end", "request close", "socket close"]);
+console.log("HTTP request stream closes before its destroyed TCP socket");

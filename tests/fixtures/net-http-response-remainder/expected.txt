@@ -1,0 +1,1 @@
+HTTP response remainder closes contaminated sockets without losing body or EOF
