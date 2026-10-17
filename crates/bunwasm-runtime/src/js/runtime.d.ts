@@ -1,5 +1,7 @@
 declare namespace BunWasm {
   interface Native {
+    registerObjectModule(name: string): string;
+    clearObjectModules(): void;
     readonly engine: "quickjs" | "jsc" | "host";
     /** Optional slot 18: 0/0 dequeues; modes 0/1/2 publish DEFAULT/IGNORE/HANDLE, 3 raises. */
     hostSignal(signal: number, disposition: number): number;
@@ -15,6 +17,7 @@ declare namespace BunWasm {
 
   interface Internal {
     readonly native: Native;
+    readonly builtinFactories: Record<string, () => object>;
     readonly realTimers: {
       setTimeout(callback: () => void, delay: number): unknown;
       clearTimeout(handle: unknown): void;

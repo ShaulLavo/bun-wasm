@@ -159,10 +159,10 @@ impl Resolver {
     /// Resolve `spec` imported from the file `from` (or a directory path ending
     /// in `/` for the entry point / eval code).
     pub fn resolve(&self, spec: &str, from: &str, kind: Kind) -> Result<Resolved, String> {
+        self.notes.borrow_mut().clear();
         if let Some(key) = self.object_modules.borrow().get(spec) {
             return Ok(Resolved::Builtin(key.clone()));
         }
-        self.notes.borrow_mut().clear();
         if let Some(name) = builtin_name(spec) {
             return Ok(Resolved::Builtin(name));
         }

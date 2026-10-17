@@ -1825,8 +1825,9 @@ compile tools on the first tool command, reuse the compiled module within the
 page, and use the fingerprinted engine cache across page loads. The cached
 response header is the single publication state, without a separate localStorage
 marker. The site ships a
-gzip artifact and build hash in both sandbox and playground. The module service
-worker can serve and cache versioned tools requests without precaching it.
+gzip artifact and build hash in both sandbox and playground. The Bun service
+worker forwards tools requests. The runner verifies their manifest fingerprint
+before compilation and publishes only verified bytes to its startup cache.
 
 ## Lint process environment
 
