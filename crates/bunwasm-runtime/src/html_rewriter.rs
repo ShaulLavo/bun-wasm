@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use lol_html::html_content::{
-    Comment, ContentType, Doctype, DocumentEnd, Element, EndTag, TextChunk,
+    Comment, ContentType, Doctype, DocumentEnd, Element, EndTag, TextChunk, UserData,
 };
 use lol_html::{
     DocumentContentHandlers, ElementContentHandlers, HandlerResult, HtmlRewriter, Selector,

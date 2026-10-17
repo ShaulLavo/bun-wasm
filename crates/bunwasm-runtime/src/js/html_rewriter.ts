@@ -95,6 +95,8 @@
       if (this.closed) return;
       this.closed = true;
       if (this.active) this.active.detach();
+      this.active = undefined;
+      this.registrations.length = 0;
       this.#endTags.clear();
       native.htmlClose(this.id);
       finalizers.unregister(this);
