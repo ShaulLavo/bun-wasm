@@ -1614,13 +1614,13 @@ implementation or compatibility branch is introduced.
 ## Missing executable errors
 
 Class **Host feature**, original adapters. `runtime/proc/types.ts`, `outcome.ts`,
-`supervisor.ts` and the worker admission adapters retain a typed startup failure
+`supervisor.ts`, `worker-client.ts` and `worker-broker.ts` retain a typed startup failure
 with ENOENT or EACCES, separate from an ordinary exit or signal. No upstream
 implementation is copied. The generic supervisor contains no shell-versus-spawn
 policy. `runtime/proc/abi.ts` and `wait-status.ts` map startup failures to the
 shell's existing wait statuses 127 and 126.
 
-`web/src/subprocess.ts`, `subprocess-broker.ts`, `worker.ts`,
+`web/src/subprocess.ts`, `subprocess-broker.ts`, `worker.ts`, `runner.ts`,
 `web/scripts/node-spawn.ts` and `node-host.mjs` carry the typed outcome and worker
 startup acknowledgement. The Bun adapter waits for that acknowledgement before
 returning a child. Its error adapter in `web/src/spawn-error.ts` preserves errno
