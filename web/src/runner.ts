@@ -244,7 +244,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     const name = `bun-${engine}`;
     if (programs.has(name)) continue;
     let loading: Promise<WebAssembly.Module> | undefined;
-    const module = engine === options.engine ? options.module
+    const module = engine === options.engine && options.adapter !== "preview1" ? options.module
       : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
     subprocess.register(name, { module, adapter: "bun", engine });
     programs.add(name);
@@ -255,9 +255,20 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   let settle: (result: RunResult) => void = () => {};
   const done = new Promise<RunResult>((resolve) => (settle = resolve));
   let finished = false;
+  let confirmed = false;
+  let selectedResult: RunResult | undefined;
   let outcomeTimer: ReturnType<typeof setTimeout> | null = null;
+  const confirm = (ownedDisposal = false) => {
+    if (confirmed || (options.runtime.disposed && !ownedDisposal)) return;
+    confirmed = true;
+    // The admission fence proves completion. Never make run.done depend on terminate().
+    settle(selectedResult!);
+    stopWorker();
+  };
   const finish = (result: RunResult, acknowledged = false, signal?: number, ownedDisposal = false) => {
-    if (finished) return;
+    // Page disposal may take ownership while this run is already awaiting its root fence.
+    // Its stop hook runs after the owned fence and must settle that existing outcome too.
+    if (finished) { if (ownedDisposal) confirm(true); return; }
     if (options.runtime.disposed && !ownedDisposal) return;
     if (rootOutcome) {
       const winner = claimOutcome(rootOutcome, signal === undefined
@@ -266,6 +277,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
         ? { code: winner.status, error: result.error } : { code: winner.status };
     }
     if (!ownedDisposal) subprocess.revokeRuntimeProcess(rootPid);
+    selectedResult = result;
     finished = true;
     if (outcomeTimer !== null) clearTimeout(outcomeTimer);
     outcomeTimer = null;
@@ -280,14 +292,9 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     const rootExit = ownedDisposal ? undefined : subprocess.rootExit(result.code);
     helper?.dispose();
     if (moduleCache) void caches.delete(moduleCache);
-    const confirm = () => {
-      // The admission fence proves completion. Never make run.done depend on terminate().
-      settle(result);
-      stopWorker();
-    };
-    if (quiescence || rootExit) void Promise.all([quiescence, rootExit]).then(confirm)
-      .catch(error => console.error("bun-wasm: root teardown failed", error));
-    else confirm();
+    if (quiescence || rootExit) void Promise.all([quiescence, rootExit]).then(() => confirm())
+      .catch(error => { if (!options.runtime.disposed) console.error("bun-wasm: root teardown failed", error); });
+    else confirm(ownedDisposal);
   };
   worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
@@ -298,6 +305,11 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       return;
     }
     const selected = rootOutcome && readOutcome(rootOutcome);
+    if (msg.type === "cleanup-error") {
+      console.error("bun-wasm: root cleanup failed", msg.message);
+      finish({ code: msg.code }, false, msg.signal);
+      return;
+    }
     if (selected?.kind === "signaled" && msg.type !== "exit" && msg.type !== "error") {
       // Reject capabilities at the dispatch boundary too: the periodic observer need not have
       // run yet when a guest catches its own terminal unwind and sends more messages.
@@ -337,6 +349,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       finish({ code: 128 + msg.signal }, false, msg.signal);
       return;
     }
+    if (msg.type !== "exit" && msg.type !== "error") return;
+    if (msg.cleanupErrors?.length) console.error("bun-wasm: root cleanup failed", msg.cleanupErrors);
     // Terminals want CRLF between the error's stack lines.
     if (msg.type === "error") finish({ code: msg.code, error: `bun.wasm crashed: ${msg.message}`.replace(/\r?\n/g, "\r\n") }, true);
     else finish({ code: msg.code }, true, msg.signal);
