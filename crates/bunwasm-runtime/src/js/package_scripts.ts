@@ -79,16 +79,20 @@
     return packages.sort().reverse();
   }
 
+  function moduleBinary(modules: string, name: string): string | undefined {
+    const bin = path.resolve(modules, ".bin", name);
+    if (native.exists(bin)) return bin;
+    for (const base of packageDirectories(modules)) {
+      const file = manifestBinary(base, name);
+      if (file) return file;
+    }
+  }
+
   function binary(cwd: string, name: string): string | undefined {
     if (!name || name === "." || name === ".." || /[/\\]/.test(name)) return;
     for (;;) {
-      const modules = path.resolve(cwd, "node_modules");
-      const bin = path.resolve(modules, ".bin", name);
-      if (native.exists(bin)) return bin;
-      for (const base of packageDirectories(modules)) {
-        const file = manifestBinary(base, name);
-        if (file) return file;
-      }
+      const file = moduleBinary(path.resolve(cwd, "node_modules"), name);
+      if (file) return file;
       const parent = path.dirname(cwd);
       if (parent === cwd) return;
       cwd = parent;
@@ -112,12 +116,17 @@
   }
 
   function commandFile(cwd: string, name: string): string {
-    const candidates = /[/\\]/.test(name)
-      ? [path.resolve(cwd, name)]
-      : (process.env.PATH || "").split(":").map(directory => path.resolve(cwd, directory, name));
-    const file = !/[/\\]/.test(name) && binary(cwd, name) || candidates.find(file => native.exists(file) && (native.stat(file).mode & 0o170000) === 0o100000);
-    if (!file) throw Object.assign(new Error(`Command not found: ${name}`), { code: "ENOENT" });
-    return file;
+    const bare = !/[/\\]/.test(name);
+    const candidates = bare
+      ? (process.env.PATH || "").split(":").map(directory => path.resolve(cwd, directory, name))
+      : [path.resolve(cwd, name)];
+    for (const file of candidates) {
+      const directory = path.dirname(file);
+      const bin = bare && directory.endsWith("/node_modules/.bin") ? moduleBinary(path.dirname(directory), name) : undefined;
+      if (bin) return bin;
+      if (native.exists(file) && (native.stat(file).mode & 0o170000) === 0o100000) return file;
+    }
+    throw Object.assign(new Error(`Command not found: ${name}`), { code: "ENOENT" });
   }
 
   function resolve(requested: string): string {
