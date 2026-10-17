@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, existsSync, symlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync, symlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const accept = "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*";
@@ -132,6 +132,16 @@ const cases: Record<string, () => Promise<void>> = {
         check(JSON.parse(readFileSync(join(cwd, "node_modules/fixture-cli/package.json"), "utf8")).version === "1.0.0", "migration must retain pin");
       }
     }
+  },
+  async aliasLock() {
+    latest = "1.0.0";
+    const cwd = project("alias-lock", { "package.json": { dependencies: { alias: "npm:fixture-cli@latest" } } });
+    await run(cwd, "install");
+    rmSync(join(cwd, "node_modules"), { recursive: true, force: true });
+    rmSync(join(cwd, ".cache"), { recursive: true, force: true });
+    latest = "2.0.0";
+    await run(cwd, "install", "--frozen-lockfile");
+    check(JSON.parse(readFileSync(join(cwd, "node_modules/alias/package.json"), "utf8")).version === "1.0.0", "frozen alias tag lost its pin");
   },
   async bunx() {
     const cwd = join(process.cwd(), "binary");

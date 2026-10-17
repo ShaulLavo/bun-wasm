@@ -3,4 +3,5 @@ registry ok
 binaries ok
 update ok
 migration ok
+aliasLock ok
 bunx ok
