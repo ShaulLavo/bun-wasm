@@ -15,7 +15,7 @@ function fixture() {
   const api = runInNewContext(source, { process: { env: {} }, URL, setImmediate })({
     require, builtin: require, nextTick: process.nextTick,
     web: { ReadableStream, Response }, concatBytes: (chunks: Uint8Array[]) => Buffer.concat(chunks),
-    addIoWaiter(waiter: { step(): unknown }) { queueMicrotask(() => waiter.step()); return waiter; },
+    addIoWaiter(waiter: { step(): unknown }) { waiter.step(); return waiter; },
     native: { cwd: () => "/", now: () => performance.now(), ...host.engineNet().natives, hostCaps: { spawn: true } },
   });
   return { host, api };
