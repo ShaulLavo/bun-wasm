@@ -5,10 +5,11 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { createRegistry } from "./registry.mjs";
 
 const root = resolve(new URL("../..", import.meta.url).pathname);
-const scratch = mkdtempSync("/work/tmp/bun-wasm-install-test-");
+const scratch = mkdtempSync(join(process.env.BUN_WASM_TEST_TMP ?? tmpdir(), "bun-wasm-install-test-"));
 const children = new Set();
 let registry;
 let cleaned = false;
