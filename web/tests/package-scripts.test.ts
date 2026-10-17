@@ -2,11 +2,13 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as path from "node:path";
+import { tmpdir } from "node:os";
 import { runInNewContext } from "node:vm";
 
 const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync("globalThis.factory = " + readFileSync(new URL("../../crates/bunwasm-runtime/src/js/package_scripts.ts", import.meta.url), "utf8")));
 function fixture(check: (cwd: string) => void) {
-  const cwd = mkdtempSync("/work/tmp/bun-wasm-script-resolution-");
+  const root = process.env.BUN_WASM_TEST_TMP ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  const cwd = mkdtempSync(join(root, "bun-wasm-script-resolution-"));
   try { check(cwd); } finally { rmSync(cwd, { recursive: true, force: true }); }
 }
 function write(cwd: string, name: string, text: string) {
