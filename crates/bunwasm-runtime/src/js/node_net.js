@@ -198,7 +198,7 @@
         if (writing) internal.nextTick(() => writing.callback(writeError));
         if (final) internal.nextTick(() => final(writeError));
         if (this._conn) this._conn.destroy(writeError);
-        setImmediate(() => callback(err));
+        internal.realTimers.setImmediate(() => callback(err));
       }
       [Symbol.asyncDispose]() {
         if (this.closed) return Promise.resolve();

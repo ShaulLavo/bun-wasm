@@ -189,7 +189,8 @@
       catch (error) { this.#fail(error); }
     }
     write(flush: number, input: Uint8Array, inOff: number, inLen: number, outLen: number) {
-      setImmediate(() => {
+      // Runtime-owned work: fake timers in tests must not capture it (#54).
+      internal.realTimers.setImmediate(() => {
         if (this.id === undefined) { processCallback.call(this); return; }
         try { this.#run(flush, input, inOff, inLen, outLen); }
         catch (error) { this.#fail(error); return; }

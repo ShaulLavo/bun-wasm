@@ -137,7 +137,7 @@
     function randomBytes(size, callback) {
       const buf = Buffer.from(native.randomBytes(size).buffer);
       if (typeof callback === "function") {
-        setImmediate(() => callback(null, buf));
+        internal.realTimers.setImmediate(() => callback(null, buf));
         return undefined;
       }
       return buf;
@@ -155,7 +155,7 @@
       for (const b of bytes) n = n * 256 + b;
       const value = min + (n % range);
       if (typeof callback === "function") {
-        setImmediate(() => callback(null, value));
+        internal.realTimers.setImmediate(() => callback(null, value));
         return undefined;
       }
       return value;
@@ -190,7 +190,7 @@
       randomFill: (buffer, ...rest) => {
         const callback = rest.pop();
         randomFillSync(buffer, ...rest);
-        setImmediate(() => callback(null, buffer));
+        internal.realTimers.setImmediate(() => callback(null, buffer));
       },
       randomInt,
       randomUUID: () => webcrypto.randomUUID(),
@@ -489,7 +489,7 @@
       _start() {
         if (this._started) return;
         this._started = true;
-        setImmediate(() => this._pump());
+        internal.realTimers.setImmediate(() => this._pump());
       }
       _pump() {
         if (this.input && this.input !== globalThis.process.stdin && typeof this.input.on === "function") {
@@ -522,7 +522,7 @@
         if (typeof options === "function") callback = options;
         if (this.output && this.output.write) this.output.write(query);
         const line = takeStdinLine();
-        setImmediate(() => callback(line === null ? "" : line));
+        internal.realTimers.setImmediate(() => callback(line === null ? "" : line));
       }
       prompt() {
         if (this.output && this.output.write) this.output.write(this._prompt);

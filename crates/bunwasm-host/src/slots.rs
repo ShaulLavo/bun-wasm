@@ -219,7 +219,8 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
             let cancel = &caller.data().cancel;
             let result = cancel.signal(signal, operation);
             // A self-raise or pending-handler removal can select default death.
-            // Stop this guest call now; its typed outcome was already sealed.
+            // Both (0, 0) dequeue and (0, 4) fatal-only checkpoints stop the
+            // guest call when its typed fatal outcome was already sealed.
             cancel.check()?;
             Ok(result)
         }),
