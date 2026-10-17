@@ -1662,7 +1662,7 @@ Class **Host feature**. Original adapters in `crates/bunwasm-runtime/src/install
 `src/js/package_scripts.ts`, and `crates/bunwasm-cli/src/main.rs`. No upstream
 source is copied or changed by these adapters. They use Bun's `src/glob/` walker,
 `src/semver/` parser, and the existing transpiler data parser from revision
-`4ceda2c2868d3a7703c7737ddd9de7244ec384df`.
+`9510e74152073d850a18758ca41114d8f214ffa6`.
 
 The installer checks `Group::has_skipped()` from Bun's
 `src/semver/SemverQuery.rs` before matching a registry range. The parser reports
