@@ -1,7 +1,7 @@
 // PC build: bun web/tests/browser-filesystem-lifecycle.ts --build <directory>
 // Mac: bun browser-filesystem-lifecycle.ts safari http://127.0.0.1:<port>/
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 const mode = process.argv[2] ?? "chromium";
 const assets = process.argv[3];
@@ -10,11 +10,7 @@ async function build(directory: string) {
   const root = resolve(import.meta.dir, "../..");
   const entries: [string, string][] = [["web/tests/fixtures/filesystem-lifecycle.ts", "main"], ["web/src/fs-worker.ts", "fs-worker"]];
   for (const [entry, name] of entries) {
-    const result = await Bun.build({ entrypoints: [resolve(root, entry)], outdir: directory, naming: `${name}.js`, target: "browser", format: "esm",
-      plugins: [{ name: "source-runtime", setup(build) {
-        build.onResolve({ filter: /^@bun-wasm\/runtime\/fs$/ }, () => ({ path: resolve(root, "runtime/fs/index.ts") }));
-      } }],
-    });
+    const result = await Bun.build({ entrypoints: [resolve(root, entry)], outdir: directory, naming: `${name}.js`, target: "browser", format: "esm" });
     assert.equal(result.success, true, result.logs.map(String).join("\n"));
   }
   await Bun.write(resolve(directory, "index.html"), '<!doctype html><meta name="viewport" content="width=device-width"><body>Filesystem lifecycle check<script type="module" src="/main.js"></script>');
@@ -113,7 +109,7 @@ async function safari(): Promise<Driver> {
 
 async function playwright(): Promise<Driver> {
   const { mkdtemp } = await import("node:fs/promises");
-  scratch = await mkdtemp("/work/tmp/bun-wasm-fs-lifecycle-");
+  scratch = await mkdtemp(join(process.env.BUN_WASM_TEST_TMP ?? process.env.TMPDIR ?? "/tmp", "bun-wasm-fs-lifecycle-"));
   await build(scratch);
   const directory = scratch;
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
