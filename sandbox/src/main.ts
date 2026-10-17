@@ -13,7 +13,7 @@ import { basicSetup } from "codemirror";
 import { decode } from "../../web/src/fs";
 import type { NetHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
-import { SharedFilesystem } from "../../web/src/shared-fs";
+import { createRuntime } from "@bun-wasm/runtime";
 import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
 import { enableTerminalCopy } from "../../web/src/terminal-copy";
 import { linkLocalUrls } from "../../web/src/terminal-links";
@@ -90,7 +90,8 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 
 // ---------- filesystem ----------
 
-const fs = new SharedFilesystem({ name: `bun-wasm-sandbox-${template}` });
+const runtime = createRuntime({ filesystem: { name: `bun-wasm-sandbox-${template}` } });
+const fs = runtime.filesystem;
 await fs.mkdirp("/tmp").catch((error) => {
   setStatus(String(error), "error");
   throw error;
@@ -247,7 +248,7 @@ async function startDevServer(): Promise<void> {
   };
   const started = performance.now();
   const output = new StartupOutput((text) => term.write(text), startupRecord);
-  const current = startRun({ engine, module: wasm.module, args: ["./index.html"], env, filesystem: fs, moduleScope: scoped }, {
+  const current = startRun({ engine, module: wasm.module, args: ["./index.html"], env, runtime, moduleScope: scoped }, {
     phase: (name) => {
       if (name === "worker-start") setStatus("starting dev server…");
     },

@@ -10,7 +10,7 @@ import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
 import { decode, normalize } from "./fs";
-import { SharedFilesystem } from "./shared-fs";
+import { createRuntime } from "@bun-wasm/runtime";
 import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
 import { type Output, Shell } from "./shell";
@@ -53,7 +53,8 @@ const previews = new Previews();
 
 // ---------- filesystem ----------
 
-const fs = new SharedFilesystem({ storage });
+const runtime = createRuntime({ filesystem: { storage, name: "bun-wasm-workspace" } });
+const fs = runtime.filesystem;
 try {
   await fs.mkdirp("/tmp");
   // Background persistence can save a prefix of startup. Publish completion only after
@@ -129,7 +130,7 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
   runButton.disabled = true;
   try {
     await fs.drain();
-    const run = startRun({ engine, module: wasm.module, args, env, filesystem: fs, moduleScope: scoped, trace }, {
+    const run = startRun({ engine, module: wasm.module, args, env, runtime, moduleScope: scoped, trace }, {
       stdout: (data) => io.out(data),
       stderr: (data) => io.err(data),
       listening: (port, helper) => {
