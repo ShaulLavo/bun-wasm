@@ -15,6 +15,7 @@ export PATH=$HOME/.local/share/mise/shims:$PATH
 source env.sh
 cargo build -j 6 --release -p bunwasm-host
 scripts/build.sh
+scripts/build-jsc.sh
 scripts/build-bun-jsc.sh
 scripts/build-bun-browser.sh
 bun install --cwd web --frozen-lockfile

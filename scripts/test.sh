@@ -69,7 +69,11 @@ server_pid=""
 trap 'if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null; fi; rm -rf "$scratch"' EXIT INT TERM
 
 if [[ $build == 1 && $update == 0 ]]; then
-  "$build_script" >"$scratch/build.log" 2>&1 || { tail -30 "$scratch/build.log"; echo "build failed"; exit 1; }
+  "$build_script" >"$scratch/build.log" 2>&1 || {
+    command grep -n -A16 -B2 -E 'error(\[|:)|panicked at' "$scratch/build.log" || tail -30 "$scratch/build.log"
+    echo "build failed"
+    exit 1
+  }
 fi
 
 # Networking fixtures need the native launcher and the local test server.

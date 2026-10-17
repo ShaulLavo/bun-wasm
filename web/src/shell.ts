@@ -2,7 +2,7 @@
 
 import type { Terminal } from "@xterm/xterm";
 import { basename, dirname, normalize } from "./fs";
-import type { SharedFilesystem } from "./shared-fs";
+import type { RuntimeFilesystem } from "@bun-wasm/runtime";
 import { HOME } from "./examples";
 
 export interface Output {
@@ -11,7 +11,7 @@ export interface Output {
 }
 
 export interface ShellHost {
-  fs: SharedFilesystem;
+  fs: RuntimeFilesystem;
   /** Runs bun.wasm with `args` (without the leading "bun"). Resolves to the exit code. */
   runBun(args: string[], cwd: string, io: Output): Promise<number>;
   /** Stops the running bun.wasm, if any. */

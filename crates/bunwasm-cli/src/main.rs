@@ -69,6 +69,10 @@ mod bun_transpiler {
     pub struct BunTranspiler;
 
     impl Transpiler for BunTranspiler {
+        fn public_transpile(&self, source: &[u8], options: &str, action: &str, loader: &str) -> Result<String, String> {
+            bunwasm_transpiler::public_transpile(source, options, action, loader)
+        }
+
         fn function_imports(&self, args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, String> {
             bunwasm_transpiler::function_imports(args, kind)
         }
@@ -372,8 +376,15 @@ fn usage_error(message: &str) -> Command {
 }
 
 fn parse(args: Vec<String>) -> Command {
+    parse_command(args, false)
+}
+
+fn parse_command(args: Vec<String>, run_file: bool) -> Command {
     let mut rest = args.into_iter();
     while let Some(arg) = rest.next() {
+        if run_file && !arg.starts_with('-') {
+            return Command::Run(Entry::File(arg), rest.collect());
+        }
         match arg.as_str() {
             "-v" | "--version" => {
                 println!("{}", bunwasm_runtime::BUN_VERSION);
@@ -408,7 +419,8 @@ fn parse(args: Vec<String>) -> Command {
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
             }
-            "run" => {
+            "run" => return parse_command(rest.collect(), true),
+            "--" => {
                 let Some(file) = rest.next() else { return usage_error("bun run needs a file to run") };
                 return Command::Run(Entry::File(file), rest.collect());
             }
@@ -418,6 +430,7 @@ fn parse(args: Vec<String>) -> Command {
             file => return Command::Run(Entry::File(file.to_owned()), rest.collect()),
         }
     }
+    if run_file { return usage_error("bun run needs a file to run"); }
     print!("{HELP}");
     Command::Exit(0)
 }
