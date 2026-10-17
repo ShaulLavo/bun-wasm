@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { spawnSync as nativeSpawnSync } from "node:child_process";
+import { posix } from "node:path";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import { SubprocessHost, childTransport } from "../src/subprocess.ts";
@@ -8,6 +9,7 @@ import { launchNodeExecutable } from "../scripts/node-spawn.ts";
 
 const require = createRequire(import.meta.url);
 const source = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/spawn.js", import.meta.url), "utf8");
+const packageSource = new Bun.Transpiler({ loader: "ts", deadCodeElimination: false }).transformSync("globalThis.factory = " + readFileSync(new URL("../../crates/bunwasm-runtime/src/js/package_scripts.ts", import.meta.url), "utf8"));
 function fixture(failure?: "ENOENT" | "EACCES") {
   const host = new SubprocessHost({
     output() {},
@@ -18,7 +20,14 @@ function fixture(failure?: "ENOENT" | "EACCES") {
     },
   });
   const api = runInNewContext(source, { process: { env: {} }, URL, setImmediate, AbortController })({
-    require, builtin: require, nextTick: process.nextTick,
+    require(name: string) {
+      if (name !== "package_scripts") return require(name);
+      return runInNewContext(packageSource, { URL })({
+        native: { exists: () => false },
+        require: (name: string) => name === "process" ? { env: {}, cwd: () => "/" } : name === "path" ? posix : require(name),
+      });
+    },
+    builtin: require, nextTick: process.nextTick,
     web: { ReadableStream, Response }, concatBytes: (chunks: Uint8Array[]) => Buffer.concat(chunks),
     addIoWaiter(waiter: { step(): unknown }) { queueMicrotask(() => waiter.step()); return waiter; },
     native: { cwd: () => "/", now: () => performance.now(), ...host.engineNet().natives, hostCaps: { spawn: true } },
