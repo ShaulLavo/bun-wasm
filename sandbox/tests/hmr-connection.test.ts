@@ -22,6 +22,10 @@ test("HMR readiness belongs to the target document across tabs and navigation", 
     await expect(waitForHmrConnection(tab, null, 150)).rejects.toThrow();
     await tab.evaluate(text => console.info(text), connected);
     await waitForHmrConnection(tab);
+    await tab.evaluate(() => console.warn("[Bun] Hot-module-reloading socket disconnected, reconnecting..."));
+    await expect(waitForHmrConnection(tab, null, 150)).rejects.toThrow();
+    await tab.evaluate(() => console.info("[Bun] Reconnected"));
+    await waitForHmrConnection(tab);
     await tab.reload();
     await expect(waitForHmrConnection(tab, null, 150)).rejects.toThrow();
     await tab.evaluate(text => console.info(text), connected);
