@@ -1,0 +1,1 @@
+The runtime reports its version header on stdout. Native Bun reports it on stderr.
