@@ -19,7 +19,7 @@ import { WASI } from "node:wasi";
 import { fileURLToPath } from "node:url";
 import { Worker, isMainThread, workerData } from "node:worker_threads";
 import { installCliFetch } from "./node-install-net.mjs";
-import { memoryViews } from "@bun-wasm/runtime/core/memory-views";
+import { memoryViews } from "waffle/core/memory-views";
 import { SubprocessHost, childTransport, wasiPipe } from "../src/subprocess.ts";
 import { launchNodeExecutable } from "./node-spawn.ts";
 import { forwardOutput, writeStdio } from "./node-stdio.ts";

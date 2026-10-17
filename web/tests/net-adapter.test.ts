@@ -1,7 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
-import { NetHost as RuntimeNetHost } from "@bun-wasm/runtime/browser/net/host";
-import { AGAIN, BADF, Kind, type NetRequest, UNSUPPORTED } from "@bun-wasm/runtime/browser/net/protocol";
-import { createRing, RingWriter } from "@bun-wasm/runtime/browser/net/ring";
+import { NetHost as RuntimeNetHost } from "waffle/browser/net/host";
+import { AGAIN, BADF, Kind, type NetRequest, UNSUPPORTED } from "waffle/browser/net/protocol";
+import { createRing, RingWriter } from "waffle/browser/net/ring";
 import { NetHost } from "../src/net/host";
 import { NetHelper } from "../src/net/helper";
 

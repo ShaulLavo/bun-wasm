@@ -1,11 +1,11 @@
-import { DescriptorTable } from "../../runtime/core/descriptors";
-import type { FilesystemIdentity } from "../../runtime/fs";
-import { readOutcome } from "../../runtime/proc/outcome";
-import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from "../../runtime/proc/worker-client";
+import { DescriptorTable } from "waffle/core/descriptors";
+import type { FilesystemIdentity } from "waffle/fs";
+import { readOutcome } from "waffle/proc/outcome";
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from "waffle/proc/worker-client";
 import { createRuntimeTerminalCodec } from "../src/runtime-terminals";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { SubprocessHost } from "../src/subprocess";
-import type { Runtime } from "@bun-wasm/runtime";
+import type { Runtime } from "waffle";
 import type { Engine } from "../src/worker";
 
 export type EngineInterruptionRoute = "legacy" | "runtimeProcess";

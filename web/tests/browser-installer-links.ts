@@ -26,7 +26,7 @@ async function check(browserName: string, engine: string, url: string) {
   try {
     await page.goto(`${url}?engine=${engine}`);
     assert.match(await ready(page), /ready/);
-    await writeFile(page, "/home/user/package.json", JSON.stringify({ name: "page-bin-fixture", scripts: { dev: 'fixture-tool "two words"' } }));
+    await writeFile(page, "/home/user/package.json", JSON.stringify({ name: "page-bin-fixture", scripts: { dev: 'fixture-tool "two words"', explicit: "./fixture-tool.ts", runtime: "bun fixture-tool" } }));
     await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);
     await command("bun add is-odd");
     await writeFile(page, "/home/user/check-links.ts", 'import fs from "node:fs"; for (const bin of ["cli", "fixture-tool"]) console.log("link", bin, fs.existsSync("node_modules/.bin/" + bin));');
@@ -56,6 +56,14 @@ async function check(browserName: string, engine: string, url: string) {
       assert.ok(output.includes(`page-cli ${args}`), output);
       assert.ok(output.includes("/home/user/node_modules/@fixture/cli/cli.ts"), output);
     }
+    await writeFile(page, "/home/user/fixture-tool.ts", '#!/usr/bin/env bun\nconsole.log("page-source");');
+    for (const [index, target] of [42, "", "../escape.ts", "/escape.ts"].entries()) {
+      await writeFile(page, `/home/user/node_modules/z-bad-${index}/package.json`, JSON.stringify({ name: `z-bad-${index}`, bin: { "fixture-tool": target } }));
+    }
+    const bare = await command("bun run dev");
+    assert.match(bare, /page-cli two words/);
+    assert.doesNotMatch(bare, /page-source|warn:|Package bin|Invalid package bin/);
+    for (const text of ["bun run fixture-tool", "bun run explicit", "bun run runtime"]) assert.match(await command(text), /page-source/);
     await command("rm bun.lock");
     await writeFile(page, "/home/user/node_modules/.bin", "not a directory");
     const failed = await run(page, "bun install");

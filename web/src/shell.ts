@@ -2,7 +2,7 @@
 
 import type { Terminal } from "@xterm/xterm";
 import { basename, dirname, normalize } from "./fs";
-import type { RuntimeFilesystem } from "@bun-wasm/runtime";
+import type { RuntimeFilesystem } from "waffle";
 import { HOME } from "./examples";
 
 export interface Output {

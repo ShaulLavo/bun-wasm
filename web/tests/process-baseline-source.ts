@@ -1,7 +1,7 @@
 import { mkdir, stat, symlink } from "node:fs/promises";
 import { join } from "node:path";
 
-/** Link the frozen runtime without changing that revision's own benchmark code. */
+/** Link a pre-extraction archive's runtime under its historical name, never as current Waffle. */
 export async function prepareBaselineSource(snapshot: string): Promise<void> {
   for (const name of ["process-bench-baseline.ts", "process-benchmark.ts"]) {
     const path = join("web/tests", name);

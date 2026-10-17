@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createFilesystemConnection } from "../../runtime/fs";
+import { createFilesystemConnection } from "waffle/fs";
 import { SharedFilesystem } from "../src/shared-fs";
 
 test("page cancellation is not proof of worker death; only an exit acknowledgement reaps", () => {

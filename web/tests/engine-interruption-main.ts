@@ -1,4 +1,4 @@
-import { createRuntime, type Runtime } from "@bun-wasm/runtime";
+import { createRuntime, type Runtime } from "waffle";
 import type { Engine, RunRequest } from "../src/worker";
 import { startRun, type Run } from "../src/runner";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";

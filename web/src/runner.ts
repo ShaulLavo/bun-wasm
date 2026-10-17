@@ -2,7 +2,7 @@
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
 // and the sandbox (../sandbox/).
 
-import type { Runtime } from "@bun-wasm/runtime";
+import type { Runtime } from "waffle";
 import { NetHelper } from "./net/helper";
 import { createRing } from "./net/ring";
 import { activated } from "./preview";
@@ -10,8 +10,8 @@ import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-ca
 import { measureStartup } from "./startup";
 import { SubprocessBroker } from "./subprocess-broker";
 import { createProcessBudget } from "./subprocess";
-import { createSignalState } from "@bun-wasm/runtime/proc/signals";
-import { claimOutcome, outcomeWord, readOutcome } from "@bun-wasm/runtime/proc/outcome";
+import { createSignalState } from "waffle/proc/signals";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
 import type { Engine, RunRequest, WorkerMessage } from "./worker";
 
 export type { Engine } from "./worker";
@@ -196,7 +196,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const isolated = globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== "undefined";
   const generic = !!options.runtimeProcess || WebAssembly.Module.imports(options.module).some(entry =>
     entry.module === "runtime_proc" && !["signal", "interrupted", "default_signal"].includes(entry.name));
-  const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("@bun-wasm/runtime/fs").FilesystemIdentity } | undefined)?.filesystem;
+  const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("waffle/fs").FilesystemIdentity } | undefined)?.filesystem;
   const pid = options.runtime.identities.pid(), job = options.runtime.identities.job();
   const request: RunRequest = {
     engine: options.engine,
@@ -377,7 +377,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   let prepared = !isolated && !generic;
   const preparation = prepared ? undefined : (async () => {
     if (generic) {
-      const { workerProcessState, createWorkerProcessTransport } = await import("@bun-wasm/runtime/proc/worker-client");
+      const { workerProcessState, createWorkerProcessTransport } = await import("waffle/proc/worker-client");
       const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
       const state = workerProcessState(transport);
       // The host endpoint and descriptor reservations use the same filesystem identity.

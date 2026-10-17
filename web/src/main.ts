@@ -10,7 +10,7 @@ import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
 import { decode, normalize } from "./fs";
-import { createRuntime } from "@bun-wasm/runtime";
+import { createRuntime } from "waffle";
 import { WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
 import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";

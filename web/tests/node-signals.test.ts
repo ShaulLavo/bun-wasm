@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createNodeSignalController } from "../scripts/node-signals.ts";
-import { setSignalDisposition, takeSignal, createSignalState } from "../../runtime/proc/signals.ts";
+import { setSignalDisposition, takeSignal, createSignalState } from "waffle/proc/signals";
 
 for (const signal of [2, 15, 13]) {
   test(`Node root default ${signal} seals typed status before worker teardown`, () => {

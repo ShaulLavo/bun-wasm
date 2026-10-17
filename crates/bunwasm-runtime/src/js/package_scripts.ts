@@ -45,9 +45,8 @@
     return command;
   }
 
-  function binPath(base: string, file: unknown): string {
-    if (typeof file !== "string") throw new TypeError("Package bin must be a string");
-    if (file.startsWith("/") || file.split("/").includes("..")) throw new Error("Invalid package bin path");
+  function binPath(base: string, file: unknown): string | undefined {
+    if (typeof file !== "string" || !file || file.startsWith("/") || file.split("/").includes("..")) return;
     return path.resolve(base, file);
   }
 
@@ -62,7 +61,8 @@
     } else if ("bin" in meta && meta.bin && typeof meta.bin === "object" && !Array.isArray(meta.bin)) {
       if (Object.prototype.hasOwnProperty.call(meta.bin, name)) file = binPath(base, Reflect.get(meta.bin, name));
     } else if ("directories" in meta && meta.directories && typeof meta.directories === "object" && "bin" in meta.directories) {
-      file = path.resolve(binPath(base, meta.directories.bin), name);
+      const directory = binPath(base, meta.directories.bin);
+      if (directory) file = path.resolve(directory, name);
     }
     if (file && native.exists(file) && (native.stat(file).mode & 0o170000) === 0o100000) return file;
   }
@@ -111,11 +111,21 @@
     } catch {}
   }
 
+  function commandFile(cwd: string, name: string): string {
+    const candidates = /[/\\]/.test(name)
+      ? [path.resolve(cwd, name)]
+      : (process.env.PATH || "").split(":").map(directory => path.resolve(cwd, directory, name));
+    const file = !/[/\\]/.test(name) && binary(cwd, name) || candidates.find(file => native.exists(file) && (native.stat(file).mode & 0o170000) === 0o100000);
+    if (!file) throw Object.assign(new Error(`Command not found: ${name}`), { code: "ENOENT" });
+    return file;
+  }
+
   function resolve(requested: string): string {
     const cwd = process.cwd();
     let name = native.mainArg();
     let args = process.argv.slice(2);
     let file = requested;
+    let kind: "entry" | "command" = "entry";
     const bins: string[] = [];
     for (let directory = cwd;; directory = path.dirname(directory)) {
       bins.push(path.resolve(directory, "node_modules", ".bin"));
@@ -123,6 +133,7 @@
     }
     process.env.PATH = bins.concat(process.env.PATH ? [process.env.PATH] : []).join(":");
     for (let depth = 0; depth < 32; depth++) {
+      if (kind === "command") { file = commandFile(cwd, name); break; }
       const command = name && !name.includes("/") ? script(cwd, name) : undefined;
       if (command === undefined) { file = sourceFile(cwd, name || requested) || binary(cwd, name) || path.resolve(cwd, name || requested); break; }
       const argv = words(command);
@@ -137,7 +148,9 @@
       process.env.npm_lifecycle_event = name;
       process.env.npm_lifecycle_script = command;
       process.env.npm_execpath = process.execPath;
+      kind = "command";
       if (["bun", "node", "nodejs"].includes(path.basename(executable))) {
+        kind = "entry";
         while (["--bun", "--smol", "--silent"].includes(argv[0])) argv.shift();
         if (argv[0] === "run") argv.shift();
         executable = argv.shift();
