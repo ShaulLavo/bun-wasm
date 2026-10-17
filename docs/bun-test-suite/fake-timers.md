@@ -39,7 +39,7 @@ The review regressions run separately from the unchanged upstream selection:
 
 ```sh
 scripts/test.sh --no-build --engine quickjs \
-  fake-timers fake-timers-review fake-timers-runtime test-fake-watchdog
+  fake-timers fake-timers-review fake-timers-cancellation fake-timers-runtime test-fake-watchdog
 bun test web/tests/fake-timers-host.test.ts
 ```
 

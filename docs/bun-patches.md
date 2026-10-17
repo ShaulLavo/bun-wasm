@@ -241,7 +241,9 @@ in a separate queue, advances a nanosecond clock, and exposes the controls throu
 and `vi`. Global timers and `node:timers` share scheduling and cancellation. Runtime-owned
 callbacks use the real timer interface, so filesystem, worker, crypto, compression, readline, and subprocess
 work survives fake-clock restoration. Host wakeups use the captured native clock. Timers
-created before fake-clock activation keep their real ownership.
+created before fake-clock activation keep their real ownership. A separate running-callback
+stack keeps numeric handles discoverable during nested drains. Cancellation and `clearAllTimers`
+close those running handles without including them in the pending timer count.
 
 A stable Date constructor wrapper preserves references saved before activation, explicit
 constructor arguments, subclasses and Date instances. Its current time also supplies native

@@ -6,7 +6,7 @@
   interface Clock {
     elapsed: number;
     origin: number;
-    firing: number;
+    readonly running: FakeTimeout[];
     readonly timers: Map<number, FakeTimeout>;
   }
 
@@ -89,7 +89,7 @@
       clock.elapsed = 0;
       clock.origin = Math.floor(initial);
     } else {
-      clock = { elapsed: 0, origin: Math.floor(initial), firing: 0, timers: new Map() };
+      clock = { elapsed: 0, origin: Math.floor(initial), running: [], timers: new Map() };
     }
     wallTime = Math.floor(initial);
     marker(true);
@@ -145,7 +145,7 @@
     hasRef() { return this.refed; }
     refresh() {
       if (this.cancelled || clock !== this.owner) return this;
-      this.due = this.owner.elapsed + Math.max(this.delay, this.owner.firing ? 1e6 : 0);
+      this.due = this.owner.elapsed + Math.max(this.delay, this.owner.running.length ? 1e6 : 0);
       this.order = sequence--;
       this.owner.timers.set(this.id, this);
       return this;
@@ -162,14 +162,15 @@
     const current = activeClock();
     let ms = Number(delay);
     if (!(ms >= 1) || ms > 2147483647) ms = 1;
-    const duration = Math.max(kind === "immediate" ? 0 : Math.trunc(ms) * 1e6, current.firing ? 1e6 : 0);
+    const duration = Math.max(kind === "immediate" ? 0 : Math.trunc(ms) * 1e6, current.running.length ? 1e6 : 0);
     return new FakeTimeout(current, kind, callback, args, duration);
   }
 
   function clear(handle: unknown) {
     if (handle instanceof FakeTimeout) { handle.close(); return true; }
     if (typeof handle !== "number" && typeof handle !== "string") return false;
-    const timer = clock?.timers.get(Number(handle));
+    const id = Number(handle);
+    const timer = clock?.timers.get(id) ?? clock?.running.find(timer => timer.id === id);
     if (!timer) return false;
     timer.close();
     return true;
@@ -187,7 +188,7 @@
     const nextDue = timer.due;
     updateTime(current, Math.max(current.elapsed, nextDue));
     current.timers.delete(timer.id);
-    current.firing++;
+    current.running.push(timer);
     try {
       try {
         internal.runInContext(timer.context, timer.callback, timer, timer.args);
@@ -196,7 +197,7 @@
       }
       internal.native.runMicrotasks();
     } finally {
-      current.firing--;
+      current.running.pop();
     }
     if (timer.kind !== "interval" || clock !== current || current.timers.has(timer.id) || timer.cancelled) return;
     timer.due = nextDue + timer.delay;
@@ -238,7 +239,9 @@
   }
 
   function clearAllTimers(this: unknown) {
-    for (const timer of activeClock().timers.values()) timer.close();
+    const current = activeClock();
+    for (const timer of current.timers.values()) timer.close();
+    for (const timer of current.running) timer.close();
     return this;
   }
 
