@@ -119,9 +119,8 @@ async function cacheIfExpected(key: string, build: string, chunks: Uint8Array<Ar
   await cacheEngine(key, build, new Response(blob, { headers }));
 }
 
-// The browser engine imports program modules from named URLs served by the service worker at
-// ./__bunwasm/ (sw.ts), which is what lets imports form cycles. Workers started from that scope are
-// controlled by it; without it (no service workers, or registration failed) modules use blob URLs.
+// The service worker at ./__bunwasm/ (sw.ts) serves named module URLs for import cycles.
+// Acyclic modules use blob URLs, including when WebKit starts an uncontrolled worker in the scope.
 const MODULE_SCOPE = "./__bunwasm/";
 
 export async function registerModuleScope(): Promise<boolean> {

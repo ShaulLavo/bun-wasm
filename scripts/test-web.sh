@@ -100,6 +100,7 @@ if [[ $browser == 1 ]]; then
     echo "skip engine interruption: needs dist/bun-jsc.wasm and dist/bun-browser.wasm alongside bun.wasm"
   fi
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
+    node tests/browser-worker-modules.ts || failed=1
     node tests/browser-engine.mjs || failed=1
     node tests/browser-crypto.mjs || failed=1
     node tests/browser-memory.mjs || failed=1
