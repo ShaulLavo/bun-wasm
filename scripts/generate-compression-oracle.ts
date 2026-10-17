@@ -47,6 +47,6 @@ if(process.argv[2]){
  writeFileSync(process.argv[2],JSON.stringify(result));
  const names=cases.map(c=>c.format+' '+c.kind+(c.dictionary?' dictionary':'')).concat(
   ['Bun Zstd dictionary'],corrupt.map(c=>c.format+' corrupt '+c.input),
-  ['native limit before expansion','Web bounded pieces','Web compression levels','Web queuing strategy','dictionary snapshot','dictionary validation','cancel parked Web expansion','Archive gzip expansion ceiling']);
+  ['native limit before expansion','Archive gzip expansion ceiling','Web bounded pieces','Web compression levels','Web queuing strategy','dictionary snapshot','dictionary validation','cancel parked Web expansion']);
  writeFileSync(process.argv[2].replace('oracle.json','expected.txt'),names.map(n=>'PASS '+n).join('\n')+'\n');
 }else console.log(JSON.stringify(result));

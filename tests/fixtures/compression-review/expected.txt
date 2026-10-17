@@ -36,10 +36,10 @@ PASS brotli corrupt 1b1000f8
 PASS zstd corrupt ffffffffff
 PASS zstd corrupt 28b52ffd
 PASS native limit before expansion
+PASS Archive gzip expansion ceiling
 PASS Web bounded pieces
 PASS Web compression levels
 PASS Web queuing strategy
 PASS dictionary snapshot
 PASS dictionary validation
 PASS cancel parked Web expansion
-PASS Archive gzip expansion ceiling

@@ -32,16 +32,19 @@ await check('native limit before expansion',()=>{
  const decoder=new z.Gunzip({maxOutputLength:1024});
  try{decoder._processChunk(Buffer.from(oracle.bomb,'hex'),z.constants.Z_NO_FLUSH);throw new Error('missing limit')}catch(e){equal(e.code,'ERR_BUFFER_TOO_LARGE')}finally{decoder.close()}
 });
+await check('Archive gzip expansion ceiling',async()=>{
+ for(const operation of ['files','extract']){let error;try{const archive=new Bun.Archive(Buffer.from(oracle.archiveBomb,'hex'));await archive[operation]('large-output')}catch(e){error=e}equal(error?.code,'ERR_BUFFER_TOO_LARGE')}
+});
 await check('Web bounded pieces',async()=>{
  const cs=new DecompressionStream('gzip',{highWaterMark:1024});
- const written=(async()=>{const w=cs.writable.getWriter();await w.write(Buffer.from(oracle.bomb,'hex'));await w.close()})();
+ const written=(async()=>{const w=cs.writable.getWriter();await w.write(Buffer.from(oracle.bomb,'hex'));await w.close()})();written.catch(()=>{});
  let count=0;for await(const piece of cs.readable){if(piece.length>1024)throw new Error('piece '+piece.length);count+=piece.length}
  await written;equal(count,4*1024*1024);
 });
 await check('Web compression levels',async()=>{
  for(const [format,lo,hi] of [['gzip',0,9],['brotli',1,11],['zstd',1,19]]){
   const sizes=[];
-  for(const level of [lo,hi]){const data=new TextEncoder().encode('some repeating data '.repeat(4096));const cs=new CompressionStream(format,{level,highWaterMark:1024});const written=(async()=>{const w=cs.writable.getWriter();await w.write(data);await w.close()})();let size=0;for await(const piece of cs.readable){if(piece.length>1024)throw new Error('piece '+piece.length);size+=piece.length}await written;sizes.push(size)}
+  for(const level of [lo,hi]){const data=new TextEncoder().encode('some repeating data '.repeat(4096));const cs=new CompressionStream(format,{level,highWaterMark:1024});const written=(async()=>{const w=cs.writable.getWriter();await w.write(data);await w.close()})();written.catch(()=>{});let size=0;for await(const piece of cs.readable){if(piece.length>1024)throw new Error('piece '+piece.length);size+=piece.length}await written;sizes.push(size)}
   if(sizes[0]===sizes[1])throw new Error(format+' ignored level');
  }
  for(const [format,level] of [['gzip',99],['brotli',12],['zstd',0]]){let error;try{new CompressionStream(format,{level})}catch(e){error=e}if(!(error instanceof RangeError))throw new Error(format+' accepted invalid level')}
@@ -61,7 +64,5 @@ await check('dictionary snapshot',async()=>{
 });
 await check('dictionary validation',()=>{for(const name of ['deflate','brotliCompress','zstdCompress']){let e;try{z[name+'Sync']('hello',{dictionary:'invalid'})}catch(error){e=error}equal(e?.code,'ERR_INVALID_ARG_TYPE')}});
 await check('cancel parked Web expansion',async()=>{const ds=new DecompressionStream('gzip',{highWaterMark:1024});const writer=ds.writable.getWriter();const reader=ds.readable.getReader();const write=writer.write(Buffer.from(oracle.bomb,'hex'));await reader.read();const closed=writer.closed.catch(()=>{});await reader.cancel(new Error('cancelled'));await write;await closed});
-await check('Archive gzip expansion ceiling',async()=>{
- for(const operation of ['files','extract']){let error;try{const archive=new Bun.Archive(Buffer.from(oracle.archiveBomb,'hex'));await archive[operation]('large-output')}catch(e){error=e}equal(error?.code,'ERR_BUFFER_TOO_LARGE')}
-});
+
 if(failures)throw new Error(failures+' compression regressions');
