@@ -97,7 +97,7 @@ for (const method of ["spawn", "spawnSync"]) test(`Bun.${method} throws EACCES f
   try {
     let caught;
     try { api[method](["broken"]); } catch (error) { caught = error; }
-    expect(caught).toMatchObject({ name: "Error", code: "EACCES", errno: -13, path: "broken" });
+    expect(caught).toMatchObject({ name: "Error", code: "EACCES", errno: -13, path: "broken", syscall: "posix_spawn" });
     const result = api.nodeChildProcess().spawnSync("broken", ["argument"]);
     expect(result.error).toMatchObject({ code: "EACCES", errno: -13, syscall: "spawnSync broken", path: "broken", spawnargs: ["argument"] });
     expect(result.status).toBeNull();
