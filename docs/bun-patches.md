@@ -15,7 +15,7 @@ Each row has one class. A file with independent changes has separate rows.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Lint and format command adapters](#lint-and-format-commands) | Port | Compile Bun's native linter, formatter, CLI parsers, and Yarr regex bindings for WASI. |
-| [Lint process environment](#lint-process-environment) | Host feature | Original adapters run configuration programs in child wasm instances and register their object modules. |
+| [Lint process environment](#lint-process-environment) | Host feature | Original adapters bound configuration workers and their output, reserve internal capacity, and register object modules. |
 | [Third-party interrupt instrumentation](#third-party-interrupt-instrumentation) | Host feature | Original TypeScript binary rewriter, content-addressed loader and rescued browser fixtures; module-internal countdowns avoid per-entry host calls. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
@@ -1571,6 +1571,14 @@ Parallel regions stay on the calling thread because WASI preview 1 has no thread
 `src/runtime/cli/typescript_libs.rs` is compiled directly from the pinned tree,
 including its `typescript_libs.bin`, without copying or changing either file.
 
+The command adapter also follows `src/runtime/cli/lint_command.rs::run_and_exit`
+for the two directory changes: top-level `--cwd` first, then the tool's `--cwd`.
+Its bunfig search adapts `src/bunfig/arguments.rs::Above` and
+`load_config_above_for_tool`. Missing required sections keep the search needed,
+a local lint section makes an unused formatter search optional, and either the
+local rules or CLI can require `bun/format`. An unusable optional ancestor ends
+the search. Named and required configs retain their diagnostics.
+
 `crates/bunwasm-lint-native/build.rs` extracts the `RegularExpression` struct and
 compile/execute/deinit bindings from `src/jsc/bindings/RegularExpression.cpp`.
 It omits the BunString entry points and replaces the runtime headers with JSC's
@@ -1591,14 +1599,32 @@ part of the release CLI adapter.
 
 ## Lint process environment
 
-Class **Host feature**, **original adapter** in
-`crates/bunwasm-cli/src/lint_command.rs`.
+Class **Host feature**, **original adapters** in
+`crates/bunwasm-cli/src/lint_command.rs`, `crates/bunwasm-host/src/process/`,
+and `web/src/subprocess.ts`.
 
 The driver supplies Bun's existing config-evaluation programs as source parts.
 The adapter runs them through the host subprocess ABI in a fresh instance of the
 same wasm artifact, passing the requested cwd and filtered process environment.
 It drains both output pipes while waiting and closes owned handles on every
 return path. It invokes no host executable or model provider.
+
+Bun serializes these evaluations with the guard in its pinned
+`src/runtime/cli/lint_command.rs::run_and_exit` and starts an isolated process
+with `--no-orphans`. The WASI callback is synchronous and also permits one
+evaluation per owner. Its `purpose: "configuration"` spawn metadata reserves
+one internal helper for the root and each of the four public children. Internal
+helpers cannot reserve another helper. The public child limit stays four, and
+there are at most five internal helpers. Ordinary `Bun.spawn` does not forward
+this metadata. Native admission leases and browser/Node shared slots release
+capacity on startup failure, completion, kill, and close.
+
+Pinned Bun does not impose a time or output limit here. The wasm adapter adds
+a five-second elapsed-time limit and an eight-MiB combined stdout/stderr budget
+for the memory-limited host. It kills, reaps, and closes the child and its pipes
+on either refusal, returning the error through the driver's existing config
+diagnostic path. Host spawn errors retain their code and message, including
+EAGAIN, instead of being reported as missing subprocess support.
 
 
 The original `src/js/bun_plugin.ts` adapter implements synchronous runtime

@@ -8,6 +8,8 @@ const closedOutput = readFileSync(new URL("../../tests/fixtures/pipe-closed-chil
 const orderedOutput = readFileSync(new URL("../../tests/fixtures/pipe-write-order/index.ts", import.meta.url), "utf8");
 const orderedChild = readFileSync(new URL("../../tests/fixtures/pipe-write-order/child.ts", import.meta.url), "utf8");
 const stdinRace = readFileSync(new URL("../../tests/fixtures/pipe-stdin-race/index.ts", import.meta.url), "utf8");
+const configurationChecks = readFileSync(new URL("../../tests/fixtures/lint-fmt-config/index.ts", import.meta.url), "utf8");
+const configurationExpected = readFileSync(new URL("../../tests/fixtures/lint-fmt-config/expected.txt", import.meta.url), "utf8").trim().split("\n");
 const executableAliases = ["bun", "/bun", "/usr/local/bin/bun", "node", "/node", "/usr/local/bin/node"];
 const apiProgram = `
 import { spawnSync, execSync } from "node:child_process";
@@ -133,6 +135,11 @@ try {
       assert.equal(api.code, 0, api.output);
       for (const line of apiExpected) assert.ok(api.output.includes(line), `missing ${line} in ${api.output}`);
       console.log(`ok ${browserName} ${engine}: Bun/Node subprocess APIs, nested workers, large stdin, cwd, files, timeout`);
+      await writeFile(page, "/home/user/lint-fmt-config.ts", configurationChecks);
+      const configured = await run(page, "bun run lint-fmt-config.ts");
+      assert.equal(configured.code, 0, configured.output);
+      for (const line of configurationExpected) assert.ok(configured.output.includes(line), configured.output);
+      console.log(`ok ${browserName} ${engine}: configuration capacity, limits, ancestry, cwd and cleanup`);
       await writeFile(page, "/home/user/closed-output.ts", closedOutput);
       const closed = await run(page, "bun run closed-output.ts");
       assert.equal(closed.code, 0, closed.output);

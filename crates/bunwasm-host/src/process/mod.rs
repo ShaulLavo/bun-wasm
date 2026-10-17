@@ -65,6 +65,26 @@ pub struct Request {
     stderr: String,
     #[serde(default)]
     worker: Option<WorkerLimits>,
+    #[serde(default)]
+    purpose: Option<ChildPurpose>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ChildPurpose { Configuration }
+
+enum Admission {
+    Public(Arc<Runtime>),
+    Configuration(Arc<AtomicBool>),
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        match self {
+            Self::Public(runtime) => { runtime.active.fetch_sub(1, Ordering::SeqCst); }
+            Self::Configuration(active) => { active.store(false, Ordering::SeqCst); }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -95,6 +115,7 @@ pub struct Processes {
     children: HashMap<i32, Child>,
     pipes: HashMap<i32, PipeHandle>,
     worker_pipes: [i32; 2],
+    configuration_active: Arc<AtomicBool>,
 }
 
 fn error(message: impl Into<String>, code: &str) -> ErrorInfo {
@@ -122,6 +143,7 @@ impl Processes {
             children: HashMap::new(),
             pipes: HashMap::new(),
             worker_pipes: [0; 2],
+            configuration_active: Arc::new(AtomicBool::new(false)),
         };
         if let Some(pipes) = worker {
             for (index, pipe) in pipes.into_iter().enumerate() {
@@ -222,20 +244,33 @@ impl Processes {
                 return Err(error("Unsupported stdio mode in bun-wasm", "EINVAL"));
             }
         }
+        let admission = self.admit(&request)?;
+        self.start(request, admission)
+    }
+
+    fn admit(&self, request: &Request) -> Result<Admission, ErrorInfo> {
+        if request.purpose.is_some() {
+            if self.stdio.configuration {
+                return Err(error("Configuration helpers cannot start another internal evaluation", "EPERM"));
+            }
+            if request.argv[0] != "bun" || request.worker.is_some() || request.argv.len() != 4 || request.argv[1..3] != ["--no-install", "-e"]
+                || request.stdin != "ignore" || request.stdout != "pipe" || request.stderr != "pipe" {
+                return Err(error("Invalid configuration helper command", "EINVAL"));
+            }
+            self.configuration_active.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .map_err(|_| error("This process already has a configuration evaluation", "EAGAIN"))?;
+            return Ok(Admission::Configuration(self.configuration_active.clone()));
+        }
         self.runtime
             .active
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                 (n < MAX_CHILDREN).then_some(n + 1)
             })
             .map_err(|_| error("bun-wasm child concurrency limit reached (4 active children)", "EAGAIN"))?;
-        let result = self.start(request);
-        if result.is_err() {
-            self.runtime.active.fetch_sub(1, Ordering::SeqCst);
-        }
-        result
+        Ok(Admission::Public(self.runtime.clone()))
     }
 
-    fn start(&mut self, mut request: Request) -> Result<i32, ErrorInfo> {
+    fn start(&mut self, mut request: Request, admission: Admission) -> Result<i32, ErrorInfo> {
         let stdio_pipes = [&request.stdin, &request.stdout, &request.stderr]
             .into_iter().filter(|mode| mode.as_str() == "pipe").count();
         // Reserve capacity before creating any pipe or starting a child thread.
@@ -277,7 +312,7 @@ impl Processes {
                     runtime.clone(),
                     request.argv,
                     request.env.into_iter().collect(),
-                    Stdio { stdin, stdout, stderr, worker, memory_limit },
+                    Stdio { stdin, stdout, stderr, worker, memory_limit, configuration: request.purpose.is_some() },
                     cancellation.clone(),
                 ).unwrap_or_else(|e| {
                     eprintln!("bun-wasm child: {e:#}");
@@ -286,8 +321,8 @@ impl Processes {
                 // Child stdin and worker control input are readers; only its
                 // stdout, stderr and worker control output are writer endpoints.
                 close_child_pipes(inputs, outputs);
+                drop(admission);
                 *completed.lock().unwrap() = Some(outcome);
-                runtime.active.fetch_sub(1, Ordering::SeqCst);
                 notify.bump();
             });
         let thread = match thread {
@@ -454,7 +489,7 @@ impl Drop for Processes {
 mod tests {
     use super::*;
 
-    fn processes() -> Processes {
+    pub(super) fn processes() -> Processes {
         let mut config = wasmtime::Config::new();
         config.epoch_interruption(true);
         let engine = wasmtime::Engine::new(&config).unwrap();
@@ -768,5 +803,54 @@ mod tests {
         assert!(processes.children.is_empty());
         assert!(processes.pipes.is_empty());
         assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+
+    fn request() -> Request {
+        serde_json::from_value(serde_json::json!({
+            "purpose": "configuration", "argv": ["bun", "--no-install", "-e", "0"],
+            "cwd": "/", "env": {}, "stdin": "ignore", "stdout": "pipe", "stderr": "pipe"
+        })).unwrap()
+    }
+
+    #[test]
+    fn helpers_reserve_one_per_owner_without_using_public_capacity() {
+        let root = super::tests::processes();
+        root.runtime.active.store(MAX_CHILDREN, Ordering::SeqCst);
+        let lease = root.admit(&request()).unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(root.runtime.active.load(Ordering::SeqCst), MAX_CHILDREN);
+        assert_eq!(root.admit(&request()).err().unwrap().code.as_deref(), Some("EAGAIN"));
+        let mut stdio = Stdio::inherited();
+        stdio.configuration = true;
+        let helper = Processes::new(root.runtime.clone(), stdio, crate::net::Net::new().notify());
+        assert_eq!(helper.admit(&request()).err().unwrap().code.as_deref(), Some("EPERM"));
+        drop(lease);
+        assert!(!root.configuration_active.load(Ordering::SeqCst));
+        root.runtime.active.store(0, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn sequential_helpers_are_reaped_with_no_pipe_or_capacity_leak() {
+        let mut root = super::tests::processes();
+        root.runtime.active.store(MAX_CHILDREN, Ordering::SeqCst);
+        for _ in 0..8 {
+            let child = root.spawn(&serde_json::to_vec(&serde_json::json!({
+                "purpose": "configuration", "argv": ["bun", "--no-install", "-e", "0"],
+                "cwd": "/", "env": {}, "stdin": "ignore", "stdout": "pipe", "stderr": "pipe"
+            })).unwrap()).unwrap();
+            let pipes = root.children[&child].pipes;
+            while root.wait(child) == AGAIN { std::thread::yield_now(); }
+            for pipe in pipes { if pipe != 0 { root.close(pipe); } }
+            root.close(child);
+            assert!(!root.configuration_active.load(Ordering::SeqCst));
+            assert_eq!(root.runtime.active.load(Ordering::SeqCst), MAX_CHILDREN);
+            assert!(root.children.is_empty());
+            assert!(root.pipes.is_empty());
+        }
+        root.runtime.active.store(0, Ordering::SeqCst);
     }
 }

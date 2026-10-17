@@ -359,10 +359,16 @@ fn build(_: Vec<String>) -> i32 {
 #[cfg(feature = "bun-transpiler")]
 mod lint_command;
 
+#[derive(Default)]
+struct ToolGlobals {
+    cwd_before: Option<String>,
+    bunfig: Option<String>,
+}
+
 enum Command {
     Run(Entry, Vec<String>),
     Build(Vec<String>),
-    Lint(String, Vec<String>, Option<String>),
+    Lint(String, Vec<String>, ToolGlobals),
     Install(String, Vec<String>),
     Print(String),
     Exit(i32),
@@ -403,7 +409,7 @@ fn parse(args: Vec<String>) -> Command {
                 let Some(code) = rest.next() else { return usage_error("--print requires code") };
                 return Command::Print(code);
             }
-            "lint" | "fmt" => return Command::Lint(arg, rest.collect(), None),
+            "lint" | "fmt" => return Command::Lint(arg, rest.collect(), ToolGlobals::default()),
             "test" => return Command::Run(Entry::Test(rest.collect()), Vec::new()),
             "build" | "bun" => return Command::Build(rest.collect()),
             "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm" =>
@@ -461,12 +467,12 @@ fn main() {
     let command = parse(std::env::args().skip(1).collect());
     let (entry, args) = match command {
         Command::Exit(code) => std::process::exit(code),
-        Command::Lint(command, args, bunfig) => {
+        Command::Lint(command, args, globals) => {
             #[cfg(feature = "bun-transpiler")]
-            std::process::exit(lint_command::run(&command, args, bunfig));
+            std::process::exit(lint_command::run(&command, args, globals));
             #[cfg(not(feature = "bun-transpiler"))]
             {
-                let _ = (args, bunfig);
+                let _ = (args, globals);
                 eprintln!("error: bun {command} requires the bun-transpiler feature");
                 std::process::exit(1);
             }

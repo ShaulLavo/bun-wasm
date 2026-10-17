@@ -272,6 +272,20 @@ WASI guest changes directory there at startup. Each stdio mode is `pipe`,
 including pipes when the parent is itself a child. No OS descriptor inheritance
 or IPC channel is implied.
 
+The lint/format adapter also sends `"purpose":"configuration"` through slot 12.
+This class requires `argv` to be `["bun","--no-install","-e",program]`, ignored
+stdin, and piped stdout/stderr. It reserves one internal helper for the owning
+process without consuming a public child slot. There are four public slots and
+at most five internal helpers, one for the root and one for each public child.
+A configuration helper cannot reserve another internal helper. Ordinary
+`Bun.spawn` does not forward this field. Duplicate internal admission returns
+EAGAIN and nested internal admission returns EPERM.
+
+The CLI callback bounds a config evaluation to five seconds and eight MiB of
+combined output. On refusal it kills and reaps its child, then closes its child
+and pipe handles. These limits are wasm host policy; pinned Bun's native CLI
+instead gives its config subprocess the `--no-orphans` lifetime flag.
+
 `child_pipe(child, fd)` returns the stdin, stdout, or stderr pipe for fd 0, 1, or
 2. It returns 0 for an inherited or ignored stream. Use the existing `write`,
 `read`, and `close` functions on these pipe handles. Closing stdin sends EOF;

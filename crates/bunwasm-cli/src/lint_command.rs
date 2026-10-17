@@ -5,6 +5,7 @@ extern crate bunwasm_lint_native;
 
 use std::io::Write;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use bun_lint_driver::{Environment, Outcome, Script, Stream, bunfig, cli, fmt, git, js_plugin};
 use bunwasm_runtime::host;
@@ -14,23 +15,25 @@ mod typescript_libs;
 
 pub(super) fn before_command(args: &[String]) -> Option<super::Command> {
     let mut forwarded = Vec::new();
-    let mut bunfig = None;
+    let mut globals = super::ToolGlobals::default();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         match arg.as_str() {
             "lint" | "fmt" => {
                 forwarded.extend_from_slice(&args[at + 1..]);
-                return Some(super::Command::Lint(arg.clone(), forwarded, bunfig));
+                return Some(super::Command::Lint(arg.clone(), forwarded, globals));
             }
             "--cwd" => {
-                forwarded.push(arg.clone());
                 at += 1;
-                forwarded.push(args.get(at)?.clone());
+                globals.cwd_before = Some(args.get(at)?.clone());
+            }
+            flag if flag.starts_with("--cwd=") => {
+                globals.cwd_before = Some(flag.split_once('=')?.1.to_owned());
             }
             "--smol" | "--silent" | "--no-install" | "--bun" => {}
             "-e" | "--eval" | "-p" | "--print" | "-v" | "--version" | "--revision" => return None,
             flag if flag.starts_with("--config=") || flag.starts_with("-c=") => {
-                bunfig = Some(flag.split_once('=')?.1.to_owned());
+                globals.bunfig = Some(flag.split_once('=')?.1.to_owned());
             }
             flag if flag.starts_with('-') => forwarded.push(arg.clone()),
             _ => return None,
@@ -71,10 +74,10 @@ fn configure_output() {
         .store(color.unwrap_or(Output::is_stderr_tty()), Ordering::Relaxed);
 }
 
-pub fn run(command: &str, args: Vec<String>, bunfig: Option<String>) -> i32 {
+pub(super) fn run(command: &str, args: Vec<String>, globals: super::ToolGlobals) -> i32 {
     configure_output();
     let argv: Vec<&[u8]> = args.iter().map(|arg| arg.as_bytes()).collect();
-    match execute(command, &argv, bunfig.as_deref()) {
+    match execute(command, &argv, &globals) {
         Ok(outcome) => {
             let _ = std::io::stdout().write_all(&outcome.stdout);
             let _ = std::io::stderr().write_all(&outcome.stderr);
@@ -92,20 +95,28 @@ pub fn run(command: &str, args: Vec<String>, bunfig: Option<String>) -> i32 {
     }
 }
 
-fn execute(command: &str, args: &[&[u8]], bunfig: Option<&str>) -> Result<Outcome, CommandError> {
-    let (cwd, help, all) = match command {
+fn execute(
+    command: &str,
+    args: &[&[u8]],
+    globals: &super::ToolGlobals,
+) -> Result<Outcome, CommandError> {
+    let (cwd, help, all, format_required) = match command {
         "lint" => {
             let options = cli::Options::parse(args).map_err(|err| err.0)?;
-            (options.cwd, options.help, options.all)
+            let format_required = options.names_a_format_rule();
+            (options.cwd, options.help, options.all, format_required)
         }
         _ => {
             let options = fmt::cli::Options::parse(args).map_err(|err| err.0)?;
-            (options.cwd, options.help, options.all)
+            (options.cwd, options.help, options.all, false)
         }
     };
     if help {
         print_help(command, all);
         return Ok(Outcome::default());
+    }
+    if let Some(cwd) = globals.cwd_before.as_deref() {
+        std::env::set_current_dir(cwd).map_err(|err| err.to_string().into_bytes())?;
     }
     if let Some(cwd) = cwd {
         let cwd = std::str::from_utf8(&cwd).map_err(|err| err.to_string().into_bytes())?;
@@ -140,7 +151,12 @@ fn execute(command: &str, args: &[&[u8]], bunfig: Option<&str>) -> Result<Outcom
         version: bunwasm_runtime::BUN_VERSION.as_bytes(),
         memory: 0,
     };
-    let (lint, format) = read_bunfigs(Path::new(cwd.as_ref()), command == "lint", bunfig)?;
+    let (lint, format) = read_bunfigs(
+        Path::new(cwd.as_ref()),
+        command == "lint",
+        globals.bunfig.as_deref(),
+        format_required,
+    )?;
     if command == "fmt" {
         let options = match format {
             Some(defaults) => fmt::cli::Options::parse_over(defaults, args),
@@ -172,8 +188,16 @@ fn read_bunfigs(
     cwd: &Path,
     linting: bool,
     named: Option<&str>,
+    format_required: bool,
 ) -> Result<(Option<cli::Options>, Option<fmt::cli::Options>), CommandError> {
-    let (mut lint, mut format) = (None, None);
+    let mut search = BunfigSearch {
+        cwd,
+        linting,
+        named: named.is_some(),
+        format_required,
+        lint: None,
+        format: None,
+    };
     let paths = match named {
         Some(path) => vec![(cwd.join(path), path.to_owned())],
         None => cwd
@@ -187,11 +211,62 @@ fn read_bunfigs(
             })
             .collect(),
     };
-    for (path, label) in paths {
+    let mut above = Above::Needed;
+    for (depth, (path, label)) in paths.into_iter().enumerate() {
+        if let Err(error) = search.read(&path, &label) {
+            if depth > 0 && above == Above::Optional {
+                break;
+            }
+            return Err(error);
+        }
+        above = search.above();
+        if above == Above::Unwanted {
+            break;
+        }
+    }
+    Ok((search.lint, search.format))
+}
+
+#[derive(PartialEq)]
+enum Above {
+    Needed,
+    Optional,
+    Unwanted,
+}
+
+struct BunfigSearch<'a> {
+    cwd: &'a Path,
+    linting: bool,
+    named: bool,
+    format_required: bool,
+    lint: Option<cli::Options>,
+    format: Option<fmt::cli::Options>,
+}
+
+impl BunfigSearch<'_> {
+    fn above(&self) -> Above {
+        if !self.linting {
+            return if self.format.is_some() {
+                Above::Unwanted
+            } else {
+                Above::Needed
+            };
+        }
+        match (&self.lint, &self.format) {
+            (Some(_), Some(_)) => Above::Unwanted,
+            (Some(options), None) if options.names_a_format_rule() || self.format_required => {
+                Above::Needed
+            }
+            (Some(_), None) => Above::Optional,
+            (None, _) => Above::Needed,
+        }
+    }
+
+    fn read(&mut self, path: &Path, label: &str) -> Result<(), CommandError> {
         let text = match std::fs::read(&path) {
             Ok(text) => text,
-            Err(error) if named.is_none() && error.kind() == std::io::ErrorKind::NotFound => {
-                continue;
+            Err(error) if !self.named && error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(());
             }
             Err(error) => {
                 return Err(CommandError::Config(
@@ -207,25 +282,22 @@ fn read_bunfigs(
         let file = bun_parsers::toml::TOML::parse(&source, &mut log, &arena, false)
             .map_err(|_| config_error(&log))?;
         let refusal = |error| config_refusal(&source, error);
-        if linting && lint.is_none() {
-            lint = bunfig::lint(&file).map_err(refusal)?.map(|options| {
+        if self.linting && self.lint.is_none() {
+            self.lint = bunfig::lint(&file).map_err(refusal)?.map(|options| {
                 options.of_bunfig_at(
                     label.as_bytes(),
-                    named.is_some(),
-                    cwd.as_os_str().as_encoded_bytes(),
+                    self.named,
+                    self.cwd.as_os_str().as_encoded_bytes(),
                 )
             });
         }
-        if format.is_none() {
-            format = bunfig::format(&file)
+        if self.format.is_none() {
+            self.format = bunfig::format(&file)
                 .map_err(refusal)?
-                .map(|options| options.of_bunfig_at(label.as_bytes(), named.is_some()));
+                .map(|options| options.of_bunfig_at(label.as_bytes(), self.named));
         }
-        if format.is_some() && (!linting || lint.is_some()) {
-            break;
-        }
+        Ok(())
     }
-    Ok((lint, format))
 }
 
 fn print_help(command: &str, all: bool) {
@@ -283,6 +355,7 @@ fn run_script(script: &Script) -> Result<Vec<u8>, Vec<u8>> {
         .filter(|(name, _)| !Script::NOT_INHERITED.contains(&name.as_bytes()))
         .collect();
     let meta = serde_json::json!({
+        "purpose": "configuration",
         "executable": "bun",
         "argv": ["bun", "--no-install", "-e", source],
         "cwd": cwd,
@@ -291,23 +364,34 @@ fn run_script(script: &Script) -> Result<Vec<u8>, Vec<u8>> {
     });
     let handle = host::spawn(meta.to_string().as_bytes());
     if handle < 0 {
-        return Err(
-            b"Cannot start a configuration process: host subprocess support is required".to_vec(),
-        );
+        return Err(process_error(
+            "Could not start a configuration process",
+            handle,
+            0,
+        ));
     }
     let mut child = Child {
         handle,
         pipes: [host::child_pipe(handle, 1), host::child_pipe(handle, 2)],
     };
     let mut output = [Vec::new(), Vec::new()];
+    let mut budget = EvaluationBudget {
+        started: Instant::now(),
+        bytes: 0,
+    };
     let mut status = host::AGAIN;
     while status == host::AGAIN || child.pipes.iter().any(|pipe| *pipe > 0) {
+        budget.check_time()?;
         for (pipe, bytes) in child.pipes.iter_mut().zip(output.iter_mut()) {
-            drain(pipe, bytes)?;
+            drain(pipe, bytes, &mut budget)?;
         }
         status = host::child_wait(handle);
         if status < 0 && status != host::AGAIN {
-            return Err(b"Configuration process failed".to_vec());
+            return Err(process_error(
+                "Configuration process failed",
+                status,
+                handle,
+            ));
         }
         if status == host::AGAIN || child.pipes.iter().any(|pipe| *pipe > 0) {
             host::poll(10);
@@ -317,18 +401,74 @@ fn run_script(script: &Script) -> Result<Vec<u8>, Vec<u8>> {
     if status == 0 { Ok(stdout) } else { Err(stderr) }
 }
 
-fn drain(pipe: &mut i32, bytes: &mut Vec<u8>) -> Result<(), Vec<u8>> {
+struct EvaluationBudget {
+    started: Instant,
+    bytes: usize,
+}
+
+impl EvaluationBudget {
+    fn check_time(&self) -> Result<(), Vec<u8>> {
+        if self.started.elapsed() >= Duration::from_secs(5) {
+            return Err(b"Configuration evaluation exceeded 5 seconds".to_vec());
+        }
+        Ok(())
+    }
+
+    fn add_output(&mut self, bytes: usize) -> Result<(), Vec<u8>> {
+        self.bytes += bytes;
+        if self.bytes > 8 * 1024 * 1024 {
+            return Err(
+                b"Configuration evaluation exceeded 8 MiB of combined stdout and stderr".to_vec(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn process_error(context: &str, code: i32, handle: i32) -> Vec<u8> {
+    if code == host::UNSUPPORTED {
+        return format!("{context}: host subprocess support is not provided").into_bytes();
+    }
+    let details = host::error(handle)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let message = details
+        .as_ref()
+        .and_then(|error| error["message"].as_str())
+        .unwrap_or("host process error");
+    let name = details
+        .as_ref()
+        .and_then(|error| error["code"].as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| code.to_string());
+    format!("{context}: {name}: {message}").into_bytes()
+}
+
+fn drain(
+    pipe: &mut i32,
+    bytes: &mut Vec<u8>,
+    budget: &mut EvaluationBudget,
+) -> Result<(), Vec<u8>> {
     if *pipe <= 0 {
         return Ok(());
     }
     match host::read(*pipe, 65536) {
-        Ok(chunk) if !chunk.is_empty() => bytes.extend_from_slice(&chunk),
+        Ok(chunk) if !chunk.is_empty() => {
+            budget.add_output(chunk.len())?;
+            bytes.extend_from_slice(&chunk);
+        }
         Err(host::AGAIN) => {}
         Ok(_) => {
             host::close(*pipe);
             *pipe = 0;
         }
-        Err(_) => return Err(b"Cannot read configuration process output".to_vec()),
+        Err(code) => {
+            return Err(process_error(
+                "Cannot read configuration process output",
+                code,
+                *pipe,
+            ));
+        }
     }
     Ok(())
 }
@@ -345,6 +485,9 @@ impl Drop for Child {
             if pipe > 0 {
                 host::close(pipe);
             }
+        }
+        while host::child_wait(self.handle) == host::AGAIN {
+            host::poll(10);
         }
         host::close(self.handle);
     }
