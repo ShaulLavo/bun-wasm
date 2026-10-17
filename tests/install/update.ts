@@ -36,6 +36,27 @@ async function run(...args: string[]) {
     assert.equal(code, 0, `bun ${args.join(" ")}\n${output}`);
   } finally { clearTimeout(timer); children.delete(child); }
 }
+async function hoistedMemberUpdate(shared: boolean, names: readonly string[]) {
+  rmSync(join(scratch, "bun.lock"), { force: true });
+  rmSync(join(scratch, "node_modules"), { recursive: true, force: true });
+  rmSync(join(scratch, "packages"), { recursive: true, force: true });
+  const manifest = join(scratch, "package.json");
+  const dependencies = shared ? { versioned: "1.0.0" } : { "is-number": "7.0.0" };
+  writeFileSync(manifest, JSON.stringify({ workspaces: ["packages/*"], dependencies }));
+  mkdirSync(join(scratch, "packages/member"), { recursive: true });
+  const member = join(scratch, "packages/member/package.json");
+  writeFileSync(member, JSON.stringify({ name: "member", version: "1.0.0", dependencies: { versioned: "1.0.0" } }));
+  await run("install");
+  if (shared) writeFileSync(manifest, JSON.stringify({ workspaces: ["packages/*"], dependencies: { versioned: "^1.0.0" } }));
+  writeFileSync(member, JSON.stringify({ name: "member", version: "1.0.0", dependencies: { versioned: "^1.0.0" } }));
+  await run("update", ...names, "--cwd", "/packages/member");
+  const nested = join(scratch, "packages/member/node_modules/versioned/package.json");
+  const resolved = existsSync(nested) ? nested : join(scratch, "node_modules/versioned/package.json");
+  assert.equal(JSON.parse(readFileSync(resolved, "utf8")).version, "1.1.0", "member update retained a hoisted resolution pin");
+  if (shared) assert.equal(JSON.parse(readFileSync(join(scratch, "node_modules/versioned/package.json"), "utf8")).version, "1.0.0", "member update advanced a shared root pin");
+  console.log("member update refreshes a hoisted edge and preserves root ownership", shared ? "shared" : "member-only", names.length ? "named" : "all");
+}
+
 try {
   registry = await createRegistry([packageFixture("versioned", "2.1.0")]);
   const manifest = join(scratch, "package.json");
@@ -64,5 +85,8 @@ try {
   rmSync(join(scratch, "bun.lock"));
   rmSync(join(scratch, "node_modules"), { recursive: true });
   rmSync(join(scratch, "packages"), { recursive: true });
+  }
+  for (const shared of [false, true]) {
+    for (const names of [["versioned"], []]) await hoistedMemberUpdate(shared, names);
   }
 } finally { await cleanup(); }
