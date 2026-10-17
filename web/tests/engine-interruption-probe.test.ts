@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import { WasiExit } from "@bun-wasm/runtime/core";
-import { assertNativeEngineCompletion, engineInterruptionFailure, observeEngineImports, observeEventLoopWait, observedEngineStart, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
+import { ProcessSignalExit } from "../../runtime/proc/abi";
+import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
+import { DefaultSignal } from "../src/default-signal";
+import { assertFatalEngineCompletion, assertNativeEngineCompletion, engineInterruptionFailure, observeEngineImports, observeEventLoopWait, observedEngineStart, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 
 function fixture() {
   const probe = new Int32Array(new SharedArrayBuffer(probeLength * 4));
@@ -84,7 +87,7 @@ test("unrelated host calls cannot fabricate checkpoint evidence", () => {
   expect(snapshotProbe(f.probe).checkpoints).toBe(0);
 });
 test("probe preserves the typed host exception and records actual callback unwind", () => {
-  const f = fixture(), fatal = new Error("typed default action");
+  const f = fixture(), fatal = new ProcessSignalExit(15);
   const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { throw fatal; }, fd_write() { return 0; } } };
   observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
   Atomics.store(f.requested, 0, 15);
@@ -93,16 +96,19 @@ test("probe preserves the typed host exception and records actual callback unwin
   expect(snapshotProbe(f.probe).checkpointReturned).toBe(0);
 });
 test("signal published inside an in-flight mode4 callback is observed at its actual unwind", () => {
-  for (const signal of [2, 15]) {
-    const f = fixture(), fatal = new Error("typed default action");
+  for (const [previousSignal, signal] of [[0, 2], [0, 15], [2, 15], [15, 2]] as const) {
+    const f = fixture(), fatal = new ProcessSignalExit(signal);
+    let calls = 0;
+    Atomics.store(f.requested, 0, previousSignal);
     const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-      sock_send() { Atomics.store(f.requested, 0, signal); throw fatal; }, fd_write() { return 0; },
+      sock_send() { calls++; Atomics.store(f.requested, 0, signal); throw fatal; }, fd_write() { return 0; },
     } };
     observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
     let caught: unknown;
     try { (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result); }
     catch (error) { caught = error; }
     expect(caught).toBe(fatal);
+    expect(calls).toBe(1);
     const evidence = snapshotProbe(f.probe);
     expect(evidence.checkpoints).toBe(1);
     expect(evidence.checkpointAfterSignal).toBe(1);
@@ -111,8 +117,32 @@ test("signal published inside an in-flight mode4 callback is observed at its act
     expect(evidence.checkpointReturned).toBe(0);
   }
 });
+test("fatal checkpoint signal is authoritative before wake publication reaches the observer", () => {
+  for (const previousSignal of [0, 2]) {
+    const f = fixture(), fatal = new ProcessSignalExit(15);
+    let calls = 0;
+    Atomics.store(f.requested, 0, previousSignal);
+    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+      sock_send() { calls++; throw fatal; }, fd_write() { return 0; },
+    } };
+    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+    let caught: unknown;
+    try { (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result); }
+    catch (error) { caught = error; }
+    // The fatal decision/typed throw precedes requestSignal's later publishWake.
+    const beforePublication = snapshotProbe(f.probe);
+    expect(caught).toBe(fatal); expect(calls).toBe(1);
+    expect(Atomics.load(f.requested, 0)).toBe(previousSignal);
+    expect(beforePublication.checkpointAfterSignal).toBe(1);
+    expect(beforePublication.checkpointSignal).toBe(15);
+    expect(beforePublication.checkpointThrew).toBe(1);
+    expect(beforePublication.checkpointReturned).toBe(0);
+    Atomics.store(f.requested, 0, 15);
+    expect(snapshotProbe(f.probe)).toEqual(beforePublication);
+  }
+});
 test("signal present before a throwing checkpoint is counted once, unrelated exceptions do not select one", () => {
-  for (const signal of [0, 15]) {
+  for (const signal of [0, 2, 15]) {
     const f = fixture(), fatal = new Error("callback error");
     const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
       sock_send() { throw fatal; }, fd_write() { return 0; },
@@ -122,22 +152,25 @@ test("signal present before a throwing checkpoint is counted once, unrelated exc
     expect(() => (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toThrow(fatal);
     const evidence = snapshotProbe(f.probe);
     expect(evidence.checkpointAfterSignal).toBe(signal ? 1 : 0);
-    expect(evidence.checkpointSignal).toBe(signal);
+    expect(evidence.checkpointSignal).toBe(0);
     expect(evidence.checkpointThrew).toBe(1);
   }
 });
 test("normal checkpoint return does not fabricate a fatal observation from a later signal", () => {
-  const f = fixture();
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-    sock_send() { Atomics.store(f.requested, 0, 15); f.view.setInt32(f.result, 0, true); return 0; }, fd_write() { return 0; },
-  } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
-  expect((imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toBe(0);
-  const evidence = snapshotProbe(f.probe);
-  expect(evidence.checkpointAfterSignal).toBe(0);
-  expect(evidence.checkpointSignal).toBe(0);
-  expect(evidence.checkpointThrew).toBe(0);
-  expect(evidence.checkpointReturned).toBe(1);
+  for (const previousSignal of [0, 2]) {
+    const f = fixture();
+    Atomics.store(f.requested, 0, previousSignal);
+    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+      sock_send() { Atomics.store(f.requested, 0, 15); f.view.setInt32(f.result, 0, true); return 0; }, fd_write() { return 0; },
+    } };
+    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+    expect((imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toBe(0);
+    const evidence = snapshotProbe(f.probe);
+    expect(evidence.checkpointAfterSignal).toBe(previousSignal ? 1 : 0);
+    expect(evidence.checkpointSignal).toBe(previousSignal);
+    expect(evidence.checkpointThrew).toBe(0);
+    expect(evidence.checkpointReturned).toBe(1);
+  }
 });
 test("catch/finally writes are visible even when real revoked stdio throws", () => {
   const f = fixture(), fatal = new Error("revoked stdio");
@@ -344,6 +377,85 @@ test("notify mutation touches only the exact process-budget wake cell and restor
     expect(Atomics.load(cells, 1)).toBe(0);
   } finally { mutation.restore(); }
   expect(target.notify).toBe(native);
+});
+test("fatal completion admits matching production signal types at the checkpoint and _start", () => {
+  for (const Fatal of [DefaultSignal, ProcessSignalExit]) {
+    for (const signal of [2, 15]) {
+      const f = fixture(), fatal = new Fatal(signal), outcome = outcomeWord();
+      let calls = 0;
+      Atomics.store(f.requested, 0, signal === 15 ? 2 : 0);
+      const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+        sock_send() { calls++; claimOutcome(outcome, { kind: "signaled", code: signal }); throw fatal; }, fd_write() { return 0; },
+      } };
+      observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+      const start = observedEngineStart({ _start() {
+        (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result);
+      } }, f.probe, true);
+      let caught: unknown;
+      try { start(); } catch (error) { caught = error; }
+      expect(caught).toBe(fatal); expect(calls).toBe(1);
+      expect(readOutcome(outcome)?.status).toBe(128 + signal);
+      const evidence = snapshotProbe(f.probe);
+      expect(evidence.checkpointAfterSignal).toBe(1);
+      expect(evidence.checkpointSignal).toBe(signal);
+      expect(evidence.checkpointFatalSignal).toBe(signal);
+      expect(evidence.startFatalSignal).toBe(signal);
+      expect(() => assertFatalEngineCompletion(evidence, signal)).not.toThrow();
+      expect(() => assertFatalEngineCompletion(evidence, signal === 15 ? 2 : 15)).toThrow("typed fatal");
+      expect(() => assertNativeEngineCompletion(evidence)).toThrow("unexpected exception");
+      // Publication happens only after both observers caught the genuine exception.
+      Atomics.store(f.requested, 0, signal);
+      expect(snapshotProbe(f.probe)).toEqual(evidence);
+    }
+  }
+});
+test("selected fatal outcome cannot turn a RuntimeError or name/code forgery into typed fatal evidence", () => {
+  const errors = [new WebAssembly.RuntimeError("unreachable mutant")].concat(
+    ["DefaultSignal", "ProcessSignalExit"].map(name => Object.assign(new Error("forged terminal exit"), { name, signal: 15, status: 143, code: 143 })),
+  );
+  for (const error of errors) {
+    const f = fixture(), outcome = outcomeWord();
+    let calls = 0;
+    claimOutcome(outcome, { kind: "signaled", code: 15 });
+    Atomics.store(f.requested, 0, 15);
+    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+      sock_send() { calls++; throw error; }, fd_write() { return 0; },
+    } };
+    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+    const start = observedEngineStart({ _start() {
+      (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result);
+    } }, f.probe, true);
+    let caught: unknown;
+    try { start(); } catch (thrown) { caught = thrown; }
+    Atomics.store(f.probe, probeCell.runReturned, 1);
+    const evidence = snapshotProbe(f.probe);
+    expect(caught).toBe(error); expect(calls).toBe(1);
+    expect(readOutcome(outcome)?.status).toBe(143);
+    expect(evidence.checkpointAfterSignal).toBe(1); expect(evidence.checkpointThrew).toBe(1);
+    expect(evidence.startLeft).toBe(1); expect(evidence.runReturned).toBe(1);
+    expect(evidence.checkpointSignal).toBe(0);
+    expect(evidence.checkpointFatalSignal).toBe(0); expect(evidence.startFatalSignal).toBe(0);
+    expect(() => assertFatalEngineCompletion(evidence, 15)).toThrow("typed fatal");
+  }
+});
+test("fatal admission rejects a typed checkpoint followed by an unrelated trap or different terminal signal", () => {
+  for (const replacement of [new WebAssembly.RuntimeError("trap after checkpoint"), new DefaultSignal(2)]) {
+    const f = fixture(), fatal = new DefaultSignal(15);
+    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+      sock_send() { throw fatal; }, fd_write() { return 0; },
+    } };
+    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+    const start = observedEngineStart({ _start() {
+      try { (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result); }
+      catch (error) { expect(error).toBe(fatal); throw replacement; }
+    } }, f.probe, true);
+    expect(() => start()).toThrow(replacement);
+    const evidence = snapshotProbe(f.probe);
+    expect(evidence.checkpointFatalSignal).toBe(15);
+    expect(evidence.startFatalSignal).toBe(replacement instanceof DefaultSignal ? 2 : 0);
+    expect(() => assertFatalEngineCompletion(evidence, 15)).toThrow("typed fatal");
+    expect(() => assertFatalEngineCompletion(evidence, 2)).toThrow("typed fatal");
+  }
 });
 test("native completion admission accepts normal return and actual imported WasiExit only", () => {
   const normal = fixture(), returned = observedEngineStart({ _start: () => 42 }, normal.probe, true);

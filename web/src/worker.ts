@@ -13,6 +13,7 @@ import type { ProcessExit } from "../../runtime/proc/types.ts";
 import { fatalInterrupt } from "../../runtime/interrupt/check";
 import type { WorkerProcessClient, WorkerProcessMessage, WorkerProcessTransport } from "../../runtime/proc/worker-client";
 import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.ts";
+import { DefaultSignal } from "./default-signal";
 
 export type Engine = "quickjs" | "jsc" | "browser";
 
@@ -90,11 +91,6 @@ export interface SpawnRequest {
   trace: boolean;
   slots?: RunRequest["slots"];
   spawnBroker: true;
-}
-
-/** A guest explicitly choosing the default action, not an unrelated guest trap. */
-class DefaultSignal extends Error {
-  constructor(readonly signal: number) { super(`Process stopped by signal ${signal}`); }
 }
 
 export type WorkerMessage =

@@ -1,4 +1,6 @@
 import { WasiExit } from "@bun-wasm/runtime/core";
+import { ProcessSignalExit } from "../../runtime/proc/abi";
+import { DefaultSignal } from "../src/default-signal";
 
 // Test-only evidence shared between the page and the instrumented guest worker.
 // Counts come from real WASI imports / _start, never the supervisor's logical exit.
@@ -42,8 +44,10 @@ export const probeCell = {
   startWasiExit: 36,
   startOtherException: 37,
   startWasiExitCode: 38,
+  checkpointFatalSignal: 39,
+  startFatalSignal: 40,
 } as const;
-export const probeLength = 39;
+export const probeLength = 41;
 export interface EngineInterruptionOptions { evidence: SharedArrayBuffer; hooks: boolean; observeCheckpoints: boolean; idleWaitTimeoutMs: number; }
 const hostCallFd = 0x7fffb0b0;
 
@@ -80,10 +84,7 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
     const signalBefore = checkpoint ? Atomics.load(requestedSignal, 0) : 0;
     if (checkpoint) {
       Atomics.add(probe, probeCell.checkpoints, 1);
-      if (signalBefore) {
-        Atomics.add(probe, probeCell.checkpointAfterSignal, 1);
-        Atomics.store(probe, probeCell.checkpointSignal, signalBefore);
-      }
+      if (signalBefore) Atomics.add(probe, probeCell.checkpointAfterSignal, 1);
     }
     try {
       let status: number;
@@ -97,6 +98,7 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
       const delivered = new DataView(memory().buffer).getInt32(result, true);
       if (checkpoint) {
         Atomics.add(probe, probeCell.checkpointReturned, 1);
+        if (signalBefore) Atomics.store(probe, probeCell.checkpointSignal, signalBefore);
         if (delivered !== 0) Atomics.add(probe, probeCell.checkpointNonzero, 1);
         if (pendingBefore) Atomics.add(probe, Atomics.load(signalState, 2) & 4
           ? probeCell.pendingPreservedBeforeLoopFinished : probeCell.pendingLostAtCheckpoint, 1);
@@ -108,13 +110,13 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
     } catch (error) {
       if (checkpoint) {
         Atomics.add(probe, probeCell.checkpointThrew, 1);
-        // The page can publish a signal between the entry sample and the real
-        // callback's fatal throw. Observe that in-flight checkpoint, once, at
-        // unwind; keep the original exception and never sample a normal return.
-        const signal = signalBefore || Atomics.load(requestedSignal, 0);
-        if (!signalBefore && signal) {
-          Atomics.add(probe, probeCell.checkpointAfterSignal, 1);
-          Atomics.store(probe, probeCell.checkpointSignal, signal);
+        // The fatal decision precedes wake publication: this word can still be
+        // zero or the previous handled signal even after the real callback throws.
+        // Only a production terminal exception identifies this fatal checkpoint.
+        if (error instanceof DefaultSignal || error instanceof ProcessSignalExit) {
+          if (!signalBefore) Atomics.add(probe, probeCell.checkpointAfterSignal, 1);
+          Atomics.store(probe, probeCell.checkpointSignal, error.signal);
+          Atomics.store(probe, probeCell.checkpointFatalSignal, error.signal);
         }
       }
       throw error;
@@ -192,6 +194,14 @@ export function observeEventLoopWait(probe: Int32Array, word: Int32Array,
   return () => { target.wait = native; };
 }
 
+export function assertFatalEngineCompletion(evidence: ReturnType<typeof snapshotProbe>, signal: number): void {
+  if (signal <= 0 || evidence.checkpointFatalSignal !== signal || evidence.startFatalSignal !== signal
+    || evidence.checkpointThrew !== 1 || evidence.startOtherException !== 1
+    || evidence.startNormalReturn !== 0 || evidence.startWasiExit !== 0) {
+    throw new Error(`default signal completion requires matching typed fatal checkpoint and _start throws: expected=${signal}, checkpoint=${evidence.checkpointFatalSignal}, start=${evidence.startFatalSignal}, threw=${evidence.checkpointThrew}, other=${evidence.startOtherException}, normal=${evidence.startNormalReturn}, wasi=${evidence.startWasiExit}`);
+  }
+}
+
 export function assertNativeEngineCompletion(evidence: ReturnType<typeof snapshotProbe>): void {
   if (evidence.startOtherException !== 0 || evidence.startNormalReturn + evidence.startWasiExit !== 1) {
     throw new Error(`native engine completion used an unexpected exception or missing normal/typed WASI exit: normal=${evidence.startNormalReturn}, wasi=${evidence.startWasiExit}, other=${evidence.startOtherException}`);
@@ -241,9 +251,12 @@ export function observedEngineStart(exports: WebAssembly.Exports, probe: Int32Ar
         Atomics.add(probe, probeCell.startWasiExit, 1);
         Atomics.store(probe, probeCell.startWasiExitCode, error.code);
       } else {
-        // Includes expected DefaultSignal in its separate host-fatal cases, but
-        // native true-return cases must not mistake traps/panics for engine exit.
+        // Keep typed fatal throws in "other" so native true-return admission
+        // remains strict; default-fatal admission additionally checks their type.
         Atomics.add(probe, probeCell.startOtherException, 1);
+        if (error instanceof DefaultSignal || error instanceof ProcessSignalExit) {
+          Atomics.store(probe, probeCell.startFatalSignal, error.signal);
+        }
       }
       throw error;
     } finally { Atomics.add(probe, probeCell.startLeft, 1); }

@@ -1,15 +1,24 @@
 // Shared verbatim by real WASM-worker cases and the native Node reference tests.
 // Checkpoints preserve authoritative pending SIGINT without dequeuing it or
 // entering guest JavaScript. The event loop alone dequeues and dispatches it.
+function protectedLoop(ready: "ready" | "handler-ready"): string {
+  // The host may interrupt as soon as it observes this unbuffered write. Emit it
+  // inside try, so readiness proves that catch/finally are already in scope.
+  return `try { fs.writeSync(2,'${ready}\\n'); while (true) {} } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
+}
+
+export function defaultSignalGuest(): string {
+  return `const fs=require('node:fs'); ${protectedLoop("ready")}`;
+}
+
 export function handledSignalGuest(nested = false, cpuMs = 1_000): string {
-  const loop = `try { while (true) {} } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
   return `const fs=require('node:fs');
     let count=0,loopFinished=false,turns=0;
     const missing=setTimeout(()=>{throw Error('queued SIGINT was not dispatched');},3000);
     process.on('SIGINT',()=>{
       if(!loopFinished)throw Error('SIGINT callback reentered synchronous CPU work');
       clearTimeout(missing);count++;
-      ${nested ? `fs.writeSync(2,'handler-ready\\n'); ${loop}` : `fs.writeSync(2,'handled\\n'); setImmediate(()=>{console.log('continued',count,turns>0);process.exit(23);});`}
+      ${nested ? protectedLoop("handler-ready") : `fs.writeSync(2,'handled\\n'); setImmediate(()=>{console.log('continued',count,turns>0);process.exit(23);});`}
     });
     fs.writeSync(2,'ready\\n');
     const end=Date.now()+${cpuMs};

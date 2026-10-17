@@ -5,7 +5,10 @@
   },
   "include": [
     "browser-engine-interruption.ts",
+    "browser-engine-interruption.test.ts",
     "engine-interruption-main.ts",
+    "engine-interruption-cases.ts",
+    "engine-interruption-cases.test.ts",
     "engine-interruption-worker.ts",
     "engine-interruption-transport.ts",
     "engine-interruption-transport.test.ts",
