@@ -23,6 +23,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Certificate regression fixtures](#certificate-regression-fixtures) | Port | Retain unchanged upstream certificate and test-key data for metadata, signature and escaping checks. |
 | [`third_party/licenses/lol-html-LICENSE`](#htmlrewriter) | Port | Retain the vendored parser's BSD license for wasm distribution. |
 | [Third-party interrupt instrumentation](#third-party-interrupt-instrumentation) | Host feature | Original TypeScript binary rewriter, content-addressed loader and rescued browser fixtures; module-internal countdowns avoid per-entry host calls. |
+| [Portable installer and package command adapters](#portable-installer-and-package-commands) | Host feature | Original filesystem, lockfile and command adapters over Bun's matcher, parsers and semver. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
@@ -1715,6 +1716,67 @@ ordinary outcome has already won. Unknown callback terminals are rejected rather
 their input can be shared. No new upstream patch, copied
 implementation or compatibility branch is introduced.
 
+## Portable installer and package commands
+
+Class **Host feature**. Original adapters in `crates/bunwasm-runtime/src/install/`,
+`src/js/package_scripts.ts`, and `crates/bunwasm-cli/src/main.rs`. No upstream
+source is copied or changed by these adapters. They use Bun's `src/glob/` walker,
+`src/semver/` parser, and the existing transpiler data parser from revision
+`9510e74152073d850a18758ca41114d8f214ffa6`.
+
+The installer checks `Group::has_skipped()` from Bun's
+`src/semver/SemverQuery.rs` before matching a registry range. The parser reports
+allocation errors through its result and records unrecognised tokens separately.
+A dist tag such as `latest` must reach tag resolution instead of matching a locked
+version as a wildcard.
+
+The manifest Accept value follows Bun's registry request contract, also checked
+by `test/cli/install/dummy.registry.ts` at that revision. Cache refresh uses the
+Cache-Control header, so it does not change content negotiation.
+
+Workspace discovery reads declared member manifests, resolves local dependencies
+relative to their declaring package, and creates filesystem links. The native
+installer retains its hoisted graph and tarball validation. Foreign lockfile
+migration is kept in a separate follow-up PR using this workspace graph.
+
+`bun update` resolves selected dependencies again, within their declared ranges
+unless `--latest` is supplied. Selected member updates clear their nested
+resolution pins before resolving the workspace graph. `bun x` prefers a local binary and otherwise
+installs into an atomically published cache directory. Concurrent cold installs
+have separate staging directories. Download cache writes also use unique temporary
+files and publish complete bytes through an atomic rename. Installed binaries use relative links so a
+published cache directory remains movable. Only ENOTSUP and EPERM from bin-link
+creation degrade to a warning; preparation failures and other errno values
+remain fatal. Required workspace links retain their original failure behavior.
+When a bin link is absent, the command adapters select the real installed entry
+through its package manifest, including scoped packages. These are original
+adapter changes, with no additional upstream source or patch. The playground
+shell dispatches its `bunx` alias through the same `bun x` command path.
+
+Default bunx bin-map selection follows Bun's first-valid-entry behavior in
+`src/runtime/cli/bunx_command.rs`, `get_bin_name_from_subpath`, at the Bun pin.
+Explicit bin names require an exact match. The host-engine import-meta hook
+reads the resolved main path after script expansion, matching the embedded engines. The local adapter preserves published
+cache use under `--no-install`. Member updates invalidate only the member's
+selected lock entries, leaving unrelated root pins intact.
+
+The TypeScript package-script dispatcher runs JavaScript and TypeScript binaries
+inside the selected engine. It handles quoted arguments and environment
+assignments. Shell pipelines, redirections, command substitution, and native
+executables remain outside this adapter. Install lifecycle scripts and security
+scanner execution retain their existing limitations.
+
+`tests/fixtures/installer-gaps/` uses an in-process fixture registry and synthetic
+tarballs. It checks the header, workspace imports, a frozen reinstall, binary
+links, script argument forwarding, update ranges and `bun x`
+without public-registry access.
+
+The original `node-misc` fixture checks current process-provider failure paths.
+It requires a structured `ENOENT` or `ERR_NOT_SUPPORTED_IN_WASM` error when
+admission fails, or status 127 with the missing-program diagnostic when the host
+completes an unregistered program. Both asynchronous completion and synchronous
+failure are checked. Its source is TypeScript. The spawn-facade unit harness loads
+the real TypeScript command dispatcher with an explicitly empty filesystem.
 ## HTMLRewriter
 
 Class **Host feature**, **original adapters** in `crates/bunwasm-runtime/src/html_rewriter.rs`,

@@ -649,20 +649,7 @@
   };
 
   internal.runMain = function runMain(requested) {
-    // `bun run ./app` finds app.ts, app/index.js, ... like an import would.
-    let path = requested;
-    if (!native.exists(path) || native.stat(path).mode & 0o040000) {
-      try {
-        path = native.resolve(requested, "/", false);
-      } catch {
-        path = requested;
-      }
-      if (path !== requested) {
-        native.setMainPath(path);
-        internal.mainPath = path;
-        if (globalThis.process.argv[1] === requested) globalThis.process.argv[1] = path;
-      }
-    }
+    const path = internal.require("package_scripts").resolve(requested);
     if (!native.exists(path)) {
       const err = new Error(`Module not found "${native.mainArg() || path}"`);
       err.code = "ERR_MODULE_NOT_FOUND";

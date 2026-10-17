@@ -1,7 +1,7 @@
 # Installing npm packages
 
 `bun install` (`bun i`, or `bun ci` for a frozen lockfile), `bun add` (`bun a`), `bun remove` (`bun rm`, `bun r`,
-`bun uninstall`) and `bun pm ls` run in all three engines. The installer runs in
+`bun uninstall`), `bun update`, `bun x` and `bun pm ls` run in all three engines. The installer runs in
 Rust before starting the JS engine. The native launcher supplies network access;
 the playground and sandbox use their existing page fetch bridge. Plain wasmtime
 without a network host cannot download packages.
@@ -11,10 +11,13 @@ bun install
 bun add react react-dom
 bun add -D --exact typescript@5.9.3
 bun remove typescript
+bun update react
+bun update react --latest
+bun x prettier@3.6.2 --version
 bun pm ls
 ```
 
-Set `NPM_CONFIG_REGISTRY` (or `npm_config_registry`), `--registry`, or
+Set `BUN_CONFIG_REGISTRY`, `NPM_CONFIG_REGISTRY` or `npm_config_registry`, `--registry`, or
 `bunfig.toml` to use a different registry:
 
 ```toml
@@ -49,11 +52,44 @@ a default of 300. Failed downloads are not retried.
 
 Lifecycle scripts are always skipped, including scripts on trusted dependencies
 and the root project. Packages with install hooks produce a `Blocked N
-postinstalls` message. No native executables run. Workspace, git, local-file,
-alias and isolated-linker installs, registry authentication, package binaries,
-patches and overrides are not implemented. Symlinks and hardlinks inside npm
+postinstalls` message. No native executables run. Workspace members and local directory links use the
+hoisted graph. npm aliases select the target package without changing its files.
+Git and isolated-linker installs, registry authentication, patches and overrides
+are not implemented. Symlinks and hardlinks inside npm
 tarballs are rejected. Downloads and expanded packages are limited to 256 MiB;
 the graph is limited to 10,000 packages and 128 nesting levels.
+
+## Workspaces and commands
+
+Native hosts create workspace and package-bin links. The page filesystem does
+not yet support symbolic links, so workspace and local-link installs still need
+the [filesystem prerequisite](../plans/browser-runtime.md#installer-filesystem-link-prerequisite).
+For package bins, ENOTSUP or EPERM from link creation produces a warning naming
+the package and bin. Installation continues and writes its lockfile. Other
+errors remain fatal. Node's native WASI also rejects some relative links under
+non-root preopens; the bounded upstream comparison records that separate limit.
+
+The installer discovers `workspaces` arrays and object-form `packages` patterns.
+Members are linked into `node_modules`. Local `link:` and directory `file:`
+dependencies resolve relative to the declaring manifest. Running `bun add` from
+a member updates its manifest and the root lockfile.
+
+Declared `bin` entries and `directories.bin` files get links under
+`node_modules/.bin`. When an entry is absent, `bun run <bin>` resolves installed
+package manifests, including scoped packages. `bun run dev` resolves a package script and executes its
+JavaScript or TypeScript binary in the selected engine. Quoted arguments,
+environment assignments and extra command arguments are supported. Shell
+pipelines, redirections and native commands remain unsupported.
+
+`bun update` refreshes selected dependencies within their declared ranges.
+`--latest` selects the latest tag. `bun x` and the `bunx` executable alias prefer an installed
+binary for an unversioned request, reading the installed package manifest when
+its bin link is absent, then use an isolated cache installation.
+They leave the project's manifest and lockfile unchanged. Concurrent installs
+publish complete cache directories through an atomic rename.
+
+Lockfile migration is split into a follow-up PR based on this command/workspace
+change. Existing foreign lockfiles are not imported by this PR.
 
 ## Real Bun installer spike
 
@@ -236,3 +272,64 @@ The esbuild package checks cover synchronous APIs and watch edits without an
 explicit rebuild request on every engine, including Chromium and WebKit pages.
 See [the package-check instructions](../tests/esbuild/README.md) for offline
 mirror requirements and the retained official package recording.
+
+## Historical combined installer measurement, 2026-10-17
+
+This frozen comparison predates the split into command/workspace and migration
+PRs. Its migration counts describe the implementation moved to the follow-up,
+not the remaining command/workspace PR.
+
+The fixed [25-file selection](bun-test-suite/installer-files.txt) covers every
+workspace, manifest-header, lock-migration, update and bunx cause assigned by PR #40.
+Each unchanged upstream file has a 15-second deadline and 2-second initial test
+timeout, one worker, with loopback-only networking. The paired artifacts are main
+`2759d45b` before and installer commit `9651da83` after, including the selected
+workspace update fix. Both sides use the same suite, launcher, host sources,
+dependencies and deadlines. Only the wasm hash differs within each engine pair.
+
+The branch later integrates main `205ad909`. Installer sources, CLI wiring,
+package-command dispatch and installer regression fixtures are unchanged by that
+integration. The tables describe the frozen pair, including its artifact sizes.
+
+| Engine | Observed passes before / after | Fully passing files before / after | Timeouts before / after |
+|---|---|---|---|
+| quickjs | 18 / 109 | 0 / 3 | 0 / 0 |
+| jsc | 18 / 109 | 0 / 3 | 0 / 0 |
+| browser | 18 / 34 | 0 / 1 | 1 / 2 |
+
+| Cause | Files | QuickJS passes before / after | JSC passes before / after | Browser passes before / after |
+|---|---|---|---|---|
+| Workspaces | 9 | 3 / 73 | 3 / 73 | 3 / 3 |
+| Manifest Accept | 5 | 14 / 26 | 14 / 26 | 14 / 26 |
+| Lock migration | 4 | 1 / 9 | 1 / 9 | 1 / 4 |
+| Update | 4 | 0 / 0 | 0 / 0 | 0 / 0 |
+| Bunx | 3 | 0 / 1 | 0 / 1 | 0 / 1 |
+
+| Artifact | Before bytes | After bytes | Change |
+|---|---|---|---|
+| bun.wasm | 14968707 | 15070118 | +101411 |
+| bun-jsc.wasm | 51468834 | 51639677 | +170843 |
+| bun-browser.wasm | 14256281 | 14359153 | +102872 |
+
+These are observed counts. They include only tests that registered before a
+collection error or deadline. The browser counts have one additional timeout
+after the change. Its workspace files are blocked by native Node WASI link
+capabilities, so the browser and native pass gains are not interchangeable.
+Security scanners, interactive update tables, global links, additional lockfile
+protocols and exact upstream diagnostics remain outside this adapter.
+
+At the measured revision, the focused synthetic checks passed on each engine:
+20 existing installer cases, both update regressions, and seven installer/command
+scenarios. Standard runtime fixtures passed 207/207 per engine. The full web
+script passed, including 859 unit tests and Chromium/WebKit checks; HMR passed all
+six engine/browser combinations. The separate `browser-installer-links.ts` scenario checks the
+browser-page filesystem prerequisite instead of treating headless results as
+proof of page support.
+
+The original Chromium page probe reproduced a plain package install succeeding,
+then a valid bin entry causing `error: Not supported (os error 58)`. The page
+regression now installs a scoped package with two bin entries from fixture
+tarballs. It requires warnings for both skipped links, a written lockfile,
+execution through `bun run`, a package script and `bunx --no-install`, and a
+fatal result for a broken `.bin` directory. Chromium and WebKit run the same
+scenario on all three engines. No filesystem-link implementation is changed.

@@ -15,6 +15,8 @@ Commands:
   install, i                     Install dependencies
   add       <package>           Add dependencies
   remove    <package>           Remove dependencies
+  update    [package]           Update dependencies
+  x         <package>           Execute a package binary
   pm ls                          List installed dependencies
   <file>                         Same as `bun run <file>`
   -e, --eval <code>              Evaluate JavaScript source code
@@ -358,6 +360,7 @@ enum Command {
     Run(Entry, Vec<String>),
     Build(Vec<String>),
     Install(String, Vec<String>),
+    X(Vec<String>),
     Print(String),
     Exit(i32),
 }
@@ -395,11 +398,12 @@ fn parse(args: Vec<String>) -> Command {
             }
             "test" => return Command::Run(Entry::Test(rest.collect()), Vec::new()),
             "build" | "bun" => return Command::Build(rest.collect()),
-            "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm" =>
+            "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm" | "update" | "up" =>
                 return Command::Install(arg, rest.collect()),
-            "x" | "bunx" | "create" | "c" | "init" | "update" | "upgrade" | "link" | "unlink"
+            "x" | "bunx" => return Command::X(rest.collect()),
+            "create" | "c" | "init" | "upgrade" | "link" | "unlink"
             | "outdated" | "publish" | "patch" | "patch-commit" | "repl" | "info" | "why"
-            | "audit" | "completions" | "getcompletes" | "discord" | "exec" | "up" | "dedupe" | "prune" | "check" | "lint" | "fmt"
+            | "audit" | "completions" | "getcompletes" | "discord" | "exec" | "dedupe" | "prune" | "check" | "lint" | "fmt"
             | "deploy" | "cloud" | "config" | "use" | "auth" | "login" | "logout" => {
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
@@ -447,13 +451,22 @@ fn main() {
         let _ = std::env::set_current_dir(&pwd);
     }
 
-    let command = parse(std::env::args().skip(1).collect());
+    let mut argv = std::env::args();
+    let executable = argv.next().unwrap_or_default();
+    let args = if executable.rsplit('/').next().unwrap_or("").trim_end_matches(".wasm") == "bunx" {
+        std::iter::once("x".to_owned()).chain(argv).collect()
+    } else { argv.collect() };
+    let command = parse(args);
     let (entry, args) = match command {
         Command::Exit(code) => std::process::exit(code),
         Command::Build(args) => std::process::exit(build(args)),
         Command::Install(command, args) => std::process::exit(
             bunwasm_runtime::install::run(&command, args, transpiler().as_ref())
         ),
+        Command::X(args) => match bunwasm_runtime::install::prepare_x(args, transpiler().as_ref()) {
+            Ok((file, args)) => (Entry::File(file), args),
+            Err(error) => { eprintln!("error: {error}"); std::process::exit(1); }
+        },
         Command::Run(entry, args) => (entry, args),
         // `-p`: evaluate an expression and print it like Bun.
         Command::Print(code) => {

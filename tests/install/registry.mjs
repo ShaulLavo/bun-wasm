@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { gzipSync } from "node:zlib";
 
-function tarEntry(path, content, type = "0", link = "") {
+export function tarEntry(path, content, type = "0", link = "") {
   const bytes = Buffer.from(content);
   const header = Buffer.alloc(512);
   header.write(path, 0, 100);
@@ -21,7 +21,7 @@ function tarEntry(path, content, type = "0", link = "") {
   return Buffer.concat([header, bytes, Buffer.alloc((512 - bytes.length % 512) % 512)]);
 }
 
-function packageFixture(name, version, extra = {}, source, entries = []) {
+export function packageFixture(name, version, extra = {}, source, entries = []) {
   const manifest = { name, version, main: "index.js", ...extra };
   const files = [tarEntry("package/package.json", JSON.stringify(manifest)), tarEntry("package/index.js", source ?? `module.exports = ${JSON.stringify(`${name}@${version}`)};\n`)];
   const archive = gzipSync(Buffer.concat(files.concat(entries, [Buffer.alloc(1024)])), { level: 9, mtime: 0 });
@@ -63,8 +63,8 @@ function fixtures() {
 }
 
 /** Local npm metadata and tarballs. Every route is local; unknown packages return 404. */
-export async function createRegistry() {
-  const packages = fixtures();
+export async function createRegistry(additionalPackages = []) {
+  const packages = fixtures().concat(additionalPackages);
   const requests = [];
   const latest = new Map([["versioned", "1.0.0"]]);
   const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*", "access-control-expose-headers": "*", "cross-origin-resource-policy": "cross-origin" };

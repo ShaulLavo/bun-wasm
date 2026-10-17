@@ -66,9 +66,21 @@ pub fn read(path: &Path, format: &str, parser: &dyn Transpiler) -> Result<Value>
 }
 
 pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let temp = path.with_extension("bun-wasm-tmp");
-    fs::write(&temp, bytes).map_err(|e| e.to_string())?;
-    fs::rename(&temp, path).map_err(|e| e.to_string())
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
+    let temp = path.with_extension(format!("bun-wasm-tmp-{:x}", u128::from_le_bytes(random)));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|e| e.to_string())?;
+    let written = file.write_all(bytes);
+    drop(file);
+    let result = written.and_then(|()| fs::rename(&temp, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result.map_err(|e: std::io::Error| e.to_string())
 }
 
 pub fn cache_dir() -> PathBuf {
@@ -108,14 +120,16 @@ fn request(url: &str, tarball: bool, refresh: bool) -> Result<Vec<u8>> {
     let accept = if tarball {
         "application/vnd.bun.install-tarball"
     } else {
-        "application/vnd.npm.install-v1+json"
+        "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*"
     };
-    let accept = if refresh {
-        format!("{accept}; no-cache")
-    } else {
-        accept.into()
-    };
-    let meta = json!({"method":"GET", "url":url, "headers":[["accept",accept],["accept-encoding","gzip"]], "redirect":"follow"});
+    let mut headers = json!([["accept", accept], ["accept-encoding", "gzip"]]);
+    if refresh {
+        headers
+            .as_array_mut()
+            .unwrap()
+            .push(json!(["cache-control", "no-cache"]));
+    }
+    let meta = json!({"method":"GET", "url":url, "headers":headers, "redirect":"follow"});
     let handle = host::fetch(meta.to_string().as_bytes(), &[]);
     if handle < 0 {
         return Err(network_error(handle));
@@ -184,6 +198,9 @@ fn network_error(handle: i32) -> String {
 }
 
 pub fn integrity(bytes: &[u8], sri: &str) -> Result<()> {
+    if sri.is_empty() {
+        return Ok(());
+    }
     let hashes: Vec<_> = sri
         .split_whitespace()
         .filter_map(|s| s.strip_prefix("sha512-"))
