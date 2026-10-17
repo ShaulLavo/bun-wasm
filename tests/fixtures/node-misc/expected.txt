@@ -7,10 +7,10 @@ process module: true
 util default: function
 http.createServer throws: true
 net.connect throws: true
-child_process unavailable: true
+child_process.spawn fails: true
 Bun.which: null
-Bun.spawnSync unavailable: true
-Bun.spawn unavailable: true
+Bun.spawnSync fails: true
+Bun.spawn throws: true
 Bun.serve throws: true
 fetch rejects: true
 fetch file: URL: true

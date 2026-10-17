@@ -1697,3 +1697,8 @@ scanner execution retain their existing limitations.
 tarballs. It checks the header, workspace imports, a frozen reinstall, binary
 links, script argument forwarding, update ranges, migration pins, and `bun x`
 without public-registry access.
+
+The original `node-misc` fixture requires asynchronous spawn errors and a failed,
+nonzero synchronous result when the program or process provider is unavailable.
+It checks the structured `ENOENT` and `ERR_NOT_SUPPORTED_IN_WASM` codes used by
+the current optional-host configurations. Its source is TypeScript.
