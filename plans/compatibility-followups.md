@@ -507,6 +507,152 @@ and full web gates. Do not reduce the guest allocation, relax its timeout or
 remove assertions to call the gate passing. The owning lane removes retained
 evidence after reproduction, review and merge.
 
+## Wasmtime memfd sealing startup failure during the API gate
+
+Status: Approved. Reproduce before changing the launcher or Wasmtime.
+
+The HTMLRewriter/X509Certificate lane observed one launcher startup failure in the
+full JSC fixture gate on 2026-10-17. `net-route-leading-slash` printed no guest output
+and failed before executing its route assertions:
+
+```text
+bun-wasm: cannot add seals to the memfd: Device or resource busy (os error 16)
+```
+
+The same run passed 200 fixtures, including the new HTMLRewriter and certificate
+fixtures. QuickJS passed all 201 fixtures. The launcher uses Wasmtime 39.0.2, and
+`crates/bunwasm-host/src/main.rs` loads the guest through `Module::from_file`.
+Neither the launcher nor the route implementation changed in this lane. The
+observation does not establish a guest networking or API failure.
+
+Start with a bounded repeat of the unchanged fixture, using a private host build
+and target directory through the heavy wrapper:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+CARGO_TARGET_DIR=/work/tmp/bun-wasm-own-target scripts/test.sh --no-build \
+  --engine jsc net-route-leading-slash
+```
+
+Build `bunwasm-host` into that target before running the command. Keep the exact
+wasm, launcher and cache settings in the reproduction. If it recurs, trace the
+Wasmtime code-memory memfd creation and sealing path and compare cache-enabled
+and cache-disabled controls. Do not add retries to the fixture or launcher.
+
+The original full gate is retained in
+`/work/reports/bun-wasm-htmlrewriter-x509-2026-10-17/round1/gate-jsc.log`.
+The coordinator owns that evidence until the startup failure is reproduced or
+ruled out. Final gate outcomes for this lane are recorded separately in its PR.
+
+## HTMLRewriter lifetime and intrinsic storage parity
+
+Status: Approved. Continue from the shared lol-html adapter after the API PR.
+
+The 2026-10-17 HTML/X509 lane adds the parser, handlers, async Response rewriting,
+streaming readers and Node certificates. Its [measurement](../docs/bun-test-suite/htmlrewriter-x509.md)
+records 9/10/10 fully passing files in the 21-file QuickJS/JSC/browser selection.
+The lifecycle file remains partial, with 29/12, 19/14 and 24/25 observed pass/fail
+counts respectively. QuickJS and JSC reach the unchanged 15-second file limit.
+No private heap counter has been filled in to make these tests pass.
+
+Reproduce the unchanged file on each engine through the heavy wrapper:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+scripts/bun-suite.sh --engine quickjs --jobs 1 --timeout 15 --network loopback \
+  --launcher "$CARGO_TARGET_DIR/release/bun-wasm" \
+  --output /work/reports/bun-wasm-own-html-lifetime/quickjs.json \
+  --log-dir /work/reports/bun-wasm-own-html-lifetime/quickjs-logs \
+  js/workerd/html-rewriter-leak.test.ts
+```
+
+Start with the cases named `never-settling handler promises are abandoned and
+release their parked state`, `cancelling the output reader from inside a handler
+releases the pipe`, and `an indexed accessor on Array.prototype never sees a
+handler`. Separate HTTP body buffering from parser cancellation in the network
+case. It waits for the first HTML handler before the server emits its second
+chunk, so a host that buffers the whole HTTP body deadlocks before rewriting.
+Do not classify that timeout as a demonstrated parser lifetime leak.
+
+Inspect `Rewrite.asyncStep`, `stream`, `buffered`, and `close` in
+`crates/bunwasm-runtime/src/js/html_rewriter.ts`, plus the parser-session table in
+`src/html_rewriter.rs`. The async wrapper awaits an assimilated handler promise;
+unreachable never-settling promises do not yet trigger native-style abandonment.
+Private handler and output arrays also need protection from indexed prototype
+accessors. Use real weak references and owned native-state measurements; neither
+zero heap counters nor a clean exit alone proves release.
+
+Keep the full HTML file's direct-stream collection failure separate. Other newly
+reachable files need TLS root certificates, TLS server support, private
+`bun:jsc.serialize`, or `sslCtxLiveCount` in `bun:internal-for-testing`.
+These are not remaining missing-HTMLRewriter or missing-X509Certificate exports.
+
+Exact results and logs are retained in
+`/work/reports/bun-wasm-htmlrewriter-x509-2026-10-17/verified/after-*.json` and
+`after-*-logs/`. The coordinator owns that evidence until the follow-up is
+reproduced and independently reviewed.
+
+## Full fixture gates after the process-signal integration
+
+Status: Approved. Runtime track owns the subprocess/error contract follow-up.
+
+PR #41's review-fix branch, after merging main through `b7cf06cd` and rebuilding
+the native launcher plus all three guests, reports **202 passed, 2 failed** on
+each engine. Both new HTML/X.509 review fixtures pass. The failed fixtures are
+`node-misc` and `pipe-closed-output`; the earlier pre-PR-33 build passed all 201
+fixtures then present.
+
+`node-misc` prints `child_process.spawn ENOENT: false` and
+`Bun.spawnSync unsupported: false`, where its manual expectation has `true`.
+Inspect `tests/fixtures/node-misc/index.mjs`, the calls of `spawn("ls")` and
+`Bun.spawnSync({ cmd: ["ls"] })`, against the new disabled-host subprocess error
+contract. No HTML or certificate API runs in that fixture.
+
+`pipe-closed-output` observes SIGPIPE exit 141 instead of 1 in its unhandled
+stream probes. Its Node-host batch probe also exits 141 without the expected
+output. Inspect `crates/bunwasm-runtime/src/js/bootstrap.js::handleBrokenPipe`,
+which raises signal 13 for escaping EPIPE, together with callback delivery and
+signal disposition in the host. Compare native Bun/Node before changing the
+fixture's expectations. The same failures recur in the first QuickJS gate and
+the subsequent complete three-engine batch; the API fixes do not touch these
+paths.
+
+After building a matching launcher and guests into private targets, reproduce
+through the heavy wrapper with:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+scripts/test.sh --no-build --engine quickjs node-misc pipe-closed-output
+scripts/test.sh --no-build --engine jsc node-misc pipe-closed-output
+scripts/test.sh --no-build --engine browser node-misc pipe-closed-output
+```
+
+Exact commands, source heads and logs are retained under
+`/work/reports/bun-wasm-htmlrewriter-x509-review-2026-10-17/`.
+`remaining/gate-{quickjs,jsc,browser}.log` contains the full gate diagnostics.
+The coordinator owns this evidence until the runtime follow-up is reproduced
+and the full gates pass. No assertion or runtime behavior was changed to hide
+these failures in the HTML/X.509 lane.
+
+The same review run's first full web gate hit a transient EADDRINUSE at the
+subprocess helper's fixed default port 4183. Concurrent test callers should set
+`BUN_WASM_TEST_PORT=0`; `web/tests/playground.mjs::serve` already supports it.
+The lane reruns the full web gate with that setting and retains both logs rather
+than terminating another job's server. See `remaining/gate-web-free-port.log` in
+the same report.
+
+The free-port full web recheck reaches `webkit browser atomic-transfer` and
+fails at `web/tests/browser-workers.ts:27` with `atomic transfer attached`,
+followed by `TypeError: Importing a module script failed.` and guest exit 1
+instead of 0. Chromium and WebKit's QuickJS/JSC worker checks pass first. The
+failure occurs in `tests/fixtures/worker-review/cases.ts`, without invoking HTML
+or certificate APIs. The worker track owns isolating it against native Bun and
+checking WebKit module/Blob URL lifetime. Its exact log is
+`remaining/gate-web-free-port.log:1100` in the report above. HMR still passes all
+six Chromium/WebKit engine runs. The lane leaves this gate failure visible.
 ## Framework follow-ups after exit provenance, 2026-10-17
 
 Status: Approved.
