@@ -1,5 +1,6 @@
 import { afterAll, expect, mock, test } from "bun:test";
 import { createFilesystemConnection } from "waffle/fs";
+import { WasiExit } from "waffle/core";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { bootstrap, type RuntimeWorkerHost } from "waffle/browser/worker";
@@ -97,7 +98,7 @@ for (const [label, options] of [
   ["a non-browser engine", { engine: "quickjs" as const }],
   ["a preview1 run", { adapter: "preview1" as const }],
   ["a guest that is not ready", { ready: 0 }],
-]) test(`${label} never starts the browser engine host`, async () => {
+] as const) test(`${label} never starts the browser engine host`, async () => {
   startEngineHost.mockClear();
   const { messages } = await run(options);
   expect(startEngineHost).not.toHaveBeenCalled();
@@ -114,15 +115,20 @@ test("the engine host gets the page's networking surface only when slots are on"
   expect(startEngineHost.mock.calls[0]![0]!.net).toBeUndefined();
 });
 
-test("engine host fetches use the worker's native fetch and stop after a fatal outcome", async () => {
+for (const kind of ["exited", "signaled"] as const) test(`engine host fetch preserves its native receiver and stops after an authoritative ${kind} outcome`, async () => {
   startEngineHost.mockClear();
   let signals!: ReturnType<typeof workerProcessState>["signals"];
   const fetched: string[] = [];
+  const code = kind === "exited" ? 23 : 15;
+  let blocked: unknown;
+  let liveText: string | undefined;
+  let receiver: unknown;
   startEngineHost.mockImplementationOnce(async options => {
     const fetch = options.fetch as (input: string) => Promise<Response>;
-    expect(await (await fetch("https://example.test/live")).text()).toBe("ok");
-    claimOutcome(signals.outcome, { kind: "signaled", code: 15 });
-    expect(() => fetch("https://example.test/dead")).toThrow(DefaultSignal);
+    liveText = await (await fetch("https://example.test/live")).text();
+    claimOutcome(signals.outcome, { kind, code });
+    try { await fetch("https://example.test/dead"); }
+    catch (error) { blocked = error; }
     return 0;
   });
   const connection = createFilesystemConnection();
@@ -132,15 +138,30 @@ test("engine host fetches use the worker's native fetch and stop after a fatal o
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message: WorkerMessage) { messages.push(message); },
-    async fetch(input) { fetched.push(String(input)); return new Response("ok"); },
+    async fetch(input) {
+      receiver = this;
+      fetched.push(String(input));
+      return new Response("ok");
+    },
   };
   const request: RunRequest = { engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
     runtimeProcess, trace: false, net: null, moduleCache: null };
   try { await bootstrapBun(request, host); }
   finally { connection.client.port.close(); connection.server.port.close(); }
+  // Assert outside the engine callback: bootstrap deliberately catches guest failures.
+  expect(receiver).toBe(host);
+  expect(liveText).toBe("ok");
+  if (kind === "signaled") {
+    expect(blocked).toBeInstanceOf(DefaultSignal);
+    expect((blocked as DefaultSignal).signal).toBe(code);
+  } else {
+    expect(blocked).toBeInstanceOf(WasiExit);
+    expect((blocked as WasiExit).code).toBe(code);
+  }
+  const status = kind === "signaled" ? 128 + code : code;
   expect(fetched).toEqual(["https://example.test/live"]);
-  expect(readOutcome(signals.outcome)).toEqual({ kind: "signaled", code: 15, status: 143 });
-  expect(exits(messages)).toEqual([{ type: "exit", code: 143, signal: 15, sleep: "atomics" }]);
+  expect(readOutcome(signals.outcome)).toEqual({ kind, code, status });
+  expect(exits(messages)).toEqual([{ type: "exit", code: status, signal: kind === "signaled" ? code : undefined, sleep: "atomics" }]);
 });
 
 test("every network slot refuses to run once the process has a fatal outcome", async () => {
