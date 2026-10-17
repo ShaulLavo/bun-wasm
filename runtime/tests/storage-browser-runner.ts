@@ -47,18 +47,37 @@ let browser: Browser | undefined;
 let launch: Promise<Browser> | undefined;
 let persistentContext: BrowserContext | undefined;
 let persistentLaunch: Promise<BrowserContext> | undefined;
+let persistentProfile: string | undefined;
+let persistentProfileCreation: Promise<string> | undefined;
+let persistentShutdownFailed = false;
 let cleaning: Promise<void> | undefined;
 const previousTmp = process.env.TMPDIR;
+async function closePersistent(): Promise<void> {
+  const profile = persistentProfile ?? await persistentProfileCreation?.catch(() => undefined);
+  const context = persistentContext ?? await persistentLaunch?.catch(() => undefined);
+  // A rejection deliberately leaves all ownership records intact for the final cleanup retry.
+  await context?.close();
+  persistentContext = undefined; persistentLaunch = undefined;
+  if (profile) await rm(profile, { recursive: true, force: true });
+  persistentProfile = undefined; persistentProfileCreation = undefined;
+}
 function cleanup(): Promise<void> {
   return cleaning ??= (async () => {
+    let stopped = false;
     try {
-      try { await (persistentContext ?? await persistentLaunch?.catch(() => undefined))?.close(); }
+      try { await closePersistent(); }
       finally { await (browser ?? await launch?.catch(() => undefined))?.close(); }
+      stopped = true;
     } finally {
       server?.stop(true);
-      try { if (scratch) await rm(scratch, { recursive: true, force: true }); }
-      finally {
-        if (firefoxScratch) await rm(firefoxScratch, { recursive: true, force: true });
+      try {
+        if (stopped) {
+          if (scratch) await rm(scratch, { recursive: true, force: true });
+          if (firefoxScratch) await rm(firefoxScratch, { recursive: true, force: true });
+        } else {
+          console.error(`Browser shutdown unconfirmed; retaining task scratch ${scratch}, persistent profile ${persistentProfile}, Firefox scratch ${firefoxScratch}`);
+        }
+      } finally {
         if (previousTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previousTmp;
       }
     }
@@ -69,15 +88,18 @@ const deadline = setTimeout(() => { console.error("storage browser tests timed o
 
 /** Each case gets a fresh context/origin store, so browser quotas and leaked state cannot cross cases. */
 async function inWorker<T>(browser: Browser, request: WorkerRequest, persistent = false): Promise<T> {
-  let profile: string | undefined;
+  if (cleaning || persistentShutdownFailed) throw new Error("Storage runner is shutting down");
   let context: BrowserContext | undefined;
   try {
     if (persistent) {
-      // A fresh task-owned on-disk data store, never the owner's Safari/browser profile.
-      profile = await mkdtemp(resolve(scratch!, "webkit-opfs-profile-"));
-      persistentLaunch = webkit.launchPersistentContext(profile, { headless: true, downloadsPath: scratch, tracesDir: scratch });
+      // Register profile creation before awaiting it, so cleanup owns this allocation too.
+      persistentProfileCreation = mkdtemp(resolve(scratch!, "webkit-opfs-profile-"));
+      persistentProfile = await persistentProfileCreation;
+      if (cleaning) throw new Error("Storage runner stopped before persistent browser launch");
+      persistentLaunch = webkit.launchPersistentContext(persistentProfile, { headless: true, downloadsPath: scratch, tracesDir: scratch });
       context = persistentContext = await persistentLaunch;
     } else context = await browser.newContext();
+    if (cleaning) throw new Error("Storage runner stopped before starting worker work");
     const page = await context.newPage();
     await page.goto(`http://127.0.0.1:${server!.port}`);
     return await page.evaluate(request => new Promise<T>((resolve, reject) => {
@@ -93,13 +115,10 @@ async function inWorker<T>(browser: Browser, request: WorkerRequest, persistent 
       worker.postMessage(request);
     }), request);
   } finally {
-    try { await context?.close(); }
-    finally {
-      if (profile) {
-        persistentContext = undefined; persistentLaunch = undefined;
-        await rm(profile, { recursive: true, force: true });
-      }
-    }
+    if (persistent) {
+      try { await closePersistent(); }
+      catch (error) { persistentShutdownFailed = true; throw error; }
+    } else await context?.close();
   }
 }
 
@@ -147,6 +166,7 @@ try {
         } catch (error) {
           const failure = `${name} ${backend}${contextMode}: ${label}\n${String(error)}`;
           failures.push(failure); console.error(`  FAIL ${failure}`);
+          if (persistentShutdownFailed || cleaning) throw error;
         }
       }
       if (selected === 0) throw new Error(`No storage cases match ${JSON.stringify(process.env.STORAGE_TEST_FILTER)}`);
