@@ -160,8 +160,7 @@ async function checkMigration(name: string, source: string) {
     const locks: [string, string][] = [["native", reference], ["guest", guest]];
     for (const [label, directory] of locks) captureLock(name, label, directory);
   }
-  const nativeBerryUnavailable = name.startsWith("berry") && native.code !== 0 && /UnsupportedYarnLockfileVersion/.test(native.output);
-  if (!process.env.MIGRATION_FORMAT_ONLY || !nativeBerryUnavailable) assert.equal(native.code, 0, `native ${name}: ${native.output}`);
+  assert.equal(native.code, 0, `native ${name}: ${native.output}`);
   if (process.env.MIGRATION_REFERENCE_ONLY) { console.log(`PASS ${name}: native reference`); return; }
   if (name === "git" || name === "http-tarball") {
     assert.notEqual(actual.code, 0, actual.output);
@@ -172,14 +171,10 @@ async function checkMigration(name: string, source: string) {
   }
   assert.equal(actual.code, 0, `guest ${name}: ${actual.output}`);
   const actualText = readFileSync(join(guest, "bun.lock"), "utf8");
-  const nativeExpected = nativeBerryUnavailable ? "" : readFileSync(join(reference, "bun.lock"), "utf8");
+  const nativeExpected = readFileSync(join(reference, "bun.lock"), "utf8");
   const expected = name === "classic-sha1"
     ? nativeExpected.replace('"lockfileVersion": 1', '"lockfileVersion": 2').replace(/, ""\],/g, ', "sha1-PrXtYmInVteaXw4qIh3+utdcL34="],')
     : name === "classic-workspace-only" || nativeBerryUnavailable ? actualText : nativeExpected;
-  if (nativeBerryUnavailable) {
-    assert.match(actualText, /"no-deps": \["no-deps@1\.0\.0"/);
-    assert.doesNotMatch(actualText, /npm:\^/);
-  }
   if (name === "classic-workspace-only") {
     assert.match(actualText, /member@workspace:packages\/member/);
     assert.match(actualText, /mkdirp@1\.0\.4/);
@@ -214,8 +209,7 @@ async function checkMigration(name: string, source: string) {
       assert.match(mismatch.output, /integrity/i);
     } finally { registryOverride = undefined; await corrupt.stop(true); }
     console.log(`PASS ${name}: intentional checksum fix versus Bun 1.4.2; corrupt recorded archive rejected`);
-  } else if (nativeBerryUnavailable) console.log(`PASS ${name}: native frozen format accepted; native foreign-import reference unavailable`);
-  else if (name === "classic-workspace-only") console.log(`PASS ${name}: workspace pins retained; native frozen format accepted; native pm migrate drops members`);
+  } else if (name === "classic-workspace-only") console.log(`PASS ${name}: workspace pins retained; native frozen format accepted; native pm migrate drops members`);
   else console.log(`PASS ${name}: native bytes and frozen reinstall`);
 }
 

@@ -50,7 +50,7 @@ applied equally to the native and guest inputs.
 
 All test networking stays inside a private loopback namespace. The server
 replays `/work/cache/bun-wasm-app-matrix` and Bun's existing
-`yarn/npm-metadata.json`. It never records or fetches live registry data.
+`registry/packages` records plus `yarn/npm-metadata.json`. It never records or fetches live registry data.
 Checksum rejection uses an unrelated archive already present in that recording.
 
 Native Bun 1.4.2 has two intentional migration differences. It loses a classic
@@ -59,15 +59,18 @@ This adapter preserves both. The native byte diffs are retained, and native
 frozen installation accepts the completed workspace lock without rewriting it.
 The SHA-1 case also rejects a corrupt replayed archive.
 
-Native Bun 1.4.2 rejects Berry input with `UnsupportedYarnLockfileVersion`.
-The strict default comparison therefore fails for Berry until a capable native
-binary is provided through `NATIVE_BUN`. The explicit `MIGRATION_FORMAT_ONLY=1`
-probe additionally checks Berry conversion and native frozen-format acceptance;
-it does not supply or claim a native Berry migration golden.
+Stable native Bun 1.4.2 and 1.4.3 reject Berry input with
+`UnsupportedYarnLockfileVersion`. Strict comparisons use the official native
+Bun `1.4.4-canary.1+5f5799ed1`, selected through `NATIVE_BUN`. Its official
+archive was verified against GitHub's SHA-256 asset digest before use.
+No format-only or unsupported-reference bypass is used by the final checks.
+The native tool is isolated from the global Bun installation and removed after
+verification.
 
 Run the check inside the heavy wrapper, after building the selected wasm engine:
 
 ```sh
+NATIVE_BUN=/path/to/native-bun-with-Berry-support \
 INSTALL_ENGINE=quickjs BUN_WASM=dist/bun.wasm \
 BUN_WASM_LAUNCHER=/path/to/bun-wasm \
 unshare --user --map-root-user --net bash -c 'ip link set lo up; exec "$@"' _ \

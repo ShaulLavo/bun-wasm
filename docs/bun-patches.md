@@ -1903,7 +1903,7 @@ classic Yarn, Berry and pnpm fixtures, plus documented reductions and two small
 snapshot-reference regressions. Files are copied only into owned test scratch.
 No copied fixture or third-party implementation is checked into this change.
 The replay combines the existing app-matrix cache and Bun's recorded
-`yarn/npm-metadata.json`; its namespace has no external network route.
+`registry/packages` and `yarn/npm-metadata.json`; its namespace has no external network route.
 
 Logical install names stay separate from resolved package identities. pnpm's
 full snapshot reference selects its edges before the peer context is removed
@@ -1911,4 +1911,4 @@ from serialized dependency values. Workspace roots and members seed traversal.
 Git and direct tarball dependency protocols fail before any converted lock is
 published. A valid classic Yarn resolved SHA-1 fragment becomes an SRI value.
 The [validation notes](lockfile-migration.md) distinguish exact native matches,
-intentional fixes to native 1.4.2 behavior, and unavailable native Berry goldens.
+intentional fixes to older native behavior, and the pinned native canary used for strict Berry goldens.
