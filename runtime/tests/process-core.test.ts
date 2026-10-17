@@ -25,6 +25,32 @@ function fixture() {
   return { registry, supervisor, root, contexts, terminated };
 }
 
+for (const recovery of ["retry", "dispose"] as const) test(`throwing completion gate stays pending and permits ${recovery} cleanup`, async () => {
+  const registry = new ExecutableRegistry();
+  registry.register("fixture", { module, adapter: "preview1" });
+  let throwGate = true, closed = 0, revoked = 0, terminated = 0;
+  const supervisor = new ProcessSupervisor({ registry,
+    launch: () => ({ terminate() { terminated++; } }),
+    canConfirmExit() { if (throwGate) throw new Error("completion gate failed"); return true; },
+  });
+  try {
+    const root = supervisor.createRoot(), pid = supervisor.reserveSpawn(root, request());
+    await supervisor.start(pid);
+    supervisor.get(pid)!.descriptors.open({ kind: "directory", handle: 42 }, 7n, 3n, () => closed++);
+    supervisor.registerRevocation(pid, () => revoked++);
+    expect(() => supervisor.exit(pid, 23)).toThrow("completion gate failed");
+    expect(supervisor.get(pid)!.result).toBeNull();
+    expect(supervisor.get(pid)!.revoked).toBe(false);
+    expect([closed, revoked, terminated]).toEqual([0, 0, 0]);
+    if (recovery === "retry") {
+      throwGate = false;
+      supervisor.exit(pid, 23);
+      expect(supervisor.wait(root, pid)).toEqual({ kind: "exited", code: 23, status: 23 });
+    } else supervisor.dispose();
+    expect([closed, revoked, terminated]).toEqual([1, 1, 1]);
+  } finally { supervisor.dispose(); }
+});
+
 test("shared allocators reserve independent pid and job number spaces without reuse", () => {
   const first = new ProcessIdentityAllocator();
   const second = new ProcessIdentityAllocator(first.buffer);

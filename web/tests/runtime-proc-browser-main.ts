@@ -3,6 +3,25 @@ import { startRun, type Run } from "../src/runner";
 import { createWorkerProcessTransport } from "../../runtime/proc/worker-client";
 import { runtimeProcChecks, runtimeProcFixture, runtimeProcStages } from "./runtime-proc-fixtures";
 
+// Diagnostic only: identify the exact BufferSource representation rejected by an engine.
+// This never changes the guest, retries an operation, or relaxes a process assertion.
+function decodeFingerprint() {
+  const memory = new WebAssembly.Memory({ initial: 1, maximum: 2 });
+  const convert = Reflect.get(memory, "toResizableBuffer");
+  if (typeof convert !== "function") return { available: false };
+  try {
+    const buffer = Reflect.apply(convert, memory, []) as ArrayBuffer;
+    const bytes = new Uint8Array(buffer, 0, 2); bytes.set([123, 125]);
+    const decode = (input: Uint8Array) => {
+      try { return { value: new TextDecoder("utf-8", { fatal: true }).decode(input) }; }
+      catch (error) { return { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }; }
+    };
+    return { available: true, resizable: Reflect.get(buffer, "resizable"), direct: decode(bytes), fixed: decode(bytes.slice()) };
+  } catch (error) {
+    return { available: true, error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) };
+  }
+}
+const bufferDecode = decodeFingerprint();
 const NativeWorker = globalThis.Worker;
 const activeWorkers = new Set<Worker>();
 const messages: string[] = [];
@@ -66,9 +85,9 @@ try {
   filesystem.dispose(); filesystem = undefined;
   await until(() => activeWorkers.size === 0, "all task-created workers terminated");
   result = { ok: true, mode: explicit ? "explicit" : "automatic", checks: runtimeProcChecks, stdout,
-    messages, exits, workerErrors, cleanup: { activeWorkers: activeWorkers.size, workersCreated } };
+    messages, exits, workerErrors, bufferDecode, cleanup: { activeWorkers: activeWorkers.size, workersCreated } };
 } catch (error) {
-  result = { ok: false, stdout, stderr, messages, exits, workerErrors,
+  result = { ok: false, stdout, stderr, messages, exits, workerErrors, bufferDecode,
     error: error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error) };
 } finally {
   if (run && !settled) {

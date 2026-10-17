@@ -1529,6 +1529,9 @@ Node, WebKit or third-party pipe implementation is copied or patched by these mo
 `plans/browser-runtime.md`, over this project's process, descriptor and filesystem services.
 It is not copied from Bun, Node, WebKit, SLICC or another WASI host. Its packed subscription,
 event and wait records are the project's own interface; the errno values follow WASI.
+Spawn metadata copies the checked guest span into fixed-owned bytes before native UTF-8
+decoding: TextDecoder's WebIDL input permits shared buffers, not resizable backing. This is
+representation normalization, with no engine/version detection or retry.
 `runtime/core/{descriptors,wasi}.ts` adds signed-success descriptor bounds, explicit immediate
 terminal methods and notification-aware preview1 polling without replacing the existing
 blocking preview1 I/O contract.
@@ -1540,6 +1543,11 @@ The browser runner, worker and subprocess broker compose these original adapters
 share one fd table with preview1 and preserve the existing Bun host slots.
 `web/src/runtime-terminals.ts` is an original callback-destination codec: it preserves stdout
 versus stderr across dup and remapped inherited fds, forwards generic child output to the run's
-hooks, and represents this runner's default EOF stdin explicitly. Unknown callback terminals
-are rejected rather than pretending their input can be shared. No new upstream patch, copied
+hooks, and represents this runner's default EOF stdin explicitly. After selecting the immutable
+winning outcome, the process supervisor waits for the final ordered host acknowledgment before
+confirming an ordinary exit and terminating its worker, so queued terminal output drains first;
+fatal outcomes and explicit disposal still
+complete without waiting for that acknowledgment. A late kill cannot bypass the drain after an
+ordinary outcome has already won. Unknown callback terminals are rejected rather than pretending
+their input can be shared. No new upstream patch, copied
 implementation or compatibility branch is introduced.

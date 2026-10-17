@@ -9,6 +9,10 @@ export interface SupervisorOptions {
   registry: ExecutableRegistry;
   launch(context: ProcessContext): ProcessHandle | Promise<ProcessHandle>;
   table?: ProcessTable;
+  /** Message-bearing hosts defer ordinary completion until ordered output/exit messages drain.
+   * Fatal outcomes and explicit disposal never wait for this acknowledgement.
+   */
+  canConfirmExit?(pid: number): boolean;
   /** Cleanup failures are diagnostics, never a reason to leave peers blocked or skip teardown. */
   onError?(error: unknown): void;
 }
@@ -287,6 +291,17 @@ export class ProcessSupervisor {
     // A signal published after our last read still competes at this atomic decision, rather
     // than overriding one observer's already-final result after the fact.
     const winner = claimOutcome(record.outcome, result);
+    // Check the immutable winner, not an earlier read: a worker may ordinary-exit while a
+    // signal observer is entering this function. Its queued output must still drain first.
+    if (winner.kind === "exited" && !this.disposed) {
+      let canConfirm: boolean;
+      try { canConfirm = this.options.canConfirmExit?.(pid) !== false; }
+      catch (error) { this.finishing.delete(pid); throw error; }
+      if (!canConfirm) {
+        this.finishing.delete(pid);
+        return;
+      }
+    }
     if (winner.kind === "signaled" && winner.code === Signal.SIGKILL) this.publishKill(record);
     record.revoked = true;
     const hooks = Array.from(record.revocations);

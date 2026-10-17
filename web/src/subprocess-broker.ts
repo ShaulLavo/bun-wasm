@@ -85,7 +85,12 @@ export class SubprocessBroker {
       for (const [name, entry] of this.registrations) registry.register(name, {
         module: entry.module, adapter: entry.adapter === "preview1" ? "preview1" : `bun:${entry.engine ?? "browser"}`,
       });
-      const supervisor = new proc.ProcessSupervisor({ registry, launch: context => this.launch(context), onError: error => this.report(error) });
+      const supervisor = new proc.ProcessSupervisor({
+        registry, launch: context => this.launch(context), onError: error => this.report(error),
+        // A shared ordinary exit can win before queued terminal output reaches this page.
+        // The final ordered worker message acknowledges that output and resource release.
+        canConfirmExit: pid => this.disposed || this.runtimeChildren.get(pid)?.acknowledged !== false,
+      });
       const pid = supervisor.createRoot({ ...this.options.root, ...this.rootTransport() });
       if (this.runtimeRoot) {
         supervisor.registerRevocation(pid, () => this.revokeRuntimeProcess(pid));
