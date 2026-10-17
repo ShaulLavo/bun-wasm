@@ -20,16 +20,22 @@ for (const property of ["constructor", "species", "then"]) {
     process.on("unhandledRejection", onRejection);
     try {
       const reason = new Error(`original ${property}`);
-      const rejected = poison(Promise.reject(reason));
-      originals.add(rejected);
-      await expect(() => rejected).toThrow(reason);
-      const pending = poison(new Promise((_, reject) => setTimeout(() => reject(reason), 1)));
-      originals.add(pending);
-      await expect(() => pending).toThrow(reason);
+      await expect(() => {
+        const rejected = poison(Promise.reject(reason));
+        originals.add(rejected);
+        return rejected;
+      }).toThrow(reason);
+      await expect(() => {
+        const pending = poison(new Promise((_, reject) => setTimeout(() => reject(reason), 1)));
+        originals.add(pending);
+        return pending;
+      }).toThrow(reason);
       await expect(() => poison(Promise.resolve(123))).not.toThrow();
-      const unawaited = poison(Promise.reject(reason));
-      originals.add(unawaited);
-      expect(() => unawaited).toThrow(reason);
+      expect(() => {
+        const unawaited = poison(Promise.reject(reason));
+        originals.add(unawaited);
+        return unawaited;
+      }).toThrow(reason);
       await new Promise(resolve => setTimeout(resolve, 10));
       assert.equal(reads, 0);
       assert.deepEqual(leaked, []);
@@ -42,12 +48,11 @@ for (const property of ["constructor", "species", "then"]) {
 test("toThrow bypasses a replaced Promise.prototype.then", async () => {
   const then = Promise.prototype.then;
   const reason = new Error("original prototype rejection");
-  const rejected = Promise.reject(reason);
   let result: unknown;
   let calls = 0;
   try {
     Promise.prototype.then = function () { calls++; throw new Error("patched then"); };
-    result = expect(() => rejected).toThrow(reason);
+    result = expect(() => Promise.reject(reason)).toThrow(reason);
   } finally {
     Promise.prototype.then = then;
   }
