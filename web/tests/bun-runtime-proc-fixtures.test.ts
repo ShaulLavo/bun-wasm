@@ -7,10 +7,12 @@ for (const scenario of bunRuntimeProcScenarios) test(`external generic root fixt
   expect(WebAssembly.validate(bytes)).toBe(true);
   const module = new WebAssembly.Module(bytes);
   expect(WebAssembly.Module.imports(module).filter(item => item.module === "runtime_proc").map(item => item.name))
-    .toEqual(["spawn", "job_of", "wait_job", "write", "pipe"]);
+    .toEqual(["spawn", "job_of", "wait_job", "write", "pipe", "read", "poll", "kill_job"]);
   let memory: WebAssembly.Memory;
   const requests: SpawnRequest[] = [], waited: number[] = [], closed: number[] = [];
   const output: string[] = [];
+  const killed: number[] = [];
+  let reads = 0;
   const instance = new WebAssembly.Instance(module, {
     runtime_proc: {
       spawn(pointer: number, length: number) {
@@ -27,6 +29,9 @@ for (const scenario of bunRuntimeProcScenarios) test(`external generic root fixt
         output.push(new TextDecoder().decode(new Uint8Array(memory.buffer, pointer, length))); return length;
       },
       pipe(pointer: number) { const view = new DataView(memory.buffer); view.setInt32(pointer, 123, true); view.setInt32(pointer + 4, 456, true); return 0; },
+      read(_fd: number, pointer: number) { if (++reads % 2 === 1) return -6; new Uint8Array(memory.buffer)[pointer] = 82; return 1; },
+      poll() { return 1; },
+      kill_job(job: number, signal: number) { expect(signal).toBe(9); killed.push(job); return 0; },
     },
     wasi_snapshot_preview1: {
       fd_close(fd: number) { closed.push(fd); return 0; },
@@ -47,6 +52,7 @@ for (const scenario of bunRuntimeProcScenarios) test(`external generic root fixt
   }
   expect(waited).toEqual(scenario.commands.map((_, index) => 111 + index));
   expect(closed).toEqual(scenario.pipe ? [123, 456] : []);
+  expect(killed).toEqual(scenario.pipe === "signal" ? [111] : []);
   expect(output).toEqual((scenario.pipe === "input" ? [scenario.input ?? ""] : []).concat(["external-root-ok\n"]));
 });
 
@@ -59,6 +65,7 @@ test("pipeline fixture starts every real child before blocking on the first job"
       spawn() { return ++spawned; }, job_of(pid: number) { return pid; },
       wait_job(_job: number, _flags: number, pointer: number) { expect(spawned).toBe(2); new DataView(memory.buffer).setInt32(pointer, 0, true); return 0; },
       write(_fd: number, _pointer: number, length: number) { return length; },
+      read() { throw new Error("pipeline root must not buffer its children"); }, poll() { return 0; }, kill_job() { throw new Error("pipeline must not kill its children"); },
       pipe(pointer: number) { const view = new DataView(memory.buffer); view.setInt32(pointer, 7, true); view.setInt32(pointer + 4, 8, true); return 0; },
     }, wasi_snapshot_preview1: { fd_close() { return 0; }, proc_exit(code: number) { throw new Error(`stage ${code}`); } },
   });

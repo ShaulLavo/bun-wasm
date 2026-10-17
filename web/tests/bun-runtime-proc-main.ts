@@ -8,10 +8,6 @@ const parameters = new URLSearchParams(location.search);
 const name = parameters.get("scenario") ?? "nested";
 const scenario = bunRuntimeProcScenarios.find(item => item.name === name);
 const nativeWorker = globalThis.Worker;
-type UnregisteringRuntime = Runtime & {
-  registerAdapter(name: string, launch: Parameters<Runtime["registerAdapter"]>[1]): () => void;
-  registerProgram(name: string, program: Parameters<Runtime["registerProgram"]>[1]): () => void;
-};
 const workers = new Set<Worker>();
 const operations: string[] = [];
 const launches: { pid: number; parentPid: number; job: number; executable: string; argv: string[] }[] = [];
@@ -61,7 +57,6 @@ try {
   equal(crossOriginIsolated, true, "external root requires SharedArrayBuffer isolation");
   if (!scenario && name !== "generic-control") throw new Error(`unknown scenario ${name}`);
   runtime = createRuntime({ filesystem: { workerURL: new URL("./fs-worker.js", location.href) } });
-  const unregisteringRuntime = runtime as UnregisteringRuntime;
   await runtime.filesystem.mkdirp("/home/user");
   await runtime.filesystem.writeFile("/home/user/preopen-data", "ROOT_PREOPEN_OK");
   await runtime.filesystem.flush();
@@ -83,10 +78,10 @@ try {
     // Disposal must unregister aliases and adapters, not merely clear a private installed flag.
     const first = installBunAdapters(runtime, options);
     first.dispose(); first.dispose();
-    const unregisterProbe = unregisteringRuntime.registerAdapter("bun:browser", () => { throw new Error("unregister probe must never launch"); });
+    const unregisterProbe = runtime.registerAdapter("bun:browser", () => { throw new Error("unregister probe must never launch"); });
     unregisterProbe();
-    const probeAdapter = unregisteringRuntime.registerAdapter("test:unregister", () => { throw new Error("alias probe must never launch"); });
-    const unregisterProgram = unregisteringRuntime.registerProgram("bun", { adapter: "test:unregister", module: new WebAssembly.Module(runtimeProcFixture()), cooperative: true });
+    const probeAdapter = runtime.registerAdapter("test:unregister", () => { throw new Error("alias probe must never launch"); });
+    const unregisterProgram = runtime.registerProgram("bun", { adapter: "test:unregister", module: new WebAssembly.Module(runtimeProcFixture()), cooperative: true });
     unregisterProgram(); probeAdapter();
     installation = installBunAdapters(runtime, options);
     if (name === "start-failed") runtime.registerProgram("broken-bun", {
@@ -128,13 +123,25 @@ try {
     filesystem: rootConnection, runtimeProcess: transport }, [port]);
   if (scenario?.action) {
     await until(() => stdout.includes("leader-ready\n") && stdout.includes("child-ready\n") && stdout.includes("grandchild-ready\n"), "three real Bun generations ready");
-    equal(launches.length, 3, "root Bun.spawn and nested child_process all used generic process admission");
+    if (scenario.action === "kill-detached") await until(() => stdout.includes("detached-ready\n"), "independent detached Bun ready");
+    equal(launches.length, scenario.action === "kill-detached" ? 4 : 3, "root Bun.spawn and nested child_process all used generic process admission");
     const first = launches[0]!;
-    equal(launches[1]!.parentPid, first.pid, "Bun child ancestry");
-    equal(launches[2]!.parentPid, launches[1]!.pid, "node child_process grandchild ancestry");
-    for (const launch of launches) equal(launch.job, first.job, "all Bun descendants inherit foreground job");
-    if (scenario.action === "kill") await service.killJob(first.job, 9);
-    else { disposedWhileLive = true; await runtime.dispose(); runtime = undefined; }
+    const foreground = launches.filter(launch => launch.job === first.job);
+    equal(foreground.length, 3, "all three ordinary Bun generations inherit the foreground job");
+    equal(foreground[1]!.parentPid, first.pid, "Bun child ancestry");
+    equal(foreground[2]!.parentPid, foreground[1]!.pid, "node child_process grandchild ancestry");
+    if (scenario.action === "dispose") { disposedWhileLive = true; await runtime.dispose(); runtime = undefined; }
+    else {
+      await service.killJob(first.job, 9);
+      if (scenario.action === "kill-detached") {
+        const detached = launches.find(launch => launch.job !== first.job)!;
+        equal(detached.parentPid, first.pid, "detached child came from the same Bun leader");
+        await until(() => confirmedExits.filter(exit => exit.job === first.job && exit.status === 137).length === 3, "foreground safe without detached child exit");
+        equal(supervisor.get(detached.pid)?.result, null, "foreground kill did not stop the detached group");
+        await service.killJob(detached.job, 9);
+        await until(() => confirmedExits.some(exit => exit.pid === detached.pid && exit.status === 137), "owned detached cleanup");
+      }
+    }
   }
   if (!disposedWhileLive) {
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -149,13 +156,22 @@ try {
     } else if (name === "start-failed") {
       equal(stdout, scenario!.stdout, "start failure still settles blocking wait_job");
       if (!stderr.includes("bun-runtime-proc-start-failed-control")) throw new Error("start failure diagnostic was lost");
-    } else if (scenario!.action === "kill") {
+    } else if (scenario!.action === "kill" || scenario!.action === "kill-detached") {
       if (!stdout.endsWith(scenario!.stdout)) throw new Error(`kill did not unblock root wait_job: ${stdout}`);
       equal(stderr, "", "kill stderr");
-      equal(confirmedExits.filter(exit => exit.kind === "signaled" && exit.status === 137).length, 3, "all three descendants reached confirmed SIGKILL outcomes");
+      equal(confirmedExits.filter(exit => exit.kind === "signaled" && exit.status === 137).length, scenario!.action === "kill-detached" ? 4 : 3, "all owned descendants reached confirmed SIGKILL outcomes");
     } else {
       equal(stdout, scenario!.stdout, "real guest stdout");
       equal(stderr, scenario!.stderr ?? "", "real guest stderr");
+      if (name === "guest-kill-job-descendants") {
+        equal(launches.length, 3, "external shell launched Bun, nested Bun.spawn and node child_process");
+        const foreground = launches[0]!;
+        for (const launch of launches) equal(launch.job, foreground.job, "nested descendants stayed in the shell's foreground job");
+        equal(launches[1]!.parentPid, foreground.pid, "nested Bun.spawn ancestry");
+        equal(launches[2]!.parentPid, launches[1]!.pid, "nested child_process ancestry");
+        equal(operations.filter(operation => operation === "signal").length, 1, "generic root called the actual kill_job ABI");
+        equal(confirmedExits.filter(exit => exit.status === 137 && exit.kind === "signaled").length, 3, "wait_job returned only after all three killed members were confirmed safe");
+      }
     }
     if (name !== "generic-control") equal(operations.filter(operation => operation === "reap-job").length >= scenario!.commands.length, true, "generic root consumed real job results");
     await until(() => workers.size === 1, "only page filesystem worker remains after guest completion");
