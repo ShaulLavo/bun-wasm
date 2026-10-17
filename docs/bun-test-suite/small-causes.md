@@ -2,6 +2,7 @@
 
 Status: Approved.
 
+The initial implementation measurements below precede the PR review corrections.
 The fixed selection contains 65 upstream files assigned to ten first-blocker
 causes in PR #40. The control and task artifacts were built independently on
 main `b7cf06cde1fbf977b748d97d86ba102262d3f03f`, after the process merge.
@@ -138,3 +139,52 @@ or reproducing the remaining work.
 | `regression/issue/25622.test.ts` | child tsconfig paths still work after replacing parent paths | error: expect(received).toBe(expected) |
 | `regression/issue/26143.test.ts` | issue #26143 - https GET request with body hangs > Bun.fetch without allowGetBody should still throw | error: expect(received).toThrow(expected) |
 | `regression/issue/26207.test.ts` | bun run --workspaces creates node symlink when NODE env points to non-existent path | error: expect(received).toContain(expected) |
+
+
+## PR review regressions
+
+Native Bun 1.4.2 passes the 12 named public regressions in
+`test-review-promises`, `transpiler-review` and `partial-assert-review`.
+The frozen pre-fix control `f61b9a9b` returns exit 1 for all three new fixtures
+on QuickJS, JSC and browser. The seven existing focused fixtures still pass.
+After the fixes, all ten focused fixtures pass on every engine, 30 successful
+engine-fixture runs on base `9ced05d7`. The full web gate and all six HMR runs
+also pass on that base. Main through `2759d45b` is merged; the final build
+verification is recorded in the PR reply and retained report.
+
+The promise regressions cover plain returned objects, real promises with
+accessor/overridden then methods, and unawaited checks. The standalone await
+observer probe fails before the fix with `second-assimilation`, then preserves
+fulfilled object identity with one getter read and ten falsy rejection controls.
+Four observer unit tests also verify caught/unawaited rejection identity and
+cleanup ownership when a caller replaces the promise constructor.
+
+Byte tests cover direct TextEncoder results, offset views, DataViews, mutation
+after calling transform and transfer of JavaScript-owned backing storage.
+Minification covers boolean and object forms, loose boolean fields and invalid
+primitive options. Import tests compare transform output and scan results for
+default, tree-shaking and explicit trimming settings.
+
+Partial comparisons cover equal/unequal URLs and KeyObjects, one-sided types,
+own-property subsets, overridden buffer iterators, genuine typed-array kinds,
+DataView/ArrayBuffer numeric properties, and Map fallback without consuming an
+entry twice. These assertions do not weaken or replace upstream tests.
+
+The new fixture goldens explicitly preserve this runtime's existing stdout
+version-header convention. Native Bun sends that header to stderr, so the
+fixtures use manual goldens. A separate existing JSC native-output buffer
+transfer gap is recorded in the compatibility follow-up plan.
+
+The paired review builds on `9ced05d7` have the following artifact deltas.
+They measure the review corrections, not the whole original PR. Gzip uses the
+same Python compression settings and a zero timestamp on both sides.
+
+| Engine | Byte delta | Gzip byte delta |
+| --- | --- | --- |
+| QuickJS | +2,518 | +545 |
+| JSC | +2,510 | +499 |
+| Browser | +2,530 | +814 |
+
+Exact commands, control and corrected logs, hashes and size records are under
+`/work/reports/bun-wasm-small-causes/review-fixes/`. The coordinator owns removal
+after re-review and reproduction of the remaining compatibility follow-ups.
