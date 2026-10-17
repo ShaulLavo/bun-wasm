@@ -5,6 +5,7 @@ import type { RunRequest, WorkerMessage } from "../src/worker";
 import { workerProcessState } from "../../runtime/proc/worker-client";
 import { createLegacyEngineScope, createRuntimeEngineScope } from "./engine-interruption-scope";
 import { setSignalDisposition, takeSignal } from "../../runtime/proc/signals";
+import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 
 // Exercise the actual page-side production admission and launchRuntime. This is
 // structural harness coverage; real interpreters and native waits run in browsers.
@@ -65,7 +66,7 @@ test("generic engine scope reaches real launchRuntime without legacy ChildTransp
   expect(workers.every(worker => worker.stopped)).toBe(true);
 });
 
-for (const route of ["legacy", "runtimeProcess"] as const) {
+for (const route of ["legacy", "runtimeProcess", "owned-preview1"] as const) {
   test(`${route} page killJob handles the guest without killing its waiting controller`, async () => {
     const NativeWorker = globalThis.Worker;
     const workers: FakeWorker[] = [], ports: MessagePort[] = [];
@@ -89,15 +90,24 @@ for (const route of ["legacy", "runtimeProcess"] as const) {
     let owned: Awaited<ReturnType<typeof createRuntimeEngineScope>> | ReturnType<typeof createLegacyEngineScope> | undefined;
     try {
       globalThis.Worker = FakeWorker as unknown as typeof Worker;
-      const module = new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0]));
+      const module = new WebAssembly.Module(route === "owned-preview1" ? preview1SignalClockGuest()
+        : new Uint8Array([0,97,115,109,1,0,0,0]));
       const url = "http://localhost/engine-interruption-worker.js";
-      owned = route === "legacy" ? createLegacyEngineScope(module, "quickjs", fs, url)
-        : await createRuntimeEngineScope(module, "quickjs", fs, url);
+      owned = route === "runtimeProcess" ? await createRuntimeEngineScope(module, "quickjs", fs, url)
+        : createLegacyEngineScope(module, route === "owned-preview1" ? "browser" : "quickjs", fs, url,
+          route === "owned-preview1" ? "preview1" : "bun");
       const child = owned.spawn("fixture-source");
       const deadline = Date.now() + 2_000;
       while (!workers[0]?.request) {
         if (Date.now() > deadline) throw new Error("real production guest launch was not reached");
         await Bun.sleep(1);
+      }
+      const request = workers[0]!.request!;
+      expect(request.module).toBe(module);
+      expect(request.interruptible).not.toBe(true);
+      expect(request.adapter).toBe(route === "owned-preview1" ? "preview1" : "bun");
+      if (route === "owned-preview1") {
+        expect(WebAssembly.Module.imports(request.module)).toContainEqual({ module: "runtime_proc", name: "interrupted", kind: "function" });
       }
       const supervisor = await owned.broker.ready();
       const root = supervisor.get(1)!;

@@ -116,7 +116,9 @@ export function createLegacyEngineScope(module: WebAssembly.Module, engine: Engi
   workerUrl: string, adapter: "bun" | "preview1" = "bun"): EngineInterruptionScope {
   const decoder = new TextDecoder();
   const broker = new SubprocessBroker(workerUrl, fs);
-  broker.register("bun", { module, adapter, engine });
+  // Preview1 here is only our byte-encoded signal-clock fixture: it explicitly
+  // handles/dequeues signals through poll_oneoff, not an untrusted guest upload.
+  broker.register("bun", adapter === "preview1" ? { module, adapter, cooperative: true } : { module, adapter, engine });
   const children = new Map<number, EngineInterruptionChild>();
   const host = new SubprocessHost({
     output() {}, onChildClose: pid => broker.close(1, pid),
