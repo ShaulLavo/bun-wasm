@@ -137,8 +137,8 @@ function prepare(app, name) {
   return project;
 }
 
-async function checkPage(url, check, project) {
-  try { return await browserSession.checkPage(url, check, project); }
+async function checkPage(url, check, project, timeout) {
+  try { return await browserSession.checkPage(url, check, project, timeout); }
   catch (error) { return { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server") }; }
 }
 
@@ -149,7 +149,7 @@ async function checkServer(proc, url, check, logfile, project) {
       const response = await fetch(url, { signal: AbortSignal.timeout(500) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       let result;
-      if (check.kind === "page") result = await checkPage(url, check, project);
+      if (check.kind === "page") result = await checkPage(url, check, project, Math.max(1, deadline - Date.now()));
       else if ((await response.text()).includes(check.text)) result = { status: "pass", assertion: `HTTP ${response.status}, body contains ${JSON.stringify(check.text)}` };
       if (proc.child.exitCode !== null || proc.child.signalCode !== null) return earlyServerExit({ code: proc.child.exitCode, signal: proc.child.signalCode, output: text(logfile) }, "server");
       if (result) return result;
@@ -223,7 +223,7 @@ try {
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.mjs", "isolate.mjs", "exit-provenance.ts", "hmr.ts"].map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.mjs", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts"].map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
   mirror = await registry({ directory: options.cache, record: options.record });
   const { browserHost } = await import("./browser.mjs");

@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { projectFiles } from "./apps.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
+import { browserDiagnostics } from "./browser-diagnostics.ts";
 import { observeHmr } from "./hmr.ts";
 import { failure, stageOutput } from "./classify.mjs";
 
@@ -78,18 +79,23 @@ export async function browserHost({ root, options, launch, stop }) {
     throw new Error("Playground did not start");
   }
 
-  async function checkPage(url, check, project) {
+  async function checkPage(url, check, project, timeout = options.timeout) {
     const page = await (await getBrowser()).newPage();
     const verifyHmr = observeHmr(page);
+    const diagnostics = browserDiagnostics(page);
+    const deadline = Date.now() + timeout;
+    const remaining = () => Math.max(1, deadline - Date.now());
     const errors = [];
     page.on("pageerror", error => errors.push(String(error)));
     try {
-      await page.goto(url, { timeout: options.timeout });
-      await page.locator(check.selector).filter({ hasText: check.text }).waitFor({ timeout: options.timeout });
-      const hmr = check.hmr && await verifyHmr(project, check.selector, check.hmr, options.timeout);
+      await page.goto(url, { timeout: remaining() });
+      await page.locator(check.selector).filter({ hasText: check.text }).waitFor({ timeout: remaining() });
+      const hmr = check.hmr && await verifyHmr(project, check.selector, check.hmr, remaining());
       if (errors.length) throw new Error(errors.join("\n"));
       if (hmr) await page.screenshot({ path: join(options.output, `${basename(project)}-dev.png`) });
       return { status: "pass", assertion: `${check.selector} renders ${JSON.stringify(check.text)}${hmr ? `; ${hmr}` : ""}` };
+    } catch (error) {
+      return { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server"), browserDiagnostics: diagnostics() };
     } finally { await page.close(); }
   }
 
