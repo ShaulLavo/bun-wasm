@@ -213,31 +213,38 @@ impl Certificate {
         Ok(serial)
     }
 
-    fn check_host(&self, host: &[u8], flags: u32) -> Result<Option<String>> {
+    fn dns_names(&self) -> Option<Vec<Vec<u8>>> {
         let mut critical = -1;
         let decoded =
             unsafe { ffi::X509_get_ext_d2i(self.p(), 85, &mut critical, ptr::null_mut()) };
-        let mut has_dns = false;
-        if let Some(value) = NonNull::new(decoded) {
-            let extension = DecodedExtension { nid: 85, value };
-            let stack = extension.value.as_ptr().cast::<ffi::Stack>();
-            for index in 0..unsafe { ffi::OPENSSL_sk_num(stack) } {
-                let entry =
-                    unsafe { ffi::OPENSSL_sk_value(stack, index) }.cast::<ffi::GeneralName>();
-                let mut kind = -1;
-                let name = unsafe { ffi::GENERAL_NAME_get0_value(entry, &mut kind) };
-                if kind != 2 {
-                    continue;
-                }
-                has_dns = true;
-                let bytes = asn1_bytes(name.cast());
-                if hostname::matches(&bytes, host, flags) {
-                    return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
-                }
+        let Some(value) = NonNull::new(decoded) else {
+            return (critical == -1).then(Vec::new);
+        };
+        let extension = DecodedExtension { nid: 85, value };
+        let stack = extension.value.as_ptr().cast::<ffi::Stack>();
+        let mut names = Vec::new();
+        for index in 0..unsafe { ffi::OPENSSL_sk_num(stack) } {
+            let entry = unsafe { ffi::OPENSSL_sk_value(stack, index) }.cast::<ffi::GeneralName>();
+            let mut kind = -1;
+            let name = unsafe { ffi::GENERAL_NAME_get0_value(entry, &mut kind) };
+            if kind == 2 {
+                names.push(asn1_bytes(name.cast()));
             }
-        } else if critical != -1 {
-            return Ok(None);
         }
+        Some(names)
+    }
+
+    fn check_host(&self, host: &[u8], flags: u32) -> Result<Option<String>> {
+        let Some(names) = self.dns_names() else {
+            return Ok(None);
+        };
+        if let Some(name) = names
+            .iter()
+            .find(|name| hostname::matches(name, host, flags))
+        {
+            return Ok(Some(String::from_utf8_lossy(name).into_owned()));
+        }
+        let has_dns = !names.is_empty();
         if flags & 0x20 != 0 || (has_dns && flags & 0x01 == 0) {
             return Ok(None);
         }

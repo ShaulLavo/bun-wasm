@@ -1493,7 +1493,7 @@ JSC-specific generated classes and stream sinks and cannot run through the built
 ## X509Certificate
 
 Class **Host feature**, **original adapters** in `crates/bunwasm-crypto-sys/src/x509.rs`,
-`crates/bunwasm-runtime/src/x509.rs` except the alternative-name formatting below,
+`crates/bunwasm-runtime/src/x509.rs` except the adapted portions below,
 `src/js/x509.ts`, the native table and the Node crypto registry.
 
 BoringSSL remains pinned by `scripts/sync-crypto.sh` to

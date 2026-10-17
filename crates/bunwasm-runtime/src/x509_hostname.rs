@@ -101,23 +101,12 @@ fn valid_pattern(pattern: &[u8]) -> bool {
     let mut hyphen = false;
     for &byte in pattern {
         match byte {
-            b'.' => {
-                if start || hyphen {
-                    return false;
-                }
-                start = true;
-            }
-            b'-' => {
-                if start {
-                    return false;
-                }
-                hyphen = true;
-            }
+            b'.' if start || hyphen => return false,
+            b'.' => start = true,
+            b'-' if start => return false,
+            b'-' => hyphen = true,
             b'*' => start = false,
-            _ if byte.is_ascii_alphanumeric() => {
-                start = false;
-                hyphen = false;
-            }
+            _ if byte.is_ascii_alphanumeric() => (start, hyphen) = (false, false),
             _ => return false,
         }
     }
