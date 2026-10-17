@@ -4,7 +4,7 @@ This matrix measures complete app commands after a fresh `bun install` in bun-wa
 
 The fixtures are original minimal projects that import the real published packages. No package implementation is replaced. Vite React uses React's public `createElement` API, and Vite Vue uses Vue's `h` API. SvelteKit uses the static adapter. These projects avoid template generators and their moving defaults.
 
-Commands invoke installed JavaScript entry points with `bun run`. The installer does not yet create package binaries in `node_modules/.bin`, so a shorthand such as `bun run dev` would measure that installer gap for every tool. Each recorded command still runs the package's actual CLI. Install failures stop execution; dependent commands are `blocked`, never counted as tested failures or passes. Next production start additionally depends on its build passing.
+The recorded commands invoke installed JavaScript entry points with `bun run`. At the time of that measurement, the installer did not create `node_modules/.bin` links. The current installer creates those links and supports package scripts such as `bun run dev`. These historical rows still use their original commands and run each package's actual CLI. Install failures stop execution; dependent commands are `blocked`, never counted as tested failures or passes. Next production start additionally depends on its build passing.
 
 ## Reproduce
 

@@ -99,6 +99,7 @@ if [[ $browser == 1 ]]; then
     failed=1
   fi
   node tests/browser-install.mjs || failed=1
+  node tests/browser-installer-links.ts || failed=1
   node tests/browser-shell-stop.ts || failed=1
   node tests/browser-net.mjs || failed=1
   node tests/browser-web-workers.ts || failed=1

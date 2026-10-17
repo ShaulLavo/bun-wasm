@@ -421,6 +421,70 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
 - brush-web `plans/001-brush-dev-shell.md`, `plans/004-own-shell.md` and `docs/external-commands.md`.
 - Spike reports: `/work/reports/browser-runtime/spikes/`.
 
+
+## Installer filesystem link prerequisite
+
+Status: Approved. Runtime track bun-wasm-a8 owns this after the waffle extraction.
+
+Workspace installs and local package links need symbolic links. The page
+filesystem only models files and directories (`runtime/fs/memory.ts`, `Node`).
+Its preview1 adapter returns `ENOTSUP` from `path_symlink` and rejects readlink
+because the filesystem has no links. Native installer and root-preopen Node-host
+fixtures support them.
+
+Package bin links no longer block page installs. The installer warns per link
+when creation returns ENOTSUP or EPERM, continues installation and writes the
+lockfile. `bun run` and `bunx` read installed package manifests when their bin
+entry is absent. Other link errors stay fatal. This permits the native installer
+gains to land before the runtime track adds page filesystem links.
+
+Run the focused page scenario after building the web app and all wasm artifacts:
+
+```sh
+source env.sh
+PLAYWRIGHT=/home/shaul/.local/share/mise/installs/npm-playwright/1.63.0/node_modules/.mise/playwright@1.63.0/node_modules/playwright/index.mjs \
+  node web/tests/browser-installer-links.ts
+```
+
+Use the heavy wrapper's browser class on this host. The scenario serves only a
+local fixture registry and installs a scoped package with two bin entries. It
+checks per-link warnings, a lockfile, `bun run`, package scripts, `bunx`, and a
+fatal non-link error on Chromium and WebKit with all three engines. Its session owns browser, listener and scratch cleanup.
+
+Implement relative symbolic links through the filesystem model, service protocol,
+shared metadata, persistence and preview1 operations. Preserve the raw link target
+for readlink, follow intermediate links when resolving paths, honor final-component
+follow flags, bound cycles, and keep directory capability boundaries intact. A
+workspace must remain live after source edits; copied package directories are not
+an equivalent fix. Package command entries must select the actual entry file so
+its argv, module directory and main-module identity stay correct.
+
+Keep the existing hardlink, rename/unlink identity, descriptor transfer, worker
+revocation and persistence tests. Add single-root and non-root preopen cases,
+scoped package bins, workspace cycles, dangling links, lstat/readlink versus stat,
+and persistence/reload coverage. Rerun the focused page scenario on Chromium and
+WebKit across all engines, then the complete runtime, web and HMR gates.
+
+The headless browser comparison has a separate native Node WASI limitation. In
+`cli/install/bun-install-link-path.test.ts`, a normal relative workspace link under
+`/tmp` reports `Capabilities insufficient (os error 76)` on Node, while native
+QuickJS/JSC proceed to later diagnostic assertions. Reproduce with
+`scripts/bun-suite.sh --engine browser --jobs 1 --timeout 15 --network loopback
+cli/install/bun-install-link-path.test.ts --output <fresh-json>`. A preview1-only
+control now reproduces that divergence on Node v26.7.0: creating the relative
+link `project/node_modules/dep -> ../packages/dep` returns errno 76 with a `/tmp`
+preopen, while Node's root preopen and wasmtime 49.0.3 with the same `/tmp`
+preopen both succeed. The source and output are retained in
+`/work/reports/upstream-bugs/node-wasi-relative-symlink-2026-10-17/` and the shared
+upstream report index, ready for the owner to file. Nothing was posted upstream.
+Do not broaden the suite runner's capabilities, replace workspace links with
+stale copies, or claim single-root fixtures establish multi-preopen conformance.
+
+The historical pre-fallback Chromium/browser probe was run on 2026-10-17. Plain installation
+exited 0; the guest confirmed `bin["is-odd"] === "index.js"`; the next install
+exited 1 with `error: Not supported (os error 58)`. The failure is at the
+filesystem prerequisite, not at registry resolution or tarball extraction.
+Evidence is retained with the installer lane's measured before/after results.
 ## Safari workspace ownership
 
 Status: Approved. Implemented in PR #62, awaiting independent review.

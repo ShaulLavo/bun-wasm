@@ -21,7 +21,7 @@ declare namespace BunWasm {
       setImmediate(callback: () => void): unknown;
       clearImmediate(handle: unknown): void;
     };
-    require(name: "path"): { resolve(...paths: string[]): string };
+    require(name: "path"): { resolve(...paths: string[]): string; dirname(path: string): string; basename(path: string): string };
     runInContext(context: unknown, callback: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]): unknown;
     handleUncaught(error: unknown): boolean;
   }

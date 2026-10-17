@@ -1,15 +1,52 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
+import { join, posix } from "node:path";
 
 const require = createRequire(import.meta.url);
 const source = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/spawn.js", import.meta.url), "utf8");
 
+function emittedPackageSource() {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-spawn-normalization-"));
+  try {
+    const destination = join(scratch, "package_scripts.js");
+    const compiled = Bun.spawnSync(["node",
+      fileURLToPath(new URL("../../scripts/transpile-runtime.ts", import.meta.url)),
+      fileURLToPath(new URL("../../crates/bunwasm-runtime/src/js/package_scripts.ts", import.meta.url)), destination,
+    ], { stdout: "pipe", stderr: "pipe" });
+    if (compiled.exitCode !== 0) throw new Error(compiled.stderr.toString());
+    return readFileSync(destination, "utf8");
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+}
+const packageSource = emittedPackageSource();
+type Context = { process: { env: Record<string, string>; execPath?: string; argv0?: string }; URL: typeof URL };
+type Internal = { require(name: string): unknown; native: { cwd(): string } & Record<string, unknown> } & Record<string, unknown>;
+function spawnFactory(context: Context) {
+  const factory = runInNewContext(source, context);
+  const scripts = runInNewContext(packageSource, context);
+  return (internal: Internal) => factory({
+    ...internal,
+    require(name: string) {
+      if (name !== "package_scripts") return internal.require(name);
+      return scripts({
+        native: { exists: () => false },
+        require(name: string) {
+          if (name === "process") return { ...context.process, cwd: internal.native.cwd };
+          if (name === "path") return posix;
+          return internal.require(name);
+        },
+      });
+    },
+  });
+}
+
 for (const executable of ["node", "/usr/bin/node", "fixture.wasm", "/tools/custom"]) {
   test(`guest command normalization preserves registry executable ${executable}`, () => {
     let metadata: { executable: string; argv: string[] } | undefined;
-    const factory = runInNewContext(source, {
+    const factory = spawnFactory( {
       process: { execPath: "/bun", argv0: "bun", env: {} }, URL,
     });
     const api = factory({
@@ -32,7 +69,7 @@ for (const executable of ["node", "/usr/bin/node", "fixture.wasm", "/tools/custo
 for (const ownCode of [23, 143]) test(`a handled TERM preserves guest own code ${ownCode} in the Bun facade`, async () => {
   let status = -2;
   let waiter: { step(): unknown } | undefined;
-  const factory = runInNewContext(source, {
+  const factory = spawnFactory( {
     process: { execPath: "/usr/local/bin/bun", argv0: "bun", env: {} }, URL,
   });
   const api = factory({
@@ -58,7 +95,7 @@ for (const signal of ["SIGTERM", "SIGKILL"]) test(`spawnSync timeout ${signal} p
   let status = -2;
   let now = 0;
   const requested: number[] = [];
-  const factory = runInNewContext(source, { process: { env: {} }, URL });
+  const factory = spawnFactory( { process: { env: {} }, URL });
   const api = factory({
     require, concatBytes: () => new Uint8Array(),
     native: {
@@ -79,7 +116,7 @@ for (const [status, signal, name] of [[143, 15, "SIGTERM"], [141, 13, "SIGPIPE"]
   test(`async facade reads final kind ${name ?? "own exit"} for status ${status}`, async () => {
     let done = false;
     let waiter: { step(): unknown } | undefined;
-    const api = runInNewContext(source, { process: { env: {} }, URL })({
+    const api = spawnFactory( { process: { env: {} }, URL })({
       require, addIoWaiter(value: { step(): unknown }) { waiter = value; return value; },
       native: {
         cwd: () => "/", hostCaps: { spawn: true }, hostSpawn: () => 2,
@@ -100,7 +137,7 @@ for (const ownCode of [23, 137, 143]) for (const acceptance of [0, -3]) {
   test(`async late KILL (${acceptance}) retains selected own exit ${ownCode}`, async () => {
     let status = -2;
     let waiter: { step(): unknown } | undefined;
-    const api = runInNewContext(source, { process: { env: {} }, URL })({
+    const api = spawnFactory( { process: { env: {} }, URL })({
       require, addIoWaiter(value: { step(): unknown }) { waiter = value; return value; },
       native: {
         cwd: () => "/", hostCaps: { spawn: true }, hostSpawn: () => 2, hostClose: () => 0,
@@ -122,7 +159,7 @@ for (const [status, signal, name] of [[143, 15, "SIGTERM"], [143, 0, null], [137
   test(`sync facade reads actual selected ${name ?? "own exit"} after a TERM timeout request`, () => {
     let completed = false;
     let now = 0;
-    const api = runInNewContext(source, { process: { env: {} }, URL })({
+    const api = spawnFactory( { process: { env: {} }, URL })({
       require, concatBytes: () => new Uint8Array(),
       native: {
         cwd: () => "/", hostCaps: { spawn: true }, hostSpawn: () => 2, hostClose: () => 0,
@@ -141,7 +178,7 @@ for (const [status, signal, name] of [[143, 15, "SIGTERM"], [143, 0, null], [137
 test("sync timeout KILL losing to ordinary exit143 does not relabel it", () => {
   let completed = false;
   let now = 0;
-  const api = runInNewContext(source, { process: { env: {} }, URL })({
+  const api = spawnFactory( { process: { env: {} }, URL })({
     require, concatBytes: () => new Uint8Array(),
     native: {
       cwd: () => "/", hostCaps: { spawn: true }, hostSpawn: () => 2, hostClose: () => 0,
@@ -161,7 +198,7 @@ test("async KILL is a no-op while selected own143 awaits publication", async () 
   let published = false;
   let waiter: { step(): unknown } | undefined;
   let queries = 0;
-  const api = runInNewContext(source, { process: { env: {} }, URL })({
+  const api = spawnFactory( { process: { env: {} }, URL })({
     require, addIoWaiter(value: { step(): unknown }) { waiter = value; return value; },
     native: {
       cwd: () => "/", hostCaps: { spawn: true }, hostSpawn: () => 2, hostClose: () => 0,
@@ -187,7 +224,7 @@ test("sync timeout request is a no-op while own143 awaits publication", () => {
   let polls = 0;
   let requests = 0;
   let now = 0;
-  const api = runInNewContext(source, { process: { env: {} }, URL })({
+  const api = spawnFactory( { process: { env: {} }, URL })({
     require, concatBytes: () => new Uint8Array(),
     native: {
       cwd: () => "/", hostCaps: { spawn: true }, hostSpawn: () => 2, hostClose: () => 0,
@@ -211,7 +248,7 @@ for (const [status, signal, name] of [[137, 9, "SIGKILL"], [137, 0, null], [143,
     let earlyClose = false;
     const requests: number[] = [];
     const closed: number[] = [];
-    const api = runInNewContext(source, { process: { env: {} }, URL })({
+    const api = spawnFactory( { process: { env: {} }, URL })({
       require, concatBytes: () => new Uint8Array(),
       native: {
         cwd: () => "/", hostCaps: { spawn: true }, hostSpawn: () => 2, now: () => 0,
@@ -238,5 +275,21 @@ for (const [status, signal, name] of [[137, 9, "SIGKILL"], [137, 0, null], [143,
     expect(metadataQueries).toBe(1);
     expect(earlyClose).toBe(false);
     expect(closed).toEqual([11, 2]);
+  });
+}
+
+for (const executable of ["bunx", "/bunx"]) {
+  test(`guest command normalization expands ${executable} into bun x`, () => {
+    let metadata: { executable: string; argv: string[] } | undefined;
+    const api = spawnFactory({ process: { env: {} }, URL })({
+      require,
+      native: { cwd: () => "/", hostCaps: { spawn: true },
+        hostSpawn(text: string) { metadata = JSON.parse(text); return -1; },
+        hostError: () => '{"message":"deliberate test stop","code":"EIO"}',
+      },
+    });
+    expect(() => api.spawn([executable, "fixture-cli"])).toThrow("deliberate test stop");
+    expect(metadata?.executable).toBe("bun");
+    expect(metadata?.argv).toEqual(["bun", "x", "fixture-cli"]);
   });
 }
