@@ -24,4 +24,11 @@ await check("nullish selectors", () => {
   for (const selector of [null, undefined]) assert.throws(() => new HTMLRewriter().on(selector, {}), { name: "TypeError", message: "Expected string" });
   assert.equal(new HTMLRewriter().on("null", { element(e) { e.setInnerContent("ok"); } }).transform("<null></null>"), "<null>ok</null>");
 });
+await check("response header snapshot", async () => {
+  const input = new Response("<p>x</p>", { headers: { "x-test": "before" } });
+  const output = new HTMLRewriter().on("p", { element() { input.headers.set("x-test", "after"); } }).transform(input);
+  assert.equal(output.headers.get("x-test"), "before");
+  assert.equal(input.headers.get("x-test"), "after");
+  assert.equal(await output.text(), "<p>x</p>");
+});
 assert.equal(failures, 0);
