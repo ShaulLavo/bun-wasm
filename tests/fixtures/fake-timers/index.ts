@@ -74,6 +74,16 @@ expect(await promised).toBe("promise");
 setImmediate(() => events.push("immediate"));
 vi.runAllTimers();
 expect(events.at(-1)).toBe("immediate");
+let immediateRuns = 0;
+function repeatImmediate() {
+  immediateRuns++;
+  if (immediateRuns < 3) setImmediate(repeatImmediate);
+}
+setImmediate(repeatImmediate);
+vi.runOnlyPendingTimers();
+expect(immediateRuns).toBe(1);
+vi.runAllTimers();
+expect(immediateRuns).toBe(3);
 
 let due = false;
 setTimeout(() => due = true, 10);

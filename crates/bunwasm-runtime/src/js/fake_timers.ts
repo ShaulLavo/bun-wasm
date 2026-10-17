@@ -158,7 +158,7 @@
     const current = activeClock();
     let ms = Number(delay);
     if (!(ms >= 1) || ms > 2147483647) ms = 1;
-    const duration = kind === "immediate" ? 0 : Math.max(Math.trunc(ms) * 1e6, current.firing ? 1e6 : 0);
+    const duration = Math.max(kind === "immediate" ? 0 : Math.trunc(ms) * 1e6, current.firing ? 1e6 : 0);
     return new FakeTimeout(current, kind, callback, args, duration);
   }
 
