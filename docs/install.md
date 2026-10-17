@@ -61,6 +61,15 @@ the graph is limited to 10,000 packages and 128 nesting levels.
 
 ## Workspaces, commands and migration
 
+These additions are verified on the native hosts and Node's headless engine host
+with a root preopen. Browser-page delivery is blocked by the shared filesystem's
+missing symbolic-link support. Packages with `bin` entries now need that capability
+when installation creates their command links. Do not enable this change in the
+page until the [filesystem prerequisite](../plans/browser-runtime.md#installer-filesystem-link-prerequisite)
+is complete. Node's native WASI also rejects some relative links under non-root
+preopens; the bounded upstream comparison records that limit.
+
+
 The installer discovers `workspaces` arrays and object-form `packages` patterns.
 Members are linked into `node_modules`. Local `link:` and directory `file:`
 dependencies resolve relative to the declaring manifest. Running `bun add` from
@@ -272,3 +281,54 @@ The esbuild package checks cover synchronous APIs and watch edits without an
 explicit rebuild request on every engine, including Chromium and WebKit pages.
 See [the package-check instructions](../tests/esbuild/README.md) for offline
 mirror requirements and the retained official package recording.
+
+## Installer command measurement, 2026-10-17
+
+The fixed [25-file selection](bun-test-suite/installer-files.txt) covers every
+workspace, manifest-header, lock-migration, update and bunx cause assigned by PR #40.
+Each unchanged upstream file has a 15-second deadline and 2-second initial test
+timeout, one worker, with loopback-only networking. The before artifacts are main
+`390bda6d`; both sides use the same suite, launcher, runner, host sources,
+dependencies and deadlines. Only the wasm hash differs within each engine pair.
+
+| Engine | Observed passes before / after | Fully passing files before / after | Timeouts before / after |
+|---|---|---|---|
+| quickjs | 18 / 109 | 0 / 3 | 0 / 0 |
+| jsc | 18 / 109 | 0 / 3 | 0 / 0 |
+| browser | 18 / 34 | 0 / 1 | 1 / 2 |
+
+| Cause | Files | QuickJS passes before / after | JSC passes before / after | Browser passes before / after |
+|---|---|---|---|---|
+| Workspaces | 9 | 3 / 73 | 3 / 73 | 3 / 3 |
+| Manifest Accept | 5 | 14 / 26 | 14 / 26 | 14 / 26 |
+| Lock migration | 4 | 1 / 9 | 1 / 9 | 1 / 4 |
+| Update | 4 | 0 / 0 | 0 / 0 | 0 / 0 |
+| Bunx | 3 | 0 / 1 | 0 / 1 | 0 / 1 |
+
+| Artifact | Before bytes | After bytes | Change |
+|---|---|---|---|
+| bun.wasm | 14959264 | 15060266 | +101002 |
+| bun-jsc.wasm | 51459316 | 51629740 | +170424 |
+| bun-browser.wasm | 14246896 | 14350056 | +103160 |
+
+These are observed counts. They include only tests that registered before a
+collection error or deadline. The browser counts have one additional timeout
+after the change. Its workspace files are blocked by native Node WASI link
+capabilities, so the browser and native pass gains are not interchangeable.
+Security scanners, interactive update tables, global links, additional lockfile
+protocols and exact upstream diagnostics remain outside this adapter.
+
+The focused synthetic checks pass on each engine: 20 existing installer cases,
+the update-pruning regression, and seven installer/command scenarios. Standard
+runtime fixtures pass 201/201 per engine. The full web script passes, including
+817 unit tests and Chromium/WebKit checks; HMR passes all six engine/browser
+combinations. The separate `browser-installer-links.ts` scenario checks the
+browser-page filesystem prerequisite instead of treating headless results as
+proof of page support.
+
+The focused Chromium page probe confirmed the prerequisite: installing a plain
+fixture package succeeds; adding a valid `bin` entry and reinstalling exits 1
+with `error: Not supported (os error 58)`. The guest reads back the edited manifest
+before the failing install, and every network request stays on the local fixture
+origins. This change is not ready for browser-page delivery until the shared
+filesystem supports those links.

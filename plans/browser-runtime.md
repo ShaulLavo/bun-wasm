@@ -340,3 +340,59 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
   audit of `web/src`.
 - brush-web `plans/001-brush-dev-shell.md`, `plans/004-own-shell.md` and `docs/external-commands.md`.
 - Spike reports: `/work/reports/browser-runtime/spikes/`.
+
+
+## Installer filesystem link prerequisite
+
+Status: Approved. Coordinate with the waffle extraction before landing the installer changes.
+
+Workspace installs and package command entries need symbolic links. The native
+installer and root-preopen Node-host fixtures pass, but the page filesystem only
+models files and directories (`runtime/fs/memory.ts`, `Node`). Its preview1
+adapter explicitly returns `ENOTSUP` from `path_symlink` and rejects readlink
+because the filesystem has no links (`runtime/core/wasi.ts:633`, `:619`). Enabling
+package binary creation before this prerequisite makes a browser-page install
+fail after extracting an otherwise valid package.
+
+Run the focused page scenario after building the web app and all wasm artifacts:
+
+```sh
+source env.sh
+PLAYWRIGHT=/home/shaul/.local/share/mise/installs/npm-playwright/1.63.0/node_modules/.mise/playwright@1.63.0/node_modules/playwright/index.mjs \
+  node web/tests/browser-installer-links.ts
+```
+
+Use the heavy wrapper's browser class on this host. The scenario serves only a
+local fixture registry, installs a package successfully, adds a valid `bin` entry
+to its manifest, checks that entry from the guest, then reinstalls and requires
+success. Its session owns browser, listener and scratch cleanup.
+
+Implement relative symbolic links through the filesystem model, service protocol,
+shared metadata, persistence and preview1 operations. Preserve the raw link target
+for readlink, follow intermediate links when resolving paths, honor final-component
+follow flags, bound cycles, and keep directory capability boundaries intact. A
+workspace must remain live after source edits; copied package directories are not
+an equivalent fix. Package command entries must select the actual entry file so
+its argv, module directory and main-module identity stay correct.
+
+Keep the existing hardlink, rename/unlink identity, descriptor transfer, worker
+revocation and persistence tests. Add single-root and non-root preopen cases,
+scoped package bins, workspace cycles, dangling links, lstat/readlink versus stat,
+and persistence/reload coverage. Rerun the focused page scenario on Chromium and
+WebKit across all engines, then the complete runtime, web and HMR gates.
+
+The headless browser comparison has a separate native Node WASI limitation. In
+`cli/install/bun-install-link-path.test.ts`, a normal relative workspace link under
+`/tmp` reports `Capabilities insufficient (os error 76)` on Node, while native
+QuickJS/JSC proceed to later diagnostic assertions. Reproduce with
+`scripts/bun-suite.sh --engine browser --jobs 1 --timeout 15 --network loopback
+cli/install/bun-install-link-path.test.ts --output <fresh-json>`. Isolate this in a
+small WASI-only control before preparing an upstream Node report or changing the
+Node host. Do not replace workspace links with stale copies or claim that the
+single-root fixture establishes multi-preopen conformance.
+
+The focused Chromium/browser probe was run on 2026-10-17. Plain installation
+exited 0; the guest confirmed `bin["is-odd"] === "index.js"`; the next install
+exited 1 with `error: Not supported (os error 58)`. The failure is at the
+filesystem prerequisite, not at registry resolution or tarball extraction.
+Evidence is retained with the installer lane's measured before/after results.
