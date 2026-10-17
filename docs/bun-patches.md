@@ -14,8 +14,6 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [Lint and format command adapters](#lint-and-format-commands) | Port | Compile Bun's native linter, formatter, CLI parsers, and Yarr regex bindings for WASI. |
-| [Lint process environment](#lint-process-environment) | Host feature | Original adapters bound configuration workers and their output, reserve internal capacity, and register object modules. |
 | [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, async handler dispatch and streaming wrappers on all engines. |
 | [X509Certificate adapters](#x509certificate) | Host feature | Original BoringSSL data bindings and Node certificate wrapper over existing KeyObjects. |
 | [X.509 hostname option matcher](#x509-hostname-option-matcher) | Port | Adapt Bun's OpenSSL-compatible Rust matcher because BoringSSL removed four option behaviors. |
@@ -61,6 +59,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`vendor/bun/vendor/rust-argon2`, inherited patch](#nested-bun-dependencies) | Host feature | Preserve Bun's low-memory Argon2 hash verification behavior. |
 | [`crates/bunwasm-glue/src/bun_native.rs`](#copied-and-generated-bun-source) | Port | Replace standalone parser base64 and zlib stubs with working Rust implementations. |
 | [`crates/bunwasm-build/src/lib.rs`](#build-command) | Port | Extract Bun's build command from its JSC runtime. |
+| [Lint and format command adapters](#lint-and-format-commands) | Port | Compile Bun's native linter, formatter, CLI parsers, and Yarr regex bindings for WASI. |
+| [Lint process environment](#lint-process-environment) | Host feature | Original adapters bound configuration workers and their output, reserve internal capacity, and register object modules. |
 | [`crates/bunwasm-build/src/dev_server/facade.rs`, `crates/bunwasm-build/src/dev_server/graph.rs`, `crates/bunwasm-build/src/dev_server/finalize.rs`](#bake-graph-adaptations) | Port | Adapt bake's graph owner, context types, and bundle finalization to synchronous WASI. |
 | [`crates/bunwasm-build/generated/bake.client.js`, `crates/bunwasm-build/generated/bake.error.js`](#generated-bake-clients) | Port | Embed Bun's generated browser HMR client and error overlay. |
 | [`crates/bunwasm-transpiler/src/lib.rs`, source-map collector](#transpiler-source-map-collector) | Port | Retain Bun's small printer callback outside its runtime crate. |
