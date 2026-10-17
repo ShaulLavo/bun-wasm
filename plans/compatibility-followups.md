@@ -815,3 +815,20 @@ The browser limitations are a non-configurable constructor accessor; a read-only
 `test-promise-intrinsics` retains immutable constructor/species, frozen inherited constructors on non-extensible promises, and missing-prototype-chain cases as browser-only TODOs, while QuickJS/JSC execute the same checks using native reaction APIs. The browser diagnostic test uses a rejection handler attached before locking the constructor to verify the message and zero getter calls. Reproduce via `scripts/test.sh --engine browser test-promise-intrinsics`; inspect the TODO lines rather than treating them as passing coverage. Helper units cover descriptor restoration, global species patches, ordinary frozen promises, exact fulfilled identity and job ordering. Evidence and a fresh-wrapper impossibility control are retained in `/work/reports/bun-wasm-small-causes/browser-constructor-fix/`.
 
 The coordinator owns any future embedding capability and retained evidence cleanup after re-review. Do not filter rejection notifications to hide these limitations. Preserve the existing observer identity and falsy-rejection controls.
+
+## WebKit OPFS reload after closing its owner
+
+Status: Approved for the Waffle filesystem track. Capture the failure state before choosing a fix.
+
+During PR #67 verification on main `25d437af`, `scripts/test-web.sh` failed once at
+`web/tests/browser-filesystem-lifecycle.ts:249`: after closing the OPFS owner tab
+and reloading the blocked tab, `state().ready` was `false` instead of `true`.
+The unchanged isolated WebKit rerun and the OPFS phase of the next full run passed.
+The installed Waffle pin was `95ebf29a96cb0c967924071e4c68c6b02bf3ff5a`.
+Reproduce with `bun web/tests/browser-filesystem-lifecycle.ts webkit` through the
+heavy queue, using the installed Playwright path. Capture `state().error` and
+filesystem teardown acknowledgements around owner close. Waffle `fs/opfs.ts:108`
+refuses an unavailable writer lock; `fs/opfs.ts:187` closes its owner. A delayed
+lock release is a candidate, not a confirmed cause. No runtime change or retry
+was added. Evidence is in `/work/reports/bun-wasm-web-worker/waffle-final/`;
+the coordinator removes it after PR acceptance and this observation is triaged.
