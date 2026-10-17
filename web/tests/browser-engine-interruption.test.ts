@@ -211,7 +211,7 @@ test("CLI validation failure writes ENGINE_INTERRUPTION_OUTPUT without launching
   let child: ReturnType<typeof Bun.spawn> | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
-    directory = await mkdtemp(join(process.env.TMPDIR ?? (process.platform === "linux" ? "/work/tmp" : tmpdir()), "bun-wasm-runner-test-"));
+    directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-runner-test-"));
     const output = join(directory, "report.json");
     child = Bun.spawn([process.execPath, join(import.meta.dir, "browser-engine-interruption.ts"), "invalid-browser-for-test"], {
       stdout: "ignore", stderr: "ignore", env: { ...process.env, ENGINE_INTERRUPTION_OUTPUT: output },
