@@ -2,7 +2,7 @@ import { installNativeStreamState } from "./native-stream-state.ts";
 import { oversizedCryptoInput } from "./crypto-inputs.js";
 import { installHostCrypto } from "./crypto-host.js";
 import { memoryViews } from "../../runtime/core/memory-views.js";
-import { transferArrayBuffers } from "./buffer-transfer.ts";
+import { isWasmMemoryBuffer, transferArrayBuffers } from "./buffer-transfer.ts";
 import { ContentModules } from "./content-modules.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
@@ -454,7 +454,7 @@ class EngineHost {
       promiseState: (p) => (host.promiseStates.get(p) || PENDING).state,
       promiseResult: (p) => (host.promiseStates.get(p) || PENDING).value,
       isProxy: () => false,
-      transferArrayBuffers,
+      transferArrayBuffers, isWasmMemoryBuffer,
       getProxyTarget: () => undefined,
       isPromise: (v) => v instanceof Promise,
       isError: (v) => (typeof Error.isError === "function" ? Error.isError(v) : v instanceof Error),

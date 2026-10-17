@@ -1,5 +1,47 @@
 # Compatibility follow-ups
 
+## Global Web Worker census
+
+Status: Approved.
+
+The global constructor passes its lifecycle, transfer, preload, dependency-loading,
+and top-level-await fixtures on all engines and in Chromium/WebKit. The eleven
+upstream cause files now pass three files per engine. The
+[measurement](../docs/worker-threads.md#global-constructor-measurement) records exact
+counts and provenance. Reproduce through the suite slot with
+`scripts/measure-web-workers.sh <engine> <fresh-output.json>` after private builds.
+Raw logs are in `/work/reports/bun-wasm-web-worker/final/after-<engine>-logs/`.
+
+- `worker-fixture-env.js` posts `process.env`, but `worker_codec.ts` rejects its
+  Proxy representation with `DataCloneError`. Give the native environment object
+  an explicit serialization contract without allowing arbitrary proxies.
+- `worker.test.ts` requests `--no-deprecation` and `--tls-min-v1.2`; the
+  `worker_threads.ts::execArguments` validator rejects them. Implement their
+  runtime behavior before accepting them. VM timeout cases require `node:vm`,
+  not changes to Worker delivery. The final run completes the entire worker file
+  on every engine; earlier scheduling-related file timeouts are resolved by main.
+- `worker-entry-point.test.ts` receives its error event for a builtin alias, but
+  the guest additionally prints the generated throw to stderr. The too-long
+  entry-path case receives the shared loader's diagnostic instead of Bun's
+  `BuildMessage` text. Trace `web_worker.ts::target` and bootstrap fatal reporting
+  together; retain ordinary explicit worker stderr.
+- `worker_blob.test.ts` has four passes and two failures. Construction currently
+  snapshots a local Blob, so immediate revocation does not cancel startup.
+  A URL created in another guest is absent from the local Map. Add a broker-owned
+  registry and its lookup/revocation lifetime rather than copying registry state.
+- BroadcastChannel GC stress and several termination cases exceed the existing
+  four-child host budget. Shared buffers/Atomics cannot cross guests. Preserve
+  those limits until the transport supplies actual sharing and capacity.
+  BroadcastChannel close-task ordering and custom inspection failures also
+  predate the constructor; their diagnostics remain in the same raw census.
+
+An earlier combined browser run lost three previously passing Node lifetime
+assertions to `EAGAIN` after stress cases. All three pass in a fresh same-artifact
+diagnostic; the final unfiltered comparison loses no observed passing assertions.
+Do not treat unavailable heap counters as evidence of leak freedom. The
+coordinator owns removal of these review records after accepting the follow-up
+evidence.
+
 Status: Approved
 
 ## YAML stringify: throwing Symbol.toPrimitive on a boxed primitive

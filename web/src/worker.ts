@@ -110,6 +110,7 @@ export type WorkerMessage =
 export type SleepMode = "atomics" | "busy-wait";
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
+const hostPostMessage = ctx.postMessage.bind(ctx);
 
 const sleepCell = ctx.crossOriginIsolated && typeof SharedArrayBuffer === "function" ? new Int32Array(new SharedArrayBuffer(4)) : null;
 const sleepMode: SleepMode = sleepCell ? "atomics" : "busy-wait";
@@ -143,7 +144,7 @@ function guestEnv(req: RunRequest): Record<string, string> {
   return { ...req.env, BUN_WASM_STACK_KIB: kib };
 }
 
-const sendNet = (req: NetRequest, transfer: Transferable[] = []) => ctx.postMessage({ type: "net", req } satisfies WorkerMessage, transfer);
+const sendNet = (req: NetRequest, transfer: Transferable[] = []) => hostPostMessage({ type: "net", req } satisfies WorkerMessage, transfer);
 
 /** `Name: message` plus the first stack frames (wasm function names when the build keeps them). */
 function describeError(err: unknown): string {
@@ -154,7 +155,7 @@ function describeError(err: unknown): string {
 }
 
 ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
-  ctx.postMessage({ type: "phase", name: "worker-start", duration: 0 } satisfies WorkerMessage);
+  hostPostMessage({ type: "phase", name: "worker-start", duration: 0 } satisfies WorkerMessage);
   const req = event.data;
   const fs = new FilesystemClient(req.filesystem);
   let runtimeProcess: WorkerProcessClient | null = null;
@@ -180,7 +181,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     revokeFilesystem(fs.connection);
     // Without shared memory the page cannot observe logical death if guest JS catches this
     // unwind and never completes. This notice is not an acknowledgement of released references.
-    if (!outcome && winner.kind === "signaled") ctx.postMessage({ type: "default-signal", signal: winner.code } satisfies WorkerMessage);
+    if (!outcome && winner.kind === "signaled") hostPostMessage({ type: "default-signal", signal: winner.code } satisfies WorkerMessage);
     throw new DefaultSignal(signal);
   };
   const checkActive = () => {
@@ -210,7 +211,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
       child.finish(ownCode, ownSignal);
       const winner = readOutcome(outcome!)!;
       // A completion word alone does not prove the worker released filesystem references.
-      ctx.postMessage({ type: "exit", code: winner.status, signal: winner.kind === "signaled" ? winner.code : undefined, sleep: sleepMode } satisfies WorkerMessage);
+      hostPostMessage({ type: "exit", code: winner.status, signal: winner.kind === "signaled" ? winner.code : undefined, sleep: sleepMode } satisfies WorkerMessage);
       return;
     }
     const winner = claim(ownSignal === undefined ? { kind: "exited", code: ownCode } : { kind: "signaled", code: ownSignal });
@@ -220,12 +221,12 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     fs.dispose();
     runtimeProcess?.exit(code);
     if ("code" in result || settled || winner.kind === "signaled") {
-      ctx.postMessage({ type: "exit", code, signal, sleep: sleepMode } satisfies WorkerMessage);
+      hostPostMessage({ type: "exit", code, signal, sleep: sleepMode } satisfies WorkerMessage);
       return;
     }
     const err = result.error;
     const message = describeError(err);
-    ctx.postMessage({ type: "error", code, message, sleep: sleepMode } satisfies WorkerMessage);
+    hostPostMessage({ type: "error", code, message, sleep: sleepMode } satisfies WorkerMessage);
   };
   try {
     const runtime = req.runtimeProcess ? await import("../../runtime/proc/worker-client") : null;
@@ -248,7 +249,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     const post = (type: "stdout" | "stderr", data: Uint8Array) => {
       if (stdio) return stdio[type === "stderr" ? 2 : 1].write([data]) === data.length;
       checkActive();
-      ctx.postMessage({ type, data }, [data.buffer]);
+      hostPostMessage({ type, data }, [data.buffer]);
       return true;
     };
     subprocess = isolated ? new SubprocessHost({
@@ -264,7 +265,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
       token: req.child?.token,
       stdin: req.child?.pipes[0],
       revoked,
-      onChildClose: pid => ctx.postMessage({ type: "child-close", pid, parentPid: runtimeState?.pid ?? req.child?.pid ?? req.pid ?? 1 } satisfies WorkerMessage),
+      onChildClose: pid => hostPostMessage({ type: "child-close", pid, parentPid: runtimeState?.pid ?? req.child?.pid ?? req.pid ?? 1 } satisfies WorkerMessage),
       output: (fd, data) => post(fd === 2 ? "stderr" : "stdout", data),
       launch: (meta, transport) => {
         const cwd = meta.cwd || req.env.PWD || "/";
@@ -278,7 +279,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
           env: { ...meta.env, PWD: cwd }, filesystem, child: transport,
           trace: req.trace, slots: req.slots, spawnBroker: true,
         };
-        ctx.postMessage({ type: "spawn", request } satisfies WorkerMessage);
+        hostPostMessage({ type: "spawn", request } satisfies WorkerMessage);
         const control = new Int32Array(transport.control, 0, 4);
         return {
           revoke: () => { revokeFilesystem(filesystem); fs.sweep(); },
@@ -314,7 +315,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
       const { ProcessABI, ProcessSignalExit } = await import("../../runtime/proc/abi");
       const { createRuntimeTerminalCodec } = await import("./runtime-terminals");
       processSignalExit = ProcessSignalExit;
-      const postMessage = (message: WorkerProcessMessage) => ctx.postMessage(message);
+      const postMessage = (message: WorkerProcessMessage) => hostPostMessage(message);
       const pipes = new WorkerPipeHost({
         transport: req.runtimeProcess, postMessage,
         fallback: createRuntimeTerminalCodec({ fallback: createFilesystemDescriptorCodec(fs),
@@ -353,7 +354,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     }
     const instantiating = perfNow();
     instance = new WebAssembly.Instance(req.module, wasi.imports(req.module));
-    ctx.postMessage({ type: "phase", name: "instantiate", duration: perfNow() - instantiating } satisfies WorkerMessage);
+    hostPostMessage({ type: "phase", name: "instantiate", duration: perfNow() - instantiating } satisfies WorkerMessage);
     const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
     const netHost = req.net ? new NetHost(req.net, sendNet, (path, bytes) => fs.writeFile(path, bytes)) : null;
     if (slots !== "off") {
