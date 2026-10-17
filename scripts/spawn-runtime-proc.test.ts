@@ -15,27 +15,45 @@ const EAGAIN = -6;
 const ENOENT = -44;
 
 interface FakePipe { chunks: Uint8Array[]; readers: number; writers: number }
+// Canonical runtime_proc.wait results, not shell-style 128 + signal exit statuses.
+type ProcessExit = [kind: 0, code: number] | [kind: 1, signal: number];
 interface FakeChild {
-  pid: number; job: number; request: Record<string, any>; status: [number, number] | null;
-  held: Map<number, { pipe: FakePipe; write: boolean }>; reaped: boolean;
+  pid: number; job: number; request: Record<string, any>;
+  selected: ProcessExit | null; status: ProcessExit | null;
+  held: Map<number, { pipe: FakePipe; write: boolean }>; reaped: boolean; liveDescendants: number;
+}
+interface ServiceOptions {
+  failSpawn?: number;
+  now?: () => number;
+  onSpawn?(child: FakeChild): void;
+  onPoll?(turn: number): void;
 }
 
-function service(options: { failSpawn?: number } = {}) {
+function service(options: ServiceOptions = {}) {
   const pipes = new Map<number, { pipe: FakePipe; write: boolean }>();
   const children = new Map<number, FakeChild>();
   const calls: string[] = [];
   let next = 5;
   let pid = 100;
+  let polls = 0;
   const release = (entry: { pipe: FakePipe; write: boolean }) => { if (entry.write) entry.pipe.writers--; else entry.pipe.readers--; };
   const retain = (entry: { pipe: FakePipe; write: boolean }) => { if (entry.write) entry.pipe.writers++; else entry.pipe.readers++; };
-  const stop = (child: FakeChild, kind: number, code: number) => {
+  const select = (child: FakeChild, outcome: ProcessExit) => { child.selected ??= outcome; };
+  // Selection wins races immediately; publication follows guest teardown and releases its pipes.
+  const publish = (child: FakeChild) => {
     if (child.status) return;
-    child.status = [kind, code];
+    if (!child.selected) throw new Error("cannot publish an unselected process outcome");
+    child.status = child.selected;
     for (const entry of child.held.values()) release(entry);
     child.held.clear();
   };
+  const stop = (child: FakeChild, outcome: ProcessExit) => {
+    if (child.selected) return;
+    select(child, outcome);
+    publish(child);
+  };
   const native: Record<string, any> = {
-    hostCaps: { proc_spawn: true }, cwd: () => "/work", now: () => Date.now(),
+    hostCaps: { proc_spawn: true }, cwd: () => "/work", now: options.now ?? (() => Date.now()),
     stat(path: string) {
       if (["/", "/work", "/tmp"].includes(path)) return { mode: 0o040755 };
       if (path === "/work/file.txt") return { mode: 0o100644 };
@@ -59,7 +77,7 @@ function service(options: { failSpawn?: number } = {}) {
       calls.push("spawn");
       if (options.failSpawn) return options.failSpawn;
       const request = JSON.parse(json);
-      const child: FakeChild = { pid: pid++, job: 7 + children.size, request, status: null, held: new Map(), reaped: false };
+      const child: FakeChild = { pid: pid++, job: 7 + children.size, request, selected: null, status: null, held: new Map(), reaped: false, liveDescendants: 0 };
       for (const { child: number, parent } of request.fds) {
         const entry = pipes.get(parent);
         if (!entry) continue; // inherited stdio: not a pipe
@@ -67,6 +85,7 @@ function service(options: { failSpawn?: number } = {}) {
         child.held.set(number, entry);
       }
       children.set(child.pid, child);
+      options.onSpawn?.(child);
       return child.pid;
     },
     ownJob: 3,
@@ -93,28 +112,39 @@ function service(options: { failSpawn?: number } = {}) {
     procWaitJob(job: number) {
       const child = Array.from(children.values()).find((candidate) => candidate.job === job);
       if (!child || child.reaped) return -12;
-      if (!child.status) return EAGAIN;
+      if (!child.status || child.liveDescendants > 0) return EAGAIN;
       child.reaped = true;
       calls.push("reap");
       return child.status[0] ? 128 + child.status[1] : child.status[1];
     },
     procKill(id: number, signal: number) {
+      calls.push(`kill:${signal}`);
       const child = children.get(id);
       if (!child) return -71;
-      stop(child, 1, signal);
+      stop(child, [1, signal]);
       return 0;
     },
     procKillJob(job: number, signal: number) {
+      calls.push(`killJob:${signal}`);
       const child = Array.from(children.values()).find((candidate) => candidate.job === job);
       if (!child) return -71;
-      stop(child, 1, signal);
+      stop(child, [1, signal]);
       return 0;
     },
-    procPoll(subscriptions: Uint8Array) { calls.push(`poll:${subscriptions.length / 16}`); return new Uint8Array(0); },
+    procPoll(subscriptions: Uint8Array) {
+      calls.push(`poll:${subscriptions.length / 16}`);
+      options.onPoll?.(++polls);
+      return new Uint8Array(0);
+    },
   };
   return {
-    native, calls, children, pipes,
-    exit(child: FakeChild, code: number) { stop(child, 0, code); },
+    native, calls, children, pipes, select, publish,
+    exit(child: FakeChild, code: number) { select(child, [0, code]); publish(child); },
+    childClose(child: FakeChild, fd: number) {
+      const entry = child.held.get(fd)!;
+      child.held.delete(fd);
+      release(entry);
+    },
     /** What a child process would write to its descriptor. */
     childWrite(child: FakeChild, fd: number, text: string) {
       const entry = child.held.get(fd)!;
@@ -129,7 +159,13 @@ function service(options: { failSpawn?: number } = {}) {
   };
 }
 
-function load(fake: ReturnType<typeof service>) {
+interface TestTimers {
+  setTimeout(callback: () => void, delay: number): unknown;
+  clearTimeout(handle: unknown): void;
+  setImmediate: typeof setImmediate;
+}
+
+function load(fake: ReturnType<typeof service>, options: { timers?: TestTimers } = {}) {
   const waiters: any[] = [];
   const factory = runInNewContext(source, {
     ReadableStream, Response, URL, TextEncoder, TextDecoder, Promise,
@@ -139,7 +175,7 @@ function load(fake: ReturnType<typeof service>) {
   const internal = {
     native: fake.native,
     web: { ReadableStream, Response },
-    realTimers: { setTimeout, clearTimeout, setImmediate },
+    realTimers: options.timers ?? { setTimeout, clearTimeout, setImmediate },
     toUint8: (value: ArrayBufferView) => new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
     concatBytes: (chunks: Uint8Array[]) => Buffer.concat(chunks),
     nextTick: (callback: () => void) => queueMicrotask(callback),
@@ -151,18 +187,28 @@ function load(fake: ReturnType<typeof service>) {
     },
   };
   const module = factory(internal);
+  /** Match pumpIo: remove a throwing waiter before handing the error to its fail handler. */
+  const pumpTurn = () => {
+    for (const waiter of waiters.slice()) {
+      try {
+        if (waiter.step() === true) waiters.splice(waiters.indexOf(waiter), 1);
+      } catch (error) {
+        waiters.splice(waiters.indexOf(waiter), 1);
+        if (waiter.fail) waiter.fail(error);
+        else throw error;
+      }
+    }
+  };
   /** Runs every waiter's step until it finishes, like the event loop's pumpIo. */
   const pump = async (limit = 50) => {
     for (let turn = 0; turn < limit; turn++) {
-      for (const waiter of waiters.slice()) {
-        if (waiter.step() === true) waiters.splice(waiters.indexOf(waiter), 1);
-      }
+      pumpTurn();
       await Promise.resolve();
       if (!waiters.length) return;
     }
     throw new Error("waiters did not finish");
   };
-  return { module, waiters, pump };
+  return { module, waiters, pump, pumpTurn };
 }
 
 function decode(subscriptions: Uint8Array) {
@@ -379,6 +425,350 @@ for (const ownCode of [23, 143]) test(`a handled TERM keeps the guest's own exit
   expect(child.signalCode).toBeNull();
   expect(child.killed).toBe(true);
 });
+
+test("Bun child.kill accepts all standard Linux signal names and aliases", async () => {
+  const namedSignals: Record<string, number> = {
+    SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGIOT: 6,
+    SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12,
+    SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGSTKFLT: 16, SIGCHLD: 17, SIGCONT: 18,
+    SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24,
+    SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 29, SIGPOLL: 29,
+    SIGPWR: 30, SIGSYS: 31,
+  };
+  for (const [name, number] of Object.entries(namedSignals)) for (const spelling of [name, name.toLowerCase()]) {
+    const fake = service();
+    const { module, pump } = load(fake);
+    const child = module.spawn(["bun", "named-signal"], { stdout: "pipe" });
+    child.kill(spelling);
+    // The service fixture accepts requests here; host disposition/unsupported-stop policy is separate.
+    expect(fake.calls.filter((call) => call.startsWith("kill:"))).toEqual([`kill:${number}`]);
+    await pump();
+    expect(await child.exited).toBe(128 + number);
+    expect(child.exitCode).toBeNull();
+    expect(child.signalCode).toBe(name === "SIGIOT" ? "SIGABRT" : name === "SIGPOLL" ? "SIGIO" : name);
+    expect(fake.open()).toBe(0);
+  }
+});
+
+for (const timeout of [0, 1]) {
+  test(`spawnSync returns before detached descendants finish (timeout ${timeout})`, async () => {
+    let now = 0;
+    const fake = service({
+      now: () => now++,
+      onSpawn(record) {
+        record.liveDescendants = 1; // An independently redirected grandchild still belongs to the job.
+        if (!timeout) fake.exit(record, 0);
+      },
+      onPoll(turn) {
+        // Only the timeout path needs a child-exit poll; JOB_EMPTY must never block this call.
+        expect(timeout).toBe(1);
+        expect(turn).toBe(1);
+      },
+    });
+    const { module, waiters, pump } = load(fake);
+    const result = module.spawnSync(["bun", "detached-leader"], {
+      detached: true, stdio: ["inherit", "inherit", "inherit"], timeout, killSignal: "SIGKILL",
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.exitCode).toBe(timeout ? null : 0);
+    expect(result.signalCode).toBe(timeout ? "SIGKILL" : null);
+    expect(result.exitedDueToTimeout).toBe(Boolean(timeout));
+    const record = fake.children.get(result.pid)!;
+    expect(record.reaped).toBe(false);
+    expect(waiters).toHaveLength(1);
+    expect(waiters[0].ref).toBe(false);
+    expect(decode(waiters[0].subscriptions())).toEqual([[4, record.job]]);
+    expect(fake.calls.filter((call) => call.startsWith("killJob:"))).toEqual([]);
+    record.liveDescendants = 0;
+    await pump();
+    expect(record.reaped).toBe(true);
+    expect(waiters).toHaveLength(0);
+    expect(fake.open()).toBe(0);
+  });
+}
+
+test("async detached completion hands surviving descendants to an unref'd reaper", async () => {
+  const fake = service();
+  const { module, waiters, pump, pumpTurn } = load(fake);
+  const child = module.spawn(["bun", "detached-leader"], { detached: true, stdout: "pipe" });
+  const record = fake.children.get(child.pid)!;
+  record.liveDescendants = 1;
+  fake.exit(record, 0);
+  pumpTurn();
+  expect(await child.exited).toBe(0);
+  expect(waiters).toHaveLength(1);
+  expect(waiters[0].ref).toBe(false);
+  expect(decode(waiters[0].subscriptions())).toEqual([[4, record.job]]);
+  expect(record.reaped).toBe(false);
+  expect(fake.open()).toBe(0);
+  expect(fake.calls.filter((call) => call.startsWith("kill"))).toEqual([]);
+  record.liveDescendants = 0;
+  await pump();
+  expect(record.reaped).toBe(true);
+  expect(waiters).toHaveLength(0);
+});
+
+test("queued stdin EPIPE drops input without abandoning the still-running child", async () => {
+  const fake = service();
+  const { module, pump, pumpTurn, waiters } = load(fake);
+  const child = module.spawn(["bun", "closes-stdin"], { stdin: "pipe", stdout: "pipe" });
+  const record = fake.children.get(child.pid)!;
+  const write = fake.native.procWrite;
+  fake.native.procWrite = () => EAGAIN;
+  child.stdin.write("queued input");
+  fake.childClose(record, 0);
+  fake.native.procWrite = write;
+  pumpTurn();
+  expect(record.status).toBeNull();
+  expect(child.stdin.closed).toBe(true);
+  expect(waiters).toHaveLength(1);
+  expect(fake.calls.filter((call) => call.startsWith("kill"))).toEqual([]);
+  fake.childWrite(record, 1, "still running");
+  fake.exit(record, 23);
+  await pump();
+  expect(await child.exited).toBe(23);
+  expect(child.exitCode).toBe(23);
+  expect(await child.stdout.text()).toBe("still running");
+  expect(fake.open()).toBe(0);
+  expect(waiters).toHaveLength(0);
+});
+
+for (const detached of [false, true]) for (const failure of ["read", "write"]) {
+  test(`async ${failure} failure terminates and observes the child (detached ${detached})`, async () => {
+    const fake = service();
+    const timers = new Map<unknown, () => void>();
+    const { module, pump, pumpTurn, waiters } = load(fake, { timers: {
+      setTimeout(callback) { const handle = {}; timers.set(handle, callback); return handle; },
+      clearTimeout(handle) { timers.delete(handle); },
+      setImmediate,
+    } });
+    const controller = new AbortController();
+    const removedListeners: string[] = [];
+    const removeListener = controller.signal.removeEventListener.bind(controller.signal);
+    controller.signal.removeEventListener = (type, listener, options) => {
+      removedListeners.push(type);
+      removeListener(type, listener, options);
+    };
+    let onExit = 0;
+    const child = module.spawn(["bun", "io-failure"], {
+      detached, stdin: "pipe", stdout: "pipe", timeout: 10, signal: controller.signal,
+      onExit() { onExit++; },
+    });
+    expect(timers.size).toBe(1);
+    const record = fake.children.get(child.pid)!;
+    // Hold the selected death until explicitly published, just as teardown can on real hosts.
+    const kill = detached ? fake.native.procKillJob : fake.native.procKill;
+    const request = (id: number, signal: number) => {
+      fake.select(record, [1, signal]);
+      return kill(id, signal);
+    };
+    if (detached) fake.native.procKillJob = request;
+    else fake.native.procKill = request;
+    if (failure === "write") {
+      fake.native.procWrite = () => EAGAIN;
+      child.stdin.write("queued input");
+      fake.native.procWrite = () => -29;
+    } else fake.native.procRead = () => -29;
+    // Attach handlers without entering Bun's pending-promise matcher before the manual pump.
+    const rejected = child.exited.catch((error: unknown) => error);
+    const outputError = child.stdout.getReader().read().catch((error: unknown) => error);
+    pumpTurn();
+    expect(await rejected).toMatchObject({ code: "EIO", syscall: failure });
+    expect(await outputError).toMatchObject({ code: "EIO" });
+    expect(timers.size).toBe(0);
+    expect(removedListeners).toEqual(["abort"]);
+    controller.abort();
+    expect(onExit).toBe(0);
+    expect(record.selected).toEqual([1, 9]);
+    expect(record.status).toBeNull();
+    expect(fake.calls.filter((call) => call.startsWith("kill"))).toEqual([detached ? "killJob:9" : "kill:9"]);
+    expect(fake.open()).toBe(0);
+    expect(waiters).toHaveLength(1);
+    expect(waiters[0].ref).toBe(false);
+    expect(decode(waiters[0].subscriptions())).toEqual([[2, child.pid]]);
+    fake.publish(record);
+    await pump();
+    expect(onExit).toBe(0); // Cleanup must not report a second, successful public completion.
+    expect(record.reaped).toBe(detached);
+    expect(waiters).toHaveLength(0);
+    expect(fake.open()).toBe(0);
+  });
+}
+
+for (const ownCode of [23, 137, 143]) for (const acceptance of [0, -71]) {
+  test(`a late SIGKILL returning ${acceptance} preserves ordinary exit ${ownCode}`, async () => {
+    const fake = service();
+    const { module, pump, waiters } = load(fake);
+    const kill = fake.native.procKill;
+    fake.native.procKill = (pid: number, signal: number) => {
+      // The guest selects and publishes its own exit between the alive check and kill.
+      fake.exit(fake.children.get(pid)!, ownCode);
+      kill(pid, signal);
+      return acceptance;
+    };
+    const child = module.spawn(["bun", "late-kill"], { stdout: "pipe" });
+    expect(() => child.kill("SIGKILL")).not.toThrow();
+    await pump();
+    expect(await child.exited).toBe(ownCode);
+    expect(child.exitCode).toBe(ownCode);
+    expect(child.signalCode).toBeNull();
+    expect(child.killed).toBe(acceptance === 0);
+    expect(fake.calls.filter((call) => call.startsWith("kill:"))).toEqual(["kill:9"]);
+    expect(waiters).toHaveLength(0);
+    expect(fake.open()).toBe(0);
+  });
+}
+
+test("spawnSync timeout SIGKILL losing to ordinary exit 143 does not relabel it", () => {
+  let now = 0;
+  const fake = service({ now: () => now++ });
+  const { module } = load(fake);
+  const kill = fake.native.procKill;
+  fake.native.procKill = (pid: number, signal: number) => {
+    fake.exit(fake.children.get(pid)!, 143);
+    kill(pid, signal);
+    return -71; // runtime_proc ESRCH, not a legacy child-slot errno
+  };
+  const result = module.spawnSync(["bun", "late-timeout"], { timeout: 1, killSignal: "SIGKILL" });
+  expect(result.error).toBeUndefined();
+  expect(result.exitedDueToTimeout).toBe(true);
+  expect(result.exitCode).toBe(143);
+  expect(result.signalCode).toBeNull();
+  expect(result.success).toBe(false);
+  expect(fake.calls.filter((call) => call.startsWith("kill:"))).toEqual(["kill:9"]);
+  expect(fake.open()).toBe(0);
+});
+
+test("async SIGKILL cannot overwrite ordinary exit 143 while publication is delayed", async () => {
+  const fake = service({ onSpawn(record) { fake.select(record, [0, 143]); } });
+  const { module, pump, waiters } = load(fake);
+  const exits: unknown[][] = [];
+  const child = module.spawn(["bun", "delayed-exit"], {
+    stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    onExit(_child: unknown, exitCode: number | null, signalCode: string | null, error: unknown) {
+      exits.push([exitCode, signalCode, error]);
+    },
+  });
+  const record = fake.children.get(child.pid)!;
+  let resolved = false;
+  child.exited.then(() => { resolved = true; });
+  child.kill("SIGKILL");
+  for (let turn = 0; turn < 3; turn++) waiters[0].step();
+  await Promise.resolve();
+  expect(record.selected).toEqual([0, 143]);
+  expect(record.status).toBeNull();
+  expect(child.exitCode).toBeNull();
+  expect(child.signalCode).toBeNull();
+  expect(resolved).toBe(false);
+  expect(exits).toEqual([]);
+  expect(fake.open()).toBe(3); // Teardown is not complete: every parent pipe is still open.
+  expect(decode(waiters[0].subscriptions())).toContainEqual([2, child.pid]);
+  expect(fake.calls.filter((call) => call.startsWith("kill:"))).toEqual(["kill:9"]);
+
+  fake.publish(record);
+  await pump();
+  expect(await child.exited).toBe(143);
+  expect(child.exitCode).toBe(143);
+  expect(child.signalCode).toBeNull();
+  expect(exits).toEqual([[143, null, null]]);
+  expect(waiters).toHaveLength(0);
+  expect(fake.open()).toBe(0);
+});
+
+test("spawnSync timeout requests one SIGKILL while ordinary exit 143 awaits publication", () => {
+  let now = 0;
+  let polls = 0;
+  const fake = service({
+    now: () => now++,
+    onSpawn(record) { fake.select(record, [0, 143]); },
+    onPoll(turn) {
+      polls = turn;
+      expect(turn).toBeLessThanOrEqual(5);
+      const record = Array.from(fake.children.values())[0]!;
+      expect(record.status).toBeNull();
+      expect(record.selected).toEqual([0, 143]);
+      expect(fake.open()).toBe(1);
+      expect(fake.calls.filter((call) => call.startsWith("kill:"))).toEqual(["kill:9"]);
+      if (turn === 5) fake.publish(record);
+    },
+  });
+  const { module } = load(fake);
+  const result = module.spawnSync(["bun", "delayed-timeout"], {
+    stdio: ["inherit", "pipe", "inherit"], timeout: 1, killSignal: "SIGKILL",
+  });
+  expect(polls).toBe(5);
+  expect(result.error).toBeUndefined();
+  expect(result.exitedDueToTimeout).toBe(true);
+  expect(result.exitCode).toBe(143);
+  expect(result.signalCode).toBeNull();
+  expect(result.success).toBe(false);
+  expect(fake.calls.filter((call) => call.startsWith("kill:"))).toEqual(["kill:9"]);
+  expect(fake.open()).toBe(0);
+});
+
+const maxBufferOutcomes: { outcome: ProcessExit; exitCode: number | null; signalCode: string | null }[] = [
+  { outcome: [1, 9], exitCode: null, signalCode: "SIGKILL" },
+  { outcome: [0, 137], exitCode: 137, signalCode: null },
+  { outcome: [0, 143], exitCode: 143, signalCode: null },
+  { outcome: [0, 23], exitCode: 23, signalCode: null },
+  { outcome: [0, 0], exitCode: 0, signalCode: null },
+];
+for (const { outcome, exitCode, signalCode } of maxBufferOutcomes) {
+  test(`spawnSync maxBuffer waits for delayed ${signalCode ?? `ordinary exit ${exitCode}`} before closing output`, () => {
+    let polls = 0;
+    let stdoutFd = -1;
+    const closes: number[] = [];
+    const fake = service({
+      onSpawn(record) {
+        // Output can precede teardown and publication, whichever outcome won selection.
+        fake.childWrite(record, 1, "xx");
+        fake.select(record, outcome);
+        stdoutFd = Array.from(fake.pipes).find(([, entry]) => !entry.write)![0];
+      },
+      onPoll(turn) {
+        polls = turn;
+        expect(turn).toBeLessThanOrEqual(3);
+        const record = Array.from(fake.children.values())[0]!;
+        expect(record.status).toBeNull();
+        expect(record.selected).toEqual(outcome);
+        expect(fake.open()).toBe(1);
+        expect(closes).toEqual([]);
+        expect(fake.calls.filter((call) => call.startsWith("kill:"))).toEqual(["kill:9"]);
+        // The failed read stays subscribed, along with the unpublished child outcome.
+        expect(decode(waitSubscriptions)).toContainEqual([0, stdoutFd]);
+        expect(decode(waitSubscriptions)).toContainEqual([2, record.pid]);
+        if (turn === 3) fake.publish(record);
+      },
+    });
+    let waitSubscriptions = new Uint8Array(0);
+    const poll = fake.native.procPoll;
+    fake.native.procPoll = (subscriptions: Uint8Array) => {
+      waitSubscriptions = subscriptions;
+      return poll(subscriptions);
+    };
+    const close = fake.native.procClose;
+    fake.native.procClose = (fd: number) => {
+      if (fd === stdoutFd) {
+        expect(polls).toBe(3);
+        expect(Array.from(fake.children.values())[0]!.status).toEqual(outcome);
+        closes.push(fd);
+      }
+      return close(fd);
+    };
+    const { module } = load(fake);
+    const result = module.spawnSync(["bun", "overflow"], {
+      stdio: ["inherit", "pipe", "inherit"], maxBuffer: 1,
+    });
+    expect(result.error.code).toBe("ENOBUFS");
+    expect(result.success).toBe(false);
+    expect(result.exitCode).toBe(exitCode);
+    expect(result.signalCode).toBe(signalCode);
+    expect(polls).toBe(3);
+    expect(closes).toEqual([stdoutFd]);
+    expect(fake.calls.filter((call) => call.startsWith("kill:"))).toEqual(["kill:9"]);
+    expect(fake.open()).toBe(0);
+  });
+}
 
 test("a missing or non-directory cwd is the spawn error and starts nothing", async () => {
   const fake = service();

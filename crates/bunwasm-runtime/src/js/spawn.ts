@@ -16,7 +16,14 @@
   const WRITABLE = 1;
   const CHILD_EXIT = 2;
   const JOB_EMPTY = 4;
-  const signals: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGABRT: 6, SIGKILL: 9, SIGUSR1: 10, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15 };
+  const signals: Record<string, number> = {
+    SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGIOT: 6,
+    SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12,
+    SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGSTKFLT: 16, SIGCHLD: 17, SIGCONT: 18,
+    SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24,
+    SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 29, SIGPOLL: 29,
+    SIGPWR: 30, SIGSYS: 31,
+  };
   const errnoNames: Record<number, string> = {
     1: "E2BIG", 2: "EACCES", 6: "EAGAIN", 8: "EBADF", 12: "ECHILD", 21: "EFAULT", 27: "EINTR", 28: "EINVAL", 29: "EIO",
     33: "EMFILE", 44: "ENOENT", 48: "ENOMEM", 52: "ENOSYS", 63: "EPERM", 64: "EPIPE", 71: "ESRCH", 76: "ENOTCAPABLE",
@@ -300,6 +307,23 @@
     return native.procWaitJob(job, 1) !== AGAIN;
   }
 
+  // Hands a job this guest owns to a waiter that does not keep the event loop alive and reaps it
+  // once every member has quiesced. Descendants may outlive their detached leader; neither
+  // spawn nor spawnSync waits for them.
+  function reapLater(job: number, pid = 0) {
+    if (!job && !pid) return;
+    let exited = pid === 0;
+    internal.addIoWaiter({
+      ref: false,
+      step() {
+        if (!exited) exited = waitChild(pid) !== null;
+        return exited && reapJob(job);
+      },
+      fail() {},
+      subscriptions: () => exited ? subscription(JOB_EMPTY, job) : subscription(CHILD_EXIT, pid),
+    });
+  }
+
   function terminate(pid: number, job: number) {
     if (job && native.procKillJob(job, 9) >= 0) return;
     native.procKill(pid, 9);
@@ -456,6 +480,10 @@
       resourceUsage() { return undefined; },
       async [Symbol.asyncDispose]() { if (!settled) child.kill(); await exited; },
     };
+    function clearExitHooks() {
+      if (timer) internal.realTimers.clearTimeout(timer);
+      if (abort) spec.options.signal!.removeEventListener("abort", abort);
+    }
     function finish(status: Exit) {
       result = status;
       const signalCode = status.kind === 1 ? signalName(status.code) : null;
@@ -463,8 +491,7 @@
       settled = true;
       child.exitCode = signalCode === null ? code : null;
       child.signalCode = signalCode;
-      if (timer) internal.realTimers.clearTimeout(timer);
-      if (abort) spec.options.signal!.removeEventListener("abort", abort);
+      clearExitHooks();
       resolveExit(code);
       if (typeof spec.options.onExit === "function") spec.options.onExit(child, child.exitCode, child.signalCode, null);
     }
@@ -479,11 +506,22 @@
         const status = waitChild(spec.pid);
         if (status) { sink.destroy(); finish(status); }
       }
-      if (!settled) sink.flush();
+      if (!settled) {
+        try { sink.flush(); } catch (error) {
+          // The child closed its stdin with input still queued: drop the input, but the child
+          // keeps running. Only that EPIPE is tolerated; anything else fails the child.
+          if ((error as { code?: string }).code !== "EPIPE") throw error;
+          sink.destroy();
+        }
+      }
       let progress = false;
       for (const state of states) if (readPipe(state, state.consume)) progress = true;
       if (settled && !reaped) reaped = reapJob(spec.job);
-      if (settled && reaped && states.every((state) => state.fd < 0)) { if (!spec.options._worker) close(); return true; }
+      if (settled && states.every((state) => state.fd < 0)) {
+        if (!reaped) reapLater(spec.job);
+        if (!spec.options._worker) close();
+        return true;
+      }
       return progress ? "progress" : false;
     }
     // What the idle event loop sleeps on: output, a blocked stdin write, and the exit itself.
@@ -497,6 +535,12 @@
       return watching(list);
     }
     function fail(error: unknown) {
+      // Public failure is final, but teardown must still observe the selected child outcome.
+      const pending = !settled;
+      if (pending) terminate(spec.pid, spec.job);
+      if (!reaped) reapLater(spec.job, pending ? spec.pid : 0);
+      settled = true;
+      clearExitHooks();
       for (const state of states) {
         if (state.fd >= 0) native.procClose(state.fd);
         state.fd = -1;
@@ -583,8 +627,7 @@
       return outcome({ error });
     } finally {
       for (const fd of [spec.stdinFd].concat(spec.outputFds)) if (fd >= 0) native.procClose(fd);
-      const waiting = subscription(JOB_EMPTY, spec.job);
-      while (!reapJob(spec.job)) sleepOn([waiting], 25);
+      if (!reapJob(spec.job)) reapLater(spec.job);
     }
   }
 
