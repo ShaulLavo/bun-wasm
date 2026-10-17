@@ -191,19 +191,38 @@ async function runResponseCases() {
 
 async function runUpgradeCases() {
   const server = net.createServer(socket => {
-    socket.once("data", data => {
+    let received = Buffer.alloc(0);
+    let reads = 0;
+    const receive = data => {
       server.emit("requestChunk");
-      const text = data.toString();
-      if (text.includes("/upgrade")) {
-        assert.equal(text.endsWith("payload"), true);
-        socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: raw\r\n\r\nreply");
-        socket.destroy();
+      reads++;
+      received = Buffer.concat([received, data]);
+      const end = received.indexOf("\r\n\r\n");
+      if (end < 0) return;
+      const header = received.subarray(0, end).toString();
+      const length = Number(/^Content-Length:\s*(\d+)\r?$/im.exec(header)?.[1] || 0);
+      const expected = end + 4 + length;
+      if (received.length < expected) return;
+      socket.removeListener("data", receive);
+      assert.equal(received.length, expected);
+      const path = header.split(" ", 2)[1];
+      if (path.startsWith("/upgrade")) {
+        assert.equal(received.subarray(end + 4).toString(), "payload");
+        const switching = "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: raw\r\n\r\n";
+        if (path === "/upgrade-fragmented") {
+          assert.equal(reads >= 2, true);
+          socket.end(switching + "reply");
+          return;
+        }
+        socket.write(switching);
+        upgradeSeen.then(() => socket.end("reply"));
       } else {
-        socket.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
-        socket.destroy();
+        socket.end("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
       }
-    });
+    };
+    socket.on("data", receive);
   });
+  const upgradeSeen = event(server, "upgradeObserved");
   server.listen(0, "127.0.0.1");
   await event(server, "listening");
   const port = server.address().port;
@@ -231,9 +250,22 @@ async function runUpgradeCases() {
   const upgrade = new Promise((resolve, reject) => {
     const request = http.request({ host: "127.0.0.1", port, path: "/upgrade", method: "POST", headers: { Connection: "Upgrade", Upgrade: "raw", "Content-Length": "7" } });
     request.on("upgrade", (_response, socket, head) => {
-      assert.equal(head.toString(), "reply");
-      socket.destroy();
-      resolve();
+      assert.equal(head.length, 0);
+      const chunks = [head];
+      const receive = chunk => {
+        chunks.push(chunk);
+        const reply = Buffer.concat(chunks);
+        if (reply.length < 5) return;
+        assert.equal(reply.toString(), "reply");
+        socket.destroy();
+        resolve();
+      };
+      socket.on("error", reject);
+      socket.on("data", receive);
+      socket.on("close", () => {
+        if (Buffer.concat(chunks).toString() !== "reply") reject(new Error("Upgrade socket closed before its complete reply"));
+      });
+      server.emit("upgradeObserved");
     });
     request.on("error", reject);
     request.end("payload");
