@@ -255,10 +255,14 @@ waits wake for handled signals. This adds one mode to slot 18, not a slot, impor
 timeout. Unhandled default actions remain immediate supervisor decisions; the engine hooks stop
 physical execution even when the browser cannot terminate busy Wasm.
 
-An EPIPE remains an error through guest stream callbacks/listeners or try/catch. If it escapes
-all guest error handling, the adapter raises SIGPIPE through mode 3; a handled EPIPE keeps the
-guest's own status, while default SIGPIPE selects 141. An explicit parent SIGPIPE request uses
-the disposition immediately, just like SIGINT or SIGTERM.
+An EPIPE remains an error through guest stream callbacks/listeners or try/catch. Plain preview1
+programs retain the default SIGPIPE action, so a SIGPIPE request selects 141. The Node/Bun JS
+runtime is different: it initializes SIGPIPE as ignored, lets an explicit `SIGPIPE` listener opt
+into handled delivery, and restores default after the last SIGPIPE listener is removed. An escaping EPIPE keeps the
+ordinary uncaught-error path and exits 1 with the error printed, even with a SIGPIPE listener; a
+handled EPIPE keeps the guest's own status. Error handling never synthesizes SIGPIPE or consumes
+unrelated pending signals. An explicit parent SIGPIPE request uses the target disposition immediately,
+just like SIGINT or SIGTERM.
 
 ## Bun child processes
 

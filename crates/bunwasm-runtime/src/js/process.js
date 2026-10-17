@@ -184,7 +184,9 @@
   function publishSignalDisposition(name) {
     const number = signals[name];
     if (number === 9) return; // SIGKILL cannot acquire a handler or ignored disposition.
-    const disposition = process.listenerCount(name) > 0 ? 2 : 0;
+    // SIGPIPE starts ignored, but Node/Bun restore DEFAULT after its last handler is removed.
+    // An unrelated removeAllListeners must preserve a signal that was still ignored.
+    const disposition = process.listenerCount(name) > 0 ? 2 : dispositions.get(number) === 1 ? 1 : 0;
     if ((dispositions.get(number) || 0) === disposition) return;
     if (native.hostSignal(number, disposition) < 0) throw new Error(`Cannot set ${name} disposition`);
     dispositions.set(number, disposition);
@@ -197,6 +199,9 @@
       for (const signal of Object.keys(signals)) publishSignalDisposition(signal);
     } else if (Object.hasOwn(signals, name)) publishSignalDisposition(name);
   };
+  // Publish the runtime's JS-only startup default before user code can write to stdio.
+  if (native.hostSignal(13, 1) < 0) throw new Error("Cannot set SIGPIPE disposition");
+  dispositions.set(13, 1);
   internal.pumpSignals = internal.require("process_signals")(process, signalNames);
 
   const props = {
