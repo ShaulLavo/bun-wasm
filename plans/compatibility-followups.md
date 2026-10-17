@@ -294,6 +294,109 @@ are retained at
 follow-up and evidence cleanup after the gate is fixed.
 
 
+## Node parallel tests after main-thread worker imports
+
+Status: Approved
+
+The worker-thread main-thread adapter lets Node's shared helper load. The bounded
+160-file census in [the worker-thread report](../docs/worker-threads.md) now reaches
+existing module gaps. Keep these separate from guest-worker execution.
+
+- `js/node/test/parallel/test-als-defaultvalue-original.js` and
+  `test-als-defaultvalue.js` fail with `AssertionError: Expected values to be
+  strictly equal` and `expected: "default"` on all engines. The
+  `AsyncLocalStorage` class at `crates/bunwasm-runtime/src/js/builtins.js:370` has
+  no options constructor and `getStore()` returns `undefined` without a frame.
+  Add the actual default-value and naming contract, then measure these files.
+- `test-arm-math-illegal-instruction.js` and
+  `test-assert-calltracker-getCalls.js` reach `No such built-in module: node:test`.
+  Implement the Node test API through the builtin loader where possible, with its
+  lifecycle and reporting behavior; do not merely suppress the import.
+- `test-async-local-storage-http-agent.js` times out with no stdout or stderr
+  after five seconds on QuickJS and fifteen seconds on JSC. The test requires a
+  response after `r2.write(payload)` before calling `r2.end('')` in that response
+  callback. `ClientRequest.write` at
+  `crates/bunwasm-runtime/src/js/net.js:1043` only appends chunks, and `end` at
+  line 1049 starts `_send()`. That buffered request path cannot satisfy this
+  exchange. The browser engine fails earlier at the first response callback,
+  with `actual: undefined`, `expected: "first"` for `cls.getStore()` at upstream
+  line 39. Implement request streaming through the HTTP host contract and
+  preserve async context across the response callbacks. The timeout is newly
+  reached after the helper import succeeds; there were no passing files lost.
+
+- `test-child-process-can-write-to-stdout.js` intermittently fails on the timer-corrected
+  browser wasm before the WebSocket rebase. Its exit listener sees
+  `output === ''` instead of
+  `'hello, world!\n'` at upstream line 21. The first post-change census passed it;
+  the timer-corrected census failed it. Two of three isolated repetitions on that
+  same wasm fail, and one passes. The combined census after the WebSocket rebase
+  passes it. These are `final-after-browser.json` and
+  `stdout-repeat-{1,2,3}.json`. Start at the child waiter in
+  `crates/bunwasm-runtime/src/js/spawn.js:248`, which resolves exit before reading
+  pipes in that turn, and Node event reporting at line 415. Trace host pipe
+  completion and Node data-event delivery before choosing a change; preserve the
+  distinct exit and close events. PR 30 later changed pipe handling and stream
+  error callbacks, so repeat the reproduction on that integration before assuming
+  the failure remains. No subprocess code changes in this PR.
+
+Exact source, runtime and dependency hashes, errors and timeout records are in
+`/work/reports/bun-wasm-worker-threads/before-<engine>.json` and
+`rebased-after-<engine>.json`, with `before-jsc-warm.json` as the valid JSC
+baseline. The earlier `final-after-*` files retain the stdout investigation.
+Those files are retained until coordinator acceptance. Reproduce one failure
+after rebuilding the engine and warming the native launcher:
+
+```sh
+source env.sh
+scripts/bun-suite.sh --engine quickjs --jobs 1 --timeout 60 \
+  --output /work/tmp/bun-wasm-node-http-agent.json \
+  js/node/test/parallel/test-async-local-storage-http-agent.js
+```
+
+Select either ALS or node:test file above with the same command when working on
+that module. Use the heavy-job wrapper and a private native launcher target.
+
+## MessagePort constructor errors and immediate-loop timer starvation
+
+PR #31 review verification measured five unmodified Node message-port files on
+all three engines before and after the close and receive fixes. Each engine
+passes 3/5 files in both runs. The two failures below predate those fixes.
+Evidence is in `/work/reports/bun-wasm-worker-threads-review-20261017/`, in the
+`before-suite-<engine>.json` and `after-suite-<engine>.json` records. The runtime
+fix was measured at `566601003675d08c912ff5fe6e88fe8f4ee3dfd0`, against the original
+worker factory at `44fafb4e3cd5df8dac49a0423486a38448a82934`. The upstream suite
+revision is `cd95fa7a13b3f13be73e512b38ec111c1c228084` in both runs.
+
+- `js/node/test/parallel/test-worker-message-port-constructor.js:14` calls
+  `MessagePort()` without `new` and expects `ERR_CONSTRUCT_CALL_INVALID`.
+  The class at `crates/bunwasm-runtime/src/js/worker_threads.ts:48` throws the
+  engine-generated TypeError before its constructor executes, so the error
+  has no code. QuickJS, JSC, and browser each fail this assertion before and
+  after the review fix. Preserve `instanceof`, constructor identity, and the
+  illegal-constructor checks when fixing the callable entry point.
+- `js/node/test/parallel/test-worker-message-port-infinite-message-loop.js:22`
+  fails with `AssertionError: hit 10001 loop iterations` on all three engines,
+  before and after the fix. The listener posts another message to itself and
+  schedules a zero-delay timer to close the port. The dynamically growing
+  `immediates` queue in `crates/bunwasm-runtime/src/js/bootstrap.js:390` drains
+  before the next timer turn. Bounded MessagePort delivery batches still
+  schedule another immediate, so they do not solve this shared scheduler bug.
+  Keep timer fairness and active-batch close ordering as separate assertions.
+
+After rebuilding the desired engine and native launcher in private targets,
+run this bounded reproduction through the slot wrapper. Substitute `jsc` or
+`browser` to repeat it on the other engines.
+
+```sh
+source env.sh
+bash /work/tmp/wave-heavy/run.sh --class light "MessagePort compatibility follow-ups" -- \
+  env PATH="$PATH" scripts/bun-suite.sh --engine quickjs --network loopback \
+  --jobs 1 --timeout 15 --launcher "$CARGO_TARGET_DIR/release/bun-wasm" \
+  --output /work/tmp/bun-wasm-message-port-followups.json \
+  js/node/test/parallel/test-worker-message-port-constructor.js \
+  js/node/test/parallel/test-worker-message-port-infinite-message-loop.js
+```
+
 ### Node stream adapter census after unavailable worker detection
 
 The PR12 round-5 merge includes main `0cffef1`. All 22 selected Node adapter
