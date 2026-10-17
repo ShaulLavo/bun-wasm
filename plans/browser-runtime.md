@@ -289,3 +289,48 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
   audit of `web/src`.
 - brush-web `plans/001-brush-dev-shell.md`, `plans/004-own-shell.md` and `docs/external-commands.md`.
 - Spike reports: `/work/reports/browser-runtime/spikes/`.
+
+### Post-merge stdio gate follow-up, 2026-10-17
+
+Status: Approved.
+
+The Next table/IPC lane rebased onto `525762749bcc8ea05ca6ceb46fbbccb4d29ce224`
+and rebuilt the native launcher and all three engines. Its focused Table, IPC,
+subprocess and worker checks pass on all engines. The full QuickJS gate reports
+201 passes and two failing fixtures, `node-misc` and `pipe-closed-output`.
+
+`node-misc` still expects `ENOENT` from the no-host spawn path. The new runtime
+reports unsupported host process support instead. Update this fixture to the
+current capability contract. `tests/test-closed-output.py:107` also still expects
+exit 1 for escaping EPIPE, while the new disposition contract selects SIGPIPE
+status 141. Keep its handled-error and callback assertions intact.
+
+There is a separate Node-host failure: the closed-output callback batch exits 141
+with no result instead of surviving to report both rounds of EPIPE callbacks.
+`web/scripts/node-host.mjs:51` forwards the physical Node process's SIGPIPE into
+the root guest. A physical closed-pipe write can therefore select the guest's
+fatal signal before its stream callbacks handle EPIPE. Review this forwarding
+against `bootstrap.js::handleBrokenPipe`, which already raises a virtual SIGPIPE
+only after an error escapes guest handling. No IPC or Table code is active in
+that fixture, and these signal paths are unchanged from the merged base.
+
+Reproduce through the heavy wrapper with the rebuilt private launcher and wasm:
+
+```sh
+source env.sh
+export CARGO_TARGET_DIR=<private-target>
+scripts/test.sh --no-build node-misc pipe-closed-output
+python3 tests/test-closed-output.py --engine quickjs --wasm dist/bun.wasm \
+  --host node --batch-only
+```
+
+The batch must survive and retain its callback ordering, shared-error identity,
+state, error event and recovery assertions. Do not add SIGPIPE handlers to the
+fixture to hide the host forwarding problem. Ordinary escaping EPIPE should
+still select the documented default signal outcome. Repeat on JSC and browser,
+then rerun the complete gates.
+
+Exact failed output is retained in
+`/work/reports/bun-wasm-next-table-ipc/gate-quickjs.log`. The branch's selector
+integration and complete source are `task/next-table-ipc-runtime`. The coordinator
+owns the reports after accepting this handoff.
