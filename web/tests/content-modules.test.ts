@@ -27,6 +27,45 @@ test("acyclic modules import without a named store and keep shared dependency id
   expect(builds).toBe(1);
 });
 
+test("failed graphs roll back cached children before a retry", async () => {
+  const scratch = process.env.BUN_WASM_TEST_TMP ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  const root = mkdtempSync(join(scratch, "bun-wasm-content-modules-retry-"));
+  owned.push(root);
+  const writes: Promise<unknown>[] = [];
+  const paths = new Map<string, string>();
+  let missing = false;
+  let modules: ContentModules;
+  const named = {
+    url(key: string) { return pathToFileURL(join(root, `${key}.mjs`)).href; },
+    put(url: string, source: string) { return writeFile(new URL(url), source); },
+  };
+  modules = new ContentModules({
+    named, paths, storing: writes, contentUrl,
+    source(key) {
+      if (key === "a") {
+        const dependency = modules.ensure("b");
+        if (!missing) throw Object.assign(new Error("Cannot find module ./missing.mjs"), { code: "ERR_MODULE_NOT_FOUND" });
+        modules.ensure("missing");
+        return `import {b} from ${JSON.stringify(dependency)}; export function a() { return 'a'; } export const result = b();`;
+      }
+      if (key === "b") {
+        const rootUrl = modules.ensure("a");
+        return `import {a} from ${JSON.stringify(rootUrl)}; export function b() { return a() + "b"; }`;
+      }
+      return "export function a() { return 'a'; }";
+    },
+  });
+  expect(() => modules.ensure("a")).toThrow(expect.objectContaining({ code: "ERR_MODULE_NOT_FOUND" }));
+  missing = true;
+  const entry = modules.ensure("a");
+  await Promise.all(writes.splice(0));
+  const imported = spawnSync("node", ["--input-type=module", "-e", `console.log((await import(${JSON.stringify(entry)})).result)`], { encoding: "utf8" });
+  expect(imported.stderr).toBe("");
+  expect(imported.status).toBe(0);
+  expect(imported.stdout.trim()).toBe("ab");
+  expect(paths.get(entry)).toBe("a");
+});
+
 test("cyclic modules retain native hoisting through a named back edge", async () => {
   const scratch = process.env.BUN_WASM_TEST_TMP ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
   const root = mkdtempSync(join(scratch, "bun-wasm-content-modules-"));

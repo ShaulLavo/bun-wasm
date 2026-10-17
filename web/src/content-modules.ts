@@ -18,36 +18,56 @@ export class ContentModules {
   private urls = new Map<string, ModuleUrl>();
   private building = new Set<string>();
   private options: ModuleOptions;
+  private transaction: Map<string, ModuleUrl> | null = null;
 
   constructor(options: ModuleOptions) { this.options = options; }
 
   ensure(key: string): string {
-    const cached = this.urls.get(key);
-    if (cached) return cached.url;
-    if (this.building.has(key)) return this.reserve(key);
-    this.building.add(key);
+    const root = this.transaction === null;
+    if (root) this.transaction = new Map();
     try {
-      const source = this.options.source(key);
-      const named = this.urls.get(key);
-      if (named?.kind === "named") {
-        const write = named.store.put(named.url, source);
-        if (write) this.options.storing.push(write);
-        return named.url;
-      }
-      const url = this.options.contentUrl(source, key);
-      this.urls.set(key, { kind: "content", url });
-      return url;
+      const cached = this.urls.get(key);
+      if (cached) return cached.url;
+      if (this.building.has(key)) return this.reserve(key);
+      this.building.add(key);
+      try {
+        const source = this.options.source(key);
+        const named = this.urls.get(key);
+        if (named?.kind === "named") {
+          const write = named.store.put(named.url, source);
+          if (write) this.options.storing.push(write);
+          return named.url;
+        }
+        const url = this.options.contentUrl(source, key);
+        this.set(key, { kind: "content", url });
+        return url;
+      } finally { this.building.delete(key); }
     } catch (error) {
-      this.urls.delete(key);
+      if (root) this.rollback();
       throw error;
-    } finally { this.building.delete(key); }
+    } finally {
+      if (root) this.transaction = null;
+    }
+  }
+
+  private set(key: string, module: ModuleUrl): void {
+    this.urls.set(key, module);
+    this.transaction?.set(key, module);
+  }
+
+  private rollback(): void {
+    for (const [key, module] of this.transaction ?? []) {
+      if (this.urls.get(key) === module) this.urls.delete(key);
+      if (this.options.paths.get(module.url) === key) this.options.paths.delete(module.url);
+    }
   }
 
   private reserve(key: string): string {
     if (!this.options.named) throw Object.assign(new Error(`Circular ES module imports are not supported by the browser engine yet (${key})`), { code: "ERR_CIRCULAR_IMPORT" });
     const store = this.options.named;
     const url = store.url(key);
-    this.urls.set(key, { kind: "named", url, store });
+    const module = { kind: "named" as const, url, store };
+    this.set(key, module);
     this.options.paths.set(url, key);
     return url;
   }
