@@ -5,7 +5,7 @@ import { NetHost } from "./net/host";
 import type { NetRequest } from "./net/protocol";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline";
 import { readOutcome, outcomeWord } from "waffle/proc/outcome";
-import { bootstrap, type RuntimeWorkerRequest, type RuntimeWorkerMessage, type WorkerExecutor } from "waffle/browser/worker";
+import { bootstrap, type RuntimeWorkerRequest, type RuntimeWorkerMessage, type RuntimeWorkerHost, type WorkerExecutor } from "waffle/browser/worker";
 import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.ts";
 import { DefaultSignal } from "./default-signal";
 
@@ -88,6 +88,13 @@ export type WorkerMessage =
 export type SleepMode = "atomics" | "busy-wait";
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
+const hostPostMessage = ctx.postMessage.bind(ctx);
+const host: RuntimeWorkerHost = {
+  crossOriginIsolated: ctx.crossOriginIsolated,
+  postMessage: hostPostMessage,
+  addEventListener: ctx.addEventListener.bind(ctx),
+  removeEventListener: ctx.removeEventListener.bind(ctx),
+};
 
 // The engines' default stack budgets are measured on V8, whose first wasm tier uses frames close to
 // its optimized ones. JavaScriptCore starts in an interpreter with frames up to three times larger,
@@ -103,7 +110,7 @@ function guestEnv(req: RunRequest): Record<string, string> {
   return { ...req.env, BUN_WASM_STACK_KIB: kib };
 }
 
-const sendNet = (req: NetRequest, transfer: Transferable[] = []) => ctx.postMessage({ type: "net", req } satisfies WorkerMessage, transfer);
+const sendNet = (req: NetRequest, transfer: Transferable[] = []) => hostPostMessage({ type: "net", req } satisfies WorkerMessage, transfer);
 
 /** Bun's engine and legacy child adapter stay out of the preview1 entry graph. */
 function bunExecutor(req: RunRequest): WorkerExecutor<RunRequest> {
@@ -137,7 +144,7 @@ function bunExecutor(req: RunRequest): WorkerExecutor<RunRequest> {
         jobId: runtimeState?.job ?? req.child?.jobId ?? req.jobId,
         workerTransport: req.child, slot: req.child?.slot, token: req.child?.token,
         stdin: req.child?.pipes[0], revoked: sharedRevoked(req.filesystem),
-        onChildClose: pid => ctx.postMessage({ type: "child-close", pid, parentPid: runtimeState?.pid ?? req.child?.pid ?? req.pid ?? 1 } satisfies WorkerMessage),
+        onChildClose: pid => hostPostMessage({ type: "child-close", pid, parentPid: runtimeState?.pid ?? req.child?.pid ?? req.pid ?? 1 } satisfies WorkerMessage),
         output: (fd, data) => post(fd === 2 ? "stderr" : "stdout", data),
         launch: (meta, transport) => {
           const cwd = meta.cwd || req.env.PWD || "/";
@@ -151,7 +158,7 @@ function bunExecutor(req: RunRequest): WorkerExecutor<RunRequest> {
             env: { ...meta.env, PWD: cwd }, filesystem, child: transport,
             trace: req.trace, slots: req.slots, spawnBroker: true,
           };
-          ctx.postMessage({ type: "spawn", request } satisfies WorkerMessage);
+          hostPostMessage({ type: "spawn", request } satisfies WorkerMessage);
           const control = new Int32Array(transport.control, 0, 4);
           return {
             starting: true,
@@ -189,4 +196,4 @@ function bunExecutor(req: RunRequest): WorkerExecutor<RunRequest> {
   };
 }
 
-ctx.onmessage = (event: MessageEvent<RunRequest>) => bootstrap(event.data, bunExecutor(event.data), ctx);
+ctx.onmessage = (event: MessageEvent<RunRequest>) => bootstrap(event.data, bunExecutor(event.data), host);

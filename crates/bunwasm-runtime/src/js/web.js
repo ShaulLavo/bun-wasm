@@ -1302,6 +1302,9 @@
     for (const name of ["MessageChannel", "MessagePort", "BroadcastChannel"]) {
       defineLazyGlobal(name, () => internal.require("worker_threads")[name]);
     }
+    defineLazyGlobal("Worker", () => internal.require("web_worker").Worker);
+    URL.createObjectURL = blob => internal.require("web_worker").createObjectURL(blob);
+    URL.revokeObjectURL = url => internal.require("web_worker").revokeObjectURL(url);
     defineLazyGlobal("WebSocket", () => internal.require("net").WebSocket);
   };
 })
