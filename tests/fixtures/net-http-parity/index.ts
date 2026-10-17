@@ -192,6 +192,7 @@ async function runResponseCases() {
 async function runUpgradeCases() {
   const server = net.createServer(socket => {
     socket.once("data", data => {
+      server.emit("requestChunk");
       const text = data.toString();
       if (text.includes("/upgrade")) {
         assert.equal(text.endsWith("payload"), true);
@@ -206,6 +207,26 @@ async function runUpgradeCases() {
   server.listen(0, "127.0.0.1");
   await event(server, "listening");
   const port = server.address().port;
+
+  const firstRead = event(server, "requestChunk");
+  await new Promise<void>((resolve, reject) => {
+    const socket = net.connect({ host: "127.0.0.1", port });
+    let response = "";
+    socket.on("error", reject);
+    socket.on("data", chunk => { response += chunk.toString(); });
+    socket.on("close", () => {
+      try {
+        assert.equal(response.startsWith("HTTP/1.1 101"), true);
+        assert.equal(response.endsWith("reply"), true);
+        resolve();
+      } catch (error) { reject(error); }
+    });
+    socket.on("connect", async () => {
+      socket.write("POST /upgrade-fragmented HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: raw\r\nContent-Length: 7\r\n\r\npay");
+      await firstRead;
+      socket.end("load");
+    });
+  });
 
   const upgrade = new Promise((resolve, reject) => {
     const request = http.request({ host: "127.0.0.1", port, path: "/upgrade", method: "POST", headers: { Connection: "Upgrade", Upgrade: "raw", "Content-Length": "7" } });
