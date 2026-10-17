@@ -24,7 +24,7 @@ async function nativeWaitTrial(suppressed: boolean) {
     expect(Atomics.load(probe, probeCell.idleWaitActiveGeneration)).toBe(generation);
     expect(Atomics.load(probe, probeCell.idleWaiting)).toBe(1);
     Atomics.store(probe, probeCell.idleWaitSampleGeneration, generation);
-    if (suppressed) mutation = suppressBudgetNotifications(budget);
+    if (suppressed) mutation = suppressBudgetNotifications(new Int32Array(budget, 4, 1));
     const started = performance.now();
     Atomics.add(cells, 1, 1); // Wake generation publication alone must not wake a sleeper.
     Atomics.notify(cells, 1);

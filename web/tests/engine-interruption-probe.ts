@@ -132,11 +132,12 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
 }
 
 /** Test-only idle proof; never installed in timed CPU overhead runs. */
-export function observeEventLoopWait(probe: Int32Array, budget: SharedArrayBuffer,
+export function observeEventLoopWait(probe: Int32Array, word: Int32Array,
   target: Pick<typeof Atomics, "wait"> = Atomics, timeoutOverrideMs = 0): () => void {
   const native = target.wait;
   target.wait = (array, index, value, timeout) => {
-    const observed = array.buffer === budget && index === 1 && (timeout === undefined || timeout > 0);
+    const observed = array.buffer === word.buffer && array.byteOffset + index * array.BYTES_PER_ELEMENT === word.byteOffset
+      && (timeout === undefined || timeout > 0);
     if (!observed) return Reflect.apply(native, target, [array, index, value, timeout]);
     const generation = Atomics.add(probe, probeCell.idleWaitEntries, 1) + 1;
     Atomics.store(probe, probeCell.idleWaitActiveGeneration, generation);
@@ -171,13 +172,13 @@ export function assertCausalIdleWake(evidence: ReturnType<typeof snapshotProbe>,
   }
 }
 
-/** Mutation control: suppress only this exact budget's wait-cell notifications. */
-export function suppressBudgetNotifications(budget: SharedArrayBuffer,
+/** Mutation control: suppress only this exact shared wait-cell address. */
+export function suppressBudgetNotifications(word: Int32Array,
   target: Pick<typeof Atomics, "notify"> = Atomics): { count(): number; restore(): void } {
   const native = target.notify;
   let suppressed = 0;
   target.notify = (array, index, count) => {
-    if (array.buffer === budget && index === 1) { suppressed++; return 0; }
+    if (array.buffer === word.buffer && array.byteOffset + index * array.BYTES_PER_ELEMENT === word.byteOffset) { suppressed++; return 0; }
     return Reflect.apply(native, target, [array, index, count]);
   };
   return { count: () => suppressed, restore() { target.notify = native; } };

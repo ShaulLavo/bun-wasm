@@ -146,6 +146,17 @@ including recursive broken-pipe handling. Default signals already have an
 immutable host outcome; a fatal checkpoint unwinds Wasm without entering guest
 catch/finally blocks, including while a handled callback is CPU-bound. The
 browser-native engine needs no new hook and remains covered by worker termination.
+
+The original `runtime/proc/abi.ts` adapter implements the same fatal-only mode 4
+for generic process imports. The original `runtime/proc/signals.ts` helper preserves
+pending-signal wake hints during cooperative dequeue. The original
+`web/src/{runner,worker,subprocess-broker,subprocess}.ts`
+adapters share each process's existing budget with its page-side broker. Signal delivery
+notifies that budget's wait word and, for generic process polling, the directory wake word;
+short timeout rescans are not the signal notification mechanism. Legacy preview1 guests
+also receive their root or child's interrupt channel, with cooperative dequeue consuming
+its wake hint without consuming another pending signal.
+
 These adapters and the browser proof/benchmark harness are original implementations,
 not copied source. JSC polling covers JS safe points, not a single uninterrupted
 native operation; QuickJS retains its existing native-operation interrupt polls.

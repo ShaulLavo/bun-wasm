@@ -128,7 +128,7 @@ test("idle evidence observes only actual event-loop budget waits and restores th
     if (observed) expect(Atomics.load(f.probe, probeCell.idleWaiting)).toBe(1);
     return "timed-out";
   } };
-  const original = target.wait, restore = observeEventLoopWait(f.probe, budget, target);
+  const original = target.wait, restore = observeEventLoopWait(f.probe, new Int32Array(budget, 4, 1), target);
   target.wait(new Int32Array(new SharedArrayBuffer(16)), 1, 0, 4);
   target.wait(cells, 0, 0, 4); target.wait(cells, 1, 0, 0);
   expect(snapshotProbe(f.probe).idleWaitEntries).toBe(0);
@@ -143,7 +143,7 @@ test("idle evidence observes only actual event-loop budget waits and restores th
 test("idle evidence clears waiting state on throw and excludes not-equal from real blocking proof", () => {
   const f = fixture(), budget = new SharedArrayBuffer(16), cells = new Int32Array(budget);
   const target: Pick<typeof Atomics, "wait"> = { wait: () => "not-equal" };
-  const restore = observeEventLoopWait(f.probe, budget, target);
+  const restore = observeEventLoopWait(f.probe, new Int32Array(budget, 4, 1), target);
   try {
     target.wait(cells, 1, 0, 4);
     expect(snapshotProbe(f.probe).idleWaitBlocked).toBe(0);
@@ -151,7 +151,7 @@ test("idle evidence clears waiting state on throw and excludes not-equal from re
     expect(snapshotProbe(f.probe).idleWaiting).toBe(0);
   } finally { restore(); }
   const thrown: Pick<typeof Atomics, "wait"> = { wait() { throw new Error("wait failed"); } };
-  const restoreThrown = observeEventLoopWait(f.probe, budget, thrown);
+  const restoreThrown = observeEventLoopWait(f.probe, new Int32Array(budget, 4, 1), thrown);
   try {
     expect(() => thrown.wait(cells, 1, 0, 4)).toThrow("wait failed");
     expect(snapshotProbe(f.probe).idleWaiting).toBe(0);
@@ -161,7 +161,7 @@ test("idle evidence clears waiting state on throw and excludes not-equal from re
 test("idle evidence records native ok separately without claiming signal-notify causality", () => {
   const f = fixture(), budget = new SharedArrayBuffer(16), cells = new Int32Array(budget);
   const target: Pick<typeof Atomics, "wait"> = { wait: () => "ok" };
-  const restore = observeEventLoopWait(f.probe, budget, target);
+  const restore = observeEventLoopWait(f.probe, new Int32Array(budget, 4, 1), target);
   try {
     target.wait(cells, 1, 0, 4);
     const evidence = snapshotProbe(f.probe);
@@ -195,7 +195,7 @@ test("one-shot native interrupt injection returns real op4 negative without host
 test("idle timeout stretching preserves foreign, non-budget-cell and zero-time waits", () => {
   const f = fixture(), budget = new SharedArrayBuffer(16), cells = new Int32Array(budget), timeouts: (number | undefined)[] = [];
   const target: Pick<typeof Atomics, "wait"> = { wait(_array, _index, _value, timeout) { timeouts.push(timeout); return "timed-out"; } };
-  const restore = observeEventLoopWait(f.probe, budget, target, 1_000);
+  const restore = observeEventLoopWait(f.probe, new Int32Array(budget, 4, 1), target, 1_000);
   try {
     target.wait(new Int32Array(new SharedArrayBuffer(16)), 1, 0, 4);
     target.wait(cells, 0, 0, 4); target.wait(cells, 1, 0, 0); target.wait(cells, 1, 0, 4);
@@ -206,7 +206,7 @@ test("notify mutation touches only the exact process-budget wake cell and restor
   const budget = new SharedArrayBuffer(16), cells = new Int32Array(budget);
   let calls = 0;
   const target: Pick<typeof Atomics, "notify"> = { notify() { calls++; return 3; } };
-  const native = target.notify, mutation = suppressBudgetNotifications(budget, target);
+  const native = target.notify, mutation = suppressBudgetNotifications(new Int32Array(budget, 4, 1), target);
   try {
     expect(target.notify(cells, 1)).toBe(0);
     expect(target.notify(cells, 0)).toBe(3);
@@ -251,4 +251,34 @@ test("native-path RuntimeError mutant after negative callback cannot pass as eng
   expect(evidence.checkpointThrew).toBe(0); expect(evidence.startLeft).toBe(1); expect(evidence.runReturned).toBe(1);
   expect(evidence.startOtherException).toBe(1);
   expect(() => assertNativeEngineCompletion(evidence)).toThrow("unexpected exception");
+});
+
+test("idle wait selection follows the exact shared word across offset view aliases", () => {
+  const f = fixture(), buffer = new SharedArrayBuffer(64);
+  const word = new Int32Array(buffer, 20, 1), wide = new Int32Array(buffer, 8, 8);
+  const timeouts: (number | undefined)[] = [];
+  const target: Pick<typeof Atomics, "wait"> = { wait(_array, _index, _value, timeout) { timeouts.push(timeout); return "ok"; } };
+  const restore = observeEventLoopWait(f.probe, word, target, 1_000);
+  try {
+    target.wait(wide, 1, 0, 4); // Same numerical index as the old budget selector, wrong byte.
+    target.wait(wide, 3, 0, 4); // Same actual shared word through a wider view.
+    target.wait(word, 0, 0, 4);
+    target.wait(new Int32Array(new SharedArrayBuffer(64), 20, 1), 0, 0, 4);
+    expect(timeouts).toEqual([4, 1_000, 1_000, 4]);
+    expect(snapshotProbe(f.probe).idleWaitEntries).toBe(2);
+  } finally { restore(); }
+});
+
+test("notification mutant selects the exact absolute shared address across aliases", () => {
+  const buffer = new SharedArrayBuffer(64), word = new Int32Array(buffer, 20, 1);
+  let calls = 0;
+  const target: Pick<typeof Atomics, "notify"> = { notify() { calls++; return 7; } };
+  const mutation = suppressBudgetNotifications(word, target);
+  try {
+    expect(target.notify(new Int32Array(buffer, 8, 8), 3)).toBe(0);
+    expect(target.notify(word, 0)).toBe(0);
+    expect(target.notify(new Int32Array(buffer), 1)).toBe(7);
+    expect(target.notify(new Int32Array(new SharedArrayBuffer(64), 20, 1), 0)).toBe(7);
+    expect(mutation.count()).toBe(2); expect(calls).toBe(2);
+  } finally { mutation.restore(); }
 });

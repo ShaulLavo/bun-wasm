@@ -149,7 +149,12 @@ try {
     reports.push({ browser: name, version, ...result });
     console.log(JSON.stringify({ browser: name, version, ...result }));
     assert.equal(result.ok, true, JSON.stringify(result));
-    assert.equal(result.checks.length, 14, "twelve WASM hook/native/idle cases and two Bun light terminate cases");
+    assert.equal(result.checks.length, 28, "fourteen legacy host, twelve page/generic-route and two actual Preview1 clock cases");
+    assert.equal(result.checks.filter((check: any) => check.route === "runtimeProcess").length, 10, "new-route fatal, pending and page-idle proof on both engines");
+    for (const engine of ["quickjs", "jsc"]) {
+      assert.equal(result.checks.filter((check: any) => check.engine === engine).length, 12, `${engine} complete legacy/new-route case set`);
+    }
+    assert.equal(new Set(result.checks.map((check: any) => `${check.engine}:${check.name}`)).size, 28, "all named proofs are distinct");
     assert.equal(result.cleanup.activeWorkers, 0, "worker cleanup");
     if (benchmark) assert.equal(result.benchmarks.length, 2, "per-engine overhead measurements");
   }

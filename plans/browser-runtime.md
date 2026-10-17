@@ -234,7 +234,10 @@ Like Node, handled signals remain pending through synchronous JavaScript and dis
 next ordinary event-loop turn. Engine polls use `(0, 4)` and never call JavaScript: arbitrary
 reentry can invalidate native regexp state and runtime timer bookkeeping. An infinite JS loop
 with a registered handler therefore stays busy until an unhandled/default signal or SIGKILL
-stops it. Idle event-loop waits must wake promptly for handled delivery.
+stops it. Idle event-loop waits must wake promptly for handled delivery. Acceptance signals
+through the page broker's `kill` and `killJob` on both legacy and runtime-process routes. A
+long test-only wait must return native `ok` for the exact sampled wait generation, while
+removing its notification fails the same check; a short timeout rescan is not wake evidence.
 
 An explicit `runtime_proc.default_signal(sig)` still reports a typed default action. SIGKILL
 always selects 137 and revokes immediately; it cannot be caught or ignored. Guest completion
