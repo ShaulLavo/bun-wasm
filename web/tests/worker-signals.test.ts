@@ -18,6 +18,9 @@ type ProcImports = { signal(signal: number, mode: number): number; interrupted()
 type EngineOptions = { onExit(code: number): void; fetch(input: string): Promise<Response> };
 type WasiBoundary = { stdio?: Partial<Record<0 | 1 | 2, Stream>>; stdout(data: Uint8Array): void; stderr(data: Uint8Array): void };
 class TestWasiExit extends Error { constructor(readonly code: number) { super("exit"); } }
+class TestDefaultSignal extends Error {
+  constructor(readonly signal: number) { super(`Process stopped by signal ${signal}`); }
+}
 
 async function run(options: {
   adapter?: RunRequest["adapter"];
@@ -88,6 +91,7 @@ async function run(options: {
     claimOutcome, outcomeWord, readOutcome,
     HOST_CALL_FD: 3,
     WasiExit: TestWasiExit,
+    DefaultSignal: TestDefaultSignal,
     Wasi: class {
       descriptors = { dispose() { events.push("dispose descriptors"); } };
       constructor(opts: WasiBoundary & { namespaces: { runtime_proc: ProcImports } }) { proc = opts.namespaces.runtime_proc; io = opts; }
