@@ -94,6 +94,10 @@ test("playground server exiting during the page assertion also fails", async () 
   expect(result).toMatchObject({ status: "fail", exit: 0 });
 });
 
+test("bracketed Next build errors retain their diagnostic", () => {
+  expect(failure("Build error occurred\n[TypeError: _promises.default.opendir is not a function]", "build")).toEqual({ category: "d", blocker: "build: TypeError: _promises.default.opendir is not a function" });
+});
+
 test("rejection diagnostics recognize bracketed errors", () => {
   for (const prefix of ["unhandledRejection", "uncaughtException"]) {
     for (const wrapped of [false, true]) {

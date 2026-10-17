@@ -1,0 +1,996 @@
+{
+  "data": "YnVuLXdhc20gaW50ZXJvcGVyYWJsZSBjcnlwdG8gdmVjdG9ycw",
+  "sign": [
+    {
+      "algorithm": {
+        "name": "HMAC",
+        "hash": "SHA-256"
+      },
+      "operation": {
+        "name": "HMAC",
+        "hash": "SHA-256"
+      },
+      "private": {
+        "key_ops": [
+          "sign",
+          "verify"
+        ],
+        "ext": true,
+        "alg": "HS256",
+        "kty": "oct",
+        "k": "layJUstbWz-4ugYHIlZvCdvC3k_mlXivbN8fRmxsSr1cBuGgHSAzxXMTMrpULUa2ggVhxunQAB_g1mx1ev0_hQ"
+      },
+      "public": {
+        "key_ops": [
+          "sign",
+          "verify"
+        ],
+        "ext": true,
+        "alg": "HS256",
+        "kty": "oct",
+        "k": "layJUstbWz-4ugYHIlZvCdvC3k_mlXivbN8fRmxsSr1cBuGgHSAzxXMTMrpULUa2ggVhxunQAB_g1mx1ev0_hQ"
+      },
+      "signature": "WLVDABhLc5CmteaAF33v1T-FblXZszdz-R_S3jPXZRY"
+    },
+    {
+      "algorithm": {
+        "name": "RSASSA-PKCS1-v1_5",
+        "hash": "SHA-256",
+        "modulusLength": 1024
+      },
+      "operation": {
+        "name": "RSASSA-PKCS1-v1_5",
+        "hash": "SHA-256",
+        "modulusLength": 1024
+      },
+      "private": {
+        "key_ops": [
+          "sign"
+        ],
+        "ext": true,
+        "alg": "RS256",
+        "kty": "RSA",
+        "n": "pRN2LVAJT-Gdh8dkPE6LfyuKGZwlyoO-f3mcehAieq8jrVLxyjW_zjaowQhl0tcJT2_OROZrZxQO02Zf5Wg-TB3qiWYXP5qgoQOukYmBnOvi6ljZHTegVbpUxEkLeRnqy6SQXTIDOVkCEw9ZvzaFMAwU8ZHlgWdIJPW--PDEJk8",
+        "e": "AQAB",
+        "d": "be5z-OEgEm5xdga3HeJAy8O3CC8Qi7kIl-Po7PDpxUH1RGvEUaFRxoZoA4UQKkTCEoCmoQPB6rdU2DuJCUFOmlgMoZ9Mn_Kdk2l5h1KD1VKxMz91v3UZrfH-0a02tSSMuvxiOVXhTC95B0h2EIphaqSxP9TQevFlEs3s8jaxJiE",
+        "p": "1xlhS2q5n5I_yg-SX8rvuOE9fY_zSPTQvA1qZ8_qDeRgzTgCmaEX3ONcg8vQyh-mBc7yFregOV3EHM1dxUH0DQ",
+        "q": "xHcM9VryzfPC58EzUejvL0LdxavChB6t6fSlwe5sa6vCv7YTpNOVaKmSYW5kS_W76sCiOpW_8gP5jDL-104gyw",
+        "dp": "ND9u-bG32wHcSsmThX820ZKsrAY-UxdcaIFduk-vi6ZQuSiEwSp3MGltvHnSgnZDjp-hAFGkMqsLCu_7egG2NQ",
+        "dq": "RMu_cOdRIMdcF9VyiBs-LlmG2SJFMgigM82kgZ1gv-9cec9jX5NrvUOr64xBeMvq6tBbvpITrcawiuSMko5cMw",
+        "qi": "1BGtuVOmxx5erwDx6OD-DaEMdCD0BlXf8NYfjagJ0vajahM-otTuoGtMjdXZvppT_6tfCC8y28gX7YhIdhDlsQ"
+      },
+      "public": {
+        "key_ops": [
+          "verify"
+        ],
+        "ext": true,
+        "alg": "RS256",
+        "kty": "RSA",
+        "n": "pRN2LVAJT-Gdh8dkPE6LfyuKGZwlyoO-f3mcehAieq8jrVLxyjW_zjaowQhl0tcJT2_OROZrZxQO02Zf5Wg-TB3qiWYXP5qgoQOukYmBnOvi6ljZHTegVbpUxEkLeRnqy6SQXTIDOVkCEw9ZvzaFMAwU8ZHlgWdIJPW--PDEJk8",
+        "e": "AQAB"
+      },
+      "signature": "fPMpO6ekh_VE4fsYNHaoLwMPRBXliSIBQWdr_xTgwsDVLMr6nEO912NghO1fyB_iqXQLh0StPFJkYU8MV0qAToLobUxodp1n0ddCgshbJkolJP5AcSkhc9vqrfuGNs_Rt7TM2rt4U2crEKI5VEP1IxSbGib_JLEfc9XHU1G9OHU",
+      "pkcs8": "MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAKUTdi1QCU_hnYfHZDxOi38rihmcJcqDvn95nHoQInqvI61S8co1v842qMEIZdLXCU9vzkTma2cUDtNmX-VoPkwd6olmFz-aoKEDrpGJgZzr4upY2R03oFW6VMRJC3kZ6sukkF0yAzlZAhMPWb82hTAMFPGR5YFnSCT1vvjwxCZPAgMBAAECgYBt7nP44SASbnF2Brcd4kDLw7cILxCLuQiX4-js8OnFQfVEa8RRoVHGhmgDhRAqRMISgKahA8Hqt1TYO4kJQU6aWAyhn0yf8p2TaXmHUoPVUrEzP3W_dRmt8f7RrTa1JIy6_GI5VeFML3kHSHYQimFqpLE_1NB68WUSzezyNrEmIQJBANcZYUtquZ-SP8oPkl_K77jhPX2P80j00LwNamfP6g3kYM04ApmhF9zjXIPL0MofpgXO8ha3oDldxBzNXcVB9A0CQQDEdwz1WvLN88LnwTNR6O8vQt3Fq8KEHq3p9KXB7mxrq8K_thOk05VoqZJhbmRL9bvqwKI6lb_yA_mMMv7XTiDLAkA0P275sbfbAdxKyZOFfzbRkqysBj5TF1xogV26T6-LplC5KITBKncwaW28edKCdkOOn6EAUaQyqwsK7_t6AbY1AkBEy79w51Egx1wX1XKIGz4uWYbZIkUyCKAzzaSBnWC_71x5z2Nfk2u9Q6vrjEF4y-rq0Fu-khOtxrCK5IySjlwzAkEA1BGtuVOmxx5erwDx6OD-DaEMdCD0BlXf8NYfjagJ0vajahM-otTuoGtMjdXZvppT_6tfCC8y28gX7YhIdhDlsQ",
+      "spki": "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQClE3YtUAlP4Z2Hx2Q8Tot_K4oZnCXKg75_eZx6ECJ6ryOtUvHKNb_ONqjBCGXS1wlPb85E5mtnFA7TZl_laD5MHeqJZhc_mqChA66RiYGc6-LqWNkdN6BVulTESQt5GerLpJBdMgM5WQITD1m_NoUwDBTxkeWBZ0gk9b748MQmTwIDAQAB"
+    },
+    {
+      "algorithm": {
+        "name": "RSA-PSS",
+        "hash": "SHA-256",
+        "modulusLength": 1024
+      },
+      "operation": {
+        "name": "RSA-PSS",
+        "hash": "SHA-256",
+        "modulusLength": 1024,
+        "saltLength": 32
+      },
+      "private": {
+        "key_ops": [
+          "sign"
+        ],
+        "ext": true,
+        "alg": "PS256",
+        "kty": "RSA",
+        "n": "oWEvsQp7ATHVsOI3zuMLwadwcfccXelwdPs7E8CDMFqpvYYQJFsEBmttPlAzBet8iZ6aQMixPhpFBpRi41otJ3rwo0cpCxjD0ndRt6MQ4eaCjX859Bntk523RxBEUgrAt68KR1S_hdmwrV2j9Q1_qhWMirQnnldKbfqS_vHNb0E",
+        "e": "AQAB",
+        "d": "eUgV1ILg4Iv4YgARGx3NRxO0USH6oqV-y5vH0VdcAKoSaQno9bmlM8Hmju8s-WT56l9U5B0v_1E00PYRv3WU-qZD2t-tAfXQuubzej0qKkX99qsB709yF5Zs36QEtVRAz6jF-Ixyshro-Eo6AidoFgrYodyTRnxwZQEZne5ZhsE",
+        "p": "zers0FBIAty4bIUswnbizxkzUm10-Cz_QnfltVHrwhprMa2lyUhaTok6KonJx53ytpe6vuJAVWyF3HgndUlYuQ",
+        "q": "yKEvKVBfUUmb7uVhjtB7Le0xRlpAI7cCrdtPPfPaY5_r9gb7gOsPLUS83BeK0Gcx4-32nf3Dl3oIEKPDax32yQ",
+        "dp": "pj_10nn-qdDqVTNwX9D8bZg7B2G3_mbV8CQ9IZdycNRDl2hLYac4wg-pFo8IilHLlAAMlfC1YEKuEMIxmVAOgQ",
+        "dq": "KQcdN9uhwmPFKZNq4eOsbPXmb7ahCyyvtZH1oHuvm1Pm0wcWg4SOM_msjW2bC4cu4qeVGTX9u4pO_-gdXFhiUQ",
+        "qi": "mJiBKhlG3Qw0TcfiU361zGn99_fyEB0n109fjsLIqTy3qO9b9LMK2cqmwLJGxwZR0qtdiyHG0ms5eDCiAfNuEA"
+      },
+      "public": {
+        "key_ops": [
+          "verify"
+        ],
+        "ext": true,
+        "alg": "PS256",
+        "kty": "RSA",
+        "n": "oWEvsQp7ATHVsOI3zuMLwadwcfccXelwdPs7E8CDMFqpvYYQJFsEBmttPlAzBet8iZ6aQMixPhpFBpRi41otJ3rwo0cpCxjD0ndRt6MQ4eaCjX859Bntk523RxBEUgrAt68KR1S_hdmwrV2j9Q1_qhWMirQnnldKbfqS_vHNb0E",
+        "e": "AQAB"
+      },
+      "signature": "RhURpsBwLjklYDClAr4ieoLPqZZ17qsbkdwVjWLsVS8HVzVUU876QMG0oF8avtb9PFlrK5VZ_t5PDogRD0GzDOG-VGlVBUGZODOR4skdfm65QPfZzeQjrVGaEr5BMzPbSaSim8jrT4_KCrfeDwWJhP64TvzmFiU-rXOY6bok8pM",
+      "pkcs8": "MIICdwIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBAKFhL7EKewEx1bDiN87jC8GncHH3HF3pcHT7OxPAgzBaqb2GECRbBAZrbT5QMwXrfImemkDIsT4aRQaUYuNaLSd68KNHKQsYw9J3UbejEOHmgo1_OfQZ7ZOdt0cQRFIKwLevCkdUv4XZsK1do_UNf6oVjIq0J55XSm36kv7xzW9BAgMBAAECgYB5SBXUguDgi_hiABEbHc1HE7RRIfqipX7Lm8fRV1wAqhJpCej1uaUzweaO7yz5ZPnqX1TkHS__UTTQ9hG_dZT6pkPa360B9dC65vN6PSoqRf32qwHvT3IXlmzfpAS1VEDPqMX4jHKyGuj4SjoCJ2gWCtih3JNGfHBlARmd7lmGwQJBAM3q7NBQSALcuGyFLMJ24s8ZM1JtdPgs_0J35bVR68IaazGtpclIWk6JOiqJyced8raXur7iQFVshdx4J3VJWLkCQQDIoS8pUF9RSZvu5WGO0Hst7TFGWkAjtwKt208989pjn-v2BvuA6w8tRLzcF4rQZzHj7fad_cOXeggQo8NrHfbJAkEApj_10nn-qdDqVTNwX9D8bZg7B2G3_mbV8CQ9IZdycNRDl2hLYac4wg-pFo8IilHLlAAMlfC1YEKuEMIxmVAOgQJAKQcdN9uhwmPFKZNq4eOsbPXmb7ahCyyvtZH1oHuvm1Pm0wcWg4SOM_msjW2bC4cu4qeVGTX9u4pO_-gdXFhiUQJBAJiYgSoZRt0MNE3H4lN-tcxp_ff38hAdJ9dPX47CyKk8t6jvW_SzCtnKpsCyRscGUdKrXYshxtJrOXgwogHzbhA",
+      "spki": "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQChYS-xCnsBMdWw4jfO4wvBp3Bx9xxd6XB0-zsTwIMwWqm9hhAkWwQGa20-UDMF63yJnppAyLE-GkUGlGLjWi0nevCjRykLGMPSd1G3oxDh5oKNfzn0Ge2TnbdHEERSCsC3rwpHVL-F2bCtXaP1DX-qFYyKtCeeV0pt-pL-8c1vQQIDAQAB"
+    },
+    {
+      "algorithm": {
+        "name": "ECDSA",
+        "namedCurve": "P-256"
+      },
+      "operation": {
+        "name": "ECDSA",
+        "namedCurve": "P-256",
+        "hash": "SHA-384"
+      },
+      "private": {
+        "key_ops": [
+          "sign"
+        ],
+        "ext": true,
+        "kty": "EC",
+        "x": "vOnKrnNdRoKvnZkziIhl-rgQPs1aM9ViLlywsCZygEI",
+        "y": "33jq-TyQurf1soC72Py9jEWVj8oOQ_XZXDL_7QRpuyc",
+        "crv": "P-256",
+        "d": "I9k7E03ztup2Szq0GK4UxH06v_Nu9UiFi5wmn5HMxgg"
+      },
+      "public": {
+        "key_ops": [
+          "verify"
+        ],
+        "ext": true,
+        "kty": "EC",
+        "x": "vOnKrnNdRoKvnZkziIhl-rgQPs1aM9ViLlywsCZygEI",
+        "y": "33jq-TyQurf1soC72Py9jEWVj8oOQ_XZXDL_7QRpuyc",
+        "crv": "P-256"
+      },
+      "signature": "IxlHI1jJ3-iJfkRLUvfm71liSmsKFd5RIovaiBM3nBvJipzdYa5H7diA4gMoigPxo9S6rbqdxxh2QbT0lWj3-A",
+      "pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgI9k7E03ztup2Szq0GK4UxH06v_Nu9UiFi5wmn5HMxgihRANCAAS86cquc11Ggq-dmTOIiGX6uBA-zVoz1WIuXLCwJnKAQt946vk8kLq39bKAu9j8vYxFlY_KDkP12Vwy_-0Eabsn",
+      "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvOnKrnNdRoKvnZkziIhl-rgQPs1aM9ViLlywsCZygELfeOr5PJC6t_WygLvY_L2MRZWPyg5D9dlcMv_tBGm7Jw"
+    },
+    {
+      "algorithm": {
+        "name": "ECDSA",
+        "namedCurve": "P-384"
+      },
+      "operation": {
+        "name": "ECDSA",
+        "namedCurve": "P-384",
+        "hash": "SHA-384"
+      },
+      "private": {
+        "key_ops": [
+          "sign"
+        ],
+        "ext": true,
+        "kty": "EC",
+        "x": "36WZ4bReAFIhIu654tzDV0xRWS6JbBT0SmDpZ4ZdBbCxOa8QssIBfvKJZXEOjG6a",
+        "y": "RPNNL8VZ1UBlJm0AGgaC8zSGppmjBFi3VgrYaclBQyXRF73PHZmrmgct-_23SB6U",
+        "crv": "P-384",
+        "d": "91bqjTXSXv166B1r2APoTD8iO33eLLnZR52JX9-gvC-Ls_hVilzsfxf-cARTeHrs"
+      },
+      "public": {
+        "key_ops": [
+          "verify"
+        ],
+        "ext": true,
+        "kty": "EC",
+        "x": "36WZ4bReAFIhIu654tzDV0xRWS6JbBT0SmDpZ4ZdBbCxOa8QssIBfvKJZXEOjG6a",
+        "y": "RPNNL8VZ1UBlJm0AGgaC8zSGppmjBFi3VgrYaclBQyXRF73PHZmrmgct-_23SB6U",
+        "crv": "P-384"
+      },
+      "signature": "zLZiO8u7STpUXdSRM7OYiQitZ7Fu2TMIZyyxAegFq_huw7vcjg-a0rf_fO_Az1iZPgRCA8ujkMK7-uKYQyf74nCDJ8FZGplFV5PK8dOBr4bzFhf01VqjKzFAusoxEGB_",
+      "pkcs8": "MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDD3VuqNNdJe_XroHWvYA-hMPyI7fd4sudlHnYlf36C8L4uz-FWKXOx_F_5wBFN4euyhZANiAATfpZnhtF4AUiEi7rni3MNXTFFZLolsFPRKYOlnhl0FsLE5rxCywgF-8ollcQ6MbppE800vxVnVQGUmbQAaBoLzNIammaMEWLdWCthpyUFDJdEXvc8dmauaBy37_bdIHpQ",
+      "spki": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE36WZ4bReAFIhIu654tzDV0xRWS6JbBT0SmDpZ4ZdBbCxOa8QssIBfvKJZXEOjG6aRPNNL8VZ1UBlJm0AGgaC8zSGppmjBFi3VgrYaclBQyXRF73PHZmrmgct-_23SB6U"
+    },
+    {
+      "algorithm": {
+        "name": "Ed25519"
+      },
+      "operation": {
+        "name": "Ed25519"
+      },
+      "private": {
+        "key_ops": [
+          "sign"
+        ],
+        "ext": true,
+        "alg": "Ed25519",
+        "crv": "Ed25519",
+        "d": "6KH1MRgAmqnxlYrnq3alWiOo6dxqqMefH0743thHLIo",
+        "x": "a85wqYapJSy0MtsiCjl2aoWmo0VPt3m5VkEEmcYcalw",
+        "kty": "OKP"
+      },
+      "public": {
+        "key_ops": [
+          "verify"
+        ],
+        "ext": true,
+        "alg": "Ed25519",
+        "crv": "Ed25519",
+        "x": "a85wqYapJSy0MtsiCjl2aoWmo0VPt3m5VkEEmcYcalw",
+        "kty": "OKP"
+      },
+      "signature": "6IOvCXuu6fzh_G45yUWSpeDizYabbQWVStbEHMkWSEWijRvQTQ-Qf1D53gnJcNNW7_wUP_qqYdcvSLrfhFZYAw",
+      "pkcs8": "MC4CAQAwBQYDK2VwBCIEIOih9TEYAJqp8ZWK56t2pVojqOncaqjHnx9O-N7YRyyK",
+      "spki": "MCowBQYDK2VwAyEAa85wqYapJSy0MtsiCjl2aoWmo0VPt3m5VkEEmcYcalw"
+    }
+  ],
+  "encrypt": [
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 32,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A128GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQQ"
+      },
+      "ciphertext": "fRrdJDP2_vfkjzja-P3UpFYwsIml61zOdy-Y9ztNialYh9hPepLNCeg"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 64,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A128GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQQ"
+      },
+      "ciphertext": "fRrdJDP2_vfkjzja-P3UpFYwsIml61zOdy-Y9ztNialYh9hPepLNCehdmgWJ"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 96,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A128GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQQ"
+      },
+      "ciphertext": "fRrdJDP2_vfkjzja-P3UpFYwsIml61zOdy-Y9ztNialYh9hPepLNCehdmgWJPFIVvA"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 104,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A128GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQQ"
+      },
+      "ciphertext": "fRrdJDP2_vfkjzja-P3UpFYwsIml61zOdy-Y9ztNialYh9hPepLNCehdmgWJPFIVvBU"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 112,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A128GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQQ"
+      },
+      "ciphertext": "fRrdJDP2_vfkjzja-P3UpFYwsIml61zOdy-Y9ztNialYh9hPepLNCehdmgWJPFIVvBVf"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 120,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A128GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQQ"
+      },
+      "ciphertext": "fRrdJDP2_vfkjzja-P3UpFYwsIml61zOdy-Y9ztNialYh9hPepLNCehdmgWJPFIVvBVf7g"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTExMTExMQ",
+        "tagLength": 128,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A128GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQQ"
+      },
+      "ciphertext": "PzoN68ZRTrgiZfTHJXpLetq6lfu6mbFjL62ik4gCBrGisf8_OEvCX85QmKhOQQEK8HiLdRU"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 32,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A192GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"
+      },
+      "ciphertext": "6Yu3VbmKUvy2Sdz71WXqcRfai0rLQCl2iW6gHjlWM280TM9ReekUDf8"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 64,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A192GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"
+      },
+      "ciphertext": "6Yu3VbmKUvy2Sdz71WXqcRfai0rLQCl2iW6gHjlWM280TM9ReekUDf9yOJxV"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 96,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A192GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"
+      },
+      "ciphertext": "6Yu3VbmKUvy2Sdz71WXqcRfai0rLQCl2iW6gHjlWM280TM9ReekUDf9yOJxVDPg6iw"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 104,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A192GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"
+      },
+      "ciphertext": "6Yu3VbmKUvy2Sdz71WXqcRfai0rLQCl2iW6gHjlWM280TM9ReekUDf9yOJxVDPg6i-U"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 112,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A192GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"
+      },
+      "ciphertext": "6Yu3VbmKUvy2Sdz71WXqcRfai0rLQCl2iW6gHjlWM280TM9ReekUDf9yOJxVDPg6i-WT"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 120,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A192GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"
+      },
+      "ciphertext": "6Yu3VbmKUvy2Sdz71WXqcRfai0rLQCl2iW6gHjlWM280TM9ReekUDf9yOJxVDPg6i-WThg"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTExMTExMQ",
+        "tagLength": 128,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A192GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"
+      },
+      "ciphertext": "DrlXSYHCrPDvzyobJy1uFlAPpkCV1XKc2ddFmKLAGHxk6dxw8lvd7yi7_pf4vUxa2VAjFpM"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 32,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A256GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"
+      },
+      "ciphertext": "mRg9MTzy0Cr6Owhqkk7rekfE7ho-di_LQulq7BOL6JOc2fXbHDT6uy4"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 64,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A256GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"
+      },
+      "ciphertext": "mRg9MTzy0Cr6Owhqkk7rekfE7ho-di_LQulq7BOL6JOc2fXbHDT6uy4n4hvD"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 96,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A256GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"
+      },
+      "ciphertext": "mRg9MTzy0Cr6Owhqkk7rekfE7ho-di_LQulq7BOL6JOc2fXbHDT6uy4n4hvDbGrOSQ"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 104,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A256GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"
+      },
+      "ciphertext": "mRg9MTzy0Cr6Owhqkk7rekfE7ho-di_LQulq7BOL6JOc2fXbHDT6uy4n4hvDbGrOSSk"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 112,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A256GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"
+      },
+      "ciphertext": "mRg9MTzy0Cr6Owhqkk7rekfE7ho-di_LQulq7BOL6JOc2fXbHDT6uy4n4hvDbGrOSSky"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTEx",
+        "tagLength": 120,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A256GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"
+      },
+      "ciphertext": "mRg9MTzy0Cr6Owhqkk7rekfE7ho-di_LQulq7BOL6JOc2fXbHDT6uy4n4hvDbGrOSSkySw"
+    },
+    {
+      "algorithm": {
+        "name": "AES-GCM"
+      },
+      "operation": {
+        "name": "AES-GCM",
+        "iv": "MTExMTExMTExMTExMTExMQ",
+        "tagLength": 128,
+        "additionalData": "AQID"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A256GCM",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"
+      },
+      "ciphertext": "X3ZUNRJegKOwFTBhClQmcI46EejO4bZdBcKyjSx65vJ5WpINOcKFmHOw2U_vkd5JHFMxMWA"
+    },
+    {
+      "algorithm": {
+        "name": "AES-CBC"
+      },
+      "operation": {
+        "name": "AES-CBC",
+        "iv": "MTExMTExMTExMTExMTExMQ"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A128CBC",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQQ"
+      },
+      "ciphertext": "Rsi-Ax2Hqbou8RdZB6c_xs91_J2G_MxM5ZgR3zBZHghK6nV9NhbVkYhAoBG1cmSW"
+    },
+    {
+      "algorithm": {
+        "name": "AES-CBC"
+      },
+      "operation": {
+        "name": "AES-CBC",
+        "iv": "MTExMTExMTExMTExMTExMQ"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A192CBC",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"
+      },
+      "ciphertext": "4i49NkgPXB5067ZnNd0BI-uGenWujLE5CLM8DwaV71OyRrvliPa3Sr_xFnUPnCBJ"
+    },
+    {
+      "algorithm": {
+        "name": "AES-CBC"
+      },
+      "operation": {
+        "name": "AES-CBC",
+        "iv": "MTExMTExMTExMTExMTExMQ"
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A256CBC",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"
+      },
+      "ciphertext": "tDHR9gkcBQUq8QfIFeq39bDF99Qjw8dBnJrSMHWh6gCI4y8xK6d3Y5fAWoeA3s0t"
+    },
+    {
+      "algorithm": {
+        "name": "AES-CTR"
+      },
+      "operation": {
+        "name": "AES-CTR",
+        "counter": "_____________________w",
+        "length": 3
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A128CTR",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQQ"
+      },
+      "ciphertext": "nMAbL4wUnhbDZxdjk_5VjoXmHpQFIc3sYYs4TJ-NCsILgywXVQ"
+    },
+    {
+      "algorithm": {
+        "name": "AES-CTR"
+      },
+      "operation": {
+        "name": "AES-CTR",
+        "counter": "_____________________w",
+        "length": 3
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A192CTR",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"
+      },
+      "ciphertext": "5pvQG1KgU0RwW_BKsvicIu6W-hL0lErnyAU4fEgxYPuI2l2qOg"
+    },
+    {
+      "algorithm": {
+        "name": "AES-CTR"
+      },
+      "operation": {
+        "name": "AES-CTR",
+        "counter": "_____________________w",
+        "length": 3
+      },
+      "key": {
+        "key_ops": [
+          "encrypt",
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "A256CTR",
+        "kty": "oct",
+        "k": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"
+      },
+      "ciphertext": "1VvkT3bsApywBobmCjESJpAOE0lEzZwl5IvVLOziBsoWp1pj3g"
+    },
+    {
+      "algorithm": {
+        "name": "RSA-OAEP",
+        "hash": "SHA-256"
+      },
+      "operation": {
+        "name": "RSA-OAEP",
+        "label": "AP-AAQ"
+      },
+      "private": {
+        "key_ops": [
+          "decrypt"
+        ],
+        "ext": true,
+        "alg": "RSA-OAEP-256",
+        "kty": "RSA",
+        "n": "65fqdPVE3x_ylIGDAKLWAMW-1nB-VOFgBrBpMgeM9XnYcOOB3l2O8PaDcRziU3ifcHG9MIOFwxAbZqGqEakR8VehFy06QK-MQayy5V0cTlFh9TtvbIrLhkPMg-5VmLOwf4dxjEorptOvwYj6EH1w7uCEUAiIc4Wdi-YrkJw4MAc",
+        "e": "AQAB",
+        "d": "I2Bne3KNCfgxI-2ir0jEW89VzbuMrNA-7CI3WaTanM3UG3d-O9bOrQ5HRIfy0FfvkSHzJ8LIJjdX9fxWnlpF8C7VRc6QuSGPIBIokrAy27En3E63v83dSqmaNq-qJrmYO-m7ZPHTQrLvoolI8Z4Xcer4a1L-2F810YyFhUzGyQk",
+        "p": "-en70GeHjqBllaGUJ5Ct7pHekZQKWlYZUgcPnq7xD37XNeHtlU5P0ajAYDcBg211kECH3X17Gk1tTxxpwQvx9Q",
+        "q": "8VSnmzCj5Oa3-c_EU0pwcUm9_npQLAID9MrHlXnMF9NYTTVwbC1ewT6pUDZNJfLt0VXn3jG4mzmfvSQs6NqQiw",
+        "dp": "YjhIpI6b4z08z4MSdD5TbYjc3YA-VWSzTN7Dj80XpsxmDqI9uslta2wUN3xG1v2FD-2cuDshz6OQi2ASXDGypQ",
+        "dq": "ZN7ug5ZsGuQ45-jo9at6nk-lY3W6hvp8rtgHXjofjaHgGb2JdR3tqjZHzOg1jPQiZUpT9XKw5-jJFOTHBLk-iw",
+        "qi": "lOJ-Akpk2JDMxyuSCMJ_Q-uicUbAoNo6VWkm9O73doJ1Yqbw43c2o1zuqDECAtjwhlQJ3nkkR4hnsu4t-oJ3YA"
+      },
+      "public": {
+        "key_ops": [
+          "encrypt"
+        ],
+        "ext": true,
+        "alg": "RSA-OAEP-256",
+        "kty": "RSA",
+        "n": "65fqdPVE3x_ylIGDAKLWAMW-1nB-VOFgBrBpMgeM9XnYcOOB3l2O8PaDcRziU3ifcHG9MIOFwxAbZqGqEakR8VehFy06QK-MQayy5V0cTlFh9TtvbIrLhkPMg-5VmLOwf4dxjEorptOvwYj6EH1w7uCEUAiIc4Wdi-YrkJw4MAc",
+        "e": "AQAB"
+      },
+      "ciphertext": "TGiNMeHEDxDPoh73DnANHnPROQ6Lpg1hqLqOj9Iis_4RHozYhjbb385zvNC5G4gI4dGHpFQ2fZ0WoqGEIRatcewz60JfgfsbQn4Lv-tXyy9x-ROBu5XnHjiM4MpcHgCFy3eRlnhT75TpErNhoHRF3YNtE2HjT1nuc745sA98wUI"
+    }
+  ],
+  "derive": [
+    {
+      "operation": {
+        "name": "HKDF",
+        "hash": "SHA-1",
+        "salt": "AQID",
+        "info": "BAUG"
+      },
+      "bits": "MhT9ijnger1lgfaMbBfTCFoDJK9MY8n_vpVge47znL8"
+    },
+    {
+      "operation": {
+        "name": "HKDF",
+        "hash": "SHA-256",
+        "salt": "AQID",
+        "info": "BAUG"
+      },
+      "bits": "KFfcBwrVlN3434K0XV84lFGSC-a-sB0ynyM6_qrjGME"
+    },
+    {
+      "operation": {
+        "name": "HKDF",
+        "hash": "SHA-384",
+        "salt": "AQID",
+        "info": "BAUG"
+      },
+      "bits": "HsJWIiNvrBSo2gMtBzs5UbI96rxenme5Y4wn07rvaqA"
+    },
+    {
+      "operation": {
+        "name": "HKDF",
+        "hash": "SHA-512",
+        "salt": "AQID",
+        "info": "BAUG"
+      },
+      "bits": "k7-dNlvAwcmdf06SjoZQNGVMdOlqcrmT_F6o_TvaGW0"
+    },
+    {
+      "operation": {
+        "name": "PBKDF2",
+        "hash": "SHA-1",
+        "salt": "AQID",
+        "iterations": 17
+      },
+      "bits": "_-5IppuJi7zvdftqrSr3ECJDvdxX6Zw50Xbcc8ph0BM"
+    },
+    {
+      "operation": {
+        "name": "PBKDF2",
+        "hash": "SHA-256",
+        "salt": "AQID",
+        "iterations": 17
+      },
+      "bits": "nb82PcLdZgg6DeH0iEnLGyUDRsExt6DmtOGg6HQouGc"
+    },
+    {
+      "operation": {
+        "name": "PBKDF2",
+        "hash": "SHA-384",
+        "salt": "AQID",
+        "iterations": 17
+      },
+      "bits": "qAxdjO0ULOP3WTeJZQo9pD9OSZSSilRMXSKhFVlp03U"
+    },
+    {
+      "operation": {
+        "name": "PBKDF2",
+        "hash": "SHA-512",
+        "salt": "AQID",
+        "iterations": 17
+      },
+      "bits": "3b2ulCXQwG9oV-oP6HySc4bNLY16l-0uZa7-o7qZM_U"
+    }
+  ],
+  "agree": [
+    {
+      "algorithm": {
+        "name": "ECDH",
+        "namedCurve": "P-256"
+      },
+      "private": {
+        "key_ops": [
+          "deriveBits"
+        ],
+        "ext": true,
+        "kty": "EC",
+        "x": "SBWkAvqyNMXs-NaZjRY4TUFQn5bJUX81luHuHoVhNoc",
+        "y": "smT_jCKDLkhFToPpyOniKH9GR1kqtNA56ugNlHCB9WE",
+        "crv": "P-256",
+        "d": "_zbSi7VgHmNrn14FyttBDIv40UwV5gdezSp095qZcVU"
+      },
+      "public": {
+        "key_ops": [],
+        "ext": true,
+        "kty": "EC",
+        "x": "c48XzpX4EEKgFgcgj6uLUJTumjeaXBHQq6qdbjyDiC4",
+        "y": "eIU4c4DGbTj1f1FkfuFe46A-9WkO9Hzk0fgFjgS-gB4",
+        "crv": "P-256"
+      },
+      "bits": "E6i9qNt82k0LS8hPyl0Wui9kkbEchZP6g23VV8DJ1Jc"
+    },
+    {
+      "algorithm": {
+        "name": "ECDH",
+        "namedCurve": "P-384"
+      },
+      "private": {
+        "key_ops": [
+          "deriveBits"
+        ],
+        "ext": true,
+        "kty": "EC",
+        "x": "dMXXo5YodARo_fQPbfxy7I0yeI3b0g12WpYLsFJs58cwlUIuuWyYHA86ejXmMMzZ",
+        "y": "tCF_HVOmRrJE2P29l1bfJE7bu7iXdAaukz0QKlOO1ZbnRM-37iInCD1M1sr59NhR",
+        "crv": "P-384",
+        "d": "2vFDI9Q5Ib6QirXS8OBEYrmPMUrBAXOqVllY0P-O0vJhafeeyfcb6K7mJn373qiO"
+      },
+      "public": {
+        "key_ops": [],
+        "ext": true,
+        "kty": "EC",
+        "x": "HhmJSH5TDLPTSTG2HkjyoFweW0bfkasDOFUK4wbOagg_Uvpr4zyIzjLh0q46aPnc",
+        "y": "_axgeCv7Hcp5WQ1zCtSuNj2PYJ2HO-Kujk59IXHV8fa4TizrPSSASdK3uwPAdXGH",
+        "crv": "P-384"
+      },
+      "bits": "l75B1x35fbGPO2W_tdnCWkbEqG_LeNWWNlPETK-0Y7o"
+    },
+    {
+      "algorithm": {
+        "name": "X25519"
+      },
+      "private": {
+        "key_ops": [
+          "deriveBits"
+        ],
+        "ext": true,
+        "crv": "X25519",
+        "d": "YDFy44oBVfJ00FT7yjadvFFRiYS_76twWV26JRBtGmo",
+        "x": "_EJze5RZ1zRClXrNwV9Xt9p9YLCFdeyhrBNoE9Ibuyg",
+        "kty": "OKP"
+      },
+      "public": {
+        "key_ops": [],
+        "ext": true,
+        "crv": "X25519",
+        "x": "7b3ByUjqOWtYo9FHXqkpUXazIClesyHYqHtX1aZo9yY",
+        "kty": "OKP"
+      },
+      "bits": "aQ59bREDAwK0kF3gvAs3ZyfYZGjF1IyCv0-moR6t_yI"
+    }
+  ]
+}
