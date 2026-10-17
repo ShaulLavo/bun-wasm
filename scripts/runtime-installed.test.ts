@@ -3,8 +3,8 @@ import { cp, mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { browserBuildConfig, resolveRuntimePackage } from "./browser-build";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import { browserBuildConfig, buildClassicWorker, resolveRuntimePackage } from "./browser-build";
 
 // A real Git installation is essential: file/workspace copies can hide Node's
 // node_modules TypeScript restrictions, prepare/trust failures and missing files.
@@ -38,8 +38,11 @@ test("trusted commit-pinned Git package prepares Node exports without sibling so
     await writeFile(join(consumer, "package.json"), JSON.stringify({ name: "installed-runtime-check", private: true, type: "module", dependencies: { "@bun-wasm/runtime": dependency }, trustedDependencies: ["@bun-wasm/runtime"] }));
     const cache = join(scratch, "clean.install.cache");
     await mkdir(cache);
+    // Production installs require a lock and do not create one themselves.
+    // Resolve the pin separately, then install with an actually empty cache.
+    await run([process.execPath, "install", "--lockfile-only"], consumer, { BUN_INSTALL_CACHE_DIR: join(scratch, "lock-resolution.cache") });
     expect(await readdir(cache)).toEqual([]);
-    await run([process.execPath, "install"], consumer, { BUN_INSTALL_CACHE_DIR: cache });
+    await run([process.execPath, "install", "--production"], consumer, { BUN_INSTALL_CACHE_DIR: cache });
     const entry = join(consumer, "main.ts");
     await writeFile(entry, 'export { memoryViews } from "@bun-wasm/runtime/core/memory-views";');
     const installed = resolveRuntimePackage(entry);
@@ -73,6 +76,44 @@ console.log("every Node export links; browser-only entries reject; module identi
     expect(browser.success).toBe(true);
     expect(Object.keys(browser.metafile!.inputs).every(input => installed.relativeInput(input) !== undefined || resolve(input) === entry)).toBe(true);
     expect(await Bun.file(join(consumer, "bun.lock")).text()).toContain(pin);
+
+    // Exercise the real consumers, not just a synthetic core import. Otherwise
+    // sibling runtime imports can bypass the package resolver and provenance.
+    const root = resolve(import.meta.dir, "..");
+    const siblingRuntime = join(root, "runtime") + "/";
+    const siblingInputs = (inputs: Record<string, unknown>) => Object.keys(inputs).filter(input => resolve(input).startsWith(siblingRuntime));
+    // Ask actual Node for its conditions: Bun's createRequire still selects bun.
+    const nodeEntries: Record<string, string> = JSON.parse(await run(["node", "--input-type=module", "--eval", `
+import { readFileSync } from "node:fs";
+const { exports } = JSON.parse(readFileSync("./node_modules/@bun-wasm/runtime/package.json", "utf8"));
+console.log(JSON.stringify(Object.fromEntries(Object.entries(exports).filter(([, value]) => value.node).map(([key]) => {
+  const name = "@bun-wasm/runtime" + (key === "." ? "" : key.slice(1));
+  return [name, import.meta.resolve(name)];
+}))));`], consumer));
+    const nodeHost = await Bun.build({
+      entrypoints: [join(root, "web/scripts/node-host.mjs")], target: "node", format: "esm", metafile: true,
+      plugins: [{ name: "installed-node-runtime", setup(build) {
+        build.onResolve({ filter: /^@bun-wasm\/runtime(?:\/|$)/ }, ({ path }) => ({ path: fileURLToPath(nodeEntries[path]!) }));
+      } }],
+    });
+    if (!nodeHost.success) throw new Error(nodeHost.logs.map(String).join("\n"));
+    expect(siblingInputs(nodeHost.metafile!.inputs)).toEqual([]);
+    const nodeRuntimeInputs = Object.keys(nodeHost.metafile!.inputs).filter(input => installed.relativeInput(input) !== undefined);
+    expect(nodeRuntimeInputs.length).toBeGreaterThan(0);
+    expect(nodeRuntimeInputs.every(input => installed.relativeInput(input)!.startsWith("dist/"))).toBe(true);
+
+    const appEntry = join(consumer, "app.ts");
+    await writeFile(appEntry, `import ${JSON.stringify(join(root, "web/src/main.ts"))};`);
+    const { outdir: _appOut, ...appConfig } = browserBuildConfig([appEntry, join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts")], join(scratch, "actual-app"), { runtimeWorker: true });
+    const app = await Bun.build(appConfig);
+    if (!app.success) throw new Error(app.logs.map(String).join("\n"));
+    expect(siblingInputs(app.metafile!.inputs)).toEqual([]);
+    expect(Object.keys(app.metafile!.inputs).some(input => installed.relativeInput(input)?.startsWith("core/"))).toBe(true);
+
+    const sw = await buildClassicWorker(join(root, "web/src/sw.ts"), join(scratch, "classic-sw"), { __PREVIEW_SOCKET_SCRIPT__: '""' }, appEntry);
+    expect(sw.outputs).toHaveLength(1);
+    expect(siblingInputs(sw.metafile!.inputs)).toEqual([]);
+    expect(Object.keys(sw.metafile!.inputs).some(input => installed.relativeInput(input)?.startsWith("browser/"))).toBe(true);
   } finally {
     for (const child of children) child.kill();
     await Promise.all(Array.from(children, child => child.exited));

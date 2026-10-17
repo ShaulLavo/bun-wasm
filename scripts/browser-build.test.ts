@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { browserBuildConfig, resolveRuntimePackage } from "./browser-build";
 
 test("browser build uses consumer exports through a dotted Git cache, not sibling source", async () => {
-  const scratch = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-package-resolver-"));
+  const scratch = await mkdtemp(join(process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-package-resolver-"));
   try {
     const consumer = join(scratch, "consumer");
     const cached = join(scratch, "cache", "@bun-wasm.runtime.git.deadbeef");

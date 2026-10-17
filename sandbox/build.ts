@@ -27,7 +27,7 @@ const page = await buildBrowserEntries([join(here, "src/main.ts"), join(web, "sr
 // The service worker stays standalone and classic for Safari.
 const sw = await buildClassicWorker(join(web, "src/sw.ts"), out, {
   __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(await previewWebsocketScript()),
-});
+}, join(here, "src/main.ts"));
 
 await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 await Bun.write(join(out, "_headers"), Bun.file(join(web, "_headers")));

@@ -18,7 +18,7 @@ const result = await buildBrowserEntries([join(here, "src/main.ts"), join(here, 
 // The service worker is a classic script (module service workers are newer in Safari).
 const sw = await buildClassicWorker(join(here, "src/sw.ts"), out, {
   __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(await previewWebsocketScript()),
-});
+}, join(here, "src/main.ts"));
 
 await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 // Cloudflare Static Assets headers: cross-origin isolation (SharedArrayBuffer for
