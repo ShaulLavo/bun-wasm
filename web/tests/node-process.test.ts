@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { resolve } from "node:path";
+import { existsSync } from "node:fs";
 
 const root = resolve(import.meta.dirname, "../..");
 
@@ -13,7 +14,7 @@ async function run(command: string[], env = process.env) {
 }
 
 for (const artifact of ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"]) {
-  test(`Node process slots and local registry fetch compose for ${artifact}`, async () => {
+  test.skipIf(!existsSync(resolve(root, "dist", artifact)))(`Node process slots and local registry fetch compose for ${artifact}`, async () => {
     const code = `const {Worker}=require('node:worker_threads'); const w=new Worker("require('node:worker_threads').parentPort.postMessage(42)",{eval:true}); w.on('message', value => console.log('worker', value));`;
     const output = await run(["node", "--no-warnings", "web/scripts/node-host.mjs", "--wasm", `dist/${artifact}`, "--", "-e", code]);
     expect(output).toContain("worker 42");
