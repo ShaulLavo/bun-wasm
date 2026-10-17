@@ -60,7 +60,7 @@ async function moduleScope(request: Request, rest: string): Promise<Response> {
   const target = new URL(rest, new URL("..", sw.registration.scope));
   target.search = new URL(request.url).search;
   // Tools are cached by the runner only after it verifies the decompressed bytes.
-  const upstream = await fetch(target);
+  const upstream = await fetch(target.href);
   // The page is cross-origin isolated: a worker script needs COEP of its own.
   const headers = new Headers(upstream.headers);
   headers.set("cross-origin-embedder-policy", "require-corp");
