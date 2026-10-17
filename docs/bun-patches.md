@@ -82,7 +82,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`runtime/fs/`, filesystem quiescence](#filesystem-quiescence) | Host feature | Original shared admission and revocation fence lets controllers stop workers only after direct filesystem operations finish. |
 | [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
 | [`web/src/native-stream-state.ts`](#native-browser-stream-completion) | Host feature | Original native completion bridge preserves host hooks on instances as well as prototypes. |
-| [Cross-platform web test adapters](#cross-platform-web-tests) | Host feature | Original scratch, child-process cleanup and command-deadline adapters run the same assertions on Linux and macOS. |
+| [Cross-platform web test adapters](#cross-platform-web-tests) | Host feature | Original scratch, child-process cleanup, command-deadline and existing-browser-cache adapters run the same assertions on Linux and macOS. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
 | [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and support asynchronous stdin with live shared filesystem changes and large files. |
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
@@ -1412,6 +1412,11 @@ before allocation, and waits for its fixture server to exit. Its original
 descendants on normal exit, deadline and interruption rather than requiring GNU
 timeout on macOS. Browser network teardown uses owned
 ChildProcess handles, not Linux-only `/proc` paths. Test assertions are unchanged.
+The original `env.sh` host-cache adapter exports `PLAYWRIGHT_BROWSERS_PATH` only
+when it is unset and `/work/cache/ms-playwright` exists. It never downloads
+browsers; hosts without that directory retain Playwright's native cache lookup,
+and explicit overrides (including `0` and empty) are preserved. The isolated
+`web/tests/toolchain-env.test.ts` probes cover the default and those overrides.
 
 ### Native browser stream completion
 
