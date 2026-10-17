@@ -1,0 +1,50 @@
+import assert from "node:assert/strict";
+import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
+
+const deadline = setTimeout(() => { throw new Error("pending peer close did not finish"); }, 1000);
+const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+const drained = new MessageChannel();
+let drainedCloses = 0;
+drained.port2.on("close", () => drainedCloses++);
+const drainedClosed = new Promise<void>((resolve) => drained.port2.once("close", resolve));
+drained.port1.postMessage(42);
+drained.port1.postMessage(43);
+await new Promise<void>((resolve) => drained.port1.close(resolve));
+await turn();
+assert.equal(drainedCloses, 0);
+assert.deepEqual(receiveMessageOnPort(drained.port2), { message: 42 });
+await turn();
+assert.equal(drainedCloses, 0);
+assert.deepEqual(receiveMessageOnPort(drained.port2), { message: 43 });
+drained.port2.start();
+await drainedClosed;
+assert.equal(drainedCloses, 1);
+console.log("unstarted peer retains messages until synchronous draining");
+
+const started = new MessageChannel();
+const events: unknown[] = [];
+const startedClosed = new Promise<void>((resolve) => started.port2.once("close", () => { events.push("close"); resolve(); }));
+started.port1.postMessage("first");
+started.port1.postMessage("second");
+await new Promise<void>((resolve) => started.port1.close(resolve));
+await turn();
+assert.deepEqual(events, []);
+started.port2.on("message", (value) => events.push(value));
+await startedClosed;
+assert.deepEqual(events, ["first", "second", "close"]);
+console.log("starting a pending peer delivers its queue before closing");
+
+const discarded = new MessageChannel();
+let discardedCloses = 0;
+discarded.port2.on("close", () => discardedCloses++);
+const discardedClosed = new Promise<void>((resolve) => discarded.port2.once("close", resolve));
+discarded.port1.postMessage("discard when receiver closes");
+await new Promise<void>((resolve) => discarded.port1.close(resolve));
+await new Promise<void>((resolve) => setTimeout(resolve, 0));
+assert.equal(discardedCloses, 0);
+discarded.port2.close();
+await discardedClosed;
+assert.equal(discardedCloses, 1);
+clearTimeout(deadline);
+console.log("pending peer close does not poll and explicit close discards its queue");

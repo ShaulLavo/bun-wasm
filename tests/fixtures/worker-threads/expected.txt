@@ -1,0 +1,8 @@
+main thread exports
+environment data
+synchronous receive and clone
+transfer markers and array buffers
+queued events and ref state
+web message handler
+broadcast channels
+close
