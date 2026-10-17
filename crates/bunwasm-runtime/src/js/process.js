@@ -144,7 +144,7 @@
       });
     }
     stream.on("newListener", (event) => {
-      if (event === "data" || event === "readable" || event === "end") start();
+      if (event === "data" || event === "readable") start();
     });
     Object.assign(stream, {
       fd: 0,
@@ -237,10 +237,11 @@
       if (code !== undefined) process.exitCode = code;
       const exitCode = (process.exitCode | 0) || 0;
       internal.emitExit(exitCode);
+      internal.traceExit("process.exit", (process.exitCode | 0) || exitCode);
       native.exit((process.exitCode | 0) || exitCode);
     },
-    reallyExit: (code) => native.exit(code | 0),
-    abort: () => native.exit(134),
+    reallyExit: (code) => { internal.traceExit("process.reallyExit", code | 0); native.exit(code | 0); },
+    abort: () => { internal.traceExit("process.abort", 134); native.exit(134); },
     kill(pid, signal = "SIGTERM") {
       const number = typeof signal === "number" ? signal : signals[String(signal).toUpperCase()];
       if (!Number.isInteger(number) || number < 0 || number > 64) throw new TypeError(`Unknown signal: ${signal}`);

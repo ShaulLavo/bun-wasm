@@ -53,6 +53,7 @@ function fixture() {
     },
     nextTick(callback: (...args: unknown[]) => void, ...args: unknown[]) { ticks.push(() => callback(...args)); },
     emitExit() {},
+    traceExit() {},
     require(name: string) {
       if (name === "events") return events;
       if (name === "process_signals") return runInContext(processSignalsSource, context)(internal);
