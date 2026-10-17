@@ -527,22 +527,32 @@ scripts/app-matrix.sh --apps=vite-react,sveltekit,astro,vitest \
 ```
 
 The report destination is `/work/reports/bun-wasm-silent-exits-2026-10-17/`.
-`verified-matrix/results.json` retains exit codes, signals, deadlines, guest exit
-records and browser request failures. Source is `eb67aa0f` on main `6e93c80c`;
+`scheduler-matrix/results.json` retains exit codes, signals, deadlines, guest exit
+records and browser request failures. Final source is `e4b4ea0f` on main
+`6e93c80c`;
 runtime #33 is not integrated in this measurement.
 
 - **React optimizer requests.** QuickJS and JSC dev stay alive but leave the
   optimized `react.js` and `react-dom_client.js` requests pending until the
   deadline. No browser error or HTTP failure is recorded. Inspect the optimizer
   context and esbuild service replies; a deadlock or a performance cause is not
-  established by this bounded observation. A longer probe is queued separately.
+  established by this bounded observation. A 300-second replay completes
+  QuickJS dev/reload/build; JSC instead receives HTTP 504 `Outdated Optimize Dep`
+  for both React dependency URLs. The 180-second scheduler replay reproduces
+  that distinction. Preserve the longer-run evidence alongside the 90-second
+  failures; do not call the QuickJS result a permanent deadlock.
 - **JSC React build.** `vite-react-jsc-build.log` repeats `JSLock::unlock` through
   `JSObjectSetProperty` and `engine_jsc::from_val`. This reproduces the earlier
   native bridge failure above. Keep the real package sources unchanged and
   investigate native value lifetime, lock ownership and GC during conversion.
 - **SvelteKit completion.** QuickJS build exits 0 after `179 modules transformed`
   and `rendering chunks`, with all recorded loop reference counts zero and no
-  output. JSC dev/build hit the deadline. Browser dev repeatedly restarts config
+  output. JSC dev initially hit the deadline; the final scheduler artifact
+  faults in `JSRopeString::resolveToBufferSlow<char16_t>` through `resolveModule`,
+  with an out-of-bounds access at `0x6f6e6e69` in `0x4640000` bytes of linear
+  memory. This stack is distinct from React's JSLock failure. Start with module
+  resolve string/value lifetime around `engine_jsc.rs:302`; no cause is proved.
+  JSC build hits the deadline. Browser dev repeatedly restarts config
   and loses its SSR `fetchModule` transport, then has an unhandled esbuild
   `The service was stopped` rejection with live handles. Trace which file or
   config dependency causes the restart and why in-flight optimizer work survives
@@ -554,3 +564,9 @@ runtime #33 is not integrated in this measurement.
 - **Vitest events adapter.** Both configured pools stop at the missing
   `EventEmitterAsyncResource` export on every engine, before a worker pool starts.
   Implement its async-context behavior rather than inferring another worker gap.
+
+The same investigation reproduced and fixed callback starvation independently
+of the framework outcomes. A recurring immediate starved I/O on QuickJS/JSC
+and due timers on every wasm engine. The ready-batch and I/O-turn regressions
+now pass on all engines. This does not resolve the React optimized-dependency
+504 or either native JSC fault; their app-level follow-ups remain approved.

@@ -81,7 +81,7 @@ framework error forms and host/guest provenance separation.
 
 ## Final 90-second replay
 
-Source `eb67aa0fe9b189ef8ee861e82aaaa5b88cc4c955`, based on main `6e93c80c`.
+Source `e4b4ea0fcd5e608fbf9eb98ad56fc9a31d56100c`, based on main `6e93c80c`.
 The six selected projects record 35 passing stages and 16 failures. All 2,709
 registry requests replay from the frozen mirror, with zero misses or errors.
 The runner reports cleanup complete. Raw reports and the exact scripts are in
@@ -89,16 +89,16 @@ The runner reports cleanup complete. Raw reports and the exact scripts are in
 
 | Check | QuickJS | JSC | Browser engine |
 | --- | --- | --- | --- |
-| Runtime fixtures | 203/203 | 203/203 | 203/203 |
+| Runtime fixtures | 205/205 | 205/205 | 205/205 |
 | Vanilla install, dev/reload, build | 3/3 | 3/3 | 3/3 |
 | Vue install, dev/reload, build | 3/3 | 3/3 | 3/3 |
 | React install, dev/reload, build | 2/3 | 1/3 | 3/3 |
-| SvelteKit dev render | Pass | Deadline | Exit 1 |
+| SvelteKit dev render | Pass | Native module-loader fault | Exit 1 |
 | SvelteKit build output | Missing | Deadline | Pass |
 
 The full web gate passes. Built-site HMR passes all six Chromium/WebKit engine
-runs. All 36 exit and parser checks pass. Generated watcher code matches the
-current TypeScript source in every engine build. The retained wasm hashes match
+runs. All 36 exit and parser checks pass. Generated watcher and scheduler code
+match the current TypeScript sources in every engine build. The retained wasm hashes match
 the matrix provenance.
 
 The selected upstream test files are `js/first_party/ws/ws-upgrade-events.test.ts`,
@@ -122,9 +122,13 @@ hashes. The temporary baseline worktree is removed after measurement.
 
 - React dev on QuickJS and JSC reaches a live server, then times out waiting for
   `@id//node_modules/.vite/deps/react.js` and `react-dom_client.js`. Both requests
-  remain pending with no browser console or HTTP error. The host is then killed
-  by the harness. This is a deadline, not a guest exit. A separate five-minute
-  probe is queued to distinguish slow optimization from unfinished work.
+  remain pending with no browser console or HTTP error at the 90-second bound.
+  The host is then killed by the harness. A five-minute replay on the earlier
+  source completes QuickJS dev/reload/build, while JSC receives HTTP 504
+  `Outdated Optimize Dep` responses. A later 180-second replay on the scheduler
+  source again completes QuickJS and browser; JSC still gets those 504 responses.
+  The scheduler regressions prove fairness; they do not establish the cause of
+  React's default-budget timeout or a startup-speed improvement.
 - React build on JSC repeats the documented `JSLock::unlock` trap through
   `JSObjectSetProperty` and `engine_jsc::from_val`. QuickJS and browser builds pass.
 - Astro exits 1 on every engine. QuickJS reports an unresolved circular
@@ -132,8 +136,10 @@ hashes. The temporary baseline worktree is removed after measurement.
   report missing `node:http2.Http2ServerResponse`.
 - SvelteKit QuickJS renders its dev page, but build exits 0 after 179 modules and
   `rendering chunks`, with no `build/index.html`. The exit record has no
-  referenced timers, message ports or I/O waiters. JSC dev and build reach their
-  deadlines after config restarts and SSR bundle rendering. Browser dev repeatedly
+  referenced timers, message ports or I/O waiters. The final JSC dev run faults in
+  `JSRopeString::resolveToBufferSlow<char16_t>` through `resolveModule` with an
+  out-of-bounds Wasm access; earlier runs reached the deadline. JSC build still
+  reaches its deadline after SSR bundle rendering. Browser dev repeatedly
   restarts config, loses the SSR transport, then exits 1 on an unhandled esbuild
   `Error during dependency optimization: The service was stopped`. Its exit
   record still has 128 referenced timers and two I/O waiters. Browser build passes.
@@ -144,3 +150,19 @@ hashes. The temporary baseline worktree is removed after measurement.
 The `networkHandles` counter is the referenced waiter count supplied by the
 networking module. It also includes worker and subprocess I/O waiters registered
 through that module.
+
+## Scheduler starvation regression
+
+A reduced script continuously queues an immediate while awaiting loopback HTTP.
+Before the scheduler fix, QuickJS and JSC time out after four seconds with no
+response. Browser and native Bun complete. A second script waits for a due timer
+under that immediate load; all three wasm engines time out while native Bun
+completes. These cases are separate from the framework timeout observations.
+
+The ready immediate batch is now bounded. Recursively queued immediates wait
+until the next batch, which gives due timers a turn. A shared TypeScript
+scheduler steps I/O between callback turns. The two regressions and adjacent
+timer/process fixtures pass on every engine, followed by all 205 runtime
+fixtures per engine and the complete web/HMR gates. No Rust runtime behavior or
+host ABI slot is added. The existing Rust comment is updated to describe the
+scheduler return contract.
