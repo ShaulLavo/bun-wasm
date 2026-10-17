@@ -33,8 +33,8 @@ export interface RunRequest {
   /** The networking ring (net/ring.ts); null when the page is not cross-origin isolated. */
   net: SharedArrayBuffer | null;
   /**
-   * Browser engine: the Cache Storage cache for this run's ES modules, which the service worker
-   * serves under ./m/ (this worker runs from its ./__bunwasm/ scope). Null: blob URLs, no cycles.
+   * Browser engine: the Cache Storage cache for import cycles, served by the service worker
+   * under ./m/. Acyclic modules use blob URLs. Null disables import cycles.
    */
   moduleCache: string | null;
   /**
