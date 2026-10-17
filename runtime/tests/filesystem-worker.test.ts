@@ -72,6 +72,15 @@ test("backend startup failures report their complete message and original worker
   worker.terminate();
 });
 
+for (const reason of ["hostile", "null-prototype"]) test(`backend startup reports an unprintable ${reason} rejection`, async () => {
+  const worker = new Worker(new URL("./fixtures/filesystem-startup-failure.ts", import.meta.url).href);
+  cleanups.push(() => worker.terminate());
+  const message = nextMessage(worker);
+  worker.postMessage({ reason });
+  expect(await message).toMatchObject({ type: "filesystem-error", message: "Unknown filesystem worker error" });
+  worker.terminate();
+});
+
 test("completed writes are visible to siblings before either process exits", async () => {
   const { client } = fixture();
   const sibling = new FilesystemClient(client.fork());
