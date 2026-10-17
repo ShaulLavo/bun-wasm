@@ -5,6 +5,7 @@ import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outco
 import { createSignalState, publishSignal, setSignalDisposition } from "../../runtime/proc/signals.ts";
 import { SharedPipe, SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "../src/subprocess.ts";
 import type { RunRequest, WorkerMessage } from "../src/worker.ts";
+import { executableNotFound } from "../src/spawn-error.ts";
 import type { Stream } from "../../runtime/core/descriptors.ts";
 
 // Execute the actual worker lifecycle with host boundaries injected, without replacing runner globals.
@@ -21,6 +22,7 @@ class TestWasiExit extends Error { constructor(readonly code: number) { super("e
 
 async function run(options: {
   adapter?: RunRequest["adapter"];
+  spawnBroker?: RunRequest["spawnBroker"];
   instantiateError?: boolean;
   onMessage?(message: WorkerMessage): void;
   onSubprocess?(host: SubprocessHost): void;
@@ -56,7 +58,7 @@ async function run(options: {
   };
   const outcome = options.outcome ?? (options.isolated === false ? undefined : new SharedArrayBuffer(8));
   const request = {
-    engine: "browser", adapter: options.adapter, module: {}, args: ["fixture"], env: {},
+    engine: "browser", adapter: options.adapter, spawnBroker: options.spawnBroker, module: {}, args: ["fixture"], env: {},
     filesystem, trace: false, net: null, moduleCache: null, slots: "off", child: options.child,
     signalState: options.signalState, outcome, interrupt: options.interrupt, requestedSignal: options.requestedSignal,
   } as unknown as RunRequest;
@@ -73,6 +75,7 @@ async function run(options: {
     },
     FilesystemClient: class {
       connection = filesystem;
+      lookup() { return { kind: "dir" }; }
       dispose() { events.push("dispose fs"); }
     },
     revokeFilesystem() { revoked = true; events.push("revoke"); },
@@ -84,7 +87,7 @@ async function run(options: {
         options.onSubprocess?.(this);
       }
     },
-    childTransport, wasiPipe,
+    childTransport, wasiPipe, executableNotFound,
     claimOutcome, outcomeWord, readOutcome,
     HOST_CALL_FD: 3,
     WasiExit: TestWasiExit,
@@ -513,4 +516,21 @@ test("ordinary numeric signal-like exit remains an ordinary exit", async () => {
 test("non-isolated workers retain ordinary execution without SharedArrayBuffer", async () => {
   const result = await run({ isolated: false, adapter: "preview1", launch: () => 23 });
   expect(exits(result.messages)).toEqual([{ type: "exit", code: 23, signal: undefined, sleep: "busy-wait" }]);
+});
+
+test("page Bun workers reject unregistered commands before posting a filesystem transfer", async () => {
+  let host!: SubprocessHost;
+  await run({
+    spawnBroker: { executables: ["bun", "custom.wasm"] },
+    onSubprocess(value) { host = value; },
+    engine() {
+      expect(host.spawn(JSON.stringify({ argv: ["missing", "argument"] }))).toBe(-1);
+      expect(JSON.parse(host.lastError!)).toMatchObject({
+        code: "ENOENT", errno: -2, path: "missing", message: 'Executable not found in $PATH: "missing"',
+      });
+      expect(host.children.size).toBe(0);
+      expect(host.handles.size).toBe(0);
+      return 0;
+    },
+  });
 });
