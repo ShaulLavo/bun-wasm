@@ -26,11 +26,11 @@
   };
   const errnoNames: Record<number, string> = {
     1: "E2BIG", 2: "EACCES", 6: "EAGAIN", 8: "EBADF", 12: "ECHILD", 21: "EFAULT", 27: "EINTR", 28: "EINVAL", 29: "EIO",
-    33: "EMFILE", 44: "ENOENT", 48: "ENOMEM", 52: "ENOSYS", 63: "EPERM", 64: "EPIPE", 71: "ESRCH", 76: "ENOTCAPABLE",
+    33: "EMFILE", 44: "ENOENT", 48: "ENOMEM", 52: "ENOSYS", 58: "ENOTSUP", 63: "EPERM", 64: "EPIPE", 71: "ESRCH", 76: "ENOTCAPABLE",
   };
   const nodeErrnos: Record<string, number> = {
     EPERM: -1, ENOENT: -2, ESRCH: -3, EINTR: -4, EIO: -5, E2BIG: -7, EBADF: -9, ECHILD: -10, EAGAIN: -11,
-    ENOMEM: -12, EACCES: -13, EFAULT: -14, EINVAL: -22, EMFILE: -24, EPIPE: -32, ENOSYS: -38, ENOTDIR: -20,
+    ENOMEM: -12, EACCES: -13, EFAULT: -14, EINVAL: -22, EMFILE: -24, EPIPE: -32, ENOSYS: -38, ENOTDIR: -20, ENOTSUP: -95,
   };
   const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
 

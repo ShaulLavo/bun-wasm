@@ -793,3 +793,14 @@ test("a missing or non-directory cwd is the spawn error and starts nothing", asy
   // A relative cwd resolves against the guest cwd before the check.
   expect(module.spawn(["bun", "x"], { cwd: "../tmp", stdout: "pipe" }).pid).toBeGreaterThan(0);
 });
+
+test("a supported signal name the process service rejects as unsupported is an ENOTSUP kill error", () => {
+  const fake = service();
+  const { module } = load(fake);
+  const child = module.spawn(["bun", "stop"], { stdout: "pipe" });
+  fake.native.procKill = () => -58;
+  try { child.kill("SIGSTOP"); throw new Error("kill should fail"); } catch (error: any) {
+    expect(error).toMatchObject({ code: "ENOTSUP", errno: -95, syscall: "kill", message: "kill ENOTSUP" });
+  }
+  expect(child.killed).toBe(false);
+});
