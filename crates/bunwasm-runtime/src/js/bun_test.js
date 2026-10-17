@@ -22,7 +22,7 @@
   }
 
   function now() {
-    return performance.now();
+    return native.now();
   }
 
   function isThenable(value) {
@@ -660,6 +660,7 @@
   };
 
   const jest = {
+    ...internal.fakeTimers.api,
     fn: mock,
     spyOn,
     restoreAllMocks: () => forEachMock("mockRestore"),
@@ -1872,14 +1873,14 @@
       const finalize = (result) => {
         if (invocation.settled) return;
         invocation.settled = true;
-        if (timer !== null) clearTimeout(timer);
+        if (timer !== null) internal.realTimers.clearTimeout(timer);
         if (activeInvocation === invocation) activeInvocation = null;
         resolve(result);
       };
       invocation.fail = (error) => finish({ error });
       activeInvocation = invocation;
       const startTimer = () => {
-        timer = setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
+        timer = internal.realTimers.setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
       };
       try {
         if (usesDone) {
@@ -2399,6 +2400,7 @@
     spyOn,
     jest,
     vi: jest,
+    setSystemTime: internal.fakeTimers.api.setSystemTime,
     setDefaultTimeout(ms) {
       if (typeof ms !== "number") throw new Error("setTimeout() expects a number (milliseconds)");
       options.timeout = ms;

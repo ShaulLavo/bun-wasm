@@ -90,9 +90,8 @@ export async function browserHost({ root, options, launch, stop }) {
     try {
       await page.goto(url, { timeout: remaining() });
       await page.locator(check.selector).filter({ hasText: check.text }).waitFor({ timeout: remaining() });
-      const hmr = check.hmr && await verifyHmr(project, check.selector, check.hmr, remaining());
+      const hmr = check.hmr && await verifyHmr(project, check.selector, check.hmr, remaining(), () => page.screenshot({ path: join(options.output, `${basename(project)}-dev.png`) }));
       if (errors.length) throw new Error(errors.join("\n"));
-      if (hmr) await page.screenshot({ path: join(options.output, `${basename(project)}-dev.png`) });
       return { status: "pass", assertion: `${check.selector} renders ${JSON.stringify(check.text)}${hmr ? `; ${hmr}` : ""}` };
     } catch (error) {
       return { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server"), browserDiagnostics: diagnostics() };

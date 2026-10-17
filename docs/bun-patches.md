@@ -18,6 +18,9 @@ Each row has one class. A file with independent changes has separate rows.
 | [Generated `bun:wrap` helpers](#bun-wrap-helpers) | Host feature | Load Bun's unmodified runtime helpers through the builtin registry. |
 | [Partial strict comparison](#partial-strict-comparison) | Port | Translate Bun's native partial-comparison rules to TypeScript for all engines. |
 | [Small public runtime adapters](#small-public-runtime-adapters) | Host feature | Original matcher, native and browser promise reaction, version, web-brand and resolver-diagnostic adapters. |
+| [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
+| [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
+| [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
 | [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, async handler dispatch and streaming wrappers on all engines. |
 | [X509Certificate adapters](#x509certificate) | Host feature | Original BoringSSL data bindings and Node certificate wrapper over existing KeyObjects. |
 | [X.509 hostname option matcher](#x509-hostname-option-matcher) | Port | Adapt Bun's OpenSSL-compatible Rust matcher because BoringSSL removed four option behaviors. |
@@ -89,12 +92,12 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/stack_trace.js`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
 | [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, `web/src/engine-host.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
-
-| [`runtime/core/`, `runtime/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, shared filesystem, IndexedDB persistence, lazy residency and descriptor adapters. |
+| [Page-owned runtime and generic browser services](#waffle-preparation) | Host feature | Original runtime ownership, worker/executor, filesystem, terminal, network and preview adapters separated from Bun policy for Waffle extraction. |
+| [`runtime/core/`, `runtime/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, shared filesystem, IndexedDB persistence, lazy residency, startup diagnostics and descriptor adapters. |
 | [`web/tests/persistence-browser-worker.ts`, persistence corpus](#browser-runtime-core) | Host feature | Original browser test adapter reproduces the local storage spike's generated sizes and synthetic bytes; no package contents or upstream implementation. |
 | [`runtime/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry, jobs, registered signal dispositions including Node/Bun's ignored SIGPIPE default, immutable final-kind query and byte-sized exit statuses. |
 | [`runtime/fs/`, filesystem quiescence](#filesystem-quiescence) | Host feature | Original shared admission and revocation fence lets controllers stop workers only after direct filesystem operations finish. |
-| [`runtime/fs/opfs.ts`, OPFS access-handle and quota adapters](#opfs-storage-adapter) | Host feature | Original one-file-per-payload storage adapter; adapts SLICC-kernel's Apache-2.0 `src/fs/opfs.ts` at 88c5bb3 for NotReadableError retries and QuotaExceededError mapping while retaining bun-wasm's checksummed snapshots, lazy index and bounded cache. |
+| [`runtime/fs/opfs.ts`, OPFS access-handle and quota adapters](#opfs-storage-adapter) | Host feature | Original one-file-per-payload storage adapter with guidance for occupied workspaces; adapts SLICC-kernel's Apache-2.0 `src/fs/opfs.ts` at 88c5bb3 for NotReadableError retries and QuotaExceededError mapping while retaining bun-wasm's checksummed snapshots, lazy index and bounded cache. |
 | [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
 | [`web/src/native-stream-state.ts`](#native-browser-stream-completion) | Host feature | Original native completion bridge preserves host hooks on instances as well as prototypes. |
 | [Cross-platform web test adapters](#cross-platform-web-tests) | Host feature | Original scratch, child-process cleanup, command-deadline and existing-browser-cache adapters run the same assertions on Linux and macOS. |
@@ -115,7 +118,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming, Agent pool and upgrade response adapters shared by all engines. |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
 | [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns and bounded immediate batches. |
-| [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations. |
+| [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations, with Node listener identity. |
 | [`src/js/exit_provenance.ts` and lifecycle hooks](#runtime-exit-provenance) | Host feature | Original opt-in exit diagnostics over the existing event loop and error handlers. |
 | [`scripts/generate-ws.sh` and builtin resolution](#portable-ws-builtin) | Host feature | Original module wrapper supplies Bun's builtin ws import and require on every engine. |
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
@@ -125,6 +128,95 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-imports) | Host feature | Original generated-function adapter with module-relative dynamic imports. |
 | [`src/js/bun_console_constructor.js`](#bun-console-constructor) | Port | Generate Bun's Console constructor with lexical engine-independent hooks. |
 | [`scripts/generate-bun-console.mjs`, `src/js/console_constructor.js`, global Console wiring](#bun-console-constructor) | Host feature | Original generation and runtime adapters expose the shared constructor and its streams. |
+
+## Waffle preparation
+
+Class **Host feature**. These are original bun-wasm adapters, not copied Bun, Node or
+WebKit implementations. The source boundary is bun-wasm main
+`4e475302e4dabab0d0a404e7dd95f7e2a3eface5`, with the startup-outcome and
+filesystem-writer-lock contracts integrated before extraction. The new
+`runtime/index.ts` / `runtime/runtime.ts` composition owns the page filesystem,
+registration, shared process identities and lazy supervision. A stable global symbol guards
+one live owner; consumers borrow capabilities rather than receiving teardown ownership.
+
+The original page filesystem and terminal adapters moved from
+`web/src/{shared-fs,fs-worker,runtime-terminals}.ts` to `runtime/browser/`. Their local changes
+inject consumer worker URLs/storage configuration, retain Bun's workspace namespace in the
+web wrapper, and remove outward runtime imports. Terminal destinations remain callback codecs,
+not interactive terminal discipline. The generic tests moved with framing/terminal code and
+no longer depend on Bun's MemFS shim; legacy subprocess assertions stay in web tests.
+
+The original ring, protocol and HTTP/1 framing moved from `web/src/net/` to
+`runtime/browser/net/`. Generic `helper.ts` requires an injected fetch function instead of
+importing Bun's installation cache. Generic `host.ts` owns handles/rings/connection state and
+ordinary bytes; `web/src/net/host.ts` retains guest-memory pointers, native function names and
+numeric slot bindings. `web/src/net/helper.ts` retains only Bun's installed-fetch policy.
+
+The original preview protocol, request/socket routing and configurable service-worker handler
+live in `runtime/browser/`. Bun's `web/src/{preview,sw}.ts` keep registration defaults, fixed
+module-cache scope and guest websocket injection. These are a separation of existing original
+adapters, not an upstream service-worker implementation.
+
+Generic worker bootstrap/protocol and process admission, descriptor transport, finalization and
+supervision live in `runtime/`; injected executors keep Bun engines, slots, cache policy and
+legacy `SubprocessHost`/Worker-channel transports in `web/`. The process-owned generic pipes
+and Bun's legacy pipes retain distinct ownership/EOF contracts. Existing upstream-derived pipe
+fragments and interruption provenance remain classified in their sections below; this boundary
+change does not remove those notices or claim new physical worker-death guarantees.
+
+`runtime/build.ts`, explicit conditional exports, the trusted-Git install check and installed
+package/source-asset/provenance tooling are original build/test adapters. They emit ignored
+per-module JavaScript for Node without bundling independent state copies, preserve source-first
+browser/Bun use and keep the 7 KiB core gate. No upstream implementation is copied by these
+packaging changes.
+
+## Engine interruption
+
+Class **Host feature**. The WebKit patch changes
+`Source/JavaScriptCore/llint/{LowLevelInterpreter.asm,LLIntSlowPaths.cpp}` and
+`Source/JavaScriptCore/runtime/VMTraps.h` at Bun's WebKit revision
+`3d3257150c40a1aabdc5f8b48d5b33d0413674cb`. Single-threaded WASI cannot use a
+watchdog thread to publish VM trap bits while JavaScript runs. A per-VM countdown
+therefore polls the host every 1,024 ordinary C-loop trap points, including loop
+backedges and function entries. The existing trap slow path saves the interpreter
+PC and stack before polling; generic exception/unwind checks do not poll the host.
+A true callback result requests JSC's distinguished uncatchable termination
+exception. Polling is disabled for hosts without optional signal slot 18. This is
+a host extension, not an upstream bug.
+
+Original adapters in `crates/bunwasm-runtime/src/{engine,engine_quickjs,engine_jsc,lib,host}.rs`,
+`crates/bunwasm-jsc/{cpp/helpers.cpp,src/sys.rs}`,
+`crates/bunwasm-host/src/{slots,process/stdio}.rs`, and `web/src/subprocess.ts`
+add `(signal=0, mode=4)` to existing slot 18. It observes fatal cancellation
+without consuming the authoritative per-signal handled pending set. QuickJS
+installs its public `JS_SetInterruptHandler` through rquickjs's interrupt API,
+without changing upstream QuickJS, amortizing host calls across eight ordinary
+engine polls (about 80,000 backedges/calls). Neither engine callback enters JS.
+
+Handled signals wait for the next ordinary event-loop turn, matching Node. An
+earlier design dispatched them inside engine callbacks; review rejected that
+because QuickJS also polls during native regexp operations, and reentry can break
+native borrowed state or runtime timer invariants. No interpreter-specific
+reentry hook or runtime critical-section suppression is needed. The original
+`crates/bunwasm-runtime/src/js/{process.js,process_signals.ts}` adapter serializes cooperative dispatch,
+including recursive broken-pipe handling. Default signals already have an
+immutable host outcome; a fatal checkpoint unwinds Wasm without entering guest
+catch/finally blocks, including while a handled callback is CPU-bound. The
+browser-native engine needs no new hook and remains covered by worker termination.
+
+The original `runtime/proc/abi.ts` adapter implements the same fatal-only mode 4
+for generic process imports. The original `runtime/proc/signals.ts` helper preserves
+pending-signal wake hints during cooperative dequeue. The original
+`web/src/{runner,worker,subprocess-broker,subprocess}.ts`
+adapters share each process's existing budget with its page-side broker. Signal delivery
+notifies that budget's wait word and, for generic process polling, the directory wake word;
+short timeout rescans are not the signal notification mechanism. Legacy preview1 guests
+also receive their root or child's interrupt channel, with cooperative dequeue consuming
+its wake hint without consuming another pending signal.
+
+These adapters and the browser proof/benchmark harness are original implementations,
+not copied source. JSC polling covers JS safe points, not a single uninterrupted
+native operation; QuickJS retains its existing native-operation interrupt polls.
 
 ## Third-party interrupt instrumentation
 
@@ -155,6 +247,7 @@ clang 23.1.0 / LLVM `895aa2c896ada719451be2e3673c83da8ddf1141`, `-O2 -nostdlib`,
 wasm32 target, exported memory and a 16 MiB maximum memory. Source comments preserve exact
 flags. The benchmark optionally takes the retained spike rewriter as an external input; it is
 bundled only into the disposable measurement app, never into the shipped runtime.
+
 
 ## Browser process service
 
@@ -236,6 +329,33 @@ Children use independent process revocation identities while
 sharing the filesystem service's root revocation word. New browser fixtures and timing
 harnesses are original test programs, not copies of the spike implementations.
 
+## Test fake clock
+
+Class **Host feature**, **original adapter** in `crates/bunwasm-runtime/src/js/fake_timers.ts`,
+with routing in `bootstrap.js`, `bun_test.js`, `process.js` and `web.js`.
+No upstream implementation is copied. The reference contracts are Bun's
+`src/runtime/test_runner/timers/FakeTimers.rs` and
+`src/jsc/bindings/JSMockFunction.cpp` at `cd95fa7a13b3f13be73e512b38ec111c1c228084`.
+
+Bun's implementation calls its JSC global object, native timer heap and virtual machine.
+Those cannot run through the portable builtin loader. The adapter keeps fake timer handles
+in a separate queue, advances a nanosecond clock, and exposes the controls through `jest`
+and `vi`. Global timers and `node:timers` share scheduling and cancellation. Runtime-owned
+callbacks use the real timer interface, so filesystem, worker, crypto, compression, readline, and subprocess
+work survives fake-clock restoration. Host wakeups use the captured native clock. Timers
+created before fake-clock activation keep their real ownership. A separate running-callback
+stack keeps numeric handles discoverable during nested drains. Cancellation and `clearAllTimers`
+close those running handles without including them in the pending timer count.
+
+A stable Date constructor wrapper preserves references saved before activation, explicit
+constructor arguments, subclasses and Date instances. Its current time also supplies native
+Intl formatters when callers omit the date. `setSystemTime` rebases wall time without changing
+timer deadlines. Performance and process high-resolution time use the fake monotonic clock.
+`runOnlyPendingTimers` uses Bun's latest pending deadline as its horizon. Timer callbacks
+drain the runtime-owned `process.nextTick` queue synchronously. Browser native Promise jobs
+remain deferred until the synchronous host drain returns. The portable scheduler bounds a single
+drain at 100,000 callbacks to reject an endless interval or recursive timer.
+
 ## OPFS storage adapter
 
 Class **Host feature**, original adapter in `runtime/fs/opfs.ts`, informed by SLICC-kernel
@@ -244,6 +364,8 @@ handle retry loop for `NotReadableError`/`InvalidStateError` and its `QuotaExcee
 `ENOSPC` mapping are adapted here. The layout, snapshot recovery, Web Lock lifetime, lazy payload
 reads, browser-specific create concurrency and 64-handle cache are original bun-wasm behavior;
 no SLICC code is copied verbatim.
+The original Web Lock refusal now tells the user to close the owning tab and reload;
+lock acquisition and the adapted SLICC retry and quota behavior stay unchanged.
 
 ## Filesystem quiescence
 
@@ -330,6 +452,11 @@ and rename events. Recursive traversal does not follow directory symlinks.
 `close`, `ref`, `unref`, persistent options and abort signals control the actual
 timer. Closing a watcher releases its timer and signal listener. Polling can
 coalesce changes between samples and does not promise an OS event count.
+Both `watch(path, callback)` and `watch(path, options, callback)` register the
+original callback directly, matching Node v22.14.0 `lib/fs.js` `watch()` and
+`lib/internal/fs/watchers.js` EventEmitter dispatch. No Node source is copied.
+The fixture checks raw listener identity, single registration, `once`, `off`,
+removal by the original callback, and callback receiver on both overloads.
 `watchFile` and the promise-based watcher remain unsupported.
 
 ## Runtime exit provenance
@@ -435,6 +562,15 @@ Web Locks and lazy data hydration. Shared revision counters capture direct guest
 persisted data can leave the pool without changing inode identity. The editor adapters wait for
 a durable checkpoint before marking a save complete, seed workspaces once, and explicitly reset
 sandbox templates. `runtime/core/wasi.ts` routes both preview1 sync calls through this boundary.
+The original worker/controller adapters in `runtime/fs/service.ts` and `web/src/shared-fs.ts`
+now send startup failures as plain message and stack fields before revoking pending requests.
+Unprintable rejection reasons and throwing stack getters still produce a diagnostic, and a
+failed diagnostic transfer still dispatches the worker error fallback.
+The playground catches startup rejection, displays the complete diagnostic, and offers Reload.
+OPFS refuses an occupied Web Lock and explains how to release it. IndexedDB uses an original
+takeover adapter. A new holder steals the lock, allocates a persisted epoch, and checks that epoch
+inside every write transaction. A displaced page stops persistence and preserves visible editor text.
+These changes extend bun-wasm's own adapters at `b14f536f`; no upstream implementation is copied.
 The original persistence browser fixtures in `web/tests/persistence-browser-{main,worker}.ts`
 and their Playwright/Safari runners exercise these adapters without a wasm build. The corpus
 fixture retains only generated package-file sizes from the original local storage spike's

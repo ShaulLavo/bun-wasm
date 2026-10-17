@@ -154,6 +154,7 @@ unsafe extern "C" {
 
     // cpp/helpers.cpp
     pub fn bunjsc_create_context() -> JSGlobalContextRef;
+    pub fn bunjsc_set_interrupt_handler(ctx: JSContextRef, enabled: bool);
     pub fn bunjsc_import(ctx: JSContextRef, specifier: *const c_char, exception: *mut JSValueRef) -> JSValueRef;
     pub fn bunjsc_evaluate_script(ctx: JSContextRef, source: *const c_char, filename: *const c_char, first_line: c_int, exception: *mut JSValueRef) -> JSValueRef;
     pub fn bunjsc_enter(ctx: JSContextRef);
