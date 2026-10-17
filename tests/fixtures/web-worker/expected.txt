@@ -1,0 +1,7 @@
+file worker, globals, options, transfer, events, terminate
+messages drain before natural close
+worker errors, missing entry, open before error
+worker global event listeners and close
+worker preload
+TypeScript blob worker
+nested web worker
