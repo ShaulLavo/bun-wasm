@@ -603,7 +603,7 @@ class EngineHost {
     const host = this;
     const hidden = (name, value) => Object.defineProperty(globalThis, name, { value, configurable: true, writable: true, enumerable: false });
     hidden("__bunwasm_meta", (meta, path) => {
-      host.internal.initImportMeta(meta, path, path === host.entry.main);
+      host.internal.initImportMeta(meta, path, path === host.internal.mainPath);
     });
     hidden("__bunwasm_dynamicImport", (from) => (spec) =>
       host.track(
