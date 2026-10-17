@@ -58,12 +58,14 @@ const NativeResponse = Response;
 function moduleStore(cacheName: string) {
   const run = cacheName.replace(/^bunwasm-m-/, "");
   const base = new URL(`./m/${run}/`, self.location.href).href;
-  const cache = caches.open(cacheName);
+  const openCache = caches.open.bind(caches, cacheName);
+  let cache: Promise<Cache> | undefined;
   return {
     url: (key: string) => base + encodeURIComponent(key),
     put: async (url: string, source: string) => {
       const headers = { "content-type": "text/javascript; charset=utf-8" };
-      await (await cache).put(url, new NativeResponse(source, { headers }));
+      const store = await (cache ??= openCache());
+      await store.put(url, new NativeResponse(source, { headers }));
     },
   };
 }
