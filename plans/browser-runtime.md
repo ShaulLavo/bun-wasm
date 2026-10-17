@@ -176,15 +176,13 @@ sections 7 and 8) maps its `ProcessHost` trait onto this layer. The process laye
 
 ### Where it lives
 
-The generic implementation currently lives in bun-wasm's `runtime/` package while the
-[approved Waffle split](waffle-split.md) is prepared. After the split it lives in the public
-MIT-licensed `ShaulLavo/waffle` repository, package `waffle`, with curated layer and browser
-entry points so a bundler includes only what a page imports. Generic filesystem, process,
-interruption, worker/bootstrap, network and preview services, tests and follow-on plan steps
-move there. Bun's guest engines, executor, native-slot/legacy-pipe adapters and application
-policy remain in `web/` here. The application creates one page-owned runtime and explicitly
-passes it to Bun and `createShell({ runtime })`; runs borrow its filesystem, identities and
-lazy process service. `proc` loads on the first spawn. A guest's `spawn` import can't await an `import()`, so the
+The generic implementation lives in the public MIT-licensed
+[`ShaulLavo/waffle`](https://github.com/ShaulLavo/waffle) repository, package `waffle`, with
+curated layer and browser entry points so a bundler includes only what a page imports. Generic
+filesystem, process, interruption, worker/bootstrap, network and preview services, tests and
+follow-on plan steps live there. Bun's guest engines, executor, native-slot/legacy-pipe adapters
+and application policy remain in `web/` here. The application creates one page-owned Waffle runtime and explicitly passes it to Bun; runs
+borrow its filesystem, identities and lazy process service. `proc` loads on the first spawn. A guest's `spawn` import can't await an `import()`, so the
 guest worker keeps a stub of about 1 KiB gzipped, including identity and atomic terminal-result
 primitives: it reserves a pid, takes the inherited descriptor references and returns at once,
 and the supervisor loads proc and starts the process
@@ -195,8 +193,8 @@ that can't run) and as a child-exit event in `poll`. A synchronous caller such a
 bun-wasm consumes an explicitly trusted Waffle Git dependency pinned to an exact commit;
 bash-web declares a Waffle peer dependency and uses an exact development pin for its own
 tests. Follow the split plan's ownership, installed-package and cross-repository gates before
-removing the in-tree package. Every new file that adapts upstream code gets its classified row
-in the owning repository's provenance ledger, including applicable notices.
+removing the in-tree package. Every new file that adapts upstream code gets its classified row in Waffle's or bun-wasm's
+provenance ledger, including applicable notices.
 
 ### Process ABI (for the shell lane)
 
@@ -304,10 +302,10 @@ the CI gate.
 | # | Step | Estimate |
 |---|---|---:|
 | 1 | **Fix the WASI host bugs in place**, stacked on PR #21: the nine from spike 4, each with a failing test first, reusing spike 4's fixtures. Add the CI gate (GitHub Actions running `web/tests` and an artifact-free headless browser smoke). | 600-900 |
-| 2 | **Package skeleton and core.** Create `runtime/`; move `wasi.ts`, `memory-views.js` and path helpers; one descriptor namespace with file, directory, pipe and terminal kinds and reference-counted open descriptions, so the host no longer holds MemFS nodes; explicit import namespaces instead of ENOSYS stubs; `poll_oneoff` with per-descriptor readiness. Enable code splitting in `web/build.ts` and `sandbox/build.ts`, including chunks under the scoped worker. `web/` consumes it with no behaviour change. CI checks bundle sizes against the budgets and initial downloads. | 1,500-2,200 |
+| 2 | **Package skeleton and core.** Create `waffle/core/` and `waffle/fs/`; use the package's WASI, memory-view and path entrypoints; one descriptor namespace with file, directory, pipe and terminal kinds and reference-counted open descriptions, so the host no longer holds MemFS nodes; explicit import namespaces instead of ENOSYS stubs; `poll_oneoff` with per-descriptor readiness. Enable code splitting in `web/build.ts` and `sandbox/build.ts`, including chunks under the scoped worker. `web/` consumes it with no behaviour change. CI checks bundle sizes against the budgets and initial downloads. | 1,500-2,200 |
 | 3a | **Filesystem worker and protocol.** In-memory tree owned by one worker; non-blocking submit and completion handles over shared memory; blocking preview1 adapter; open-file identity across rename and unlink. Memory-only backend. Replaces copy-at-spawn and merge-at-exit. | 1,500-2,200 |
 | 3b | **Persistence.** Backend interface; IndexedDB backend (default); background batched persistence; `fsync`; checksummed metadata written beside the old copy then swapped; Web Locks for one writer tab; the editor's persisted save. Reload test immediately after a save resolves. | 1,200-1,800 |
-| 3c | **OPFS backend.** One file per immutable revision, lazy loading, bounded total native handles under Safari's 253, per-browser create concurrency, and file-scoped durability. Explicit `storage: "opfs"`; IndexedDB stays default. [Implementation and measured corpus evidence](../runtime/README.md#opfs-corpus-measurements). | 600-1,000 |
+| 3c | **OPFS backend.** One file per immutable revision, lazy loading, bounded total native handles under Safari's 253, per-browser create concurrency, and file-scoped durability. Explicit `storage: "opfs"`; IndexedDB stays default. [Implementation and measured corpus evidence](https://github.com/ShaulLavo/waffle/blob/main/docs/benchmarks/filesystem-persistence-opfs-2026-10-17.json). | 600-1,000 |
 | 4a | **Processes.** Supervisor, process table, generic registry (module plus guest adapter), shared compiled modules, first-spawn stub, spawn/wait/kill/kill_job, jobs, per-signal dispositions and registration, immutable outcomes and revocation. Unhandled signals apply their default action immediately; handled signals retain the guest's own exit. Optional per-browser pool. Tests: delayed first activation while another shell task runs; one Ctrl+C stops an unhandled program with 130; a SIGINT handler exits 0 and keeps 0; removing it restores default; handled EPIPE retains its status. | 1,200-1,800 |
 | 4b | **Pipes.** Per-writer rings built from `SharedPipe`, reader merging, relay mode for multiple reading processes, reference counts, readiness, the `runtime_proc` imports. Tests: inherited concurrent writers, inherited readers, kill between a writer's check and publish, output queued before a kill still drained, a delayed publish after a kill never read, zero-length and partial I/O. | 1,000-1,500 |
 | 4c | **Process gate for the shell.** The own-shell spike's section 8 gate on real workers: external producer and consumer with a builtin filter, bounded flow and early reader close across workers, interrupt while WASM runs, descendant kill with reaping, an inherited nonstandard fd closed by the parent right after spawn, a background job surviving one command and controlled by the next. Runs against a preview1 fixture until the shell lands. | 500-800 |
@@ -335,8 +333,8 @@ A bounded preparation reproduction exited and job-reaped 100 leaf children under
 It left one process record, one job and one live transport, but retained 100 compact child
 identities and 101 parent edges. All children shared the root's single directory. The 101-entry
 used-PID and used-job ledgers intentionally enforce never-reuse and are **not** this finding.
-Suspect `runtime/proc/worker-broker.ts` (`retainIdentity` / `reapTransports`) and
-`runtime/proc/table.ts` (`parents` / `remove`). No worker, channel or filesystem backend is needed.
+Suspect Waffle `proc/worker-broker.ts` (`retainIdentity` / `reapTransports`) and
+`proc/table.ts` (`parents` / `remove`). No worker, channel or filesystem backend is needed.
 
 Reproduce from an exclusive checkout, through the PC light queue (use the matching canonical
 queue on another host). The command creates only in-memory transports and releases them in
