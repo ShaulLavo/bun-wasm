@@ -31,6 +31,7 @@ const before = { ReadableStream, WritableStream, TransformStream };
 const readable = new ReadableStream({ start(controller) { controller.close(); } });
 const writable = new WritableStream();
 const hooks = [Reflect.get(readable, closedKey), Reflect.get(writable, closedKey)];
+const errorHooks = [Reflect.get(readable, errorKey), Reflect.get(writable, errorKey)];
 const { installNativeStreamState } = await import("../src/native-stream-state.ts");
 const dispose = installNativeStreamState();
 try {
@@ -48,6 +49,14 @@ try {
   if (hasNativeHooks) {
     assert.equal(Reflect.get(readable, closedKey), hooks[0]);
     assert.equal(Reflect.get(writable, closedKey), hooks[1]);
+    assert.equal(Reflect.get(readable, errorKey), errorHooks[0]);
+    assert.equal(Reflect.get(writable, errorKey), errorHooks[1]);
+    if (mode === "own") {
+      for (const stream of [readable, writable]) {
+        assert.ok(Object.hasOwn(stream, closedKey));
+        assert.ok(Object.hasOwn(stream, errorKey));
+      }
+    }
   }
   assert.ok(stream instanceof native.ReadableStream);
   assert.equal(stream.locked, false);
@@ -72,5 +81,16 @@ try {
 } finally {
   dispose();
   await writable.close();
+}
+const installed = { ReadableStream, WritableStream, TransformStream };
+const descriptors = [ReadableStream, WritableStream].map(Ctor =>
+  [closedKey, errorKey].map(key => Object.getOwnPropertyDescriptor(Ctor.prototype, key)));
+const disposeAgain = installNativeStreamState();
+try {
+  assert.deepEqual({ ReadableStream, WritableStream, TransformStream }, installed);
+  assert.deepEqual([ReadableStream, WritableStream].map(Ctor =>
+    [closedKey, errorKey].map(key => Object.getOwnPropertyDescriptor(Ctor.prototype, key))), descriptors);
+} finally {
+  disposeAgain();
 }
 console.log(`${mode}: native stream construction and completion passed on ${process.version}`);
