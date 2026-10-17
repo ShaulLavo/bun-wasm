@@ -133,6 +133,9 @@ const cases: Record<string, () => Promise<void>> = {
     const empty = project("bunx", { "package.json": {} });
     check((await run(empty, "x", "fixture-cli@1.0.0", "remote")).trim() === "fixture-1.0.0 remote", "bun x install");
     check(!existsSync(join(empty, "bun.lock")), "bun x changed project lock");
+    const alias = Bun.spawn(["bunx", "fixture-cli", "alias"], { cwd, stdout: "pipe", stderr: "pipe" });
+    const [aliasOutput, aliasError, aliasCode] = await Promise.all([alias.stdout.text(), alias.stderr.text(), alias.exited]);
+    check(aliasCode === 0 && aliasOutput.trim() === "fixture-1.1.0 alias", `bunx alias: ${aliasError}`);
     const raced = await Promise.all(Array.from({ length: 3 }, () => run(empty, "x", "fixture-cli@2.0.0", "race")));
     check(raced.every(output => output.trim() === "fixture-2.0.0 race"), "concurrent bun x install");
   },
