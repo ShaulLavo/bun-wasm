@@ -98,9 +98,15 @@ pub fn workspaces(root: &Path, manifest: &Value, parser: &dyn Transpiler) -> Res
 }
 
 pub fn link(target: &Path, path: &Path) -> Result<()> {
-    fs::create_dir_all(path.parent().ok_or("Invalid link path")?).map_err(|e| e.to_string())?;
+    let parent = path.parent().ok_or("Invalid link path")?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let target = if target.is_absolute() {
+        relative(target, &physical(parent)?)
+    } else {
+        target.to_owned()
+    };
     if let Ok(meta) = fs::symlink_metadata(path) {
-        if meta.is_symlink() && fs::read_link(path).ok().as_deref() == Some(target) {
+        if meta.is_symlink() && fs::read_link(path).ok().as_deref() == Some(target.as_path()) {
             return Ok(());
         }
         if meta.is_dir() && !meta.is_symlink() {
@@ -128,4 +134,43 @@ pub fn lock_meta(meta: &Value) -> Value {
         }
     }
     row
+}
+
+pub fn physical(path: &Path) -> Result<PathBuf> {
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let mut path = PathBuf::from(crate::resolve::normalize(&cwd.join(path).to_string_lossy()));
+    for _ in 0..40 {
+        let mut prefix = PathBuf::new();
+        let mut redirected = None;
+        for component in path.components() {
+            prefix.push(component);
+            let Ok(target) = fs::read_link(&prefix) else {
+                continue;
+            };
+            let rest = path.strip_prefix(&prefix).map_err(|e| e.to_string())?;
+            let target = prefix.parent().ok_or("Invalid link parent")?.join(target).join(rest);
+            redirected = Some(PathBuf::from(crate::resolve::normalize(&target.to_string_lossy())));
+            break;
+        }
+        let Some(next) = redirected else {
+            return Ok(path);
+        };
+        path = next;
+    }
+    Err("Too many symbolic links in local dependency".into())
+}
+
+pub fn relative(target: &Path, base: &Path) -> PathBuf {
+    for ancestor in base.ancestors() {
+        let Ok(tail) = target.strip_prefix(ancestor) else {
+            continue;
+        };
+        let mut path = PathBuf::new();
+        for _ in base.strip_prefix(ancestor).unwrap().components() {
+            path.push("..");
+        }
+        path.push(tail);
+        return path;
+    }
+    target.to_owned()
 }

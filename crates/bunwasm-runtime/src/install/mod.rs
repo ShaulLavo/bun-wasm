@@ -289,7 +289,7 @@ fn command_package<'a>(resolver: &'a Resolver, name: &str, member: Option<&Path>
 
 fn package_present(package: &Package) -> bool {
     if let Some(local) = &package.local {
-        return fs::read_link(package.path()).ok().as_deref() == Some(local.path.as_path());
+        return local::physical(&package.path()).ok().as_deref() == Some(local.path.as_path());
     }
     let Ok(bytes) = fs::read(package.path().join("package.json")) else {
         return false;
