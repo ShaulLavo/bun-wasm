@@ -68,7 +68,10 @@ function safePromiseShape(promise: Promise<unknown>, own: PropertyDescriptor | u
 
 export function observePromise(promise: Promise<unknown>, fulfilled?: Reaction, rejected?: Reaction): Promise<unknown> {
   const own = descriptor(promise, "constructor");
-  if (safePromiseShape(promise, own)) return apply(then, promise, [fulfilled, rejected]);
+  // Proxy traps on a constructor or species holder are user code; a throwing one must not escape the matcher.
+  let safe = false;
+  try { safe = safePromiseShape(promise, own); } catch { safe = false; }
+  if (safe) return apply(then, promise, [fulfilled, rejected]);
   const replaceable = own ? own.configurable || ("value" in own && own.writable) : extensible(promise);
   if (!replaceable) {
     const cause = own
