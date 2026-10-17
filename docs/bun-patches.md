@@ -51,6 +51,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
+| [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
 | [0003](#0003-transpiler-dependencies) | Port | Supply WASI wakers, CPU features, crash, and resolver implementations. |
@@ -2184,6 +2185,18 @@ non-process descriptors to the existing Wasmtime functions. WASI record layouts 
 constants are interface definitions, not copied wasi-libc code. No Bun, wasi-libc or
 Wasmtime implementation is copied or patched by these new modules; the previously documented
 Wasmtime `proc_exit` behavior and upstream revision remain in [Browser process service](#browser-process-service).
+
+## Module preparation benchmark host
+
+Class **Host feature**, **original adapter** in `scripts/bench-module-preparation.ts` (the
+existing `.mjs` command is a TypeScript-entry shim). It uses the same `NodeProcessBroker`
+and `createNodeProcess` adapters as the headless host: the controller remains responsive
+on the main thread while the measured guest runs in a worker with real `runtime_proc`
+imports and preview1 descriptor routing. The benchmark loads `wasmCaller` from the existing
+`web/src/engine-host.js` through the original source wrapper, resolving its local imports
+to file URLs. It keeps the plain-JS, await and TypeScript fixtures, fresh-path and cached-call
+measurements; success, errors, interruption and a bounded deadline all stop the owned worker
+and remove its fixtures. No Bun, Node, wasi-libc or third-party implementation is copied.
 
 ## Compression and archive adapters
 
