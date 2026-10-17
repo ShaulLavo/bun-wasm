@@ -11,9 +11,18 @@ export interface BunLauncherOptions {
   executableName?(context: ProcessContext, service: ProcessService): ((name: string) => string) | undefined | Promise<((name: string) => string) | undefined>;
 }
 
-/** The service worker at ./__bunwasm/ (sw.ts) serves named module URLs for import cycles. */
+/** Where a worker URL is resolved from: the page, as `new Worker(url)` does. */
+function base(): string {
+  return globalThis.location?.href ?? import.meta.url;
+}
+
+/**
+ * The service worker at ./__bunwasm/ (sw.ts) serves named module URLs for import cycles. Only the
+ * classification resolves the URL; the worker is started with the string exactly as given, so a
+ * relative URL resolves as the browser resolves it.
+ */
 function scopedWorker(workerUrl: string): boolean {
-  return new URL(workerUrl).pathname.endsWith("/__bunwasm/worker.js");
+  return new URL(workerUrl, base()).pathname.endsWith("/__bunwasm/worker.js");
 }
 
 /** Launches `bun:<engine>` programs in the Bun worker. */
@@ -40,7 +49,7 @@ export function preview1Launcher(options: BunLauncherOptions): GuestLauncher {
   return async (context, service) => {
     const executableName = await options.executableName?.(context, service);
     return service.launchWorker(context, {
-      workerUrl: new URL("./preview1-worker.js", options.workerUrl).href,
+      workerUrl: new URL("./preview1-worker.js", new URL(options.workerUrl, base())).href,
       request: { module: context.module, args: context.request.argv, env: { ...context.request.env, PWD: context.request.cwd }, interruptible: context.interruptible },
       // Alias selection belongs to the Bun composition root, including recursive preview1
       // guests. The reusable worker never guesses that an unknown executable is Bun.
