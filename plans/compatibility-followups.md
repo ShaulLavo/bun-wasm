@@ -18,8 +18,8 @@ Raw logs are in `/work/reports/bun-wasm-web-worker/final/after-<engine>-logs/`.
 - `worker.test.ts` requests `--no-deprecation` and `--tls-min-v1.2`; the
   `worker_threads.ts::execArguments` validator rejects them. Implement their
   runtime behavior before accepting them. VM timeout cases require `node:vm`,
-  not changes to Worker delivery. The embedded-engine file also stalls at a
-  separate sixty-second diagnostic deadline after reaching those cases.
+  not changes to Worker delivery. The final run completes the entire worker file
+  on every engine; earlier scheduling-related file timeouts are resolved by main.
 - `worker-entry-point.test.ts` receives its error event for a builtin alias, but
   the guest additionally prints the generated throw to stderr. The too-long
   entry-path case receives the shared loader's diagnostic instead of Bun's
