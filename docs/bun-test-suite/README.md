@@ -107,6 +107,9 @@ Run this through the host's heavy-job wrapper. Repeat with `--engine jsc` and
 from registered test counts, and check matching suite, runner and dependency
 hashes before comparing revisions.
 
+The focused [HTMLRewriter and X509Certificate measurement](htmlrewriter-x509.md)
+records the 2026-10-17 API selection, all-engine gates and wasm size changes.
+
 ## Reproduce
 
 From a checkout with the pinned `vendor/bun` and all three wasm artifacts built:

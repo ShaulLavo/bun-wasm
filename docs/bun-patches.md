@@ -16,7 +16,7 @@ Each row has one class. A file with independent changes has separate rows.
 | --- | --- | --- |
 | [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, async handler dispatch and streaming wrappers on all engines. |
 | [X509Certificate adapters](#x509certificate) | Host feature | Original BoringSSL data bindings and Node certificate wrapper over existing KeyObjects. |
-| [X.509 alternative name formatting](#x509-alternative-name-formatting) | Port | Translate Bun and Node certificate-name quoting to Rust without JSC. |
+| [X.509 alternative name formatting and Node license](#x509-alternative-name-formatting) | Port | Translate Bun and Node certificate-name quoting to Rust without JSC and retain the Node MIT notices. |
 | [Certificate regression fixtures](#certificate-regression-fixtures) | Port | Retain unchanged upstream certificate and test-key data for metadata, signature and escaping checks. |
 | [`third_party/licenses/lol-html-LICENSE`](#htmlrewriter) | Port | Retain the vendored parser's BSD license for wasm distribution. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
@@ -1435,6 +1435,10 @@ writers and JSC strings. It retains JSON-compatible quoting for names containing
 quotes, controls or non-ASCII IA5 bytes. Distinguished names keep UTF-8. This prevents one
 certificate name from looking like multiple alternative names. BoringSSL's unsupported
 otherName, X400 and EDI names retain the upstream unsupported descriptions.
+
+`third_party/licenses/node-X509-LICENSE` retains the Node and Joyent MIT notices.
+The two license sections are copied unchanged from Node v26.7.0 `LICENSE`; no Node
+implementation is taken from that version.
 
 ## Certificate regression fixtures
 

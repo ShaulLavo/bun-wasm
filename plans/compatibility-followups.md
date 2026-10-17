@@ -544,3 +544,52 @@ The original full gate is retained in
 `/work/reports/bun-wasm-htmlrewriter-x509-2026-10-17/round1/gate-jsc.log`.
 The coordinator owns that evidence until the startup failure is reproduced or
 ruled out. Final gate outcomes for this lane are recorded separately in its PR.
+
+## HTMLRewriter lifetime and intrinsic storage parity
+
+Status: Approved. Continue from the shared lol-html adapter after the API PR.
+
+The 2026-10-17 HTML/X509 lane adds the parser, handlers, async Response rewriting,
+streaming readers and Node certificates. Its [measurement](../docs/bun-test-suite/htmlrewriter-x509.md)
+records 9/10/10 fully passing files in the 21-file QuickJS/JSC/browser selection.
+The lifecycle file remains partial, with 29/12, 19/14 and 24/25 observed pass/fail
+counts respectively. QuickJS and JSC reach the unchanged 15-second file limit.
+No private heap counter has been filled in to make these tests pass.
+
+Reproduce the unchanged file on each engine through the heavy wrapper:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+scripts/bun-suite.sh --engine quickjs --jobs 1 --timeout 15 --network loopback \
+  --launcher "$CARGO_TARGET_DIR/release/bun-wasm" \
+  --output /work/reports/bun-wasm-own-html-lifetime/quickjs.json \
+  --log-dir /work/reports/bun-wasm-own-html-lifetime/quickjs-logs \
+  js/workerd/html-rewriter-leak.test.ts
+```
+
+Start with the cases named `never-settling handler promises are abandoned and
+release their parked state`, `cancelling the output reader from inside a handler
+releases the pipe`, and `an indexed accessor on Array.prototype never sees a
+handler`. Separate HTTP body buffering from parser cancellation in the network
+case. It waits for the first HTML handler before the server emits its second
+chunk, so a host that buffers the whole HTTP body deadlocks before rewriting.
+Do not classify that timeout as a demonstrated parser lifetime leak.
+
+Inspect `Rewrite.asyncStep`, `stream`, `buffered`, and `close` in
+`crates/bunwasm-runtime/src/js/html_rewriter.ts`, plus the parser-session table in
+`src/html_rewriter.rs`. The async wrapper awaits an assimilated handler promise;
+unreachable never-settling promises do not yet trigger native-style abandonment.
+Private handler and output arrays also need protection from indexed prototype
+accessors. Use real weak references and owned native-state measurements; neither
+zero heap counters nor a clean exit alone proves release.
+
+Keep the full HTML file's direct-stream collection failure separate. Other newly
+reachable files need TLS root certificates, TLS server support, private
+`bun:jsc.serialize`, or `sslCtxLiveCount` in `bun:internal-for-testing`.
+These are not remaining missing-HTMLRewriter or missing-X509Certificate exports.
+
+Exact results and logs are retained in
+`/work/reports/bun-wasm-htmlrewriter-x509-2026-10-17/verified/after-*.json` and
+`after-*-logs/`. The coordinator owns that evidence until the follow-up is
+reproduced and independently reviewed.
