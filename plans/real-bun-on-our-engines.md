@@ -252,6 +252,48 @@ Remaining files at this change:
 - `crates/bunwasm-runtime/src/js/webassembly.js`
 - `crates/bunwasm-runtime/src/js/websocket.js`
 
+## Pristine process gate failures during small API verification
+
+Status: Approved. The process/runtime track owns the remaining gate failures.
+
+The small API lane built pristine main `b7cf06cde1fbf977b748d97d86ba102262d3f03f`
+and its branch independently. All seven new API/CLI fixtures pass on QuickJS,
+JSC and browser. Each full fixture gate reports 205 passes and the same two
+failures. The pristine QuickJS control reproduces both failures unchanged:
+
+- `node-misc` prints false for its ENOENT checks on `child_process.spawn` and
+  `Bun.spawnSync`, where the existing manual fixture expects true.
+- `pipe-closed-output` reports exit 141 instead of 1 for unhandled stream output
+  on QuickJS/native and QuickJS/node. Its node-host batch case also exits 141.
+
+Reproduce from the pristine control checkout with its built launcher and wasm:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+export CARGO_TARGET_DIR=/work/tmp/bun-wasm-small-causes-base-target
+scripts/test.sh --no-build node-misc pipe-closed-output
+```
+
+Run through the heavy wrapper. The control checkout is at
+`/work/worktrees/bun-wasm/small-causes-base` until lane cleanup; recreate it at
+that commit afterward. Exact output is retained in
+`/work/reports/bun-wasm-small-causes/base-regressions.log`, with status 1 in
+`base-regressions.status`. Task gate logs are `gate-quickjs.log`, `gate-jsc.log`
+and `gate-browser.log` in the same report directory. The control records zero
+passes and two failures; the closed-pipe batch callback case passes.
+
+Inspect `crates/bunwasm-runtime/src/js/bootstrap.js` near `handleBrokenPipe`,
+which raises guest SIGPIPE for EPIPE, and the process/native error translation
+used by `src/js/spawn.js`. Do not change expected exit codes or unsupported
+process checks merely to make the gate green. Confirm the intended Bun stream
+and absent-host contracts first. The API lane changes reproduce neither cause
+uniquely, so they do not explain these failures.
+
+The full web gate and all six Chromium/WebKit HMR runs pass on the API lane.
+The coordinator owns retaining the report evidence until the process follow-up
+has reproduced and resolved these blockers.
+
 ## Browser occupied-port follow-up after fake timers
 
 Status: Approved.

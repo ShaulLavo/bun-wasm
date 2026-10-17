@@ -8,6 +8,7 @@ function inputs() {
   const sourceRoot = join(root, "crates/bunwasm-runtime/src/js");
   const names = ["buffer", "events", "streams", "node_stream_core", "node_stream_web", "node_stream_bindings", "native_stream_state"];
   const sources = Object.fromEntries(names.filter(name => existsSync(join(sourceRoot, name + ".js"))).map(name => [name, readFileSync(join(sourceRoot, name + ".js"), "utf8")]));
+  sources.compression_streams = stripTypeScriptTypes(readFileSync(join(sourceRoot, "compression_streams.ts"), "utf8"));
   const builtins = readFileSync(join(sourceRoot, "builtins.js"), "utf8");
   sources.asyncHooks = builtins.slice(builtins.indexOf("  function asyncHooksModule()"), builtins.indexOf("  function diagnosticsChannelModule()"));
   sources.hostBridge = stripTypeScriptTypes(readFileSync(join(root, "web/src/native-stream-state.ts"), "utf8"));

@@ -80,10 +80,20 @@ impl Format {
     }
 }
 
-pub fn resolve_error(msg: &str, spec: &str, kind: Kind) -> NativeError {
+pub fn resolve_error(msg: &str, spec: &str, referrer: &str, kind: Kind, notes: Vec<crate::resolve::ResolveNote>) -> NativeError {
+    use crate::engine::{Record, Val};
     // require() and import report different codes, like Node and Bun.
-    let code = if kind == Kind::Require { "MODULE_NOT_FOUND" } else { "ERR_MODULE_NOT_FOUND" };
-    NativeError::error(msg).prop("code", code).prop("specifier", spec)
+    let code = if spec.starts_with("node:") { "ERR_UNKNOWN_BUILTIN_MODULE" } else if kind == Kind::Require { "MODULE_NOT_FOUND" } else { "ERR_MODULE_NOT_FOUND" };
+    let mut logs = Vec::new();
+    for note in notes {
+        let position = Record::new().set("file", note.file).set("lineText", note.line_text).set("line", note.line as u32).set("column", note.column as u32);
+        logs.push(Record::new().set("message", note.message).set("position", position).into());
+    }
+    let import_kind = if kind == Kind::Require { "require-call" } else { "import-statement" };
+    NativeError::error(msg).named("ResolveMessage").prop("code", code).prop("specifier", spec)
+        .prop("referrer", referrer).prop("level", "error").prop("importKind", import_kind)
+        .prop("position", Val::Null).prop("line", 0u32).prop("column", 0u32)
+        .prop("notes", Val::Array(logs))
 }
 
 /// A transpiler failure, reported like Bun's build errors: the offending

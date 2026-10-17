@@ -139,6 +139,10 @@ buffer). Network failures (DNS, refused, TLS, CORS in browsers) return `-1`;
 `error(handle, …)` then gives the reason. Headers keep their order; names are
 lower-case; repeated headers appear as separate pairs.
 
+Optional `bodyEncoding`: a host that forwards compressed bytes names the
+compression, and the guest decodes them before exposing the fetch body. Absent or
+null means the bytes are exposed as-is. The Node host uses it for Zstd. The original content-encoding and content-length headers remain visible.
+
 ### `read(handle, buf_ptr, buf_cap) -> n`
 
 For a fetch handle: the response body (after `fetch_head` succeeded),
