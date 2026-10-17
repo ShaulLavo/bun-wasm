@@ -2,429 +2,246 @@
   "provenance": {
     "schema": 1,
     "engine": "quickjs",
-    "suite_commit": "4ceda2c2868d3a7703c7737ddd9de7244ec384df",
-    "wasm_sha256": "0b6e61d2b8bc87770d62db21b795a34adb772301ff4daf604b10c5079c408dbf",
-    "runner_sha256": "402ec80ab03e0a367a6a8fc49fe6605847a37c99b69fb8f93d9c66ebc8539d44",
-    "launcher_sha256": "6086c031ea3880512fe73b96618f20cbdc8d328bf05a56f3ba70c3768fbae696",
+    "suite_commit": "cd95fa7a13b3f13be73e512b38ec111c1c228084",
+    "wasm_sha256": "794e4b24f5755f4f18d2e2aac5149d87de73f7d7f2c27fba2d0fdf8ff7ec82c9",
+    "runner_sha256": "9df69cce25bc9d94722cfd323d018943da08456e7c000c9d1f0c884426d52767",
+    "launcher_sha256": "0b61ddaa7e30cbe3e26fbed3d3c78d529e8727462efd9f9eb302de7dcd38b300",
     "host_sources": {},
     "dependencies": {
       "files": 537,
       "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
     },
     "test_dependencies": {
-      "files": 4248,
-      "sha256": "fa39a9d0c87fde12be431f502e4803f0445b844dfdbb59cd19773965e33046ae"
+      "files": 2483,
+      "sha256": "59663e62be14bd8b6cf77bf3eca5ccb4506ad635ed2c795327b238b32ea6e787"
     },
+    "node_parallel": false,
     "network": "loopback",
-    "timeout_seconds": 15,
+    "timeout_seconds": 15.0,
     "test_timeout_ms": 2000
   },
-  "runner_source_commit": "3b0a4dcb5a1dcc0d7197a978e6be49598f684cac",
+  "runner_source_commit": "7aa78b19ba2ec798bfc75eb08da84afd04d0e0ee",
   "summary": {
     "files": 2305,
-    "fully_passing": 282,
-    "timeouts": 57,
+    "fully_passing": 411,
+    "timeouts": 51,
     "counts": {
-      "pass": 12663,
-      "fail": 28870,
-      "skip": 974,
-      "todo": 637,
-      "errors": 606
+      "pass": 20162,
+      "fail": 35465,
+      "skip": 2237,
+      "todo": 1017,
+      "errors": 469
     }
   },
   "timeouts_after_report": 1,
-  "wall_seconds": 516.717,
-  "failing_files": 1916,
-  "empty_or_skip_only_files": 107,
+  "wall_seconds": 540.923,
+  "failing_files": 1786,
+  "empty_or_skip_only_files": 108,
   "categories": {
-    "a": 87,
-    "b": 67,
-    "c": 147,
-    "d": 1505,
-    "e": 92,
-    "f": 18
+    "a": 84,
+    "b": 81,
+    "c": 54,
+    "d": 1451,
+    "e": 93,
+    "f": 23
   },
   "category_tests": {
     "a": {
-      "pass": 30,
-      "total": 450
+      "pass": 26,
+      "total": 429
     },
     "b": {
-      "pass": 29,
-      "total": 1277
+      "pass": 52,
+      "total": 1091
     },
     "c": {
-      "pass": 2112,
-      "total": 3928
+      "pass": 314,
+      "total": 476
     },
     "d": {
-      "pass": 5270,
-      "total": 30897
+      "pass": 12607,
+      "total": 48196
     },
     "e": {
       "pass": 7,
-      "total": 116
+      "total": 117
     },
     "f": {
-      "pass": 26,
-      "total": 479
+      "pass": 554,
+      "total": 998
     }
   },
   "comparison": {
     "browser": {
-      "files": 1082,
-      "fully_passing": 116,
-      "timeouts": 43,
-      "timeouts_with_report": 2,
-      "counts": {
-        "pass": 15143,
-        "fail": 21029,
-        "skip": 645,
-        "todo": 557,
-        "errors": 246
-      },
-      "quickjs_fail_other_pass": 18,
-      "quickjs_pass_other_fail": 13,
-      "different_test_counts": 124
-    },
-    "jsc": {
-      "files": 1082,
-      "fully_passing": 113,
-      "timeouts": 46,
+      "files": 2305,
+      "fully_passing": 418,
+      "timeouts": 62,
       "timeouts_with_report": 0,
       "counts": {
-        "pass": 8878,
-        "fail": 16034,
-        "skip": 631,
-        "todo": 555,
-        "errors": 278
+        "pass": 29457,
+        "fail": 34765,
+        "skip": 2136,
+        "todo": 1013,
+        "errors": 471
       },
-      "quickjs_fail_other_pass": 5,
-      "quickjs_pass_other_fail": 3,
-      "different_test_counts": 62
+      "quickjs_fail_other_pass": 19,
+      "quickjs_pass_other_fail": 12,
+      "different_test_counts": 147
+    },
+    "jsc": {
+      "files": 2305,
+      "fully_passing": 411,
+      "timeouts": 50,
+      "timeouts_with_report": 1,
+      "counts": {
+        "pass": 19290,
+        "fail": 34681,
+        "skip": 1973,
+        "todo": 1015,
+        "errors": 473
+      },
+      "quickjs_fail_other_pass": 7,
+      "quickjs_pass_other_fail": 7,
+      "different_test_counts": 104
     }
   },
   "self_spawn_subset": {
     "files": 745,
-    "fully_passing": 112,
-    "tests_passing": 1134,
+    "fully_passing": 155,
+    "tests_passing": 1734,
     "timeouts": [
-      "cli/check/check.test.ts",
       "cli/hot/hot.test.ts",
-      "cli/lint/config-files.test.ts",
-      "cli/lint/oxc-names.test.ts",
+      "cli/install/bun-security-scanner-matrix-without-node-modules.test.ts",
       "cli/test/isolation.test.ts",
       "cli/test/parallel.test.ts",
       "js/bun/spawn/spawn-signal.test.ts",
       "regression/issue/42989.test.ts"
     ]
   },
-  "runtime_source_commit": "5ed3e9e",
-  "changes_since_previous": {
-    "regressions": [
-      "js/bun/io/fetch/fetch-abort-slow-connect.test.ts",
-      "js/node/promise/reject-tostring.test.ts",
-      "regression/issue/01466.test.ts",
-      "regression/issue/015201.test.ts"
-    ],
-    "new_fully_passing": [
-      "bake/dev/import-meta-inline-negative.test.ts",
-      "bundler/transpiler/assign-to-import.test.ts",
-      "bundler/transpiler/preserve-use-strict-cjs.test.ts",
-      "bundler/transpiler/property.test.ts",
-      "bundler/transpiler/simplifier-side-effects.test.ts",
-      "bundler/transpiler/template-literal.test.ts",
-      "cli/run/log-test.test.ts",
-      "cli/run/run-unicode.test.ts",
-      "cli/run/self-reference.test.ts",
-      "integration/bun-lambda/bun-lambda.test.ts",
-      "internal/build-cli-config-flags.test.ts",
-      "internal/close-linked-issues.test.ts",
-      "internal/install-ps1.test.ts",
-      "internal/source-lints/bss-singleton-unique.test.ts",
-      "internal/source-lints/ci-image-pins.test.ts",
-      "internal/source-lints/comment-cop.test.ts",
-      "internal/source-lints/expect-call-counter.test.ts",
-      "internal/source-lints/iso-subspace-creation.test.ts",
-      "internal/source-lints/jsresult-swallow.test.ts",
-      "internal/source-lints/lockfile-registry-only.test.ts",
-      "internal/source-lints/no-iostream-include.test.ts",
-      "internal/source-lints/no-std-stdio.test.ts",
-      "internal/source-lints/port-era-markers.test.ts",
-      "internal/source-lints/pre-port-identifiers.test.ts",
-      "internal/source-lints/primordials-exports.test.ts",
-      "internal/source-lints/printer-rope-in-place.test.ts",
-      "internal/source-lints/self-receiver-reclaim.test.ts",
-      "internal/source-lints/sema-parser-recursion.test.ts",
-      "internal/source-lints/shared-sorts.test.ts",
-      "internal/source-lints/thread-pool-batch-field-ref.test.ts",
-      "internal/source-lints/uninit-assumed-init.test.ts",
-      "internal/source-lints/unsafe-refcount-exports.test.ts",
-      "internal/source-lints/unsound-erased-box.test.ts",
-      "internal/source-lints/vm-thread-door.test.ts",
-      "js/bun/css/doesnt_crash.test.ts",
-      "js/bun/css/nested-function-backtracking.test.ts",
-      "js/bun/css/small-list-grow.test.ts",
-      "js/bun/fetch/node-use-system-ca.test.ts",
-      "js/bun/gc/error-stack-finalizer-exception.test.ts",
-      "js/bun/glob/stress.test.ts",
-      "js/bun/http/bun-serve-body-json-async.test.ts",
-      "js/bun/http/bun-serve-html-hot-reload-drop.test.ts",
-      "js/bun/io/bun-write-leak.test.ts",
-      "js/bun/jsc/webkit-upgrade-df289ce551.test.ts",
-      "js/bun/json5/json5-test-suite.test.ts",
-      "js/bun/jsonc/json-differential-fuzz.test.ts",
-      "js/bun/resolve/concurrent-dynamic-import.test.ts",
-      "js/bun/resolve/dynamic-import-evaluation-error-gc.test.ts",
-      "js/bun/resolve/non-english-import.test.js",
-      "js/bun/resolve/star-export-namespace.test.ts",
-      "js/bun/resolve/toml/toml-parse.test.ts",
-      "js/bun/spawn/exit-code.test.ts",
-      "js/bun/spawn/job-object-bug.test.ts",
-      "js/bun/spawn/spawn-env.test.ts",
-      "js/bun/spawn/spawn-stream-serve.test.ts",
-      "js/bun/spawn/spawn-stress.test.ts",
-      "js/bun/spawn/spawn-unread-stdout-gc.test.ts",
-      "js/bun/spawn/spawnsync-no-microtask-drain.test.ts",
-      "js/bun/test/expect-extend-matcher-utils-throw.test.ts",
-      "js/bun/test/expect-symbol-toPrimitive-crash.test.ts",
-      "js/bun/toml/toml-test-suite.test.ts",
-      "js/bun/util/fuzzilli-reprl.test.ts",
-      "js/bun/util/pathToFileURL-invalid.test.ts",
-      "js/bun/websocket/websocket-server-reload-leak.test.ts",
-      "js/bun/yaml/yaml-block-scalar-matrix.test.ts",
-      "js/bun/yaml/yaml-test-suite.test.ts",
-      "js/node/buffer-from-symbol-to-primitive.test.ts",
-      "js/node/fs/fs-stat-seccomp-linux.test.ts",
-      "js/node/fs/glob.test.ts",
-      "js/node/http/node-http-res-settimeout-unref.test.ts",
-      "js/node/net/connect-autoselectfamily-stale-timer.test.ts",
-      "js/node/net/double-connect.test.ts",
-      "js/node/path/resolve-long-cwd.test.ts",
-      "js/node/readline/readline_never_unrefs.test.ts",
-      "js/node/util/parse_args/parse-args.test.mjs",
-      "js/third_party/grpc-js/test-call-credentials.test.ts",
-      "js/third_party/grpc-js/test-certificate-provider.test.ts",
-      "js/third_party/grpc-js/test-confg-parsing.test.ts",
-      "js/third_party/grpc-js/test-duration.test.ts",
-      "js/third_party/grpc-js/test-metadata.test.ts",
-      "js/third_party/grpc-js/test-prototype-pollution.test.ts",
-      "js/third_party/grpc-js/test-retry-config.test.ts",
-      "js/third_party/grpc-js/test-server-credentials.test.ts",
-      "js/third_party/grpc-js/test-status-builder.test.ts",
-      "js/third_party/grpc-js/test-uri-parser.test.ts",
-      "js/third_party/jsonwebtoken/decoding.test.js",
-      "js/third_party/jsonwebtoken/issue_304.test.js",
-      "js/third_party/jsonwebtoken/undefined_secretOrPublickey.test.js",
-      "js/web/abort/abort-controller-gc-reason.test.ts",
-      "js/web/console/console-log-utf16.test.ts",
-      "js/web/console/console-recursive.test.ts",
-      "js/web/explicit-resource-management.test.ts",
-      "js/web/timers/clearImmediate-gc.test.ts",
-      "regression/issue/03216.test.ts",
-      "regression/issue/03844/03844.test.ts",
-      "regression/issue/04011.test.ts",
-      "regression/issue/04893.test.ts",
-      "regression/issue/07261.test.ts",
-      "regression/issue/08768.test.ts",
-      "regression/issue/10170.test.ts",
-      "regression/issue/11677.test.ts",
-      "regression/issue/11866.test.ts",
-      "regression/issue/12250.test.ts",
-      "regression/issue/16702/16702.test.ts",
-      "regression/issue/18028.test.ts",
-      "regression/issue/19652.test.ts",
-      "regression/issue/20546.test.ts",
-      "regression/issue/20965.test.ts",
-      "regression/issue/21137-minify-typeof-comma.test.ts",
-      "regression/issue/22003.test.ts",
-      "regression/issue/22656.test.ts",
-      "regression/issue/22929-module-extensions-asi.test.ts",
-      "regression/issue/23275.test.ts",
-      "regression/issue/23287-array-comma-value.test.ts",
-      "regression/issue/23489.test.ts",
-      "regression/issue/23569.test.ts",
-      "regression/issue/24007.test.ts",
-      "regression/issue/24234.test.ts",
-      "regression/issue/246-child_process_object_assign_compatibility.test.ts",
-      "regression/issue/25398.test.ts",
-      "regression/issue/25609.test.ts",
-      "regression/issue/25716.test.ts",
-      "regression/issue/26088.test.ts",
-      "regression/issue/26411.test.ts",
-      "regression/issue/26631.test.ts",
-      "regression/issue/26632.test.ts",
-      "regression/issue/26647.test.ts",
-      "regression/issue/27117.test.ts",
-      "regression/issue/27458.test.ts",
-      "regression/issue/27849.test.ts",
-      "regression/issue/28159.test.ts",
-      "regression/issue/28914.test.ts",
-      "regression/issue/29242.test.ts",
-      "regression/issue/29267/29267.test.ts",
-      "regression/issue/30621.test.ts",
-      "regression/issue/3179.test.ts",
-      "regression/issue/32178.test.ts",
-      "regression/issue/32489.test.ts",
-      "regression/issue/32686.test.ts",
-      "regression/issue/36450.test.ts",
-      "regression/issue/40606.test.ts",
-      "regression/issue/440.test.ts",
-      "regression/issue/5344.test.ts",
-      "regression/issue/circular-error-stack-edge-cases.test.ts",
-      "regression/issue/comma-operator-this-binding.test.ts",
-      "regression/issue/issue-12276.test.ts",
-      "regression/issue/stdin-pause-resume.test.ts",
-      "regression/issue/tty-readstream-ref-unref.test.ts",
-      "regression/issue/update-interactive-formatting.test.ts"
-    ],
-    "new_timeouts": [
-      "cli/check/check.test.ts",
-      "cli/hot/hot.test.ts",
-      "cli/lint/config-files.test.ts",
-      "cli/lint/oxc-names.test.ts",
-      "cli/test/isolation.test.ts",
-      "cli/test/parallel.test.ts",
-      "internal/source-lints/byte-search.test.ts",
-      "internal/source-lints/dead-code-escapes.test.ts",
-      "internal/source-lints/empty-jsvalue-laundering.test.ts",
-      "internal/source-lints/fn-long-mut-reborrow.test.ts",
-      "internal/source-lints/frozen-nonnull-reborrow.test.ts",
-      "js/bun/bun-object/deep-equals-temporal.test.ts",
-      "js/bun/gc/gc-controller-cadence.test.ts",
-      "js/bun/glob/leak.test.ts",
-      "js/bun/http/bun-serve-file.test.ts",
-      "js/bun/http/bun-serve-html-build-holds-server.test.ts",
-      "js/bun/http/serve-async-stream-client-abort.test.ts",
-      "js/bun/http/serve-http2-lifecycle.test.ts",
-      "js/bun/http/serve-response-stream-sink-leak.test.ts",
-      "js/bun/jsonl/jsonl-parse.test.ts",
-      "js/bun/module-graph/module-graph-workers.test.ts",
-      "js/bun/spawn/spawn-signal.test.ts",
-      "js/bun/terminal/terminal-platform-gaps.test.ts",
-      "js/node/fs/abort-signal-leak-read-write-file.test.ts",
-      "js/node/http/node-http-connect.test.ts",
-      "js/node/http/node-http-uaf.test.ts",
-      "js/node/url/pathToFileURL.test.ts",
-      "js/web/fetch/fetch-leak.test.ts",
-      "js/web/fetch/fetch-proxy-connect-tunnel-split-envelope.test.ts",
-      "js/web/fetch/fetch-response-finalizer-sweep.test.ts",
-      "regression/issue/42989.test.ts"
-    ],
-    "resolved_timeouts": [
-      "cli/install/bun-install-git-deps.test.ts",
-      "cli/install/bun-pm-scan.test.ts",
-      "cli/install/migration/complex-workspace.test.ts",
-      "cli/install/public-hoist-pattern.test.ts",
-      "cli/install/symlink-path-traversal.test.ts",
-      "js/bun/http/fetch-header-count-limit.test.ts",
-      "js/bun/http/node-http-pipeline-callbacks.test.ts",
-      "js/bun/http/proxy-stress-adversarial.test.ts",
-      "js/bun/http/proxy-stress-headers.test.ts",
-      "js/bun/http/proxy-stress-matrix.test.ts",
-      "js/bun/http/proxy-stress-protocol.test.ts",
-      "js/bun/http/serve-directory-routes.test.ts",
-      "js/bun/http/serve-http2.test.ts",
-      "js/bun/http/serve-listen.test.ts",
-      "js/bun/net/unix-socket-unlink.test.ts",
-      "js/bun/websocket/websocket-server-upgrade-early-frames.test.ts",
-      "js/node/async_hooks/AsyncLocalStorage.test.ts",
-      "js/node/http/client-timeout-error.test.ts",
-      "js/node/http/node-http-incoming-socket.test.ts",
-      "js/node/http/node-https-checkServerIdentity.test.ts",
-      "js/node/http/node-https-server.test.ts",
-      "js/node/http2/h2-push-refusal-staged.test.ts",
-      "js/node/http2/node-http2-invalid-padding.test.ts",
-      "js/node/http2/node-http2-settings-ack-ordering.test.ts",
-      "js/node/net/net-mongodb-pattern-leak.test.ts",
-      "js/node/perf_hooks/perf_hooks.test.ts",
-      "js/node/timers/node-timers.test.ts",
-      "js/node/tls/node-tls-upgrade.test.ts",
-      "js/web/fetch/body-clone.test.ts",
-      "js/web/fetch/chunked-trailing.test.js",
-      "js/web/fetch/client-fetch.test.ts",
-      "js/web/fetch/cookies.test.ts",
-      "js/web/fetch/exiting.test.ts",
-      "js/web/fetch/fetch-abort-stream-body.test.ts",
-      "js/web/fetch/fetch-chunked-size.test.ts",
-      "js/web/fetch/fetch-keepalive.test.ts",
-      "js/web/fetch/fetch-session.test.ts",
-      "js/web/fetch/fetch.test.ts",
-      "js/web/fetch/fetch.unix.test.ts",
-      "js/web/fetch/headers.undici.test.ts",
-      "js/web/timers/setInterval.test.js",
-      "js/web/websocket/test-ws-bidir-proxy.test.ts",
-      "js/web/websocket/websocket-close-code.test.ts",
-      "js/web/websocket/websocket-permessage-deflate-edge-cases.test.ts",
-      "js/web/websocket/websocket.test.js",
-      "js/workerd/html-rewriter.test.js",
-      "packages/s3-server/test/access.test.ts",
-      "packages/s3-server/test/auth.test.ts",
-      "packages/s3-server/test/bucket.test.ts",
-      "packages/s3-server/test/list.test.ts",
-      "packages/s3-server/test/multipart.test.ts",
-      "packages/s3-server/test/object.test.ts",
-      "packages/s3-server/test/post-object.test.ts",
-      "packages/s3-server/test/server.test.ts",
-      "packages/s3-server/test/versioning.test.ts",
-      "regression/issue/06443.test.ts",
-      "regression/issue/18595.test.ts",
-      "regression/issue/21792.test.ts",
-      "regression/issue/24575.test.ts",
-      "regression/issue/27061.test.ts",
-      "regression/issue/27358.test.ts",
-      "regression/issue/29283.test.ts",
-      "regression/issue/29371.test.ts",
-      "regression/issue/33227.test.ts"
-    ]
-  },
+  "runtime_source_commit": "6e93c80c6f9bccc879990bedb999c3efdcd3166f",
+  "changes_since_previous": {},
   "comparison_provenance": {
     "browser": {
       "schema": 1,
       "engine": "browser",
-      "suite_commit": "4ceda2c2868d3a7703c7737ddd9de7244ec384df",
-      "wasm_sha256": "5cfac0b675efa2cfe87007b4628678e31200ba458eebb4f6dde447a211545661",
-      "runner_sha256": "402ec80ab03e0a367a6a8fc49fe6605847a37c99b69fb8f93d9c66ebc8539d44",
-      "launcher_sha256": "6a4b0887cf2bded70a2d752d419e10b29a8ed0e3baa583c8cb4f8769707bde60",
+      "suite_commit": "cd95fa7a13b3f13be73e512b38ec111c1c228084",
+      "wasm_sha256": "accc747792ac2e53e4ea86e51b15c3f3ec5354e20516288d95a79aae7cea7e0e",
+      "runner_sha256": "9df69cce25bc9d94722cfd323d018943da08456e7c000c9d1f0c884426d52767",
+      "launcher_sha256": "64f7ea4a21d49bbb2b2d4710ac1a17b245ddeb1015960962a598d26852cb5b78",
       "host_sources": {
-        "web/src/engine-host.js": "128b00396611cb3f7106e176d4f8ede839998c70d8f1d9013f7a423e0414c120",
-        "web/scripts/node-net.mjs": "137b8bdfe805643b34367bd356d23d798e1cea40bbc2f887f4d356042405f88d",
-        "web/src/subprocess.js": "63314be35f10fe311ace9638cc2080c069ba5a980013d9435699e6c65be4e1bb",
-        "web/src/subprocess-fs.ts": "7766f031b52ce8d22f719e6da99cdccd52c0f61d6cc4816b2857e5eaf3096dd9",
-        "web/src/fs.ts": "5e52efaa27bf0fcbb2c3c41987dc6a82090499fdb0a53ecb313a4599c1d3e400",
-        "web/src/wasi.ts": "7c1432514faf1fd0ba66f638714b2804b7fd3115b2c32ee341b9b7a97a875576"
+        "web/src/engine-host.js": "48dbe039f2245587e25a788d3cf7716d92021ec079578e39e4c2956defdd3535",
+        "runtime/core/memory-views.js": "5f28415351a3f6b5c86e83c41c27bcbafe452b5d9826c817ca1fb87f146653fb",
+        "web/scripts/node-net.mjs": "6384fdb46bd6bdbe9a94430e3b9e9fb799a058a1bf4769c43ed5f6dd9959477e",
+        "web/scripts/node-stdio.ts": "95d41faa574afb31f1b88a7b9fa1b810360872fe313cf9eb75dfbd7660a0cd60",
+        "web/src/subprocess.js": "7751141bf68626e34f608bd826dcb17fde9ad6c59a2b104d7dc2ea7b83dd1120",
+        "web/src/fs.ts": "2a649fd18c88e6553b7fadd6e3bacdb5d2733e86cfb21772a4040bd72f04ff9d",
+        "runtime/fs/memory.ts": "918f538deebf8e8fb0915e61a07e2418af5fc548a4ed1d90a9765ed4cecec8d2",
+        "runtime/fs/backend.ts": "ea4bfc55fdf4072239ebee4251c7a602672726365f23f595ed3afdb4509ab0d9",
+        "runtime/fs/client.ts": "bbffada8207c0125e044a1be377bd26c73ff31ddbb78b601d811fa23a47412a2",
+        "runtime/fs/service.ts": "dc22fbbee5659db0e624c4e2dc5aaaf3b1e52a3533aa96b9d116f1cf0c6930d5",
+        "runtime/fs/protocol.ts": "9874424df618eee752627807a3153c0c932758753abbb896984c77855d938f89",
+        "runtime/fs/index.ts": "046b20a602ce84e84b63ae77c9f56339c9b0d53282d9724fd1b59c26fbfb6cf5",
+        "runtime/core/wasi.ts": "c426b8f228c9d524122abb0fcdc680851443691579a650cf48056d4f567fa377",
+        "runtime/core/descriptors.ts": "454e55542870956565e9d71e63e49a5dd1e67ad79057a47b58c555a5d791195f",
+        "runtime/core/filesystem.ts": "52fb688a22b1dc6108eb377a62f9c3f4ad8f923881f524a3eb494e47c918c80a",
+        "runtime/core/path.ts": "31f2d7f1b154821a0cc19b3d1477f4ed2587627bd5a49aeb64e298c522c00b48",
+        "runtime/core/index.ts": "50956e58f33c7ac2014bcc1f28afbb38d11cbbc1e9165c77062eaad9ee36285b",
+        "runtime/package.json": "2ef7f809f845d502e7e9d45f600503604ed8d55aa71a1752738bba8103328619"
       },
       "dependencies": {
         "files": 537,
         "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
       },
       "test_dependencies": {
-        "files": 4248,
-        "sha256": "fa39a9d0c87fde12be431f502e4803f0445b844dfdbb59cd19773965e33046ae"
+        "files": 2483,
+        "sha256": "59663e62be14bd8b6cf77bf3eca5ccb4506ad635ed2c795327b238b32ea6e787"
       },
+      "node_parallel": false,
       "network": "loopback",
-      "timeout_seconds": 15,
+      "timeout_seconds": 15.0,
       "test_timeout_ms": 2000
     },
     "jsc": {
       "schema": 1,
       "engine": "jsc",
-      "suite_commit": "4ceda2c2868d3a7703c7737ddd9de7244ec384df",
-      "wasm_sha256": "aa3ac5798092c3b8179d959526e8cd9daaa04755d9a5155ede17e1756b214f1d",
-      "runner_sha256": "402ec80ab03e0a367a6a8fc49fe6605847a37c99b69fb8f93d9c66ebc8539d44",
-      "launcher_sha256": "6086c031ea3880512fe73b96618f20cbdc8d328bf05a56f3ba70c3768fbae696",
+      "suite_commit": "cd95fa7a13b3f13be73e512b38ec111c1c228084",
+      "wasm_sha256": "596e8f29bfd9d48c556b1f9a26ca9e8b9e439a4d8351551718cb13cbefe7b36f",
+      "runner_sha256": "9df69cce25bc9d94722cfd323d018943da08456e7c000c9d1f0c884426d52767",
+      "launcher_sha256": "0b61ddaa7e30cbe3e26fbed3d3c78d529e8727462efd9f9eb302de7dcd38b300",
       "host_sources": {},
       "dependencies": {
         "files": 537,
         "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
       },
       "test_dependencies": {
-        "files": 4248,
-        "sha256": "fa39a9d0c87fde12be431f502e4803f0445b844dfdbb59cd19773965e33046ae"
+        "files": 2483,
+        "sha256": "59663e62be14bd8b6cf77bf3eca5ccb4506ad635ed2c795327b238b32ea6e787"
       },
+      "node_parallel": false,
       "network": "loopback",
-      "timeout_seconds": 15,
+      "timeout_seconds": 15.0,
       "test_timeout_ms": 2000
+    }
+  },
+  "previous_baseline": {
+    "quickjs": {
+      "fully_passing": 282,
+      "observed_passes": 12663,
+      "timeouts": 57
+    },
+    "jsc": {
+      "fully_passing": 113,
+      "observed_passes": 8878,
+      "timeouts": 46
+    },
+    "browser": {
+      "fully_passing": 116,
+      "observed_passes": 15143,
+      "timeouts": 43
+    }
+  },
+  "before_after": {
+    "quickjs": {
+      "fully_passing": [
+        282,
+        411
+      ],
+      "observed_passes": [
+        12663,
+        20162
+      ],
+      "timeouts": [
+        57,
+        51
+      ]
+    },
+    "jsc": {
+      "fully_passing": [
+        113,
+        411
+      ],
+      "observed_passes": [
+        8878,
+        19290
+      ],
+      "timeouts": [
+        46,
+        50
+      ]
+    },
+    "browser": {
+      "fully_passing": [
+        116,
+        418
+      ],
+      "observed_passes": [
+        15143,
+        29457
+      ],
+      "timeouts": [
+        43,
+        62
+      ]
     }
   }
 }

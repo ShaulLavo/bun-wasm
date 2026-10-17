@@ -666,3 +666,33 @@ workers have no forced-GC hook. The Chromium/WebKit web and HMR gates are separa
 checks of browser behavior, not evidence of forced collection in those workers.
 The second-review red/green logs are retained in
 `/work/reports/bun-wasm-rv28-round2-20261016/`.
+
+
+## Current full replay
+
+The 2026-10-17 offline replay ran all 17 apps across QuickJS, JSC and browser engines on native and playground hosts. It used runtime commit `6e93c80c6f9bccc879990bedb999c3efdcd3166f`, the three artifact hashes in `results.json`, and registry digest `bff1211cea1f8aed1dacd80b53b81b8a75a1a63987c8b053e426021269389b59`. The replay produced 180 stage records.
+
+| Engine / host | Pass | Fail | Blocked |
+|---|---:|---:|---:|
+| quickjs / native | 21 | 9 | 15 |
+| quickjs / playground | 12 | 1 | 2 |
+| jsc / native | 21 | 9 | 15 |
+| jsc / playground | 12 | 1 | 2 |
+| browser / native | 21 | 9 | 15 |
+| browser / playground | 12 | 1 | 2 |
+
+| Run | Pass | Fail | Blocked |
+|---|---:|---:|---:|
+| Current full replay | 99 | 30 | 51 |
+
+The previous committed census recorded 63 pass, 51 fail and 12 blocked native stages across the three wasm engines, plus 19 pass, 8 fail and 0 blocked playground stages. The current replay records 63 pass, 27 fail and 45 blocked native stages, plus 36 pass, 3 fail and 6 blocked playground stages.
+
+The dominant app blockers were missing offline `esbuild-wasm` registry records (51 blocked stages), Next WebAssembly export-table support (6 failed stages), and Prisma’s 16 MiB allocation ceiling (12 blocked stages). The matrix classified each first blocker with the same a–f rules as the suite.
+
+Raw evidence is retained in `/work/reports/bun-wasm-main-2026-10-17/app-matrix/`. The exact replay command was:
+
+```sh
+scripts/app-matrix.sh --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-main-2026-10-17/app-matrix --timeout=90 --launcher=/work/tmp/bun-wasm-measure-suite-matrix/quickjs-target/release/bun-wasm
+```
+
+The ranked next-fix list, including suite file counts, app stage counts, reproduction commands and suspected source locations, is in [`docs/bun-test-suite/triage.md`](../bun-test-suite/triage.md#ranked-next-fixes).

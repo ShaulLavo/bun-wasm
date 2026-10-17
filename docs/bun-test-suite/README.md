@@ -1,6 +1,14 @@
 # Bun's upstream suite
 
-A bounded compatibility census of the pinned Bun tests, measured on 2026-10-15. Tests run unchanged, one file per process. Counts describe observed results, including collection failures, rather than assertions that native Bun would eventually execute.
+## Before → current
+
+The previous committed full QuickJS baseline was upstream `4ceda2c2868d3a7703c7737ddd9de7244ec384df` on 2026-10-15. The current replay uses upstream `cd95fa7a13b3f13be73e512b38ec111c1c228084` from runtime commit `6e93c80c6f9bccc879990bedb999c3efdcd3166f`.
+
+| Engine | Fully passing before → current | Observed passes before → current | File timeouts before → current |
+|---|---:|---:|---:|
+| QuickJS | 282 → 411 | 12,663 → 20,162 | 57 → 51 |
+| JSC | 113 → 411 | 8,878 → 19,290 | 46 → 50 |
+| Browser | 116 → 418 | 15,143 → 29,457 | 43 → 62 |
 
 <!-- baseline:start -->
 ## Measured baseline
@@ -69,6 +77,130 @@ Categories are mutually exclusive first-blocker assignments. Passing, empty and 
 | js/node | 340 | 35 | 1,847/3,884 | 114 | 14 |
 | js/web | 185 | 16 | 762/7,949 | 114 | 5 |
 <!-- baseline:end -->
+
+## Current measurement
+
+<!-- current:start -->
+## Current measured run
+
+Upstream `cd95fa7a13b3f13be73e512b38ec111c1c228084`, engine `quickjs`.
+
+2,305 files; 411 fully passing; 20,162/58,881 observed tests passing; 51 file timeouts.
+
+| Directory | Files | Fully passing | Observed tests passed/total | Skipped | Todo |
+|---|---|---|---|---|---|
+| bake | 27 | 1 | 1/173 | 0 | 1 |
+| bundler | 107 | 18 | 1,982/4,017 | 29 | 253 |
+| cli | 257 | 5 | 1,141/13,368 | 1442 | 44 |
+| config | 2 | 0 | 0/51 | 2 | 1 |
+| integration | 23 | 3 | 50/81 | 0 | 1 |
+| internal | 66 | 44 | 574/663 | 9 | 0 |
+| js/bun | 557 | 82 | 8,101/15,335 | 405 | 536 |
+| js/deno | 16 | 3 | 194/244 | 17 | 0 |
+| js/first_party | 7 | 0 | 32/117 | 0 | 3 |
+| js/junit-reporter | 1 | 0 | 0/9 | 0 | 0 |
+| js/node | 340 | 42 | 2,896/5,600 | 165 | 25 |
+| js/sql | 71 | 0 | 0/76 | 4 | 0 |
+| js/third_party | 120 | 38 | 1,973/2,373 | 11 | 123 |
+| js/valkey | 15 | 0 | 2/41 | 8 | 0 |
+| js/web | 185 | 28 | 1,484/13,303 | 98 | 6 |
+| js/workerd | 3 | 0 | 0/53 | 1 | 0 |
+| napi | 60 | 0 | 0/153 | 0 | 21 |
+| packages | 15 | 2 | 1,234/2,110 | 0 | 0 |
+| regression | 430 | 143 | 476/1,089 | 46 | 1 |
+| root | 1 | 1 | 21/21 | 0 | 0 |
+| snippets | 1 | 1 | 1/3 | 0 | 2 |
+| v8 | 1 | 0 | 0/1 | 0 | 0 |
+
+| Category | Meaning | Failing files | Observed tests passed/total |
+|---|---|---|---|
+| a | platform limitation | 84 | 26/429 |
+| b | missing subprocess capability | 81 | 52/1,091 |
+| c | fixable, small | 54 | 314/476 |
+| d | fixable, big | 1451 | 12,607/48,196 |
+| e | not worth the cost | 93 | 7/117 |
+| f | engine difference | 23 | 554/998 |
+
+1,786 failing files + 411 fully passing + 108 empty/skip-only = 2,305 files.
+
+
+Categories are mutually exclusive first-blocker assignments. Passing, empty and skip-only files are excluded. 'Needs reproduction' is a conservative big-work bucket, not a claim that every assertion failure needs a subsystem rewrite. No unexecuted tests are counted.
+
+| Engine | Compared files | Fully passing | Observed passes | File timeouts | QuickJS failures passing here | QuickJS passes failing here |
+|---|---|---|---|---|---|---|
+| browser | 2305 | 418 | 29457 | 62 | 19 | 12 |
+| jsc | 2305 | 411 | 19290 | 50 | 7 | 7 |
+
+### browser comparison
+
+| Directory | Files | Fully passing | Observed tests passed/total | Skipped | Todo |
+|---|---|---|---|---|---|
+| bake | 27 | 1 | 1/173 | 0 | 1 |
+| bundler | 107 | 17 | 1,943/4,004 | 31 | 253 |
+| cli | 257 | 4 | 1,036/12,526 | 1324 | 40 |
+| config | 2 | 0 | 0/51 | 2 | 1 |
+| integration | 23 | 3 | 50/81 | 0 | 1 |
+| internal | 66 | 43 | 572/660 | 9 | 0 |
+| js/bun | 557 | 84 | 17,882/25,112 | 405 | 536 |
+| js/deno | 16 | 4 | 198/244 | 17 | 0 |
+| js/first_party | 7 | 0 | 32/117 | 0 | 3 |
+| js/junit-reporter | 1 | 0 | 0/9 | 0 | 0 |
+| js/node | 340 | 42 | 2,565/5,150 | 162 | 25 |
+| js/sql | 71 | 0 | 0/76 | 4 | 0 |
+| js/third_party | 120 | 38 | 1,524/2,374 | 11 | 123 |
+| js/valkey | 15 | 0 | 2/41 | 8 | 0 |
+| js/web | 185 | 30 | 1,916/13,322 | 116 | 6 |
+| js/workerd | 3 | 0 | 0/53 | 1 | 0 |
+| napi | 60 | 0 | 0/153 | 0 | 21 |
+| packages | 15 | 2 | 1,233/2,110 | 0 | 0 |
+| regression | 430 | 148 | 481/1,090 | 46 | 1 |
+| root | 1 | 1 | 21/21 | 0 | 0 |
+| snippets | 1 | 1 | 1/3 | 0 | 2 |
+| v8 | 1 | 0 | 0/1 | 0 | 0 |
+
+### jsc comparison
+
+| Directory | Files | Fully passing | Observed tests passed/total | Skipped | Todo |
+|---|---|---|---|---|---|
+| bake | 27 | 1 | 1/60 | 0 | 0 |
+| bundler | 107 | 18 | 1,993/4,017 | 29 | 253 |
+| cli | 257 | 5 | 1,142/13,078 | 1163 | 44 |
+| config | 2 | 0 | 0/51 | 2 | 1 |
+| integration | 23 | 3 | 50/81 | 0 | 1 |
+| internal | 66 | 44 | 574/663 | 9 | 0 |
+| js/bun | 557 | 83 | 8,094/15,432 | 405 | 536 |
+| js/deno | 16 | 3 | 192/244 | 17 | 0 |
+| js/first_party | 7 | 0 | 32/117 | 0 | 3 |
+| js/junit-reporter | 1 | 0 | 0/9 | 0 | 0 |
+| js/node | 340 | 43 | 2,371/4,934 | 162 | 24 |
+| js/sql | 71 | 0 | 0/76 | 4 | 0 |
+| js/third_party | 120 | 38 | 1,973/2,373 | 11 | 123 |
+| js/valkey | 15 | 0 | 2/41 | 8 | 0 |
+| js/web | 185 | 27 | 1,133/12,354 | 116 | 6 |
+| js/workerd | 3 | 0 | 0/53 | 1 | 0 |
+| napi | 60 | 0 | 0/153 | 0 | 21 |
+| packages | 15 | 2 | 1,234/2,110 | 0 | 0 |
+| regression | 430 | 142 | 477/1,088 | 46 | 1 |
+| root | 1 | 1 | 21/21 | 0 | 0 |
+| snippets | 1 | 1 | 1/3 | 0 | 2 |
+| v8 | 1 | 0 | 0/1 | 0 | 0 |
+<!-- current:end -->
+
+### Current run provenance
+
+The current replay used `scripts/bun-suite.sh` with `--network loopback`, a 15-second file deadline, a 2,000 ms test deadline, and the installed dependency tree at `docs/bun-test-suite/dependencies/node_modules`. It ran all 2,305 discovered files on each engine.
+
+```sh
+source env.sh
+export CARGO_TARGET_DIR=/work/tmp/bun-wasm-measure-suite-matrix/quickjs-target
+deps="$PWD/docs/bun-test-suite/dependencies/node_modules"
+scripts/bun-suite.sh --network loopback --jobs 6 --timeout 15 --dependencies "$deps" --output /work/reports/bun-wasm-main-2026-10-17/suite/quickjs.json
+scripts/bun-suite.sh --engine jsc --network loopback --jobs 2 --timeout 15 --dependencies "$deps" --output /work/reports/bun-wasm-main-2026-10-17/suite/jsc.json
+scripts/bun-suite.sh --engine browser --network loopback --jobs 2 --timeout 15 --dependencies "$deps" --output /work/reports/bun-wasm-main-2026-10-17/suite/browser.json
+```
+
+The suite revision was `cd95fa7a13b3f13be73e512b38ec111c1c228084`. The artifact hashes are QuickJS `794e4b24f5755f4f18d2e2aac5149d87de73f7d7f2c27fba2d0fdf8ff7ec82c9`, JSC `596e8f29bfd9d48c556b1f9a26ca9e8b9e439a4d8351551718cb13cbefe7b36f`, browser `accc747792ac2e53e4ea86e51b15c3f3ec5354e20516288d95a79aae7cea7e0e`, and native launcher `0b61ddaa7e30cbe3e26fbed3d3c78d529e8727462efd9f9eb302de7dcd38b300`. Artifact and launcher hashes are recorded in `/work/reports/bun-wasm-main-2026-10-17/artifact-sha256.txt`. The raw per-engine JSON and bounded logs are in `/work/reports/bun-wasm-main-2026-10-17/suite/`. The ranked next-fix list with reproduction commands and suspected file locations is in [triage.md](triage.md#ranked-next-fixes).
+
 
 ## Reading the results
 
