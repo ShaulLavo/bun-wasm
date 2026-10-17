@@ -1475,7 +1475,8 @@ Class **Port**. Bun revision `9510e74152073d850a18758ca41114d8f214ffa6`.
 
 `crates/bunwasm-cli/src/lint_command.rs` calls `src/lint/driver` for both commands.
 Bun's native rule registry, parsers, semantic analysis, formatter, file discovery,
-configuration resolution, fix application, and report formats compile unchanged.
+configuration resolution, fix application, and report formats use the vendored
+implementations, with the WASI layout and docs-embedding adjustments listed below.
 The adapter follows `src/runtime/cli/{lint_command,format_command}.rs` and
 retains their help wording from `src/runtime/cli/mod.rs`. It parses
 CLI options, loading `[lint]` and `[fmt]` defaults through the driver's bunfig
