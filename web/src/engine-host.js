@@ -1,3 +1,4 @@
+import { observePromise } from "./promise-reactions.ts";
 import { installNativeStreamState } from "./native-stream-state.ts";
 import { oversizedCryptoInput } from "./crypto-inputs.js";
 import { installHostCrypto } from "./crypto-host.js";
@@ -726,14 +727,17 @@ class EngineHost {
         }
       };
     };
+    const attach = (react, promise, onFulfilled, onRejected) => {
+      const box = { promise: null };
+      box.promise = react(promise, wrap(onFulfilled, box, false), wrap(onRejected, box, true));
+      return box.promise;
+    };
     const { then } = {
       then(onFulfilled, onRejected) {
-        const box = { promise: null };
-        box.promise = nativePromiseThen(this, wrap(onFulfilled, box, false), wrap(onRejected, box, true));
-        return box.promise;
+        return attach(nativePromiseThen, this, onFulfilled, onRejected);
       },
     };
-    host.promiseThen = Function.prototype.call.bind(then);
+    host.promiseThen = (promise, fulfilled, rejected) => attach(observePromise, promise, fulfilled, rejected);
     Object.defineProperty(NativePromise.prototype, "then", { value: then, configurable: true, writable: true, enumerable: false });
 
     // Statics whose result state is known at once. `this` stays the caller's
