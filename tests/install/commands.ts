@@ -68,19 +68,22 @@ const cases: Record<string, () => Promise<void>> = {
   },
   async scriptCommandPrecedence() {
     const cwd = project("script-command", {
-      "package.json": JSON.stringify({ dependencies: { tool: "1.0.0" }, scripts: { bare: "tool", explicit: "./tool", runtime: "bun tool", node: "node tool", path: "PATH=./tools:$PATH path-tool" } }),
+      "package.json": JSON.stringify({ dependencies: { tool: "1.0.0" }, scripts: { bare: "tool", explicit: "./tool", runtime: "bun tool", node: "node tool", path: "PATH=./tools:$PATH path-tool", override: "PATH=./tools tool" } }),
       tool: '#!/usr/bin/env bun\nconsole.log("source-file");',
       "tools/path-tool": '#!/usr/bin/env bun\nconsole.log("path-bin");',
+      "tools/tool": `#!${process.execPath}\nconsole.log("path-bin");`,
       "path-tool.ts": 'throw new Error("cwd source must not run");',
     });
     chmodSync(join(cwd, "tool"), 0o755);
     chmodSync(join(cwd, "tools/path-tool"), 0o755);
+    chmodSync(join(cwd, "tools/tool"), 0o755);
     await success(cwd, "install");
     for (const linked of [true, false]) {
       if (!linked) rmSync(join(cwd, "node_modules/.bin"), { recursive: true });
       assert.equal((await success(cwd, "run", "bare")).trim(), "bin-tool");
       for (const name of ["explicit", "runtime", "node", "tool"]) assert.equal((await success(cwd, "run", name)).trim(), "source-file");
       assert.equal((await success(cwd, "run", "path")).trim(), "path-bin");
+      assert.equal((await success(cwd, "run", "override")).trim(), "path-bin");
       if (process.env.INSTALL_ENGINE === "native") break;
     }
   },

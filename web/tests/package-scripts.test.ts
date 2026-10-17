@@ -2,11 +2,13 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as path from "node:path";
+import { tmpdir } from "node:os";
 import { runInNewContext } from "node:vm";
 
 const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync("globalThis.factory = " + readFileSync(new URL("../../crates/bunwasm-runtime/src/js/package_scripts.ts", import.meta.url), "utf8")));
 function fixture(check: (cwd: string) => void) {
-  const cwd = mkdtempSync("/work/tmp/bun-wasm-script-resolution-");
+  const root = process.env.BUN_WASM_TEST_TMP ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  const cwd = mkdtempSync(join(root, "bun-wasm-script-resolution-"));
   try { check(cwd); } finally { rmSync(cwd, { recursive: true, force: true }); }
 }
 function write(cwd: string, name: string, text: string) {
@@ -38,17 +40,20 @@ function native(cwd: string, name: string, env: Record<string, string> = {}) {
 }
 
 for (const linked of [true, false]) test(`script command kinds preserve native precedence, linked=${linked}`, () => fixture(cwd => {
-  write(cwd, "package.json", JSON.stringify({ scripts: { bare: "tool", explicit: "./tool", runtime: "bun tool", node: "node tool" } }));
+  write(cwd, "package.json", JSON.stringify({ scripts: { bare: "tool", explicit: "./tool", runtime: "bun tool", node: "node tool", path: "PATH=./tools tool" } }));
   write(cwd, "tool", '#!/usr/bin/env bun\nconsole.log("source-file");');
   write(cwd, "node_modules/pkg/package.json", '{"name":"pkg","bin":{"tool":"cli.ts"}}');
   write(cwd, "node_modules/pkg/cli.ts", '#!/usr/bin/env bun\nconsole.log("package-bin");');
+  write(cwd, "tools/tool", `#!${process.execPath}\nconsole.log("path-bin");`);
   mkdirSync(join(cwd, "node_modules/.bin"));
   symlinkSync("../pkg/cli.ts", join(cwd, "node_modules/.bin/tool"));
   expect(native(cwd, "bare").stdout).toBe("package-bin");
   expect(native(cwd, "explicit").stdout).toBe("source-file");
   expect(native(cwd, "runtime").stdout).toBe("source-file");
+  expect(native(cwd, "path").stdout).toBe("path-bin");
   if (!linked) rmSync(join(cwd, "node_modules/.bin"), { recursive: true });
   expect(dispatched(cwd, "bare")).toBe(join(cwd, "node_modules/pkg/cli.ts"));
+  expect(dispatched(cwd, "path")).toBe(join(cwd, "tools/tool"));
   for (const name of ["explicit", "runtime", "node", "tool"]) expect(dispatched(cwd, name)).toBe(join(cwd, "tool"));
 }));
 
