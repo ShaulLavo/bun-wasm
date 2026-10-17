@@ -24,6 +24,7 @@ class TestWasiExit extends Error { constructor(readonly code: number) { super("e
 async function run(options: {
   adapter?: RunRequest["adapter"];
   instantiateError?: boolean;
+  replaceGuestGlobals?: boolean;
   onMessage?(message: WorkerMessage): void;
   onSubprocess?(host: SubprocessHost): void;
   child?: ChildTransport;
@@ -98,6 +99,11 @@ async function run(options: {
       launch() { return options.launch?.(proc, io) ?? null; }
     },
     async startEngineHost(engine: EngineOptions) {
+      if (options.replaceGuestGlobals) Object.assign(context, {
+        postMessage() { throw new Error("guest postMessage reached"); },
+        addEventListener() { throw new Error("guest addEventListener reached"); },
+        removeEventListener() { throw new Error("guest removeEventListener reached"); },
+      });
       const dispatch = (type: string, error: unknown) => {
         let prevented = false;
         listeners.get(type)?.({ error, reason: error, preventDefault() { prevented = true; } });
@@ -516,4 +522,10 @@ test("ordinary numeric signal-like exit remains an ordinary exit", async () => {
 test("non-isolated workers retain ordinary execution without SharedArrayBuffer", async () => {
   const result = await run({ isolated: false, adapter: "preview1", launch: () => 23 });
   expect(exits(result.messages)).toEqual([{ type: "exit", code: 23, signal: undefined, sleep: "busy-wait" }]);
+});
+
+
+test("Bun guest globals cannot replace the browser worker transport", async () => {
+  const result = await run({ replaceGuestGlobals: true });
+  expect(exits(result.messages)).toEqual([expect.objectContaining({ type: "exit", code: 0 })]);
 });

@@ -149,7 +149,6 @@ declare namespace BunWasm {
     workerSource(source: string, path: string): string;
   }
   interface Internal {
-    require(name: "bun"): { isMainThread: boolean };
     require(name: "web_worker"): { initialize(port: WebParentPort, options: WebWorkerOptions, webMessageEvent: (event: MessageEvent) => MessageEvent): void };
     randomUUID(): string;
     initImportMeta(meta: object, path: string, main: boolean): void;
