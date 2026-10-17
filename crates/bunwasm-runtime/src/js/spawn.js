@@ -376,7 +376,7 @@
     const { Readable, Writable } = internal.builtin("node:stream");
 
     function spawnError(error, command, args, sync) {
-      if (error.code !== "ENOENT" && error.code !== "EACCES") return error;
+      if (!error || typeof error !== "object" || (error.code !== "ENOENT" && error.code !== "EACCES")) return error;
       const path = String(command);
       const syscall = `${sync ? "spawnSync" : "spawn"} ${path}`;
       return Object.assign(new Error(`${syscall} ${error.code}`), {
@@ -446,6 +446,28 @@
       disconnect() { throw unsupported("Child process IPC"); }
     }
 
+    function reportStartFailure(child, options, error) {
+      const streams = options.stdio.map((mode, fd) => {
+        if (mode !== "pipe") return null;
+        if (fd === 0) return new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+        return new Readable({ read() {} });
+      });
+      child.stdin = streams[0];
+      child.stdout = streams[1];
+      child.stderr = streams[2];
+      child.stdio = streams;
+      const closed = streams.filter(Boolean).map((stream) => new Promise((resolve) => stream.once("close", resolve)));
+      const errno = error && typeof error === "object" && Number.isInteger(error.errno) ? error.errno : -2;
+      internal.nextTick(() => {
+        child.exitCode = errno;
+        if (child.stdin) child.stdin.destroy();
+        if (child.stdout) { child.stdout.push(null); child.stdout.resume(); }
+        if (child.stderr) { child.stderr.push(null); child.stderr.resume(); }
+        child.emit("error", error);
+        Promise.all(closed).then(() => child.emit("close", errno, null));
+      });
+    }
+
     function reportExit(child, code) {
       child.signalCode = child._child.signalCode;
       child.exitCode = child.signalCode === null ? code : null;
@@ -464,7 +486,7 @@
       child.spawnargs = argv;
       try { child._child = spawn(argv, options); } catch (error) {
         error = spawnError(error, command, args, false);
-        internal.nextTick(() => { child.emit("error", error); child.emit("close", -2, null); });
+        reportStartFailure(child, options, error);
         return child;
       }
       child.pid = child._child.pid;
@@ -495,8 +517,8 @@
       const signal = result.signalCode;
       if (result.exitedDueToTimeout) result.error = Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT", errno: -110, syscall: "spawnSync", path: String(command) });
       const encoding = options.encoding;
-      const stdout = missing || options.stdio[1] === "inherit" || options.stdio[1] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stdout.toString(encoding) : result.stdout;
-      const stderr = missing || options.stdio[2] === "inherit" || options.stdio[2] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stderr.toString(encoding) : result.stderr;
+      const stdout = missing ? undefined : options.stdio[1] === "inherit" || options.stdio[1] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stdout.toString(encoding) : result.stdout;
+      const stderr = missing ? undefined : options.stdio[2] === "inherit" || options.stdio[2] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stderr.toString(encoding) : result.stderr;
       return { pid: result.pid, status: result.error || signal ? null : result.exitCode, signal,
         output: missing ? null : [null, stdout, stderr], stdout, stderr, error: result.error };
     }

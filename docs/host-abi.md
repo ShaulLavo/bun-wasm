@@ -273,6 +273,9 @@ The Bun slot adapter waits for the execution worker's startup acknowledgement
 before returning a child. The transport's control int32 at index 2 is zero while
 startup is pending and one after successful instantiation or confirmed completion;
 publication wakes that cell. Failure completion still follows filesystem quiescence.
+The Node host uses a separate supervisor worker to publish pre-bootstrap failures
+and early exits while the spawning thread waits. Generic roots and children share
+their authoritative outcome in the initial request, before dynamic adapter imports.
 A failed start returns -1 and a host error containing code, negative errno and path.
 Bun's spawn APIs throw ENOENT or EACCES. Node's spawn emits error then close without
 spawn or exit, and its synchronous API returns the error with null status and signal.

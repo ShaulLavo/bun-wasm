@@ -347,6 +347,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     transport.data = { ...(transport.data as object | undefined), filesystem };
     await subprocess.adoptRuntimeRoot(transport);
     rootOutcome = state.signals.outcome;
+    request.outcome = rootOutcome;
     rootPid = request.pid = state.pid;
     rootJob = request.jobId = state.job;
     prepared = true;

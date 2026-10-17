@@ -31,7 +31,7 @@ export interface RunRequest {
   interrupt?: SharedArrayBuffer;
   requestedSignal?: SharedArrayBuffer;
   signalState?: SharedArrayBuffer;
-  outcome?: SharedArrayBuffer;
+  outcome?: SharedArrayBuffer | BigInt64Array;
   module: WebAssembly.Module;
   args: string[];
   env: Record<string, string>;

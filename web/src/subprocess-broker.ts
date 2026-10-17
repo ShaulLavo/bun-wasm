@@ -403,7 +403,7 @@ export class SubprocessBroker {
       module: context.module, engine: preview1 ? "browser" : context.adapter.slice(4) as Engine,
       adapter: preview1 ? "preview1" : "bun", interruptible, args: context.request.argv,
       env: { ...context.request.env, PWD: context.request.cwd },
-      filesystem: this.filesystem.connect(filesystem), runtimeProcess: transport,
+      filesystem: this.filesystem.connect(filesystem), runtimeProcess: transport, outcome: context.outcome,
       pid: context.pid, jobId: context.job, trace: false, spawnBroker: true, net: null, moduleCache: null,
     };
     if (!preview1 && request.engine === "browser" && new URL(this.workerUrl).pathname.endsWith("/__bunwasm/worker.js")) request.moduleCache = `bunwasm-m-${crypto.randomUUID()}`;

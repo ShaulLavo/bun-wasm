@@ -22,6 +22,7 @@ import { installCliFetch } from "./node-install-net.mjs";
 import { memoryViews } from "../../runtime/core/memory-views.js";
 import { SubprocessHost, childTransport, wasiPipe } from "../src/subprocess.ts";
 import { launchNodeExecutable } from "./node-spawn.ts";
+import { launchNodeChild } from "./node-child.ts";
 import { forwardOutput, writeStdio } from "./node-stdio.ts";
 import { createNodeSignalController } from "./node-signals.ts";
 import { installNodeProcess } from "./node-process.ts";
@@ -179,14 +180,12 @@ async function run() {
       if (child) return wasiPipe(child[fd === 2 ? "stderr" : "stdout"], "write").write([bytes]) === bytes.length;
       return forwardOutput(fd === 2 ? 2 : 1, bytes);
     },
-    launch: (meta, transport, onError) => launchNodeExecutable(meta, transport, () => {
+    launch: (meta, transport) => launchNodeExecutable(meta, transport, () => {
       validateCwd(meta.cwd);
-      const worker = new Worker(new URL(import.meta.url), {
+      return launchNodeChild(new URL(import.meta.url), {
         workerData: { bunwasmChild: true, module, preopens, meta, transport, withNet, stackMb: workerData.stackMb },
         resourceLimits: { maxOldGenerationSizeMb: 128, ...meta.worker?.resourceLimits, stackSizeMb: Math.max(workerData.stackMb, meta.worker?.resourceLimits?.stackSizeMb || 0) },
-      });
-      worker.on("error", onError);
-      return worker;
+      }, transport);
     }),
   });
   const wasi = new WASI({ version: "preview1", args: ["bun"].concat(args), env, preopens, returnOnExit: true });
