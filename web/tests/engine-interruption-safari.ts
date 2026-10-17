@@ -52,7 +52,7 @@ async function inspectCommand(args: string[], allowEmpty = false, deadline = Inf
 }
 
 async function listenerPids(port: number, deadline?: number): Promise<number[]> {
-  const output = await inspectCommand(["/usr/sbin/lsof", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], true, deadline);
+  const output = await inspectCommand([process.platform === "darwin" ? "/usr/sbin/lsof" : "lsof", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], true, deadline);
   if (!output) return [];
   const pids = output.split(/\s+/).map(Number);
   if (pids.some(pid => !Number.isInteger(pid) || pid <= 0)) throw new Error("invalid Safari listener process identity");
