@@ -176,7 +176,7 @@ path or revision.
 The scheduler gives I/O a turn between callback turns, even when callbacks keep
 queuing immediates or timers remain due. Immediate callbacks queued during an
 existing batch wait for the next batch, so due timers can run. Microtasks still
-drain between callbacks. This uses the existing I/O waiter interface and adds
+drain between callback turns. This uses the existing I/O waiter interface and adds
 no host ABI slot.
 
 ## Portable filesystem watcher

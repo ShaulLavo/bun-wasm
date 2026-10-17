@@ -383,7 +383,7 @@
   }
 
   // Called by the Rust event loop. Runs at most one callback so microtasks
-  // drain between callbacks. Returns 0 when something ran, the delay in ms
+  // drain between callbacks. Returns 0 when another turn is ready, the delay in ms
   // until the next timer, or -1 when nothing keeps the process alive.
   internal.runTimers = function runTimers() {
     const workerProgress = internal.workerPump && internal.workerPump();
