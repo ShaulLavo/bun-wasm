@@ -23,6 +23,7 @@ mod compression;
 mod zlib_ffi;
 mod crypto;
 mod glob;
+mod html_rewriter;
 pub mod engine;
 #[cfg(feature = "engine-host")]
 pub mod engine_host;
@@ -37,6 +38,7 @@ mod semver;
 mod sourcemap;
 mod sqlite;
 mod wasm;
+mod x509;
 pub mod transpiler;
 
 #[cfg(feature = "engine-quickjs")]
