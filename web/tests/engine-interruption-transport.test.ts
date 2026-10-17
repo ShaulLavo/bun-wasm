@@ -1,22 +1,19 @@
 import { expect, test } from "bun:test";
-import { createSignalState } from "waffle/proc/signals";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
-import type { RunRequest } from "../src/worker";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
 
-// Only transport selection is isolated here. Browser cases create the real request
-// through SubprocessBroker.launch / launchRuntime, never through this test fixture.
-test("generic engine probe uses authoritative offset signal views and actual shared hostPoll budget", () => {
+// Select real generic views, not a replacement of the removed Bun transport.
+test("generic engine probe uses authoritative offset signals and the actual runtime_proc.poll readiness word", () => {
   const runtimeProcess = createWorkerProcessTransport();
-  const budget = new SharedArrayBuffer(64);
   const state = workerProcessState(runtimeProcess);
-  const selected = engineInterruptionTransport({ runtimeProcess, budget } as RunRequest);
+  const selected = engineInterruptionTransport({ runtimeProcess, engine: "quickjs" });
   expect(selected.route).toBe("runtimeProcess");
   expect(selected.requestedSignal.buffer).toBe(runtimeProcess.directory);
   expect(selected.requestedSignal.byteOffset).toBe(state.signals.requestedSignal.byteOffset);
   expect(selected.signalState.byteOffset).toBe(state.signals.signalState.byteOffset);
   expect(selected.signalState.length).toBe(65);
-  expect(selected.waitWord.buffer).toBe(budget);
+  expect(selected.waitWord.buffer).toBe(state.wake.buffer);
+  expect(selected.waitWord.byteOffset).toBe(state.wake.byteOffset);
   expect(selected.waitWord.byteOffset).toBe(4);
   expect(selected.waitWord.length).toBe(1);
   Atomics.store(selected.requestedSignal, 0, 15);
@@ -26,25 +23,28 @@ test("generic engine probe uses authoritative offset signal views and actual sha
   expect(Atomics.load(new Int32Array(runtimeProcess.directory), 0)).not.toBe(15);
 });
 
-test("legacy engine probe observes actual child budget word and shared signal state", () => {
-  const child = { budget: new SharedArrayBuffer(64), requestedSignal: new SharedArrayBuffer(4), signalState: createSignalState().buffer };
-  const selected = engineInterruptionTransport({ child } as RunRequest);
-  expect(selected.route).toBe("legacy");
-  expect(selected.waitWord.buffer).toBe(child.budget);
-  expect(selected.waitWord.byteOffset).toBe(4);
+test("probe rejects a request without its actual production transport", () => {
+  expect(() => engineInterruptionTransport({})).toThrow("production signal and wait transport");
+});
+
+for (const root of [false, true]) test(`Preview1 ${root ? "Bun composition root" : "sibling worker"} selects the exact WASI interrupt wait cell, not process readiness`, () => {
+  const runtimeProcess = createWorkerProcessTransport();
+  const state = workerProcessState(runtimeProcess);
+  const selected = engineInterruptionTransport(root ? { runtimeProcess, engine: "browser", adapter: "preview1" } : { runtimeProcess });
+  expect(selected.route).toBe("runtimeProcess");
+  expect(selected.waitWord.buffer).toBe(state.signals.interrupt.buffer);
+  expect(selected.waitWord.byteOffset).toBe(state.signals.interrupt.byteOffset);
   expect(selected.waitWord.length).toBe(1);
-  Atomics.store(selected.signalState, 2, 6);
-  expect(Atomics.load(new Int32Array(child.signalState), 2)).toBe(6);
+  expect(selected.waitWord.byteOffset).not.toBe(state.wake.byteOffset);
+  Atomics.store(selected.waitWord, 0, 2);
+  expect(Atomics.load(state.signals.interrupt, 0)).toBe(2);
+  expect(Atomics.load(state.wake, 0)).toBe(0);
 });
 
-test("probe rejects requests without an actual production signal and wait transport", () => {
-  expect(() => engineInterruptionTransport({} as RunRequest)).toThrow("production signal and wait transport");
-});
-
-for (const childRoute of [false, true]) test(`Preview1 ${childRoute ? "child" : "root"} probe selects actual WASI interrupt wait word, never hostPoll budget`, () => {
-  const transport = { budget: new SharedArrayBuffer(64), interrupt: new SharedArrayBuffer(4),
-    requestedSignal: new SharedArrayBuffer(4), signalState: createSignalState().buffer };
-  const selected = engineInterruptionTransport({ adapter: "preview1", ...(childRoute ? { child: transport } : transport) } as RunRequest);
-  expect(selected.waitWord.buffer).toBe(transport.interrupt);
-  expect(selected.waitWord.byteOffset).toBe(0);
+test("both Bun engines observe the same service-owned readiness sequence", () => {
+  const runtimeProcess = createWorkerProcessTransport();
+  const quickjs = engineInterruptionTransport({ runtimeProcess, engine: "quickjs" });
+  const jsc = engineInterruptionTransport({ runtimeProcess, engine: "jsc" });
+  Atomics.add(quickjs.waitWord, 0, 1);
+  expect(Atomics.load(jsc.waitWord, 0)).toBe(1);
 });

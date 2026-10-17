@@ -103,10 +103,10 @@ test("generic engine scope reaches real launchRuntime with the process transport
     worker.onmessage!({ data: { type: "stderr", data: text.encode("ready\n") } } as MessageEvent<WorkerMessage>);
     expect(child.stderr).toBe("ready\n");
     worker.onmessage!({ data: { type: "exit", code: 23 } } as MessageEvent<WorkerMessage>);
-    expect((await owned.broker.wait(child.pid)).code).toBe(23);
+    expect((await owned.outcome(child)).code).toBe(23);
     expect(owned.wait(child)).toBe(23);
   } finally {
-    try { owned?.dispose(); } finally { await realm.dispose(); }
+    try { await owned?.dispose(); } finally { await realm.dispose(); }
   }
   expect(realm.workers.every(worker => worker.stopped)).toBe(true);
 });
@@ -135,7 +135,7 @@ for (const route of ["runtimeProcess", "owned-preview1"] as const) {
       if (route === "owned-preview1") {
         expect(WebAssembly.Module.imports(request.module)).toContainEqual({ module: "runtime_proc", name: "interrupted", kind: "function" });
       }
-      const supervisor = await owned.broker.ready();
+      const supervisor = await owned.service.ready();
       const root = supervisor.get(1)!;
       setSignalDisposition(child.signalState, 2, 2);
       await owned.kill(child, 2, "page-killJob");
@@ -143,11 +143,11 @@ for (const route of ["runtimeProcess", "owned-preview1"] as const) {
       // A real page job signal must not also default-kill the test's waiter.
       expect(root.result).toBeNull();
       realm.workers[0]!.onmessage!({ data: { type: "exit", code: 23 } } as MessageEvent<WorkerMessage>);
-      expect((await owned.broker.wait(child.pid))).toMatchObject({ kind: "exited", code: 23 });
+      expect((await owned.outcome(child))).toMatchObject({ kind: "exited", code: 23 });
       expect(owned.wait(child)).toBe(23);
       expect(child.jobId).not.toBe(root.job);
     } finally {
-      try { owned?.dispose(); } finally { await realm.dispose(); }
+      try { await owned?.dispose(); } finally { await realm.dispose(); }
     }
     expect(realm.workers.every(worker => worker.stopped)).toBe(true);
   });
@@ -172,7 +172,7 @@ for (const stage of ["admission", "running"] as const) {
         }
         throw new Error(`injected ${stage} failure`);
       } finally {
-        try { owned?.dispose(); } finally { await realm.dispose(); }
+        try { await owned?.dispose(); } finally { await realm.dispose(); }
       }
     })();
     await expect(failed).rejects.toThrow(`injected ${stage} failure`);
