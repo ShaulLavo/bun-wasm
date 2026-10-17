@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { createRegistry } from "./registry.mjs";
+import { createRegistry, packageFixture } from "./registry.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
 const scratch = mkdtempSync("/work/tmp/bun-wasm-install-update-");
@@ -37,7 +37,7 @@ async function run(...args: string[]) {
   } finally { clearTimeout(timer); children.delete(child); }
 }
 try {
-  registry = await createRegistry();
+  registry = await createRegistry([packageFixture("versioned", "2.1.0")]);
   const manifest = join(scratch, "package.json");
   writeFileSync(manifest, JSON.stringify({ dependencies: { "rehoist-parent": "2.0.0" } }));
   await run("install");
@@ -47,16 +47,22 @@ try {
   assert.equal(JSON.parse(readFileSync(join(scratch, "node_modules/rehoist-parent/package.json"), "utf8")).version, "1.0.0");
   assert.equal(existsSync(join(scratch, "node_modules/rehoist-child")), false, "bun update retained an obsolete transitive dependency");
   console.log("update prunes obsolete transitive dependencies");
+  for (const names of [["versioned"], []]) {
   writeFileSync(manifest, JSON.stringify({ workspaces: ["packages/*"], dependencies: { versioned: "2.0.0" } }));
   mkdirSync(join(scratch, "packages/member"), { recursive: true });
   const member = join(scratch, "packages/member/package.json");
   writeFileSync(member, JSON.stringify({ name: "member", version: "1.0.0", dependencies: { versioned: "1.0.0" } }));
   await run("install");
   writeFileSync(member, JSON.stringify({ name: "member", version: "1.0.0", dependencies: { versioned: "^1.0.0" } }));
-  await run("update", "versioned", "--cwd", "/packages/member");
+  writeFileSync(manifest, JSON.stringify({ workspaces: ["packages/*"], dependencies: { versioned: "^2.0.0" } }));
+  await run("update", ...names, "--cwd", "/packages/member");
   const rootVersion = JSON.parse(readFileSync(join(scratch, "node_modules/versioned/package.json"), "utf8")).version;
   const memberVersion = JSON.parse(readFileSync(join(scratch, "packages/member/node_modules/versioned/package.json"), "utf8")).version;
   assert.equal(rootVersion, "2.0.0");
   assert.equal(memberVersion, "1.1.0", "selected workspace update retained a nested lock pin");
-  console.log("selected workspace update refreshes its nested resolution");
+  console.log("selected workspace update refreshes its nested resolution and preserves root pins", names.length ? "named" : "all");
+  rmSync(join(scratch, "bun.lock"));
+  rmSync(join(scratch, "node_modules"), { recursive: true });
+  rmSync(join(scratch, "packages"), { recursive: true });
+  }
 } finally { await cleanup(); }
