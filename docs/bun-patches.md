@@ -22,6 +22,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`third_party/licenses/lol-html-LICENSE`](#htmlrewriter) | Port | Retain the vendored parser's BSD license for wasm distribution. |
 | [Third-party interrupt instrumentation](#third-party-interrupt-instrumentation) | Host feature | Original TypeScript binary rewriter, content-addressed loader and rescued browser fixtures; module-internal countdowns avoid per-entry host calls. |
 | [Portable installer and package command adapters](#portable-installer-and-package-commands) | Host feature | Original filesystem, lockfile and command adapters over Bun's matcher, parsers and semver. |
+| [Foreign lockfile migration](#foreign-lockfile-migration) | Host feature | Original format adapters preserve selected records, snapshot edges, workspace pins and checksums, using the shared canonical lock writer. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
@@ -1822,3 +1823,29 @@ matching path and numeric flags, removes the TLS-only mode and BunString output,
 and uses our existing BoringSSL accessors and owned UTF-8 names. SAN parsing
 errors suppress subject fallback; an email-only SAN does not suppress a CN
 hostname match. The BoringSSL source remains unchanged.
+
+## Foreign lockfile migration
+
+Class **Host feature**. Original adapters in `crates/bunwasm-runtime/src/install/migration.rs`
+and the shared writer in `install/mod.rs`. They use the existing Bun data parser,
+workspace discovery and resolver. No upstream implementation is copied or patched.
+The text format follows Bun's `src/install/lockfile/bun.lock.rs`; selected references
+and bin representations are checked against native Bun rather than inferred from
+pretty JSON. Registry metadata can fill omitted bin, platform and script fields,
+while the original lock's checksum takes priority.
+
+`tests/install/migration.ts` reads public fixtures and recorded metadata under
+`vendor/bun/test/cli/install/migration/` at the Bun pin. It uses unchanged npm,
+classic Yarn, Berry and pnpm fixtures, plus documented reductions and two small
+snapshot-reference regressions. Files are copied only into owned test scratch.
+No copied fixture or third-party implementation is checked into this change.
+The replay combines the existing app-matrix cache and Bun's recorded
+`yarn/npm-metadata.json`; its namespace has no external network route.
+
+Logical install names stay separate from resolved package identities. pnpm's
+full snapshot reference selects its edges before the peer context is removed
+from serialized dependency values. Workspace roots and members seed traversal.
+Git and direct tarball dependency protocols fail before any converted lock is
+published. A valid classic Yarn resolved SHA-1 fragment becomes an SRI value.
+The [validation notes](lockfile-migration.md) distinguish exact native matches,
+intentional fixes to native 1.4.2 behavior, and unavailable native Berry goldens.

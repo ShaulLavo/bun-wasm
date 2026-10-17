@@ -118,6 +118,26 @@ const cases: Record<string, () => Promise<void>> = {
     await run(cwd, "update", "fixture-cli", "--latest");
     check(JSON.parse(readFileSync(join(cwd, "node_modules/fixture-cli/package.json"), "utf8")).version === "2.0.0", "update latest");
   },
+  async migration() {
+    const integrity = `sha512-${new Bun.CryptoHasher("sha512").update(archives.get("1.0.0")!).digest("base64")}`;
+    const dep = { version: "1.0.0", resolved: `${server.url}1.0.0.tgz`, integrity, bin: { "fixture-cli": "cli.ts" } };
+    const locks: Record<string, unknown> = {
+      "package-lock.json": { lockfileVersion: 3, packages: { "": { dependencies: { "fixture-cli": "^1.0.0" } }, "node_modules/fixture-cli": dep } },
+      "yarn.lock": `"fixture-cli@^1.0.0":\n  version "1.0.0"\n  resolved "${server.url}1.0.0.tgz"\n  integrity ${integrity}\n`,
+      "pnpm-lock.yaml": `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      fixture-cli:\n        specifier: ^1.0.0\n        version: 1.0.0\npackages:\n  fixture-cli@1.0.0:\n    resolution:\n      integrity: ${integrity}\n      tarball: ${server.url}1.0.0.tgz\nsnapshots:\n  fixture-cli@1.0.0: {}\n`,
+      "berry/yarn.lock": `__metadata:\n  version: 8\n"fixture-cli@npm:^1.0.0":\n  version: 1.0.0\n  resolution: "fixture-cli@npm:1.0.0"\n`,
+    };
+    for (const [lockfile, data] of Object.entries(locks)) {
+      const cwd = project(`migrate-${lockfile.split("/")[0]}`, { "package.json": { dependencies: { "fixture-cli": "^1.0.0" } }, [lockfile.replace("berry/", "")]: data });
+      if (lockfile.startsWith("berry/")) {
+        await run(cwd, "install", "--lockfile-only");
+        check(readFileSync(join(cwd, "bun.lock"), "utf8").includes("fixture-cli@1.0.0"), "berry migration pin");
+      } else {
+        await run(cwd, "install");
+        check(JSON.parse(readFileSync(join(cwd, "node_modules/fixture-cli/package.json"), "utf8")).version === "1.0.0", "migration must retain pin");
+      }
+    }
+  },
   async aliasLock() {
     latest = "1.0.0";
     const cwd = project("alias-lock", { "package.json": { dependencies: { alias: "npm:fixture-cli@latest" } } });

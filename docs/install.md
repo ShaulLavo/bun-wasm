@@ -88,8 +88,11 @@ its bin link is absent, then use an isolated cache installation.
 They leave the project's manifest and lockfile unchanged. Concurrent installs
 publish complete cache directories through an atomic rename.
 
-Lockfile migration is split into a follow-up PR based on this command/workspace
-change. Existing foreign lockfiles are not imported by this PR.
+Without `bun.lock`, the installer imports npm, pnpm, Yarn classic or Berry locks
+before resolving dependencies. `bun pm migrate` writes a converted lock without
+extracting packages. Both paths use the same canonical writer and retain workspace
+pins. See [migration behavior and native validation](lockfile-migration.md), including
+unsupported source protocols and the installed native Bun's Berry limitation.
 
 ## Real Bun installer spike
 

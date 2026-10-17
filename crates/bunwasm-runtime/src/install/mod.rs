@@ -117,7 +117,7 @@ fn execute(command: &str, args: Vec<String>, parser: &dyn Transpiler) -> Result<
     let locked = if Path::new("bun.lock").exists() {
         io::read(Path::new("bun.lock"), "JSONC", parser)?
     } else {
-        migration::read(if member.is_some() { &root_manifest } else { &old_manifest }, parser)?
+        migration::read(if member.is_some() { &root_manifest } else { &old_manifest }, parser, &registry)?
             .unwrap_or_else(|| json!({}))
     };
     let mut resolution_lock = locked.clone();
@@ -407,59 +407,70 @@ fn same_lock(locked: &Value, text: &str, parser: &dyn Transpiler, production: bo
 }
 
 fn lockfile(manifest: &Value, resolver: &Resolver) -> String {
-    let mut root = local::lock_meta(manifest);
-    root.as_object_mut().unwrap().remove("version");
-    let mut out = "{\n  \"lockfileVersion\": 2,\n  \"configVersion\": 1,\n  \"workspaces\": {\n    \"\": ".to_owned();
-    pretty(&root, 2, &mut out);
+    let mut workspaces = json!({"": migration::workspace_meta(manifest, true)});
     for member in resolver.workspaces.values() {
         let cwd = std::env::current_dir().unwrap();
         let path = member.path.strip_prefix(&cwd).unwrap_or(&member.path).to_string_lossy();
-        out.push_str(&format!(",\n    {}: ", json!(path)));
-        pretty(&local::lock_meta(&member.meta), 2, &mut out);
+        workspaces[path.as_ref()] = migration::workspace_meta(&member.meta, false);
     }
-    out.push_str(",\n  },\n  \"packages\": {\n");
-    for (index, (key, package)) in resolver.packages.iter().enumerate() {
-        if index > 0 {
-            out.push('\n');
-        }
-        let tarball = if package.tarball.starts_with("https://registry.npmjs.org/") {
-            ""
-        } else {
-            &package.tarball
-        };
+    let mut packages = serde_json::Map::new();
+    for (key, package) in &resolver.packages {
+        let original = package.source_chain.as_ref().map(|chain| &resolver.locked["packages"][chain.join("/")]);
+        let tarball = original.filter(|row| row[0] == format!("{}@{}", package.name, package.version))
+            .and_then(|row| row[1].as_str()).unwrap_or(&package.tarball);
+        let tarball = if tarball.starts_with("https://registry.npmjs.org/") { "" } else { tarball };
         let row = if let Some(local) = &package.local {
-            let cwd = std::env::current_dir().unwrap();
-            let path = local::relative(&local.path, &cwd);
-            let path = if !local.workspace
-                && path
-                    .components()
-                    .next()
-                    .is_some_and(|part| matches!(part, std::path::Component::Normal(_)))
-            {
+            let path = local::relative(&local.path, &std::env::current_dir().unwrap());
+            let path = if !local.workspace && path.components().next().is_some_and(|part| matches!(part, std::path::Component::Normal(_))) {
                 format!("./{}", path.display())
-            } else {
-                path.to_string_lossy().into_owned()
-            };
-            json!([format!(
-                "{}@{}:{path}",
-                package.name,
-                if local.workspace { "workspace" } else { "link" }
-            )])
+            } else { path.to_string_lossy().into_owned() };
+            json!([format!("{}@{}:{path}", package.name, if local.workspace { "workspace" } else { "link" })])
         } else {
-            json!([
-                format!("{}@{}", package.name, package.version),
-                tarball,
-                resolve::lock_info(&package.meta),
-                package.integrity
-            ])
+            json!([format!("{}@{}", package.name, package.version), tarball,
+                migration::package_meta(&package.meta), package.integrity])
         };
-        out.push_str(&format!("    {}: {},\n", json!(key), inline(&row)));
+        packages.insert(key.clone(), row);
     }
+    write_lock(&json!({"workspaces": workspaces, "packages": packages}))
+}
+
+fn write_lock(lock: &Value) -> String {
+    let mut out = "{\n  \"lockfileVersion\": 2,\n  \"configVersion\": 1,\n  \"workspaces\": {\n".to_owned();
+    if let Some(workspaces) = lock["workspaces"].as_object() {
+        for (path, meta) in workspaces.iter().collect::<std::collections::BTreeMap<_, _>>() {
+            out.push_str(&format!("    {}: ", json!(path)));
+            pretty(meta, 2, &mut out);
+            out.push_str(",\n");
+        }
+    }
+    if lock["packages"].as_object().is_none_or(|packages| packages.is_empty()) {
+        out.push_str("  },\n  \"packages\": {}\n}\n");
+        return out;
+    }
+    out.push_str("  },\n  \"packages\": {\n");
+    if let Some(packages) = lock["packages"].as_object() { write_package_rows(packages, &mut out); }
     out.push_str("  }\n}\n");
     out
 }
 
+fn write_package_rows(packages: &serde_json::Map<String, Value>, out: &mut String) {
+    for (index, (key, row)) in packages.iter().collect::<std::collections::BTreeMap<_, _>>().into_iter().enumerate() {
+        if index > 0 { out.push('\n'); }
+        out.push_str(&format!("    {}: {},\n", json!(key), inline(row)));
+    }
+}
+
 fn pretty(value: &Value, level: usize, out: &mut String) {
+    if let Some(values) = value.as_array().filter(|values| !values.is_empty()) {
+        out.push_str("[\n");
+        for value in values {
+            out.push_str(&"  ".repeat(level + 1));
+            pretty(value, level + 1, out);
+            out.push_str(",\n");
+        }
+        out.push_str(&format!("{}]", "  ".repeat(level)));
+        return;
+    }
     let Some(object) = value.as_object() else {
         out.push_str(&value.to_string());
         return;
@@ -560,8 +571,9 @@ fn report_added(input: &str, resolver: &Resolver, member: Option<&Path>) {
 fn pm(opts: &Options, parser: &dyn Transpiler) -> Result<()> {
     if opts.names.first().map(String::as_str) == Some("migrate") {
         let manifest = manifest("install", parser)?;
-        let lock = migration::read(&manifest, parser)?.ok_or("No lockfile found to migrate")?;
-        return io::write(Path::new("bun.lock"), format!("{}\n", serde_json::to_string_pretty(&lock).unwrap()).as_bytes());
+        let registry = registry(opts, parser)?;
+        let lock = migration::read(&manifest, parser, &registry)?.ok_or("No lockfile found to migrate")?;
+        return io::write(Path::new("bun.lock"), migration::write(&lock).as_bytes());
     }
     if opts.names.first().map(String::as_str) != Some("ls") {
         return Err("Only bun pm ls is supported in bun-wasm".into());
