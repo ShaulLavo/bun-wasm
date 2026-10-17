@@ -506,3 +506,37 @@ That dependency has landed in PR #36, and the branch reruns the memory
 and full web gates. Do not reduce the guest allocation, relax its timeout or
 remove assertions to call the gate passing. The owning lane removes retained
 evidence after reproduction, review and merge.
+
+## Node subprocess suite blocked by util.getSystemErrorName
+
+Status: Approved. Owner: compatibility track.
+
+The missing-executable fix passes node-misc and the focused child-process fixtures
+on QuickJS, JSC and the browser engine. Its unchanged three-file upstream sample
+remains 0/3 fully passing before and after, with no timeouts. The browser's
+`test-child-process-spawn-error.js` now passes the undefined-pid assertion and
+reaches line 51, where `util.getSystemErrorName` is not a function. QuickJS and
+JSC also stop at that missing helper. `crates/bunwasm-runtime/src/js/util.js:1471`
+starts the exported helper object, which has no getSystemErrorName entry.
+
+Expose the missing Node helper and verify its errno contract against Bun's tests.
+Do not weaken or edit the upstream script. Reproduce on each built engine through
+the heavy wrapper:
+
+```sh
+source env.sh
+scripts/bun-suite.sh --node-parallel --engine browser --jobs 1 --timeout 15 \
+  --network loopback --output /work/reports/bun-wasm-util-error-name/browser.json \
+  js/node/test/parallel/test-child-process-spawn-error.js
+```
+
+Repeat with quickjs and jsc. The companion files have separate blockers:
+`test-child-process-exec-error.js:33` requires a real shell child pid, and
+`test-child-process-spawnsync.js:34` requires an external sleep executable.
+The host registry provides Bun/Node programs, so those files do not establish
+that direct executable-start errors are wrong.
+
+Exact before/after JSON and bounded failure excerpts are retained in
+`/work/reports/bun-wasm-node-misc-browser/upstream-{before,after}-{quickjs,jsc,browser}.json`.
+The compatibility track owns that evidence until this follow-up is reproduced
+and the subprocess behavior is measured again.
