@@ -117,7 +117,7 @@ class ProvenanceTests(unittest.TestCase):
 
     def test_missing_installed_package_refuses_provenance(self):
         (self.root / "web/node_modules/waffle").unlink()
-        with self.assertRaisesRegex(RuntimeError, "runtime"):
+        with self.assertRaisesRegex(RuntimeError, "waffle|installed"):
             self.provenance()
 
     def test_missing_generated_node_entry_refuses_provenance(self):
