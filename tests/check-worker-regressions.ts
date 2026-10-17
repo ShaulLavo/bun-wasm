@@ -9,7 +9,7 @@ const engine = option("--engine", "browser");
 const host = option("--host", engine === "browser" ? "node" : "native");
 const artifact = resolve(option("--wasm", `dist/${engine === "quickjs" ? "bun" : `bun-${engine}`}.wasm`));
 const root = resolve(import.meta.dirname, "..");
-const launcher = resolve(process.env.CARGO_TARGET_DIR || "/work/tmp/bun-wasm-target", "release/bun-wasm");
+const launcher = process.env.BUN_WASM_LAUNCHER || resolve(process.env.CARGO_TARGET_DIR || "/work/tmp/bun-wasm-target", "release/bun-wasm");
 const selected = workerReviewCases.filter(test => !option("--case") || test.name.includes(option("--case")));
 const results = [];
 let active: ReturnType<typeof spawn> | undefined;
@@ -24,7 +24,7 @@ for (const test of selected) {
   if (control) writeFileSync(control, test.code);
   const command = host === "node-control" ? [process.execPath, control]
     : host === "node" ? [process.execPath, "--no-warnings", `${root}/web/scripts/node-host.mjs`, "--wasm", artifact, "--net", "--", "-e", test.code]
-    : [launcher, "--wasm", artifact, "-e", test.code];
+    : [launcher, "--wasm", artifact, "--", "-e", test.code];
   const result = await new Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string; timeout: boolean }>(resolve => {
     let stdout = ""; let stderr = ""; let timeout = false;
     active = spawn(command[0], command.slice(1), { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
