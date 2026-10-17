@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { compareEngines, failure, stageOutput } from "./classify.mjs";
+import { compareEngines, failure, stageOutput } from "./classify.ts";
 import { sha256 } from "./registry.mjs";
 
 const evidence = resolve(process.argv[2] ?? "/work/reports/bun-wasm-app-matrix-2026-10-15");
@@ -29,7 +29,7 @@ for (const row of classified.filter(row => row.status === "blocked")) {
   if (prerequisite) Object.assign(row, { category: prerequisite.category, blocker: prerequisite.blocker });
 }
 const safe = value => String(value).replaceAll("|", "\\|").replaceAll("\n", " ");
-const lines = ["# Retained census classifications", "", `Regenerated from ${evidence}. This updates failure categories only. Original pass assertions predate the strengthened harness and are not revalidated here.`, "", "Reproduce with `bun scripts/app-matrix/reclassify.mjs <evidence-directory>`.", "", ...sources.map(source => `- ${source}`), "", "| App | Engine | Host | Stage | Status | Category | Diagnostic / assertion | Passes on |", "| --- | --- | --- | --- | --- | --- | --- | --- |"];
+const lines = ["# Retained census classifications", "", `Regenerated from ${evidence}. This updates failure categories only. Original pass assertions predate the strengthened harness and are not revalidated here.`, "", "Reproduce with `bun scripts/app-matrix/reclassify.ts <evidence-directory>`.", "", ...sources.map(source => `- ${source}`), "", "| App | Engine | Host | Stage | Status | Category | Diagnostic / assertion | Passes on |", "| --- | --- | --- | --- | --- | --- | --- | --- |"];
 for (const row of classified.filter(row => row.status !== "pass")) lines.push(`| ${row.app} | ${row.engine} | ${row.host} | ${row.stage} | ${row.status} | ${row.category} | ${safe(row.blocker)} | ${row.passesOn?.join(", ") ?? "-"} |`);
 writeFileSync(output, lines.join("\n") + "\n");
 console.log(JSON.stringify({ rows: classified.length, failures: classified.filter(row => row.status === "fail").length, categories: Object.fromEntries(["a", "b", "c", "d", "e", "f"].map(category => [category, classified.filter(row => row.status === "fail" && row.category === category).length])) }));

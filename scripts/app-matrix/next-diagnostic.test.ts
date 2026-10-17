@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { firstError } from "./classify.mjs";
+import { firstError } from "./classify.ts";
 
 test("Next SWC download diagnostics remain visible after warning prefixes", () => {
   const line = '⚠ [Error: Failed to get registry from "npm".] {';

@@ -6,6 +6,7 @@
   const AGAIN = -2;
   const marker = "BUNWASM_CHILD_IPC";
   type Callback = (error: Error | null) => void;
+  type Frame = ["message", unknown] | ["disconnect"];
   interface Target extends BunWasm.NodeEmitter {
     connected?: boolean;
     channel?: { ref(): unknown; unref(): unknown } | null;
@@ -45,7 +46,7 @@
   }
   function attach(target: Target, input: number, output: number, serialization: "json" | "advanced", parent: boolean, receive?: (value: unknown) => void, completed?: () => void) {
     const decoder = new TextDecoder();
-    const queue: { bytes: Uint8Array; offset: number; callback?: Callback }[] = [];
+    const queue: { kind: Frame[0]; bytes: Uint8Array; offset: number; callback?: Callback }[] = [];
     let incoming = "";
     let phase: "open" | "closing" | "closed" = "open";
     let explicitRef: boolean | undefined;
@@ -61,10 +62,12 @@
     function report(cause: Error, callback?: Callback) {
       schedule(() => callback ? callback(cause) : target.emit("error", cause));
     }
-    function enqueue(frame: unknown, callback?: Callback) {
+    function enqueue(frame: Frame, callback?: Callback) {
       const bytes = encoder.encode(JSON.stringify(frame) + "\n");
-      queue.push({ bytes, offset: 0, callback });
+      if (frame[0] === "message" && phase !== "open") { report(error("ERR_IPC_CHANNEL_CLOSED", "Channel closed"), callback); return false; }
+      queue.push({ kind: frame[0], bytes, offset: 0, callback });
       pendingBytes += bytes.length;
+      return true;
     }
     function beginClose() {
       if (phase !== "open") return;
@@ -78,7 +81,7 @@
       target.connected = false;
       native.hostClose(input);
       native.hostClose(output);
-      for (const item of queue) if (item.callback) report(error("ERR_IPC_CHANNEL_CLOSED", "Channel closed"), item.callback);
+      for (const item of queue) if (item.kind === "message") report(error("ERR_IPC_CHANNEL_CLOSED", "Channel closed"), item.callback);
       queue.length = 0;
       pendingBytes = 0;
       completed?.();
@@ -153,9 +156,9 @@
       if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") throw new TypeError("Invalid IPC message type");
       if (handle !== undefined && handle !== null && typeof handle !== "function") throw error("ERR_INVALID_HANDLE_TYPE", "IPC handle transfer is not supported");
       const payload = codec ? codec.encode(value) : value;
-      enqueue(["message", payload], cb);
+      if (!enqueue(["message", payload], cb)) return false;
       flush();
-      return pendingBytes < 128 * 1024;
+      return phase === "open" && pendingBytes < 128 * 1024;
     };
     target.disconnect = () => {
       if (phase !== "open") { report(error("ERR_IPC_DISCONNECTED", "IPC channel is already disconnected")); return; }

@@ -1,4 +1,4 @@
-export function stageOutput(log, command) {
+export function stageOutput(log: string, command: string) {
   const lines = log.replace(/\x1b\[[0-9;]*m/g, "").split("\n");
   const start = lines.findLastIndex(line => line.endsWith(`user@bun:~$ ${command}`));
   if (start === -1) throw new Error(`Missing stage boundary for ${command}`);
@@ -6,13 +6,13 @@ export function stageOutput(log, command) {
   return lines.slice(start + 1, end === -1 ? undefined : end).join("\n");
 }
 
-export function firstError(output) {
+export function firstError(output: string) {
   const lines = output.replace(/\x1b\[[0-9;]*m/g, "").split("\n").map(line => line.trim().replace(/^(?:unhandledRejection|uncaughtException)\s+\[?(\w*Error:.*?)\]?$/, "$1").replace(/^\[((?:\w*Error|error):.*)\]$/, "$1"));
-  const diagnostic = lines.find(line => /^(?:(?:\w*Error|error|panic|fatal|bun-wasm):|memory allocation of \d+ bytes failed|thread '.+' panicked|[^|\n]+error TS\d+:)/i.test(line));
+  const diagnostic = lines.find(line => /^(?:[⚠⨯]\s*)?(?:\[?(?:\w*Error|error|panic|fatal|bun-wasm):|Failed to load SWC binary|Next\.js build worker exited with code: [1-9]\d*|memory allocation of \d+ bytes failed|thread '.+' panicked|[^|\n]+error TS\d+:)/i.test(line));
   return (diagnostic ?? "No diagnostic before exit or deadline").slice(0, 500);
 }
 
-export function failure(output, stage) {
+export function failure(output: string, stage: string) {
   const blocker = firstError(output);
   if (/current platform .*wasm32|Native Prisma engine|native addon|\.node\b|dlopen|unsupported.*(platform|architecture)/i.test(blocker)) return { category: "a", blocker };
   if (/node:child_process|external executable|IPC.*not|spawn.*(not supported|not implemented)/i.test(blocker)) return { category: "b", blocker };
@@ -20,7 +20,7 @@ export function failure(output, stage) {
   return { category: "d", blocker: `${stage}: ${blocker}` };
 }
 
-export function compareEngines(rows) {
+export function compareEngines<T extends { app: string; engine: string; host: string; stage: string; status: string }>(rows: readonly T[]) {
   return rows.map(row => {
     if (row.engine !== "quickjs" || row.status !== "fail") return row;
     const passesOn = rows.filter(other => other.app === row.app && other.host === row.host && other.stage === row.stage && ["jsc", "browser"].includes(other.engine) && other.status === "pass").map(other => other.engine);
