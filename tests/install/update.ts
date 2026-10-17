@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createRegistry } from "./registry.mjs";
 
@@ -47,4 +47,16 @@ try {
   assert.equal(JSON.parse(readFileSync(join(scratch, "node_modules/rehoist-parent/package.json"), "utf8")).version, "1.0.0");
   assert.equal(existsSync(join(scratch, "node_modules/rehoist-child")), false, "bun update retained an obsolete transitive dependency");
   console.log("update prunes obsolete transitive dependencies");
+  writeFileSync(manifest, JSON.stringify({ workspaces: ["packages/*"], dependencies: { versioned: "2.0.0" } }));
+  mkdirSync(join(scratch, "packages/member"), { recursive: true });
+  const member = join(scratch, "packages/member/package.json");
+  writeFileSync(member, JSON.stringify({ name: "member", version: "1.0.0", dependencies: { versioned: "1.0.0" } }));
+  await run("install");
+  writeFileSync(member, JSON.stringify({ name: "member", version: "1.0.0", dependencies: { versioned: "^1.0.0" } }));
+  await run("update", "versioned", "--cwd", "/packages/member");
+  const rootVersion = JSON.parse(readFileSync(join(scratch, "node_modules/versioned/package.json"), "utf8")).version;
+  const memberVersion = JSON.parse(readFileSync(join(scratch, "packages/member/node_modules/versioned/package.json"), "utf8")).version;
+  assert.equal(rootVersion, "2.0.0");
+  assert.equal(memberVersion, "1.1.0", "selected workspace update retained a nested lock pin");
+  console.log("selected workspace update refreshes its nested resolution");
 } finally { await cleanup(); }
