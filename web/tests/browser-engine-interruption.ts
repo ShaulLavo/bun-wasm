@@ -9,7 +9,7 @@ import { join, resolve, sep } from "node:path";
 import { tmpdir, availableParallelism, loadavg } from "node:os";
 import { buildBrowserEntries } from "../../scripts/browser-build";
 import type { Browser } from "playwright";
-import { allocateSafariDriverPort, assertSafariDriverOwnership, ownSafariDriver, stopSafariDriver, type SafariDriverOwnership } from "./engine-interruption-safari";
+import { allocateSafariDriverPort, assertSafariDriverAlive, ownSafariDriver, safariDriverOwnershipDiagnostic, stopSafariDriver, type SafariDriverOwnership } from "./engine-interruption-safari";
 
 export interface RunnerCleanup {
   safe: boolean;
@@ -195,7 +195,7 @@ async function main(): Promise<boolean> {
   function assertRunning(): void { assert.ok(!stopping, "engine interruption runner is stopping"); }
   async function webdriver(path: string, method = "GET", body?: unknown): Promise<any> {
     assert.ok(driverOwnership, "Safari driver not started");
-    await assertSafariDriverOwnership(driverOwnership, driverPort);
+    assertSafariDriverAlive(driverOwnership.driver);
     const response = await fetch(`http://127.0.0.1:${driverPort}` + path, { method, body: body === undefined ? undefined : JSON.stringify(body),
       headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(stopping ? 3_000 : benchmark ? 540_000 : functionalDriverTimeoutMs) });
     const result: any = await response.json();
@@ -336,6 +336,11 @@ async function main(): Promise<boolean> {
               await Bun.sleep(100); assertRunning();
             }
           }
+          assertRunning();
+          // Follow step9's proven free-port + owned-driver session lifecycle.
+          // Strict XPC attribution is useful evidence, not a session gate.
+          const diagnostic = await safariDriverOwnershipDiagnostic(driverOwnership, driverPort);
+          if (diagnostic) console.log(JSON.stringify({ safariDriverOwnershipDiagnostic: diagnostic }));
           assertRunning();
           const opened = await (openingSession = webdriver("/session", "POST", { capabilities: { alwaysMatch: { browserName: "safari" } } }));
           session = opened.sessionId; version = opened.capabilities.browserVersion; report.version = version;

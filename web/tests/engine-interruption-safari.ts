@@ -23,9 +23,9 @@ export function ownSafariDriver(driver: SafariDriverIdentity, spawnedAfter: numb
   return { driver, spawnedAfter: Math.floor(spawnedAfter / 1_000) * 1_000, allocatedPort, confirmed: false, observed: new Map(), verified: new Map() };
 }
 
-// Reserve a private random port until the child is about to bind. Port allocation
-// alone cannot close the release/bind race, so every WebDriver request also checks
-// the listener's real process identity and the owned child's health.
+// Reserve a private random port until the child is about to bind. As in step9,
+// preflight excludes already occupied ports but cannot close the release/bind
+// race. Apple's launchd listener attribution is diagnostic, not session admission.
 export async function allocateSafariDriverPort(requested = 0): Promise<number> {
   const server = createServer();
   try {
@@ -41,7 +41,7 @@ export async function allocateSafariDriverPort(requested = 0): Promise<number> {
   }
 }
 
-function assertAlive(driver: SafariDriverIdentity): void {
+export function assertSafariDriverAlive(driver: SafariDriverIdentity): void {
   if (driver.exitCode !== null || driver.signalCode !== null) throw new Error(`owned Safari driver ${driver.pid} exited (${driver.exitCode ?? driver.signalCode})`);
 }
 
@@ -131,7 +131,7 @@ function rememberTree(owned: SafariDriverOwnership, processes: readonly SafariPr
 
 export async function assertSafariDriverOwnership(owned: SafariDriverOwnership, port: number,
   inspect: SafariInspection = inspection, deadline?: number): Promise<void> {
-  assertAlive(owned.driver);
+  assertSafariDriverAlive(owned.driver);
   const pids = await inspect.listeners(port, deadline);
   const rows = await inspect.processes(deadline);
   const tree = rememberTree(owned, rows);
@@ -161,76 +161,64 @@ export async function assertSafariDriverOwnership(owned: SafariDriverOwnership, 
       }
     }
   }
-  assertAlive(owned.driver);
-  if (!accepted) throw new Error(`Safari driver port ${port} not owned or associated with task-created driver ${owned.driver.pid}: ${pids.join(",") || "no listener"}`);
+  assertSafariDriverAlive(owned.driver);
+  if (!accepted) {
+    // Preserve the initial ownership snapshot: teardown may remove these processes
+    // before the coordinator can inspect them. Never dump unrelated host rows.
+    const identity = { spawnedAfter: owned.spawnedAfter, allocatedPort: owned.allocatedPort ?? null,
+      root: root ?? null, associated: owned.associated ?? null,
+      listeners: pids.map(pid => ({ pid, process: rows.find(row => row.pid === pid) ?? null, owned: tree.has(pid) })) };
+    throw new Error(`Safari driver port ${port} not owned or associated with task-created driver ${owned.driver.pid}: ${pids.join(",") || "no listener"}; identity=${JSON.stringify(identity)}`);
+  }
   owned.confirmed = true;
 }
 
-// Keep lifetime identities after reparenting or group changes, but revalidate each
-// one before signalling. Never kill a replacement PID or an unrelated listener.
+export async function safariDriverOwnershipDiagnostic(owned: SafariDriverOwnership, port: number,
+  inspect: SafariInspection = inspection): Promise<string | undefined> {
+  try { await assertSafariDriverOwnership(owned, port, inspect); }
+  catch (error) { return String(error); }
+}
+
+// Reuse step9's session-first lifecycle: stop only our spawned driver, never an
+// Apple XPC service. Strict association is diagnostic, not session admission.
+// Owned PID+birth identities and port closure independently prove this teardown;
+// the outer host controller additionally checks task paths before deleting roots.
 export async function stopSafariDriver(owned: SafariDriverOwnership, port: number,
   inspect: SafariInspection = inspection, signal: (pid: number, signal: "SIGTERM" | "SIGKILL") => void = (pid, signal) => process.kill(pid, signal)): Promise<void> {
-  // Reuse step9's session-first, bounded TERM -> KILL teardown policy. This
-  // helper's inspections share a deadline below the runner's 15-second bound,
-  // rather than racing a timeout that leaves cleanup running in the background.
   const shutdownDeadline = Date.now() + 12_000;
   let rows = await inspect.processes(shutdownDeadline);
-  rememberTree(owned, rows);
-  let associationError: string | undefined;
-  if (owned.allocatedPort === port && !owned.associated) {
-    // Startup may fail before a successful request commits its association.
-    // Discover it before stopping the driver; failure must not skip stopping
-    // owned processes, nor turn an untracked XPC with a closed port into green.
-    // Reserve six seconds for fresh identities, TERM/KILL and final checks.
-    const discoveryDeadline = Math.min(Date.now() + 3_000, shutdownDeadline - 6_000);
-    try {
-      if ((await inspect.listeners(port, discoveryDeadline)).length) await assertSafariDriverOwnership(owned, port, inspect, discoveryDeadline);
-      else if (!owned.confirmed) associationError = "startup listener never confirmed; XPC shutdown is unproved";
-    } catch (error) { associationError = String(error); }
-    rows = await inspect.processes(shutdownDeadline);
-    rememberTree(owned, rows);
+  const initialTree = rememberTree(owned, rows);
+  if (!initialTree.has(owned.driver.pid) && owned.driver.exitCode === null && owned.driver.signalCode === null) {
+    throw new Error("owned Safari driver process identity unavailable");
   }
   function remaining(): SafariProcessIdentity[] {
     return rows.filter(row => {
       const verified = owned.verified.get(row.pid);
-      const associated = owned.associated, observed = owned.observed.get(row.pid);
-      return !(associated && sameProcess(associated, row)) && !(observed && sameProcess(observed, row))
-        && verified !== undefined && sameProcess(verified, row);
+      return verified !== undefined && sameProcess(verified, row);
     });
   }
-  function associatedRemaining(): SafariProcessIdentity[] {
-    const associated = owned.associated;
-    return associated ? rows.filter(row => sameProcess(associated, row)) : [];
-  }
-  function observedRemaining(): SafariProcessIdentity[] {
-    return rows.filter(row => {
-      const observed = owned.observed.get(row.pid);
-      return observed !== undefined && sameProcess(observed, row);
-    });
-  }
+  let listeners: number[] = [];
   for (const kind of ["SIGTERM", "SIGKILL"] as const) {
-    const sent = new Map<number, SafariProcessIdentity>();
-    const deadline = Math.min(Date.now() + 2_000, shutdownDeadline);
-    do {
-      // Discover children forked during shutdown while the original root can
-      // still prove their ancestry. Previously verified orphans stay tracked.
-      rememberTree(owned, rows);
-      // Signal descendants before the parent; the parent may reap them on exit.
-      for (const row of remaining().sort((left, right) => Number(left.pid === owned.driver.pid) - Number(right.pid === owned.driver.pid))) {
-        const previous = sent.get(row.pid);
-        if (previous && sameProcess(previous, row)) continue;
-        try { signal(row.pid, kind); }
-        catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error; }
-        sent.set(row.pid, row);
-      }
+    if (kind === "SIGKILL") {
       rows = await inspect.processes(shutdownDeadline);
       rememberTree(owned, rows);
-      if (!remaining().length && !associatedRemaining().length && !observedRemaining().length) break;
+    }
+    const deadline = Math.min(Date.now() + 2_000, shutdownDeadline);
+    // A verified descendant can be an Apple XPC service: never signal it, even
+    // if its parent/group happens to match. Signal the original root only.
+    if (remaining().some(row => row.pid === owned.driver.pid)) {
+      try { signal(owned.driver.pid, kind); }
+      catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error; }
+    }
+    do {
+      rows = await inspect.processes(shutdownDeadline);
+      // Retain known children across reparenting/group changes, and notice new
+      // children while the original parent still proves their ancestry.
+      rememberTree(owned, rows);
+      listeners = await inspect.listeners(port, shutdownDeadline);
+      if (!remaining().length && !listeners.length) return;
       await Bun.sleep(25);
     } while (Date.now() < deadline);
-    if (!remaining().length && !associatedRemaining().length && !observedRemaining().length) break;
   }
-  const live = remaining(), associated = associatedRemaining(), observed = observedRemaining();
-  const listeners = await inspect.listeners(port, shutdownDeadline);
-  if (associationError || live.length || associated.length || observed.length || listeners.length) throw new Error(`Safari driver shutdown unproved: processes=${live.map(row => row.pid).join(",") || "none"}; associated=${associated.map(row => row.pid).join(",") || "none"}; observed=${observed.map(row => row.pid).join(",") || "none"}; listeners=${listeners.join(",") || "none"}${associationError ? `; association inspection=${associationError}` : ""}`);
+  throw new Error(`Safari driver shutdown unproved: processes=${remaining().map(row => row.pid).join(",") || "none"}; listeners=${listeners.join(",") || "none"}`);
 }

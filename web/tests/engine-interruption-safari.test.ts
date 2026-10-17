@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { allocateSafariDriverPort, assertSafariDriverOwnership, ownSafariDriver, parseSafariProcessTable, stopSafariDriver,
+import { allocateSafariDriverPort, assertSafariDriverAlive, assertSafariDriverOwnership, ownSafariDriver, parseSafariProcessTable, safariDriverOwnershipDiagnostic, stopSafariDriver,
   type SafariDriverIdentity, type SafariInspection, type SafariProcessIdentity } from "./engine-interruption-safari";
 
 function driver(): SafariDriverIdentity { return { pid: 41, exitCode: null, signalCode: null }; }
@@ -58,6 +58,21 @@ function darwinProbe() {
   return { owned, inspection, replace: (rows: SafariProcessIdentity[]) => { processes = rows; }, rows: processes };
 }
 
+test("Safari rejection captures only the spawn, driver and listener identities needed to diagnose an ineligible candidate", async () => {
+  const f = darwinProbe();
+  const root = f.rows[0]!, candidate = { ...f.rows[1]!, ppid: root.pid };
+  f.replace([root, candidate, row(99)]);
+  const message = await assertSafariDriverOwnership(f.owned, 51265, f.inspection).then(() => "", error => String(error));
+  expect(message).toContain(`; identity=${JSON.stringify({
+    spawnedAfter: f.owned.spawnedAfter, allocatedPort: 51265, root, associated: null,
+    listeners: [{ pid: candidate.pid, process: candidate, owned: false }],
+  })}`);
+  expect(message).not.toContain('"pid":99');
+  expect(f.owned.observed.size).toBe(0);
+  expect(f.owned.associated).toBeUndefined();
+  expect(f.owned.verified.has(candidate.pid)).toBe(false);
+});
+
 test("Safari accepts the actual Darwin launchd XPC shape as associated, never as an owned descendant", async () => {
   const f = darwinProbe();
   await expect(assertSafariDriverOwnership(f.owned, 51265, f.inspection)).resolves.toBeUndefined();
@@ -97,80 +112,73 @@ test("Safari rechecks driver health and XPC identity after asynchronous executab
     g.replace([g.rows[0]!, { ...g.rows[1]!, started: g.owned.spawnedAfter + 1_000 }]); return appleHttpService;
   } })).rejects.toThrow("not owned");
 });
-test("Safari cannot prove cleanup when startup never confirmed a listener and its port is already closed", async () => {
+test("Safari cleanup uses independent driver and port absence even when strict startup association was never confirmed", async () => {
   const f = darwinProbe(), signalled: number[] = [];
   await expect(stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => [] }, pid => {
     signalled.push(pid); f.replace([f.rows[1]!]);
-  })).rejects.toThrow("startup listener never confirmed");
+  })).resolves.toBeUndefined();
   expect(signalled).toEqual([34128]);
 });
-test("Safari retains an observed but unconfirmed XPC after failed startup, a closed port and a process group change", async () => {
+test("Safari teardown signals only the driver and waits for verified descendants to exit independently", async () => {
+  const owned = scope(), signalled: number[] = [];
+  let processes = [row(), row(42, 41)];
+  await stopSafariDriver(owned, 43186, { processes: async () => {
+    if (signalled.length) processes = [];
+    return processes;
+  }, listeners: async () => [] }, pid => { signalled.push(pid); });
+  expect(signalled).toEqual([41]);
+});
+test("Safari logs strict association failure without blocking the live owned-driver lifecycle", async () => {
+  const f = darwinProbe();
+  f.replace([f.rows[0]!, { ...f.rows[1]!, ppid: f.rows[0]!.pid }]);
+  expect(await safariDriverOwnershipDiagnostic(f.owned, 51265, f.inspection)).toContain("not owned or associated");
+  expect(() => assertSafariDriverAlive(f.owned.driver)).not.toThrow();
+  f.owned.driver.exitCode = 1;
+  expect(() => assertSafariDriverAlive(f.owned.driver)).toThrow("exited");
+});
+test("Safari failed executable diagnostics do not prevent root shutdown or require signalling an observed XPC", async () => {
   const f = darwinProbe(), signalled: number[] = [];
-  await expect(assertSafariDriverOwnership(f.owned, 51265, { ...f.inspection, executable: async () => {
+  expect(await safariDriverOwnershipDiagnostic(f.owned, 51265, { ...f.inspection, executable: async () => {
     throw new Error("executable inspection failed");
-  } })).rejects.toThrow("executable inspection failed");
-  expect(f.owned.observed.has(34130)).toBe(true);
+  } })).toContain("executable inspection failed");
   const moved = { ...f.rows[1]!, group: 34131 };
   f.replace([f.rows[0]!, moved]);
-  await expect(stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => [] }, pid => {
+  await stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => [] }, pid => {
     signalled.push(pid); f.replace([moved]);
-  })).rejects.toThrow("observed=34130");
-  expect(signalled).toEqual([34128]);
-}, 8_000);
-test("Safari reserves termination budget when startup association discovery times out", async () => {
-  const f = darwinProbe(), signalled: number[] = [];
-  let shutdownDeadline: number | undefined;
-  const discoveryDeadlines: number[] = [];
-  await expect(stopSafariDriver(f.owned, 51265, { ...f.inspection, processes: async deadline => {
-    shutdownDeadline ??= deadline;
-    return signalled.length ? [] : f.rows;
-  }, listeners: async (_port, deadline) => {
-    if (!signalled.length) {
-      if (deadline !== undefined) discoveryDeadlines.push(deadline);
-      throw new Error("association discovery timed out");
-    }
-    return [];
-  } }, pid => { signalled.push(pid); })).rejects.toThrow("association discovery timed out");
-  expect(signalled).toEqual([34128]);
-  expect(discoveryDeadlines).toHaveLength(1);
-  expect(discoveryDeadlines[0]!).toBeLessThanOrEqual(shutdownDeadline! - 6_000);
-});
-test("Safari discovers the associated XPC during teardown even if startup never verified ownership", async () => {
-  const f = darwinProbe(), signalled: number[] = [];
-  let listening = true;
-  await expect(stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => listening ? [34130] : [] }, pid => {
-    signalled.push(pid); listening = false; f.replace([f.rows[1]!]);
-  })).rejects.toThrow("associated=34130");
-  expect(signalled).toEqual([34128]);
-}, 8_000);
-test("Safari still stops the driver but remains unsafe when initial XPC executable inspection fails", async () => {
-  const f = darwinProbe(), signalled: number[] = [];
-  let listening = true;
-  await expect(stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => listening ? [34130] : [],
-    executable: async () => { throw new Error("cannot inspect executable"); } }, pid => {
-    signalled.push(pid); listening = false; f.replace([f.rows[1]!]);
-  })).rejects.toThrow("cannot inspect executable");
-  expect(signalled).toEqual([34128]);
-});
-test("Safari stops only its driver and requires the associated XPC process to disappear", async () => {
-  const f = darwinProbe(), signalled: number[] = [];
-  await assertSafariDriverOwnership(f.owned, 51265, f.inspection);
-  let alive = true;
-  await stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => alive ? [34130] : [] }, pid => {
-    signalled.push(pid); alive = false; f.replace([]);
   });
   expect(signalled).toEqual([34128]);
 });
-test("Safari never signals an associated XPC that survives shutdown after closing its port and changing its process group", async () => {
+test("Safari teardown does not spend termination time discovering an XPC association", async () => {
+  const f = darwinProbe(), signalled: number[] = [];
+  let executableInspected = false;
+  await stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => signalled.length ? [] : [34130],
+    executable: async () => { executableInspected = true; throw new Error("not needed for teardown"); } }, pid => {
+    signalled.push(pid); f.replace([f.rows[1]!]);
+  });
+  expect(signalled).toEqual([34128]);
+  expect(executableInspected).toBe(false);
+});
+test("Safari stops only its driver and waits for its allocated port to close", async () => {
+  const f = darwinProbe(), signalled: number[] = [];
+  await assertSafariDriverOwnership(f.owned, 51265, f.inspection);
+  let listening = true, checks = 0;
+  await stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => {
+    if (++checks === 2) listening = false;
+    return listening ? [34130] : [];
+  } }, pid => { signalled.push(pid); f.replace([f.rows[1]!]); });
+  expect(checks).toBe(2);
+  expect(signalled).toEqual([34128]);
+});
+test("Safari never signals an associated XPC that closes its port and changes its process group", async () => {
   const f = darwinProbe(), signalled: number[] = [];
   await assertSafariDriverOwnership(f.owned, 51265, f.inspection);
   const moved = { ...f.rows[1]!, group: 34131 };
   f.replace([f.rows[0]!, moved]);
-  await expect(stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => [] }, pid => {
+  await stopSafariDriver(f.owned, 51265, { ...f.inspection, listeners: async () => [] }, pid => {
     signalled.push(pid); f.replace([moved]);
-  })).rejects.toThrow("associated=34130");
+  });
   expect(signalled).toEqual([34128]);
-}, 8_000);
+});
 
 test("Safari parses real process group IDs rather than Darwin's redacted sess pointers", () => {
   const started = "Sat Oct 17 15:13:35 2026";
@@ -249,40 +257,53 @@ test("Safari checks child health again after asynchronous listener and process i
     owned.driver.signalCode = "SIGTERM"; return [row()];
   } })).rejects.toThrow("exited");
 });
-test("Safari teardown still stops a verified child after its process group changes", async () => {
+test("Safari retains an owned child across group changes but never signals it or claims cleanup while it survives", async () => {
   const owned = scope(), signalled: number[] = [];
   let processes = [row(), row(42, 41)];
   const inspection: SafariInspection = { processes: async () => processes, listeners: async () => [] };
   await assertSafariDriverOwnership(owned, 43186, { ...inspection, listeners: async () => [42] });
   processes = [row(), row(42, 41, 42)];
-  await stopSafariDriver(owned, 43186, inspection, pid => { signalled.push(pid); processes = processes.filter(row => row.pid !== pid); });
-  expect(signalled).toEqual([42, 41]);
-  expect(processes).toEqual([]);
-});
+  await expect(stopSafariDriver(owned, 43186, inspection, pid => {
+    signalled.push(pid); processes = processes.filter(row => row.pid !== pid);
+  })).rejects.toThrow("processes=42");
+  expect(signalled).toEqual([41]);
+  expect(processes).toEqual([row(42, 41, 42)]);
+}, 8_000);
 test("Safari accepts an already verified listener after its process group changes, but not an unknown child in that group", async () => {
   const owned = scope();
   await assertSafariDriverOwnership(owned, 43186, inspect([42], [row(), row(42, 41)]));
   await expect(assertSafariDriverOwnership(owned, 43186, inspect([42], [row(), row(42, 41, 42)]))).resolves.toBeUndefined();
   await expect(assertSafariDriverOwnership(owned, 43186, inspect([43], [row(), row(42, 41, 42), row(43, 42, 42)]))).rejects.toThrow("not owned");
 });
-test("Safari teardown remembers a verified child after reparenting and stops it before the parent", async () => {
+test("Safari teardown waits for a verified reparented child to exit with the root without signalling the child", async () => {
   const owned = scope(), signalled: number[] = [];
   let processes = [row(), row(42, 41)];
   const inspection: SafariInspection = { processes: async () => processes, listeners: async () => processes.some(row => row.pid === 42) ? [42] : [] };
   await assertSafariDriverOwnership(owned, 43186, inspection);
   processes = [row(), row(42, 1)];
-  await stopSafariDriver(owned, 43186, inspection, pid => { signalled.push(pid); processes = processes.filter(row => row.pid !== pid); });
-  expect(signalled).toEqual([42, 41]);
+  await stopSafariDriver(owned, 43186, inspection, pid => { signalled.push(pid); processes = []; });
+  expect(signalled).toEqual([41]);
 });
-test("Safari teardown stops a verified orphan after the root exits", async () => {
+test("Safari teardown waits for a verified orphan after the root exits without signalling it", async () => {
   const owned = scope(), signalled: number[] = [];
   await assertSafariDriverOwnership(owned, 43186, inspect([42], [row(), row(42, 41)]));
   owned.driver.exitCode = 1;
-  let processes = [row(42, 1)];
-  await stopSafariDriver(owned, 43186, { processes: async () => processes, listeners: async () => [] }, pid => {
-    signalled.push(pid); processes = [];
+  let checks = 0;
+  await stopSafariDriver(owned, 43186, { processes: async () => ++checks === 1 ? [row(42, 1)] : [], listeners: async () => [] }, pid => {
+    signalled.push(pid);
   });
-  expect(signalled).toEqual([42]);
+  expect(signalled).toEqual([]);
+});
+test("Safari teardown never signals a replacement or uninspectable live root", async () => {
+  const owned = scope(), signalled: number[] = [];
+  await assertSafariDriverOwnership(owned, 43186, inspect([41]));
+  await expect(stopSafariDriver(owned, 43186, inspect([], [row(41, 1, 7, 2_000)]), pid => {
+    signalled.push(pid);
+  })).rejects.toThrow("process identity changed");
+  await expect(stopSafariDriver(owned, 43186, inspect([], []), pid => {
+    signalled.push(pid);
+  })).rejects.toThrow("process identity unavailable");
+  expect(signalled).toEqual([]);
 });
 test("Safari teardown tolerates ESRCH but does not claim success on inspection or other signal errors", async () => {
   let processes = [row()];
@@ -305,7 +326,7 @@ test("Safari teardown shares one bounded inspection deadline instead of leaving 
   expect(deadlines[0]).toBeGreaterThan(before);
   expect(deadlines[0]! - before).toBeLessThanOrEqual(12_000);
 });
-test("Safari teardown discovers a non-listening child forked during shutdown", async () => {
+test("Safari teardown discovers a non-listening child forked during shutdown but signals only the root", async () => {
   const owned = scope(), signalled: number[] = [];
   let processes = [row()];
   let inspected = 0;
@@ -315,18 +336,20 @@ test("Safari teardown discovers a non-listening child forked during shutdown", a
     return processes;
   }, listeners: async () => [] }, pid => {
     signalled.push(pid);
-    if (pid === 42 || signalled.filter(value => value === 41).length > 1) processes = processes.filter(row => row.pid !== pid);
+    if (signalled.length > 1) processes = [];
   });
-  expect(signalled).toContain(42);
+  expect(signalled).toEqual([41, 41]);
+  expect(owned.verified.has(42)).toBe(true);
   expect(processes).toEqual([]);
 });
-test("Safari teardown discovers children even if startup fails before the first ownership check", async () => {
+test("Safari teardown tracks startup children but signals only the root", async () => {
   const owned = scope(), signalled: number[] = [];
   let processes = [row(), row(42, 41)];
   await stopSafariDriver(owned, 43186, { processes: async () => processes, listeners: async () => [] }, pid => {
-    signalled.push(pid); processes = processes.filter(row => row.pid !== pid);
+    signalled.push(pid); processes = [];
   });
-  expect(signalled).toEqual([42, 41]);
+  expect(signalled).toEqual([41]);
+  expect(owned.verified.has(42)).toBe(true);
 });
 test("Safari teardown never signals a reused child PID or unrelated listener, and reports an occupied port", async () => {
   const owned = scope(), signalled: number[] = [];
