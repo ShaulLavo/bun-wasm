@@ -55,7 +55,7 @@
         if (internal.isProxy?.(object)) throw cloneError();
         // JSC's bytes C API pins its input. Encode a copy so the sender remains detachable.
         if (object instanceof ArrayBuffer) return ["buffer", internal.native.base64Encode(new Uint8Array(object).slice(), false), object.resizable ? object.maxByteLength : 0];
-        if (ArrayBuffer.isView(object)) return ["view", tag(object), visit(object.buffer, implicit), object.byteOffset, object.byteLength];
+        if (ArrayBuffer.isView(object)) return ["view", hooks.buffer?.is(object) ? "Buffer" : tag(object), visit(object.buffer, implicit), object.byteOffset, object.byteLength];
         if (object instanceof Date) return ["date", String(object.getTime())];
         if (object instanceof RegExp) return ["regexp", object.source, object.flags];
         if (object instanceof Map) return ["map", Array.from(object, ([key, value]): [number, number] => [visit(key, implicit), visit(value, implicit)])];
@@ -127,8 +127,10 @@
           }
           case "view": {
             const buffer = read(node[2]);
-            if (!(buffer instanceof ArrayBuffer) || !views[node[1]]) throw cloneError("Invalid typed array");
-            result = views[node[1]](buffer, node[3], node[4]); break;
+            if (!(buffer instanceof ArrayBuffer)) throw cloneError("Invalid typed array");
+            const restore = node[1] === "Buffer" ? hooks.buffer?.restore : views[node[1]];
+            if (!restore) throw cloneError("Invalid typed array");
+            result = restore(buffer, node[3], node[4]); break;
           }
           case "array": { const array = new Array(node[1]); memory.set(index, array); return properties(array, node[2]); }
           case "object": { const object = {}; memory.set(index, object); return properties(object, node[1]); }

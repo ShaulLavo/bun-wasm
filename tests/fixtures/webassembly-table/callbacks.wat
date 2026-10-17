@@ -1,0 +1,10 @@
+(module
+  (type $unary (func (param i32) (result i32)))
+  (import "env" "callback" (func $callback (type $unary)))
+  (export "callback" (func $callback))
+  (func $hidden (type $unary) (local.get 0) (i32.const 2) (i32.mul))
+  (table (export "table") 2 5 funcref)
+  (elem (i32.const 0) $callback $hidden)
+  (func (export "invoke") (param i32) (result i32)
+    (local.get 0) (i32.const 0) (call_indirect (type $unary)))
+)

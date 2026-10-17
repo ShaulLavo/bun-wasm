@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 const module = new WebAssembly.Module(readFileSync("./module.wasm"));
 const e = new WebAssembly.Instance(module).exports as any;
 assert(e.table instanceof WebAssembly.Table);
+assert.equal(WebAssembly.Table.length, 1);
+assert.equal(WebAssembly.Table.prototype.grow.length, 1);
+assert.equal(Object.prototype.toString.call(e.table), "[object WebAssembly.Table]");
 assert.equal(e.table, e.alias);
 assert.equal(e.table.length, 2);
 assert.equal(e.table.get(0), e.add);
@@ -17,7 +20,16 @@ assert.throws(() => e.table.grow(3), RangeError);
 assert.throws(() => e.table.get(3), RangeError);
 assert.throws(() => e.table.set(3, null), RangeError);
 assert.throws(() => e.table.set(0, () => 1), TypeError);
-assert.throws(() => e.table.get(-1), TypeError);
+for (const index of [-1, NaN, undefined, Infinity, 2 ** 32, 1n, Symbol()]) {
+  assert.throws(() => e.table.get(index), TypeError);
+  assert.throws(() => e.table.grow(index), TypeError);
+}
+assert.equal(e.table.get("1"), e.add);
+assert.throws(() => WebAssembly.Table.prototype.get.call({}, 0), TypeError);
+assert.throws(() => e.table.set(0, undefined), TypeError);
+assert.throws(() => e.table.grow(0, undefined), TypeError);
+assert.throws(() => new WebAssembly.Table({ element: "invalid", initial: 0 }), TypeError);
+assert.throws(() => new WebAssembly.Table({ element: "anyfunc", initial: 2, maximum: 1 }), RangeError);
 const imported = new WebAssembly.Instance(new WebAssembly.Module(readFileSync("./import.wasm")), { env: { table: e.table } }).exports as any;
 assert.equal(imported.table, e.table);
 assert.equal(imported.invoke(0, 8), 9);
@@ -37,4 +49,27 @@ assert.equal(refs.get(0), undefined);
 refs.set(1, "hello");
 assert.equal(refs.grow(1, value), 2);
 assert.equal(refs.get(2), value);
+const linkedRefs = new WebAssembly.Instance(new WebAssembly.Module(readFileSync("./references.wasm")), { env: { refs } }).exports as any;
+assert.equal(linkedRefs.refs, refs);
+assert.equal(linkedRefs.get(2), value);
+linkedRefs.set(1, value);
+assert.equal(refs.get(1), value);
+assert.equal(linkedRefs.grow(undefined, 1), 3);
+assert.equal(refs.get(3), undefined);
+let rejectCallback = false;
+const sentinel = new Error("callback failed");
+const callbackExports = new WebAssembly.Instance(new WebAssembly.Module(readFileSync("./callbacks.wasm")), { env: {
+  callback(value: number) { if (rejectCallback) throw sentinel; return value + 3; },
+} }).exports as any;
+assert.equal(callbackExports.table.get(0), callbackExports.callback);
+assert.equal(callbackExports.table.get(1)(9), 18);
+assert.equal(callbackExports.callback(5), 8);
+assert.equal(callbackExports.table.get(0)(6), 9);
+assert.equal(callbackExports.invoke(7), 10);
+standalone.set(0, callbackExports.callback);
+assert.equal(cross.invoke(0, 8), 11);
+rejectCallback = true;
+for (const invoke of [() => callbackExports.callback(1), () => callbackExports.invoke(1), () => cross.invoke(0, 1)]) {
+  assert.throws(invoke, error => error === sentinel);
+}
 console.log("table exports, imports, identity, indirect calls, growth and externref pass");

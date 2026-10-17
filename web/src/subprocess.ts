@@ -8,6 +8,7 @@ import { memoryViews } from "../../runtime/core/memory-views.js";
 import { InheritedWorkerPipes, workerBuffers } from "./worker-pipes.ts";
 
 export interface SpawnMeta {
+  ipc?: boolean;
   executable?: string;
   worker?: { memoryLimitMb?: number; resourceLimits?: { maxOldGenerationSizeMb?: number; maxYoungGenerationSizeMb?: number; codeRangeSizeMb?: number; stackSizeMb?: number } };
   argv: string[];

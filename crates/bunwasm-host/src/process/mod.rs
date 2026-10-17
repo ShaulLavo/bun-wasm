@@ -65,6 +65,8 @@ pub struct Request {
     stderr: String,
     #[serde(default)]
     worker: Option<WorkerLimits>,
+    #[serde(default)]
+    ipc: bool,
 }
 
 #[derive(Deserialize)]
@@ -239,12 +241,12 @@ impl Processes {
         let stdio_pipes = [&request.stdin, &request.stdout, &request.stderr]
             .into_iter().filter(|mode| mode.as_str() == "pipe").count();
         // Reserve capacity before creating any pipe or starting a child thread.
-        self.require_handles(1 + stdio_pipes + if request.worker.is_some() { 2 } else { 0 })?;
+        self.require_handles(1 + stdio_pipes + if request.worker.is_some() || request.ipc { 2 } else { 0 })?;
         request.env.insert("PWD".into(), request.cwd.clone());
         let (stdin_id, stdin) = self.stdin(&request.stdin)?;
         let (stdout_id, stdout) = self.output(&request.stdout, 1)?;
         let (stderr_id, stderr) = self.output(&request.stderr, 2)?;
-        let (to_worker, from_worker, worker) = if request.worker.is_some() {
+        let (to_worker, from_worker, worker) = if request.worker.is_some() || request.ipc {
             let (incoming, input) = self.pipe(true)?;
             let (outgoing, output) = self.pipe(false)?;
             (incoming, outgoing, Some([input, output]))

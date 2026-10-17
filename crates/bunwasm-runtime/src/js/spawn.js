@@ -6,6 +6,7 @@
   const AGAIN = -2;
   // Slot 14 selector 3 returns the completed outcome's signal, not a requested signal.
   const CHILD_FINAL_SIGNAL = 3;
+  const ipc = internal.require("child_process_ipc");
   const signals = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGABRT: 6, SIGKILL: 9, SIGUSR1: 10, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15 };
 
   function unsupported(message) {
@@ -62,7 +63,6 @@
     options = options || {};
     if (!Array.isArray(cmd) || !cmd.length) throw new TypeError("cmd must be a non-empty array");
     validateCommandLength(cmd);
-    if (options.ipc !== undefined) throw unsupported("Child process IPC");
     const argv = cmd.map(String);
     if (argv.some((arg) => arg.includes("\0"))) throw new TypeError("Command arguments cannot contain null bytes");
     const proc = globalThis.process;
@@ -80,6 +80,7 @@
       stdout: stdioMode(output, 1, "pipe"),
       stderr: stdioMode(error, 2, sync ? "pipe" : "inherit") };
     if (options._worker) meta.worker = options._worker;
+    ipc.prepare(meta, options, sync);
     return { meta, options, input };
   }
 
@@ -227,8 +228,8 @@
         if (number) child.killed = true;
         // Requests do not classify completion; even SIGKILL may lose to an already selected exit.
       },
-      ref() { waiter.ref = true; return child; },
-      unref() { waiter.ref = false; return child; },
+      ref() { waiter.ref = true; child.channel?.ref(); return child; },
+      unref() { waiter.ref = false; child.channel?.unref(); return child; },
       resourceUsage() { return undefined; },
       async [Symbol.asyncDispose]() { if (!settled) child.kill(); await exited; },
     };
@@ -256,7 +257,7 @@
       if (!settled) sink.flush();
       let progress = false;
       for (const state of states) if (readPipe(state, state.consume)) progress = true;
-      if (settled && states.every((state) => !state.handle)) { if (!spec.options._worker) close(); return true; }
+      if (settled && states.every((state) => !state.handle) && child._ipcClosed !== false) { if (!spec.options._worker) close(); return true; }
       return progress ? "progress" : false;
     }
     function fail(error) {
@@ -281,6 +282,8 @@
       resolveExit(1);
       close();
     } });
+    if (spec.meta.ipc) child._ipcClosed = false;
+    if (spec.meta.ipc && !spec.options._ipc) ipc.connectBun(child, spec.handle, spec.options);
     initialInput(spec.input, sink);
     if (spec.options.timeout > 0) timer = setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, spec.options.timeout);
     if (spec.options.signal) {
@@ -375,12 +378,7 @@
     const EventEmitter = internal.require("events");
     const { Readable, Writable } = internal.builtin("node:stream");
 
-    function nodeOptions(options = {}) {
-      const io = options.stdio === undefined ? "pipe" : options.stdio;
-      const stdio = Array.isArray(io) ? io : [io, io, io];
-      if (stdio.includes("ipc")) throw unsupported("Child process IPC");
-      return Object.assign({}, options, { stdio });
-    }
+    const nodeOptions = ipc.options;
 
     function nodeArgv(command, args, options) {
       if (options.shell) return shellArgs([command].concat(args).join(" "));
@@ -431,10 +429,10 @@
         this.killed = signalNumber(signal) !== 0;
         return true;
       }
-      ref() { if (this._child) this._child.ref(); return this; }
-      unref() { if (this._child) this._child.unref(); return this; }
-      send() { throw unsupported("Child process IPC"); }
-      disconnect() { throw unsupported("Child process IPC"); }
+      ref() { if (this._child) this._child.ref(); this.channel?.ref(); return this; }
+      unref() { if (this._child) this._child.unref(); this.channel?.unref(); return this; }
+      send(...args) { return ipc.sendClosed(this, args); }
+      disconnect() { internal.nextTick(() => this.emit("error", Object.assign(new Error("IPC channel is already disconnected"), { code: "ERR_IPC_DISCONNECTED" }))); }
     }
 
     function reportExit(child, code) {
@@ -458,10 +456,11 @@
         return child;
       }
       child.pid = child._child.pid;
+      if (options._ipc) ipc.connectNode(child, child._child, child.pid, options);
       child.stdin = nodeWritable(child._child.stdin);
       child.stdout = nodeReadable(child._child.stdout);
       child.stderr = nodeReadable(child._child.stderr);
-      child.stdio = [child.stdin, child.stdout, child.stderr];
+      child.stdio = [child.stdin, child.stdout, child.stderr].concat(options.stdio.slice(3).map(() => null));
       child._drains = [child.stdout, child.stderr].filter(Boolean).map((stream) => stream._childDrained);
       internal.nextTick(() => child.emit("spawn"));
       if (options.signal) {
@@ -548,7 +547,7 @@
       if (!Array.isArray(args)) { options = args || {}; args = []; }
       options = options || {};
       const execArgs = options.execArgv || globalThis.process.execArgv;
-      const config = Object.assign({}, options, { stdio: options.stdio || (options.silent ? "pipe" : "inherit") });
+      const config = ipc.forkOptions(options);
       return nodeSpawn(options.execPath || globalThis.process.execPath, execArgs.concat([String(modulePath)], args), config);
     }
 
