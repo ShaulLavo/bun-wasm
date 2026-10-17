@@ -69,9 +69,13 @@
   }
   internal.isMarkedAsUntransferable = isMarkedAsUntransferable;
   function messageEvent(data: unknown, ports: MessagePort[] = []) {
-    const event = Object.assign(new MessageEvent("message", { data, ports }), { data });
+    const event = new MessageEvent("message", { data, ports });
     messagePayloads.set(event, data);
     return event;
+  }
+  function webMessageEvent(event: MessageEvent) {
+    const data = messagePayloads.has(event) ? messagePayloads.get(event) : event.data;
+    return Object.assign(new MessageEvent("message", { data }), { data, ports: event.ports });
   }
   function transfers(value: unknown) {
     if (value == null) return [];
@@ -601,7 +605,9 @@
         if (!options.stderr) this.stderr.pipe(process.stderr);
         this.#drained = Promise.all([out.drained, err.drained]);
         publicPort.on("message", value => this.emit("message", value));
-        if (web) EventTarget.prototype.addEventListener.call(publicPort, "message", event => this.emit("_webmessage", event));
+        if (web) EventTarget.prototype.addEventListener.call(publicPort, "message", event => {
+          if (event instanceof MessageEvent) this.emit("_webmessage", webMessageEvent(event));
+        });
         publicPort.on("messageerror", error => this.emit("messageerror", error)); publicPort.unref();
         child.exited.then(code => this.#settled(code), error => { this.#settled(1); this.#error = true; this.emit("error", error); });
       } catch (error) {
@@ -702,7 +708,7 @@
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "error", child: route[route.length - 1], graph, code } });
     };
     if (config.web) {
-      internal.require("web_worker").initialize(parentPort, config.web);
+      internal.require("web_worker").initialize(parentPort, config.web, webMessageEvent);
       parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
     }
     const requirePreload = internal.builtin("node:module").createRequire(process.cwd() + "/__worker_preload__.cjs");
