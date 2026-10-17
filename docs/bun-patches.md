@@ -15,13 +15,21 @@ Each row has one class. A file with independent changes has separate rows.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
+| [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
+| [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
+| [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, async handler dispatch and streaming wrappers on all engines. |
+| [X509Certificate adapters](#x509certificate) | Host feature | Original BoringSSL data bindings and Node certificate wrapper over existing KeyObjects. |
+| [X.509 hostname option matcher](#x509-hostname-option-matcher) | Port | Adapt Bun's OpenSSL-compatible Rust matcher because BoringSSL removed four option behaviors. |
+| [X.509 alternative name formatting and Node license](#x509-alternative-name-formatting) | Port | Translate Bun and Node certificate-name quoting to Rust without JSC and retain the Node MIT notices. |
+| [Certificate regression fixtures](#certificate-regression-fixtures) | Port | Retain unchanged upstream certificate and test-key data for metadata, signature and escaping checks. |
+| [`third_party/licenses/lol-html-LICENSE`](#htmlrewriter) | Port | Retain the vendored parser's BSD license for wasm distribution. |
 | [Third-party interrupt instrumentation](#third-party-interrupt-instrumentation) | Host feature | Original TypeScript binary rewriter, content-addressed loader and rescued browser fixtures; module-internal countdowns avoid per-entry host calls. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
 | [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, browser module loading and stream adapters over separate host guest instances, with distinct control-pipe and final-signal selectors. |
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
-| [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, reader relay and descriptor-transfer adapters. |
+| [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original runtime_proc imports, nonblocking filesystem preparation, preview1 notification waits and lazy browser process integration. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
@@ -81,11 +89,12 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
 | [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, `web/src/engine-host.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
 
+| [`runtime/core/`, `runtime/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, shared filesystem, IndexedDB persistence, lazy residency, startup diagnostics and descriptor adapters. |
 | [`runtime/core/`, `runtime/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, shared filesystem, IndexedDB persistence, lazy residency and descriptor adapters. |
 | [`web/tests/persistence-browser-worker.ts`, persistence corpus](#browser-runtime-core) | Host feature | Original browser test adapter reproduces the local storage spike's generated sizes and synthetic bytes; no package contents or upstream implementation. |
 | [`runtime/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry, jobs, registered signal dispositions including Node/Bun's ignored SIGPIPE default, immutable final-kind query and byte-sized exit statuses. |
 | [`runtime/fs/`, filesystem quiescence](#filesystem-quiescence) | Host feature | Original shared admission and revocation fence lets controllers stop workers only after direct filesystem operations finish. |
-| [`runtime/fs/opfs.ts`, OPFS access-handle and quota adapters](#opfs-storage-adapter) | Host feature | Original one-file-per-payload storage adapter; adapts SLICC-kernel's Apache-2.0 `src/fs/opfs.ts` at 88c5bb3 for NotReadableError retries and QuotaExceededError mapping while retaining bun-wasm's checksummed snapshots, lazy index and bounded cache. |
+| [`runtime/fs/opfs.ts`, OPFS access-handle and quota adapters](#opfs-storage-adapter) | Host feature | Original one-file-per-payload storage adapter with guidance for occupied workspaces; adapts SLICC-kernel's Apache-2.0 `src/fs/opfs.ts` at 88c5bb3 for NotReadableError retries and QuotaExceededError mapping while retaining bun-wasm's checksummed snapshots, lazy index and bounded cache. |
 | [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
 | [`web/src/native-stream-state.ts`](#native-browser-stream-completion) | Host feature | Original native completion bridge preserves host hooks on instances as well as prototypes. |
 | [Cross-platform web test adapters](#cross-platform-web-tests) | Host feature | Original scratch, child-process cleanup, command-deadline and existing-browser-cache adapters run the same assertions on Linux and macOS. |
@@ -117,6 +126,54 @@ Each row has one class. A file with independent changes has separate rows.
 | [`src/js/bun_console_constructor.js`](#bun-console-constructor) | Port | Generate Bun's Console constructor with lexical engine-independent hooks. |
 | [`scripts/generate-bun-console.mjs`, `src/js/console_constructor.js`, global Console wiring](#bun-console-constructor) | Host feature | Original generation and runtime adapters expose the shared constructor and its streams. |
 
+## Engine interruption
+
+Class **Host feature**. The WebKit patch changes
+`Source/JavaScriptCore/llint/{LowLevelInterpreter.asm,LLIntSlowPaths.cpp}` and
+`Source/JavaScriptCore/runtime/VMTraps.h` at Bun's WebKit revision
+`3d3257150c40a1aabdc5f8b48d5b33d0413674cb`. Single-threaded WASI cannot use a
+watchdog thread to publish VM trap bits while JavaScript runs. A per-VM countdown
+therefore polls the host every 1,024 ordinary C-loop trap points, including loop
+backedges and function entries. The existing trap slow path saves the interpreter
+PC and stack before polling; generic exception/unwind checks do not poll the host.
+A true callback result requests JSC's distinguished uncatchable termination
+exception. Polling is disabled for hosts without optional signal slot 18. This is
+a host extension, not an upstream bug.
+
+Original adapters in `crates/bunwasm-runtime/src/{engine,engine_quickjs,engine_jsc,lib,host}.rs`,
+`crates/bunwasm-jsc/{cpp/helpers.cpp,src/sys.rs}`,
+`crates/bunwasm-host/src/{slots,process/stdio}.rs`, and `web/src/subprocess.ts`
+add `(signal=0, mode=4)` to existing slot 18. It observes fatal cancellation
+without consuming the authoritative per-signal handled pending set. QuickJS
+installs its public `JS_SetInterruptHandler` through rquickjs's interrupt API,
+without changing upstream QuickJS, amortizing host calls across eight ordinary
+engine polls (about 80,000 backedges/calls). Neither engine callback enters JS.
+
+Handled signals wait for the next ordinary event-loop turn, matching Node. An
+earlier design dispatched them inside engine callbacks; review rejected that
+because QuickJS also polls during native regexp operations, and reentry can break
+native borrowed state or runtime timer invariants. No interpreter-specific
+reentry hook or runtime critical-section suppression is needed. The original
+`crates/bunwasm-runtime/src/js/{process.js,process_signals.ts}` adapter serializes cooperative dispatch,
+including recursive broken-pipe handling. Default signals already have an
+immutable host outcome; a fatal checkpoint unwinds Wasm without entering guest
+catch/finally blocks, including while a handled callback is CPU-bound. The
+browser-native engine needs no new hook and remains covered by worker termination.
+
+The original `runtime/proc/abi.ts` adapter implements the same fatal-only mode 4
+for generic process imports. The original `runtime/proc/signals.ts` helper preserves
+pending-signal wake hints during cooperative dequeue. The original
+`web/src/{runner,worker,subprocess-broker,subprocess}.ts`
+adapters share each process's existing budget with its page-side broker. Signal delivery
+notifies that budget's wait word and, for generic process polling, the directory wake word;
+short timeout rescans are not the signal notification mechanism. Legacy preview1 guests
+also receive their root or child's interrupt channel, with cooperative dequeue consuming
+its wake hint without consuming another pending signal.
+
+These adapters and the browser proof/benchmark harness are original implementations,
+not copied source. JSC polling covers JS safe points, not a single uninterrupted
+native operation; QuickJS retains its existing native-operation interrupt polls.
+
 ## Third-party interrupt instrumentation
 
 **Class: Host feature (original adapter).** `runtime/interrupt/rewriter.ts`, `loader.ts` and
@@ -146,6 +203,7 @@ clang 23.1.0 / LLVM `895aa2c896ada719451be2e3673c83da8ddf1141`, `-O2 -nostdlib`,
 wasm32 target, exported memory and a 16 MiB maximum memory. Source comments preserve exact
 flags. The benchmark optionally takes the retained spike rewriter as an external input; it is
 bundled only into the disposable measurement app, never into the shipped runtime.
+
 
 ## Browser process service
 
@@ -262,6 +320,8 @@ handle retry loop for `NotReadableError`/`InvalidStateError` and its `QuotaExcee
 `ENOSPC` mapping are adapted here. The layout, snapshot recovery, Web Lock lifetime, lazy payload
 reads, browser-specific create concurrency and 64-handle cache are original bun-wasm behavior;
 no SLICC code is copied verbatim.
+The original Web Lock refusal now tells the user to close the owning tab and reload;
+lock acquisition and the adapted SLICC retry and quota behavior stay unchanged.
 
 ## Filesystem quiescence
 
@@ -453,6 +513,15 @@ Web Locks and lazy data hydration. Shared revision counters capture direct guest
 persisted data can leave the pool without changing inode identity. The editor adapters wait for
 a durable checkpoint before marking a save complete, seed workspaces once, and explicitly reset
 sandbox templates. `runtime/core/wasi.ts` routes both preview1 sync calls through this boundary.
+The original worker/controller adapters in `runtime/fs/service.ts` and `web/src/shared-fs.ts`
+now send startup failures as plain message and stack fields before revoking pending requests.
+Unprintable rejection reasons and throwing stack getters still produce a diagnostic, and a
+failed diagnostic transfer still dispatches the worker error fallback.
+The playground catches startup rejection, displays the complete diagnostic, and offers Reload.
+OPFS refuses an occupied Web Lock and explains how to release it. IndexedDB uses an original
+takeover adapter. A new holder steals the lock, allocates a persisted epoch, and checks that epoch
+inside every write transaction. A displaced page stops persistence and preserves visible editor text.
+These changes extend bun-wasm's own adapters at `b14f536f`; no upstream implementation is copied.
 The original persistence browser fixtures in `web/tests/persistence-browser-{main,worker}.ts`
 and their Playwright/Safari runners exercise these adapters without a wasm build. The corpus
 fixture retains only generated package-file sizes from the original local storage spike's
@@ -1647,6 +1716,10 @@ original bun-wasm host adapter, not a copied upstream implementation. The proces
 adds independent producer rings, atomic committed-position/revocation cursors, a host-only
 process publication registry, reference-counted endpoints, reader merging and supervisor relay.
 These changes prevent a terminated worker's delayed publication from altering the live stream.
+EOF also validates the pipe's atomic admission generation around its monotonic closed-ring scan:
+a concurrent child reservation in an earlier slot cannot be missed while the parent closes a
+later slot. An overlapping scan reports not-EOF and publishes a wake, keeping registry revocation
+as the authority for freezing committed output rather than adding a second writer-lifetime count.
 
 `runtime/proc/worker-pipes.ts` is a separate original adapter for cloneable endpoint capabilities,
 filesystem-codec composition and supervisor relay ownership. Spawn retains a process endpoint
@@ -1682,3 +1755,99 @@ complete without waiting for that acknowledgment. A late kill cannot bypass the 
 ordinary outcome has already won. Unknown callback terminals are rejected rather than pretending
 their input can be shared. No new upstream patch, copied
 implementation or compatibility branch is introduced.
+
+## HTMLRewriter
+
+Class **Host feature**, **original adapters** in `crates/bunwasm-runtime/src/html_rewriter.rs`,
+`src/js/html_rewriter.ts`, the native table and global registry.
+The runtime links the unchanged `vendor/bun/vendor/lolhtml` Rust crate at Bun revision
+`cd95fa7a13b3f13be73e512b38ec111c1c228084`. The vendored crate is lol-html 2.7.2,
+including Bun's token suspension support. No vendor file changes.
+
+Each transform owns a parser session. Content handlers suspend the parser and return a
+plain-data event. TypeScript invokes the registered handler, waits for its promise for a
+Response input, then resumes the parser. String and buffer inputs remain synchronous and
+reject handlers that need asynchronous work. Response inputs consume the source reader
+incrementally, keep the native-consumer reader lock after completion, forward cancellation
+and preserve handler rejection values. Tokens and
+attribute iterators detach when their handler ends. The wrapper is original bun-wasm code.
+Bun's corresponding implementation, `src/runtime/api/html_rewriter.rs`, depends on Bun's
+JSC-specific generated classes and stream sinks and cannot run through the builtin loader.
+
+`third_party/licenses/lol-html-LICENSE` is copied unchanged from that vendored crate.
+
+## X509Certificate
+
+Class **Host feature**, **original adapters** in `crates/bunwasm-crypto-sys/src/x509.rs`,
+`crates/bunwasm-runtime/src/x509.rs` except the adapted portions below,
+`src/js/x509.ts`, the native table and the Node crypto registry.
+
+BoringSSL remains pinned by `scripts/sync-crypto.sh` to
+`41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f`. The Rust declarations call its existing
+certificate, name, extension, key and signature functions declared in `include/openssl/`
+`{x509,asn1,evp,bio,obj,stack,mem,err}.h`. These declarations contain no
+copied implementation. Certificates retain owned DER bytes. Checks parse those bytes and
+release their native allocations on every return. Public keys use the existing Node
+KeyObject implementation via a SPKI export. No new host slot is used.
+
+Bun's `src/js/node/crypto.ts` exports its native X509Certificate binding. That binding lives
+in `src/jsc/bindings/JSX509Certificate*.cpp`, so it cannot be loaded as an engine-independent
+JavaScript wrapper. The new TypeScript wrapper implements the same public certificate
+contract using the shared native table.
+
+## X.509 alternative name formatting
+
+Class **Port**, **adapted implementation** in `crates/bunwasm-runtime/src/x509.rs`,
+`alternative_name`, `general_name`, `ip_name`, and extension-list formatting.
+The upstream source is Bun `src/jsc/bindings/ncrypto.cpp`, `IsSafeAltName`, `PrintAltName`,
+`PrintGeneralName`, `SafeX509SubjectAltNamePrint`, and `SafeX509InfoAccessPrint` at
+`cd95fa7a13b3f13be73e512b38ec111c1c228084`, inherited from Node's ncrypto.
+
+The Rust translation uses BoringSSL accessors and owned strings instead of C++ BIO
+writers and JSC strings. It retains JSON-compatible quoting for names containing commas,
+quotes, controls or non-ASCII IA5 bytes. Distinguished names keep UTF-8. This prevents one
+certificate name from looking like multiple alternative names. BoringSSL's unsupported
+otherName, X400 and EDI names retain the upstream unsupported descriptions.
+
+`third_party/licenses/node-X509-LICENSE` retains the Node and Joyent MIT notices.
+The two license sections are copied unchanged from Node v26.7.0 `LICENSE`; no Node
+implementation is taken from that version.
+
+## Certificate regression fixtures
+
+Class **Port**, **copied upstream fixture data** in `tests/fixtures/crypto-x509/`.
+The sources are Bun `test/js/node/test/fixtures/keys/{agent1-cert.pem,agent1-key.pem,
+ca1-cert.pem,ca2-cert.pem}` and `test/js/node/test/fixtures/x509-escaping/{alt-0-cert.pem,info-2-cert.pem}`
+at `cd95fa7a13b3f13be73e512b38ec111c1c228084`.
+
+The PEM bytes are unchanged. `alt-0-cert.pem` is named `escaped-san.pem`, and
+`info-2-cert.pem` is named `unknown-access.pem` locally.
+They are public test data, including a test private key. The standalone TypeScript fixture
+is original and checks the real wasm parser, certificate names, fingerprints, signatures,
+KeyObjects, issuer checks and legacy fields on every engine.
+
+### Certificate check-option regression fixtures
+
+`tests/fixtures/crypto-x509-options/{names,email-only}.pem` are original self-signed
+P-256 certificates generated with OpenSSL for PR #41 review. They contain a
+fallback common name and either DNS/email SANs or an email-only SAN. No upstream
+source or production certificate is copied. The generation key is disposable;
+only the public certificates are retained. The fixture runs unchanged on Bun and
+Node and covers the five hostname options and standalone issuer metadata.
+
+## X.509 hostname option matcher
+
+Class **Port**, **adapted implementation** in
+`crates/bunwasm-runtime/src/x509_hostname.rs` and `x509.rs::check_host`.
+The upstream is Bun `src/boringssl/lib.rs`, `match_hostname`,
+`openssl_valid_pattern`, `match_dot_subdomain`, and `Bun__X509__checkHost`, at
+`cd95fa7a13b3f13be73e512b38ec111c1c228084`.
+
+BoringSSL's pinned headers define ALWAYS_CHECK_SUBJECT, NO_PARTIAL_WILDCARDS,
+MULTI_LABEL_WILDCARDS and SINGLE_LABEL_SUBDOMAINS as zero compatibility macros.
+Passing OpenSSL's bits to X509_check_host cannot implement these options. Bun
+uses a Rust matcher for the same reason. The adaptation retains its OpenSSL
+matching path and numeric flags, removes the TLS-only mode and BunString output,
+and uses our existing BoringSSL accessors and owned UTF-8 names. SAN parsing
+errors suppress subject fallback; an email-only SAN does not suppress a CN
+hostname match. The BoringSSL source remains unchanged.

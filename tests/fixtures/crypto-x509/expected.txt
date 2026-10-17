@@ -1,0 +1,5 @@
+PEM, DER, names, dates, and fingerprints pass
+KeyObject, signature, issuer, and name checks pass
+legacy fields and subclassing pass
+alternative name escaping passes
+unknown access method OIDs pass

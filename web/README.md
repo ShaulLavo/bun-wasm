@@ -90,6 +90,30 @@ runs it on another engine), or `scripts/test-web.sh` for everything. `node tests
 [chromium|webkit]` prints a table comparing the engines (wasm size, startup, `tests/bench/micro.js`,
 which examples pass).
 
+`bash scripts/test-web-host.sh` runs the artifact-free Web host CI gate, including both persistence
+backends and the editor startup-steal regressions. CI calls its unit and browser phases around
+browser installation. `scripts/test-web.sh` calls the same phases before its WASM integration gates.
+
+Build the playground on the PC, copy `web/dist` to a task directory on the Mac, and serve it with COOP/COEP headers.
+Run `bun web/tests/browser-startup-safari.ts <playground-url>` on the Mac to check fresh startup, three durable reloads, newest-tab ownership, and recovery of the displaced tab.
+Set `SAFARI_IOS=1` for the iPhone 17 Pro simulator, `SAFARI_OUTPUT=<path>` for the JSON report, and `SAFARI_SCREENSHOT=<path>` for the error screenshot.
+If the simulator is shut down, run `xcrun simctl boot "iPhone 17 Pro"` and `xcrun simctl bootstatus "iPhone 17 Pro" -b` before starting the driver.
+Set `SAFARI_SEED_URL=https://bun.sprockt.dev/playground/` to import a workspace created by the live build before testing the candidate.
+The test uses a task-owned Safari automation session and driver. It preserves normal browser profiles.
+
+The filesystem lifecycle regression uses the actual page adapter and persistence worker without
+guest WASM. `scripts/test-web.sh` runs its Chromium and WebKit cases, plus the storage fencing tests.
+For real Safari, build with `bun web/tests/browser-filesystem-lifecycle.ts --build <directory>`
+through the PC heavy wrapper. Copy the assets and runner to an owned directory under Mac `~/tmp`,
+then serve them on an unused localhost port with COOP `same-origin` and COEP `require-corp`.
+Under the Mac lock, run `bun browser-filesystem-lifecycle.ts safari <url>` and repeat with
+`SAFARI_IOS=1` for the booted iPhone 17 Pro simulator. `SAFARI_OUTPUT=<file>` records lifecycle
+and lock observations. Both Safari platforms cover same-tab reopen, Reload, cached-page
+restoration, Reload after Back with no other tab, newest-wins IndexedDB ownership, preserved
+visible edits and durable saves. OPFS keeps no-steal ownership and checks refusal and recovery
+after the owner closes. [The runtime plan](../plans/browser-runtime.md#safari-workspace-ownership)
+explains the epoch fence and the HTTPS no-store complement.
+
 ## Without a browser
 
 `bun scripts/run.ts <file.wasm> [args…]` runs a wasm binary under the same WASI shim and seeded

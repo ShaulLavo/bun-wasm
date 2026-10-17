@@ -202,6 +202,7 @@
       webcrypto,
       subtle: webcrypto.subtle,
       ...keyApi,
+      ...internal.require("x509")(Buffer, keyApi),
       Hash,
       Hmac: Hash,
     });
