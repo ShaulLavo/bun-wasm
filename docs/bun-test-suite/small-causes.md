@@ -143,21 +143,29 @@ or reproducing the remaining work.
 
 ## PR review regressions
 
-Native Bun 1.4.2 passes the 12 named public regressions in
-`test-review-promises`, `transpiler-review` and `partial-assert-review`.
-The frozen pre-fix control `f61b9a9b` returns exit 1 for all three new fixtures
-on QuickJS, JSC and browser. The seven existing focused fixtures still pass.
-After the fixes, all ten focused fixtures pass on every engine, 30 successful
-engine-fixture runs on base `9ced05d7`. The full web gate and all six HMR runs
-also pass on that base. Main through `2759d45b` is merged; the final build
-verification is recorded in the PR reply and retained report.
+The initial 65-file measurements above precede these corrections. Native Bun
+1.4.2 passes the 12 named public regressions in `test-review-promises`,
+`transpiler-review` and `partial-assert-review`. The frozen pre-fix control
+`f61b9a9b` returns exit 1 for all three new fixtures on QuickJS, JSC and browser;
+the seven existing focused fixtures still pass.
+
+After merging main through `2759d45b`, rebuilding the launcher and all wasm
+artifacts, all 12 focused fixtures pass on every engine. This gives 36 successful
+engine-fixture runs. The full web gate and all six Chromium/WebKit HMR runs pass.
+Four observer units and the standalone Node probe pass as well.
 
 The promise regressions cover plain returned objects, real promises with
-accessor/overridden then methods, and unawaited checks. The standalone await
-observer probe fails before the fix with `second-assimilation`, then preserves
+accessor/overridden then methods, and unawaited checks. The await probe retains
 fulfilled object identity with one getter read and ten falsy rejection controls.
-Four observer unit tests also verify caught/unawaited rejection identity and
-native promise identity when a caller replaces the promise constructor.
+It also checks delayed caught rejections and constructor inspection. The observer
+returns the original native promise, polls native state and uses rejection
+notifications; it never mutates promise properties or re-resolves user values.
+
+A separate regression requires a failed assertion to exit 1 after inspecting
+its constructor and passing it to Promise.resolve. The superseded constructor
+observer incorrectly exits 0. Native Bun and the final implementation exit 1.
+The rejection-identity fixture checks the original promise and all five falsy
+reasons through native rejection events on every engine.
 
 Byte tests cover direct TextEncoder results, offset views, DataViews, mutation
 after calling transform and transfer of JavaScript-owned backing storage.
@@ -170,21 +178,12 @@ own-property subsets, overridden buffer iterators, genuine typed-array kinds,
 DataView/ArrayBuffer numeric properties, and Map fallback without consuming an
 entry twice. These assertions do not weaken or replace upstream tests.
 
-The new fixture goldens explicitly preserve this runtime's existing stdout
-version-header convention. Native Bun sends that header to stderr, so the
-fixtures use manual goldens. A separate existing JSC native-output buffer
-transfer gap is recorded in the compatibility follow-up plan.
+Manual goldens preserve this runtime's existing stdout version-header convention;
+native Bun sends the header to stderr. A separate existing JSC native-output
+buffer transfer gap is recorded in the compatibility follow-up plan.
 
-The paired review builds on `9ced05d7` have the following artifact deltas.
-They measure the review corrections, not the whole original PR. Gzip uses the
-same Python compression settings and a zero timestamp on both sides.
-
-| Engine | Byte delta | Gzip byte delta |
-| --- | --- | --- |
-| QuickJS | +2,518 | +545 |
-| JSC | +2,510 | +499 |
-| Browser | +2,530 | +814 |
-
-Exact commands, control and corrected logs, hashes and size records are under
-`/work/reports/bun-wasm-small-causes/review-fixes/`. The coordinator owns removal
-after re-review and reproduction of the remaining compatibility follow-ups.
+Exact commands, control and corrected logs, hashes and raw/gzip size records are
+under `/work/reports/bun-wasm-small-causes/review-fixes/`. Earlier size deltas
+include superseded implementations; the whole PR's size cost against the final
+main base still needs a matched control build. The coordinator owns evidence
+removal after re-review and reproduction of remaining compatibility follow-ups.
