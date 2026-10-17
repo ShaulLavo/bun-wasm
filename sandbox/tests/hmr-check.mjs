@@ -40,17 +40,40 @@ async function check(browserName, engine) {
   const visit = await firstVisit(context, url.href);
   const page = await context.newPage();
   const logs = [];
-  let hmrConnected = false;
-  const hmrWaiters = [];
-  page.on("console", (m) => {
-    const text = m.text();
-    logs.push(`${m.type()}: ${text}`);
-    if (text === "[Bun] Hot-module-reloading socket connected, waiting for changes...") {
-      hmrConnected = true;
-      while (hmrWaiters.length) hmrWaiters.shift()();
-    }
-  });
-  page.on("framenavigated", () => { hmrConnected = false; });
+  const watchHmr = (target, sink = []) => {
+    let generation = 0;
+    let connectedGeneration = -1;
+    const waiters = new Set();
+    target.on("console", (m) => {
+      const text = m.text();
+      sink.push(`${m.type()}: ${text}`);
+      if (text !== "[Bun] Hot-module-reloading socket connected, waiting for changes...") return;
+      connectedGeneration = generation;
+      for (const waiter of waiters) {
+        waiters.delete(waiter);
+        waiter.resolve();
+      }
+    });
+    target.on("framenavigated", () => {
+      generation++;
+      connectedGeneration = -1;
+    });
+    return {
+      waitForConnected: async (timeout = STEP_MS) => {
+        if (connectedGeneration === generation) return;
+        await new Promise((resolve, reject) => {
+          const waiter = { resolve };
+          const timer = setTimeout(() => {
+            waiters.delete(waiter);
+            reject(new Error("Bun HMR WebSocket did not report connected"));
+          }, timeout);
+          waiter.resolve = () => { clearTimeout(timer); resolve(); };
+          waiters.add(waiter);
+        });
+      },
+    };
+  };
+  const hmr = watchHmr(page, logs);
   page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));
   const tag = `${browserName}/${engine}`;
   const shot = async (step) => shots && (await page.screenshot({ path: join(shots, `${browserName}-${engine}-${step}.png`) }));
@@ -77,13 +100,6 @@ async function check(browserName, engine) {
       editor.setText(edit.reduce((t, [from, to]) => t.replace(from, to), text));
     }, [path, edit]);
   };
-  const waitForHmrConnected = async () => {
-    if (hmrConnected) return;
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("Bun HMR WebSocket did not report connected")), STEP_MS);
-      hmrWaiters.push(() => { clearTimeout(timer); resolve(); });
-    });
-  };
   try {
     await page.goto(visit.url);
     await step("1 renders", async () => {
@@ -97,7 +113,7 @@ async function check(browserName, engine) {
       await app.locator("button.counter", { hasText: "count is 3" }).waitFor({ timeout: STEP_MS });
     });
     await step("3 edit tsx keeps state", async () => {
-      await waitForHmrConnected();
+      await hmr.waitForConnected();
       await setFile("src/App.tsx", [["Hello from bun.wasm", "Hello, hot reload"]]);
       await app.locator("h1", { hasText: "Hello, hot reload" }).waitFor({ timeout: STEP_MS });
       const count = await app.locator("button.counter").textContent();
@@ -105,7 +121,7 @@ async function check(browserName, engine) {
       await shot("3-edited");
     });
     await step("4 edit css", async () => {
-      await waitForHmrConnected();
+      await hmr.waitForConnected();
       await setFile("src/App.css", [["color: #fbf0df;", "color: rgb(244, 114, 182);"]]);
       await page.waitForFunction(
         () => {
@@ -121,7 +137,7 @@ async function check(browserName, engine) {
       await shot("4-css");
     });
     await step("5 syntax error overlay and recovery", async () => {
-      await waitForHmrConnected();
+      await hmr.waitForConnected();
       await setFile("src/App.tsx", [["<h1>", "<h1 "]]);
       await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
       await shot("5-overlay");
@@ -137,10 +153,11 @@ async function check(browserName, engine) {
       const href = await page.locator("#preview-url").getAttribute("href");
       if (!href || !new URL(href, page.url()).pathname.includes("/__preview/")) throw new Error(`label link: ${href}`);
       const tab = await context.newPage();
+      const tabHmr = watchHmr(tab);
       try {
         await tab.goto(new URL(href, page.url()).href);
         await tab.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
-        await waitForHmrConnected();
+        await Promise.all([hmr.waitForConnected(), tabHmr.waitForConnected()]);
         await setFile("src/App.tsx", [["Fixed it", "From another tab"]]);
         await tab.locator("h1", { hasText: "From another tab" }).waitFor({ timeout: STEP_MS });
         await app.locator("h1", { hasText: "From another tab" }).waitFor({ timeout: STEP_MS });
@@ -154,7 +171,7 @@ async function check(browserName, engine) {
       await Promise.all([page.waitForNavigation(), page.selectOption("#template", "vanilla")]);
       await app.locator("h1", { hasText: "Hello from vanilla TypeScript" }).waitFor({ timeout: STARTUP_MS });
       for (let i = 0; i < 2; i++) await app.locator("button.counter").click();
-      await waitForHmrConnected();
+      await hmr.waitForConnected();
       await setFile("src/main.ts", [["Hello from vanilla TypeScript", "Vanilla hot update"]]);
       await app.locator("h1", { hasText: "Vanilla hot update" }).waitFor({ timeout: STEP_MS });
       const count = await app.locator("button.counter").textContent();
@@ -181,12 +198,14 @@ async function check(browserName, engine) {
       await shot("6-switched");
     });
     await step("6b initial build error overlay and recovery", async () => {
+      await hmr.waitForConnected();
       await setFile("src/App.tsx", [["<h1>", "<h1 "]]);
       await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
       const navigated = page.waitForEvent("framenavigated", { predicate: (frame) => frame.parentFrame() !== null });
       await page.locator("#restart").click();
       await navigated;
       await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
+      await hmr.waitForConnected();
       await setFile("src/App.tsx", [["<h1 ", "<h1>"]]);
       await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
       await app.locator("bun-hmr").waitFor({ state: "hidden", timeout: STEP_MS });
