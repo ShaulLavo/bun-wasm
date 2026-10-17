@@ -207,7 +207,7 @@ for (const failure of ["client", "codec", "protocol", "pipes", "abi", "terminals
     if (failure === "binding") {
       expect(events).toEqual(["dispose default", "dispose inherited", "dispose fs"]);
       expect(descriptors!.get(17)).toBeUndefined();
-      expect(readOutcome(client.workerProcessState(transport).signals.outcome)).toMatchObject({ kind: "exited", code: 126 });
+      expect(readOutcome(client.workerProcessState(transport).signals.outcome)).toMatchObject({ kind: "start-failed", code: 13, error: "EACCES", status: null });
     }
   } finally { descriptors?.dispose(); filesystem.port.close(); connection.server.port.close(); }
 });

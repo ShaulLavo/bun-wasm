@@ -1,6 +1,5 @@
 import { processOutcome } from "../../runtime/proc/outcome.ts";
 import type { ProcessExit } from "../../runtime/proc/types.ts";
-import { spawnStartError } from "./spawn-error.ts";
 import type { Stream } from "@bun-wasm/runtime/core";
 import type { EngineNet } from "./net/host";
 import type { SlotImpls } from "./net/trampoline";
@@ -86,6 +85,13 @@ const HANDLE_LIMIT = 0x7fff0000;
 export const MAX_CHILDREN = 4;
 // Slot 14 selectors: 0..2 stdio, 3 immutable final signal, 4/5 worker message channels.
 export const CHILD_FINAL_SIGNAL = 3;
+
+function spawnStartError(executable: string, code: "ENOENT" | "EACCES") {
+  if (code === "EACCES") return Object.assign(new Error(`EACCES: permission denied, posix_spawn '${executable}'`), {
+    code, errno: -13, path: executable, syscall: "posix_spawn",
+  });
+  return Object.assign(new Error(`Executable not found in $PATH: "${executable}"`), { code, errno: -2, path: executable });
+}
 
 export function createProcessBudget() {
   return new SharedArrayBuffer(8 + MAX_CHILDREN * 4);
