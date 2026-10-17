@@ -127,9 +127,8 @@ fn execute(
     bun_paths::fs::FileSystem::init(cwd.as_bytes());
     // WASI preview 1 has one thread. This also keeps nested parser regions off Bun's worker pool.
     bun_sema_driver::keep_regions_on_this_thread();
-    let command_line = std::iter::once(command.as_bytes())
-        .chain(args.iter().copied())
-        .collect::<Vec<_>>();
+    let process_args: Vec<String> = std::env::args().skip(1).collect();
+    let command_line: Vec<&[u8]> = process_args.iter().map(|arg| arg.as_bytes()).collect();
     let environment = Environment {
         cwd: bun_lint_driver::from_native_path(cwd.as_bytes()),
         stdout: Stream {

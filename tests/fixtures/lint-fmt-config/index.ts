@@ -70,6 +70,7 @@ async function directories() {
   const checked = await finish(start(["--cwd", parent, "lint", "--cwd", "sub", "-f", "json", "input.js"]));
   diagnosed(checked);
   writeFileSync(`${cwd}/format.ts`, "const value=1;");
+  writeFileSync(`${cwd}/.prettierrc.js`, `if (process.argv[1] !== ${JSON.stringify(`--cwd=${parent}`)}) throw new Error("configuration lost top-level arguments"); export default {};`);
   const formatted = await finish(start([`--cwd=${parent}`, "fmt", "--cwd", "sub", "--log-level=warn", "format.ts"]));
   assert.equal(formatted.code, 0, formatted.stderr);
   assert.equal(readFileSync(`${cwd}/format.ts`, "utf8"), "const value = 1;\n");
