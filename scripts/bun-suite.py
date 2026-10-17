@@ -26,6 +26,16 @@ STOP = threading.Event()
 PROCESSES = set()
 LOCK = threading.Lock()
 
+# The installed Waffle tree is fingerprinted separately. Include the local Node host and
+# its runtime imports so resume cannot reuse results after an adapter or slot change.
+BROWSER_HOST_SOURCES = (
+    "web/scripts/node-host.ts", "web/scripts/node-process.ts", "web/scripts/node-signals.ts",
+    "web/scripts/node-spawn.ts", "web/scripts/node-net.mjs", "web/scripts/node-install-net.mjs",
+    "web/scripts/node-stdio.ts", "web/src/net/trampoline.ts", "web/src/engine-host.js",
+    "web/src/promise-reactions.ts", "web/src/native-stream-state.ts", "web/src/crypto-inputs.js",
+    "web/src/crypto-host.js", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
+)
+
 
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -179,7 +189,7 @@ def provenance(opts, wasm):
             "tools_sha256": digest(wasm.with_name("bun-tools.wasm")) if wasm.with_name("bun-tools.wasm").is_file() else None,
             "runner_sha256": digest(Path(__file__)),
             "launcher_sha256": digest(opts.launcher) if opts.engine != "browser" else digest(ROOT / "web/scripts/node-host.mjs"),
-            "host_sources": {path: digest(ROOT / path) for path in ["web/src/engine-host.js", "web/scripts/node-net.mjs", "web/scripts/node-install-net.mjs", "web/src/net/package-fetch.ts", "web/scripts/node-stdio.ts", "web/scripts/node-spawn.ts", "web/src/subprocess.ts", "web/src/fs.ts"]} if opts.engine == "browser" else {},
+            "host_sources": {path: digest(ROOT / path) for path in BROWSER_HOST_SOURCES} if opts.engine == "browser" else {},
             "runtime_package": runtime_package_provenance() if opts.engine == "browser" else {},
             "dependencies": dependency_digest(opts.suite / "node_modules"),
             "test_dependencies": dependency_digest(opts.dependencies or opts.suite / "test/node_modules"),
