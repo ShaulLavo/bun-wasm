@@ -347,3 +347,27 @@ test("a caller whose job cannot be named fails the spawn instead of starting a n
   const detached = module.spawn(["bun", "j"], { stdout: "pipe", detached: true });
   expect(fake.children.get(detached.pid)!.request.job).toBe(0);
 });
+
+for (const executable of ["node", "/usr/bin/node", "fixture.wasm", "/tools/custom"]) test(`the registry executable ${executable} reaches the spawn request unchanged`, () => {
+  const fake = service();
+  const { module } = load(fake);
+  module.spawn([executable, "argument"]);
+  const request = Array.from(fake.children.values())[0]!.request;
+  expect(request.executable).toBe(executable);
+  expect(request.argv).toEqual([executable, "argument"]);
+});
+
+for (const ownCode of [23, 143]) test(`a handled TERM keeps the guest's own exit code ${ownCode}`, async () => {
+  const fake = service();
+  const { module, pump } = load(fake);
+  // A handled signal is delivered but selects no outcome; the guest then exits on its own.
+  fake.native.procKill = () => 0;
+  const child = module.spawn(["bun", "handler"], { stdout: "pipe" });
+  child.kill("SIGTERM");
+  fake.exit(fake.children.get(child.pid)!, ownCode);
+  await pump();
+  expect(await child.exited).toBe(ownCode);
+  expect(child.exitCode).toBe(ownCode);
+  expect(child.signalCode).toBeNull();
+  expect(child.killed).toBe(true);
+});

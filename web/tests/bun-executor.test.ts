@@ -3,16 +3,22 @@ import { createFilesystemConnection } from "waffle/fs";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { bootstrap, type RuntimeWorkerHost } from "waffle/browser/worker";
+import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
 
 // The Bun executor is Waffle's bootstrap plus Bun policy. These tests run the real bootstrap with
 // an injected host and a hand-assembled guest; only the browser engine host is replaced.
 const actualEngineHost = { ...await import("../src/engine-host.js") };
+const actualTrampoline = { ...await import("../src/net/trampoline") };
+// The guest-facing slot installation is replaced by a recorder; the executor's own wrappers are kept.
+const installed: Record<string, (...args: number[]) => number>[] = [];
+mock.module("../src/net/trampoline", () => ({ ...actualTrampoline,
+  installHostSlotsViaImport: (_instance: unknown, impls: Record<string, (...args: number[]) => number>) => { installed.push(impls); return null; } }));
 const startEngineHost = mock(async (_options: Record<string, unknown>): Promise<number> => 0);
 mock.module("../src/engine-host.js", () => ({ startEngineHost }));
 const { createBunExecutor } = await import("../src/bun-executor");
 // Module mocks are process-wide in `bun test`: leave the real engine host for the other files.
-afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); });
+afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); });
 
 const name = (value: string) => [value.length].concat(Array.from(new TextEncoder().encode(value)));
 const section = (id: number, bytes: number[]) => [id, bytes.length].concat(bytes);
@@ -25,7 +31,7 @@ function guest(ready: number): WebAssembly.Module {
   )));
 }
 
-async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env">> & { ready?: number; fetched?: string[]; onFetch?(): void } = {}) {
+async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env" | "net">> & { ready?: number; fetched?: string[]; onFetch?(): void } = {}) {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const messages: WorkerMessage[] = [];
@@ -39,7 +45,7 @@ async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slo
   const request: RunRequest = {
     engine: options.engine ?? "browser", adapter: options.adapter, module: guest(options.ready ?? 1),
     args: ["bun"], env: options.env ?? {}, filesystem: connection.client, runtimeProcess,
-    trace: false, net: null, moduleCache: null, slots: options.slots,
+    trace: false, net: options.net ?? null, moduleCache: null, slots: options.slots,
   };
   try {
     await bootstrapBun(request, host);
@@ -55,6 +61,23 @@ async function bootstrapBun(request: RunRequest, host: BunExecutorHost & Runtime
     context.fs.release = () => {};
     executor.setup?.(context);
   } }, host);
+}
+/** Like run(), but hands the caller the process's shared signal words before the guest starts. */
+async function runCapturingSignals(capture: (signals: ReturnType<typeof workerProcessState>["signals"]) => void, net: SharedArrayBuffer) {
+  const connection = createFilesystemConnection();
+  const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
+  capture(workerProcessState(runtimeProcess).signals);
+  const messages: WorkerMessage[] = [];
+  const host: BunExecutorHost & RuntimeWorkerHost = {
+    crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message: WorkerMessage) { messages.push(message); },
+    async fetch() { return new Response("ok"); },
+  };
+  const request: RunRequest = { engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
+    runtimeProcess, trace: false, net, moduleCache: null };
+  try { await bootstrapBun(request, host); }
+  finally { connection.client.port.close(); connection.server.port.close(); }
+  return { messages };
 }
 const exits = (messages: WorkerMessage[]) => messages.filter(message => message.type === "exit" || message.type === "error");
 
@@ -99,7 +122,7 @@ test("engine host fetches use the worker's native fetch and stop after a fatal o
     const fetch = options.fetch as (input: string) => Promise<Response>;
     expect(await (await fetch("https://example.test/live")).text()).toBe("ok");
     claimOutcome(signals.outcome, { kind: "signaled", code: 15 });
-    expect(() => fetch("https://example.test/dead")).toThrow();
+    expect(() => fetch("https://example.test/dead")).toThrow(DefaultSignal);
     return 0;
   });
   const connection = createFilesystemConnection();
@@ -118,4 +141,29 @@ test("engine host fetches use the worker's native fetch and stop after a fatal o
   expect(fetched).toEqual(["https://example.test/live"]);
   expect(readOutcome(signals.outcome)).toEqual({ kind: "signaled", code: 15, status: 143 });
   expect(exits(messages)).toEqual([{ type: "exit", code: 143, signal: 15, sleep: "atomics" }]);
+});
+
+test("every network slot refuses to run once the process has a fatal outcome", async () => {
+  const { SLOT_NAMES } = actualTrampoline;
+  const { createRing } = await import("../src/net/ring");
+  installed.length = 0;
+  startEngineHost.mockClear();
+  let signals!: ReturnType<typeof workerProcessState>["signals"];
+  startEngineHost.mockImplementationOnce(async () => {
+    const slots = installed[0]!;
+    expect(Object.keys(slots).sort()).toEqual(SLOT_NAMES.slice().sort());
+    claimOutcome(signals.outcome, { kind: "signaled", code: 15 });
+    // The guard runs before the slot touches guest memory or the network ring.
+    for (const name of SLOT_NAMES) expect(() => slots[name]!(0, 0, 0, 0), name).toThrow(DefaultSignal);
+    return 0;
+  });
+  const result = await runCapturingSignals(options => { signals = options; }, createRing());
+  expect(installed).toHaveLength(1);
+  expect(exits(result.messages)).toEqual([{ type: "exit", code: 143, signal: 15, sleep: "atomics" }]);
+});
+
+test("without a networking ring no slots are installed", async () => {
+  installed.length = 0;
+  await run();
+  expect(installed).toEqual([]);
 });
