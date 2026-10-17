@@ -25,7 +25,7 @@ async function request(path: string, method = "GET", body?: unknown): Promise<an
 }
 async function evaluate(script: string, args: unknown[] = []): Promise<any> {
   const result = await request(`/session/${session}/execute/async`, "POST", {
-    script: `const done = arguments[arguments.length - 1]; Promise.resolve().then(async () => { ${script} }).then(value => done({ok:true,value}), error => done({ok:false,error:String(error.stack || error)}));`, args,
+    script: `const done = arguments[arguments.length - 1]; Promise.resolve().then(async () => { ${script} }).then(value => done({ok:true,value}), error => done({ok:false,error:String(error) + (error?.stack ? "\\n" + error.stack : "")}));`, args,
   });
   if (!result.ok) throw new Error(result.error);
   return result.value;

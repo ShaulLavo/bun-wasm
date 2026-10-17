@@ -329,5 +329,5 @@ self.onmessage = async ({ data }) => {
     const operation = commands[data.command];
     if (!operation) throw new Error(`Unknown persistence test command ${data.command}`);
     self.postMessage({ id: data.id, value: await operation(data.args) });
-  } catch (error) { self.postMessage({ id: data.id, error: error instanceof Error ? error.stack : String(error) }); }
+  } catch (error) { self.postMessage({ id: data.id, error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error) }); }
 };
