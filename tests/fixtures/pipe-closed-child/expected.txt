@@ -1,6 +1,12 @@
-closed child stdout false 1
+closed child stdout false 141
 closed child stdout true 42
-closed child stderr false 1
+closed child stdout callback 42
+closed child stdout trycatch 42
+closed child stdout signal 42
+closed child stderr false 141
 closed child stderr true 42
+closed child stderr callback 42
+closed child stderr trycatch 42
+closed child stderr signal 42
 closed inherited child stdout 42
 closed inherited child stderr 42

@@ -121,9 +121,17 @@ impl Net {
         self.notify.clone()
     }
 
+    fn require_handle(&self) -> Result<(), ErrorInfo> {
+        if self.next_handle >= crate::process::FIRST_HANDLE {
+            return Err(ErrorInfo::new("Error", "bun-wasm network handle space exhausted", Some("EAGAIN")));
+        }
+        Ok(())
+    }
+
     fn insert(&mut self, handle: Handle) -> i32 {
+        // Callers preflight before starting I/O or consuming an accepted socket.
+        debug_assert!(self.next_handle < crate::process::FIRST_HANDLE);
         let id = self.next_handle;
-        // Handles are never reused; i32 overflow after 2^31 handles is not a concern.
         self.next_handle += 1;
         self.handles.insert(id, handle);
         id
@@ -154,6 +162,7 @@ impl Net {
     }
 
     pub fn fetch(&mut self, meta: &[u8], body: &[u8]) -> i32 {
+        if let Err(error) = self.require_handle() { return self.fail(error); }
         match fetch::Fetch::start(&self.clients, meta, body, self.notify.clone()) {
             Ok(request) => self.insert(Handle::Fetch(request)),
             Err(error) => self.fail(error),
@@ -197,6 +206,7 @@ impl Net {
     }
 
     pub fn listen(&mut self, host: &str, port: i32) -> i32 {
+        if let Err(error) = self.require_handle() { return self.fail(error); }
         match tcp::Listener::bind(host, port, self.notify.clone()) {
             Ok(listener) => self.insert(Handle::Listener(listener)),
             Err(error) => self.fail(error),
@@ -212,11 +222,12 @@ impl Net {
     }
 
     pub fn accept(&mut self, handle: i32) -> i32 {
-        let conn = match self.handles.get(&handle) {
-            Some(Handle::Listener(listener)) => listener.accept(),
+        let listener = match self.handles.get(&handle) {
+            Some(Handle::Listener(listener)) => listener,
             _ => return BADF,
         };
-        match conn {
+        if let Err(error) = self.require_handle() { return self.fail(error); }
+        match listener.accept() {
             Some(conn) => self.insert(Handle::Conn(conn)),
             None => AGAIN,
         }
@@ -242,6 +253,7 @@ impl Net {
         if !(0..=65535).contains(&port) {
             return self.fail(ErrorInfo::new("RangeError", format!("Port should be >= 0 and < 65536. Received {port}."), Some("ERR_SOCKET_BAD_PORT")));
         }
+        if let Err(error) = self.require_handle() { return self.fail(error); }
         let conn = tcp::Conn::connect(host.to_string(), port as u16, self.notify.clone());
         self.insert(Handle::Conn(conn))
     }
