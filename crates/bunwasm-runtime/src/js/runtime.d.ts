@@ -12,7 +12,30 @@ declare namespace BunWasm {
     readonly native: Native;
     require(name: "path"): { resolve(...paths: string[]): string };
   }
+  type EventListener = (...args: unknown[]) => void;
+  interface NodeEmitter {
+    on(this: object, event: string | symbol, listener: EventListener): unknown;
+    once(this: object, event: string | symbol, listener: EventListener): unknown;
+    prependListener(this: object, event: string | symbol, listener: EventListener): unknown;
+    prependOnceListener(this: object, event: string | symbol, listener: EventListener): unknown;
+    removeListener(this: object, event: string | symbol, listener: EventListener): unknown;
+    removeAllListeners(this: object, event?: string | symbol): unknown;
+    emit(this: object, event: string | symbol, ...args: unknown[]): boolean;
+    listenerCount(this: object, event: string | symbol): number;
+    listeners(this: object, event: string | symbol): EventListener[];
+    rawListeners(this: object, event: string | symbol): EventListener[];
+    eventNames(this: object): (string | symbol)[];
+    getMaxListeners(this: object): number;
+    setMaxListeners(this: object, count: number): unknown;
+  }
+  interface Internal {
+    require(name: "events"): { call(target: object): void; prototype: NodeEmitter };
+    require(name: "structured_clone"): { structuredClone(value: unknown, options?: unknown): unknown };
+    messagePortRefs: number;
+    isMarkedAsUntransferable?: (value: unknown) => boolean;
+  }
 }
 
 declare const process: { cwd(): string };
 declare const Buffer: unknown;
+declare function setImmediate(callback: () => void): unknown;
