@@ -23,7 +23,7 @@
   };
   const nodeErrnos: Record<string, number> = {
     EPERM: -1, ENOENT: -2, ESRCH: -3, EINTR: -4, EIO: -5, E2BIG: -7, EBADF: -9, ECHILD: -10, EAGAIN: -11,
-    ENOMEM: -12, EACCES: -13, EFAULT: -14, EINVAL: -22, EMFILE: -24, EPIPE: -32, ENOSYS: -38,
+    ENOMEM: -12, EACCES: -13, EFAULT: -14, EINVAL: -22, EMFILE: -24, EPIPE: -32, ENOSYS: -38, ENOTDIR: -20,
   };
   const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -196,6 +196,19 @@
     return { meta, options, input };
   }
 
+  // The process service starts children asynchronously, so a bad cwd would only show up as an exit
+  // status. Like POSIX spawn, report it as the spawn error, before any descriptor or child exists.
+  function checkCwd({ executable, cwd }: SpawnMeta) {
+    let code = "";
+    try {
+      if ((native.stat(cwd, false).mode & 0o170000) !== 0o040000) code = "ENOTDIR";
+    } catch (error) {
+      code = (error as { code?: string }).code || "EIO";
+    }
+    if (!code) return;
+    throw Object.assign(new Error(`spawn ${executable} ${code}`), { code, errno: nodeErrnos[code], syscall: "spawn", path: executable });
+  }
+
   // Every descriptor the call creates is released again if the spawn fails. Child ends are
   // closed here once procSpawn has taken its own references, so the child sees EOF or EPIPE
   // as soon as the last parent copy goes.
@@ -203,6 +216,7 @@
     const spec = normalize(cmd, options, sync);
     if (spec.options.signal && spec.options.signal.aborted) throw spec.options.signal.reason;
     if (spec.options.killSignal !== undefined) signalNumber(spec.options.killSignal);
+    checkCwd(spec.meta);
     const held = new Set<number>();
     const release = (fd: number) => { if (held.delete(fd)) native.procClose(fd); };
     const pipe = (): [number, number] => {

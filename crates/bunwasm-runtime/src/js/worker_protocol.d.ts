@@ -48,6 +48,8 @@ declare namespace BunWasm {
     execPath: string;
     exitCode?: number;
     cwd(): string;
+    /** Node-style stat record; throws a system error (code ENOENT, ...). */
+    stat(path: string, lstat: boolean): { mode: number };
     exit(code?: number): never;
     on(event: string, callback: EventListener): unknown;
   }
