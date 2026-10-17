@@ -11,9 +11,11 @@ if [[ "$phase" != --browser ]]; then
   bun test ../scripts/runtime-emission.test.ts ../scripts/runtime-types.test.ts ../scripts/runtime-signal-dispatch.test.ts ../scripts/worker-codec.test.ts ../scripts/worker-selectors.test.ts ../scripts/worker-outcome.test.ts
   bun install --cwd ../runtime --frozen-lockfile
   bun install --cwd ../sandbox --frozen-lockfile
+  bun run --cwd ../runtime build
+  bun test ../scripts/browser-build.test.ts ../scripts/runtime-installed.test.ts
   bun run test
   bun test ../runtime/tests ../scripts/runtime-size.test.ts
-  PYTHONDONTWRITEBYTECODE=1 python3 ../scripts/test-bun-suite.py ReportTests.test_browser_provenance_hashes_runtime_core
+  PYTHONDONTWRITEBYTECODE=1 python3 ../scripts/test-bun-suite.py ProvenanceTests
   bun run check
   bun x tsc -p tests/engine-interruption.tsconfig.json
   bun run --cwd ../runtime check
