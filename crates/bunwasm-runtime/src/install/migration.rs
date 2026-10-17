@@ -17,6 +17,9 @@ pub fn read(manifest: &Value, parser: &dyn Transpiler, registry: &str) -> Result
     {
         return Ok(None);
     }
+    reject_selection_config(manifest)?;
+    let registry = clean_registry(registry)?;
+    let registry = registry.as_str();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let members = local::workspaces(&cwd, manifest, parser)?;
     let mut workspaces = json!({"": workspace_meta(manifest, true)});
@@ -38,6 +41,8 @@ pub fn read(manifest: &Value, parser: &dyn Transpiler, registry: &str) -> Result
     let source = if Path::new("package-lock.json").exists() {
         npm(
             &io::read(Path::new("package-lock.json"), "JSON", parser)?,
+            &members,
+            registry,
             &mut packages,
         )?;
         "package-lock.json"
@@ -102,15 +107,20 @@ pub fn workspace_meta(manifest: &Value, root: bool) -> Value {
     meta
 }
 
-fn record(name: &str, meta: &Value) -> Result<Value> {
+fn record(name: &str, meta: &Value, registry: &str) -> Result<Value> {
     validate_ranges(meta, false)?;
     let name = meta["name"].as_str().unwrap_or(name);
-    resolve::valid_name(name)?;
+    resolve::valid_name(name).map_err(|_| "Invalid migrated package name")?;
     let version = meta["version"]
         .as_str()
         .ok_or("Migrated package has no version")?;
-    if version.contains(':') || version.contains('/') {
-        return Err(format!("Unsupported migrated resolution: {name}@{version}"));
+    if !exact_version(version) {
+        return Err("Invalid migrated package version".into());
+    }
+    if !meta["resolved"].is_null() && !meta["resolved"].is_string()
+        || !meta["integrity"].is_null() && !meta["integrity"].is_string()
+    {
+        return Err("Invalid migrated source metadata".into());
     }
     let resolved = meta["resolved"].as_str().unwrap_or("");
     let (tarball, fragment) = resolved.split_once('#').unwrap_or((resolved, ""));
@@ -119,23 +129,8 @@ fn record(name: &str, meta: &Value) -> Result<Value> {
     } else {
         tarball
     };
-    let standard = tarball.is_empty()
-        || [
-            "https://registry.npmjs.org/",
-            "https://registry.yarnpkg.com/",
-        ]
-        .iter()
-        .any(|origin| {
-            tarball.strip_prefix(origin).is_some_and(|path| {
-                path == format!(
-                    "{name}/-/{}-{version}.tgz",
-                    name.rsplit('/').next().unwrap()
-                )
-            })
-        });
-    if !standard && !tarball.starts_with("https://") && !tarball.starts_with("http://") {
-        return Err(format!("Unsupported migrated resolution: {resolved}"));
-    }
+    let tarball = clean_transport(tarball)?;
+    let standard = transport(name, version, &tarball)?.is_empty();
     let integrity = match meta["integrity"].as_str() {
         Some(value) if !value.is_empty() => value.to_owned(),
         _ if fragment.len() == 40 && fragment.bytes().all(|c| c.is_ascii_hexdigit()) => {
@@ -147,36 +142,74 @@ fn record(name: &str, meta: &Value) -> Result<Value> {
         }
         _ => String::new(),
     };
+    if !supported_integrity(&integrity)
+        && !tarball.is_empty()
+        && !under_registry(&tarball, registry)
+        && !under_registry(&tarball, "https://registry.npmjs.org")
+        && !under_registry(&tarball, "https://registry.yarnpkg.com")
+    {
+        return Err("InvalidNPMLockfile".into());
+    }
     let info = package_meta(meta);
     Ok(json!([
         format!("{name}@{version}"),
-        if standard { "" } else { tarball },
+        if standard { "" } else { &tarball },
         info,
         integrity
     ]))
 }
 
-fn npm_row(path: &str, meta: &Value, packages: &mut BTreeMap<String, Value>) -> Result<()> {
+fn npm_row(
+    path: &str,
+    meta: &Value,
+    workspace_paths: &BTreeMap<String, String>,
+    registry: &str,
+    packages: &mut BTreeMap<String, Value>,
+) -> Result<()> {
+    if !meta.is_object() {
+        return Err("InvalidNPMLockfile".into());
+    }
+    for field in [
+        "dependencies",
+        "optionalDependencies",
+        "peerDependencies",
+        "devDependencies",
+    ] {
+        validate_dependency_map(&meta[field], false).map_err(|_| "InvalidNPMLockfile")?;
+    }
     if meta["link"] == true {
+        let target = meta["resolved"].as_str().ok_or("InvalidNPMLockfile")?;
+        if !workspace_paths.contains_key(target) {
+            return Err("Unsupported migrated npm link target".into());
+        }
         return Ok(());
     }
-    let Some(path) = path.strip_prefix("node_modules/") else {
+    if path.is_empty() || workspace_paths.contains_key(path) {
         return Ok(());
+    }
+    let (prefix, path) = match path.strip_prefix("node_modules/") {
+        Some(path) => (String::new(), path),
+        None => {
+            let (workspace, tail) = path
+                .split_once("/node_modules/")
+                .ok_or("InvalidNPMLockfile")?;
+            let name = workspace_paths.get(workspace).ok_or("InvalidNPMLockfile")?;
+            (format!("{name}/"), tail)
+        }
     };
     let name = path.rsplit("node_modules/").next().unwrap();
+    let key = format!("{prefix}{}", path.replace("/node_modules/", "/"));
     packages.insert(
-        path.replace("/node_modules/", "/"),
-        record(name, &npm_bin(name, meta))?,
+        key,
+        record(name, &npm_bin(name, meta), registry).map_err(|error| {
+            if error == "Invalid migrated package version" {
+                "InvalidNPMLockfile".into()
+            } else {
+                error
+            }
+        })?,
     );
     Ok(())
-}
-
-fn npm_tree_meta(meta: &Value) -> Value {
-    let mut value = meta.clone();
-    if meta["requires"].is_object() {
-        value["dependencies"] = meta["requires"].clone();
-    }
-    value
 }
 
 fn npm_bin(name: &str, meta: &Value) -> Value {
@@ -193,30 +226,41 @@ fn npm_bin(name: &str, meta: &Value) -> Value {
     meta
 }
 
-fn npm(source: &Value, packages: &mut BTreeMap<String, Value>) -> Result<()> {
-    if let Some(rows) = source["packages"].as_object() {
-        for (path, meta) in rows {
-            npm_row(path, meta, packages)?;
-        }
-        return Ok(());
+fn npm(
+    source: &Value,
+    members: &BTreeMap<String, local::Local>,
+    registry: &str,
+    packages: &mut BTreeMap<String, Value>,
+) -> Result<()> {
+    let version = source["lockfileVersion"]
+        .as_u64()
+        .ok_or("InvalidNPMLockfile")?;
+    if !(2..=4).contains(&version) {
+        return Err(format!(
+            "package-lock.json is lockfileVersion {version}, which bun cannot migrate\nnote: npm install --package-lock-only --lockfile-version=3"
+        ));
     }
-    let mut pending = VecDeque::from([(String::new(), &source["dependencies"])]);
-    while let Some((parent, deps)) = pending.pop_front() {
-        let Some(deps) = deps.as_object() else {
-            continue;
-        };
-        for (name, meta) in deps {
-            let key = if parent.is_empty() {
-                name.clone()
-            } else {
-                format!("{parent}/{name}")
-            };
-            packages.insert(
-                key.clone(),
-                record(name, &npm_bin(name, &npm_tree_meta(meta)))?,
-            );
-            pending.push_back((key, &meta["dependencies"]));
-        }
+    let rows = source["packages"].as_object().ok_or("InvalidNPMLockfile")?;
+    if !rows.get("").is_some_and(Value::is_object) {
+        return Err("InvalidNPMLockfile".into());
+    }
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let paths = members
+        .iter()
+        .map(|(name, member)| {
+            (
+                member
+                    .path
+                    .strip_prefix(&cwd)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                name.clone(),
+            )
+        })
+        .collect();
+    for (path, meta) in rows {
+        npm_row(path, meta, &paths, registry, packages)?;
     }
     Ok(())
 }
@@ -232,7 +276,10 @@ fn npm_range(range: &str) -> String {
 }
 
 fn yarn_record(selector: &str, value: &Value, registry: &str) -> Result<Option<(String, Value)>> {
-    let (name, range) = resolve::spec(selector)?;
+    let (name, range) = resolve::spec(selector).map_err(|_| "Invalid yarn.lock descriptor")?;
+    for field in ["dependencies", "optionalDependencies", "peerDependencies"] {
+        validate_dependency_map(&value[field], false)?;
+    }
     if range.starts_with("workspace:") {
         return Ok(None);
     }
@@ -244,7 +291,10 @@ fn yarn_record(selector: &str, value: &Value, registry: &str) -> Result<Option<(
     if let Some(resolution) = resolution {
         let (target, version) = resolution
             .split_once("@npm:")
-            .ok_or_else(|| format!("Unsupported migrated resolution: {resolution}"))?;
+            .ok_or("Unsupported migrated resolution")?;
+        if !exact_version(version) {
+            return Err("yarn.lock entry has an invalid version".into());
+        }
         meta["name"] = target.into();
         meta["version"] = version.into();
         meta["resolved"] = format!(
@@ -253,10 +303,36 @@ fn yarn_record(selector: &str, value: &Value, registry: &str) -> Result<Option<(
         )
         .into();
     } else if let Some(alias) = range.strip_prefix("npm:") {
-        meta["name"] = resolve::spec(alias)?.0.into();
+        meta["name"] = resolve::spec(alias)
+            .map_err(|_| "Unsupported migrated resolution")?
+            .0
+            .into();
     }
     for field in ["dependencies", "optionalDependencies", "peerDependencies"] {
         normalize_yarn_dependencies(&mut meta[field]);
+    }
+    let optional: Vec<_> = meta["dependenciesMeta"]
+        .as_object()
+        .into_iter()
+        .flat_map(|deps| deps.iter())
+        .filter(|(_, info)| info["optional"] == true)
+        .map(|(name, _)| name.clone())
+        .collect();
+    for name in optional {
+        let Some(range) = meta["dependencies"].get(&name).cloned() else {
+            continue;
+        };
+        meta["optionalDependencies"][&name] = range;
+        meta["dependencies"]
+            .as_object_mut()
+            .unwrap()
+            .shift_remove(&name);
+    }
+    if meta["dependencies"]
+        .as_object()
+        .is_some_and(|deps| deps.is_empty())
+    {
+        meta.as_object_mut().unwrap().shift_remove("dependencies");
     }
     Ok(Some((format!("{logical}@{}", npm_range(&range)), meta)))
 }
@@ -268,9 +344,31 @@ fn yarn(
     packages: &mut BTreeMap<String, Value>,
 ) -> Result<()> {
     let text = fs::read_to_string("yarn.lock").map_err(|e| e.to_string())?;
-    let source = if text.contains("__metadata:") {
-        io::parsed(text.as_bytes(), "YAML", parser)?
+    let berry = text.starts_with("__metadata:") || text.contains("\n__metadata:");
+    let config = yarn_config(parser)?;
+    let source = if berry {
+        let source = io::parsed(text.as_bytes(), "YAML", parser)?;
+        let version = source["__metadata"]["version"]
+            .as_u64()
+            .or_else(|| source["__metadata"]["version"].as_str()?.parse().ok());
+        if !version.is_some_and(|version| (4..=10).contains(&version)) {
+            return Err("yarn.lock version is not supported".into());
+        }
+        let rows = source
+            .as_object()
+            .ok_or("yarn.lock must be a YAML mapping")?;
+        if !rows.values().any(|row| {
+            row["resolution"]
+                .as_str()
+                .is_some_and(|value| value.ends_with("@workspace:."))
+        }) {
+            return Err("yarn.lock has no root workspace entry (\"@workspace:.\")".into());
+        }
+        source
     } else {
+        if !text.contains("# yarn lockfile v1") {
+            return Err("UnsupportedYarnLockfileVersion".into());
+        }
         classic(&text, parser)?
     };
     let mut records = BTreeMap::new();
@@ -278,11 +376,27 @@ fn yarn(
         if selectors == "__metadata" {
             continue;
         }
+        if !value.is_object() || berry && !value["resolution"].is_string() {
+            return Err("Invalid yarn.lock entry mapping or resolution".into());
+        }
         for selector in selectors.split(", ") {
-            records.extend(yarn_record(selector, value, registry)?);
+            let (name, range) =
+                resolve::spec(selector).map_err(|_| "Invalid yarn.lock descriptor")?;
+            let registry = if berry && !range.starts_with("workspace:") {
+                yarn_registry(&config, &name, registry)?
+            } else {
+                registry.to_owned()
+            };
+            records.extend(yarn_record(selector, value, &registry)?);
         }
     }
-    graph(roots, &records, packages)
+    graph(
+        roots,
+        &records,
+        packages,
+        registry,
+        config["enableTransparentWorkspaces"] != false,
+    )
 }
 
 fn normalize_yarn_dependencies(value: &mut Value) {
@@ -339,6 +453,9 @@ fn pnpm_row(key: &str, value: &Value, snapshot: Option<&Value>, registry: &str) 
         .filter(|(name, _)| !name.is_empty())
         .or_else(|| bare.rsplit_once('/'))
         .ok_or("Invalid pnpm package key")?;
+    if !value.is_object() || !value["resolution"].is_object() || !exact_version(version) {
+        return Err("InvalidPnpmLockfile".into());
+    }
     let mut meta = value.clone();
     meta["name"] = name.into();
     meta["version"] = version.into();
@@ -354,7 +471,7 @@ fn pnpm_row(key: &str, value: &Value, snapshot: Option<&Value>, registry: &str) 
         || version.contains(':')
         || (!source.starts_with("https://") && !source.starts_with("http://"))
     {
-        return Err(format!("Unsupported migrated resolution: {key}"));
+        return Err("Unsupported migrated resolution".into());
     }
     meta["resolved"] = source.into();
     meta["_references"] = json!({});
@@ -368,9 +485,10 @@ fn pnpm_row(key: &str, value: &Value, snapshot: Option<&Value>, registry: &str) 
 }
 
 fn snapshot_field(meta: &mut Value, field: &str, value: &Value) -> Result<()> {
-    let Some(deps) = value.as_object() else {
+    if value.is_null() {
         return Ok(());
-    };
+    }
+    let deps = value.as_object().ok_or("Invalid pnpm dependency mapping")?;
     for (child, reference) in deps {
         let range = pnpm_reference(
             child,
@@ -388,20 +506,57 @@ fn snapshot_field(meta: &mut Value, field: &str, value: &Value) -> Result<()> {
 }
 
 fn pnpm_importer(manifest: &Value, importer: &Value) -> Result<Value> {
-    let mut meta = manifest.clone();
+    let mut normalized = manifest.clone();
+    remove_optional_duplicates(&mut normalized);
+    let mut meta = normalized.clone();
     for field in ["dependencies", "devDependencies", "optionalDependencies"] {
-        let Some(deps) = importer[field].as_object() else {
-            continue;
-        };
-        for (name, value) in deps {
-            let reference = value["version"]
-                .as_str()
-                .or_else(|| value.as_str())
-                .ok_or("Invalid pnpm dependency version")?;
-            meta[field][name] = pnpm_reference(name, reference).into();
-        }
+        pnpm_importer_field(&mut meta, &normalized, importer, field)?;
     }
     Ok(meta)
+}
+
+fn pnpm_importer_field(
+    meta: &mut Value,
+    manifest: &Value,
+    importer: &Value,
+    field: &str,
+) -> Result<()> {
+    if importer[field].is_null() && manifest[field].is_null() {
+        return Ok(());
+    }
+    let deps = importer[field]
+        .as_object()
+        .ok_or("Invalid pnpm importer dependency mapping")?;
+    if manifest[field]
+        .as_object()
+        .is_some_and(|expected| expected.keys().any(|name| !deps.contains_key(name)))
+    {
+        return Err("pnpm-lock.yaml importer specifier does not match package.json".into());
+    }
+    for (name, value) in deps {
+        let specifier = value["specifier"]
+            .as_str()
+            .or_else(|| importer["specifiers"][name].as_str());
+        let requested = manifest[field][name].as_str().or_else(|| {
+            (field == "dependencies")
+                .then(|| manifest["peerDependencies"][name].as_str())
+                .flatten()
+        });
+        if specifier != requested {
+            return Err("pnpm-lock.yaml importer specifier does not match package.json".into());
+        }
+        let reference = value["version"]
+            .as_str()
+            .or_else(|| value.as_str())
+            .ok_or("Invalid pnpm dependency version")?;
+        validate_pnpm_selection(
+            name,
+            requested.ok_or("Invalid pnpm importer specifier")?,
+            reference,
+        )?;
+        meta[field][name] = pnpm_reference(name, reference).into();
+    }
+    Ok(())
 }
 
 fn pnpm(
@@ -411,6 +566,22 @@ fn pnpm(
     registry: &str,
     packages: &mut BTreeMap<String, Value>,
 ) -> Result<()> {
+    let version = source["lockfileVersion"]
+        .as_f64()
+        .or_else(|| source["lockfileVersion"].as_str()?.parse().ok())
+        .ok_or("pnpm-lock.yaml missing or invalid 'lockfileVersion' field")?;
+    if version < 7.0 {
+        return Err(format!(
+            "pnpm-lock.yaml is lockfileVersion {version}, which bun cannot migrate"
+        ));
+    }
+    reject_selection_config(source)?;
+    if !source["importers"].is_object()
+        || (!source["packages"].is_null() && !source["packages"].is_object())
+        || (!source["snapshots"].is_null() && !source["snapshots"].is_object())
+    {
+        return Err("InvalidPnpmLockfile".into());
+    }
     let mut records = BTreeMap::new();
     if let Some(rows) = source["packages"].as_object() {
         for (key, value) in rows {
@@ -427,10 +598,13 @@ fn pnpm(
     }
     if let Some(snapshots) = source["snapshots"].as_object() {
         for (key, snapshot) in snapshots {
+            if !snapshot.is_object() {
+                return Err("InvalidPnpmLockfile".into());
+            }
             let base = key.split('(').next().unwrap();
             let value = source["packages"]
                 .get(base)
-                .ok_or_else(|| format!("Missing pnpm package: {base}"))?;
+                .ok_or("Missing pnpm package entry")?;
             records.insert(key.clone(), pnpm_row(key, value, Some(snapshot), registry)?);
         }
     }
@@ -446,10 +620,14 @@ fn pnpm(
                 .into_owned(),
             None => ".".into(),
         };
-        let importer = source["importers"].get(&importer).unwrap_or(source);
-        selected.push((parent.clone(), pnpm_importer(manifest, importer)?));
+        let source_importer = source["importers"]
+            .get(&importer)
+            .ok_or("Missing pnpm importer")?;
+        let mut meta = pnpm_importer(manifest, source_importer)?;
+        validate_pnpm_links(&mut meta, manifest, &cwd.join(&importer), members)?;
+        selected.push((parent.clone(), meta));
     }
-    graph(&selected, &records, packages)
+    graph(&selected, &records, packages, registry, true)
 }
 
 fn find_record<'a>(
@@ -463,20 +641,14 @@ fn find_record<'a>(
     records
         .get(&format!("{name}@{range}"))
         .or_else(|| records.get(&key))
-        .or_else(|| {
-            records.iter().find_map(|(key, value)| {
-                let (candidate, _) = key.split('(').next()?.rsplit_once('@')?;
-                ((candidate == name || value["name"].as_str() == Some(name))
-                    && resolve::matches(value["version"].as_str()?, range))
-                .then_some(value)
-            })
-        })
 }
 
 fn graph(
     roots: &[(Vec<String>, Value)],
     records: &BTreeMap<String, Value>,
     packages: &mut BTreeMap<String, Value>,
+    registry: &str,
+    transparent_workspaces: bool,
 ) -> Result<()> {
     let mut pending = VecDeque::new();
     for (parent, manifest) in roots {
@@ -490,19 +662,21 @@ fn graph(
         if count > 10000 {
             return Err("Migrated dependency graph exceeds install limit".into());
         }
-        if range.starts_with("workspace:") || range.starts_with("link:") {
+        if workspace_selected(roots, &name, &range, transparent_workspaces)? {
             continue;
         }
         if peer_satisfied(packages, &name, peer.as_deref()) {
             continue;
         }
-        let selected = find_record(records, &name, &range)
-            .ok_or_else(|| format!("Missing migrated resolution for {name}@{range}"))?;
         let meta = peer
             .as_ref()
             .and_then(|range| peer_record(records, &name, range))
-            .unwrap_or(selected);
-        let row = record(&name, meta)?;
+            .or_else(|| find_record(records, &name, &range))
+            .ok_or_else(|| format!("Missing migrated resolution for {name}"))?;
+        let row = record(&name, meta, registry)?;
+        if visible_row(packages, &parent, &name) == Some(&row) {
+            continue;
+        }
         let mut chain = parent;
         chain.push(name.clone());
         let key = if packages.get(&name).is_none_or(|old| old == &row) {
@@ -513,7 +687,8 @@ fn graph(
         if packages.get(&key) == Some(&row) {
             continue;
         }
-        packages.insert(key.clone(), row);
+        let placed_chain = super::chain_from_lock(&key, &row)?;
+        packages.insert(key, row);
         let children = graph_children(meta)?;
         for (child, (range, _, peer)) in children {
             let requirement = peer.then(|| {
@@ -522,7 +697,7 @@ fn graph(
                     .unwrap_or(&range)
                     .to_owned()
             });
-            pending.push_back((child, range, vec![key.clone()], requirement));
+            pending.push_back((child, range, placed_chain.clone(), requirement));
         }
     }
     Ok(())
@@ -563,17 +738,37 @@ fn normalize_peers(meta: &mut Value) {
 }
 
 fn validate_ranges(meta: &Value, include_dev: bool) -> Result<()> {
+    for field in [
+        "dependencies",
+        "optionalDependencies",
+        "peerDependencies",
+        "devDependencies",
+    ] {
+        validate_dependency_map(&meta[field], field == "devDependencies" && !include_dev)?;
+    }
     for (name, (range, _, _)) in resolve::dependencies(meta, false, include_dev) {
-        if range.starts_with("workspace:") {
+        if let Some(reference) = range
+            .strip_prefix("workspace:")
+            .or_else(|| range.strip_prefix("link:"))
+        {
+            if reference.contains(':')
+                || reference.contains('@')
+                || reference.contains('?')
+                || reference.contains('#')
+            {
+                return Err(format!("Unsupported migrated resolution for {name}"));
+            }
             continue;
         }
         let version = if let Some(alias) = range.strip_prefix("npm:") {
-            resolve::spec(alias)?.1
+            resolve::spec(alias)
+                .map_err(|_| "Unsupported migrated resolution")?
+                .1
         } else {
             range.clone()
         };
         if version.contains(':') || version.contains('/') {
-            return Err(format!("Unsupported migrated resolution: {name}@{range}"));
+            return Err(format!("Unsupported migrated resolution for {name}"));
         }
     }
     Ok(())
@@ -598,7 +793,7 @@ fn graph_children(meta: &Value) -> Result<BTreeMap<String, (String, bool, bool)>
                 child.clone(),
                 (
                     range.as_str().ok_or("Invalid snapshot reference")?.into(),
-                    false,
+                    meta["optionalDependencies"].get(child).is_some(),
                     meta["peerDependencies"].get(child).is_some(),
                 ),
             );
@@ -684,4 +879,348 @@ fn peer_record<'a>(
         })
         .max_by(|(left, _), (right, _)| resolve::order(left, right))
         .map(|(_, value)| value)
+}
+
+fn exact_version(version: &str) -> bool {
+    let bytes = version.as_bytes();
+    bun_semver::Version::parse_exact(bun_semver::SlicedString::init(bytes, bytes)).is_some()
+}
+
+fn validate_dependency_map(value: &Value, skip: bool) -> Result<()> {
+    if skip || value.is_null() {
+        return Ok(());
+    }
+    let deps = value
+        .as_object()
+        .ok_or("Invalid dependency mapping in migrated lockfile")?;
+    for (name, range) in deps {
+        resolve::valid_name(name).map_err(|_| "Invalid migrated dependency name")?;
+        if !range.is_string() {
+            return Err("Invalid dependency value in migrated lockfile".into());
+        }
+    }
+    Ok(())
+}
+
+fn reject_selection_config(value: &Value) -> Result<()> {
+    for field in [
+        "overrides",
+        "resolutions",
+        "patchedDependencies",
+        "packageExtensions",
+    ] {
+        if value[field]
+            .as_object()
+            .is_some_and(|rules| rules.is_empty())
+            || value[field].is_null()
+        {
+            continue;
+        }
+        return Err(format!("Migration of {field} is not supported"));
+    }
+    if !value["pnpm"].is_null() {
+        reject_selection_config(&value["pnpm"])?;
+    }
+    Ok(())
+}
+
+fn clean_registry(registry: &str) -> Result<String> {
+    let url = clean_transport(registry)?;
+    if url.contains('?') || url.contains('#') {
+        return Err("Invalid registry URL".into());
+    }
+    if url.is_empty() {
+        return Err("Invalid registry URL".into());
+    }
+    Ok(url.trim_end_matches('/').into())
+}
+
+fn clean_transport(value: &str) -> Result<String> {
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    if [":_authToken=", ":_auth=", ":username=", ":_password="]
+        .iter()
+        .any(|key| value.contains(key))
+    {
+        return Err("Embedded registry authentication is not supported during migration".into());
+    }
+    let mut url = url::Url::parse(value).map_err(|_| "Unsupported migrated resolution")?;
+    if !["https", "http"].contains(&url.scheme()) || url.host_str().is_none() {
+        return Err("Unsupported migrated resolution".into());
+    }
+    if url.query_pairs().any(|(key, _)| {
+        matches!(
+            key.to_ascii_lowercase().as_str(),
+            "token"
+                | "auth"
+                | "_auth"
+                | "_authtoken"
+                | "password"
+                | "_password"
+                | "authorization"
+                | "access_token"
+        )
+    }) {
+        return Err("Credential-bearing URL query is not supported during migration".into());
+    }
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    Ok(url.into())
+}
+
+pub(super) fn transport(name: &str, version: &str, value: &str) -> Result<String> {
+    let clean = clean_transport(value)?;
+    let suffix = format!(
+        "{name}/-/{}-{version}.tgz",
+        name.rsplit('/').next().unwrap()
+    );
+    if [
+        "https://registry.npmjs.org/",
+        "https://registry.yarnpkg.com/",
+    ]
+    .iter()
+    .any(|origin| clean.strip_prefix(origin) == Some(suffix.as_str()))
+    {
+        return Ok(String::new());
+    }
+    Ok(clean)
+}
+
+fn under_registry(value: &str, registry: &str) -> bool {
+    let Ok(value) = url::Url::parse(value) else {
+        return false;
+    };
+    let Ok(registry) = url::Url::parse(registry) else {
+        return false;
+    };
+    value.origin() == registry.origin()
+        && value
+            .path()
+            .starts_with(&format!("{}/", registry.path().trim_end_matches('/')))
+}
+
+fn visible_row<'a>(
+    packages: &'a BTreeMap<String, Value>,
+    parent: &[String],
+    name: &str,
+) -> Option<&'a Value> {
+    for level in (0..=parent.len()).rev() {
+        let mut chain = parent[..level].to_vec();
+        chain.push(name.into());
+        if let Some(row) = packages.get(&chain.join("/")) {
+            return Some(row);
+        }
+    }
+    None
+}
+
+fn workspace_selected(
+    roots: &[(Vec<String>, Value)],
+    name: &str,
+    range: &str,
+    transparent: bool,
+) -> Result<bool> {
+    let workspace = roots
+        .iter()
+        .find(|(chain, _)| chain.first().is_some_and(|value| value == name));
+    let explicit = range.strip_prefix("workspace:");
+    let Some((_, manifest)) = workspace else {
+        return if explicit.is_some() || range.starts_with("link:") {
+            Err("Workspace link dependencies to non-existent folders aren't supported yet in pnpm-lock.yaml migration".into())
+        } else {
+            Ok(false)
+        };
+    };
+    let version = manifest["version"].as_str().unwrap_or("0.0.0");
+    let requested = explicit.unwrap_or(range);
+    let matches = ["*", "^", "~"].contains(&requested) || resolve::matches(version, requested);
+    if explicit.is_some() && !matches {
+        return Err(format!(
+            "Workspace {name} does not satisfy the migrated reference"
+        ));
+    }
+    Ok(matches && (explicit.is_some() || transparent))
+}
+
+fn validate_pnpm_links(
+    meta: &mut Value,
+    manifest: &Value,
+    importer: &Path,
+    members: &BTreeMap<String, local::Local>,
+) -> Result<()> {
+    for field in ["dependencies", "devDependencies", "optionalDependencies"] {
+        let Some(deps) = meta[field].as_object_mut() else {
+            continue;
+        };
+        for (name, range) in deps {
+            *range = pnpm_link_reference(name, range, &manifest[field][name], importer, members)?;
+        }
+    }
+    Ok(())
+}
+
+fn pnpm_link_reference(
+    name: &str,
+    range: &Value,
+    requested: &Value,
+    importer: &Path,
+    members: &BTreeMap<String, local::Local>,
+) -> Result<Value> {
+    let Some(link) = range.as_str().and_then(|range| range.strip_prefix("link:")) else {
+        return Ok(range.clone());
+    };
+    let target = local::physical(&importer.join(link))?;
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let importer = local::relative(importer, &cwd);
+    let missing = || {
+        format!(
+            "pnpm-lock.yaml has no package entry for dependency '{name}' of importer '{}'",
+            importer.display()
+        )
+    };
+    if !target.is_dir() {
+        return Err(missing());
+    }
+    let member = members
+        .get(name)
+        .filter(|member| member.path == target)
+        .ok_or_else(missing)?;
+    let version = member.meta["version"].as_str().unwrap_or("0.0.0");
+    let requested = requested.as_str().unwrap_or("*");
+    let requested = requested.strip_prefix("workspace:").unwrap_or(requested);
+    if !["*", "^", "~"].contains(&requested)
+        && !requested.starts_with("link:")
+        && !resolve::matches(version, requested)
+    {
+        return Err(
+            "pnpm workspace selected version does not satisfy package.json specifier".into(),
+        );
+    }
+    Ok(format!("workspace:{version}").into())
+}
+
+fn yarn_config(parser: &dyn Transpiler) -> Result<Value> {
+    let mut config = json!({});
+    if let Ok(value) = std::env::var("YARN_NPM_REGISTRY_SERVER")
+        && !value.is_empty()
+    {
+        config["npmRegistryServer"] = value.into();
+    }
+    if let Ok(value) = std::env::var("YARN_ENABLE_TRANSPARENT_WORKSPACES") {
+        config["enableTransparentWorkspaces"] = (!["false", "0"].contains(&value.as_str())).into();
+    }
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let filename = std::env::var("YARN_RC_FILENAME").unwrap_or_else(|_| ".yarnrc.yml".into());
+    for directory in cwd.ancestors() {
+        merge_yarn_config(&mut config, &directory.join(&filename), parser)?;
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        merge_yarn_config(&mut config, &Path::new(&home).join(filename), parser)?;
+    }
+    Ok(config)
+}
+
+fn merge_yarn_config(config: &mut Value, path: &Path, parser: &dyn Transpiler) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let source = io::read(path, "YAML", parser).map_err(|_| "Invalid .yarnrc.yml")?;
+    reject_selection_config(&source)?;
+    for field in ["npmRegistryServer", "enableTransparentWorkspaces"] {
+        if config[field].is_null() && !source[field].is_null() {
+            config[field] = source[field].clone();
+        }
+    }
+    let Some(scopes) = source["npmScopes"].as_object() else {
+        return Ok(());
+    };
+    for (name, scope) in scopes {
+        if config["npmScopes"][name].is_null() {
+            config["npmScopes"][name] = scope.clone();
+        }
+    }
+    Ok(())
+}
+
+fn yarn_registry(config: &Value, name: &str, registry: &str) -> Result<String> {
+    let scope = name
+        .strip_prefix('@')
+        .and_then(|name| name.split('/').next());
+    let from_yarn = scope
+        .and_then(|scope| config["npmScopes"][scope]["npmRegistryServer"].as_str())
+        .or_else(|| (scope == Some("jsr")).then_some("https://npm.jsr.io"))
+        .or_else(|| config["npmRegistryServer"].as_str());
+    let Some(from_yarn) = from_yarn else {
+        return Ok(registry.into());
+    };
+    if from_yarn.contains("${") {
+        return Err(format!(
+            "yarn's registry for \"{name}\" uses an environment variable; bun cannot tell if it is the registry bun is configured with"
+        ));
+    }
+    let configured = clean_registry(registry)?;
+    let source = clean_registry(from_yarn)?;
+    let canonical = |url: &str| {
+        if url == "https://registry.yarnpkg.com" {
+            "https://registry.npmjs.org".to_owned()
+        } else {
+            url.to_owned()
+        }
+    };
+    if canonical(&configured) != canonical(&source) {
+        return Err(format!(
+            "yarn fetches \"{name}\" from {source} and bun is configured to fetch it from {configured}; add the registry to bunfig.toml or .npmrc"
+        ));
+    }
+    Ok(configured)
+}
+
+fn supported_integrity(integrity: &str) -> bool {
+    integrity.split_whitespace().any(|part| {
+        let Some((algorithm, digest)) = part.split_once('-') else {
+            return false;
+        };
+        let size = match algorithm {
+            "sha1" => 20,
+            "sha256" => 32,
+            "sha384" => 48,
+            "sha512" => 64,
+            _ => return false,
+        };
+        crate::encoding::base64_decode(digest).len() == size
+    })
+}
+
+fn validate_pnpm_selection(name: &str, requested: &str, reference: &str) -> Result<()> {
+    if reference.starts_with("link:") || requested.starts_with("workspace:") {
+        return Ok(());
+    }
+    let selected = pnpm_reference(name, reference);
+    let selected = selected.split('(').next().unwrap();
+    let version = selected
+        .strip_prefix("npm:")
+        .and_then(|value| value.rsplit_once('@').map(|(_, version)| version))
+        .unwrap_or(selected);
+    let range = match requested.strip_prefix("npm:") {
+        Some(alias) => {
+            resolve::spec(alias)
+                .map_err(|_| "Invalid pnpm importer specifier")?
+                .1
+        }
+        None => requested.to_owned(),
+    };
+    let tag = range
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"-._".contains(&byte))
+        && range
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic);
+    if !exact_version(version) || !tag && !resolve::matches(version, &range) {
+        return Err(
+            "pnpm-lock.yaml selected version does not satisfy package.json specifier".into(),
+        );
+    }
+    Ok(())
 }

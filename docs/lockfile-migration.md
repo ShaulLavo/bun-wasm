@@ -81,3 +81,34 @@ Repeat for `jsc` and `browser`. `MIGRATION_EVIDENCE` retains native/guest locks
 and diagnostics. `MIGRATION_CASES` selects comma-separated fixture names.
 `NATIVE_BUN` selects an existing native reference binary. Every child, namespace,
 replay listener and scratch copy is owned by the test and removed at teardown.
+
+
+## Review regressions
+
+`tests/install/migration-review.ts` checks workspace-nested npm pins, finite nested
+cycles in pnpm and Berry, transparent workspace selection, dangling links, custom
+transports, external integrity requirements, Berry registry configuration,
+selection configuration, optional edges, schema/version validation and credential
+removal. Successful cases compare the complete native lock and run the frozen
+writer. Extraction cases use real archives and matching integrity values, then
+import the installed modules. The npm workspace conflict fixture uses unchanged
+abbrev release archives checked into `tests/install/archives/`.
+
+Run it with the same environment and private loopback namespace as the main
+migration runner. Both registries, every process and all copied projects are
+removed in its cleanup path. Rejected external transports make zero archive
+requests, including during automatic frozen migration.
+
+Overrides, resolutions, patches and package extensions are currently rejected
+before migration. The adapter cannot preserve their selection metadata through
+ordinary installation, so accepting their selected records alone would change
+later installs. This includes parent-specific resolutions with two satisfying
+locked versions. No first-satisfying-record fallback remains.
+
+The pinned native canary has four further differences covered explicitly by the
+regressions. It clears a custom path on the default npm registry, coerces an invalid
+npm selected version to `0.0.0`, accepts a stale pnpm importer specifier, and retains npm transport URL userinfo. The
+adapter preserves the custom path, rejects the inconsistent inputs and removes URL userinfo. These
+outcomes are retained alongside the native bytes rather than reported as exact
+native matches. Unsupported adapter configuration also has an explicit rejection
+assertion even where native Bun supports it.

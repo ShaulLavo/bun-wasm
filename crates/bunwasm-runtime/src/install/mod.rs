@@ -159,7 +159,7 @@ fn execute(command: &str, args: Vec<String>, parser: &dyn Transpiler) -> Result<
             local.meta = manifest.clone();
         }
     }
-    let lock = lockfile(if member.is_some() { &root_manifest } else { &manifest }, &resolver);
+    let lock = lockfile(if member.is_some() { &root_manifest } else { &manifest }, &resolver)?;
     if opts.frozen && !same_lock(&locked, &lock, parser, opts.production)? {
         return Err("lockfile had changes, but lockfile is frozen".into());
     }
@@ -412,7 +412,7 @@ fn same_lock(locked: &Value, text: &str, parser: &dyn Transpiler, production: bo
     Ok(locked["workspaces"] == planned["workspaces"] && packages_match)
 }
 
-fn lockfile(manifest: &Value, resolver: &Resolver) -> String {
+fn lockfile(manifest: &Value, resolver: &Resolver) -> Result<String> {
     let mut workspaces = json!({"": migration::workspace_meta(manifest, true)});
     for member in resolver.workspaces.values() {
         let cwd = std::env::current_dir().unwrap();
@@ -424,7 +424,7 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> String {
         let original = package.source_chain.as_ref().map(|chain| &resolver.locked["packages"][chain.join("/")]);
         let tarball = original.filter(|row| row[0] == format!("{}@{}", package.name, package.version))
             .and_then(|row| row[1].as_str()).unwrap_or(&package.tarball);
-        let tarball = if tarball.starts_with("https://registry.npmjs.org/") { "" } else { tarball };
+        let tarball = migration::transport(&package.name, &package.version, tarball)?;
         let row = if let Some(local) = &package.local {
             let path = local::relative(&local.path, &std::env::current_dir().unwrap());
             let path = if !local.workspace && path.components().next().is_some_and(|part| matches!(part, std::path::Component::Normal(_))) {
@@ -437,7 +437,7 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> String {
         };
         packages.insert(key.clone(), row);
     }
-    write_lock(&json!({"configVersion": resolver.locked["configVersion"].as_u64().unwrap_or(1), "workspaces": workspaces, "packages": packages}))
+    Ok(write_lock(&json!({"configVersion": resolver.locked["configVersion"].as_u64().unwrap_or(1), "workspaces": workspaces, "packages": packages})))
 }
 
 fn write_lock(lock: &Value) -> String {
@@ -461,7 +461,9 @@ fn write_lock(lock: &Value) -> String {
 }
 
 fn write_package_rows(packages: &serde_json::Map<String, Value>, out: &mut String) {
-    for (index, (key, row)) in packages.iter().collect::<std::collections::BTreeMap<_, _>>().into_iter().enumerate() {
+    let mut rows: Vec<_> = packages.iter().collect();
+    rows.sort_by_cached_key(|(key, row)| (chain_from_lock(key, row).map_or(usize::MAX, |chain| chain.len()), (*key).clone()));
+    for (index, (key, row)) in rows.into_iter().enumerate() {
         if index > 0 { out.push('\n'); }
         out.push_str(&format!("    {}: {},\n", json!(key), inline(row)));
     }
