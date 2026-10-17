@@ -373,7 +373,7 @@ async function sendUpdate(path: string, revision: number): Promise<void> {
 
 async function save(path: string, text: string, revision: number): Promise<void> {
   await fs.writeFile(abs(path), text);
-  await fs.flush();
+  await fs.flush(abs(path));
   if (server) await sendUpdate(path, revision);
   else if (run) unsent.set(path, revision);
   else if (revision === editRevision) setSaveState("saved", "ok");

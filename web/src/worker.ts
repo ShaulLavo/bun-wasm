@@ -10,6 +10,7 @@ import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net
 import { Wasi, WasiExit, type Stream } from "@bun-wasm/runtime/core";
 import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
 import type { ProcessExit } from "../../runtime/proc/types.ts";
+import { fatalInterrupt } from "../../runtime/interrupt/check";
 import type { WorkerProcessClient, WorkerProcessMessage, WorkerProcessTransport } from "../../runtime/proc/worker-client";
 import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.ts";
 
@@ -18,6 +19,8 @@ export type Engine = "quickjs" | "jsc" | "browser";
 export interface RunRequest {
   engine: Engine;
   adapter?: "bun" | "preview1";
+  /** Third-party preview1 code rewritten with fatal-only interruption checks. */
+  interruptible?: boolean;
   pid?: number;
   jobId?: number;
   identity?: SharedArrayBuffer;
@@ -33,8 +36,8 @@ export interface RunRequest {
   /** The networking ring (net/ring.ts); null when the page is not cross-origin isolated. */
   net: SharedArrayBuffer | null;
   /**
-   * Browser engine: the Cache Storage cache for this run's ES modules, which the service worker
-   * serves under ./m/ (this worker runs from its ./__bunwasm/ scope). Null: blob URLs, no cycles.
+   * Browser engine: the Cache Storage cache for import cycles, served by the service worker
+   * under ./m/. Acyclic modules use blob URLs. Null disables import cycles.
    */
   moduleCache: string | null;
   /**
@@ -58,12 +61,14 @@ const NativeResponse = Response;
 function moduleStore(cacheName: string) {
   const run = cacheName.replace(/^bunwasm-m-/, "");
   const base = new URL(`./m/${run}/`, self.location.href).href;
-  const cache = caches.open(cacheName);
+  const openCache = caches.open.bind(caches, cacheName);
+  let cache: Promise<Cache> | undefined;
   return {
     url: (key: string) => base + encodeURIComponent(key),
     put: async (url: string, source: string) => {
       const headers = { "content-type": "text/javascript; charset=utf-8" };
-      await (await cache).put(url, new NativeResponse(source, { headers }));
+      const store = await (cache ??= openCache());
+      await store.put(url, new NativeResponse(source, { headers }));
     },
   };
 }
@@ -284,7 +289,7 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
     let instance: WebAssembly.Instance;
     const processImports: Record<string, (...args: number[]) => number | void> = {
       signal: (signal, mode) => subprocess?.signal(signal!, mode!) ?? -38,
-      interrupted: () => subprocess?.signal(0, 0) ?? 0,
+      interrupted: () => req.interruptible ? fatalInterrupt(outcome) : subprocess?.signal(0, 0) ?? 0,
       default_signal: defaultSignal,
     };
     wasi = new Wasi({
@@ -341,6 +346,8 @@ ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
         wait: (ms, word, expected) => { checkActive(); Atomics.wait(word, 0, expected, ms); checkActive(); },
       });
       for (const [name, call] of Object.entries(abi.imports)) {
+        // Injected checks must never dequeue handled signals or replace their trap with an ABI unwind.
+        if (req.interruptible && name === "interrupted") continue;
         processImports[name] = (...args) => { checkActive(); return call(...args); };
       }
     }

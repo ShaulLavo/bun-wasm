@@ -118,9 +118,8 @@ async function cacheIfExpected(key: string, build: string, chunks: Uint8Array<Ar
   await cacheEngine(key, build, new Response(blob, { headers }));
 }
 
-// The browser engine imports program modules from named URLs served by the service worker at
-// ./__bunwasm/ (sw.ts), which is what lets imports form cycles. Workers started from that scope are
-// controlled by it; without it (no service workers, or registration failed) modules use blob URLs.
+// The service worker at ./__bunwasm/ (sw.ts) serves named module URLs for import cycles.
+// Acyclic modules use blob URLs, including when WebKit starts an uncontrolled worker in the scope.
 const MODULE_SCOPE = "./__bunwasm/";
 
 export async function registerModuleScope(): Promise<boolean> {
@@ -233,7 +232,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
     return module;
   };
-  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, { module: moduleFor(options.engine), adapter: options.adapter ?? "bun", engine: options.engine });
+  const rootExecutable = options.adapter === "preview1"
+    ? { module: moduleFor(options.engine), adapter: "preview1" as const, cooperative: true as const }
+    : { module: moduleFor(options.engine), adapter: "bun" as const, engine: options.engine };
+  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, rootExecutable);
   for (const engine of ["quickjs", "jsc", "browser"] as const) subprocess.register(`bun-${engine}`, { module: moduleFor(engine), adapter: "bun", engine });
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
