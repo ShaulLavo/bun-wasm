@@ -2,7 +2,7 @@ import { SharedFilesystem } from "../src/shared-fs";
 import type { Engine, RunRequest } from "../src/worker";
 import { startRun, type Run } from "../src/runner";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
-import { assertCausalIdleWake, assertNativeEngineCompletion, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
+import { assertCausalIdleWake, assertNativeEngineCompletion, engineInterruptionFailure, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 import { measureInterruptionOverhead } from "./engine-interruption-benchmark";
 import { handledSignalGuest, idleSignalGuest } from "./engine-interruption-guests";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
@@ -114,12 +114,18 @@ async function scope(module: WebAssembly.Module, engine: Engine, route: EngineIn
 }
 async function testDefault(module: WebAssembly.Module, engine: Engine, signal: 2 | 15, nestedHandler = false, route: EngineInterruptionRoute = "legacy"): Promise<void> {
   const owned = await scope(module, engine, route);
+  let diagnostics: () => unknown = () => ({ phase: "before guest spawn" });
   try {
     // fd 1 is buffered even through fs.writeSync; fd 2 is unbuffered here.
     const loop = `try { while (true) {} } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
     const child = owned.spawn(nestedHandler
       ? handledSignalGuest(true)
       : `const fs=require('node:fs'); fs.writeSync(2,'ready\\n'); ${loop}`);
+    diagnostics = () => {
+      const worker = guestWorkers.get(child.pid);
+      return { evidence: worker ? snapshotProbe(worker.probe) : null, requestedSignal: Atomics.load(child.requestedSignal, 0),
+        ordinaryStatus: owned.wait(child), stdout: child.stdout, stderr: child.stderr };
+    };
     const worker = await owned.ready(child);
     // Let the synchronous readiness import return before signaling pure-JS work.
     // Default cases never yield; nested cases first finish finite CPU work, then
@@ -159,6 +165,8 @@ async function testDefault(module: WebAssembly.Module, engine: Engine, signal: 2
     checks.push({ engine, route, delivery: route === "legacy" ? "host" : "page-kill",
       name: `${route === "runtimeProcess" ? "runtimeProcess-page-" : ""}${nestedHandler ? "nested-SIGINT-handler-" : ""}default-${signal}-status-${128 + signal}`,
       evidence: snapshotProbe(worker.probe), elapsedMs: performance.now() - started });
+  } catch (error) {
+    throw engineInterruptionFailure(`${engine}/${route} ${nestedHandler ? "nested-handler " : ""}default signal ${signal} proof failed`, error, diagnostics);
   } finally { owned.dispose(); }
 }
 async function testNativeInterrupt(module: WebAssembly.Module, engine: Engine): Promise<void> {
@@ -195,7 +203,7 @@ async function testNativeInterrupt(module: WebAssembly.Module, engine: Engine): 
     // used by runtime error reporting or cleanup after native termination.
     checks.push({ engine, route: "legacy", delivery: "native-callback", name: "native-interrupt-true-unwinds-current-frame", evidence: { ...evidence, outcome: result } });
   } catch (error) {
-    throw new Error(`${engine} native true-return proof failed: ${String(error)}; diagnostics=${JSON.stringify(diagnostics())}`, { cause: error });
+    throw engineInterruptionFailure(`${engine} native true-return proof failed`, error, diagnostics);
   } finally { owned.dispose(); }
 }
 async function testHandled(module: WebAssembly.Module, engine: Engine, route: EngineInterruptionRoute = "legacy"): Promise<void> {

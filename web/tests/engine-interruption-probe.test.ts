@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { WasiExit } from "@bun-wasm/runtime/core";
-import { assertNativeEngineCompletion, observeEngineImports, observeEventLoopWait, observedEngineStart, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
+import { assertNativeEngineCompletion, engineInterruptionFailure, observeEngineImports, observeEventLoopWait, observedEngineStart, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 
 function fixture() {
   const probe = new Int32Array(new SharedArrayBuffer(probeLength * 4));
@@ -12,6 +12,28 @@ function fixture() {
   view.setInt32(packet, 18, true); view.setInt32(packet + 8, 4, true);
   return { probe, memory, requested, pending, view, packet, result };
 }
+test("fatal proof failure retains full probe and process context as diagnostic JSON", () => {
+  const f = fixture(), original = new Error("checkpoint assertion");
+  Atomics.store(f.probe, probeCell.checkpointThrew, 1);
+  Atomics.store(f.probe, probeCell.startLeft, 1);
+  const expected = { evidence: snapshotProbe(f.probe), stdout: "out\n", stderr: "ready\n", requestedSignal: 15, ordinaryStatus: 143 };
+  const failure = engineInterruptionFailure("jsc/legacy default SIGTERM proof failed", original, () => expected);
+  expect(failure.cause).toBe(original);
+  expect(failure.message).toContain("jsc/legacy default SIGTERM proof failed: Error: checkpoint assertion");
+  const context = JSON.parse(failure.message.split("; diagnostics=")[1]!);
+  expect(context).toEqual(expected);
+  expect(Object.keys(context.evidence)).toHaveLength(Object.keys(probeCell).length);
+  expect(context.evidence.checkpointAfterSignal).toBe(0);
+  expect(context.evidence.checkpointThrew).toBe(1);
+  expect(context.evidence.startLeft).toBe(1);
+});
+test("diagnostic collection failure preserves the original proof error", () => {
+  const original = new Error("original proof assertion");
+  const failure = engineInterruptionFailure("proof failed", original, () => { throw new Error("diagnostic read failed"); });
+  expect(failure.cause).toBe(original);
+  expect(failure.message).toContain("original proof assertion");
+  expect(JSON.parse(failure.message.split("; diagnostics=")[1]!)).toEqual({ diagnosticError: "Error: diagnostic read failed" });
+});
 test("mode4 checkpoint observes selected signal and preserves real shared pending bit", () => {
   const f = fixture(); let calls = 0;
   const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
@@ -69,6 +91,53 @@ test("probe preserves the typed host exception and records actual callback unwin
   expect(() => (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toThrow(fatal);
   expect(snapshotProbe(f.probe).checkpointThrew).toBe(1);
   expect(snapshotProbe(f.probe).checkpointReturned).toBe(0);
+});
+test("signal published inside an in-flight mode4 callback is observed at its actual unwind", () => {
+  for (const signal of [2, 15]) {
+    const f = fixture(), fatal = new Error("typed default action");
+    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+      sock_send() { Atomics.store(f.requested, 0, signal); throw fatal; }, fd_write() { return 0; },
+    } };
+    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+    let caught: unknown;
+    try { (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result); }
+    catch (error) { caught = error; }
+    expect(caught).toBe(fatal);
+    const evidence = snapshotProbe(f.probe);
+    expect(evidence.checkpoints).toBe(1);
+    expect(evidence.checkpointAfterSignal).toBe(1);
+    expect(evidence.checkpointSignal).toBe(signal);
+    expect(evidence.checkpointThrew).toBe(1);
+    expect(evidence.checkpointReturned).toBe(0);
+  }
+});
+test("signal present before a throwing checkpoint is counted once, unrelated exceptions do not select one", () => {
+  for (const signal of [0, 15]) {
+    const f = fixture(), fatal = new Error("callback error");
+    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+      sock_send() { throw fatal; }, fd_write() { return 0; },
+    } };
+    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+    Atomics.store(f.requested, 0, signal);
+    expect(() => (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toThrow(fatal);
+    const evidence = snapshotProbe(f.probe);
+    expect(evidence.checkpointAfterSignal).toBe(signal ? 1 : 0);
+    expect(evidence.checkpointSignal).toBe(signal);
+    expect(evidence.checkpointThrew).toBe(1);
+  }
+});
+test("normal checkpoint return does not fabricate a fatal observation from a later signal", () => {
+  const f = fixture();
+  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
+    sock_send() { Atomics.store(f.requested, 0, 15); f.view.setInt32(f.result, 0, true); return 0; }, fd_write() { return 0; },
+  } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  expect((imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toBe(0);
+  const evidence = snapshotProbe(f.probe);
+  expect(evidence.checkpointAfterSignal).toBe(0);
+  expect(evidence.checkpointSignal).toBe(0);
+  expect(evidence.checkpointThrew).toBe(0);
+  expect(evidence.checkpointReturned).toBe(1);
 });
 test("catch/finally writes are visible even when real revoked stdio throws", () => {
   const f = fixture(), fatal = new Error("revoked stdio");

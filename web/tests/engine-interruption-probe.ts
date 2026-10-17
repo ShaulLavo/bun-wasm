@@ -51,6 +51,13 @@ export function snapshotProbe(probe: Int32Array): Record<keyof typeof probeCell,
   return Object.fromEntries(Object.entries(probeCell).map(([key, index]) => [key, Atomics.load(probe, index)])) as Record<keyof typeof probeCell, number>;
 }
 
+export function engineInterruptionFailure(label: string, error: unknown, diagnostics: () => unknown): Error {
+  let context: unknown;
+  try { context = diagnostics(); }
+  catch (diagnosticError) { context = { diagnosticError: String(diagnosticError) }; }
+  return new Error(`${label}: ${String(error)}; diagnostics=${JSON.stringify(context)}`, { cause: error });
+}
+
 /** Decorate only the guest's actual imported WASI functions, preserving their behavior. */
 export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32Array,
   memory: () => WebAssembly.Memory, requestedSignal: Int32Array, signalState: Int32Array, observeCheckpoints = true): void {
@@ -70,12 +77,12 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
     // Mode4 must leave it there until an event-loop mode0 dequeue after JS yields.
     const pendingBefore = checkpoint && Atomics.load(probe, probeCell.loopFinishedWrites) === 0
       ? Atomics.load(signalState, 2) & 4 : 0;
+    const signalBefore = checkpoint ? Atomics.load(requestedSignal, 0) : 0;
     if (checkpoint) {
       Atomics.add(probe, probeCell.checkpoints, 1);
-      const signal = Atomics.load(requestedSignal, 0);
-      if (signal) {
+      if (signalBefore) {
         Atomics.add(probe, probeCell.checkpointAfterSignal, 1);
-        Atomics.store(probe, probeCell.checkpointSignal, signal);
+        Atomics.store(probe, probeCell.checkpointSignal, signalBefore);
       }
     }
     try {
@@ -99,7 +106,17 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
       }
       return status;
     } catch (error) {
-      if (checkpoint) Atomics.add(probe, probeCell.checkpointThrew, 1);
+      if (checkpoint) {
+        Atomics.add(probe, probeCell.checkpointThrew, 1);
+        // The page can publish a signal between the entry sample and the real
+        // callback's fatal throw. Observe that in-flight checkpoint, once, at
+        // unwind; keep the original exception and never sample a normal return.
+        const signal = signalBefore || Atomics.load(requestedSignal, 0);
+        if (!signalBefore && signal) {
+          Atomics.add(probe, probeCell.checkpointAfterSignal, 1);
+          Atomics.store(probe, probeCell.checkpointSignal, signal);
+        }
+      }
       throw error;
     }
   };
