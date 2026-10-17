@@ -27,6 +27,10 @@ try {
   await writeFile(page, "/home/user/node_modules/is-odd/package.json", JSON.stringify({
     name: "is-odd", version: "3.0.1", main: "index.js", dependencies: { "is-number": "^7.0.0" }, bin: { "is-odd": "index.js" },
   }));
+  await writeFile(page, "/home/user/check-bin-fixture.ts", 'import fs from "node:fs"; console.log("fixture-bin:", JSON.parse(fs.readFileSync("node_modules/is-odd/package.json", "utf8")).bin["is-odd"]);');
+  const checked = await run(page, "bun run check-bin-fixture.ts");
+  assert.equal(checked.code, 0, checked.output);
+  assert.match(checked.output, /fixture-bin: index\.js/);
   const withBinary = await run(page, "bun install");
   console.log(JSON.stringify({ engine: "browser", withoutBinary: installed, withBinary, external }));
   assert.deepEqual(external, [], "probe attempted an external request");
