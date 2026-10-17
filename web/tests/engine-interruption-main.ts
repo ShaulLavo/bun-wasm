@@ -6,7 +6,7 @@ import { assertCausalIdleWake, assertFatalEngineCompletion, assertNativeEngineCo
 import { measureInterruptionOverhead } from "./engine-interruption-benchmark";
 import { defaultSignalGuest, handledSignalGuest, idleSignalGuest } from "./engine-interruption-guests";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
-import { createLegacyEngineScope, createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignalDelivery } from "./engine-interruption-scope";
+import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignalDelivery } from "./engine-interruption-scope";
 import { FunctionalCases, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
 
 interface CaseResources {
@@ -139,8 +139,8 @@ async function scope(module: WebAssembly.Module, engine: Engine, route: EngineIn
   const owner = await fixtureRuntime();
   let base: EngineInterruptionScope;
   try {
-    base = route === "runtimeProcess" ? await createRuntimeEngineScope(module, engine, owner)
-      : createLegacyEngineScope(module, engine, owner, new URL(`./${workerName}`, location.href).href, adapter);
+    // Every root is now a generic process; the "legacy" label only names the older case set.
+    base = await createRuntimeEngineScope(module, engine, owner, new URL(`./${workerName}`, location.href).href, adapter);
   } catch (error) { await disposeRuntime(owner); throw error; }
   const resources = currentCase;
   const context = { read: () => Array.from(base.children.values(), child => ({

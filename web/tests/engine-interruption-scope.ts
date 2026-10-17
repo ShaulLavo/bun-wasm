@@ -4,9 +4,8 @@ import { readOutcome } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from "waffle/proc/worker-client";
 import { createRuntimeTerminalCodec } from "../src/runtime-terminals";
 import { SubprocessBroker } from "../src/subprocess-broker";
-import { SubprocessHost } from "../src/subprocess";
 import type { Runtime } from "waffle";
-import type { Engine } from "../src/worker";
+import type { Engine } from "../src/bun-executor";
 
 export type EngineInterruptionRoute = "legacy" | "runtimeProcess";
 export type EngineSignalDelivery = "host" | "page-kill" | "page-killJob";
@@ -30,9 +29,11 @@ export interface EngineInterruptionScope {
 }
 
 /** Original test adapter. Admission, descriptor tokens and launchRuntime are the
- * production path; no RunRequest or detached generic budget is manufactured. */
+ * production path; no RunRequest is manufactured. Preview1 here is only our byte-encoded
+ * signal-clock fixture, which handles and dequeues signals through poll_oneoff, not an
+ * untrusted guest upload. */
 export async function createRuntimeEngineScope(module: WebAssembly.Module, engine: Engine, runtime: Runtime,
-  workerUrl = new URL("./engine-interruption-worker.js", location.href).href) {
+  workerUrl = new URL("./engine-interruption-worker.js", location.href).href, adapter: "bun" | "preview1" = "bun") {
   const filesystem = runtime.filesystem;
   const descriptors = new DescriptorTable();
   const identities: FilesystemIdentity[] = [];
@@ -62,7 +63,7 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
         if (fd === 2) active.stderr += decoder.decode(bytes); else active.stdout += decoder.decode(bytes);
       },
     });
-    runtime.registerProgram("bun", { module, adapter: `bun:${engine}`, cooperative: true });
+    runtime.registerProgram("bun", { module, adapter: adapter === "preview1" ? "preview1" : `bun:${engine}`, cooperative: true });
     for (const fd of [0, 1, 2]) {
       const installed = descriptors.open({ kind: "terminal", read: () => 0,
         write: chunks => chunks.reduce((size, bytes) => size + bytes.length, 0),
@@ -111,55 +112,4 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
       dispose,
     };
   } catch (error) { dispose(); throw error; }
-}
-
-export function createLegacyEngineScope(module: WebAssembly.Module, engine: Engine, runtime: Runtime,
-  workerUrl: string, adapter: "bun" | "preview1" = "bun"): EngineInterruptionScope {
-  const fs = runtime.filesystem;
-  const decoder = new TextDecoder();
-  const pid = runtime.identities.pid(), job = runtime.identities.job();
-  const broker = new SubprocessBroker(workerUrl, runtime, { root: { pid, job } });
-  // Preview1 here is only our byte-encoded signal-clock fixture: it explicitly
-  // handles/dequeues signals through poll_oneoff, not an untrusted guest upload.
-  broker.register("bun", adapter === "preview1" ? { module, adapter, cooperative: true } : { module, adapter, engine });
-  const children = new Map<number, EngineInterruptionChild>();
-  const host = new SubprocessHost({
-    pid, jobId: job, identity: runtime.identities.buffer,
-    output() {}, onChildClose: childPid => broker.close(pid, childPid),
-    launch(meta, transport) {
-      const identity = fs.createIdentity();
-      children.set(transport.pid, { pid: transport.pid, jobId: transport.jobId,
-        requestedSignal: new Int32Array(transport.requestedSignal), signalState: new Int32Array(transport.signalState), stdout: "", stderr: "" });
-      broker.spawn({ executable: "bun", argv: meta.argv, pid: transport.pid, parentPid: transport.parentPid,
-        jobId: transport.jobId, cwd: "/home/user", env: {}, filesystem: identity, child: transport,
-        trace: false, slots: "imports", spawnBroker: true });
-      return { revoke() { fs.revoke(identity); }, terminate() {} };
-    },
-  });
-  return { broker, children,
-    drain(child) {
-      for (const fd of [1, 2]) for (;;) {
-        const bytes = host.read(host.pipe(child.pid, fd));
-        if (!(bytes instanceof Uint8Array)) break;
-        if (fd === 1) child.stdout += decoder.decode(bytes); else child.stderr += decoder.decode(bytes);
-      }
-    },
-    spawn(source) {
-      // Signal the guest job without also default-killing this scope's controller.
-      // The generic adapter uses the same real production new-job admission.
-      const pid = host.spawn(JSON.stringify({ executable: "bun", argv: ["bun", "-e", source], job: -1 }));
-      if (pid <= 0) throw new Error(`spawn failed: ${pid}`);
-      const child = children.get(pid);
-      if (!child) throw new Error("spawn transport missing");
-      return child;
-    },
-    wait: child => host.wait(child.pid),
-    async kill(child, signal, delivery = "host") {
-      if (delivery === "host") return host.kill(child.pid, signal);
-      if (delivery === "page-killJob") await broker.killJob(child.jobId, signal);
-      else await broker.kill(child.pid, signal);
-      return 0;
-    },
-    dispose() { broker.dispose(); host.dispose(); },
-  };
 }

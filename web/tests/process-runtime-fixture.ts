@@ -33,6 +33,7 @@ export function processRuntimeFixture(filesystem: RuntimeFilesystem, options: {
     registerAdapter(name, launch) {
       if (adapters.has(name)) throw new Error(`Adapter already registered: ${name}`);
       adapters.set(name, launch);
+      return () => { if (adapters.get(name) === launch) adapters.delete(name); };
     },
     registerProgram(name, program) {
       if (registry.has(name)) throw new Error(`Program already registered: ${name}`);

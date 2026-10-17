@@ -170,7 +170,9 @@ test("Bun browser-native names and capability flags remain in the adapter", () =
   expect(call("hostFetch", "malformed")).toBe(-1);
   expect(JSON.parse(call("hostError", 0)).message).toContain("malformed request metadata");
   expect(net.caps.poll).toBe(false);
-  expect(net.caps.signal).toBe(false);
+  // Signals and processes are the guest's own runtime_proc imports, not host network capabilities.
+  expect(Object.hasOwn(net.caps, "signal")).toBe(false);
+  expect(Object.keys(net.caps).some(name => name.startsWith("proc_") || name.startsWith("child_") || name === "spawn")).toBe(false);
   expect(net.caps.fetch).toBe(true);
   expect(net.caps.connect).toBe(true);
   expect(typeof net.onNews).toBe("function");

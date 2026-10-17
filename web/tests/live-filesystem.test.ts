@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { FilesystemClient, FilesystemService, MemoryBackend, createFilesystemConnection } from "waffle/fs";
-import { SharedPipe, SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "../src/subprocess.ts";
 
+// Two processes of one tree share a live filesystem through separate connections: edits are
+// visible to the other without snapshots, stdio traffic or process exit as synchronization.
 const encode = (text: string) => new TextEncoder().encode(text);
 const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 function fixture() {
@@ -12,35 +13,21 @@ function fixture() {
   service.connect(root.server); service.connect(child.server);
   const parentFS = new FilesystemClient(root.client);
   const childFS = new FilesystemClient(child.client);
-  let transport: ChildTransport | undefined;
-  const host = new SubprocessHost({ output() {}, launch(_meta, value) { transport = value; return { terminate() {} }; } });
-  const id = host.spawn(JSON.stringify({ argv: ["bun", "-e", "0"] }));
-  if (!transport) throw new Error("child was not launched");
-  return { parentFS, childFS, host, id, transport,
-    cleanup() { host.dispose(); childFS.dispose(); parentFS.dispose(); service.dispose(); } };
+  return { parentFS, childFS, cleanup() { childFS.dispose(); parentFS.dispose(); service.dispose(); } };
 }
 
-test("live filesystem edits precede child stdin and parent stdout without snapshots or child exit", async () => {
-  const { parentFS, childFS, host, id, transport, cleanup } = fixture();
+test("live filesystem edits cross between parent and child without snapshots or child exit", async () => {
+  const { parentFS, childFS, cleanup } = fixture();
   try {
-    const child = childTransport(transport);
-    expect(transport.control.byteLength).toBe(16);
-    expect("filesystem" in transport).toBe(false);
     await parentFS.asyncCall("writeFile", ["/entry.ts"], encode("export default 42"));
-    expect(host.write(host.pipe(id, 0), encode("build"))).toBe(5);
-    expect(child.stdin.read()).toEqual(encode("build"));
     expect(decode(await childFS.asyncCall("readFile", ["/entry.ts"]))).toBe("export default 42");
     await childFS.asyncCall("writeFile", ["/out.js"], encode("answer=42"));
-    const stdout = wasiPipe(child.stdout, "write");
-    expect(stdout.write([encode("built")])).toBe(5);
-    expect(host.read(host.pipe(id, 1))).toEqual(encode("built"));
     expect(decode(await parentFS.asyncCall("readFile", ["/out.js"]))).toBe("answer=42");
-    expect(host.wait(id)).toBe(-2);
   } finally { cleanup(); }
 });
 
-test("idle persistent children observe parent edits without stdin, stdout, or exit synchronization", async () => {
-  const { parentFS, childFS, host, id, transport, cleanup } = fixture();
+test("idle persistent children observe parent edits without any other synchronization", async () => {
+  const { parentFS, childFS, cleanup } = fixture();
   try {
     await parentFS.asyncCall("writeFile", ["/entry.ts"], encode("before"));
     const root = await childFS.asyncCall("preopen", ["/"]);
@@ -50,11 +37,8 @@ test("idle persistent children observe parent edits without stdin, stdout, or ex
     expect(childFS.read(path.node, [bytes], 0)).toBe(6);
     expect(decode(bytes)).toBe("before");
     await parentFS.asyncCall("writeFile", ["/entry.ts"], encode("newest"));
-    host.poll();
     expect(childFS.read(path.node, [bytes], 0)).toBe(6);
     expect(decode(bytes)).toBe("newest");
-    expect(new SharedPipe(transport.pipes[0], transport.budget).read()).toBe(-2);
-    expect(host.wait(id)).toBe(-2);
     childFS.release(path.node);
   } finally { cleanup(); }
 });
