@@ -48,8 +48,6 @@ declare namespace BunWasm {
     execPath: string;
     exitCode?: number;
     cwd(): string;
-    /** Node-style stat record; throws a system error (code ENOENT, ...). */
-    stat(path: string, lstat: boolean): { mode: number };
     exit(code?: number): never;
     on(event: string, callback: EventListener): unknown;
   }
@@ -61,6 +59,8 @@ declare namespace BunWasm {
     hostClose(handle: number): number;
     hostError(handle: number): string;
     cwd(): string;
+    /** Node-style stat record; throws a system error (code ENOENT, ...). */
+    stat(path: string, lstat: boolean): { mode: number };
     now(): number;
     /** runtime_proc process ABI. Results are >= 0 or a negative WASI errno (-6 EAGAIN). */
     procSpawn(request: string): number;
