@@ -426,7 +426,8 @@ impl Resolver {
     fn locked_row(&self, row: &Value, name: &str, range: &str, chain: &[String], optional: bool) -> Option<Package> {
         let version = locked_version(row, name)?;
         let resolved_name = platform_package(name, version);
-        let root_tag = chain.len() == 1 && is_tag(range) && declared(&self.locked["workspaces"][""], name, range);
+        let root_tag =
+            chain.len() == 1 && is_tag(range) && declared_root(&self.locked["workspaces"][""], &chain[0], name, range);
         if !matches(version, range) && !root_tag {
             return None;
         }
@@ -489,6 +490,23 @@ fn declared(meta: &Value, name: &str, range: &str) -> bool {
     ]
     .iter()
     .any(|field| meta[*field][name].as_str() == Some(range))
+}
+
+fn declared_root(meta: &Value, logical_name: &str, resolved_name: &str, range: &str) -> bool {
+    if logical_name == resolved_name && declared(meta, logical_name, range) {
+        return true;
+    }
+    [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    ]
+    .iter()
+    .filter_map(|field| meta[*field][logical_name].as_str())
+    .filter_map(|value| value.strip_prefix("npm:"))
+    .filter_map(|alias| spec(alias).ok())
+    .any(|(name, target)| name == resolved_name && target == range)
 }
 
 fn package_integrity(meta: &Value) -> Result<String> {
