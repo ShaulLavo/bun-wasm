@@ -86,6 +86,17 @@ for (const [reason, message] of rejectedReasons) test(`backend startup reports a
   worker.terminate();
 });
 
+test("a refused diagnostic transfer still dispatches the original worker error", async () => {
+  const worker = new Worker(new URL("./fixtures/filesystem-diagnostic-transfer-failure.ts", import.meta.url).href);
+  cleanups.push(() => worker.terminate());
+  const error = new Promise<string>(resolve => {
+    worker.onerror = event => { event.preventDefault(); resolve(event.message); };
+  });
+  worker.postMessage({});
+  expect(await error).toContain("Original filesystem startup failure");
+  worker.terminate();
+});
+
 test("completed writes are visible to siblings before either process exits", async () => {
   const { client } = fixture();
   const sibling = new FilesystemClient(client.fork());
