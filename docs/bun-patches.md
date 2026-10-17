@@ -44,7 +44,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
-| [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
+| [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
@@ -1934,11 +1934,19 @@ them as `procSpawn`, `procPipe`, `procRead`, `procWrite`, `procWait`, `procWaitJ
 `procKillJob` and `procPoll`. `js/spawn.ts` (converted from the earlier `spawn.js` adapter) keeps
 the Bun JSON and pipe metadata surface (`Bun.spawn`, `Bun.spawnSync`, `node:child_process`
 wrappers, readable stream helpers, `maxBuffer`, `timeout`, `killSignal`) and now builds every
-child from descriptor bindings, classifies outcomes only from typed `wait` results, and reaps
-each child's job with `wait_job`. `js/worker_channel.ts` and `js/worker_threads.ts` carry worker
+child from descriptor bindings and classifies outcomes only from typed `wait` results.
+Ordinary children join the caller's job from `job_of(0)`; lookup failure is a spawn error,
+not a fallback to a separate job. Detached children request their own job, which the parent
+can reap with `wait_job` or stop with `kill_job`. Before allocating any descriptor or child,
+the original `checkCwd` adapter stats the resolved directory and reports missing or
+non-directory paths as `ENOENT` or `ENOTDIR` with syscall `spawn`, rather than an asynchronous
+child exit. `js/worker_channel.ts` and `js/worker_threads.ts` carry worker
 control frames over two ordinary bound pipes. This replaces the Bun-only spawn, child wait, child
 pipe and child kill slots without any compatibility path. Bun's `spawn` option names and result
-shapes are the behavior being preserved; no Bun source is copied.
+shapes are the behavior being preserved; no Bun source is copied. The original
+`web/src/engine-host.js` adapter overrides only the 14 named networking capability flags;
+the mandatory `runtime_proc` process and signal capabilities remain owned by the guest,
+without an optional-slot probe or process-native substitution.
 
 
 ## Native process descriptor bridge
@@ -1957,8 +1965,16 @@ The preview1 bridge intercepts process-owned `fd_read`, `fd_write`, `fd_close`, 
 contract while `runtime_proc` operations remain immediate and return negative errnos.
 Filesystem descriptors remain owned by Wasmtime and are not transferable through this
 spawn adapter. The bridge validates guest iovecs before observable I/O and delegates
-non-process descriptors to the existing Wasmtime functions. WASI record layouts and
-constants are interface definitions, not copied wasi-libc code. No Bun, wasi-libc or
+non-process descriptors to the existing Wasmtime functions. Delegation re-enters a small,
+original generated Wasm wrapper that imports the guest's existing memory and the retained
+preview1 function, then exports that memory and a forwarding call. A direct host-to-host
+`Func::call` has no caller memory export for preview1 to inspect; the wrapper supplies that
+Wasm caller context without copying or allocating another linear memory. Each forwarded
+function is instantiated lazily and cached per store. The original resource-limit adapter
+in `crates/bunwasm-host/src/main.rs` allows one guest plus its six delegation instances,
+while retaining the guest's linear-memory limit. These are host-composition adapters, not
+Wasmtime patches or copied Wasm modules. WASI record layouts and constants are interface
+definitions, not copied wasi-libc code. No Bun, wasi-libc or
 Wasmtime implementation is copied or patched by these new modules; the previously documented
 Wasmtime `proc_exit` behavior and upstream revision remain in [Browser process service](#browser-process-service).
 
