@@ -506,3 +506,35 @@ That dependency has landed in PR #36, and the branch reruns the memory
 and full web gates. Do not reduce the guest allocation, relax its timeout or
 remove assertions to call the gate passing. The owning lane removes retained
 evidence after reproduction, review and merge.
+
+## WebKit worker module-loader cancellation crash on macOS
+
+Status: Approved. The browser/runtime compatibility track owns diagnosis and
+upstream reporting. Keep this separate from the missing-module retry repair.
+
+On macOS 26.4 / Apple M1, Playwright 1.64.1 WebKit revision 2370 crashed its
+WebContent process during `node web/tests/browser-worker-modules.ts`. The
+bundle included main `a70d3a1` and freshly rebuilt guest artifacts. Chromium
+passed 20/20 atomic-transfer trials and the uncontrolled-child case. WebKit
+passed 10 trials before `page.evaluate: Target page, context or browser has
+been closed`. One run was observed; a diagnostic rerun was interrupted by
+the next task assignment. The readiness regression itself passed 20/20 in
+each browser and all six engine/browser API combinations.
+
+The macOS crash report records PID 79405, `EXC_BAD_ACCESS / SIGSEGV`, invalid
+address `0x10`, on `WebCore: Worker`. The first frames are
+`WorkerThreadableLoader::MainThreadBridge::cancel()`,
+`WorkerScriptLoader::cancel()`, and `WorkerModuleScriptLoader` destruction.
+This is a browser-process crash, with no observed eval-module HTTP error.
+Do not classify it as the earlier service-worker 404 or weaken the test.
+
+Reproduce using a current PC-built web bundle transferred to the Mac,
+`PLAYWRIGHT=<local playwright/index.mjs> node web/tests/browser-worker-modules.ts
+webkit`, with the normal cross-origin-isolated server and an explicit free
+`BUN_WASM_TEST_PORT`. Inspect worker termination while a module load is being
+cancelled, starting with `web/src/subprocess-broker.ts` physical teardown.
+The current integration case has not been reduced to a standalone browser
+reproducer. Retained evidence is
+`/work/reports/bun-wasm-signal-readiness/final/results/worker-modules.log`,
+`webkit-crash-summary.json`, and `rebuilt-wasm-sha256.txt`. The compatibility
+track removes these after reproducing and accepting the finding.
