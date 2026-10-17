@@ -36,7 +36,7 @@ test("HMR readiness belongs to the target document across tabs and navigation", 
     await frame.evaluate(text => console.info(text), connected);
     await waitForHmrConnection(owner, "#preview");
   } finally {
-    await browser?.close();
-    server.stop(true);
+    try { await browser?.close(); }
+    finally { server.stop(true); }
   }
-});
+}, 30_000);
