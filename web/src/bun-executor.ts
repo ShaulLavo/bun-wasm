@@ -2,9 +2,10 @@
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
 import { startEngineHost } from "./engine-host.js";
 import type { RuntimeWorkerRequest, RuntimeWorkerMessage, WorkerExecutor } from "waffle/browser/worker";
-import { NetHost } from "./net/host";
-import type { NetRequest } from "./net/protocol";
-import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline";
+import { NetHost } from "./net/host.js";
+import { DefaultSignal } from "./default-signal.js";
+import type { NetRequest } from "./net/protocol.js";
+import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
 
 export type Engine = "quickjs" | "jsc" | "browser";
 
@@ -79,6 +80,9 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
   return {
     hostCallFd: HOST_CALL_FD,
     env: () => env,
+    // Bun's own fatal-unwind type, which the engine interruption probes recognize.
+    signalError(signal): never { throw new DefaultSignal(signal); },
+    terminalSignal: error => error instanceof DefaultSignal ? error.signal : undefined,
     instantiated({ instance, wasi, fs, checkActive }) {
       netHost = req.net ? new NetHost(req.net, (net, transfer = []) => host.postMessage({ type: "net", req: net }, transfer), (path, bytes) => fs.writeFile(path, bytes)) : null;
       if (slots === "off") return;
