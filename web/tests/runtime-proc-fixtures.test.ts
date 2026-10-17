@@ -154,7 +154,7 @@ for (const returned of [0, -8]) test(`child fixture still fails early EOF or une
 // gate below runs the same bytes through actual guest-created workers and the real broker.
 function jobWaitShell(options: { pending?: number; status?: number; eof?: number } = {}) {
   let memory: WebAssembly.Memory;
-  const reads: (string | number)[] = ["DG", "LL", -6, "XX", options.eof ?? 0];
+  const reads: (string | number)[] = ["R", "DG", "LL", -6, "XX", options.eof ?? 0];
   const spawned: SpawnRequest[] = [], waits: [number, number][] = [], operations: string[] = [];
   let nextFd = 20;
   class Exit extends Error { constructor(readonly code: number) { super(`exit ${code}`); } }
@@ -278,7 +278,7 @@ for (const argc of [1, 3, 4, 5]) for (const lateWake of argc === 3 || argc === 4
   expect(emptyPolls).toBe(lateWake ? 1 : 0); expect(readyPolls).toBe(lateWake ? 1 : 0);
   if (argc === 3 || argc === 4) expect(deliveries).toBe(lateWake ? 3 : 2);
   expect(chunks).toEqual([]);
-  expect(writes).toEqual(argc === 3 ? ["D", "L", "X"] : argc === 4 ? ["G", "L", "X"] : []);
+  expect(writes).toEqual(argc === 1 ? ["R"] : argc === 3 ? ["D", "L", "X"] : argc === 4 ? ["G", "L", "X"] : []);
   expect(signals).toEqual(argc === 3 || argc === 4 ? [[15, 2]] : []);
   expect(spawned.length).toBe(argc === 1 || argc === 3 ? 1 : 0);
   if (spawned.length) {
