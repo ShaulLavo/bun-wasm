@@ -21,10 +21,8 @@ fn main() {
             println!("cargo:rustc-link-arg-bin=bun=--export={name}");
         }
     }
-    // JavaScriptCore build: one libc (wasi-sdk's; scripts/build-bun-jsc.sh
-    // links with -C link-self-contained=no), so the startup object comes from
-    // the wasi-sdk sysroot too.
-    if std::env::var_os("CARGO_FEATURE_ENGINE_JSC").is_some() {
+    // BoringSSL and JavaScriptCore share wasi-sdk's libc with Rust.
+    {
         let sdk = std::env::var("WASI_SDK_PATH").expect("WASI_SDK_PATH (source env.sh)");
         println!("cargo:rustc-link-arg-bin=bun={sdk}/share/wasi-sysroot/lib/wasm32-wasip1/crt1-command.o");
     }

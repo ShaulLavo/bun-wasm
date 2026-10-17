@@ -18,6 +18,7 @@ use std::time::Instant;
 mod directory;
 mod encoding;
 mod streams;
+mod crypto;
 mod glob;
 pub mod engine;
 #[cfg(feature = "engine-host")]

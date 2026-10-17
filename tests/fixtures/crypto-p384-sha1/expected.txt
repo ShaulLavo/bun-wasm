@@ -1,0 +1,2 @@
+P-384 SHA-1 native verify true
+P-384 SHA-1 runtime sign ok
