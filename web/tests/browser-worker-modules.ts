@@ -1,6 +1,6 @@
 // cd web && bun run build && node tests/browser-worker-modules.ts [chromium|webkit]
 import assert from "node:assert/strict";
-import type { Browser } from "playwright";
+import type { Browser, BrowserContext } from "playwright";
 import { playwright, session, ready, writeFile, run } from "./playground.mjs";
 import { workerReviewCases } from "../../tests/fixtures/worker-review/cases.ts";
 
@@ -36,14 +36,17 @@ try {
     const context = await browser.newContext();
     const moduleErrors: { url: string; status: number; fromServiceWorker: boolean }[] = [];
     const evalRequests: string[] = [];
-    context.on("request", request => {
-      if (decodeURIComponent(request.url()).endsWith("/[eval]")) evalRequests.push(request.url());
-    });
-    context.on("response", response => {
-      if (response.status() >= 400 && response.url().includes("/__bunwasm/m/")) moduleErrors.push({
-        url: response.url(), status: response.status(), fromServiceWorker: response.fromServiceWorker(),
+    function observeModules(observed: BrowserContext) {
+      observed.on("request", request => {
+        if (decodeURIComponent(request.url()).endsWith("/[eval]")) evalRequests.push(request.url());
       });
-    });
+      observed.on("response", response => {
+        if (response.status() >= 400 && response.url().includes("/__bunwasm/m/")) moduleErrors.push({
+          url: response.url(), status: response.status(), fromServiceWorker: response.fromServiceWorker(),
+        });
+      });
+    }
+    observeModules(context);
     const page = await context.newPage();
     await page.goto(`${url}?engine=browser`);
     assert.match(await ready(page), /ready/);
@@ -56,6 +59,7 @@ try {
     }
     await context.close();
     const uncontrolled = await browser.newContext();
+    observeModules(uncontrolled);
     await uncontrolled.addInitScript(uncontrolledChildren);
     const uncontrolledPage = await uncontrolled.newPage();
     await uncontrolledPage.goto(`${url}?engine=browser`);

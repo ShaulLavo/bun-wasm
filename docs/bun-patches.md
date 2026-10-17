@@ -1320,8 +1320,10 @@ The original loader in `web/src/content-modules.ts` creates blob module URLs for
 acyclic browser imports. Only a cycle reserves a named URL before its source is
 available. Eval workers need no HTTP module request, so an uncontrolled WebKit
 worker cannot bypass the module service worker and get a 404. Named URLs retain
-native import cycles. The Node host keeps its existing named module loader.
-`web/tests/browser-worker-modules.ts` repeats atomic transfer rollback twenty
+native import cycles. Failed source builds retain unfinished cycle reservations;
+recorded dependency edges repair them when retrying the root or a cached child,
+without discarding successful reentrant imports. The Node host keeps its existing
+named module loader. `web/tests/browser-worker-modules.ts` repeats atomic transfer rollback twenty
 times per browser and also starts children outside the module scope.
 
 The inspected upstream implementation is `src/js/node/worker_threads.ts` at Bun
