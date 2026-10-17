@@ -93,9 +93,14 @@ impl Cancellation {
         true
     }
 
-    /// Slot 18: publish DEFAULT/IGNORE/HANDLE (0/1/2), raise (3), or
-    /// dequeue one handled signal (0, 0). SIGKILL cannot be reconfigured.
+    /// Slot 18: publish DEFAULT/IGNORE/HANDLE (0/1/2), raise (3),
+    /// dequeue one handled signal (0, 0), or check fatal state without
+    /// dequeuing (0, 4). The slot adapter calls check() after every operation.
+    /// SIGKILL cannot be reconfigured.
     pub fn signal(&self, signal: i32, operation: i32) -> i32 {
+        if signal == 0 && operation == 4 {
+            return 0;
+        }
         if signal == 0 && operation == 0 {
             let mut state = self.state.lock().unwrap();
             if state.pending == 0 || state.selected.is_some() {
@@ -445,6 +450,62 @@ mod tests {
         for signal in [2, 15, 64, 0] {
             assert_eq!(cancel.signal(0, 0), signal);
         }
+        assert!(cancel.check().is_ok());
+    }
+
+    #[test]
+    fn fatal_checkpoint_does_not_dequeue_handled_pending_signals() {
+        let cancel = Cancellation::default();
+        assert_eq!(cancel.signal(0, 4), 0);
+        for signal in [64, 15, 2] {
+            assert_eq!(cancel.signal(signal, 2), 0);
+            assert!(cancel.kill(signal));
+        }
+        for signal in [2, 15, 64, 0] {
+            for _ in 0..3 {
+                assert_eq!(cancel.signal(0, 4), 0);
+                assert!(cancel.check().is_ok());
+            }
+            assert_eq!(cancel.signal(0, 0), signal);
+        }
+    }
+
+    #[test]
+    fn fatal_checkpoint_leaves_pending_disposition_changes_authoritative() {
+        for disposition in [0, 1] {
+            let cancel = Cancellation::default();
+            assert_eq!(cancel.signal(2, 2), 0);
+            assert!(cancel.kill(2));
+            assert_eq!(cancel.signal(0, 4), 0);
+            assert_eq!(cancel.signal(2, disposition), 0);
+            assert_eq!(cancel.signal(0, 0), 0);
+            let expected = if disposition == 0 { FinalOutcome::Signal(2) } else { FinalOutcome::Exit(0) };
+            assert_eq!(cancel.select(FinalOutcome::Exit(0)), expected);
+        }
+    }
+
+    #[test]
+    fn fatal_checkpoint_preserves_selected_outcomes_like_dequeue_checkpoint() {
+        for outcome in [FinalOutcome::Exit(143), FinalOutcome::Signal(2), FinalOutcome::Signal(9)] {
+            let cancel = Cancellation::default();
+            assert_eq!(cancel.select(outcome), outcome);
+            for operation in [4, 0, 4] {
+                assert_eq!(cancel.signal(0, operation), 0);
+                assert_eq!(cancel.check().is_err(), outcome.signal() != 0);
+                assert_eq!(cancel.select(FinalOutcome::Exit(0)), outcome);
+            }
+        }
+    }
+
+    #[test]
+    fn fatal_checkpoint_rejects_nonzero_signals_without_changing_pending() {
+        let cancel = Cancellation::default();
+        assert_eq!(cancel.signal(15, 2), 0);
+        assert!(cancel.kill(15));
+        for signal in [-1, 1, 9, 15, 64, 65] {
+            assert_eq!(cancel.signal(signal, 4), -22);
+        }
+        assert_eq!(cancel.signal(0, 0), 15);
         assert!(cancel.check().is_ok());
     }
 

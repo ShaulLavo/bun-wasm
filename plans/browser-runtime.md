@@ -176,9 +176,15 @@ sections 7 and 8) maps its `ProcessHost` trait onto this layer. The process laye
 
 ### Where it lives
 
-A new `runtime/` directory in bun-wasm: a TypeScript package (`@bun-wasm/runtime`) with one entry
-per layer (`core`, `fs`, `net`, `proc`, `term`) so a bundler includes only what a page imports,
-and `proc` loaded on the first spawn. A guest's `spawn` import can't await an `import()`, so the
+The generic implementation currently lives in bun-wasm's `runtime/` package while the
+[approved Waffle split](waffle-split.md) is prepared. After the split it lives in the public
+MIT-licensed `ShaulLavo/waffle` repository, package `waffle`, with curated layer and browser
+entry points so a bundler includes only what a page imports. Generic filesystem, process,
+interruption, worker/bootstrap, network and preview services, tests and follow-on plan steps
+move there. Bun's guest engines, executor, native-slot/legacy-pipe adapters and application
+policy remain in `web/` here. The application creates one page-owned runtime and explicitly
+passes it to Bun and `createShell({ runtime })`; runs borrow its filesystem, identities and
+lazy process service. `proc` loads on the first spawn. A guest's `spawn` import can't await an `import()`, so the
 guest worker keeps a stub of about 1 KiB gzipped, including identity and atomic terminal-result
 primitives: it reserves a pid, takes the inherited descriptor references and returns at once,
 and the supervisor loads proc and starts the process
@@ -186,11 +192,11 @@ asynchronously. A start failure shows up through `wait` (127 for a missing progr
 that can't run) and as a child-exit event in `poll`. A synchronous caller such as Bun's
 `spawnSync` polls afterwards; the shell never blocks on a first spawn. The builds (`web/build.ts`,
 `sandbox/build.ts`) enable code splitting and serve the split chunks under every worker scope.
-Bun's adapter and executor stay in
-`web/`. brush-web and the own shell consume the package as a pinned copy, the way brush-web
-vendors `third-party/bun-wasm/` today, until the product repository exists. Every new file that
-adapts upstream code (brush-web's terminal discipline, SQLite's OPFS bridge pattern) gets its row
-in `docs/bun-patches.md`.
+bun-wasm consumes an explicitly trusted Waffle Git dependency pinned to an exact commit;
+bash-web declares a Waffle peer dependency and uses an exact development pin for its own
+tests. Follow the split plan's ownership, installed-package and cross-repository gates before
+removing the in-tree package. Every new file that adapts upstream code gets its classified row
+in the owning repository's provenance ledger, including applicable notices.
 
 ### Process ABI (for the shell lane)
 
@@ -222,7 +228,8 @@ non-blocking except `poll` and `wait_job` without NOHANG.
 | `kill` | `(pid, sig) -> 0` | Signals one process. |
 | `kill_job` | `(job, sig) -> 0` | Signals every process in a job, including descendants spawned into it. |
 | `poll` | `(subs_ptr, n, timeout_ms, out_ptr) -> n_ready` | Each subscription is 16 bytes: `u32 kind` (0 readable, 1 writable, 2 child exit, 3 filesystem completion, 4 job-empty), `u32 id` (fd, pid, request or job), `u64 userdata`. Each event written is 16 bytes: `u64 userdata`, `u32 kind`, `u32 flags` (bit 0 hang-up). Also returns when this process's interrupt word is set (`n_ready` may be 0). Blocks unless timeout is zero. |
-| `signal` | `(sig, mode) -> result` | Synchronously sets this process's disposition: 0 default, 1 ignored, 2 handled; mode 3 raises a signal against the current disposition. `(0, 0)` dequeues the next pending handled signal (0 if none), sharing the queue with `interrupted`. Set/raise returns 0, invalid arguments -22. SIGKILL cannot be registered or ignored. Bun reaches the same adapter through optional host slot 18. |
+| `signal` | `(sig, mode) -> result` | Synchronously sets this process's disposition: 0 default, 1 ignored, 2 handled; mode 3 raises a signal against the current disposition. `(0, 0)` dequeues the next pending handled signal (0 if none), sharing the queue with `interrupted`; `(0, 4)` polls fatal cancellation without consuming handled pending signals. Set/raise/poll returns 0, invalid arguments -22. SIGKILL cannot be registered or ignored. Bun reaches the same adapter through optional host slot 18. |
+
 | `interrupted` | `() -> sig` | Dequeues one pending handled signal for this process (0 if none); the guest dispatches its handler at a checkpoint. Unhandled default actions have already been selected by the supervisor. Don't rely on the host call itself to make `terminate()` work: in real Safari, `terminate()` alone stopped only 13 of 50 runs with tiny injected host checks, while stopping on the returned signal worked 50 of 50 (spike 5). |
 | `default_signal` | `(sig) -> never` | Takes the default action for the signal returned by a checkpoint. The adapter reports it explicitly before unwinding; the supervisor records `128 + sig`, revokes descriptors and requests physical termination. An unrelated later trap is not inferred to be a signal exit. |
 
@@ -253,6 +260,16 @@ ignoring a signal clears its pending state. Standard signals may coalesce per si
 pending signals must not overwrite one another. Dequeue clears pending before a once-listener
 removes itself. The per-signal state is authoritative; the shared interrupt word only wakes
 checkpoints.
+
+Like Node, handled signals remain pending through synchronous JavaScript and dispatch on the
+next ordinary event-loop turn. Engine polls use `(0, 4)` and never call JavaScript: arbitrary
+reentry can invalidate native regexp state and runtime timer bookkeeping. An infinite JS loop
+with a registered handler therefore stays busy until an unhandled/default signal or SIGKILL
+stops it. Idle event-loop waits must wake promptly for handled delivery. Acceptance signals
+through the page broker's `kill` and `killJob` on both legacy and runtime-process routes. A
+long test-only wait must return native `ok` for the exact sampled wait generation, while
+removing its notification fails the same check; a short timeout rescan is not wake evidence.
+
 
 An explicit `runtime_proc.default_signal(sig)` still reports a typed default action. SIGKILL
 always selects 137 and revokes immediately; it cannot be caught or ignored. Guest completion
@@ -297,7 +314,7 @@ the CI gate.
 | 4d | **IPC.** Node `fork()` and Bun `spawn({ipc})` as a pipe pair on a child fd with newline-delimited JSON; guest send and receive on QuickJS and JSC as well as Bun light. | 400-700 |
 | 5 | **Terminal.** Terminal descriptor kind with a foreground owner; cooked mode (echo, line editing, Ctrl+D) ported from brush-web; raw mode passes Ctrl+C through as a byte; resize events. | 600-1,000 |
 | 6 | **Network.** One socket namespace shared by all processes (children get networking; loopback works across workers); fetch bridge; bounded connection writes; preview routing split from Bun's module-serving service worker, one registration; the preview client loads only when a preview opens. | 1,000-1,600 |
-| 7a | **Engine interruption.** QuickJS's interrupt handler and a JSC trap hook check shared interruption while CPU-bound JS runs, delivering registered handlers and stopping revoked guests in Chromium, Firefox and real Safari. Immediate unhandled default actions already belong to 4a; they do not wait for these engine hooks. | 300-600 |
+| 7a | **Engine interruption.** QuickJS's interrupt handler and a JSC trap hook poll fatal cancellation while CPU-bound JS runs, stopping revoked guests in Chromium, Firefox and real Safari. Handled signals stay in the authoritative host pending set until the next event-loop turn, matching Node; engine callbacks never enter JS. Check idle handled-signal wake latency as well as fatal busy-loop interruption. Immediate unhandled default actions already belong to 4a; they do not wait for these engine hooks. | 300-600 |
 | 7b | **Bun onto the runtime.** Bun's slots as an adapter over the services; remove the Bun-only spawn restrictions (`spawn.js:49-65`, `subprocess.js:170-179`) and engine inheritance; playground migrated; demo UI out of the runtime import graph; WebKit engine-cache retention fixed. Bun light meets the budgets, measured on real downloads before and after the first spawn. | 1,000-1,500 |
 | 8 | **The shell on the runtime.** Owned by the shell track: its `ProcessHost` maps onto the process ABI. This track supplies the ABI, the 4c gate and the milestone's Playwright acceptance tests (`/work/reports/browser-shell-research/pipelines.acceptance.spec.ts`). | shell track |
 | 9 | **Interrupt injection for third-party WASM.** Spike first: rewrite a module at load time to call `interrupted` at loop headers and function entries, measuring rewrite time and overhead on a real program; refuse modules it can't instrument; then build it into the loader. | 800-1,500 |
@@ -306,6 +323,70 @@ Total for this track: about 13,000-19,000 lines across fifteen PRs, plus the she
 work. Order: 1, then 2 and 3a in parallel; 3b after 3a, 3c after 3b; 4a after 2; 4b after 4a;
 4c and 4d after 4b; 5, 6 and 7b after 4b; 7a any time after 1; 9 any time after 2. The shell
 track can start its `ProcessHost` against the ABI as soon as 4b lands.
+
+### Step 4c follow-up: reclaim empty nonroot bookkeeping
+
+**Status: Approved; scheduled with step 4c after the Waffle extraction.** The preparation fixes
+completed-root retention now: 100 finished runs release their reservations, controller callbacks
+and root transport directories. This separate follow-up concerns compact bookkeeping beneath a
+root that deliberately stays alive, not retained workers or 100 shared directories.
+
+A bounded preparation reproduction exited and job-reaped 100 leaf children under one live root.
+It left one process record, one job and one live transport, but retained 100 compact child
+identities and 101 parent edges. All children shared the root's single directory. The 101-entry
+used-PID and used-job ledgers intentionally enforce never-reuse and are **not** this finding.
+Suspect `runtime/proc/worker-broker.ts` (`retainIdentity` / `reapTransports`) and
+`runtime/proc/table.ts` (`parents` / `remove`). No worker, channel or filesystem backend is needed.
+
+Reproduce from an exclusive checkout, through the PC light queue (use the matching canonical
+queue on another host). The command creates only in-memory transports and releases them in
+`finally`.
+
+```sh
+source env.sh
+bun /work/platform-production/heavy/current/run.js --class light waffle-empty-subtrees -- timeout 7200 bun -e "$(cat <<'TS'
+import { DescriptorTable } from './runtime/core/descriptors.ts';
+import { ProcessIdentityAllocator } from './runtime/proc/identity.ts';
+import { ProcessTable } from './runtime/proc/table.ts';
+import { ExecutableRegistry } from './runtime/proc/registry.ts';
+import { ProcessSupervisor } from './runtime/proc/supervisor.ts';
+import { WorkerProcessBroker } from './runtime/proc/worker-broker.ts';
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from './runtime/proc/worker-client.ts';
+const ids = new ProcessIdentityAllocator(), table = new ProcessTable(ids), registry = new ExecutableRegistry();
+registry.register('fixture', { module: new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0])), adapter: 'fixture' });
+const supervisor = new ProcessSupervisor({ table, registry, retainJobResults: true, launch: () => ({ terminate() {} }) });
+const codec = { export() { throw Error('unused'); }, import() { throw Error('unused'); }, discard() {} };
+const broker = new WorkerProcessBroker({ supervisor: async () => supervisor, codec });
+const root = createWorkerProcessTransport({ pid: ids.pid(), job: ids.job(), identity: ids.buffer });
+const state = workerProcessState(root);
+supervisor.createRoot({ pid: state.pid, job: state.job, ...state.signals });
+broker.adoptRoot(root);
+const messages = [], descriptors = new DescriptorTable();
+const client = new WorkerProcessClient({ transport: root, descriptors, codec, postMessage: message => messages.push(message) });
+try {
+  for (let index = 0; index < 100; index++) {
+    const pid = client.spawn(client.pid, { executable: 'fixture', argv: ['fixture'], env: {}, cwd: '/', job: -1, fds: [] });
+    while (messages.length) await broker.handle(messages.shift(), client.pid);
+    await supervisor.start(pid);
+    const job = supervisor.get(pid).job;
+    supervisor.exit(pid, 0);
+    await supervisor.waitForExit(client.pid, pid);
+    client.waitJob(client.pid, job);
+    while (messages.length) await broker.handle(messages.shift(), client.pid);
+  }
+  console.log({ records: Array.from(table.values()).length, jobs: Reflect.get(table, 'jobs').size,
+    transports: Reflect.get(broker, 'transports').size, identities: Reflect.get(broker, 'identities').size,
+    parents: Reflect.get(table, 'parents').size, usedPids: Reflect.get(table, 'usedPids').size,
+    usedJobs: Reflect.get(table, 'usedJobs').size });
+} finally { descriptors.dispose(); broker.dispose(); supervisor.dispose(); }
+TS
+)"
+```
+
+Reclaim only empty, safely reaped nonroot identity/ancestry entries. Preserve live descendants,
+unreaped independent jobs, pending admission leases and monotonic no-reuse ledgers. Add a bounded
+long-lived-root regression alongside the completed-root and live-background-job controls before
+changing these maps. After extraction, use Waffle's normalized paths for this same reproduction.
 
 ### Before merging runtime PRs
 
@@ -340,3 +421,69 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
   audit of `web/src`.
 - brush-web `plans/001-brush-dev-shell.md`, `plans/004-own-shell.md` and `docs/external-commands.md`.
 - Spike reports: `/work/reports/browser-runtime/spikes/`.
+
+## Safari workspace ownership
+
+Status: Approved. Implemented in PR #62, awaiting independent review.
+
+Safari can freeze a cached document's filesystem worker before pagehide or freeze cleanup can
+flush and release its Web Lock. A fresh page in the same tab then fails to open the workspace.
+The regression reproduced on desktop Safari 26.4 and iOS simulator Safari 26.5.
+
+IndexedDB now requests the workspace lock with `steal: true`. On acquisition, a strict IndexedDB
+transaction increments `metadata["epoch"]`. The new backend loads the current persisted tree;
+it never inherits the previous page's memory. Each commit reads its captured epoch in the same
+strict transaction that writes payloads, appends journals, swaps snapshots and deletes obsolete
+journal records or payloads during compaction. A stale epoch aborts the whole transaction.
+A transaction that committed before takeover remains part of the new owner's saved state.
+
+Loss of the Web Lock rejects its lifetime promise. The displaced storage owner aborts active
+transactions and rejects queued operations. Its worker disposes background checkpoints, reports
+ownership loss and closes; the page revokes the service and terminates the worker. Epoch fencing
+also rejects a stale writer that resumes before receiving the lock-loss notification. Editor text
+stays visible. The complete message says "This workspace was opened in another tab. Reload to
+continue here." It also explains that unsaved changes in that tab weren't kept and can be copied
+before reloading. Saves acknowledged before takeover remain durable.
+
+OPFS keeps `ifAvailable: true`, without stealing. Its writes use native sync access handles and
+cannot be fenced atomically by an IndexedDB transaction. An occupied OPFS workspace explains that
+a tab or browser-history page owns it and asks the user to close those tabs before reopening.
+IndexedDB uses a separate lock namespace so opening that backend cannot steal an OPFS lock.
+The runtime track, bun-wasm-a8, owns review of this persistence boundary.
+
+A cheap cache-header probe found `Cache-Control: no-store` ineffective on isolated localhost
+HTTP in both Safari versions. Over private HTTPS, responses with no-store returned a new
+document on Back on both platforms. The HTTPS proxy also injected no-store on the requested
+control response, so that probe has no cacheable HTTPS control. Static site document headers and
+`web/serve.ts` use no-store as a complement. Correctness still comes from fencing, verified while
+real Safari restores cached documents on localhost HTTP.
+
+`scripts/test-web.sh` runs the storage fencing and Chromium/WebKit lifecycle regressions.
+For real Safari, build the small fixture on the PC through the heavy queue:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+bash /work/tmp/wave-heavy/run.sh --class light safari-lifecycle-assets -- env PATH="$PATH" \
+  bun web/tests/browser-filesystem-lifecycle.ts --build /work/tmp/bun-wasm-safari-assets
+```
+
+Copy the assets and `web/tests/browser-filesystem-lifecycle.ts` into an owned directory under
+Mac `~/tmp`. Reserve `~/tmp/.agent-mac-lock`, record the simulator's boot state and serve the
+assets on an explicit free localhost port with COOP same-origin and COEP require-corp. Run:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$HOME/.bun/bin:$PATH
+SAFARI_DRIVER_PORT=43462 SAFARI_OUTPUT=desktop.json \
+  bun browser-filesystem-lifecycle.ts safari http://127.0.0.1:43463/
+SAFARI_IOS=1 SAFARI_DRIVER_PORT=43462 SAFARI_OUTPUT=ios.json \
+  bun browser-filesystem-lifecycle.ts safari http://127.0.0.1:43463/
+```
+
+The iOS check uses the booted iPhone 17 Pro simulator. Both platforms cover same-tab reopen,
+Reload, restoration of a displaced cached page, Reload after Back with no other tab, newest-wins
+two-tab ownership, preserved visible edits, durable saved files and OPFS no-steal recovery.
+Stop the server and driver, shut down only a simulator booted by the run, and remove transfers
+and the owned lock. Evidence remains under `/work/reports/bun-wasm-safari-fencing-2026-10-17/`
+until the coordinator resolves PR #62. Earlier rejected lifecycle approaches remain in
+`/work/reports/bun-wasm-safari-lifecycle-2026-10-17/` under the same cleanup owner.

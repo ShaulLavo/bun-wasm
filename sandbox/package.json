@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm-sandbox",
-  "version": "0.0.12",
+  "version": "0.0.15",
   "private": true,
   "type": "module",
   "scripts": {
@@ -23,5 +23,8 @@
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "typescript": "^7.0.2"
-  }
+  },
+  "trustedDependencies": [
+    "@bun-wasm/runtime"
+  ]
 }

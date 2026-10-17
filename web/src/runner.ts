@@ -2,16 +2,17 @@
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
 // and the sandbox (../sandbox/).
 
+import type { Runtime } from "@bun-wasm/runtime";
 import { isToolCommand } from "./tool-command";
-import type { SharedFilesystem } from "./shared-fs";
 import { NetHelper } from "./net/helper";
 import { createRing } from "./net/ring";
 import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
 import { measureStartup } from "./startup";
 import { SubprocessBroker } from "./subprocess-broker";
-import { createSignalState } from "../../runtime/proc/signals";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
+import { createProcessBudget } from "./subprocess";
+import { createSignalState } from "@bun-wasm/runtime/proc/signals";
+import { claimOutcome, outcomeWord, readOutcome } from "@bun-wasm/runtime/proc/outcome";
 import type { Engine, RunRequest, WorkerMessage } from "./worker";
 
 export type { Engine } from "./worker";
@@ -23,12 +24,6 @@ export const ENGINES: Record<Engine, { name: string; wasm: string; script: strin
   browser: { name: "Browser (native)", wasm: "bun-browser.wasm", script: "scripts/build-bun-browser.sh" },
 };
 
-let toolsModule: Promise<WebAssembly.Module> | undefined;
-function loadTools(): Promise<WebAssembly.Module> {
-  return toolsModule ??= loadWasm("bun-tools.wasm", () => {})
-    .then(result => result.module).catch(error => { toolsModule = undefined; throw error; });
-}
-
 export function isEngine(name: string | null): name is Engine {
   return name !== null && Object.hasOwn(ENGINES, name);
 }
@@ -38,6 +33,13 @@ export function mb(bytes: number): string {
 }
 
 export class WasmMissing extends Error {}
+
+let toolsModule: Promise<WebAssembly.Module> | undefined;
+function loadTools(): Promise<WebAssembly.Module> {
+  return toolsModule ??= loadWasm("bun-tools.wasm", () => {})
+    .then(result => result.module)
+    .catch(error => { toolsModule = undefined; throw error; });
+}
 
 /**
  * Fetches and compiles a wasm module. Sites ship it gzipped (static hosts cap file sizes, and it is
@@ -165,9 +167,7 @@ async function cacheIfExpected(key: string, build: string, chunks: Uint8Array<Ar
   const hex = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
   if (hex !== build) return;
   const headers = { "content-type": "application/wasm", "content-length": String(size) };
-  if (await cacheEngine(key, build, new Response(blob, { headers }))) {
-    performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
-  }
+  await cacheEngine(key, build, new Response(blob, { headers }));
 }
 
 // The service worker at ./__bunwasm/ (sw.ts) serves named module URLs for import cycles.
@@ -194,7 +194,7 @@ export interface RunOptions {
   args: string[];
   env: Record<string, string>;
   /** Shared service owned by the page, also used by editor and shell. */
-  filesystem: SharedFilesystem;
+  runtime: Runtime;
   /** From registerModuleScope(): run the worker under ./__bunwasm/. */
   moduleScope: boolean;
   trace?: boolean;
@@ -231,6 +231,8 @@ function slotsMode(): RunRequest["slots"] {
   return value === "table" || value === "off" ? value : "imports";
 }
 
+const registeredPrograms = new WeakMap<Runtime, Set<string>>();
+
 /** Starts `bun <args>` in a fresh worker. Networking needs a cross-origin isolated page. */
 export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const ring = globalThis.crossOriginIsolated === true ? createRing() : null;
@@ -245,7 +247,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const isolated = globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== "undefined";
   const generic = !!options.runtimeProcess || WebAssembly.Module.imports(options.module).some(entry =>
     entry.module === "runtime_proc" && !["signal", "interrupted", "default_signal"].includes(entry.name));
-  const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("../../runtime/fs").FilesystemIdentity } | undefined)?.filesystem;
+  const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("@bun-wasm/runtime/fs").FilesystemIdentity } | undefined)?.filesystem;
+  const pid = options.runtime.identities.pid(), job = options.runtime.identities.job();
   const request: RunRequest = {
     engine: options.engine,
     adapter: options.adapter,
@@ -253,94 +256,126 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     module: options.module,
     args: ["bun", ...options.args],
     env: options.env,
-    filesystem: filesystemIdentity ? options.filesystem.connect(filesystemIdentity) : options.filesystem.fork(),
+    filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
     trace: options.trace ?? false,
     net: ring,
     moduleCache,
     slots: slotsMode(),
     spawnBroker: true,
-    pid: 1,
-    jobId: 1,
+    pid,
+    jobId: job,
+    identity: isolated ? options.runtime.identities.buffer : undefined,
+    budget: isolated ? createProcessBudget() : undefined,
     interrupt: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
     requestedSignal: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
     signalState: isolated && !generic ? createSignalState().buffer as SharedArrayBuffer : undefined,
     outcome: isolated && !generic ? new SharedArrayBuffer(8) : undefined,
   };
   let rootOutcome = request.outcome ? outcomeWord(request.outcome) : null;
-  let rootPid = 1, rootJob = 1;
+  let rootPid = pid, rootJob = job;
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
   let rootAcknowledged = false;
   let rootQuiescence: Promise<void> | undefined;
+  let rootStopped = false;
+  let rootConsumerRelease: (() => void) | undefined;
   const quiesceRoot = (): void | Promise<void> => {
     if (rootAcknowledged) return;
-    return rootQuiescence ??= options.filesystem.quiesce(request.filesystem);
+    return rootQuiescence ??= options.runtime.filesystem.quiesce(request.filesystem);
   };
-  const subprocess = new SubprocessBroker(workerUrl, options.filesystem, { quiesceRoot, tools: loadTools, output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
-    pid: 1, job: 1, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
+  let workerStopped = false;
+  const releaseRootConsumer = () => { rootConsumerRelease?.(); rootConsumerRelease = undefined; };
+  const stopWorker = () => {
+    if (workerStopped) return;
+    workerStopped = true;
+    request.filesystem.port.close();
+    worker.terminate();
+  };
+  const stopRoot = () => { if (rootStopped) return; rootStopped = true; stopWorker(); };
+  rootConsumerRelease = options.runtime.retainConsumer({
+    filesystem: request.filesystem,
+    revoke: () => { if (!finished) finish({ code: 137 }, false, 9, true); },
+    stop: stopRoot,
+  });
+  const subprocess = new SubprocessBroker(workerUrl, options.runtime, { quiesceRoot, rootIdentity: { pid, job }, rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged, stopRoot: () => finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true), engine: options.engine, aliasExecutable: options.adapter === "preview1" ? `preview1-root-${pid}` : undefined, budget: request.budget, output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
+
+    pid, job, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
     signalState: request.signalState, outcome: request.outcome,
   } : undefined });
-  // Generic aliases use the page/root engine; named executables select an engine explicitly.
-  const modules = new Map<Engine, Promise<WebAssembly.Module>>();
-  modules.set(options.engine, Promise.resolve(options.module));
-  const moduleFor = (engine: Engine) => () => {
-    let module = modules.get(engine);
-    if (!module) {
-      module = loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
-      modules.set(engine, module);
-    }
-    return module;
-  };
-  const rootExecutable = options.adapter === "preview1"
-    ? { module: moduleFor(options.engine), adapter: "preview1" as const, cooperative: true as const }
-    : { module: moduleFor(options.engine), adapter: "bun" as const, engine: options.engine };
-  for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) subprocess.register(name, rootExecutable);
-  for (const engine of ["quickjs", "jsc", "browser"] as const) subprocess.register(`bun-${engine}`, { module: moduleFor(engine), adapter: "bun", engine });
+  // Programs are engine-qualified and registered once for this runtime, never rebound by
+  // the next run. Bun's per-root adapter resolves legacy aliases to its immutable selection.
+  let programs = registeredPrograms.get(options.runtime);
+  if (!programs) registeredPrograms.set(options.runtime, programs = new Set());
+  for (const engine of ["quickjs", "jsc", "browser"] as const) {
+    const name = `bun-${engine}`;
+    if (programs.has(name)) continue;
+    let loading: Promise<WebAssembly.Module> | undefined;
+    const module = engine === options.engine && options.adapter !== "preview1" ? options.module
+      : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
+    subprocess.register(name, { module, adapter: "bun", engine });
+    programs.add(name);
+  }
+  if (options.adapter === "preview1") subprocess.register(`preview1-root-${pid}`, { module: options.module, adapter: "preview1", cooperative: true });
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
   let settle: (result: RunResult) => void = () => {};
   const done = new Promise<RunResult>((resolve) => (settle = resolve));
   let finished = false;
+  let confirmed = false;
+  let selectedResult: RunResult | undefined;
   let outcomeTimer: ReturnType<typeof setTimeout> | null = null;
-  const finish = (result: RunResult, acknowledged = false, signal?: number) => {
-    if (finished) return;
+  const confirm = (ownedDisposal = false) => {
+    if (confirmed || (options.runtime.disposed && !ownedDisposal)) return;
+    confirmed = true;
+    // The admission fence proves completion. Never make run.done depend on terminate().
+    settle(selectedResult!);
+    stopWorker();
+    releaseRootConsumer();
+  };
+  const finish = (result: RunResult, acknowledged = false, signal?: number, ownedDisposal = false) => {
+    // Page disposal may take ownership while this run is already awaiting its root fence.
+    // Its stop hook runs after the owned fence and must settle that existing outcome too.
+    if (finished) { if (ownedDisposal) confirm(true); return; }
+    if (options.runtime.disposed && !ownedDisposal) return;
     if (rootOutcome) {
       const winner = claimOutcome(rootOutcome, signal === undefined
         ? { kind: "exited", code: result.code } : { kind: "signaled", code: signal });
       result = winner.kind === "exited" && winner.code === result.code && result.error
         ? { code: winner.status, error: result.error } : { code: winner.status };
     }
-    subprocess.revokeRuntimeProcess(rootPid);
+    if (!ownedDisposal) subprocess.revokeRuntimeProcess(rootPid);
+    selectedResult = result;
     finished = true;
     if (outcomeTimer !== null) clearTimeout(outcomeTimer);
     outcomeTimer = null;
     let quiescence: void | Promise<void> = undefined;
     if (acknowledged) {
       rootAcknowledged = true;
-      options.filesystem.reap(request.filesystem);
-    } else {
+      options.runtime.filesystem.reap(request.filesystem);
+    } else if (!ownedDisposal) {
       // Outcome/revocation is immediate; confirmation and physical stop require the fence.
       quiescence = quiesceRoot();
     }
-    const rootExit = subprocess.rootExit(result.code);
+    const rootExit = ownedDisposal ? undefined : subprocess.rootExit(result.code);
     helper?.dispose();
     if (moduleCache) void caches.delete(moduleCache);
-    const confirm = () => {
-      // The admission fence proves completion. Never make run.done depend on terminate().
-      settle(result);
-      worker.terminate();
-    };
-    if (quiescence || rootExit) void Promise.all([quiescence, rootExit]).then(confirm)
-      .catch(error => console.error("bun-wasm: root teardown failed", error));
-    else confirm();
+    if (quiescence || rootExit) void Promise.all([quiescence, rootExit]).then(() => confirm())
+      .catch(error => { if (!options.runtime.disposed) console.error("bun-wasm: root teardown failed", error); });
+    else confirm(ownedDisposal);
   };
   worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
+    if (options.runtime.disposed) return;
     if (finished) {
       if (msg.type === "spawn") subprocess.rejectSpawn(msg.request);
       if (msg.type === "runtime-proc") subprocess.rejectRuntimeMessage(msg);
       return;
     }
     const selected = rootOutcome && readOutcome(rootOutcome);
+    if (msg.type === "cleanup-error") {
+      console.error("bun-wasm: root cleanup failed", msg.message);
+      finish({ code: msg.code }, false, msg.signal);
+      return;
+    }
     if (selected?.kind === "signaled" && msg.type !== "exit" && msg.type !== "error") {
       // Reject capabilities at the dispatch boundary too: the periodic observer need not have
       // run yet when a guest catches its own terminal unwind and sends more messages.
@@ -380,6 +415,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       finish({ code: 128 + msg.signal }, false, msg.signal);
       return;
     }
+    if (msg.type !== "exit" && msg.type !== "error") return;
+    if (msg.cleanupErrors?.length) console.error("bun-wasm: root cleanup failed", msg.cleanupErrors);
     // Terminals want CRLF between the error's stack lines.
     if (msg.type === "error") finish({ code: msg.code, error: `bun.wasm crashed: ${msg.message}`.replace(/\r?\n/g, "\r\n") }, true);
     else finish({ code: msg.code }, true, msg.signal);
@@ -388,32 +425,30 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     event.preventDefault();
     finish({ code: 1, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
-  let prepared = !generic;
   const tooling = options.adapter !== "preview1" && isToolCommand(options.args);
-  const preparation = (generic || tooling) ? (async () => {
+  let prepared = !isolated && !generic && !tooling;
+  const preparation = prepared ? undefined : (async () => {
     if (tooling) request.module = await loadTools();
-    if (!generic) {
-      prepared = true;
-      if (!finished) worker.postMessage(request, [request.filesystem.port]);
-      return;
-    }
-    const { workerProcessState, createWorkerProcessTransport } = await import("../../runtime/proc/worker-client");
-    const transport = request.runtimeProcess ??= createWorkerProcessTransport();
-    const state = workerProcessState(transport);
-    // The host endpoint and descriptor reservations use the same filesystem identity.
-    const { port, ...filesystem } = request.filesystem;
-    transport.data = { ...(transport.data as object | undefined), filesystem };
-    await subprocess.adoptRuntimeRoot(transport);
-    rootOutcome = state.signals.outcome;
-    rootPid = request.pid = state.pid;
-    rootJob = request.jobId = state.job;
+    if (generic) {
+      const { workerProcessState, createWorkerProcessTransport } = await import("@bun-wasm/runtime/proc/worker-client");
+      const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
+      const state = workerProcessState(transport);
+      // The host endpoint and descriptor reservations use the same filesystem identity.
+      const { port, ...filesystem } = request.filesystem;
+      transport.data = { ...(transport.data as object | undefined), filesystem };
+      await subprocess.adoptRuntimeRoot(transport);
+      rootOutcome = state.signals.outcome;
+      rootPid = request.pid = state.pid;
+      rootJob = request.jobId = state.job;
+    } else await subprocess.prepareRoot();
+    releaseRootConsumer();
     prepared = true;
     if (!finished) {
       worker.postMessage(request, [request.filesystem.port]);
       watchOutcome();
     }
-  })().catch(error => finish({ code: 126, error: String(error) })) : undefined;
-  if (!preparation) worker.postMessage(request, [request.filesystem.port]);
+  })().catch(error => finish({ code: 126, error: String(error) }));
+  if (prepared) worker.postMessage(request, [request.filesystem.port]);
   function watchOutcome(): void {
     if (!rootOutcome || finished) return;
     outcomeTimer = setTimeout(() => {

@@ -1,4 +1,4 @@
-import { memoryViews } from "../../runtime/core/memory-views.js";
+import { memoryViews } from "@bun-wasm/runtime/core/memory-views";
 import type { SubprocessHost } from "../src/subprocess.ts";
 import { HOST_CALL_FD, installHostSlotsViaImport, type SlotImpls } from "../src/net/trampoline.ts";
 
