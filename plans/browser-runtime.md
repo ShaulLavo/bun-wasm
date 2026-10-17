@@ -289,3 +289,45 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
   audit of `web/src`.
 - brush-web `plans/001-brush-dev-shell.md`, `plans/004-own-shell.md` and `docs/external-commands.md`.
 - Spike reports: `/work/reports/browser-runtime/spikes/`.
+
+## Process gate follow-up after PR 33
+
+Status: Approved.
+
+The fake-timer lane's complete fixture suites on the PR 33 runtime report
+200 passed and 2 failed on each engine. `node-misc` still expects the old
+bare-WASI spawn errors. Its `child_process.spawn ENOENT` and
+`Bun.spawnSync unsupported` checks both print `false` after the process-service
+change. Inspect the actual error and completion contracts before updating that fixture.
+
+The Node-host closed-output batches exit 141 on both stdout and stderr even
+though they install EPIPE listeners. Preserve their callback, error identity,
+ordering and survival assertions. The process contract above requires a guest
+that handles EPIPE to retain its own status. Inspect OS SIGPIPE forwarding in
+`web/scripts/node-host.mjs` separately from the explicit escaping-EPIPE path in
+`crates/bunwasm-runtime/src/js/bootstrap.js:handleBrokenPipe`. The separate
+unhandled-output expectation of 1 also needs alignment with the approved default
+SIGPIPE status of 141.
+
+Reproduce against built artifacts, through the shared runner:
+
+```sh
+source env.sh
+python3 tests/test-closed-output.py --engine quickjs --host node --batch-only --wasm dist/bun.wasm
+scripts/test.sh --no-build --engine quickjs node-misc pipe-closed-output
+```
+
+A copied, validated QuickJS wasm with all four timer-changed JavaScript
+factories restored to exact main `52576274` bytes reproduces both failures.
+That control disables the fake-clock adapter and removes the new routing hooks.
+Its manifest, reproducer and logs are retained in
+`/work/reports/bun-wasm-fake-timers/` as `main-control-manifest.json`,
+`main-control.sh`, `main-control-pipe.log` and `main-control-node-misc.log`.
+The control's copied wasm was removed after its consumers stopped.
+The coordinator owns this evidence until the runtime fix is verified.
+
+The same lane's full web gate also reproduces the previously documented
+WebKit/browser Worker `atomic-transfer` failure. It prints `atomic transfer
+attached`, then `TypeError: Importing a module script failed.` PR 33 records a
+matching-main comparison for this signature. That compatibility follow-up remains
+open. The unchanged HMR check passes all six browser/engine runs.
