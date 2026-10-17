@@ -225,8 +225,10 @@
     return adapters;
   }
   let decoders: ReturnType<typeof create> | undefined;
-  function decode(body: ReadableStream<Uint8Array>, encoding: string | null): ReadableStream<Uint8Array> {
-    if (encoding === null) return body;
+  // A host that forwards a still-encoded body names its encoding in the fetch
+  // head (`bodyEncoding`); a host without the field has already decoded it.
+  function decode(body: ReadableStream<Uint8Array>, encoding: string | null | undefined): ReadableStream<Uint8Array> {
+    if (encoding == null) return body;
     const format = encoding === "br" ? "brotli" : encoding === "x-gzip" ? "gzip" : encoding;
     decoders ??= create(TransformStream, ReadableStream, WritableStream);
     return body.pipeThrough(new decoders.DecompressionStream(format));
