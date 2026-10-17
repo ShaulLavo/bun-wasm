@@ -375,6 +375,15 @@
     const EventEmitter = internal.require("events");
     const { Readable, Writable } = internal.builtin("node:stream");
 
+    function spawnError(error, command, args, sync) {
+      if (error.code !== "ENOENT") return error;
+      const path = String(command);
+      const syscall = `${sync ? "spawnSync" : "spawn"} ${path}`;
+      return Object.assign(new Error(`${syscall} ENOENT`), {
+        code: "ENOENT", errno: -2, syscall, path, spawnargs: args.map(String),
+      });
+    }
+
     function nodeOptions(options = {}) {
       const io = options.stdio === undefined ? "pipe" : options.stdio;
       const stdio = Array.isArray(io) ? io : [io, io, io];
@@ -454,6 +463,7 @@
       child.spawnfile = String(command);
       child.spawnargs = argv;
       try { child._child = spawn(argv, options); } catch (error) {
+        error = spawnError(error, command, args, false);
         internal.nextTick(() => { child.emit("error", error); child.emit("close", -2, null); });
         return child;
       }
@@ -480,13 +490,15 @@
       const config = Object.assign({}, options);
       if (options.input !== undefined) config.stdio = [options.input].concat(options.stdio.slice(1));
       const result = spawnSync(argv, config);
+      if (result.error) result.error = spawnError(result.error, command, args, true);
+      const missing = result.pid === 0 && result.error && result.error.code === "ENOENT";
       const signal = result.signalCode;
       if (result.exitedDueToTimeout) result.error = Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT", errno: -110, syscall: "spawnSync", path: String(command) });
       const encoding = options.encoding;
-      const stdout = options.stdio[1] === "inherit" || options.stdio[1] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stdout.toString(encoding) : result.stdout;
-      const stderr = options.stdio[2] === "inherit" || options.stdio[2] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stderr.toString(encoding) : result.stderr;
+      const stdout = missing || options.stdio[1] === "inherit" || options.stdio[1] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stdout.toString(encoding) : result.stdout;
+      const stderr = missing || options.stdio[2] === "inherit" || options.stdio[2] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stderr.toString(encoding) : result.stderr;
       return { pid: result.pid, status: result.error || signal ? null : result.exitCode, signal,
-        output: [null, stdout, stderr], stdout, stderr, error: result.error };
+        output: missing ? null : [null, stdout, stderr], stdout, stderr, error: result.error };
     }
 
     function failure(command, result) {
@@ -568,5 +580,9 @@
     return { ChildProcess, spawn: nodeSpawn, spawnSync: nodeSpawnSync, exec, execSync, execFile, execFileSync, fork };
   }
 
-  return { spawn, spawnSync, nodeChildProcess };
+  return { spawn, spawnSync(cmd, options) {
+    const result = spawnSync(cmd, options);
+    if (result.error && result.error.code === "ENOENT") throw result.error;
+    return result;
+  }, nodeChildProcess };
 })

@@ -21,6 +21,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, browser module loading and stream adapters over separate host guest instances, with distinct control-pipe and final-signal selectors. |
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, reader relay and descriptor-transfer adapters. |
+| [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun and Node spawn adapters reject unregistered commands with ENOENT and preserve shell status 127. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original runtime_proc imports, nonblocking filesystem preparation, preview1 notification waits and lazy browser process integration. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
@@ -1609,3 +1610,29 @@ complete without waiting for that acknowledgment. A late kill cannot bypass the 
 ordinary outcome has already won. Unknown callback terminals are rejected rather than pretending
 their input can be shared. No new upstream patch, copied
 implementation or compatibility branch is introduced.
+
+## Missing executable errors
+
+Class **Host feature**, original adapters. `web/scripts/node-spawn.ts`,
+`web/src/spawn-error.ts`, `subprocess.ts`, `worker.ts`, `runner.ts` and
+`subprocess-broker.ts` reject commands missing from the host executable registry
+with a structured ENOENT startup error. Each Bun worker receives the registered
+names without activating the generic process service. The generic supervisor
+and shell retain their missing-program status 127.
+
+`crates/bunwasm-runtime/src/js/spawn.js` preserves Bun's throwing spawn APIs and
+Node's error event and synchronous result contracts. These changes are original
+implementations against the public APIs. No upstream implementation is copied.
+The existing JavaScript factory is changed in place to keep this fix separate
+from the approved runtime TypeScript conversion.
+
+Behavior references at upstream Bun revision
+`5e0baa66516f3af00b008cdf1521c681317741e8` are
+`src/runtime/api/bun/js_bun_spawn_bindings.rs::throw_command_not_found`,
+`src/js/node/child_process.ts`,
+`test/js/node/test/parallel/test-child-process-spawn-error.js`,
+`test/js/node/test/parallel/test-child-process-spawnsync.js` and the spawn-failure
+close-event tests in `test/js/node/child_process/child_process.test.ts`.
+Bun errors carry ENOENT, errno -2 and path. Node errors add the spawn syscall and
+argument list. Node emits error then close without spawn or exit; its synchronous
+result has null status, signal and output on a missing command.
