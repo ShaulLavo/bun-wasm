@@ -72,7 +72,7 @@ const cases: Record<string, () => Promise<void>> = {
     rmSync(join(cwd, "node_modules/.bin"), { recursive: true });
     assert.match(await success(cwd, "x", ...(process.env.INSTALL_ENGINE === "native" ? [] : ["--no-install"]), "@fixture/multiple"), /first-bin/);
     assert.match(await success(cwd, "x", ...(process.env.INSTALL_ENGINE === "native" ? [] : ["--no-install"]), "@fixture/string"), /string-bin/);
-    assert.match(await success(cwd, "x", "--no-install", "--package", "@fixture/multiple", "second"), /second-bin/);
+    assert.match(await success(cwd, "x", "--no-install", "--package", "@fixture/multiple", "aSecond"), /second-bin/);
     const missing = await run(cwd, "x", "--no-install", "--package", "only", "missing");
     assert.notEqual(missing.code, 0, missing.stdout);
     assert.doesNotMatch(missing.stdout, /only-bin/);
@@ -92,7 +92,7 @@ const cases: Record<string, () => Promise<void>> = {
 try {
   registry = await createRegistry([
     packageFixture("tool", "1.0.0", { bin: "cli.ts" }, undefined, [tarEntry("package/cli.ts", '#!/usr/bin/env bun\nconsole.log("bin-tool");')]),
-    packageFixture("@fixture/multiple", "1.0.0", { bin: { first: "first.ts", second: "second.ts" } }, undefined,
+    packageFixture("@fixture/multiple", "1.0.0", { bin: { invalid: 42, escape: "../escape.ts", empty: "", zFirst: "first.ts", aSecond: "second.ts" } }, undefined,
       [tarEntry("package/first.ts", '#!/usr/bin/env bun\nconsole.log("first-bin");'), tarEntry("package/second.ts", '#!/usr/bin/env bun\nconsole.log("second-bin");')]),
     packageFixture("only", "1.0.0", { bin: { actual: "cli.ts" } }, undefined, [tarEntry("package/cli.ts", '#!/usr/bin/env bun\nconsole.log("only-bin");')]),
     packageFixture("@fixture/string", "1.0.0", { bin: "cli.ts" }, undefined, [tarEntry("package/cli.ts", '#!/usr/bin/env bun\nconsole.log("string-bin");')]),
