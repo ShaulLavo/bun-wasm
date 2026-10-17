@@ -327,7 +327,7 @@ async function main(): Promise<boolean> {
           assertRunning();
           const spawnedAfter = Date.now();
           driver = Bun.spawn(["/usr/bin/safaridriver", "--port", String(driverPort)], { stdout: "ignore", stderr: "inherit" });
-          driverOwnership = ownSafariDriver(driver, spawnedAfter);
+          driverOwnership = ownSafariDriver(driver, spawnedAfter, driverPort);
           console.log(JSON.stringify({ resources: { safariDriverPort: driverPort, safariDriverPid: driver.pid } }));
           for (let attempt = 0; ; attempt++) {
             try { await webdriver("/status"); break; }
