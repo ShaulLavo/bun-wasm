@@ -226,8 +226,16 @@ console.log("started workers drop messages without a handler");
 
 const transferWorker = new Worker(new URL("./transfer-worker.ts", import.meta.url));
 const transferClose = closed(transferWorker);
-const transferResult = message(transferWorker);
+const transferMessages: unknown[] = [];
+const transferResult = new Promise<void>((resolve, reject) => {
+  transferWorker.onmessage = event => {
+    transferMessages.push(event.data);
+    if (event.data === "worker transfer validation") resolve();
+  };
+  transferWorker.onerror = reject;
+});
 await checkTransferValidation(transferWorker.postMessage.bind(transferWorker));
-assert.equal(await transferResult, "worker transfer validation");
+await transferResult;
 await transferClose;
+assert.deepEqual(transferMessages, [null, null, "worker transfer validation"]);
 console.log("Web transfer validation is atomic and matches Bun errors");
