@@ -42,7 +42,7 @@ pub fn read(manifest: &Value, parser: &dyn Transpiler, registry: &str) -> Result
         )?;
         "package-lock.json"
     } else if Path::new("yarn.lock").exists() {
-        yarn(&roots, parser, &mut packages)?;
+        yarn(&roots, parser, registry, &mut packages)?;
         "yarn.lock"
     } else if Path::new("pnpm-lock.yaml").exists() {
         pnpm(
@@ -61,15 +61,29 @@ pub fn read(manifest: &Value, parser: &dyn Transpiler, registry: &str) -> Result
     }
     eprintln!("migrated lockfile from {source}");
     Ok(Some(
-        json!({"lockfileVersion": 2, "configVersion": 1, "workspaces": workspaces, "packages": packages}),
+        json!({"lockfileVersion": 2, "configVersion": if source == "pnpm-lock.yaml" { 1 } else { 0 }, "workspaces": workspaces, "packages": packages}),
     ))
 }
 
 pub fn workspace_meta(manifest: &Value, root: bool) -> Value {
-    let mut meta = local::lock_meta(manifest);
+    let mut meta = json!({});
+    for field in [
+        "name",
+        "version",
+        "bin",
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    ] {
+        if !manifest[field].is_null() {
+            meta[field] = manifest[field].clone();
+        }
+    }
     if root {
         meta.as_object_mut().unwrap().shift_remove("version");
     }
+    remove_optional_duplicates(&mut meta);
     let info = resolve::lock_info(manifest);
     if !info["optionalPeers"].is_null() {
         meta["optionalPeers"] = info["optionalPeers"].clone();
@@ -217,7 +231,7 @@ fn npm_range(range: &str) -> String {
     target.into()
 }
 
-fn yarn_record(selector: &str, value: &Value) -> Result<Option<(String, Value)>> {
+fn yarn_record(selector: &str, value: &Value, registry: &str) -> Result<Option<(String, Value)>> {
     let (name, range) = resolve::spec(selector)?;
     if range.starts_with("workspace:") {
         return Ok(None);
@@ -233,6 +247,11 @@ fn yarn_record(selector: &str, value: &Value) -> Result<Option<(String, Value)>>
             .ok_or_else(|| format!("Unsupported migrated resolution: {resolution}"))?;
         meta["name"] = target.into();
         meta["version"] = version.into();
+        meta["resolved"] = format!(
+            "{registry}/{target}/-/{}-{version}.tgz",
+            target.rsplit('/').next().unwrap()
+        )
+        .into();
     } else if let Some(alias) = range.strip_prefix("npm:") {
         meta["name"] = resolve::spec(alias)?.0.into();
     }
@@ -245,6 +264,7 @@ fn yarn_record(selector: &str, value: &Value) -> Result<Option<(String, Value)>>
 fn yarn(
     roots: &[(Vec<String>, Value)],
     parser: &dyn Transpiler,
+    registry: &str,
     packages: &mut BTreeMap<String, Value>,
 ) -> Result<()> {
     let text = fs::read_to_string("yarn.lock").map_err(|e| e.to_string())?;
@@ -259,7 +279,7 @@ fn yarn(
             continue;
         }
         for selector in selectors.split(", ") {
-            records.extend(yarn_record(selector, value)?);
+            records.extend(yarn_record(selector, value, registry)?);
         }
     }
     graph(roots, &records, packages)
@@ -623,4 +643,23 @@ fn registry_metadata(name: &str, registry: &str) -> Option<Value> {
         eprintln!("warn: registry metadata unavailable while migrating {name}");
     }
     result.ok()
+}
+
+fn remove_optional_duplicates(meta: &mut Value) {
+    let names: Vec<_> = meta["optionalDependencies"]
+        .as_object()
+        .into_iter()
+        .flat_map(|deps| deps.keys().cloned())
+        .collect();
+    for field in ["dependencies", "devDependencies"] {
+        let Some(deps) = meta[field].as_object_mut() else {
+            continue;
+        };
+        for name in &names {
+            deps.shift_remove(name);
+        }
+        if deps.is_empty() {
+            meta.as_object_mut().unwrap().shift_remove(field);
+        }
+    }
 }

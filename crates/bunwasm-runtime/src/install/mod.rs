@@ -431,11 +431,12 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> String {
         };
         packages.insert(key.clone(), row);
     }
-    write_lock(&json!({"workspaces": workspaces, "packages": packages}))
+    write_lock(&json!({"configVersion": resolver.locked["configVersion"].as_u64().unwrap_or(1), "workspaces": workspaces, "packages": packages}))
 }
 
 fn write_lock(lock: &Value) -> String {
-    let mut out = "{\n  \"lockfileVersion\": 2,\n  \"configVersion\": 1,\n  \"workspaces\": {\n".to_owned();
+    let config = lock["configVersion"].as_u64().unwrap_or(1);
+    let mut out = format!("{{\n  \"lockfileVersion\": 2,\n  \"configVersion\": {config},\n  \"workspaces\": {{\n");
     if let Some(workspaces) = lock["workspaces"].as_object() {
         for (path, meta) in workspaces.iter().collect::<std::collections::BTreeMap<_, _>>() {
             out.push_str(&format!("    {}: ", json!(path)));

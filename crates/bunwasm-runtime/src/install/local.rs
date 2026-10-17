@@ -172,23 +172,6 @@ mod tests {
     }
 }
 
-pub fn lock_meta(meta: &Value) -> Value {
-    let mut row = json!({});
-    for field in [
-        "name",
-        "version",
-        "dependencies",
-        "devDependencies",
-        "optionalDependencies",
-        "peerDependencies",
-    ] {
-        if !meta[field].is_null() {
-            row[field] = meta[field].clone();
-        }
-    }
-    row
-}
-
 pub fn physical(path: &Path) -> Result<PathBuf> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut path = PathBuf::from(crate::resolve::normalize(&cwd.join(path).to_string_lossy()));

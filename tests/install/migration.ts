@@ -132,6 +132,21 @@ function captureLock(name: string, label: string, directory: string) {
   if (evidence && existsSync(join(directory, "bun.lock"))) writeFileSync(join(evidence, `${name}-${label}.lock`), readFileSync(join(directory, "bun.lock")));
 }
 
+function registryPackage(name: string, base: string): Response | undefined {
+  const directory = resolve(upstream, "../registry/packages");
+  const file = resolve(directory, name, "package.json");
+  if (!file.startsWith(directory + "/") || !existsSync(file)) return;
+  const manifest = object(JSON.parse(readFileSync(file, "utf8")));
+  const versions = object(manifest.versions);
+  for (const [version, value] of Object.entries(versions)) {
+    const row = object(value), dist = object(row.dist);
+    if (typeof dist.tarball === "string") dist.tarball = base + new URL(dist.tarball).pathname;
+    row.dist = dist; versions[version] = row;
+  }
+  manifest.versions = versions;
+  return Response.json(manifest);
+}
+
 async function checkMigration(name: string, source: string) {
   const reference = join(scratch, `${name}-native`), guest = join(scratch, `${name}-guest`);
   cpSync(join(upstream, source), reference, { recursive: true });
@@ -209,15 +224,19 @@ try {
   const recorded = await replay({ directory: process.env.MATRIX_CACHE || "/work/cache/bun-wasm-app-matrix", record: false });
   const metadata = object(JSON.parse(readFileSync(join(upstream, "yarn/npm-metadata.json"), "utf8")));
   const metadataRequests: string[] = [];
+  let overlayBase = "";
   const overlay = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const path = new URL(request.url).pathname;
     const name = decodeURIComponent(path.slice(1));
+    const packageRecord = registryPackage(name, overlayBase);
+    if (packageRecord) { metadataRequests.push(name); return packageRecord; }
     if (!Object.hasOwn(metadata, name)) return fetch(`${recorded.base}${path}`);
     metadataRequests.push(name);
     const versions = Object.fromEntries(Object.entries(object(metadata[name])).map(([version, fields]) => [version, { name, version, ...object(fields) }]));
     return Response.json({ name, versions });
   } });
-  mirror = { ...recorded, base: String(overlay.url).replace(/\/$/, ""), async close() { await overlay.stop(true); await recorded.close(); } };
+  overlayBase = String(overlay.url).replace(/\/$/, "");
+  mirror = { ...recorded, base: overlayBase, async close() { await overlay.stop(true); await recorded.close(); } };
   for (const [name, source] of cases) {
     if (process.env.MIGRATION_CASES && !process.env.MIGRATION_CASES.split(",").includes(name)) continue;
     try { await checkMigration(name, source); } catch (error) { console.error(`FAIL ${name}`, error); process.exitCode = 1; }
