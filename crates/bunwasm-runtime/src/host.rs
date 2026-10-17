@@ -9,7 +9,7 @@
 use std::ptr::{addr_of, addr_of_mut, read_volatile};
 
 pub const ABI_VERSION: u32 = 1;
-pub const SLOT_COUNT: usize = 15;
+pub const SLOT_COUNT: usize = 14;
 
 pub const ERROR: i32 = -1;
 pub const AGAIN: i32 = -2;
@@ -33,12 +33,11 @@ pub enum Slot {
     PeerAddr = 11,
     Shutdown = 12,
     LocalAddr = 13,
-    Signal = 14,
 }
 
 pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
     "poll", "fetch", "fetch_head", "read", "write", "close", "listen", "local_port", "accept", "connect",
-    "error", "peer_addr", "shutdown", "local_addr", "signal",
+    "error", "peer_addr", "shutdown", "local_addr",
 ];
 
 #[repr(C)]
@@ -62,7 +61,6 @@ pub fn provided(slot_number: usize) -> bool {
 }
 
 type F1 = extern "C" fn(i32) -> i32;
-type F2 = extern "C" fn(i32, i32) -> i32;
 type F3 = extern "C" fn(i32, i32, i32) -> i32;
 type F4 = extern "C" fn(i32, i32, i32, i32) -> i32;
 
@@ -113,7 +111,6 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
     Some(unsafe {
         match id {
             Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept | Slot::Shutdown => std::mem::transmute::<usize, F1>(index as usize)(args[0]),
-            Slot::Signal => std::mem::transmute::<usize, F2>(index as usize)(args[0], args[1]),
             Slot::Fetch => std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3]),
             Slot::FetchHead | Slot::Read | Slot::Write | Slot::Listen | Slot::Connect | Slot::Error | Slot::PeerAddr | Slot::LocalAddr => std::mem::transmute::<usize, F3>(index as usize)(args[0], args[1], args[2]),
         }
@@ -225,6 +222,7 @@ mod runtime_proc {
         pub fn kill(pid: i32, sig: i32) -> i32;
         pub fn kill_job(job: i32, sig: i32) -> i32;
         pub fn poll(subs_ptr: i32, n: i32, timeout_ms: i32, out_ptr: i32) -> i32;
+        pub fn signal(sig: i32, mode: i32) -> i32;
     }
     #[link(wasm_import_module = "wasi_snapshot_preview1")]
     unsafe extern "C" {
@@ -247,6 +245,7 @@ mod runtime_proc {
     pub unsafe fn kill(_: i32, _: i32) -> i32 { UNSUPPORTED }
     pub unsafe fn kill_job(_: i32, _: i32) -> i32 { UNSUPPORTED }
     pub unsafe fn poll(_: i32, _: i32, _: i32, _: i32) -> i32 { UNSUPPORTED }
+    pub unsafe fn signal(_: i32, _: i32) -> i32 { UNSUPPORTED }
     pub unsafe fn fd_close(_: i32) -> i32 { -UNSUPPORTED }
 }
 
@@ -328,68 +327,10 @@ pub fn proc_poll(subscriptions: &[u8], timeout_ms: i32) -> Result<Vec<u8>, i32> 
     Ok(events)
 }
 
+/// `runtime_proc.signal(sig, mode)` (docs/host-abi.md, "Signal dispositions"). A selected default
+/// action unwinds through the host instead of returning.
 pub fn signal(signal: i32, operation: i32) -> i32 {
-    call(Slot::Signal, [signal, operation, 0, 0]).unwrap_or(UNSUPPORTED)
-}
-
-/// Plain WASI has no process supervisor, but self-signals and JS handler
-/// registration still work. This state is used only when slot 18 is absent.
-pub(crate) struct LocalSignals {
-    dispositions: [u8; 65],
-    pending: u64,
-}
-
-impl Default for LocalSignals {
-    fn default() -> Self {
-        Self { dispositions: [0; 65], pending: 0 }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) enum SignalAction {
-    Value(i32),
-    Default(i32),
-}
-
-impl LocalSignals {
-    pub(crate) fn signal(&mut self, signal: i32, operation: i32) -> SignalAction {
-        // Without a supervisor, default actions are returned by the operation
-        // that selects them. A fatal-only checkpoint leaves handled work here.
-        if signal == 0 && operation == 4 {
-            return SignalAction::Value(0);
-        }
-        if signal == 0 && operation == 0 {
-            if self.pending == 0 {
-                return SignalAction::Value(0);
-            }
-            let signal = self.pending.trailing_zeros() + 1;
-            self.pending &= !(1u64 << (signal - 1));
-            return SignalAction::Value(signal as i32);
-        }
-        if !(1..=64).contains(&signal) || !(0..=3).contains(&operation)
-            || (signal == 9 && operation != 3)
-        {
-            return SignalAction::Value(-22);
-        }
-        let bit = 1u64 << (signal - 1);
-        if operation == 3 {
-            match self.dispositions[signal as usize] {
-                0 => return SignalAction::Default(signal),
-                1 => {}
-                2 => self.pending |= bit,
-                _ => unreachable!(),
-            }
-        } else {
-            self.dispositions[signal as usize] = operation as u8;
-            if operation != 2 && self.pending & bit != 0 {
-                self.pending &= !bit;
-                if operation == 0 {
-                    return SignalAction::Default(signal);
-                }
-            }
-        }
-        SignalAction::Value(0)
-    }
+    proc_call!(runtime_proc::signal(signal, operation))
 }
 
 /// Sleep through the host when present so child cancellation can interrupt timers
@@ -411,97 +352,16 @@ mod signal_tests {
     use super::*;
 
     #[test]
-    fn bun_child_slots_are_gone_and_processes_use_runtime_proc_imports() {
-        assert_eq!(Slot::Signal as usize, 14);
-        assert_eq!(SLOT_NAMES[14], "signal");
-        assert_eq!(SLOT_COUNT, 15);
-        assert!(SLOT_NAMES.iter().all(|name| !name.starts_with("child_") && *name != "spawn"));
+    fn bun_child_and_signal_slots_are_gone_and_processes_use_runtime_proc_imports() {
+        assert_eq!(Slot::LocalAddr as usize, 13);
+        assert_eq!(SLOT_NAMES[13], "local_addr");
+        assert_eq!(SLOT_COUNT, 14);
+        assert!(SLOT_NAMES.iter().all(|name| !name.starts_with("child_") && *name != "spawn" && *name != "signal"));
         // Off wasm32 the imports do not exist, so every call reports UNSUPPORTED.
         assert!(!PROCESS_ABI);
         assert_eq!(proc_spawn(b"{}"), UNSUPPORTED);
         assert_eq!(proc_pipe(), Err(UNSUPPORTED));
         assert_eq!(proc_poll(&[], 0), Err(UNSUPPORTED));
-    }
-
-    #[test]
-    fn plain_wasi_self_raise_honors_dispositions() {
-        for signal in [2, 13, 15] {
-            for disposition in 0..=2 {
-                let mut signals = LocalSignals::default();
-                assert_eq!(signals.signal(signal, disposition), SignalAction::Value(0));
-                let expected = if disposition == 0 { SignalAction::Default(signal) } else { SignalAction::Value(0) };
-                assert_eq!(signals.signal(signal, 3), expected);
-                assert_eq!(signals.signal(0, 0), SignalAction::Value(if disposition == 2 { signal } else { 0 }));
-            }
-        }
-    }
-
-    #[test]
-    fn plain_wasi_pending_removal_ignore_and_once_share_the_host_contract() {
-        for disposition in 0..=2 {
-            let mut signals = LocalSignals::default();
-            assert_eq!(signals.signal(2, 2), SignalAction::Value(0));
-            assert_eq!(signals.signal(2, 3), SignalAction::Value(0));
-            let expected = if disposition == 0 { SignalAction::Default(2) } else { SignalAction::Value(0) };
-            assert_eq!(signals.signal(2, disposition), expected);
-            assert_eq!(signals.signal(0, 0), SignalAction::Value(if disposition == 2 { 2 } else { 0 }));
-            // Once removal happens after the pending delivery was consumed.
-            assert_eq!(signals.signal(2, 0), SignalAction::Value(0));
-        }
-    }
-
-    #[test]
-    fn plain_wasi_distinct_signals_do_not_overwrite_each_other() {
-        let mut signals = LocalSignals::default();
-        for signal in [64, 15, 2] {
-            assert_eq!(signals.signal(signal, 2), SignalAction::Value(0));
-            assert_eq!(signals.signal(signal, 3), SignalAction::Value(0));
-            assert_eq!(signals.signal(signal, 3), SignalAction::Value(0));
-        }
-        for signal in [2, 15, 64, 0] {
-            assert_eq!(signals.signal(0, 0), SignalAction::Value(signal));
-        }
-    }
-
-    #[test]
-    fn plain_wasi_fatal_checkpoint_does_not_dequeue_handled_pending_signals() {
-        let mut signals = LocalSignals::default();
-        assert_eq!(signals.signal(0, 4), SignalAction::Value(0));
-        for signal in [64, 15, 2] {
-            assert_eq!(signals.signal(signal, 2), SignalAction::Value(0));
-            assert_eq!(signals.signal(signal, 3), SignalAction::Value(0));
-        }
-        for signal in [2, 15, 64, 0] {
-            for _ in 0..3 {
-                assert_eq!(signals.signal(0, 4), SignalAction::Value(0));
-            }
-            assert_eq!(signals.signal(0, 0), SignalAction::Value(signal));
-        }
-    }
-
-    #[test]
-    fn plain_wasi_fatal_checkpoint_leaves_pending_disposition_changes_authoritative() {
-        for disposition in [0, 1] {
-            let mut signals = LocalSignals::default();
-            assert_eq!(signals.signal(2, 2), SignalAction::Value(0));
-            assert_eq!(signals.signal(2, 3), SignalAction::Value(0));
-            for signal in [-1, 1, 9, 15, 64, 65] {
-                assert_eq!(signals.signal(signal, 4), SignalAction::Value(-22));
-            }
-            assert_eq!(signals.signal(0, 4), SignalAction::Value(0));
-            let expected = if disposition == 0 { SignalAction::Default(2) } else { SignalAction::Value(0) };
-            assert_eq!(signals.signal(2, disposition), expected);
-            assert_eq!(signals.signal(0, 0), SignalAction::Value(0));
-        }
-    }
-
-    #[test]
-    fn plain_wasi_kill_cannot_be_reconfigured_and_invalid_calls_are_harmless() {
-        let mut signals = LocalSignals::default();
-        for (signal, operation) in [(9, 0), (9, 1), (9, 2), (-1, 0), (65, 0), (2, -1), (2, 4), (0, 3)] {
-            assert_eq!(signals.signal(signal, operation), SignalAction::Value(-22));
-        }
-        assert_eq!(signals.signal(0, 0), SignalAction::Value(0));
-        assert_eq!(signals.signal(9, 3), SignalAction::Default(9));
+        assert_eq!(signal(0, 4), UNSUPPORTED);
     }
 }
