@@ -561,5 +561,7 @@ export function installBunAdapters(runtime: Runtime, workerUrl: string, tools?: 
 async function commandModule(context: ProcessContext, tools?: () => Promise<WebAssembly.Module>): Promise<WebAssembly.Module> {
   if (!context.adapter.startsWith("bun:") || !isToolCommand(context.request.argv.slice(1))) return context.module;
   if (!tools) throw new Error("bun-tools.wasm loader is unavailable");
-  return tools();
+  const module = await tools();
+  if (readOutcome(context.outcome)) throw new Error("Process exited while loading tools");
+  return module;
 }
