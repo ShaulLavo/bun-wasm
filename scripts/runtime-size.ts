@@ -32,11 +32,11 @@ export function checkCoreBudget(gzipBytes: number): void {
   if (gzipBytes > budget) throw new Error(`core exceeds ${budget} B gzip budget by ${gzipBytes - budget} B; inspect runtime/core imports and the layer report`);
 }
 
-/** Only the reservation primitives are eager; Bun's slot/pipe adapter is separately visible. */
+/** Reservation and synchronous signal-control primitives are eager, not the process service. */
 export function processServiceInputs(inputs: readonly string[]): string[] {
   return inputs.filter(path => {
     const match = /(?:^|\/)runtime\/proc\/(.+)\.ts$/.exec(path);
-    return match !== null && !["identity", "stub", "outcome", "types"].includes(match[1]!);
+    return match !== null && !["identity", "stub", "outcome", "signals", "types"].includes(match[1]!);
   });
 }
 export function checkLazyProcessService(inputs: readonly string[]): void {

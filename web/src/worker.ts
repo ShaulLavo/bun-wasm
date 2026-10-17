@@ -8,7 +8,8 @@ import { NetHost } from "./net/host";
 import type { NetRequest } from "./net/protocol";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline";
 import { Wasi, WasiExit, type Stream } from "@bun-wasm/runtime/core";
-import { claimOutcome, outcomeWord, readOutcome, type ProcessExit } from "@bun-wasm/runtime/proc";
+import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
+import type { ProcessExit } from "../../runtime/proc/types.ts";
 import { SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "./subprocess.ts";
 
 export type Engine = "quickjs" | "jsc" | "browser";

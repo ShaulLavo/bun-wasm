@@ -77,7 +77,10 @@ Each process has fresh interrupt/revocation/transport buffers;
 killed buffers are never assigned to another process. The browser keeps pooling disabled:
 measurements must justify enabling it per browser before adding idle workers.
 
-The generic service is dynamically imported on first spawn. Bun's existing pipe/slot transport
+The generic service's registry, process table and supervisor are dynamically imported on first
+spawn. Small identity, typed-outcome and signal-state leaves are available earlier for synchronous
+root control; importing them must not pull in the service barrel. The bundle gate checks both this
+boundary and the approximately 1 KiB compressed first-spawn stub. Bun's existing pipe/slot transport
 is measured separately and remains in the initial adapter closure until step 4b. The unified
 `runtime_proc` descriptor/pipe imports are also step 4b; CPU-bound QuickJS/JSC interrupt checkpoints
 are step 7a. Handled signals already dispatch during cooperative event-loop turns, while unhandled
