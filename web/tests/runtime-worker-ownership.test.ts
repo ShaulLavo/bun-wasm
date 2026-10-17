@@ -297,8 +297,7 @@ for (const early of [false, true]) test(`explicit generic runner roots preserve 
     if (early) run.kill(9);
     await ready;
     expect(sent.runtimeProcess).toBe(transport);
-    expect(sent.pid).toBe(11);
-    expect(sent.jobId).toBe(7);
+    expect(workerProcessState(sent.runtimeProcess!)).toMatchObject({ pid: 11, job: 7 });
     expect(connections).toBe(1);
     if (!early) run.kill(9);
     expect(await run.done).toEqual({ code: 137 });

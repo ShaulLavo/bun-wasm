@@ -129,14 +129,20 @@ role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `1
   this installed Waffle package entrypoint for standalone consumers.
 - `waffle/core/wasi`: the WASI preview1 implementation over the Waffle filesystem service. Any import
   it does not implement gets an ENOSYS stub that prints `[wasi] unimplemented import …` once.
-- `src/worker.ts`: each `bun …` command starts a fresh worker, instantiates the precompiled module,
-  streams `fd_write` on fds 1/2 back as it happens, and uses the live filesystem service.
+- `src/worker.ts`: the worker entry. Each `bun …` command starts a fresh worker running Waffle's
+  process bootstrap with Bun's executor (`src/bun-executor.ts`, `createBunExecutor`, which has no
+  import side effects): it instantiates the precompiled module, streams `fd_write` on fds 1/2 back
+  as it happens, and uses the live filesystem service.
   Ctrl-C sends SIGINT: an ordinary program stops immediately with 130; a registered handler may
   clean up and retain its own exit code. A second stop request sends SIGKILL. Completed writes remain visible.
 - `src/shell.ts`: line editing, history, Tab completion, `;`/`&&`, `>`/`>>`, and the builtins
   `ls cat echo cd pwd mkdir rm mv touch edit clear history help`.
 - `src/runner.ts`: loading an engine's wasm and starting one `bun …` run in a worker with its
-  networking; the sandbox (../sandbox/) uses it too.
+  networking; the sandbox (../sandbox/) uses it too. Every run roots a generic Waffle process
+  tree, so the root, its children and the shell spawn through the page runtime's one service.
+- `src/subprocess-broker.ts`, `src/bun-launcher.ts`: Bun's composition over that service. The
+  launchers start one worker per `bun:<engine>` or `preview1` process; the broker adopts a run's
+  root, resolves the `bun`/`node` aliases to the run's engine and forwards signals.
 - `src/main.ts`: layout, editor tabs, Run button.
 
 The guest gets `/` preopened and `PWD=/home/user`. WASI has no working directory of its own, so
@@ -144,9 +150,11 @@ bun.wasm must `chdir($PWD)` at startup for relative paths to resolve from `/home
 
 ## Bun subprocess workers
 
-When the page is cross-origin isolated, the subprocess ABI reserves a pid immediately and the
-page broker lazily loads Waffle's `proc/` service to start one worker per process. A synchronous wasm call
-cannot block that startup. The executable registry maps a name to a compiled module and guest
+The Bun guest imports Waffle's `runtime_proc` process ABI directly (`spawn`, `pipe`, `read`, `write`,
+`wait`, `wait_job`, `kill`, `kill_job`, `poll`, `signal`, plus WASI `fd_close`); the only host slots
+left are the 14 network ones (`src/net/trampoline.ts`). A synchronous wasm call
+reserves a pid immediately and the page runtime lazily loads Waffle's `proc/` service to start one
+worker per process. The executable registry maps a name to a compiled module and guest
 adapter; modules are shared between fresh workers, never retained guest instances. `bun`, `/bun`,
 `node`, `/node`, `/usr/local/bin/bun` and `/usr/local/bin/node` select Bun light. `bun-quickjs`, `bun-jsc` and `bun-browser` select
 an engine explicitly instead of inheriting the parent's engine. Other registered preview1
@@ -155,8 +163,8 @@ The module service-worker scope is prepared for every parent engine, so Bun ligh
 load cyclic modules even when their parent uses QuickJS or JSC. The host never starts a native executable. The headless Node adapter maintains its explicit
 Bun alias registry and real filesystem preopens.
 
-Each process has separate argv, environment, cwd and stdio. Bun's existing bounded 1 MiB pipe
-transport remains until step 4b. Closing stdin sends EOF; `child_wait` polls the exit status.
+Each process has separate argv, environment, cwd and descriptors. Pipes are Waffle's process-owned
+rings; closing the last writer sends EOF and `wait` polls the exit status.
 SIGINT, SIGTERM and SIGPIPE use per-process, per-signal dispositions. Without a registered
 handler, the supervisor immediately records `128 + signal` and revokes before termination.
 Ignored signals do nothing; handled signals queue for the guest and preserve its own exit code.
@@ -166,10 +174,9 @@ SIGKILL always records 137 and revokes; it cannot be caught or ignored. Cooperat
 turns deliver registered handlers now; CPU-bound engine checkpoints are step 7a, not a dependency
 of unhandled default actions. A second Run/Ctrl+C stop request sends SIGKILL; no timer escalates.
 Jobs and pids have separate namespaces; foreground job termination leaves other background jobs
-alive, and ordinary parent exit does not kill children. Bun's adapter retains its four-active-child
-budget; the generic service does not impose that limit. Each wasm instance retains the module's
-512 MiB memory limit, and Node children have a 128 MiB JS heap limit. Close child handles after
-consuming output to release transport buffers.
+alive, and ordinary parent exit does not kill children. The generic service imposes no
+four-active-child limit. Each wasm instance retains the module's 512 MiB memory limit, and Node
+children have a 128 MiB JS heap limit.
 
 All browser processes connect to one live filesystem worker. Completed writes are immediately
 visible to the editor and other processes; there is no copy-at-spawn or merge-at-exit. Each
@@ -181,14 +188,13 @@ process buffers are never reused for another process. Node workers use their rea
 
 Browser children do not share the parent's networking ring. The browser engine
 still has direct host `fetch`; QuickJS/JSC children have no networking slots.
-Browser subprocess `stdin: "inherit"` shares the parent's stdin pipe when the
-parent has one; the playground's root stdin remains EOF. Inherited output goes
-to the parent's stdout/stderr, and ignored output is drained and discarded.
+The playground's root stdin remains EOF, and children inherit it as EOF. Inherited output goes
+to the root's stdout/stderr through its terminal descriptions.
 
 Run `node --no-warnings web/tests/subprocess.mjs` for Node worker checks, or build
 web/ and run `bun web/tests/browser-subprocess.ts` for Chromium and WebKit
-checks across all three engines. `bun test web/tests/subprocess.test.ts` checks
-pipe wrapping, live filesystem visibility, and the Node worker checks. The artifact-free
+checks across all three engines. `bun test web/tests/live-filesystem.test.ts` checks live
+filesystem visibility between processes. The artifact-free
 `bun web/tests/browser-process.ts chromium|firefox|webkit` gate exercises the generic supervisor
 and real workers, including cooperative CPU-loop signal handling and background jobs.
 Add `--artifact` to use the existing Bun light WASM for orphan-lifetime and capacity checks;

@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { createRuntime, type Runtime } from "waffle";
-import type { RunRequest, WorkerMessage } from "../src/worker";
+import type { RunRequest, WorkerMessage } from "../src/bun-executor";
 import { workerProcessState } from "waffle/proc/worker-client";
-import { createLegacyEngineScope, createRuntimeEngineScope } from "./engine-interruption-scope";
+import { createRuntimeEngineScope } from "./engine-interruption-scope";
 import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 
@@ -79,7 +79,7 @@ function runtimeRealm() {
 
 // Exercise the actual page-side production admission and launchRuntime. This is
 // structural harness coverage; real interpreters and native waits run in browsers.
-test("generic engine scope reaches real launchRuntime without legacy ChildTransport", async () => {
+test("generic engine scope reaches real launchRuntime with the process transport", async () => {
   const realm = runtimeRealm();
   let owned: Awaited<ReturnType<typeof createRuntimeEngineScope>> | undefined;
   try {
@@ -92,12 +92,10 @@ test("generic engine scope reaches real launchRuntime without legacy ChildTransp
       await Bun.sleep(1);
     }
     const worker = realm.workers[0]!, request = worker.request!;
-    expect(request.child).toBeUndefined();
     expect(request.runtimeProcess).toBeDefined();
-    expect(request.budget).toBeInstanceOf(SharedArrayBuffer);
     expect(request.args).toEqual(["bun", "-e", "fixture-source"]);
-    expect(request.pid).toBe(child.pid);
     const state = workerProcessState(request.runtimeProcess!);
+    expect(state.pid).toBe(child.pid);
     expect(child.signalState.buffer).toBe(state.signals.signalState.buffer);
     expect(child.signalState.byteOffset).toBe(state.signals.signalState.byteOffset);
     expect(request.runtimeProcess!.bindings.map(binding => binding.fd)).toEqual([0, 1, 2]);
@@ -113,17 +111,16 @@ test("generic engine scope reaches real launchRuntime without legacy ChildTransp
   expect(realm.workers.every(worker => worker.stopped)).toBe(true);
 });
 
-for (const route of ["legacy", "runtimeProcess", "owned-preview1"] as const) {
+for (const route of ["runtimeProcess", "owned-preview1"] as const) {
   test(`${route} page killJob handles the guest without killing its waiting controller`, async () => {
     const realm = runtimeRealm();
-    let owned: Awaited<ReturnType<typeof createRuntimeEngineScope>> | ReturnType<typeof createLegacyEngineScope> | undefined;
+    let owned: Awaited<ReturnType<typeof createRuntimeEngineScope>> | undefined;
     try {
       const module = new WebAssembly.Module(route === "owned-preview1" ? preview1SignalClockGuest()
         : new Uint8Array([0,97,115,109,1,0,0,0]));
       const url = "http://localhost/engine-interruption-worker.js";
       owned = route === "runtimeProcess" ? await createRuntimeEngineScope(module, "quickjs", realm.runtime, url)
-        : createLegacyEngineScope(module, route === "owned-preview1" ? "browser" : "quickjs", realm.runtime, url,
-          route === "owned-preview1" ? "preview1" : "bun");
+        : await createRuntimeEngineScope(module, "browser", realm.runtime, url, "preview1");
       const child = owned.spawn("fixture-source");
       const deadline = Date.now() + 2_000;
       while (!realm.workers[0]?.request) {
@@ -133,7 +130,8 @@ for (const route of ["legacy", "runtimeProcess", "owned-preview1"] as const) {
       const request = realm.workers[0]!.request!;
       expect(request.module).toBe(module);
       expect(request.interruptible).not.toBe(true);
-      expect(request.adapter).toBe(route === "owned-preview1" ? "preview1" : "bun");
+      // Preview1 programs run in the sibling preview1 worker, which has no Bun adapter field.
+      expect(request.adapter).toBe(route === "owned-preview1" ? undefined : "bun");
       if (route === "owned-preview1") {
         expect(WebAssembly.Module.imports(request.module)).toContainEqual({ module: "runtime_proc", name: "interrupted", kind: "function" });
       }

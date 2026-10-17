@@ -4,12 +4,10 @@ import { MemFS } from "waffle/fs/memory";
 import { outcomeWord } from "waffle/proc/outcome";
 import { ProcessABI } from "waffle/proc/abi";
 import { createSignalState, requestSignal } from "waffle/proc/signals";
-import { SubprocessHost } from "../src/subprocess";
 
-for (const mode of ["legacy", "generic"] as const) test(`${mode} dequeue preserves later pending signals and releases the final WASI wait`, () => {
+test("dequeue preserves later pending signals and releases the final WASI wait", () => {
   const signals = { signalState: createSignalState(), interrupt: new Int32Array(new SharedArrayBuffer(4)),
     requestedSignal: new Int32Array(new SharedArrayBuffer(4)), outcome: outcomeWord() };
-  const host = new SubprocessHost({ ...signals, output() {}, launch() { throw new Error("unexpected launch"); } });
   const memory = new WebAssembly.Memory({ initial: 1 });
   let waits = 0;
   const fs = new MemFS();
@@ -19,7 +17,7 @@ for (const mode of ["legacy", "generic"] as const) test(`${mode} dequeue preserv
   const unused = (): never => { throw new Error("unexpected service operation"); };
   const abi = new ProcessABI({ memory, descriptors: wasi.descriptors, fs, pid: 1, signals,
     service: { spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused } });
-  const signal = mode === "legacy" ? host.signal.bind(host) : abi.imports.signal!;
+  const signal = abi.imports.signal!;
   const imports = (wasi as unknown as { functions(): Record<string, (...args: number[]) => number> }).functions();
   wasi.start({ exports: { memory, _start() {} } } as unknown as WebAssembly.Instance);
   const clock = (timeout = 0n) => {
@@ -42,5 +40,5 @@ for (const mode of ["legacy", "generic"] as const) test(`${mode} dequeue preserv
     expect(waits).toBe(0);
     expect(clock(1_000_000n)).toBe(0);
     expect(waits).toBeGreaterThan(0);
-  } finally { host.dispose(); wasi.descriptors.dispose(); }
+  } finally { wasi.descriptors.dispose(); }
 });
