@@ -83,6 +83,7 @@ if [[ $browser == 1 ]]; then
   node tests/browser-shell-stop.ts || failed=1
   node tests/browser-net.mjs || failed=1
   bun tests/browser-subprocess.ts || failed=1
+  bun tests/browser-runtime-proc.ts chromium webkit || failed=1
   node tests/browser-stack.mjs || failed=1
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
     node tests/browser-engine.mjs || failed=1

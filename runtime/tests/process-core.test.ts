@@ -131,6 +131,31 @@ test("spawn snapshots request data and atomically rejects bad descriptor binding
   descriptors.dispose();
 });
 
+test("supervisor validates both fd bindings within the signed WASM success range before retaining", () => {
+  const { supervisor, root } = fixture();
+  const descriptors = supervisor.get(root)!.descriptors;
+  const fd = descriptors.open({ kind: "directory", handle: 1 }, 7n, 3n);
+  const source = descriptors.get(fd)!;
+  try {
+    for (const invalid of [0x80000000, 0xffffffff, -1, 1.5, NaN]) {
+      for (const binding of [{ child: invalid, parent: fd }, { child: 3, parent: invalid }]) {
+        let error: unknown;
+        try { supervisor.reserveSpawn(root, request({ fds: [binding] })); } catch (caught) { error = caught; }
+        expect(error).toMatchObject({ name: "ProcessError", errno: 28 });
+        expect(source.description.references).toBe(1);
+      }
+    }
+    descriptors.inherit(0x7fffffff, source);
+    const pid = supervisor.reserveSpawn(root, request({ fds: [{ child: 0x7fffffff, parent: 0x7fffffff }] }));
+    const child = supervisor.get(pid)!.descriptors;
+    expect(child.get(0x7fffffff)!.description).toBe(source.description);
+    const duplicate = child.dup(0x7fffffff);
+    expect(duplicate).toBeGreaterThanOrEqual(0);
+    expect(duplicate).toBeLessThanOrEqual(0x7fffffff);
+    expect(child.get(duplicate)!.description).toBe(source.description);
+  } finally { supervisor.dispose(); }
+});
+
 test("kill records signal, interrupts, revokes and publishes logical exit before teardown", async () => {
   const { supervisor, root, contexts, terminated } = fixture();
   const pid = supervisor.spawn(root, request());

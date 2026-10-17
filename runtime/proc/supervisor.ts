@@ -1,5 +1,5 @@
 import { checkedSignalNumber, createSignalState, requestSignal } from "./signals";
-import { DescriptorTable, OpenDescription, type Descriptor } from "../core/descriptors";
+import { DescriptorTable, MAX_DESCRIPTOR, OpenDescription, type Descriptor } from "../core/descriptors";
 import { ExecutableNotFound, ExecutableRegistry } from "./registry";
 import { ProcessTable, type ProcessRecord } from "./table";
 import { claimOutcome, outcomeWord, readOutcome } from "./outcome";
@@ -21,7 +21,7 @@ function signalWord(source?: Int32Array | SharedArrayBuffer): Int32Array {
   if (!(word.buffer instanceof SharedArrayBuffer) || word.length !== 1) throw new TypeError("signal word must be one shared int32");
   return word;
 }
-function validFd(fd: number): boolean { return Number.isInteger(fd) && fd >= 0 && fd <= 0xffffffff; }
+function validFd(fd: number): boolean { return Number.isInteger(fd) && fd >= 0 && fd <= MAX_DESCRIPTOR; }
 function snapshot(spec: SpawnRequest): Readonly<SpawnRequest> {
   // Own all mutable request data before returning to the guest's synchronous spawn call.
   return {
