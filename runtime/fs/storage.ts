@@ -30,7 +30,8 @@ export interface StorageBackend {
   load(): Promise<PersistedIndex | undefined>;
   read(key: string): Promise<Uint8Array>;
   persist(batch: PersistenceBatch): Promise<void>;
-  flush(): Promise<void>;
+  /** Make the selected immutable payloads durable; omitted means all outstanding payloads. */
+  flush(keys?: readonly string[]): Promise<void>;
   close(): Promise<void>;
 }
 

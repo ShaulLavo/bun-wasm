@@ -43,7 +43,7 @@ export class PersistentBackend extends MemoryBackend {
     fs.onLinkChange = (node, delta) => this.changeLinks(node, delta);
     fs.onChange = node => { if (!this.detached.has(node)) { this.nodes.set(node.ino, node); this.dirty.add(node); } };
     if (intervalMs > 0) this.timer = setInterval(() => {
-      if (!this.stopped && !this.pendingCheckpoints) void this.flush().catch(() => { /* explicit flush reports/retries failures */ });
+      if (!this.stopped && !this.pendingCheckpoints) void this.checkpoint().catch(() => { /* explicit flush reports/retries failures */ });
     }, intervalMs);
   }
   static async open(storage: StorageBackend, options: { intervalMs?: number } = {}): Promise<PersistentBackend> {
@@ -203,8 +203,12 @@ export class PersistentBackend extends MemoryBackend {
   }
   /** Capture only dirty nodes and changed resident payloads. Cost is bounded by the shared
    * slot table plus changes, not by the number of cold files in a workspace. */
-  flush(): Promise<void> {
+  flush(target?: FileHandle | string): Promise<void> { return this.checkpoint(true, target); }
+  /** Background close-only checkpoint. Explicit saves/fsync use flush() for payload durability. */
+  checkpoint(durable = false, target?: FileHandle | string): Promise<void> {
     if (this.stopped) return Promise.reject(new Error("filesystem persistence backend is closed"));
+    const selected = typeof target === "string" ? this.fs.lookup(target)
+      : target === undefined ? undefined : this.fs.nodeForHandle(target);
     this.pruneDetached();
     const changed = new Set(this.dirty);
     const data = new Map<string, Uint8Array>();
@@ -231,7 +235,9 @@ export class PersistentBackend extends MemoryBackend {
       : { ino: node.ino, kind: "file", mtime: node.mtime, size: node.size ?? node.data.length, data: this.keys.get(node.ino) });
     this.dirty.clear();
     const removes = Array.from(this.removed); this.removed.clear();
-    if (!upserts.length && !removes.length) return this.lastCommit.then(() => this.storage.flush());
+    const key = selected?.kind === "file" ? this.keys.get(selected.ino) ?? this.detachedKeys.get(selected.ino) : undefined;
+    const flushKeys = target === undefined ? undefined : key ? [key] : [];
+    if (!upserts.length && !removes.length) return this.lastCommit.then(() => durable ? this.storage.flush(flushKeys) : undefined);
     const epoch = this.checkpointEpoch;
     const batch: PersistenceBatch = { generation: 0, root: this.fs.root.ino, upserts, removes, data };
     this.pendingCheckpoints++;
@@ -245,7 +251,6 @@ export class PersistentBackend extends MemoryBackend {
         return this.nodes.has(ino) && key ? [key] : [];
       }));
       await this.storage.persist(batch);
-      await this.storage.flush();
       this.generation = batch.generation;
       for (const entry of upserts) if (entry.data) this.committedKeys.set(entry.ino, entry.data);
       this.pruneDetached();
@@ -268,7 +273,7 @@ export class PersistentBackend extends MemoryBackend {
       this.keys = new Map(this.committedKeys);
       this.revisions.clear();
     });
-    return commit;
+    return durable ? commit.then(() => this.storage.flush(flushKeys)) : commit;
   }
   dispose(): void { this.stopped = true; if (this.timer !== undefined) clearInterval(this.timer); }
   async close(): Promise<void> { try { await this.flush(); } finally { this.dispose(); await this.storage.close(); } }
