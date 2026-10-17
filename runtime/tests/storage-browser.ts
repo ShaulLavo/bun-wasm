@@ -185,6 +185,9 @@ function indexedDBCases(): StorageContractCase[] {
     const owners = opened.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
     let writers = 0;
     try {
+      for (const result of opened) if (result.status === "rejected") {
+        assert(String(result.reason).includes("This workspace was opened in another tab. Reload to continue here."), "startup takeover reports the complete ownership message");
+      }
       await rejects(first.persist(batch(2)), "opened in another tab");
       for (const owner of owners) {
         try { await owner.persist(batch(2)); writers++; }
