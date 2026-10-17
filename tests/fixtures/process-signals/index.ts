@@ -2,23 +2,28 @@ import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
 
 async function check(signal: "SIGINT" | "SIGTERM" | "SIGPIPE", number: number, mode: "handled" | "default" | "removed" | "stdio", ownCode = 0) {
+  const ignored = signal === "SIGPIPE" && (mode === "default" || mode === "stdio");
+  const statusCode = ignored ? 17 : mode === "handled" ? ownCode : 128 + number;
+  const signalCode = ignored || mode === "handled" ? null : signal;
   const child = Bun.spawn([process.execPath, "-e", `
     const handler = () => process.exit(${ownCode});
     ${mode === "handled" || mode === "removed" ? `process.on(${JSON.stringify(signal)}, handler);` : ""}
     ${mode === "stdio" ? 'process.stdout.on("error", () => {}); process.stderr.on("error", () => {});' : ""}
     ${mode === "removed" ? `process.removeListener(${JSON.stringify(signal)}, handler);` : ""}
     console.log("ready");
-    setInterval(() => {}, 1000);
-  `], { stdout: "pipe", stderr: "pipe", timeout: 5000, killSignal: "SIGKILL" });
+    ${ignored ? "await Bun.stdin.text(); process.exit(17);" : "setInterval(() => {}, 1000);"}
+  `], { stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 5000, killSignal: "SIGKILL" });
   const reader = child.stdout.getReader();
   try {
     const ready = await reader.read();
     assert.equal(new TextDecoder().decode(ready.value).trim(), "ready");
     child.kill(signal);
+    // Keep ignored guests alive until the synchronous signal decision has been made.
+    if (ignored) child.stdin.end();
     const status = await child.exited;
-    assert.equal(status, mode === "handled" ? ownCode : 128 + number);
-    assert.equal(child.exitCode, mode === "handled" ? ownCode : null);
-    assert.equal(child.signalCode, mode === "handled" ? null : signal);
+    assert.equal(status, statusCode);
+    assert.equal(child.exitCode, signalCode === null ? statusCode : null);
+    assert.equal(child.signalCode, signalCode);
     assert.equal(child.exitedDueToTimeout, false);
     console.log(mode, signal, status, child.signalCode);
   } finally {
@@ -92,11 +97,13 @@ for (const [signal, number] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]]
       ${handled ? 'setInterval(() => {}, 1000);' : 'process.exit(99);'}
     `], { stdout: "pipe", stderr: "pipe", timeout: 5000, killSignal: "SIGKILL" });
     try {
-      assert.equal(await child.exited, handled ? 0 : 128 + number);
-      assert.equal(child.exitCode, handled ? 0 : null);
-      assert.equal(child.signalCode, handled ? null : signal);
+      const status = handled ? 0 : signal === "SIGPIPE" ? 99 : 128 + number;
+      const signaled = !handled && signal !== "SIGPIPE";
+      assert.equal(await child.exited, status);
+      assert.equal(child.exitCode, signaled ? null : status);
+      assert.equal(child.signalCode, signaled ? signal : null);
       assert.equal(child.exitedDueToTimeout, false);
-      console.log("self", signal, handled, handled ? 0 : 128 + number, child.signalCode);
+      console.log("self", signal, handled, status, child.signalCode);
     } finally {
       child.kill("SIGKILL");
       await child.exited;
@@ -128,9 +135,10 @@ for (const [mode, source] of [
   try {
     const code = await new Promise<number>(resolve => worker.once("exit", resolve));
     assert.equal(expired, false);
-    assert.equal(code, 141);
-    assert.deepEqual(errors, []);
-    console.log("worker", mode, "selected SIGPIPE", code);
+    assert.equal(code, mode === "EPIPE" ? 1 : 0);
+    assert.equal(errors.length, mode === "EPIPE" ? 1 : 0);
+    if (mode === "EPIPE") assert.equal(errors[0].message, "escaping broken pipe");
+    console.log("worker", mode, "exit", code);
   } finally {
     clearTimeout(timer);
     await worker.terminate();
