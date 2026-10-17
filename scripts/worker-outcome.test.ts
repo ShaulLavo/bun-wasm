@@ -20,7 +20,6 @@ function receiver() {
   };
   const factory = runInNewContext(source, {
     EventTarget, Event, MessageEvent, DOMException, URL, structuredClone,
-    setImmediate(callback: () => void) { immediate.push(callback); },
   });
   const modules: Record<string, unknown> = {
     process: { env: {}, execArgv: [], execPath: "bun", cwd: () => "/" },
@@ -36,6 +35,7 @@ function receiver() {
     worker_stdio: { readable: () => ({ stream: new EventEmitter(), drained: Promise.resolve() }) },
   };
   const implementation = factory({
+    realTimers: { setImmediate(callback: () => void) { immediate.push(callback); } },
     native: { hostChildPipe: (_pid: number, selector: number) => selector },
     require(name: string) {
       if (!(name in modules)) throw new Error(`Unexpected module ${name}`);

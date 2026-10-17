@@ -16,8 +16,7 @@ for test_file in "$root"/web/tests/*.mjs; do
 done
 
 cd "$root/web"
-bun run check
-bun test tests/
+bash "$root/scripts/test-web-host.sh" --unit
 bun run build >/dev/null
 
 scratch_root="${BUN_WASM_TEST_TMP:-${TMPDIR:-/tmp}}"
@@ -88,7 +87,11 @@ for slots in table imports; do
 done
 
 if [[ $browser == 1 ]]; then
-  node "$root/scripts/test-native-stream-interop.mjs" || failed=1
+  bash "$root/scripts/test-web-host.sh" --browser || failed=1
+  bun tests/browser-editor.ts webkit || failed=1
+  bun tests/browser-filesystem-lifecycle.ts chromium || failed=1
+  bun tests/browser-filesystem-lifecycle.ts webkit || failed=1
+  bun "$root/runtime/tests/storage-browser-runner.ts" chromium webkit || failed=1
   node tests/browser-install.mjs || failed=1
   node tests/browser-shell-stop.ts || failed=1
   node tests/browser-net.mjs || failed=1
@@ -97,6 +100,11 @@ if [[ $browser == 1 ]]; then
   bun tests/browser-interrupt.ts chromium firefox webkit || failed=1
   bun tests/browser-runtime-proc.ts chromium webkit || failed=1
   node tests/browser-stack.mjs || failed=1
+  if [[ -f "$root/dist/bun-jsc.wasm" && -f "$root/dist/bun-browser.wasm" ]]; then
+    bun tests/browser-engine-interruption.ts || failed=1
+  else
+    echo "skip engine interruption: needs dist/bun-jsc.wasm and dist/bun-browser.wasm alongside bun.wasm"
+  fi
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
     node tests/browser-worker-modules.ts || failed=1
     node tests/browser-engine.mjs || failed=1

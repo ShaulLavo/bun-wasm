@@ -627,7 +627,7 @@
 
   // Deliver on the "poll" phase: setImmediate keeps the loop alive until then.
   function later(fn) {
-    setImmediate(fn);
+    internal.realTimers.setImmediate(fn);
   }
 
   function callbackify(name, fn, shape) {

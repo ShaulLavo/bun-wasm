@@ -259,6 +259,14 @@ pub enum PromiseState {
 
 /// The runtime's side of module loading, called by the engine's loader.
 pub trait ModuleHost<E: Engine> {
+    /// Whether the host supplies CPU-bound process-signal checkpoints.
+    /// Engines without a signal host do not install an interrupt callback.
+    fn has_interrupt_handler(&self) -> bool { false }
+    /// Poll fatal cancellation without consuming handled signals or calling JS.
+    /// Engines may also poll during native operations: arbitrary JS reentry is
+    /// unsafe. True requests an engine-native uncatchable interrupt; a browser
+    /// host's selected fatal outcome instead unwinds Wasm directly.
+    fn interrupt(&self) -> bool { false }
     /// Resolve `specifier` imported from the module `referrer` (a path, a
     /// built-in id, or empty for the entry point) to a module name.
     fn resolve(&self, engine: &E, specifier: &str, referrer: &str) -> Result<String, E::Value>;

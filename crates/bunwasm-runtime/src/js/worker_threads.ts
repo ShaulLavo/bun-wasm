@@ -268,7 +268,7 @@
         if (!Array.isArray(value.nodes) || typeof value.root !== "number") throw new Error("Invalid graph");
         state.pending.set(sequence, graph as Graph);
         port.#accept();
-      } catch (error) { setImmediate(() => port.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
+      } catch (error) { internal.realTimers.setImmediate(() => port.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
     }
     #accept() {
       const state = this.#value();
@@ -325,7 +325,7 @@
     #schedule() {
       const state = this.#state;
       if (!state || state.phase !== "open" || !state.started || state.scheduled || state.batch || !state.queue.length) return;
-      state.scheduled = true; setImmediate(() => this.#deliver(state));
+      state.scheduled = true; internal.realTimers.setImmediate(() => this.#deliver(state));
     }
     #deliver(state: PortState) {
       state.scheduled = false;
@@ -346,11 +346,11 @@
       if (this.#state !== state) return;
       if (!batch.remaining || !batch.queue.length) {
         state.batch = null;
-        if (state.phase === "closing") { setImmediate(() => this.#finishLocalClose(state)); return; }
+        if (state.phase === "closing") { internal.realTimers.setImmediate(() => this.#finishLocalClose(state)); return; }
         this.#schedule(); this.#maybeClose(); return;
       }
       state.scheduled = true;
-      setImmediate(() => this.#deliverBatch(state, batch));
+      internal.realTimers.setImmediate(() => this.#deliverBatch(state, batch));
     }
     start() { if (this.#state) { this.#state.started = true; this.#schedule(); } }
     ref() { if (this.#state?.phase === "open" && !this.#state.ref) { this.#state.ref = true; internal.messagePortRefs++; } }
@@ -361,7 +361,7 @@
       const state = this.#state;
       if (!state || state.phase !== "open") return;
       state.phase = "closing"; state.queue = []; state.pending.clear(); this.unref();
-      if (!state.batch) setImmediate(() => this.#finishLocalClose(state));
+      if (!state.batch) internal.realTimers.setImmediate(() => this.#finishLocalClose(state));
     }
     #finishLocalClose(state: PortState) {
       if (this.#state !== state || state.phase === "closed") return;
@@ -377,7 +377,7 @@
       if (state.phase === "closed") return;
       state.phase = "closed"; state.queue = []; state.pending.clear(); this.unref(); localPorts.delete(state.id);
       root({ kind: "closed", id: state.id });
-      setImmediate(() => this.#finishClose(state));
+      internal.realTimers.setImmediate(() => this.#finishClose(state));
     }
     #finishClose(state: PortState) {
       if (this.#state !== state) return;
@@ -457,7 +457,7 @@
     }
     static receive(channel: BroadcastChannel, value: unknown) {
       if (channel.#closed) return;
-      channel.#queue.push(value); setImmediate(() => channel.#deliver());
+      channel.#queue.push(value); internal.realTimers.setImmediate(() => channel.#deliver());
     }
     postMessage(value: unknown) {
       if (this.#closed) throw new DOMException("BroadcastChannel is closed.", "InvalidStateError");
@@ -594,7 +594,7 @@
     #schedule() {
       if (this.#scheduled || this.#exited) return;
       this.#scheduled = true;
-      setImmediate(() => { this.#scheduled = false; this.#pump(); });
+      internal.realTimers.setImmediate(() => { this.#scheduled = false; this.#pump(); });
     }
     get threadId() { return this.#exited ? -1 : this.#path.reduce((parent, counter) => (parent + counter) * (parent + counter + 1) / 2 + counter + 1, 0); }
     postMessage(value: unknown, transfer?: unknown) { this.#port.postMessage(value, transfer); }
@@ -612,12 +612,12 @@
         if (typeof frame.messages !== "number" || !Number.isSafeInteger(frame.messages) || frame.messages < 0) throw new Error("Invalid worker exit sequence");
         this.#graceful = true; this.#expectedMessages = frame.messages; return;
       }
-      if (frame.kind === "online") { setImmediate(() => this.emit("online")); return; }
+      if (frame.kind === "online") { internal.realTimers.setImmediate(() => this.emit("online")); return; }
       if (frame.kind === "error") {
         this.#error = true;
         const error = codec.decode(frame.graph);
         if (error instanceof Error && typeof frame.code === "string") Object.assign(error, { code: frame.code });
-        setImmediate(() => this.emit("error", error)); return;
+        internal.realTimers.setImmediate(() => this.emit("error", error)); return;
       }
       throw new Error("Unknown worker lifecycle event");
     }
@@ -625,17 +625,17 @@
       if (this.#exited) return false;
       let progress = false;
       try { progress = this.#channel.pump(incoming); }
-      catch (error) { this.#channel.close(); this.#child.kill(9); setImmediate(() => this.emit("messageerror", error)); }
+      catch (error) { this.#channel.close(); this.#child.kill(9); internal.realTimers.setImmediate(() => this.emit("messageerror", error)); }
       if (this.#code !== null && !this.#channel.ended) this.#schedule();
       if (this.#code !== null && this.#channel.ended && !this.#finishing) {
         this.#finishing = true;
-        this.#drained.then(() => setImmediate(() => this.#finish()));
+        this.#drained.then(() => internal.realTimers.setImmediate(() => this.#finish()));
         progress = true;
       }
       return progress;
     }
     #finish() {
-      if (!portOps.drained(this.#port) || portOps.received(this.#port) < this.#expectedMessages) { setImmediate(() => this.#finish()); return; }
+      if (!portOps.drained(this.#port) || portOps.received(this.#port) < this.#expectedMessages) { internal.realTimers.setImmediate(() => this.#finish()); return; }
       this.#exited = true;
       this.#port.close(); this.#channel.close(); this.#child._finishWorker(); children.delete(this.#id);
       root({ kind: "gone", path: this.#path });

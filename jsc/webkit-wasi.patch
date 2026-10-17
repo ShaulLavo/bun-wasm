@@ -384,3 +384,94 @@ index dedf2254..3e454fbf 100644
      else ()
          message(FATAL_ERROR "Unknown OS '${CMAKE_SYSTEM_NAME}'")
      endif ()
+diff --git i/Source/JavaScriptCore/llint/LowLevelInterpreter.asm w/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+--- i/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
++++ w/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+@@ -2490,6 +2490,17 @@
+ macro checkTraps(dispatch)
+     loadp CodeBlock[cfr], t1
+     loadp CodeBlock::m_vm[t1], t1
++    if C_LOOP
++        # External hosts cannot set VM trap bits while single-threaded Wasm is
++        # executing. Poll them at the same saved-frame points, not per opcode.
++        loadi VM::m_threadContext+VMThreadContext::m_traps+VMTraps::m_hostInterruptInterval[t1], t0
++        btiz t0, .checkVMTraps
++        loadi VM::m_threadContext+VMThreadContext::m_traps+VMTraps::m_hostInterruptCountdown[t1], t0
++        subi 1, t0
++        storei t0, VM::m_threadContext+VMThreadContext::m_traps+VMTraps::m_hostInterruptCountdown[t1]
++        btiz t0, .handleTraps
++    end
++.checkVMTraps:
+     loadi VM::m_threadContext+VMThreadContext::m_traps+VMTraps::m_trapBits[t1], t0
+     andi VMTrapsAsyncEvents, t0
+     btpnz t0, .handleTraps
+diff --git i/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp w/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+--- i/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
++++ w/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+@@ -43,6 +43,7 @@
+ #include "FunctionAllowlist.h"
+ #include "FunctionCodeBlock.h"
+ #include "GetterSetter.h"
++#include "GlobalObjectMethodTable.h"
+ #include "InterpreterInlines.h"
+ #include "JITExceptions.h"
+ #include "JITWorklist.h"
+@@ -2442,8 +2443,18 @@
+ LLINT_SLOW_PATH_DECL(slow_path_handle_traps)
+ {
+     LLINT_BEGIN_NO_SET_PC();
+-    ASSERT(vm.traps().needHandling(VMTraps::AsyncEvents));
+-    vm.traps().handleTraps(VMTraps::AsyncEvents);
++    vm.traps().handleTrapsIfNeeded(VMTraps::AsyncEvents);
++#if ENABLE(C_LOOP)
++    // callTrapHandler saved the PC and C-loop stack before entering here;
++    // only poll fatal cancellation here, never run guest JavaScript. Avoid
++    // generic C++ exception checks and pending-exception unwinding.
++    if (vm.traps().takeHostInterruptPoll() && !throwScope.exception()) {
++        if (globalObject->globalObjectMethodTable()->shouldInterruptScriptBeforeTimeout(globalObject)) {
++            vm.notifyNeedTermination();
++            vm.traps().handleTrapsIfNeeded(VMTraps::AsyncEvents);
++        }
++    }
++#endif
+     UNUSED_PARAM(pc);
+     LLINT_RETURN_TWO(throwScope.exception(), globalObject);
+ }
+diff --git i/Source/JavaScriptCore/runtime/VMTraps.h w/Source/JavaScriptCore/runtime/VMTraps.h
+--- i/Source/JavaScriptCore/runtime/VMTraps.h
++++ w/Source/JavaScriptCore/runtime/VMTraps.h
+@@ -272,6 +272,22 @@
+     ALWAYS_INLINE const CLoopStack& cloopStack() const { return m_stack.cloopStack(); }
+     ALWAYS_INLINE void* cloopStackLimit() { return m_stack.cloopStackLimit(); }
+     ALWAYS_INLINE void* currentCLoopStackPointer() const { return m_stack.currentCLoopStackPointer(); }
++
++    // Zero disables host polling. Only normal interpreter trap points consume
++    // this countdown; generic RETURN_IF_EXCEPTION sites never dispatch JS.
++    void setHostInterruptInterval(uint32_t interval)
++    {
++        m_hostInterruptInterval = interval;
++        m_hostInterruptCountdown = interval;
++    }
++    bool takeHostInterruptPoll()
++    {
++        if (!m_hostInterruptInterval || m_hostInterruptCountdown)
++            return false;
++        // Reset before the host checkpoint; handled signals remain pending.
++        m_hostInterruptCountdown = m_hostInterruptInterval;
++        return !m_trapsDeferred && !isDeferringTermination();
++    }
+ #endif
+
+     ALWAYS_INLINE void* softStackLimit() const { return m_stack.softStackLimit(); };
+@@ -343,6 +359,11 @@
+     Box<Lock> m_trapSignalingLock;
+     Box<Condition> m_condition;
+
++#if ENABLE(C_LOOP)
++    uint32_t m_hostInterruptInterval { 0 };
++    uint32_t m_hostInterruptCountdown { 0 };
++#endif
++
+ #if ENABLE(SIGNAL_BASED_VM_TRAPS)
+     RefPtr<SignalSender> m_signalSender;
+ #endif
