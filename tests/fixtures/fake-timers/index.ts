@@ -8,8 +8,8 @@ const originalNow = Date.now;
 const previous = new Date(0);
 const realBefore = Date.now();
 const realTimer = new Promise<string>(resolve => setTimeout(() => resolve("real"), 1));
-const format = new Intl.DateTimeFormat("en-US", { timeZone: "UTC" }).format;
-expect(vi).toBe(jest);
+const formatter = new Intl.DateTimeFormat("en-US", { timeZone: "UTC" });
+const format = formatter.format.bind(formatter);
 expect(jest.useFakeTimers({ now: new Date("2000-01-01T00:00:00Z") })).toBe(jest);
 expect(Date).toBe(OriginalDate);
 expect(Date.now).toBe(originalNow);
@@ -26,6 +26,7 @@ class SubDate extends Date { label() { return "subclass"; } }
 expect(new SubDate().label()).toBe("subclass");
 expect(new SubDate().getTime()).toBe(Date.now());
 expect(jest.now()).toBe(946684800000);
+expect(vi.now()).toBe(jest.now());
 expect(performance.now()).toBe(0);
 
 const events: string[] = [];
