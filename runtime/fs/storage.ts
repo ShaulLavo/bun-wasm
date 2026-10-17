@@ -15,7 +15,7 @@ export interface PersistedIndex {
   nodes: PersistedNode[];
 }
 
-/** A generation is committed atomically; unchanged inodes and payloads are not rewritten. */
+/** One logical generation. Unchanged inode and immutable payload identities are preserved. */
 export interface PersistenceBatch {
   generation: number;
   root: number;

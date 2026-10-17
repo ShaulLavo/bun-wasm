@@ -44,12 +44,16 @@ than it is today. The process layer loads on the first spawn.
 - **Storage backends are swappable.** The filesystem service talks to storage through a small
   backend interface (load the tree, read data that isn't in memory, persist a batch, flush). We
   ship two from day one: IndexedDB, the default (fastest writes on Chromium and Safari, consistent
-  reads), and OPFS. The OPFS backend is simple: one OPFS file per file, no per-file flush, create
-  concurrency tuned per browser, and lazy loading (the index loads in about 20 ms; files are read
+  reads), and OPFS. The OPFS backend is simple: one OPFS file per immutable file revision, no
+  per-file flush in background checkpoints, create concurrency tuned per browser, and lazy loading
+  (the spike's index loads in about 20 ms; files are read
   on first use, since reading every file takes 16-33 s in Firefox). A packed OPFS backend, 15x
   faster to write in Firefox, can come later (spike 3). Later backends can include IndexedDB
   without our own memory cache (lower memory, the browser caches for us) and memory-only for
-  throwaway sandboxes (owner, 2026-10-16).
+  throwaway sandboxes (owner, 2026-10-16). Explicit `fsync(fd)` and the editor's persisted save
+  flush that file's payload and the snapshot naming it before resolving; they do not promise
+  durability for unrelated unsynced payloads. IndexedDB requests strict atomic transaction
+  durability, while OPFS background checkpoints remain close-only with a flushed naming snapshot.
 - **Killing is not instant, so kills interrupt, revoke and confirm.** Chromium waits 2 s before
   forcibly stopping a busy worker after `terminate()` (`kForcibleTerminationDelay` in Blink's
   `worker_thread.cc`; spike 2 saw CPU-bound WASM and JS keep running and writing shared memory).
