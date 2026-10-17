@@ -91,10 +91,10 @@ reads as `UNSUPPORTED`. The playground and sandbox use this by default (`web/src
 | 11   | `peer_addr`  | `(handle, buf_ptr, buf_cap) -> len`                              |
 | 12   | `shutdown`   | `(connection) -> i32`                                            |
 | 13   | `local_addr` | `(handle, buf_ptr, buf_cap) -> len`                              |
-| 14   | `signal`     | `(signal, mode) -> i32`                                          |
 
-Version 1 has 15 slots. The Bun-specific child slots (`spawn`, `child_wait`, `child_pipe`,
-`child_kill`) no longer exist; slots after `peer_addr` were renumbered when they went away.
+Version 1 has 14 slots. The Bun-specific child slots (`spawn`, `child_wait`, `child_pipe`,
+`child_kill`) and the signal slot no longer exist; slots after `peer_addr` were renumbered when
+they went away. Child processes and signals use the `runtime_proc` imports.
 
 ### `poll(timeout_ms) -> i32`
 
@@ -209,10 +209,9 @@ connection, same length protocol as `fetch_head`.
 
 ## Signal dispositions
 
-Optional slot 14, `signal(sig, mode)`, connects Node/Bun signal listeners to the process host
-without adding mandatory WebAssembly imports. ABI version 1 and slots 0–13 retain their meaning.
-A plain preview1 host may leave the slot unset. The browser's ordinary WASI adapter also exposes
-`runtime_proc.signal(sig, mode)` with the same operations.
+`runtime_proc.signal(sig, mode)` connects Node/Bun signal listeners to the process host; preview1
+programs use the same import. Bun imports it like the other process calls, and there is no
+signal slot.
 
 - Modes 0, 1 and 2 synchronously set default, ignored and handled dispositions, respectively.
   Signal numbers are 1–64; SIGKILL (9) cannot be registered or ignored.
@@ -254,7 +253,7 @@ and ignored transitions if a handler is removed before delivery. A selected fata
 unwinds through the host's typed default action, outside guest catch/finally blocks, including
 when a handled callback is itself CPU-bound. An infinite loop with a handled signal does not
 run that handler without yielding; a default signal or SIGKILL can still stop it. Idle event-loop
-waits wake for handled signals. This adds one mode to slot 18, not a slot, import, retry, or
+waits wake for handled signals. This adds one mode to `signal`, not a slot, import, retry, or
 timeout. Unhandled default actions remain immediate supervisor decisions; the engine hooks stop
 physical execution even when the browser cannot terminate busy Wasm.
 
@@ -288,10 +287,11 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 | `runtime_proc.kill` | `(pid, sig) -> 0` |
 | `runtime_proc.kill_job` | `(job, sig) -> 0` |
 | `runtime_proc.poll` | `(subs_ptr, n, timeout_ms, out_ptr) -> n_ready` |
+| `runtime_proc.signal` | `(sig, mode) -> result`, see [Signal dispositions](#signal-dispositions) |
 | `wasi_snapshot_preview1.fd_close` | `(fd) -> errno`, the only way to close a pipe end |
 
-The guest does not import `dup`, `interrupted`, `signal` or `default_signal` (signals keep slot
-14). A host that instantiates bun.wasm must provide the namespace; a plain `wasmtime run` of
+The guest does not import `dup`, `interrupted` or `default_signal` (`signal(0, 0)` dequeues like
+`interrupted`; a selected default action unwinds inside the host). A host that instantiates bun.wasm must provide the namespace; a plain `wasmtime run` of
 bun.wasm no longer links. Results are `>= 0` or a negative WASI errno (`EAGAIN` is `-6`, `EPIPE`
 `-64`); they are not the network slots' `-2 AGAIN`.
 

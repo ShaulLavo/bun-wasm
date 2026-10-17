@@ -852,12 +852,12 @@ fn install_url(t: &mut Table) {
 /// byte results come back as Uint8Array / strings.
 fn install_host(t: &mut Table, state: &Rc<State>) {
     use crate::host;
-    // Slot capabilities, plus the process ABI: runtime_proc is a wasm import namespace, not a slot.
+    // Slot capabilities, plus the process ABI and signals: runtime_proc is a wasm import namespace, not slots.
     let caps = host::SLOT_NAMES
         .iter()
         .enumerate()
         .map(|(i, name)| ((*name).to_owned(), Val::Bool(host::provided(i))))
-        .chain(std::iter::once(("proc_spawn".to_owned(), Val::Bool(host::PROCESS_ABI))))
+        .chain(["proc_spawn", "signal"].map(|name| (name.to_owned(), Val::Bool(host::PROCESS_ABI))))
         .collect();
     t.constants.push(("hostCaps", Val::Object(caps)));
     // String on success, the negative code otherwise.
