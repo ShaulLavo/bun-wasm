@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Worker } from "node:worker_threads";
 
 async function check(signal: "SIGINT" | "SIGTERM" | "SIGPIPE", number: number, mode: "handled" | "default" | "removed" | "stdio", ownCode = 0) {
   const child = Bun.spawn([process.execPath, "-e", `
@@ -102,5 +103,38 @@ for (const [signal, number] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]]
       await child.stdout.cancel();
       await child.stderr.cancel();
     }
+  }
+}
+
+const overflow = Bun.spawnSync([process.execPath, "-e", `
+  process.stdout.write("overflow");
+  setInterval(() => {}, 1000);
+`], { stdin: "ignore", stdout: "pipe", stderr: "pipe", maxBuffer: 1 });
+assert.equal(overflow.error?.code, "ENOBUFS");
+assert.equal(overflow.success, false);
+assert.equal(overflow.exitCode, null);
+assert.equal(overflow.signalCode, "SIGKILL");
+console.log("sync maxBuffer selected", overflow.signalCode);
+
+for (const [mode, source] of [
+  ["signal", 'process.kill(process.pid, "SIGPIPE")'],
+  ["EPIPE", 'throw Object.assign(new Error("escaping broken pipe"), { code: "EPIPE" })'],
+]) {
+  const worker = new Worker(source, { eval: true, stdout: true, stderr: true });
+  const errors: Error[] = [];
+  worker.on("error", error => { errors.push(error); });
+  let expired = false;
+  const timer = setTimeout(() => { expired = true; void worker.terminate(); }, 5000);
+  try {
+    const code = await new Promise<number>(resolve => worker.once("exit", resolve));
+    assert.equal(expired, false);
+    assert.equal(code, 141);
+    assert.deepEqual(errors, []);
+    console.log("worker", mode, "selected SIGPIPE", code);
+  } finally {
+    clearTimeout(timer);
+    await worker.terminate();
+    worker.stdout.destroy();
+    worker.stderr.destroy();
   }
 }
