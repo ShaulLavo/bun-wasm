@@ -12,13 +12,13 @@ const installBunAdapters = (runtime: Runtime, options: Omit<BunAdapterOptions, "
 
 // Keep Runtime, filesystem transport/backend, executable admission and process supervisor real.
 // Only the browser filesystem worker is hosted in-process; no persistent store is created.
-async function withRuntime(run: (runtime: ReturnType<typeof createRuntime>, registry: () => ExecutableRegistry) => Promise<void>) {
+async function withRuntime(run: (runtime: ReturnType<typeof createRuntime>, registry: () => ExecutableRegistry) => Promise<void>, backend = new MemoryBackend()) {
   const originalWorker = globalThis.Worker;
   const ports: MessagePort[] = [];
   let registry!: ExecutableRegistry;
   let runtime: ReturnType<typeof createRuntime> | undefined;
   globalThis.Worker = class {
-    service = new FilesystemService(new MemoryBackend());
+    service = new FilesystemService(backend);
     addEventListener() {}
     postMessage(message: { connect: FilesystemConnection }) {
       ports.push(message.connect.port);
@@ -96,4 +96,65 @@ test("real Runtime installation never replaces a different existing executable f
     expect(error).toBeInstanceOf(BunWasmExecutableConflictError);
     expect(new TextDecoder().decode(await runtime.filesystem.readFile("/bin/bun"))).toBe("caller-owned command");
   });
+});
+
+function racingBackend(winner: "file" | "directory" | "marker") {
+  const backend = new MemoryBackend();
+  const execute = backend.execute.bind(backend);
+  let raced = false;
+  backend.execute = (operation, args, data) => {
+    if (!raced && operation === "writeFile" && args[0] === "/bin/bun" && args[2] === true) {
+      raced = true;
+      const winnerOperation = winner === "directory" ? "mkdirp" : "writeFile";
+      const winnerBytes = winner === "marker" ? data : new TextEncoder().encode("concurrent caller-owned command");
+      execute(winnerOperation, ["/bin/bun", false, false], winnerBytes);
+    }
+    return execute(operation, args, data);
+  };
+  return { backend, raced: () => raced };
+}
+
+for (const winner of ["file", "directory"] as const) {
+  test(`real Runtime exclusive installation preserves a concurrent ${winner} winner and rolls back only its own files`, async () => {
+    const race = racingBackend(winner);
+    await withRuntime(async runtime => {
+      const error = await installBunAdapters(runtime, { executables: ["/owned/bun", "/bin/bun"] }).catch(error => error);
+      expect(error).toBeInstanceOf(BunWasmExecutableConflictError);
+      expect(error).toMatchObject({ code: "BUN_WASM_EXECUTABLE_CONFLICT", path: "/bin/bun" });
+      expect(race.raced()).toBe(true);
+      expect(await runtime.filesystem.lookup("/owned/bun")).toBeUndefined();
+      expect((await runtime.filesystem.lookup("/bin/bun"))?.kind).toBe(winner === "directory" ? "dir" : "file");
+      expect(winner === "file" ? new TextDecoder().decode(await runtime.filesystem.readFile("/bin/bun")) : undefined)
+        .toBe(winner === "file" ? "concurrent caller-owned command" : undefined);
+      await runtime.filesystem.remove("/bin/bun");
+      (await installBunAdapters(runtime)).dispose();
+    }, race.backend);
+  });
+}
+
+test("real Runtime shares a concurrent identical marker after draining its exclusive-create failure", async () => {
+  const race = racingBackend("marker");
+  await withRuntime(async runtime => {
+    const installation = await installBunAdapters(runtime);
+    try {
+      expect(race.raced()).toBe(true);
+      expect(new TextDecoder().decode(await runtime.filesystem.readFile("/bin/bun"))).toBe("bun-wasm registered executable\n");
+      expect(await runtime.filesystem.readFile("/bin/node")).toBeInstanceOf(Uint8Array);
+      await runtime.filesystem.drain();
+    } finally { installation.dispose(); }
+  }, race.backend);
+});
+
+test("real Runtime rollback preserves a concurrent identical marker when a later path fails", async () => {
+  const race = racingBackend("marker");
+  await withRuntime(async runtime => {
+    await runtime.filesystem.writeFile("/blocked", "caller-owned parent file");
+    const error = await installBunAdapters(runtime, { executables: ["/owned/bun", "/bin/bun", "/blocked/bun"] }).catch(error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("filesystem errno");
+    expect(race.raced()).toBe(true);
+    expect(await runtime.filesystem.lookup("/owned/bun")).toBeUndefined();
+    expect(new TextDecoder().decode(await runtime.filesystem.readFile("/bin/bun"))).toBe("bun-wasm registered executable\n");
+    expect(new TextDecoder().decode(await runtime.filesystem.readFile("/blocked"))).toBe("caller-owned parent file");
+  }, race.backend);
 });

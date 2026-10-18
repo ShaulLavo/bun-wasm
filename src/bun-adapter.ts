@@ -1,4 +1,5 @@
 import type { Runtime } from "waffle";
+import { FilesystemError } from "waffle/fs/protocol";
 import { loadBunWasm, type LoadBunWasmOptions } from "./assets.js";
 
 import { bunLauncher } from "../web/src/bun-launcher.js";
@@ -34,6 +35,24 @@ const executableMarker = new TextEncoder().encode("bun-wasm registered executabl
 const matchesMarker = (bytes: Uint8Array | undefined): boolean => bytes !== undefined
   && bytes.length === executableMarker.length && bytes.every((byte, index) => byte === executableMarker[index]);
 
+async function createExecutable(runtime: Runtime, name: string): Promise<boolean> {
+  try {
+    await runtime.filesystem.writeFile(name, executableMarker, { exclusive: true });
+    return true;
+  } catch (error) {
+    if (!(error instanceof FilesystemError) || error.errno !== 20) throw error;
+    // A rejected mutation is also queued for drain. Consume that same EEXIST before
+    // inspecting the winner, without swallowing an unrelated queued storage failure.
+    try { await runtime.filesystem.drain(); }
+    catch (queuedError) { if (queuedError !== error) throw queuedError; }
+    const entry = await runtime.filesystem.lookup(name);
+    if (entry?.kind !== "file" || !matchesMarker(await runtime.filesystem.readFile(name))) {
+      throw new BunWasmExecutableConflictError(name);
+    }
+    return false;
+  }
+}
+
 /** Register Bun on a caller-owned Runtime, provisioning executable files without reserving a root. */
 export async function installBunAdapters(runtime: Runtime, options: BunAdapterOptions): Promise<BunAdapterInstallation> {
   if (installations.has(runtime) || installing.has(runtime)) throw new Error("bun-wasm adapters are already installed on this Runtime");
@@ -67,19 +86,8 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
       }
     }
     for (const name of names) {
-      const existing = await runtime.filesystem.lookup(name);
-      if (existing) {
-        if (existing.kind !== "file" || !matchesMarker(await runtime.filesystem.readFile(name))) throw new BunWasmExecutableConflictError(name);
-        continue;
-      }
       await runtime.filesystem.mkdirp(name.slice(0, name.lastIndexOf("/")) || "/");
-      // Recheck after creating parents, rather than overwriting an entry created meanwhile.
-      if (await runtime.filesystem.lookup(name)) {
-        if (!matchesMarker(await runtime.filesystem.readFile(name))) throw new BunWasmExecutableConflictError(name);
-        continue;
-      }
-      await runtime.filesystem.writeFile(name, executableMarker);
-      created.push(name);
+      if (await createExecutable(runtime, name)) created.push(name);
     }
   } catch (error) {
     for (const unregister of unregisters.reverse()) unregister();

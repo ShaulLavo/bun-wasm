@@ -12,6 +12,14 @@ import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-exec
 // an injected host and a hand-assembled guest; only the browser engine host is replaced.
 const actualEngineHost = { ...await import("../src/engine-host.js") };
 const actualTrampoline = { ...await import("../src/net/trampoline") };
+const actualControl = { ...await import("waffle/proc/control") };
+// Test-only observation of Waffle's existing exported wait boundary. Production captures
+// Atomics.wait before guest code runs; changing that global must not affect it.
+let observeWait: typeof actualControl.controlWait | undefined;
+mock.module("waffle/proc/control", () => ({ ...actualControl,
+  controlWait: (...args: Parameters<typeof actualControl.controlWait>) =>
+    (observeWait ?? actualControl.controlWait)(...args),
+}));
 // The guest-facing slot installation is replaced by a recorder; the executor's own wrappers are kept.
 const installed: Record<string, (...args: number[]) => number>[] = [];
 mock.module("../src/net/trampoline", () => ({ ...actualTrampoline,
@@ -20,7 +28,7 @@ const startEngineHost = mock(async (_options: Record<string, unknown>): Promise<
 mock.module("../src/engine-host.js", () => ({ startEngineHost }));
 const { createBunExecutor } = await import("../src/bun-executor");
 // Module mocks are process-wide in `bun test`: leave the real engine host for the other files.
-afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); });
+afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); mock.module("waffle/proc/control", () => actualControl); });
 
 const name = (value: string) => [value.length].concat(Array.from(new TextEncoder().encode(value)));
 const unsigned = (value: number): number[] => {
@@ -272,9 +280,9 @@ test("without a networking ring no slots are installed", async () => {
   expect(installed).toEqual([]);
 });
 
-// These tests invoke the actual linked imports. Descriptor readiness and Atomics.wait
-// are observation/injection points; neither the ABI scanner nor bootstrap wait hooks
-// are substituted. All process, filesystem and native-wait state is test-owned.
+// These tests invoke the actual linked imports. Descriptor readiness and the existing
+// exported controlWait boundary are test-only observation/injection points; neither the
+// ABI scanner nor bootstrap wait guards are substituted. All state is test-owned.
 for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
   const importName = route === "runtime_proc" ? "poll" : "poll_oneoff";
   for (const stage of ["before", "after"] as const) {
@@ -293,7 +301,6 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
           args: ["/bin/bun"], env: {}, filesystem: connection.client, runtimeProcess: transport,
           trace: false, net: null, moduleCache: null };
         const executor = createBunExecutor(request, host);
-        const nativeWait = Atomics.wait;
         let call!: (...args: number[]) => unknown;
         let waits = 0, scans = 0;
         let failure: unknown;
@@ -316,14 +323,14 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
               const view = new DataView((instance.exports.memory as WebAssembly.Memory).buffer);
               if (route === "runtime_proc") { view.setUint32(0, 0, true); view.setUint32(4, fd, true); }
               else { view.setUint8(8, 1); view.setUint32(16, fd, true); }
-              Atomics.wait = ((word: Int32Array, index: number, expected: number) => {
+              observeWait = (word, index, expected) => {
                 expect(word.buffer).toBe(state.wake.buffer);
                 expect(word.byteOffset + index * 4).toBe(state.wake.byteOffset);
                 waits++; select(); return "timed-out";
-              }) as typeof Atomics.wait;
+              };
               try { route === "runtime_proc" ? call(0, 1, 1000, 128) : call(0, 128, 1, 256); }
               catch (error) { failure = error; throw error; }
-              finally { Atomics.wait = nativeWait; }
+              finally { observeWait = undefined; }
               throw new Error("selected death escaped the production wait guard");
             },
           }, host);
@@ -332,7 +339,7 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
           expect(failure).toBeInstanceOf(terminal === "signaled" ? DefaultSignal : WasiExit);
           expect(exits(messages)).toContainEqual({ type: "exit", code: terminal === "signaled" ? 143 : terminal === "exited" ? 23 : 1,
             signal: terminal === "signaled" ? 15 : undefined, sleep: "atomics" });
-        } finally { Atomics.wait = nativeWait; connection.client.port.close(); connection.server.port.close(); }
+        } finally { observeWait = undefined; connection.client.port.close(); connection.server.port.close(); }
       });
     }
   }
@@ -349,7 +356,6 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
       args: ["/bin/bun"], env: {}, filesystem: connection.client, runtimeProcess: transport,
       trace: false, net: null, moduleCache: null };
     const executor = createBunExecutor(request, host);
-    const nativeWait = Atomics.wait;
     let call!: (...args: number[]) => unknown;
     let waits = 0, scans = 0;
     let result: unknown, nativeResult: unknown;
@@ -374,18 +380,18 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
           if (route === "runtime_proc") { view.setUint32(0, 0, true); view.setUint32(4, fd, true); }
           else { view.setUint8(8, 1); view.setUint32(16, fd, true); }
           original = controlLoad(state.wake, 0);
-          Atomics.wait = ((word: Int32Array, index: number, expected: number) => {
+          observeWait = (word, index, expected) => {
             waits++;
             expect(word.buffer).toBe(state.wake.buffer);
             expect(word.byteOffset + index * 4).toBe(state.wake.byteOffset);
             expect(expected).toBe(original);
-            expect(Atomics.load(word, index)).toBe(original + 1);
+            expect(actualControl.controlLoad(word, index)).toBe(original + 1);
             // Calling the real native primitive proves the old snapshot refuses sleep.
-            nativeResult = nativeWait(word, index, expected, 0);
+            nativeResult = actualControl.controlWait(word, index, expected, 0);
             return nativeResult;
-          }) as typeof Atomics.wait;
+          };
           try { result = route === "runtime_proc" ? call(0, 1, 1000, 128) : call(0, 128, 1, 256); }
-          finally { Atomics.wait = nativeWait; }
+          finally { observeWait = undefined; }
           if (route !== "runtime_proc") expect(view.getUint32(256, true)).toBe(1);
           return 0;
         },
@@ -394,6 +400,6 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
       expect(waits).toBe(1);
       expect(nativeResult).toBe("not-equal");
       expect(result).toBe(route === "runtime_proc" ? 1 : 0);
-    } finally { Atomics.wait = nativeWait; connection.client.port.close(); connection.server.port.close(); }
+    } finally { observeWait = undefined; connection.client.port.close(); connection.server.port.close(); }
   });
 }

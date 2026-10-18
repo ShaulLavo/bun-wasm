@@ -7,9 +7,31 @@ major="${ICU_VERSION%%.*}"
 tgz="$ICU_DIR/icu4c-$ICU_VERSION-sources.tgz"
 host="$ICU_DIR/host-src/source"
 wasm="$ICU_DIR/wasm-src/source"
+bun "$REPO/scripts/build-wasi-sysroot.ts"
 mkdir -p "$ICU_DIR"
+# A native archive is reusable only for the exact source, compiler and patched
+# sysroot inputs. Never bless an older SDK build merely because its files exist.
+stamp="$ICU_DIR/.bunwasm-inputs"
+inputs="$({
+  printf 'ICU_VERSION=%s\nICU_SHA256=%s\nSYSROOT=%s\nSDK=%s\n' "$ICU_VERSION" "$ICU_SHA256" "$BUN_WASM_SYSROOT" "$WASI_SDK_PATH"
+  cat "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" "$WASI_SDK_PATH/VERSION"
+  sha256sum "$JSC_SRC/build-icu.sh"
+  "$WASI_SDK_PATH/bin/clang" --version
+  cc --version
+} | sha256sum | cut -d' ' -f1)"
+if [[ -f "$stamp" ]]; then
+  if [[ "$(cat "$stamp")" != "$inputs" ]]; then
+    echo "error: ICU inputs changed at $ICU_DIR; choose a fresh JSC_BUILD_DIR." >&2
+    exit 1
+  fi
+elif [[ -e "$ICU_DIR/host-src" || -e "$ICU_DIR/wasm-src" || -e "$ICU_PREFIX" ]]; then
+  echo "error: ICU cache at $ICU_DIR has no input receipt; choose a fresh JSC_BUILD_DIR." >&2
+  exit 1
+else
+  printf '%s\n' "$inputs" > "$stamp"
+fi
 
-if [[ -f "$ICU_PREFIX/lib/libicudata.a" && -f "$ICU_PREFIX/lib/libicuuc.a" ]]; then
+if [[ -f "$ICU_PREFIX/lib/libicudata.a" && -f "$ICU_PREFIX/lib/libicuuc.a" && -f "$ICU_PREFIX/lib/libicui18n.a" ]]; then
   echo "icu: $ICU_PREFIX already built"
   exit 0
 fi
@@ -33,7 +55,7 @@ if [[ ! -f "$wasm/lib/libicui18n.a" ]]; then
   tar -xf "$tgz" -C "$ICU_DIR/wasm-src" --strip-components=1
   emu="-D_WASI_EMULATED_MMAN -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_GETPID"
   (cd "$wasm" && $CAGE env \
-      CC="$WASI_SDK_PATH/bin/clang --target=wasm32-wasip1" CXX="$WASI_SDK_PATH/bin/clang++ --target=wasm32-wasip1" \
+      CC="$WASI_SDK_PATH/bin/clang --target=wasm32-wasip1 --sysroot=$BUN_WASM_SYSROOT" CXX="$WASI_SDK_PATH/bin/clang++ --target=wasm32-wasip1 --sysroot=$BUN_WASM_SYSROOT" \
       AR="$WASI_SDK_PATH/bin/llvm-ar" RANLIB="$WASI_SDK_PATH/bin/llvm-ranlib" \
       CFLAGS="-O2 $emu" CXXFLAGS="-O2 -fno-exceptions $emu" \
       CPPFLAGS="-DU_HAVE_MMAP=0 -DU_ENABLE_DYLOAD=0 -DU_HAVE_TZSET=0 -DU_HAVE_TZNAME=0 -DU_HAVE_TIMEZONE=0" \
@@ -58,7 +80,7 @@ keep='^(([a-z]+)/)?(root|en|en_US|en_US_POSIX|en_001|res_index|pool|supplemental
 grep -vE "$keep" "$data/all.lst" | grep -E '\.res$|\.cnv$|^translit/|^unames\.icu$|\.spp$|\.cfu$|^cnvalias\.icu$' > "$data/remove.lst"
 "$host/bin/icupkg" -r "$data/remove.lst" "$data/in/icudt${major}l.dat" "$data/out/icudt${major}l.dat"
 (cd "$data/out" && "$host/bin/genccode" -e "icudt$major" "icudt${major}l.dat" >/dev/null)
-$CAGE "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 -O1 -I"$wasm/common" -c "$data/out/icudt${major}l_dat.c" -o "$data/out/icudata.o"
+$CAGE "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot=$BUN_WASM_SYSROOT -O1 -I"$wasm/common" -c "$data/out/icudt${major}l_dat.c" -o "$data/out/icudata.o"
 
 mkdir -p "$ICU_PREFIX/lib" "$ICU_PREFIX/include/unicode"
 cp "$wasm/lib/libicuuc.a" "$wasm/lib/libicui18n.a" "$ICU_PREFIX/lib/"

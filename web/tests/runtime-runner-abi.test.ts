@@ -1,6 +1,6 @@
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import type { Runtime } from "waffle";
-import { expect, test } from "bun:test";
+import { afterAll, expect, mock, test } from "bun:test";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { DescriptorTable } from "waffle/core/descriptors";
@@ -9,10 +9,20 @@ import { WorkerPipeBroker } from "waffle/proc/worker-pipes";
 import { PipeController, attachPipePublicationRegistry, type PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { readOutcome } from "waffle/proc/outcome";
-import { suppressBudgetNotifications } from "./engine-interruption-probe";
 import { startRun, type RunOptions } from "../src/runner";
 import type { RunRequest } from "../src/worker";
 import type { SharedFilesystem } from "../src/shared-fs";
+
+// Observe the existing public boundary, not mutable globals captured by Waffle.
+// Dependency injection is confined to this test harness; Waffle's runtime has no hook.
+const intrinsicsPath = Bun.resolveSync("waffle/proc/control", import.meta.dir).replace(/control\.(ts|js)$/, "intrinsics.$1");
+const actualIntrinsics = { ...await import(intrinsicsPath) };
+let observeNotify: typeof Atomics.notify | undefined;
+mock.module(intrinsicsPath, () => ({ ...actualIntrinsics,
+  atomicsNotify: (...args: Parameters<typeof Atomics.notify>) =>
+    (observeNotify ?? actualIntrinsics.atomicsNotify)(...args),
+}));
+afterAll(() => { mock.module(intrinsicsPath, () => actualIntrinsics); });
 
 function imported(name: string, namespace = "runtime_proc"): WebAssembly.Module {
   const text = (value: string) => [value.length].concat(Array.from(new TextEncoder().encode(value)));
@@ -381,7 +391,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
       terminate() {}
     } as unknown as typeof Worker;
     const state = registryFixture();
-    let mutation: ReturnType<typeof suppressBudgetNotifications> | undefined;
+    let suppressed = 0;
     try {
       state.broker.register("/bin/fixture", { module: imported("signal"), adapter: "bun", engine });
       await state.broker.adoptRuntimeRoot(state.root);
@@ -398,19 +408,22 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
       const generation = Atomics.load(word, 0);
       // Reuse the browser causal-wake negative control on the real production request,
       // never a manufactured word. Even suppressed notify must advance this generation.
-      mutation = suppressBudgetNotifications(word);
+      observeNotify = (selected, index = 0) => {
+        if (selected.buffer === word.buffer && selected.byteOffset + index * 4 === word.byteOffset) { suppressed++; return 0; }
+        return actualIntrinsics.atomicsNotify(selected, index);
+      };
       if (delivery === "kill") await state.broker.kill(pid, 2);
       else await state.broker.killJob(shared.job, 2);
-      expect(mutation.count()).toBe(1);
+      expect(suppressed).toBe(1);
       expect(Atomics.load(word, 0)).toBe(generation + 1);
       expect(takeSignal(shared.signals.signalState)).toBe(2);
       expect(readOutcome(shared.signals.outcome)).toBeNull();
       expect(supervisor.get(pid)!.result).toBeNull();
       await new Promise(resolve => setTimeout(resolve, 12));
       expect(takeSignal(shared.signals.signalState)).toBe(0);
-      expect(mutation.count()).toBe(1);
+      expect(suppressed).toBe(1);
     } finally {
-      mutation?.restore();
+      observeNotify = undefined;
       try { await state.dispose(); } finally { globalThis.Worker = nativeWorker; }
     }
   });

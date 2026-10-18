@@ -2,6 +2,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$root/env.sh"
+bun "$root/scripts/build-wasi-sysroot.ts"
 export CARGO_TARGET_DIR="${TOOLS_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR}-tools}"
 cargo build -j "${JOBS:-12}" --release --target wasm32-wasip1 -p bunwasm-tools
 mkdir -p "$root/dist"

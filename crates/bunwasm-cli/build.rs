@@ -1,5 +1,6 @@
 //! Link settings for bun.wasm.
 fn main() {
+    println!("cargo:rerun-if-env-changed=BUN_WASM_SYSROOT");
     let target = std::env::var("TARGET").unwrap_or_default();
     if !target.starts_with("wasm32") {
         return;
@@ -21,9 +22,9 @@ fn main() {
             println!("cargo:rustc-link-arg-bin=bun=--export={name}");
         }
     }
-    // BoringSSL and JavaScriptCore share wasi-sdk's libc with Rust.
+    // BoringSSL, JavaScriptCore and Rust share Waffle's patched wasi-libc.
     {
-        let sdk = std::env::var("WASI_SDK_PATH").expect("WASI_SDK_PATH (source env.sh)");
-        println!("cargo:rustc-link-arg-bin=bun={sdk}/share/wasi-sysroot/lib/wasm32-wasip1/crt1-command.o");
+        let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("BUN_WASM_SYSROOT (source env.sh)");
+        println!("cargo:rustc-link-arg-bin=bun={sysroot}/lib/wasm32-wasip1/crt1-command.o");
     }
 }

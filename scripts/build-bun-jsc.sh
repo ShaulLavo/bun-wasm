@@ -10,10 +10,10 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$root/jsc/common.sh"
+bun "$root/scripts/build-wasi-sysroot.ts"
 check_jsc_inputs_stamp
 "$root/scripts/sync-crypto.sh"
 export CARGO_TARGET_DIR="${JSC_CARGO_TARGET_DIR:-$JSC_BUILD_DIR/target}"
-export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--cap-lints=warn -C link-self-contained=no"
 export JSC_BUILD_DIR
 # rquickjs-sys isn't built here, but sqlite's cc build uses the same wasi-sdk.
 export WASI_SDK="${WASI_SDK:-$WASI_SDK_PATH}"

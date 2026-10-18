@@ -11,8 +11,9 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::fd::AsRawFd;
+use std::io::{self, Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -37,6 +38,9 @@ impl Table {
 /// Node's (code, negative Linux errno, description) for an I/O error.
 fn errno_info(err: &io::Error) -> (&'static str, i32, &'static str) {
     use io::ErrorKind as K;
+    if err.raw_os_error() == Some(libc::EBADF) {
+        return ("EBADF", -9, "bad file descriptor");
+    }
     match err.kind() {
         K::BrokenPipe => ("EPIPE", -32, "broken pipe"),
         K::NotFound => ("ENOENT", -2, "no such file or directory"),
@@ -144,12 +148,25 @@ fn copy_dir_all(from: &str, to: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Open files by fake fd (WASI has real fds, but std does not expose a way to
-/// adopt arbitrary numbers, so we keep our own table starting at 3).
+/// Own files opened by this runtime, indexed by their real process descriptor.
+/// Inherited descriptors share that namespace and remain owned by the process host.
 #[derive(Default)]
 pub struct FdTable {
     files: HashMap<i32, File>,
-    next: i32,
+}
+
+fn descriptor_metadata(fd: i32) -> io::Result<fs::Metadata> {
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
+    // Validate the descriptor before borrowing it. Guest native calls are synchronous;
+    // no JS can close or reuse it between this check and metadata().
+    if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // This view never acquires lifetime ownership: ManuallyDrop prevents close on
+    // return (including errors). Owned opens remain in FdTable; inherited fds remain
+    // owned by their host until an explicit close or process exit.
+    let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd as _) });
+    file.metadata()
 }
 
 fn open_options(flags: &str) -> OpenOptions {
@@ -434,15 +451,6 @@ pub(crate) fn symlink(_: &str, _: &str) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
 }
 
-fn write_file_at(file: &mut File, bytes: &[u8], position: Option<u64>) -> io::Result<()> {
-    let Some(position) = position else { return file.write_all(bytes) };
-    let cursor = file.stream_position()?;
-    file.seek(SeekFrom::Start(position))?;
-    let result = file.write_all(bytes);
-    let restored = file.seek(SeekFrom::Start(cursor)).map(|_| ());
-    result.and(restored)
-}
-
 fn writev(state: &State, args: Args<'_>) -> NativeResult {
     let fd = match args.get(0) {
         Val::Num(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(i32::MAX) => *n as i32,
@@ -454,12 +462,8 @@ fn writev(state: &State, args: Args<'_>) -> NativeResult {
         Val::Bytes(bytes) => Ok(bytes.as_slice()),
         _ => Err(NativeError::type_error("expected a byte buffer")),
     }).collect::<Result<Vec<_>, _>>()?;
-    let files = state.fds.borrow();
-    let descriptor = match fd {
-        1 | 2 => { state.flush(); fd }
-        _ => libc::c_int::try_from(files.files.get(&fd).ok_or_else(|| bad_fd("writev"))?.as_raw_fd())
-            .map_err(|_| bad_fd("writev"))?,
-    };
+    if fd == 1 || fd == 2 { state.flush(); }
+    let descriptor = fd;
     let position = args.opt_num(2).filter(|&n| n >= 0.0).map(|n| n as libc::off_t);
     let mut written = 0usize;
     for bytes in buffers {
@@ -493,10 +497,8 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         let path = a.str(0)?;
         let flags = a.opt_str(1).unwrap_or("r");
         let file = open_options(flags).open(path).map_err(|e| io_error(e, "open", Some(path)))?;
-        let mut fds = st.fds.borrow_mut();
-        let fd = fds.next.max(3);
-        fds.next = fd + 1;
-        fds.files.insert(fd, file);
+        let fd = i32::try_from(file.as_raw_fd()).map_err(|_| bad_fd("open"))?;
+        st.fds.borrow_mut().files.insert(fd, file);
         Ok(fd.into())
     });
     let st = state.clone();
@@ -507,29 +509,25 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         }
         match st.fds.borrow_mut().files.remove(&fd) {
             Some(_) => ok(),
-            None => Err(bad_fd("close")),
+            None => {
+                if unsafe { libc::close(fd) } < 0 {
+                    Err(io_error(io::Error::last_os_error(), "close", None))
+                } else { ok() }
+            },
         }
     });
-    let st = state.clone();
-    t.add("read", move |a| {
+    t.add("read", |a| {
         let fd = a.i32(0)?;
         let mut buf = vec![0u8; a.num(1)? as usize];
-        if fd == 0 && buf.is_empty() {
-            return Ok(Val::Bytes(buf));
-        }
-        let n = if fd == 0 {
-            let count = unsafe { libc::read(0, buf.as_mut_ptr().cast(), buf.len()) };
-            if count < 0 { Err(io::Error::last_os_error()) } else { Ok(count as usize) }
-        } else {
-            let mut fds = st.fds.borrow_mut();
-            let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("read"))?;
-            if let Some(p) = a.opt_num(2).filter(|p| *p >= 0.0) {
-                file.seek(SeekFrom::Start(p as u64)).map_err(|e| io_error(e, "read", None))?;
-            }
-            file.read(&mut buf)
-        };
-        let n = n.map_err(|e| io_error(e, "read", None))?;
-        buf.truncate(n);
+        if fd == 0 && buf.is_empty() { return Ok(Val::Bytes(buf)); }
+        let position = a.opt_num(2).filter(|p| *p >= 0.0);
+        // Positional reads must not advance the shared open-file cursor.
+        let count = unsafe { match position {
+            Some(position) => libc::pread(fd, buf.as_mut_ptr().cast(), buf.len(), position as libc::off_t),
+            None => libc::read(fd, buf.as_mut_ptr().cast(), buf.len()),
+        } };
+        if count < 0 { return Err(io_error(io::Error::last_os_error(), "read", None)); }
+        buf.truncate(count as usize);
         Ok(Val::Bytes(buf))
     });
     let st = state.clone();
@@ -540,28 +538,27 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
             1 => st.write_stdout(bytes).map_err(|e| io_error(e, "write", None))?,
             2 => st.write_stderr(bytes).map_err(|e| io_error(e, "write", None))?,
             _ => {
-                let mut fds = st.fds.borrow_mut();
-                let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("write"))?;
-                let position = a.opt_num(2).filter(|p| *p >= 0.0).map(|p| p as u64);
-                write_file_at(file, bytes, position).map_err(|e| io_error(e, "write", None))?;
+                let position = a.opt_num(2).filter(|p| *p >= 0.0).map(|p| p as libc::off_t);
+                let mut written = 0;
+                while written < bytes.len() {
+                    let offset = position.map(|p| p + written as libc::off_t);
+                    let count = write_chunk(fd, &bytes[written..], offset).map_err(|e| io_error(e, "write", None))?;
+                    if count == 0 { return Err(io_error(io::ErrorKind::WriteZero.into(), "write", None)); }
+                    written += count;
+                }
             }
         }
         Ok(Val::Num(bytes.len() as f64))
     });
     let st = state.clone();
     t.add("writev", move |a| writev(&st, a));
-    let st = state.clone();
-    t.add("fstat", move |a| {
-        let fds = st.fds.borrow();
-        let file = fds.files.get(&a.i32(0)?).ok_or_else(|| bad_fd("fstat"))?;
-        let meta = file.metadata().map_err(|e| io_error(e, "fstat", None))?;
+    t.add("fstat", |a| {
+        let meta = descriptor_metadata(a.i32(0)?).map_err(|e| io_error(e, "fstat", None))?;
         Ok(stat_record(&meta))
     });
-    let st = state.clone();
-    t.add("ftruncate", move |a| {
-        let fds = st.fds.borrow();
-        let file = fds.files.get(&a.i32(0)?).ok_or_else(|| bad_fd("ftruncate"))?;
-        file.set_len(a.opt_num(1).unwrap_or(0.0) as u64).map_err(|e| io_error(e, "ftruncate", None))?;
+    t.add("ftruncate", |a| {
+        let result = unsafe { libc::ftruncate(a.i32(0)?, a.opt_num(1).unwrap_or(0.0) as libc::off_t) };
+        if result < 0 { return Err(io_error(io::Error::last_os_error(), "ftruncate", None)); }
         ok()
     });
 }
@@ -968,6 +965,45 @@ mod builtin_tests {
     fn call(table: &Table, name: &str, args: &[Val]) -> NativeResult {
         let (_, function) = table.functions.iter().find(|(key, _)| *key == name).expect("shared data native");
         function(Args(args))
+    }
+
+    #[test]
+    fn real_descriptors_accept_inherited_files_without_stealing_their_lifetime() {
+        use std::io::{Read, Seek, SeekFrom};
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) { let _ = fs::remove_file(&self.0); }
+        }
+        let path = std::env::temp_dir().join(format!("bun-wasm-native-fds-{}-{}", std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        let fixture = Fixture(path);
+        let mut inherited = OpenOptions::new().create_new(true).read(true).write(true).open(&fixture.0).unwrap();
+        inherited.write_all(b"xxcursor!").unwrap();
+        inherited.seek(SeekFrom::Start(2)).unwrap();
+        let fd = Val::Num(inherited.as_raw_fd() as f64);
+        let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
+        let natives = table(&state);
+        assert_eq!(call(&natives, "read", &[fd.clone(), Val::Num(2.0), Val::Num(0.0)]).unwrap(), Val::Bytes(b"xx".to_vec()));
+        assert_eq!(inherited.stream_position().unwrap(), 2);
+        assert_eq!(call(&natives, "read", &[fd.clone(), Val::Num(6.0), Val::Num(-1.0)]).unwrap(), Val::Bytes(b"cursor".to_vec()));
+        assert_eq!(inherited.stream_position().unwrap(), 8);
+        call(&natives, "write", &[fd.clone(), Val::Bytes(b"X".to_vec()), Val::Num(0.0)]).unwrap();
+        assert_eq!(inherited.stream_position().unwrap(), 8);
+        assert!(call(&natives, "fstat", &[fd.clone()]).is_ok());
+        call(&natives, "ftruncate", &[fd.clone(), Val::Num(10.0)]).unwrap();
+        assert_eq!(inherited.metadata().unwrap().len(), 10);
+        call(&natives, "writev", &[fd.clone(), Val::Array(vec![Val::Bytes(b"?".to_vec())]), Val::Num(-1.0)]).unwrap();
+        let own = call(&natives, "open", &[Val::from(fixture.0.to_str().unwrap()), Val::from("r")]).unwrap();
+        let Val::Num(own_fd) = own else { panic!("open must return descriptor") };
+        assert_ne!(own_fd, inherited.as_raw_fd() as f64);
+        assert_eq!(state.fds.borrow().files[&(own_fd as i32)].as_raw_fd() as f64, own_fd);
+        call(&natives, "close", &[Val::Num(own_fd)]).unwrap();
+        let error = call(&natives, "read", &[Val::Num(own_fd), Val::Num(1.0), Val::Num(-1.0)]).unwrap_err();
+        assert!(error.props.contains(&("code".into(), Val::from("EBADF"))));
+        drop(natives); drop(state);
+        inherited.seek(SeekFrom::Start(8)).unwrap();
+        let mut suffix = [0]; inherited.read_exact(&mut suffix).unwrap();
+        assert_eq!(suffix, [b'?']);
     }
 
     #[test]

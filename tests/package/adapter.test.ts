@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Runtime, GuestLauncher, ProgramDefinition } from "waffle";
+import { FilesystemError } from "waffle/fs/protocol";
 import { installBunAdapters as installReal, type BunAdapterOptions, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
 const workerUrl = "https://example.test/worker.js";
 const installBunAdapters = (runtime: Runtime, options: Omit<BunAdapterOptions, "workerUrl"> & { workerUrl?: string | URL } = {}) => installReal(runtime, { workerUrl, ...options });
@@ -23,7 +24,10 @@ function fixture() {
     filesystem: {
       lookup: async (path: string) => files.has(path) ? { kind: "file" } : directories.has(path) ? { kind: "dir" } : undefined,
       readFile: async (path: string) => files.get(path),
-      writeFile: async (path: string, bytes: Uint8Array) => { files.set(path, new Uint8Array(bytes)); },
+      writeFile: async (path: string, bytes: Uint8Array, mode?: { exclusive?: boolean }) => {
+        if (mode?.exclusive && (files.has(path) || directories.has(path))) throw new FilesystemError(20);
+        files.set(path, new Uint8Array(bytes));
+      },
       mkdirp: async (path: string) => { directories.add(path); },
       remove: async (path: string) => files.delete(path),
       drain: async () => {},
@@ -127,4 +131,33 @@ test("invalid executable names and explicit engines are validated before registr
   const install = await installBunAdapters(f.runtime, { engine: "quickjs", module });
   expect(f.programs.get("/opt/bun/quickjs/bin/bun")?.adapter).toBe("bun:quickjs");
   install.dispose();
+});
+
+for (const failure of [new FilesystemError(29), Object.assign(new Error("not a filesystem conflict"), { errno: 20 })]) {
+  test(`exclusive marker creation preserves unrelated ${failure.message} errors`, async () => {
+    const f = fixture();
+    f.runtime.filesystem.writeFile = async (_path, _bytes, mode) => {
+      expect(mode).toEqual({ exclusive: true });
+      throw failure;
+    };
+    expect(await installBunAdapters(f.runtime).catch(error => error)).toBe(failure);
+    expect(f.adapters.size).toBe(0);
+    expect(f.programs.size).toBe(0);
+    expect(f.files.size).toBe(0);
+  });
+}
+
+test("an unrelated queued storage failure is not swallowed while resolving an exclusive marker race", async () => {
+  const f = fixture();
+  const failure = new FilesystemError(29);
+  const winner = new TextEncoder().encode("bun-wasm registered executable\n");
+  f.runtime.filesystem.writeFile = async () => {
+    f.files.set("/bin/bun", winner);
+    throw new FilesystemError(20);
+  };
+  f.runtime.filesystem.drain = async () => { throw failure; };
+  expect(await installBunAdapters(f.runtime).catch(error => error)).toBe(failure);
+  expect(f.files.get("/bin/bun")).toBe(winner);
+  expect(f.adapters.size).toBe(0);
+  expect(f.programs.size).toBe(0);
 });

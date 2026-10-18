@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "private": true,
   "type": "module",
   "exports": {
@@ -61,13 +61,13 @@
     "publish-guest": "bun scripts/publish-guest.ts"
   },
   "peerDependencies": {
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#0a9fe12bf73cce81047999d0499543dfe0d9e513"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#afe9cc1f3f93ea84929903e5a55854dbfd973448"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "typescript": "^7.0.2",
     "vite": "8.3.4",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#0a9fe12bf73cce81047999d0499543dfe0d9e513"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#afe9cc1f3f93ea84929903e5a55854dbfd973448"
   },
   "trustedDependencies": [
     "waffle"

@@ -54,6 +54,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Node startup diagnostic drain](#node-startup-diagnostic-drain) | Host feature | Use Waffle's public cancellable, bounded asynchronous diagnostic drain for the Node process host's immediate stderr writes. |
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
+| [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle 0.0.47's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
 | [Vendor source synchronization](#vendor-source-synchronization) | Host feature | Original patch-tree verification updates existing clones and detached worktrees without overwriting local changes. |
@@ -2763,6 +2764,33 @@ The Waffle core budget is 7,680 B gzip, matching its upstream budget; this pin
 measures 7,516 B. Tagged process directory/control and startup value primitives
 remain included in the startup byte totals. Supervisor, registry, table, worker
 service, pipes and interrupt rewriting still cannot load before first use.
+
+## Patched sysroot and native descriptor bridge
+
+Class **Port**, with an original local build wrapper and native runtime adapter. The libc input is
+not copied into this repository: Waffle 0.0.47 at `afe9cc1f3f93ea84929903e5a55854dbfd973448`
+builds wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13` from the installed
+`waffle/scripts/build-wasi-libc.sh`. Its `preopen-scan.patch` skips occupied inherited descriptors
+only when `fd_fdstat_get` succeeds and stops on the first real BADF. `scripts/build-wasi-sysroot.ts`
+records the exact Waffle revision, SDK VERSION, builder hash, patch hash and libc hash, claims an
+atomic output lock, stages publication, and refuses stale or caller-owned outputs. It symlinks only
+unchanged SDK C++ headers and noeh libraries; CRT, libc and emulation archives come from the
+patched sysroot. Every guest and native C/C++ consumer receives that sysroot explicitly, while
+Rust self-contained libc remains disabled. The JSC/ICU side uses the same receipt boundary:
+`jsc/build-icu.sh` fingerprints the ICU source, wasi-sdk VERSION, patched sysroot receipt, compiler
+versions and build script before accepting an existing cache; a missing or mismatched receipt on a
+nonempty cache is an error rather than a silent reuse of older libc inputs. `jsc/common.sh` extends
+the JSC prebuild fingerprint with that receipt and the effective toolchain, and `scripts/build-bun-jsc.sh`
+requires the matching stamp before linking a guest.
+
+`crates/bunwasm-runtime/src/natives.rs` is original bun-wasm code, not a copied wasi-libc or Node
+implementation. Its open-file table stores real descriptors, allowing inherited fd3/fd4 resources
+to use the same read/write/fstat/ftruncate namespace and preserving shared open-file cursors. The
+browser process control creates a real filesystem file, consumes its prefix in the external root,
+then verifies the child reads the shared cursor and writes through inherited fd3 in Chromium,
+Firefox and WebKit. The package installer uses exclusive marker creation and rolls back only paths
+it created; a matching concurrent marker is shared and unrelated queued filesystem errors remain
+fatal.
 
 ## Node startup diagnostic drain
 

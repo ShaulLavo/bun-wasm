@@ -2,9 +2,11 @@ import { createRuntime, type Runtime, type ProcessService } from "waffle";
 import { createWorkerProcessTransport, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { installBunAdapters } from "../../src/bun-adapter.js";
 import { runtimeProcFixture } from "./runtime-proc-fixtures";
-import { bunRuntimeProcFixture, bunRuntimeProcPending, bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
+import { bunRuntimeProcFixture, bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
 
 const parameters = new URLSearchParams(location.search);
+const engine = parameters.get("engine") ?? "browser";
+if (engine !== "browser" && engine !== "quickjs" && engine !== "jsc") throw new Error(`unknown engine ${engine}`);
 const publishedDefault = parameters.has("published-default");
 const name = parameters.get("scenario") ?? "nested";
 const scenario = bunRuntimeProcScenarios.find(item => item.name === name);
@@ -60,6 +62,7 @@ try {
   runtime = createRuntime({ filesystem: { workerURL: new URL("./fs-worker.js", location.href) } });
   await runtime.filesystem.mkdirp("/home/user");
   await runtime.filesystem.writeFile("/home/user/preopen-data", "ROOT_PREOPEN_OK");
+  if (scenario?.fileCursor) await runtime.filesystem.writeFile("/home/user/inherited-cursor", "xxcursor!");
   await runtime.filesystem.flush();
   const service: ProcessService = await runtime.processes();
   const supervisor = await service.ready();
@@ -78,8 +81,8 @@ try {
     const workerUrl = new URL("./worker.js", location.href).href;
     // Explicit opt-in only: this mode exercises the package's public default descriptor,
     // with no engine/module/asset/URL override and no local artifact fallback.
-    const options = publishedDefault ? { workerUrl } : { workerUrl, engine: "browser" as const,
-      module: await WebAssembly.compileStreaming(fetch("./bun-browser.wasm")),
+    const options = publishedDefault ? { workerUrl } : { workerUrl, engine,
+      module: await WebAssembly.compileStreaming(fetch("./bun-guest.wasm")),
       executables: ["/bin/bun", "/bin/node"] };
     // Disposal must unregister aliases and adapters, not merely clear a private installed flag.
     const first = await installBunAdapters(runtime, options);
@@ -92,7 +95,7 @@ try {
     installation = await installBunAdapters(runtime, options);
     if (name === "start-failed") await runtime.filesystem.writeFile("/bin/broken-bun", "fixture");
     if (name === "start-failed") runtime.registerProgram("/bin/broken-bun", {
-      adapter: "bun:browser", cooperative: true,
+      adapter: `bun:${engine}`, cooperative: true,
       module: () => { throw new Error("bun-runtime-proc-start-failed-control"); },
     });
   }
@@ -187,7 +190,7 @@ try {
   }
   await until(() => workers.size === 0, "external Runtime disposal stopped every owned worker");
   equal(errors.length, 0, "worker errors");
-  result = { ok: true, ...diagnostics(), pending: bunRuntimeProcPending };
+  result = { ok: true, ...diagnostics() };
 } catch (error) {
   result = { ok: false, ...diagnostics(), error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error) };
 } finally {

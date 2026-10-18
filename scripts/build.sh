@@ -6,6 +6,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$root/env.sh"
+bun "$root/scripts/build-wasi-sysroot.ts"
 "$root/scripts/sync-crypto.sh"
 # rquickjs-sys looks for wasi-sdk here (otherwise it downloads one).
 export WASI_SDK="${WASI_SDK:-$WASI_SDK_PATH}"
