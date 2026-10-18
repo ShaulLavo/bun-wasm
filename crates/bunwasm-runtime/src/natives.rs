@@ -249,7 +249,7 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
         st.flush();
         let ms = a.opt_num(0).unwrap_or(0.0);
         if ms > 0.0 {
-            crate::host::sleep(Duration::from_secs_f64(ms / 1000.0));
+            st.sleep(Duration::from_secs_f64(ms / 1000.0));
         }
         ok()
     });

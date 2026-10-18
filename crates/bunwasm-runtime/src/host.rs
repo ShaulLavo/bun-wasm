@@ -343,11 +343,62 @@ pub fn idle(timeout_ms: i32) {
     }
 }
 
+/// Handled signals taken from the process service during a synchronous sleep, waiting for the
+/// next JavaScript checkpoint. Node runs handled callbacks only on the event loop, never inside
+/// `Bun.sleepSync`, but the service's pending state would make every poll return at once.
+#[derive(Default)]
+pub(crate) struct DeferredSignals {
+    pending: u64,
+}
+
+impl DeferredSignals {
+    pub(crate) fn defer(&mut self, signal: i32) {
+        if (1..=64).contains(&signal) {
+            self.pending |= 1u64 << (signal - 1);
+        }
+    }
+
+    /// The lowest deferred signal, like the service's own dequeue order; 0 when none.
+    pub(crate) fn take(&mut self) -> i32 {
+        if self.pending == 0 {
+            return 0;
+        }
+        let signal = self.pending.trailing_zeros() + 1;
+        self.pending &= !(1u64 << (signal - 1));
+        signal as i32
+    }
+
+    /// Withdraws one deferred signal; whether it was pending.
+    pub(crate) fn withdraw(&mut self, signal: i32) -> bool {
+        if !(1..=64).contains(&signal) {
+            return false;
+        }
+        let bit = 1u64 << (signal - 1);
+        let was = self.pending & bit != 0;
+        self.pending &= !bit;
+        was
+    }
+}
+
 /// Sleep so child cancellation and signals can interrupt timers and `Bun.sleepSync`, including
-/// instances with no open handles. Bounded steps re-enter the signal checkpoint.
-pub fn sleep(duration: std::time::Duration) {
+/// instances with no open handles. Each step first dequeues handled signals (a selected default
+/// action unwinds inside `dequeue`), keeping them in `deferred`, then waits at most 25 ms. Without
+/// the dequeue a pending handled signal makes every wait return at once and the sleep spins.
+pub(crate) fn sleep_with(
+    duration: std::time::Duration,
+    deferred: &mut DeferredSignals,
+    mut dequeue: impl FnMut() -> i32,
+    mut idle: impl FnMut(i32),
+) {
     let started = std::time::Instant::now();
     while started.elapsed() < duration {
+        loop {
+            let signal = dequeue();
+            if signal <= 0 {
+                break;
+            }
+            deferred.defer(signal);
+        }
         let left = duration.saturating_sub(started.elapsed());
         idle(left.as_millis().clamp(1, 25) as i32);
     }
@@ -376,8 +427,55 @@ mod signal_tests {
         let started = std::time::Instant::now();
         idle(20);
         assert!(started.elapsed() >= std::time::Duration::from_millis(20));
+    }
+
+    #[test]
+    fn a_handled_signal_during_sleep_is_deferred_not_spun_on_or_lost() {
+        let mut deferred = DeferredSignals::default();
+        let mut queue = vec![15, 2];
+        let mut idles = 0;
+        let mut dequeues = 0;
         let started = std::time::Instant::now();
-        sleep(std::time::Duration::from_millis(30));
-        assert!(started.elapsed() >= std::time::Duration::from_millis(30));
+        sleep_with(
+            std::time::Duration::from_millis(60),
+            &mut deferred,
+            || { dequeues += 1; if queue.is_empty() { 0 } else { queue.remove(0) } },
+            |ms| {
+                idles += 1;
+                assert!((1..=25).contains(&ms));
+                // The service has no pending signal left, so waiting really blocks.
+                std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+            },
+        );
+        assert!(started.elapsed() >= std::time::Duration::from_millis(60));
+        // Bounded: one wait per slice, not one per spin.
+        assert!(idles <= 8, "{idles} waits");
+        assert_eq!(dequeues, idles + 2);
+        // Nothing was dropped; delivery order matches the service's lowest-first dequeue.
+        assert_eq!(deferred.take(), 2);
+        assert_eq!(deferred.take(), 15);
+        assert_eq!(deferred.take(), 0);
+    }
+
+    #[test]
+    fn a_selected_default_action_unwinds_out_of_sleep() {
+        let mut deferred = DeferredSignals::default();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sleep_with(std::time::Duration::from_secs(10), &mut deferred, || panic!("signal death"), |_| unreachable!());
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deferred_signals_coalesce_and_can_be_withdrawn() {
+        let mut deferred = DeferredSignals::default();
+        for signal in [15, 15, 0, 65, -1, 2] {
+            deferred.defer(signal);
+        }
+        assert!(deferred.withdraw(15));
+        assert!(!deferred.withdraw(15));
+        assert!(!deferred.withdraw(99));
+        assert_eq!(deferred.take(), 2);
+        assert_eq!(deferred.take(), 0);
     }
 }
