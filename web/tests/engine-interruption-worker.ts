@@ -1,12 +1,16 @@
 // Test bootstrap only: run the unmodified production worker with observed imports.
 import type { RunRequest } from "../src/bun-executor";
 import type { RuntimeWorkerRequest } from "waffle/browser/worker";
-import { observeEngineImports, observeEventLoopWait, observedEngineStart, probeCell, type EngineInterruptionOptions } from "./engine-interruption-probe";
-import { engineInterruptionTransport } from "./engine-interruption-transport";
-import { observeProcessPoll } from "./engine-interruption-sleep";
+import type { EngineInterruptionOptions } from "./engine-interruption-probe";
+import { installAtomicsObservers, observedAtomics } from "./engine-interruption-atomics";
 
+installAtomicsObservers();
 const context = self as unknown as DedicatedWorkerGlobalScope;
 context.onmessage = async (event: MessageEvent<RuntimeWorkerRequest & Partial<RunRequest> & { engineInterruption: EngineInterruptionOptions }>) => {
+  // Importing even the probe/transport loads Waffle's intrinsic-capture module.
+  const { observeEngineImports, observePreview1Dequeue, observeEventLoopWait, observedEngineStart, probeCell } = await import("./engine-interruption-probe");
+  const { engineInterruptionTransport } = await import("./engine-interruption-transport");
+  const { observeProcessPoll } = await import("./engine-interruption-sleep");
   const options = event.data.engineInterruption;
   const probe = new Int32Array(options.evidence);
   const transport = engineInterruptionTransport(event.data);
@@ -18,6 +22,7 @@ context.onmessage = async (event: MessageEvent<RuntimeWorkerRequest & Partial<Ru
       const imports = args[1];
       if (!imports) throw new Error("interruption probe requires the production imports");
       let instance: WebAssembly.Instance;
+      if (preview1) observePreview1Dequeue(imports, probe, transport.signalState);
       if (!preview1) {
         observeEngineImports(imports, probe, () => instance.exports.memory as WebAssembly.Memory, transport.signalState, options.observeCheckpoints);
         if (options.observeCheckpoints) observeProcessPoll(imports, probe);
@@ -31,7 +36,7 @@ context.onmessage = async (event: MessageEvent<RuntimeWorkerRequest & Partial<Ru
   });
   WebAssembly.Instance = Instance;
   const restoreWait = options.observeCheckpoints
-    ? observeEventLoopWait(probe, transport.waitWord, Atomics, options.idleWaitTimeoutMs) : () => {};
+    ? observeEventLoopWait(probe, transport.waitWord, observedAtomics, options.idleWaitTimeoutMs) : () => {};
   try {
     if (event.data.engine === undefined) await import("waffle/browser/preview1-worker");
     else await import("../src/worker");

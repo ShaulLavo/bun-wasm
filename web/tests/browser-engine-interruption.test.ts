@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { collectRunnerCleanup, finishRunnerCleanup, runBrowserGate, type RunnerCleanup } from "./browser-engine-interruption";
 
 function green() {
-  const checks = ["quickjs", "jsc"].flatMap(engine => Array.from({ length: 12 }, (_, index) => ({
-    engine, route: index < 5 ? "runtimeProcess" : "legacy", name: `proof-${index}`,
+  const checks = ["quickjs", "jsc"].flatMap(engine => Array.from({ length: 14 }, (_, index) => ({
+    engine, route: index < 7 ? "runtimeProcess" : "legacy", name: `proof-${index}`,
   }))).concat(Array.from({ length: 4 }, (_, index) => ({ engine: "browser", route: "legacy", name: `browser-${index}` })));
   return { ok: true, checks, outcomes: [{ ok: true, cleanup: { safe: true } }], pageErrors: [],
     cleanup: { safe: true, activeWorkers: 0 }, benchmarks: [{ engine: "quickjs" }, { engine: "jsc" }] };
@@ -176,7 +176,7 @@ test("failed admission marks nominally green result RED and still closes before 
   f.options.runBrowser = async name => { const result = green(); if (name === "chromium") result.checks.pop(); f.events.push(`run:${name}`); return result; };
   const report = await runBrowserGate(f.options);
   expect(report.ok).toBe(false); expect(report.reports).toHaveLength(4); expect(report.cleanup.safe).toBe(true);
-  expect(report.reports[0]!.ok).toBe(false); expect(report.reports[0]!.error).toContain("28"); expect(report.reports[1]!.ok).toBe(true);
+  expect(report.reports[0]!.ok).toBe(false); expect(report.reports[0]!.error).toContain("32"); expect(report.reports[1]!.ok).toBe(true);
   expect(f.events.indexOf("close:chromium")).toBeLessThan(f.events.indexOf("run:firefox"));
 });
 
