@@ -24,7 +24,7 @@ for (const test of selected) {
   if (control) writeFileSync(control, test.code);
   const command = host === "node-control" ? [process.execPath, control]
     : host === "node" ? [process.execPath, "--no-warnings", `${root}/web/scripts/node-host.mjs`, "--wasm", artifact, "--net", "--", "-e", test.code]
-    : [launcher, "--wasm", artifact, "--", "-e", test.code];
+    : [launcher, "--wasm", artifact, "--engine", `${engine}=${artifact}`, "--env", `PATH=/opt/bun/${engine}/bin:/bin:/usr/bin`, "--", "-e", test.code];
   const result = await new Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string; timeout: boolean }>(resolve => {
     let stdout = ""; let stderr = ""; let timeout = false;
     active = spawn(command[0], command.slice(1), { cwd: root, stdio: ["ignore", "pipe", "pipe"] });

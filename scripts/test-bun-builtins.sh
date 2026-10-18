@@ -29,7 +29,7 @@ for engine in quickjs jsc browser; do
   if [[ "$engine" == browser ]]; then
     (cd "$scratch" && timeout 60 node --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --dir "$scratch::/" --env PWD=/ -- run /index.js)
   else
-    timeout 60 "${BUN_WASM_LAUNCHER:-$CARGO_TARGET_DIR/release/bun-wasm}" --wasm "$wasm" --dir "$scratch::/" --env PWD=/ -- run /index.js
+    timeout 60 "${BUN_WASM_LAUNCHER:-$CARGO_TARGET_DIR/release/bun-wasm}" --wasm "$wasm" --engine "$engine=$wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$scratch::/" --env PWD=/ -- run /index.js
   fi
   echo "PASS generated builtins ($engine)"
 done

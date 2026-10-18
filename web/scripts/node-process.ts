@@ -106,7 +106,10 @@ export function createNodeProcess(options: NodeProcessOptions) {
       options.postMessage(message);
     },
     createPipe: () => pipes.createPipe(), revokeProcess: pid => pipes.revokeProcess(pid),
-    prepareSpawn: () => ({ data: { registry: pipes.registry.handle() } }),
+    prepareSpawn(pid) {
+      pipes.registry.registerProcess(pid);
+      return { data: { registry: pipes.registry.handle() }, cancel: () => pipes.registry.collectProcess(pid) };
+    },
   });
   const isSignalPending = options.isSignalPending ?? createNodeSignalController(client.signals).pending;
   client.installBindings();

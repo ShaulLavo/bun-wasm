@@ -113,9 +113,11 @@ test("generic host failure confirms after its filesystem fence before physical t
     const supervisor = await state.broker.ready();
     await supervisor.start(pid);
     const worker = state.workers.get(pid)!;
+    const shared = workerProcessState(transport);
+    const record = supervisor.get(pid)!;
     let confirmedAtTermination = -1;
     worker.terminate = () => {
-      confirmedAtTermination = controlLoad(workerProcessState(transport).confirmed, 0);
+      confirmedAtTermination = record.jobSafe && record.result !== null ? 1 : 0;
       return physicalTermination;
     };
     worker.onerror?.({ preventDefault() {}, message: "worker startup failed" } as ErrorEvent);
@@ -127,9 +129,10 @@ test("generic host failure confirms after its filesystem fence before physical t
     state.release();
     expect(await waiting).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
     await Promise.resolve();
-    expect(controlLoad(workerProcessState(transport).confirmed, 0)).toBe(1);
+    expect(controlLoad(shared.confirmed, 0)).toBe(1);
     expect(confirmedAtTermination).toBe(1);
-    expect(supervisor.jobEmpty(1, workerProcessState(transport).job)).toBe(true);
+    expect(record.jobSafe).toBe(true);
+    expect(supervisor.jobEmpty(1, shared.job)).toBe(true);
     // Physical termination is deliberately unresolved; it cannot be the safe point.
   } finally { releasePhysical(); await state.dispose(); }
 });
@@ -255,13 +258,13 @@ test("a killed generic child cannot queue a new spawn capability", async () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(state.workers.has(descendant)).toBe(false);
     const rejected = workerProcessState(queued.transport);
-    expect(rejected.signals.outcome[0]).not.toBe(0n);
+    expect(readOutcome(rejected.signals.outcome)).not.toBeNull();
     expect(controlLoad(rejected.confirmed, 0)).toBe(0);
     expect(controlLoad(rejected.jobConfirmed, 0)).toBe(0);
     state.release();
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(controlLoad(rejected.confirmed, 0)).toBe(1);
-    expect(controlLoad(rejected.jobConfirmed, 0)).toBe(1);
+    expect(() => controlLoad(rejected.confirmed, 0)).toThrow("collected");
+    expect(() => readOutcome(rejected.signals.outcome)).toThrow("collected");
   } finally { await state.dispose(); }
 });
 
@@ -276,6 +279,7 @@ for (const early of [false, true]) test(`explicit generic runner roots preserve 
   const ready = new Promise<void>(resolve => { posted = resolve; });
   let terminated = 0;
   let connections = 0;
+  const requestedAtRevocation: number[] = [];
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
   globalThis.Worker = class {
@@ -285,7 +289,11 @@ for (const early of [false, true]) test(`explicit generic runner roots preserve 
   const filesystem = {
     connect(value: FilesystemIdentity) { expect(value.owner).toBe(identity.owner); connections++; return { ...value, port: channel.port1 }; },
     fork() { throw new Error("explicit root identity must not be replaced"); },
-    revoke: revokeFilesystem, reap() {},
+    revoke(value: FilesystemIdentity) {
+      requestedAtRevocation.push(controlLoad(workerProcessState(transport).signals.requestedSignal, 0));
+      revokeFilesystem(value);
+    },
+    reap() {},
     async quiesce(value: FilesystemIdentity) { revokeFilesystem(value); },
     client: { sweep() {} },
   } as unknown as SharedFilesystem;
@@ -302,7 +310,8 @@ for (const early of [false, true]) test(`explicit generic runner roots preserve 
     expect(connections).toBe(1);
     if (!early) run.kill(9);
     expect(await run.done).toEqual({ code: 137 });
-    expect(workerProcessState(transport).signals.requestedSignal[0]).toBe(9);
+    expect(requestedAtRevocation).toContain(9);
+    expect(() => workerProcessState(transport)).toThrow("collected");
     await Promise.resolve();
     expect(terminated).toBe(1);
   } finally {
@@ -327,7 +336,7 @@ for (const beforeAdmission of [false, true]) test(`job kill reaches reserved gen
     const pending = state.messages[0]!.transport;
     if (!beforeAdmission) await state.dispatch();
     await state.broker.killJob(1, 9);
-    expect(workerProcessState(pending).signals.requestedSignal[0]).toBe(9);
+    expect(controlLoad(workerProcessState(pending).signals.requestedSignal, 0)).toBe(9);
     release();
     if (beforeAdmission) await state.dispatch();
     else await (await state.broker.ready()).start(pid);

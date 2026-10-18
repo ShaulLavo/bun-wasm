@@ -184,7 +184,6 @@ pub struct Stdio {
     pub fds: super::descriptors::Descriptors,
     pub pid: i32,
     pub memory_limit: usize,
-    pub configuration: bool,
 }
 
 impl Stdio {
@@ -206,7 +205,6 @@ impl Stdio {
             .collect(),
             pid: 0,
             memory_limit: 512 << 20,
-            configuration: false,
         }
     }
     pub fn install(&self, wasi: &mut wasmtime_wasi::WasiCtxBuilder, cancel: Arc<Cancellation>) {

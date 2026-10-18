@@ -3,9 +3,9 @@ import { parentPort, workerData } from "node:worker_threads";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { MemFS } from "waffle/fs/memory";
 import { ProcessABI } from "waffle/proc/abi";
-import type { SignalTransport } from "waffle/proc/signals";
+import { workerProcessState, type WorkerProcessTransport } from "waffle/proc/worker-client";
 
-const { signals, wake } = workerData as { signals: SignalTransport; wake: Int32Array };
+const { signals, wake } = workerProcessState((workerData as { transport: WorkerProcessTransport }).transport);
 const descriptors = new DescriptorTable();
 const unused = (): never => { throw new Error("unexpected service operation"); };
 const abi = new ProcessABI({ memory: new WebAssembly.Memory({ initial: 1 }), descriptors, fs: new MemFS(), pid: 1, signals, wake,

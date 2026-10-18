@@ -32,7 +32,7 @@ async function proveWake(operation: "kill" | "killJob", suppressNotify: boolean,
     }) as typeof Atomics.notify;
     const result = await new Promise<{ generation: number; result: string; pending: number; interrupt: number; sequence: number }>((resolve, reject) => {
       deadlineTimer = setTimeout(() => reject(new Error("signal wait deadline exceeded")), deadlineMilliseconds);
-      worker = new Worker(new URL("./fixtures/signal-wake-worker.ts", import.meta.url), { workerData: { signals, wake: state.wake } });
+      worker = new Worker(new URL("./fixtures/signal-wake-worker.ts", import.meta.url), { workerData: { transport } });
       worker.on("error", reject);
       worker.on("exit", code => { if (code !== 0) reject(new Error(`signal wait worker exited ${code}`)); });
       worker.on("message", message => {

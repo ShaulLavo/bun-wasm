@@ -100,7 +100,12 @@ test("preview1 roots keep their explicit module and Bun executable paths launch 
       const client = new WorkerProcessClient({ transport: root, descriptors,
         codec: { export() { throw new Error("unexpected export"); }, import() { throw new Error("unexpected import"); }, discard() {} },
         postMessage: message => state!.message(message),
-        prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (root.data as { pipeRegistry: unknown }).pipeRegistry } }),
+        prepareSpawn(pid) {
+      const pipeRegistry = (root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry;
+      const registry = attachPipePublicationRegistry(pipeRegistry);
+      registry.registerProcess(pid);
+      return { data: { filesystem: createFilesystemIdentity(), pipeRegistry }, cancel: () => registry.collectProcess(pid) };
+    },
       });
       for (const alias of ["/bin/bun", "/bin/node"]) {
         const pid = client.spawn(1, { executable: alias, argv: [alias], env: {}, cwd: "/", job: 1, fds: [] });
@@ -170,7 +175,12 @@ function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker
       throw new Error("unexpected export");
     }, import() { throw new Error("unexpected import"); }, discard() {} },
     postMessage: message => messages.push(message),
-    prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (root.data as { pipeRegistry: unknown }).pipeRegistry } }),
+    prepareSpawn(pid) {
+      const pipeRegistry = (root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry;
+      const registry = attachPipePublicationRegistry(pipeRegistry);
+      registry.registerProcess(pid);
+      return { data: { filesystem: createFilesystemIdentity(), pipeRegistry }, cancel: () => registry.collectProcess(pid) };
+    },
   });
   return { root, runtime, broker, client, messages, descriptors, async dispose() { broker.dispose(); descriptors.dispose(); try { await runtime.dispose(); } finally { for (const port of ports) port.close(); } } };
 }
@@ -235,7 +245,12 @@ test("explicit Preview1 children run without installing Bun slots", async () => 
     const client = new WorkerProcessClient({ transport: root, descriptors,
       codec: { export() { throw new Error("unexpected export"); }, import() { throw new Error("unexpected import"); }, discard() {} },
       postMessage: message => state.message(message),
-      prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (root.data as { pipeRegistry: unknown }).pipeRegistry } }),
+      prepareSpawn(pid) {
+      const pipeRegistry = (root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry;
+      const registry = attachPipePublicationRegistry(pipeRegistry);
+      registry.registerProcess(pid);
+      return { data: { filesystem: createFilesystemIdentity(), pipeRegistry }, cancel: () => registry.collectProcess(pid) };
+    },
     });
     const childBroker = new SubprocessBroker("http://localhost/worker.js", state.runtime);
     childBroker.register("/usr/libexec/test-guest", { adapter: "preview1", module: state.request().module, cooperative: true });

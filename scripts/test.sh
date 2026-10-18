@@ -217,7 +217,7 @@ for name in "${names[@]}"; do
       --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   else
-    (cd "$work" && timeout 60 "$launcher" --wasm "$wasm" --dir "$work::/" --env PWD=/ --env HOME=/ \
+    (cd "$work" && timeout 60 "$launcher" --wasm "$wasm" --engine "$engine=$wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$work::/" --env PWD=/ --env HOME=/ \
       --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   fi

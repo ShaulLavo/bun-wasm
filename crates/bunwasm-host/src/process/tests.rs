@@ -223,7 +223,6 @@ fn spawn_rejects_unhandable_filesystem_fd_without_partial_child() {
         processes.spawn(&serde_json::to_vec(&case["request"]).unwrap()),
         BADF
     );
-    assert_eq!(processes.runtime.active.load(Ordering::Acquire), 0);
     assert_eq!(processes.runtime.state.lock().unwrap().processes.len(), 1);
 }
 
@@ -273,7 +272,6 @@ fn unregistered_paths_return_admission_errno_without_a_child() {
         );
     }
     assert_eq!(processes.runtime.state.lock().unwrap().processes.len(), 1);
-    assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -470,7 +468,6 @@ fn oversized_json_job_ids_do_not_saturate_into_the_root_job() {
         let bytes = serde_json::to_vec(&serde_json::json!({"executable":"/bin/bun","argv":[],"env":{},"cwd":"/","job":job,"fds":[]})).unwrap();
         assert!(Request::decode(&bytes).is_ok());
         assert_eq!(processes.spawn(&bytes), SRCH);
-        assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
     }
     assert_eq!(processes.runtime.state.lock().unwrap().processes.len(), 1);
 }
@@ -626,4 +623,30 @@ fn process_drop_retires_pending_access_requests_and_teardown_removes_files() {
     drop(p);
     drop(runtime);
     assert!(mounts.iter().all(|(path, _)| !path.exists()));
+}
+
+#[test]
+fn process_directory_capacity_includes_root_and_unwaited_children() {
+    let mut processes = processes();
+    // Root is pid 0; fill the remaining directory slots with completed children.
+    // No host threads are needed to prove completed children retain their slots.
+    for pid in 1..PROCESS_CAPACITY as i32 {
+        fake_child(&processes, pid, 0, ROOT_JOB, Some(FinalOutcome::Exit(23)));
+    }
+    processes.runtime.state.lock().unwrap().next = PROCESS_CAPACITY as i32;
+    assert_eq!(
+        processes.runtime.state.lock().unwrap().processes.len(),
+        PROCESS_CAPACITY
+    );
+    let meta = request("/bin/bun", serde_json::json!([]));
+    assert_eq!(processes.spawn(&meta), AGAIN);
+    assert_eq!(processes.wait(1), Ok(FinalOutcome::Exit(23)));
+    let replacement = processes.spawn(&meta);
+    assert_eq!(replacement, PROCESS_CAPACITY as i32);
+    assert_eq!(completed(&processes, replacement), FinalOutcome::Exit(0));
+    // Consuming wait freed the replacement slot; fill it again, then observe full.
+    let replacement = processes.spawn(&meta);
+    assert!(replacement > 0);
+    assert_eq!(processes.spawn(&meta), AGAIN);
+    assert_eq!(completed(&processes, replacement), FinalOutcome::Exit(0));
 }

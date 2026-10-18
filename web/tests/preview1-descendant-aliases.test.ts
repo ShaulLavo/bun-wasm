@@ -50,7 +50,10 @@ test("explicit recursive Preview1 programs retain inherited writers across ordin
       const registry = (transport.data as { pipeRegistry: ConstructorParameters<typeof WorkerPipeHost>[0]["registry"] }).pipeRegistry;
       const pipes = new WorkerPipeHost({ transport, registry, postMessage: post });
       const client = new WorkerProcessClient({ transport, descriptors, codec: pipes.codec(), postMessage: post,
-        prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: pipes.registry.handle() } }),
+        prepareSpawn(pid) {
+          pipes.registry.registerProcess(pid);
+          return { data: { filesystem: createFilesystemIdentity(), pipeRegistry: pipes.registry.handle() }, cancel: () => pipes.registry.collectProcess(pid) };
+        },
       });
       client.installBindings();
       return { client, descriptors, pipes };

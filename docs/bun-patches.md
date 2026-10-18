@@ -50,6 +50,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, process-aware idle waits, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
+| [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
@@ -2214,6 +2215,22 @@ admission fails, or status 127 with the missing-program diagnostic when the host
 completes an unregistered program. Both asynchronous completion and synchronous
 failure are checked. Its source is TypeScript. The spawn-facade unit harness loads
 the real TypeScript command dispatcher with an explicitly empty filesystem.
+
+## Native executable admission
+
+Class **Host feature**, **original adapter** in
+`crates/bunwasm-host/src/process/executables.rs`; no upstream implementation is
+copied. It adapts Waffle's `proc/registry.ts`, `proc/access.ts` and
+`proc/worker-client.ts` contracts at the consuming package's pinned revision.
+The native host creates real guest-visible executable files for `/bin/bun` and
+`/bin/node`. Explicit `--engine quickjs=PATH` and `--engine jsc=PATH` registrations
+own `/opt/bun/<engine>/bin/{bun,node}` and their exact modules; no root-ancestry
+rewrite chooses an engine. Access queries observe the live filesystem, retain a
+process-owned request until take/cancel, and spawn independently rechecks
+admission. Native process admission matches Waffle b1f2b7dd's default 1024-slot
+process directory, including the root and completed children until consuming
+wait; exhaustion returns EAGAIN. Marker directories and access threads are
+owned and cleaned by the native runtime.
 
 ## Native process descriptor bridge
 

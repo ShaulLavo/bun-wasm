@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='bun-wasm-next-review-partial-', dir='/w
         command = ['node', '--no-warnings', str(ROOT / 'web/scripts/node-host.mjs'), '--wasm', str(args.wasm.resolve()), '--dir', directory + '::/', '--env', 'PWD=/', '--', 'run', '/index.mjs']
     else:
         launcher = os.environ.get("BUN_WASM_LAUNCHER", str(Path(os.environ.get("CARGO_TARGET_DIR", "/work/tmp/bun-wasm-target")) / "release/bun-wasm"))
-        command = [launcher, "--wasm", str(args.wasm.resolve()), "--dir", directory + "::/", "--env", "PWD=/", "--", "run", "/index.mjs"]
+        command = [launcher, "--wasm", str(args.wasm.resolve()), "--engine", f"{args.engine}={args.wasm.resolve()}", "--env", f"PATH=/opt/bun/{args.engine}/bin:/bin:/usr/bin", "--dir", directory + "::/", "--env", "PWD=/", "--", "run", "/index.mjs"]
     # RLIMIT_FSIZE also applies to Wasmtime's compiled artifacts and COW memfd.
     result = subprocess.run(command, cwd=work, text=True, capture_output=True, timeout=90, preexec_fn=limit_file, env=dict(os.environ, BUN_WASM_CACHE_DIR="off", BUN_WASM_MEMORY_INIT_COW="0"))
     expected = (fixture / 'expected.txt').read_text()

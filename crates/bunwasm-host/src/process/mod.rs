@@ -10,7 +10,7 @@ pub mod wasi;
 pub use stdio::{Cancellation, FinalOutcome, Stdio};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -40,7 +40,10 @@ pub const PERM: i32 = -63;
 pub const PIPE: i32 = -64;
 pub const SRCH: i32 = -71;
 pub const NOTCAPABLE: i32 = -76;
-const MAX_CHILDREN: usize = 4;
+// Waffle b1f2b7dd, proc/worker-client.ts:createWorkerProcessTransport defaults
+// to 1024 directory slots and immediately reserves one for the root. Completed
+// children retain a slot until consuming wait, just like the shared directory.
+const PROCESS_CAPACITY: usize = 1024;
 const MAX_ACCESS_REQUESTS: usize = 64;
 
 pub(crate) fn validate_signal(signal: i32, probe: bool) -> Result<(), i32> {
@@ -65,7 +68,6 @@ pub struct Runtime {
     executables: executables::Executables,
     next_access: AtomicU32,
     access_threads: Mutex<Vec<JoinHandle<()>>>,
-    active: AtomicUsize,
     state: Mutex<Supervisor>,
 }
 
@@ -112,7 +114,6 @@ impl Runtime {
             executables,
             next_access: AtomicU32::new(1),
             access_threads: Mutex::default(),
-            active: AtomicUsize::new(0),
             state: Mutex::new(Supervisor {
                 next: 1,
                 jobs: [(
@@ -138,17 +139,26 @@ impl Runtime {
         self.executables.register(paths, module)?;
         Ok(())
     }
-    pub fn module_for<'a>(&'a self, argv: &[String], base: &'a wasmtime::Module) -> anyhow::Result<&'a wasmtime::Module> {
+    pub fn module_for<'a>(
+        &'a self,
+        argv: &[String],
+        base: &'a wasmtime::Module,
+    ) -> anyhow::Result<&'a wasmtime::Module> {
         if crate::tool_args::before_command(argv.get(1..).unwrap_or_default()).is_none() {
             return Ok(base);
         }
         let tools = self.tools.get_or_init(|| {
-            let path = self.tools_path.as_ref().ok_or("tools artifact path is unavailable")?;
-            wasmtime::Module::from_file(&self.engine, path).map_err(|error| format!("loading {}: {error}", path.display()))
+            let path = self
+                .tools_path
+                .as_ref()
+                .ok_or("tools artifact path is unavailable")?;
+            wasmtime::Module::from_file(&self.engine, path)
+                .map_err(|error| format!("loading {}: {error}", path.display()))
         });
-        tools.as_ref().map_err(|message| anyhow::anyhow!("{message}"))
+        tools
+            .as_ref()
+            .map_err(|message| anyhow::anyhow!("{message}"))
     }
-
 
     /// Root teardown owns every still-running child, even if its direct parent
     /// has exited. Keep epoch ticking until they have all joined.
@@ -508,22 +518,17 @@ impl Processes {
         } else {
             None
         };
-        self.runtime
-            .active
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                (n < MAX_CHILDREN).then_some(n + 1)
-            })
-            .map_err(|_| AGAIN)?;
         let cancel = Arc::new(Cancellation::default());
         // Admission and thread-handle publication are one supervisor operation.
         // A very fast child can finish only after this lock is released.
         let mut state = self.runtime.state.lock().unwrap();
+        if state.processes.len() >= PROCESS_CAPACITY {
+            return Err(AGAIN);
+        }
         if state.stopping {
-            self.runtime.active.fetch_sub(1, Ordering::SeqCst);
             return Err(PERM);
         }
         if request.job > 0.0 && !state.jobs.contains_key(&(request.job as i32)) {
-            self.runtime.active.fetch_sub(1, Ordering::SeqCst);
             return Err(SRCH);
         }
         if request.job > 0.0
@@ -534,11 +539,9 @@ impl Processes {
                 .filter(|child| child.job == request.job as i32)
                 .all(|child| child.result.is_some())
         {
-            self.runtime.active.fetch_sub(1, Ordering::SeqCst);
             return Err(CHILD);
         }
         let Some(next) = state.next.checked_add(1) else {
-            self.runtime.active.fetch_sub(1, Ordering::SeqCst);
             return Err(AGAIN);
         };
         let pid = state.next;
@@ -604,14 +607,12 @@ impl Processes {
                 {
                     job.result = Some(outcome);
                 }
-                runtime.active.fetch_sub(1, Ordering::SeqCst);
                 drop(state);
                 notify.bump();
             });
         let thread = match thread {
             Ok(thread) => thread,
             Err(_) => {
-                self.runtime.active.fetch_sub(1, Ordering::SeqCst);
                 return Err(AGAIN);
             }
         };

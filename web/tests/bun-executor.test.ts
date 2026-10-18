@@ -237,7 +237,13 @@ for (const kind of ["exited", "signaled"] as const) test(`every process import c
             try { call(0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff); }
             catch (error) { refused.set(name, error); }
           }
-          serviceMessages = messages.length - before;
+          // Fatal admission may notify the supervisor of the already-selected exit.
+          // It must not invoke a guest-requested process service or inspect memory.
+          const notifications = messages.slice(before);
+          for (const message of notifications) {
+            expect(message).toMatchObject({ type: "runtime-proc", operation: "exit", targets: [1] });
+          }
+          serviceMessages = notifications.filter(message => message.type !== "runtime-proc" || message.operation !== "exit").length;
         } finally { Reflect.deleteProperty(memory, "buffer"); }
         return 0;
       },

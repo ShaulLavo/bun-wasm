@@ -150,6 +150,7 @@ test("explicit disposal confirms a selected ordinary child exit only after its f
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     await until(() => state.workers.length === 1, "child launch");
     const worker = state.workers[0]!, shared = workerProcessState(worker.request!.runtimeProcess!);
+    const record = (await state.broker.ready()).get(pid)!;
     claimOutcome(shared.signals.outcome, { kind: "exited", code: 23 });
     void state.runtime.dispose();
     await pause();
@@ -158,8 +159,10 @@ test("explicit disposal confirms a selected ordinary child exit only after its f
     expect(worker.terminated).toBe(false);
     fence.resolve();
     // Physical stop and safe confirmation are independent consumers of the fence.
-    await until(() => controlLoad(shared.confirmed, 0) === 1, "disposed child safely confirmed");
-    expect(state.parent.wait(1, pid)).toEqual({ kind: "exited", code: 23, status: 23 });
+    await until(() => record.result !== null && record.jobSafe, "disposed child safely confirmed");
+    expect(record.result).toEqual({ kind: "exited", code: 23, status: 23 });
+    // Disposal collects directory slots; an old observer is not a new capability.
+    expect(() => controlLoad(shared.confirmed, 0)).toThrow("collected");
     await until(() => worker.terminated, "unacknowledged child stopped during disposal");
   } finally { fence.resolve(); await state.dispose(); }
 });

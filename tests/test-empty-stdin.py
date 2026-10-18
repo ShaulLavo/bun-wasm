@@ -26,7 +26,7 @@ def main():
     }
     wasm = (args.wasm or root / "dist" / binaries[args.engine]).resolve()
     launcher = os.environ.get("BUN_WASM_LAUNCHER", str(Path(os.environ.get("CARGO_TARGET_DIR", "/work/tmp/bun-wasm-target")) / "release/bun-wasm"))
-    command = [launcher, "--wasm", str(wasm), "--dir", f"{fixture}::/", "--env", "PWD=/", "--", "run", "/index.js"]
+    command = [launcher, "--wasm", str(wasm), "--engine", f"{args.engine}={wasm}", "--env", f"PATH=/opt/bun/{args.engine}/bin:/bin:/usr/bin", "--dir", f"{fixture}::/", "--env", "PWD=/", "--", "run", "/index.js"]
     if args.engine == "native":
         command = ["bun", "run", "index.js"]
     if args.engine == "browser":

@@ -91,10 +91,12 @@ test("rootExit before a root is adopted is a no-op, and after adoption confirms 
   try {
     expect(state.broker.rootExit(0)).toBeUndefined();
     await state.broker.adoptRuntimeRoot(state.root);
-    await state.broker.rootExit(7);
     const shared = workerProcessState(state.root);
-    expect(readOutcome(shared.signals.outcome)).toEqual({ kind: "exited", code: 7, status: 7 });
-    expect(controlLoad(shared.confirmed, 0)).toBe(1);
+    const root = (await state.broker.ready()).get(shared.pid)!;
+    await state.broker.rootExit(7);
+    expect(root.result).toEqual({ kind: "exited", code: 7, status: 7 });
+    expect(root.jobSafe).toBe(true);
+    expect(() => controlLoad(shared.confirmed, 0)).toThrow("collected");
   } finally { await state.dispose(); }
 });
 

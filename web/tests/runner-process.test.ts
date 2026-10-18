@@ -1,4 +1,4 @@
-import { controlLoad } from "waffle/proc/control";
+import { TaggedCells, controlLoad } from "waffle/proc/control";
 import type { RootProcessOptions } from "waffle/proc";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
@@ -83,6 +83,7 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
         pending.set(pid, request => { clearTimeout(timer); launchTimers.delete(timer); pending.delete(pid); resolve(request); });
       });
     },
+    async record() { return (await (await runtime.processes()).ready()).get(pidOf(request))!; },
     revoked: () => revoked, reaped: () => reaped, rejected: () => rejected,
     async dispose() {
       try {
@@ -344,7 +345,7 @@ test("one isolated Ctrl-C claims DEFAULT 130 immediately before quiescent physic
   const state = isolatedRoot();
   try {
     await state.ready;
-    expect(signalsOf(state.request).signalState).toBeInstanceOf(Int32Array);
+    expect(signalsOf(state.request).signalState).toBeInstanceOf(TaggedCells);
     const waiting = runConfirmation(state.run);
     state.run.kill();
     expect(readOutcome(signalsOf(state.request).outcome)).toEqual({ kind: "signaled", code: 2, status: 130 });
@@ -373,9 +374,11 @@ for (const code of [0, 23, 130]) {
       expect(takeSignal(signalState)).toBe(0);
       expect(readOutcome(signalsOf(state.request).outcome)).toBeNull();
       expect(state.revoked()).toBe(0);
+      const root = await state.record();
       state.worker.exit(code);
       expect(await state.run.done).toEqual({ code });
-      expect(readOutcome(signalsOf(state.request).outcome)).toEqual({ kind: "exited", code, status: code });
+      expect(root.result).toEqual({ kind: "exited", code, status: code });
+      expect(() => readOutcome(root.outcome)).toThrow("collected");
       expect(state.reaped()).toBe(1);
     } finally { await state.dispose(); }
   });
@@ -406,10 +409,12 @@ test("removing a root handler restores the next explicit INT default", async () 
     state.run.kill(2);
     expect(takeSignal(signalState)).toBe(2);
     expect(setSignalDisposition(signalState, 2, 0)).toBe(false);
+    const root = await state.record();
     state.run.kill(2);
     state.release();
     expect(await state.run.done).toEqual({ code: 130 });
-    expect(readOutcome(signalsOf(state.request).outcome)?.kind).toBe("signaled");
+    expect(root.result?.kind).toBe("signaled");
+    expect(() => readOutcome(root.outcome)).toThrow("collected");
   } finally { await state.dispose(); }
 });
 
@@ -417,11 +422,13 @@ test.each([0, 143])("a root exit already claimed as %s wins a later default sign
   const state = isolatedRoot();
   try {
     await state.ready;
+    const root = await state.record();
     claimOutcome(signalsOf(state.request).outcome, { kind: "exited", code });
     state.run.kill(2);
     state.release();
     expect(await state.run.done).toEqual({ code });
-    expect(readOutcome(signalsOf(state.request).outcome)).toEqual({ kind: "exited", code, status: code });
+    expect(root.result).toEqual({ kind: "exited", code, status: code });
+    expect(() => readOutcome(root.outcome)).toThrow("collected");
   } finally { await state.dispose(); }
 });
 
@@ -429,10 +436,12 @@ test("root acknowledgement adopts a previously claimed typed signal rather than 
   const state = isolatedRoot();
   try {
     await state.ready;
+    const root = await state.record();
     claimOutcome(signalsOf(state.request).outcome, { kind: "signaled", code: 15 });
     state.worker.exit(143);
     expect(await state.run.done).toEqual({ code: 143 });
-    expect(readOutcome(signalsOf(state.request).outcome)).toEqual({ kind: "signaled", code: 15, status: 143 });
+    expect(root.result).toEqual({ kind: "signaled", code: 15, status: 143 });
+    expect(() => readOutcome(root.outcome)).toThrow("collected");
   } finally { await state.dispose(); }
 });
 
@@ -481,10 +490,12 @@ test("a second implicit UI stop still force-kills a root that handled the first 
     state.run.kill();
     expect(takeSignal(signalState)).toBe(2);
     expect(readOutcome(signalsOf(state.request).outcome)).toBeNull();
+    const root = await state.record();
     state.run.kill();
     state.release();
     expect(await state.run.done).toEqual({ code: 137 });
-    expect(readOutcome(signalsOf(state.request).outcome)).toEqual({ kind: "signaled", code: 9, status: 137 });
+    expect(root.result).toEqual({ kind: "signaled", code: 9, status: 137 });
+    expect(() => readOutcome(root.outcome)).toThrow("collected");
   } finally { await state.dispose(); }
 });
 
@@ -532,21 +543,24 @@ for (const acknowledged of [false, true]) test(`runner root job completion uses 
   try {
     await state.ready;
     const supervisor = await broker.ready();
+    const root = supervisor.get(1)!;
     const background = supervisor.reserveSpawn(1, { executable: "bun", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     const waiting = runConfirmation(state.run);
     if (acknowledged) state.worker.exit(23);
     else state.run.kill(9);
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(waiting.confirmed()).toBe(acknowledged);
-    expect(supervisor.get(1)!.result?.status ?? null).toBe(acknowledged ? 23 : null);
-    expect(supervisor.jobEmpty(1, 1)).toBe(acknowledged);
+    expect(root.result?.status ?? null).toBe(acknowledged ? 23 : null);
+    expect(root.jobSafe).toBe(acknowledged);
+    expect(supervisor.job(1)?.pendingMembers ?? 0).toBe(acknowledged ? 0 : 1);
     // Runner physical stop and supervisor confirmation share exactly one fence.
     expect(state.revoked()).toBe(acknowledged ? 0 : 1);
     state.release();
     expect((await waiting.result).code).toBe(acknowledged ? 23 : 137);
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(supervisor.get(1)!.result?.status).toBe(acknowledged ? 23 : 137);
-    expect(supervisor.jobEmpty(1, 1)).toBe(true);
+    expect(root.result?.status).toBe(acknowledged ? 23 : 137);
+    expect(root.jobSafe).toBe(true);
+    expect(supervisor.job(1)?.pendingMembers ?? 0).toBe(0);
     expect(supervisor.get(background)!.result).toBeNull();
     expect(state.worker.terminated).toBe(1);
   } finally { register.mockRestore(); await state.dispose(); broker.dispose(); }
