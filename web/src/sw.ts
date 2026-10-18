@@ -57,7 +57,10 @@ sw.addEventListener("fetch", event => {
 /** `m/<run>/<key>`: a module the worker stored; anything else: the app file of that name. */
 async function moduleScope(request: Request, rest: string): Promise<Response> {
   if (rest.startsWith("m/")) return (await caches.match(request)) ?? text(404, `bun.wasm: no such module ${rest}\n`);
-  const upstream = await fetch(new URL(rest, new URL("..", sw.registration.scope)).href);
+  const target = new URL(rest, new URL("..", sw.registration.scope));
+  target.search = new URL(request.url).search;
+  // Tools are cached by the runner only after it verifies the decompressed bytes.
+  const upstream = await fetch(target.href);
   // The page is cross-origin isolated: a worker script needs COEP of its own.
   const headers = new Headers(upstream.headers);
   headers.set("cross-origin-embedder-policy", "require-corp");

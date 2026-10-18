@@ -22,7 +22,7 @@ import { installCliFetch } from "./node-install-net.mjs";
 import { waitStatus } from "waffle/proc/wait-status";
 import { memoryViews } from "waffle/core/memory-views";
 import { SubprocessHost, childTransport, wasiPipe } from "../src/subprocess.ts";
-import { launchNodeExecutable } from "./node-spawn.ts";
+import { launchNodeExecutable, nodeModule } from "./node-spawn.ts";
 import { launchNodeChild } from "./node-child.ts";
 import { forwardOutput, writeStdio } from "./node-stdio.ts";
 import { createNodeSignalController } from "./node-signals.ts";
@@ -161,7 +161,9 @@ function validateCwd(cwd) {
 }
 
 async function run() {
-  const module = workerData?.module || await WebAssembly.compile(readFileSync(wasmPath));
+  const baseModule = workerData?.module || await WebAssembly.compile(readFileSync(wasmPath));
+  const basePath = workerData?.wasmPath || wasmPath;
+  const module = await nodeModule({ args, baseModule, wasmPath: basePath });
   subprocess = new SubprocessHost({
     signalState: signals.buffers.signalState,
     outcome: signals.buffers.outcome,
@@ -183,7 +185,7 @@ async function run() {
     launch: (meta, transport) => launchNodeExecutable(meta, transport, () => {
       validateCwd(meta.cwd);
       return launchNodeChild(new URL(import.meta.url), {
-        workerData: { bunwasmChild: true, module, preopens, meta, transport, withNet, stackMb: workerData.stackMb },
+        workerData: { bunwasmChild: true, module: baseModule, wasmPath: basePath, preopens, meta, transport, withNet, stackMb: workerData.stackMb },
         resourceLimits: { maxOldGenerationSizeMb: 128, ...meta.worker?.resourceLimits, stackSizeMb: Math.max(workerData.stackMb, meta.worker?.resourceLimits?.stackSizeMb || 0) },
       }, transport);
     }),

@@ -498,6 +498,7 @@
     randomUUIDv7,
     peek,
     gc: () => native.gc(),
+    plugin: internal.require("bun_plugin").plugin,
     resolveSync,
     resolve: async (spec, from) => resolveSync(spec, from),
     fileURLToPath: (url) => internal.require("node_url").fileURLToPath(url),

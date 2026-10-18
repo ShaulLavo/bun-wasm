@@ -1,5 +1,6 @@
 // Builds the playground into web/dist as plain static files.
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
+// BUN_TOOLS_WASM overrides ../dist/bun-tools.wasm.
 // (Not BUN_JSC_WASM: Bun refuses to start when a BUN_JSC_* variable is not a JSC option.)
 import { existsSync, rmSync, statSync } from "node:fs";
 import { previewWebsocketScript } from "./preview-build";
@@ -48,6 +49,11 @@ if (!(await copyWasm(jscSource, "bun-jsc.wasm"))) {
 const browserSource = resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun-browser.wasm");
 if (!(await copyWasm(browserSource, "bun-browser.wasm"))) {
   console.warn(`bun-browser.wasm: ${browserSource} not found; the Browser (native) engine option will fail to load.`);
+}
+
+const toolsSource = resolve(here, process.env.BUN_TOOLS_WASM ?? "../dist/bun-tools.wasm");
+if (!(await copyWasm(toolsSource, "bun-tools.wasm"))) {
+  console.warn(`bun-tools.wasm: ${toolsSource} not found; lint and fmt will not be available.`);
 }
 
 await Bun.write(join(out, "engine-builds.json"), JSON.stringify(engineBuilds));

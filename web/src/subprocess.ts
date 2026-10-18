@@ -9,6 +9,7 @@ import { memoryViews } from "waffle/core/memory-views";
 import { InheritedWorkerPipes, workerBuffers } from "./worker-pipes.ts";
 
 export interface SpawnMeta {
+  purpose?: "configuration";
   executable?: string;
   worker?: { memoryLimitMb?: number; resourceLimits?: { maxOldGenerationSizeMb?: number; maxYoungGenerationSizeMb?: number; codeRangeSizeMb?: number; stackSizeMb?: number } };
   argv: string[];
@@ -84,6 +85,8 @@ const FIRST_HANDLE = 0x70000000;
 // Higher handles are reserved for the current worker's inherited message channels.
 const HANDLE_LIMIT = 0x7fff0000;
 export const MAX_CHILDREN = 4;
+const PROCESS_SLOTS = MAX_CHILDREN * 2 + 1;
+const SLOT_GENERATION = 16;
 // Slot 14 selectors: 0..2 stdio, 3 immutable final signal, 4/5 worker message channels.
 export const CHILD_FINAL_SIGNAL = 3;
 
@@ -95,7 +98,7 @@ function spawnStartError(executable: string, code: "ENOENT" | "EACCES") {
 }
 
 export function createProcessBudget() {
-  return new SharedArrayBuffer(8 + MAX_CHILDREN * 4);
+  return new SharedArrayBuffer(8 + PROCESS_SLOTS * 4);
 }
 
 function wake(budget?: SharedArrayBuffer) {
@@ -229,7 +232,7 @@ export function releaseProcessSlot(transport: Pick<ChildTransport, "budget" | "s
   const cells = new Int32Array(transport.budget);
   const index = transport.slot + 2;
   const state = Atomics.load(cells, index);
-  if (state > 0 && Math.floor(state / 8) === transport.token) Atomics.compareExchange(cells, index, state, 0);
+  if (state > 0 && Math.floor(state / SLOT_GENERATION) === transport.token) Atomics.compareExchange(cells, index, state, 0);
 }
 
 export function childTransport(transport: ChildTransport) {
@@ -333,17 +336,19 @@ export class SubprocessHost {
     const slot = this.options.slot;
     if (slot === undefined) return true;
     const state = Atomics.load(cells, slot + 2);
-    return state > 0 && Math.floor(state / 8) === this.options.token;
+    return state > 0 && Math.floor(state / SLOT_GENERATION) === this.options.token;
   }
-  reserve() {
+  reserve(configuration = false) {
     const cells = new Int32Array(this.budget);
     if (!this.parentActive(cells)) return null;
     const token = Atomics.add(cells, 0, 1) + 1;
-    if (token <= 0 || token > 0x0fffffff) return null;
+    if (token <= 0 || token > 0x07ffffff) return null;
     const parent = this.options.slot;
     // One atomic word carries both generation and parent link; checking a separate token races reuse.
-    const state = token * 8 + (parent === undefined ? 1 : parent + 2);
-    for (let slot = 0; slot < MAX_CHILDREN; slot++) {
+    const state = token * SLOT_GENERATION + (parent === undefined ? 1 : parent + 2);
+    const first = configuration ? MAX_CHILDREN + (parent === undefined ? 0 : parent + 1) : 0;
+    const end = configuration ? first + 1 : MAX_CHILDREN;
+    for (let slot = first; slot < end; slot++) {
       if (Atomics.compareExchange(cells, slot + 2, 0, state) !== 0) continue;
       if (this.parentActive(cells)) return { slot, token };
       this.releaseSlot(slot, token);
@@ -368,10 +373,18 @@ export class SubprocessHost {
     if (meta.env !== undefined && (!meta.env || typeof meta.env !== "object" || Array.isArray(meta.env) || Object.values(meta.env).some((v) => typeof v !== "string"))) return this.fail("spawn: invalid env", "EINVAL");
     const modes = [meta.stdin || "pipe", meta.stdout || "pipe", meta.stderr || "pipe"];
     if (modes.some((mode) => !["pipe", "inherit", "ignore"].includes(mode))) return this.fail("spawn: invalid stdio", "EINVAL");
+    if (meta.purpose !== undefined && meta.purpose !== "configuration") return this.fail("spawn: invalid purpose", "EINVAL");
+    const configuration = meta.purpose === "configuration";
+    if (configuration && this.options.slot !== undefined && this.options.slot >= MAX_CHILDREN) {
+      return this.fail("Configuration helpers cannot start another internal evaluation", "EPERM");
+    }
+    if (configuration && (executable !== "bun" || meta.worker !== undefined || meta.argv.length !== 4 || meta.argv[1] !== "--no-install" || meta.argv[2] !== "-e" || modes[0] !== "ignore" || modes[1] !== "pipe" || modes[2] !== "pipe")) {
+      return this.fail("Invalid configuration helper command", "EINVAL");
+    }
     const channels = workerBuffers(meta);
     if (this.nextHandle + modes.filter(mode => mode === "pipe").length + channels.length > HANDLE_LIMIT) return this.fail("spawn: pipe handle space exhausted", "EAGAIN");
-    const reservation = this.reserve();
-    if (!reservation) return this.fail("spawn: at most four bun-wasm child instances may run", "EAGAIN");
+    const reservation = this.reserve(configuration);
+    if (!reservation) return this.fail(configuration ? "This process already has a configuration evaluation" : "spawn: at most four bun-wasm child instances may run", "EAGAIN");
     const { slot, token } = reservation;
     const buffers = modes.map(() => new SharedArrayBuffer(16 + PIPE_SIZE)).concat(channels);
     const inheritedStdin = modes[0] === "inherit" && Boolean(this.options.stdin);

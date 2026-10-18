@@ -8,6 +8,7 @@ import type { Runtime, ProcessService, RuntimeFilesystem } from "waffle";
 import { childTransport, createProcessBudget } from "./subprocess.ts";
 import type { Engine, RunRequest, SpawnRequest, WorkerMessage } from "./worker";
 import type { WorkerProcessMessage, WorkerProcessTransport } from "waffle/proc/worker-client";
+import { isToolCommand } from "./tool-command";
 
 type CompiledExecutable = WebAssembly.Module | (() => Promise<WebAssembly.Module>);
 export type ExecutableRegistration =
@@ -53,11 +54,12 @@ export class SubprocessBroker {
       stopRoot?(): void | Promise<void>;
       engine?: Engine;
       aliasExecutable?: string;
+      tools?: () => Promise<WebAssembly.Module>;
     } = {}) {
     this.filesystem = runtime.filesystem;
     this.rootIdentity = { pid: options.root?.pid ?? options.rootIdentity?.pid ?? runtime.identities.pid(), job: options.root?.job ?? options.rootIdentity?.job ?? runtime.identities.job() };
     runtime.identities.observePid(this.rootIdentity.pid); runtime.identities.observeJob(this.rootIdentity.job);
-    installBunAdapters(runtime, workerUrl);
+    installBunAdapters(runtime, workerUrl, options.tools);
     if (options.root) { this.rootTransport(); controllersFor(runtime).set(this.root!.pid, this); }
   }
   private rootTransport(): SignalTransport & { pid: number; job: number } {
@@ -229,7 +231,7 @@ export class SubprocessBroker {
     this.watch();
   }
 
-  private launch(context: ProcessContext) {
+  private async launch(context: ProcessContext) {
     const child = this.children.get(context.pid);
     if (!child || this.disposed) throw new Error("Process no longer has a live controller");
     const spawn = child.spawn;
@@ -238,8 +240,10 @@ export class SubprocessBroker {
     const interruptible = context.interruptible;
     if (!preview1 && !/^bun:(browser|quickjs|jsc)$/.test(context.adapter)) throw new Error(`Unknown Bun adapter: ${context.adapter}`);
     const engine = preview1 ? "browser" : context.adapter.slice(4) as Engine;
+    const module = await commandModule(context, this.options.tools);
+    if (this.disposed || readOutcome(context.outcome)) throw new Error("Process exited while loading tools");
     const request: RunRequest = {
-      module: context.module, engine, adapter: preview1 ? "preview1" : "bun", interruptible,
+      module, engine, adapter: preview1 ? "preview1" : "bun", interruptible,
       args: spawn.argv, env: { ...spawn.env, PWD: spawn.cwd },
       filesystem: this.filesystem.connect(spawn.filesystem), child: spawn.child,
       pid: spawn.pid, jobId: spawn.jobId, identity: spawn.child.identity, interrupt: spawn.child.interrupt,
@@ -519,7 +523,7 @@ function controllersFor(runtime: Runtime): Map<number, SubprocessBroker> {
   return controllers;
 }
 /** Immutable engine-qualified registrations; concurrent runs never replace a global engine alias. */
-export function installBunAdapters(runtime: Runtime, workerUrl: string): void {
+export function installBunAdapters(runtime: Runtime, workerUrl: string, tools?: () => Promise<WebAssembly.Module>): void {
   if (installedAdapters.has(runtime)) return;
   installedAdapters.add(runtime);
   const originController = async (context: ProcessContext, service: ProcessService) => {
@@ -541,11 +545,12 @@ export function installBunAdapters(runtime: Runtime, workerUrl: string): void {
   });
   for (const engine of ["quickjs", "jsc", "browser"] as const) runtime.registerAdapter(`bun:${engine}`, async (context, service) => {
     const controller = await originController(context, service);
+    const module = await commandModule(context, tools);
     const moduleCache = engine === "browser" && new URL(workerUrl).pathname.endsWith("/__bunwasm/worker.js") ? `bunwasm-m-${crypto.randomUUID()}` : null;
     const budget = createProcessBudget();
     return service.launchWorker<RunRequest>(context, {
       workerUrl,
-      request: { engine, adapter: "bun", module: context.module, args: context.request.argv,
+      request: { engine, adapter: "bun", module, args: context.request.argv,
         env: { ...context.request.env, PWD: context.request.cwd }, pid: context.pid, jobId: context.job,
         budget, trace: false, spawnBroker: true, net: null, moduleCache },
       cleanup: () => { if (moduleCache) void caches.delete(moduleCache); },
@@ -556,4 +561,12 @@ export function installBunAdapters(runtime: Runtime, workerUrl: string): void {
       // transport uses only the generic process protocol; it never guesses legacy payloads.
     });
   });
+}
+
+async function commandModule(context: ProcessContext, tools?: () => Promise<WebAssembly.Module>): Promise<WebAssembly.Module> {
+  if (!context.adapter.startsWith("bun:") || !isToolCommand(context.request.argv.slice(1))) return context.module;
+  if (!tools) throw new Error("bun-tools.wasm loader is unavailable");
+  const module = await tools();
+  if (readOutcome(context.outcome)) throw new Error("Process exited while loading tools");
+  return module;
 }

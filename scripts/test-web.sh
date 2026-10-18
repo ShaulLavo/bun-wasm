@@ -117,6 +117,7 @@ if [[ $browser == 1 ]]; then
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
     node tests/browser-worker-modules.ts || failed=1
     node tests/browser-engine.mjs || failed=1
+    node tests/browser-tools.ts || failed=1
     node tests/browser-crypto.mjs || failed=1
     node tests/browser-memory.mjs || failed=1
   else

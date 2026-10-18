@@ -1,7 +1,7 @@
 From cd95fa7a13b3f13be73e512b38ec111c1c228084 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Fri, 16 Oct 2026 01:46:27 +0300
-Subject: [PATCH 10/10] wasm: expose semantic dynamic import locations to the
+Subject: [PATCH 10/12] wasm: expose semantic dynamic import locations to the
  host
 
 ---

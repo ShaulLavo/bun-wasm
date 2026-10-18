@@ -174,6 +174,7 @@ pub struct Stdio {
     pub stderr: Arc<dyn StdoutStream + Sync>,
     pub worker: Option<[super::pipe::Pipe; 2]>,
     pub memory_limit: usize,
+    pub configuration: bool,
 }
 
 impl Stdio {
@@ -184,6 +185,7 @@ impl Stdio {
             stderr: Arc::new(std::io::stderr()),
             worker: None,
             memory_limit: 512 << 20,
+            configuration: false,
         }
     }
     pub fn install(&self, wasi: &mut wasmtime_wasi::WasiCtxBuilder, cancel: Arc<Cancellation>) {

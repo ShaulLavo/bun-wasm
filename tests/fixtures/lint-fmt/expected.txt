@@ -1,0 +1,11 @@
+runtime object module plugins
+lint native rule and bunfig
+lint CLI overrides config
+lint upstream rule registry
+fmt upstream TypeScript printer and bunfig
+fmt check preserves input and reports changes
+fmt stdin
+fmt config evaluation uses the guest runtime
+bunfig diagnostics include source locations
+doctor uses relative bunfig paths
+formatter honors FORCE_COLOR

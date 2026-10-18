@@ -45,7 +45,7 @@ test("missing executable is a startup error and releases reserved capacity", () 
       });
       expect(host.children.size).toBe(0);
       expect(host.handles.size).toBe(0);
-      expect(Array.from(new Int32Array(host.budget).subarray(2))).toEqual([0, 0, 0, 0]);
+      expect(Array.from(new Int32Array(host.budget).subarray(2)).every(value => value === 0)).toBe(true);
     }
   } finally { host.dispose(); }
 });

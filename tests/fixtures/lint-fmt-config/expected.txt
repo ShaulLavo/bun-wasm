@@ -1,0 +1,7 @@
+three parallel config-backed commands
+public child limit remains four
+eight sequential config evaluations
+optional ancestors stop silently and required configs fail
+top-level cwd precedes lint and fmt cwd
+config deadline reaps the child and healthy commands recover
+combined config output is bounded and healthy commands recover

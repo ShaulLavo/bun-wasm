@@ -3,6 +3,7 @@
 // and the sandbox (../sandbox/).
 
 import type { Runtime } from "waffle";
+import { isToolCommand } from "./tool-command";
 import { NetHelper } from "./net/helper";
 import { createRing } from "./net/ring";
 import { activated } from "./preview";
@@ -34,11 +35,19 @@ export function mb(bytes: number): string {
 
 export class WasmMissing extends Error {}
 
+let toolsModule: Promise<WebAssembly.Module> | undefined;
+function loadTools(): Promise<WebAssembly.Module> {
+  return toolsModule ??= loadWasm("bun-tools.wasm", () => {})
+    .then(result => result.module)
+    .catch(error => { toolsModule = undefined; throw error; });
+}
+
 /**
  * Fetches and compiles a wasm module. Sites ship it gzipped (static hosts cap file sizes, and it is
  * 3-4x smaller) and the page decompresses it; a plain .wasm URL works too. Throws WasmMissing on 404.
  */
 export async function loadWasm(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string | null }> {
+  if (url.endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
   progress("loading bun.wasm…");
   const build = assetBuild(url);
   const key = new URL(url, location.href).href;
@@ -108,6 +117,43 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   const engine = { module, size };
   if (build) setTimeout(() => void cacheIfExpected(key, build, chunks, size), 0);
   return { ...engine, build };
+}
+
+async function loadVerifiedTools(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string }> {
+  const build = assetBuild(url);
+  if (!build) throw new Error("bun-tools.wasm: build manifest fingerprint is missing");
+  const key = new URL(url, location.href).href;
+  const cached = await cachedEngine(key, build);
+  if (cached) {
+    const bytes = new Uint8Array(await cached.arrayBuffer());
+    try { await verifyArtifact("bun-tools.wasm", bytes, build); }
+    catch (error) { await evictEngine(key); throw error; }
+    progress(`compiling cached bun-tools.wasm (${mb(bytes.length)})…`);
+    return { module: await WebAssembly.compile(bytes), size: bytes.length, build };
+  }
+  progress("downloading bun-tools.wasm…");
+  const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
+  let response = await fetch(`${gzUrl}?v=${build}`);
+  const gzipped = response.ok;
+  if (!gzipped) response = await fetch(url);
+  if (response.status === 404) throw new WasmMissing(`${url}: HTTP 404`);
+  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  if (!response.body) throw new Error(`${url}: empty response body`);
+  const body = gzipped ? response.body.pipeThrough(new DecompressionStream("gzip")) : response.body;
+  const wasm = new Uint8Array(await new Response(body).arrayBuffer());
+  await verifyArtifact("bun-tools.wasm", wasm, build);
+  progress(`compiling bun-tools.wasm (${mb(wasm.length)})…`);
+  const module = await WebAssembly.compile(wasm);
+  if (await cacheEngine(key, build, new Response(wasm, { headers: { "content-type": "application/wasm", "content-length": String(wasm.length) } }))) {
+    performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
+  }
+  return { module, size: wasm.length, build };
+}
+
+async function verifyArtifact(name: string, bytes: Uint8Array<ArrayBuffer>, expected: string): Promise<void> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  const actual = Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("");
+  if (actual !== expected) throw new Error(`${name} integrity mismatch: expected ${expected}, received ${actual}`);
 }
 
 /** Caches the downloaded engine only if its bytes are the build the page expects. */
@@ -246,7 +292,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     revoke: () => { if (!finished) finish({ code: 137 }, false, 9, true); },
     stop: stopRoot,
   });
-  const subprocess = new SubprocessBroker(workerUrl, options.runtime, { quiesceRoot, rootIdentity: { pid, job }, rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged, stopRoot: () => finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true), engine: options.engine, aliasExecutable: options.adapter === "preview1" ? `preview1-root-${pid}` : undefined, budget: request.budget, output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
+  const subprocess = new SubprocessBroker(workerUrl, options.runtime, { quiesceRoot, tools: loadTools, rootIdentity: { pid, job }, rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged, stopRoot: () => finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true), engine: options.engine, aliasExecutable: options.adapter === "preview1" ? `preview1-root-${pid}` : undefined, budget: request.budget, output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
 
     pid, job, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
     signalState: request.signalState, outcome: request.outcome,
@@ -375,8 +421,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     event.preventDefault();
     finish({ code: 1, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
-  let prepared = !isolated && !generic;
+  const tooling = options.adapter !== "preview1" && isToolCommand(options.args);
+  let prepared = !isolated && !generic && !tooling;
   const preparation = prepared ? undefined : (async () => {
+    if (tooling) request.module = await loadTools();
     if (generic) {
       const { workerProcessState, createWorkerProcessTransport } = await import("waffle/proc/worker-client");
       const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
@@ -389,8 +437,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       request.outcome = rootOutcome;
       rootPid = request.pid = state.pid;
       rootJob = request.jobId = state.job;
-    } else await subprocess.prepareRoot();
-    releaseRootConsumer();
+    } else if (isolated) await subprocess.prepareRoot();
+    if (generic || isolated) releaseRootConsumer();
     prepared = true;
     if (!finished) {
       worker.postMessage(request, [request.filesystem.port]);

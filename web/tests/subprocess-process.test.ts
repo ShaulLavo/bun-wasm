@@ -306,7 +306,7 @@ test("Bun process id exhaustion cannot overlap pipe handles or leak a capacity s
     host.identities.observePid(0x6fffffff);
     expect(host.spawn(command())).toBe(-1);
     expect(launched).toHaveLength(0);
-    expect(Array.from(new Int32Array(host.budget).subarray(2))).toEqual([0, 0, 0, 0]);
+    expect(Array.from(new Int32Array(host.budget).subarray(2)).every(value => value === 0)).toBe(true);
   } finally { host.dispose(); }
 });
 
