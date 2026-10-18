@@ -133,7 +133,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/crypto_keys.js` and `crypto_host_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters and `web/src/engine-host.js` provider capture`](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 | [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
-| [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, write-side shutdown and bounded native handle allocation over the existing host ABI. |
+| [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. |
 | [Embedded WHATWG Streams](#whatwg-reader-lock-errors) | Port | Pinned portable streams with Bun reader-lock error text. |
 | [Streams AST hooks](#whatwg-reader-lock-errors) | Host feature | Original generator adapter preserves Node completion hooks and error codes. |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming request/response bodies, Agent pool and upgrade response adapters shared by all engines. |
@@ -520,6 +520,15 @@ node:net and node:http adapters instead. It adds no host networking path.
 See [the ws builtin](ws-builtin.md) for generation and verification.
 
 ## TCP and IP helpers
+
+The 2026-10-18 empty-EOF correction in `node_net.js` is an original **Host
+feature** adapter. An accepted socket with no buffered bytes must process its
+readable EOF before its writable side has finished. Waiting for both sides
+creates a cycle with Duplex's automatic write-side completion. The adapter now
+calls its existing zero-byte read after empty EOF. Buffered data is preserved.
+`net-tcp-empty-fin` forces server acceptance before the client ends, then checks
+readable end, socket close and server close. Native Bun 1.4.2 supplies the control;
+unchanged main and the response-streaming guest both fail before the correction.
 
 The IP regular expressions in `crates/bunwasm-runtime/src/js/net_address.js` come
 from Bun `src/js/internal/net/isIP.ts` at

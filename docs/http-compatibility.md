@@ -184,6 +184,15 @@ the rejection belongs to the prior handle, while direct wrapped and raw deflate
 controls pass. The generator now preserves Bun's message without changing
 locking or scheduling.
 
+An existing TCP close cycle also becomes visible in the QuickJS socket control.
+The original guest sometimes closes its listener before accepting the incoming
+socket. Forcing acceptance first reproduces the empty-FIN hang on unchanged
+main. A socket with zero buffered bytes waits for writable completion before
+processing readable EOF, while Duplex waits for readable end before finishing
+the write side. Removing that extra condition permits normal end and close
+without consuming buffered data. The deterministic fixture passes on native
+Bun and fails on the original guest before the fix.
+
 The exact 180-file before and after replays use the unchanged upstream tests,
 15-second file deadlines and 2,000 ms test deadlines on all three engines.
 These bounded observations include newly reached failures. They do not establish
