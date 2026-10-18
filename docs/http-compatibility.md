@@ -519,8 +519,8 @@ text is not a reason to replace those implementations together.
 
 The final response-streaming and empty-EOF adapters were measured against the
 same 180 files, suite revision, dependency hashes and deadlines on all three
-engines. The tools guest was absent for both suite replays. The unchanged-main
-guest and launcher are retained under the report directory.
+engines. The tools guest was absent for both suite replays. The artifact hashes
+and frozen input metadata are retained under the report directory.
 
 | Engine | Fully passing files | Observed passes | Observed failures | File timeouts |
 | --- | --- | --- | --- | --- |
@@ -539,7 +539,16 @@ pass.
 The bounded runs report no formerly fully passing file lost. Individual test
 counts vary when a file deadline cuts off a later test. Matched controls retain
 the original QuickJS socket timing and browser lifecycle counts. The direct
-body-memory control reaches the same guest allocation limit on both artifacts.
+body-memory control reaches the same guest allocation limit on both artifacts. The
+matched JSC controls keep gzip at 62 passes and the focused body-consumption
+check passes on both artifacts.
+
+The source hashes and before/after summaries are committed in
+[`http-results.json`](bun-test-suite/http-results.json). Eight affected API files
+have their failure-index rows refreshed with the shared partial-report helper
+from the test-runner lane. The newly passing `double-connect.test.ts` row is
+removed. Full-census summaries and README tables retain their prior census;
+this partial measurement does not replace the 2,305-file run.
 
 The exact commands and raw records are under
 `/work/reports/bun-wasm-http-scoreboard-20261018/final-r7/`.
@@ -547,10 +556,10 @@ The exact commands and raw records are under
 The server's whole-body buffering is a shared cause that the current code and
 runtime controls confirm. `serveHttp` waits for a complete upload before it
 calls a Node request listener. A client waiting for a response before ending
-its upload cannot make progress. `writeResponse` also waits for `arrayBuffer()`
+its upload cannot make progress. Before this change, `writeResponse` also waited for `arrayBuffer()`
 before sending Bun Response headers. A stream that waits for a client handshake
-cannot make progress either. The new fixtures reproduce both cycles without
-subprocesses or external network access.
+cannot make progress either. The retained upload reproducer and response-stream fixture exercise both
+handshakes without subprocesses or external network access.
 
 The response path is the selected fix. The Node request dispatcher retains its
 existing complete-upload behavior. Its header timing, unread-body draining and
@@ -586,7 +595,7 @@ native memory ownership or leak freedom. TLS transport, CONNECT dispatch,
 request timeout policy, queued pipelined response objects and Bun's direct stream
 extension remain separate compatibility work.
 
-## Measurements
+## Earlier HTTP upgrade measurements
 
 | Engine | Fully passing upstream files, before → after | Observed passes, before → after | File timeouts, before → after |
 | --- | --- | --- | --- |
