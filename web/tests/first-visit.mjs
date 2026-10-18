@@ -51,7 +51,11 @@ function forwardRequest(upstream, incoming, outgoing) {
     autoSelectFamilyAttemptTimeout: 2_000,
     signal: AbortSignal.timeout(180_000),
   }, (response) => forwardResponse(target, outgoing, response));
+  outgoing.once("close", () => {
+    if (!outgoing.writableFinished) forwarded.destroy();
+  });
   forwarded.on("error", (error) => {
+    if (outgoing.destroyed) return;
     console.error(`first-visit proxy ${target.href}: ${error.stack ?? error}`);
     outgoing.destroy(error);
   });
