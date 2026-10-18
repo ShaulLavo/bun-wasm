@@ -438,7 +438,7 @@ impl State {
                 positions.insert(
                     path.to_owned(),
                     PositionMap {
-                        map: Some(crate::sourcemap::SourceMap::parse(&mappings)),
+                        map: Some(crate::sourcemap::SourceMap::parse(mappings)),
                         original,
                         ..Default::default()
                     },

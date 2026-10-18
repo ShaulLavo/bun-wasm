@@ -82,28 +82,12 @@ impl GraphTraceState {
         }
     }
 
-    #[cfg_attr(not(target_os = "wasi"), allow(dead_code))]
-    pub(crate) fn clear(&mut self) {
-        self.server_bits.unmanaged.set_all(false);
-        self.client_bits.unmanaged.set_all(false);
-    }
-
     pub(crate) fn resize(&mut self, side: Side, new_size: usize) -> Result<(), crate::Error> {
         let b = self.bits(side);
         if b.unmanaged.bit_length < new_size {
             b.resize(new_size, false)?;
         }
         Ok(())
-    }
-
-    #[cfg_attr(not(target_os = "wasi"), allow(dead_code))]
-    pub(crate) fn clear_and_free(&mut self) {
-        self.client_bits
-            .resize(0, false)
-            .expect("freeing memory can not fail");
-        self.server_bits
-            .resize(0, false)
-            .expect("freeing memory can not fail");
     }
 }
 

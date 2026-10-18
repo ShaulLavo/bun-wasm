@@ -397,7 +397,7 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
             ModuleImportKind::Static(specifier) => specifier,
         };
         rec.push("kind", "static");
-        match state.resolver.resolve(&specifier, path, Kind::Import) {
+        match state.resolver.resolve(specifier, path, Kind::Import) {
             Ok(Resolved::Builtin(b)) => rec.push("key", b),
             Ok(Resolved::File(f)) => rec.push("key", f),
             Err(msg) => {

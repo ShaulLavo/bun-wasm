@@ -72,6 +72,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [0010](#0010-semantic-import-locations) | Host feature | Collect semantic import locations in Bun's scan and print passes for host module linking. |
 | [0011](#0011-lint-layout-assertions) | Port | Make semantic type-argument and lint-message size assertions pointer-width aware. |
 | [0012](#0012-wasi-lint-rule-docs) | Port | Generate and embed Bun's compressed lint rule docs in WASI artifacts. |
+| [0013](#0013-strict-wasi-lint-boundaries) | Port | Correct native-only cfgs and mark individual native poller/watcher declarations unused on WASI. |
 | [`jsc/webkit-wasi.patch`, platform hunks](#webkit-platform-hunks) | Port | Compile the C-loop interpreter and WTF for WASI. |
 | [`jsc/webkit-wasi.patch`, module slots](#webkit-module-import-slots) | Upstream bug | Give import slots a full JSValue stride and initialize the whole slot. |
 | [`jsc/webkit-wasi.patch`, non-JIT declarations](#webkit-non-jit-declarations) | Upstream bug | Expose a required enum without DFG and add two missing includes. |
@@ -1019,7 +1020,7 @@ This is a judgment call. The build failures are in a non-JIT configuration and d
 
 `third_party/libc` is libc **0.2.186**, selected by `[patch.crates-io]`. Class **Port**.
 
-Only two source files differ from the published crate. `src/wasi/mod.rs` adds the unused POSIX fields to `rusage`, exposes the existing p2 socket definitions on p1, and exports `posix_compat`. New `src/wasi/posix_compat.rs` declares missing mmap, signal, process, spawn, terminal, resource, scheduling, and socket APIs and constants. `bunwasm-posix` supplies absent symbols. Without this layer Bun's POSIX-oriented crates fail to compile or link for wasip1. These declarations describe bun-wasm's shim contract; they do not establish that upstream libc has the wrong WASI ABI.
+Only two source files differ from the published crate. `src/wasi/mod.rs` adds the unused POSIX fields to `rusage`, exposes the existing p2 socket definitions on p1, and exports `posix_compat`. New `src/wasi/posix_compat.rs` declares missing mmap, signal, process, spawn, terminal, resource, scheduling, and socket APIs and constants. `bunwasm-posix` supplies absent symbols. Without this layer Bun's POSIX-oriented crates fail to compile or link for wasip1. The compatibility module reuses p2's existing `MSG_NOSIGNAL` rather than exporting a second ambiguous definition, and imports its types through the parent module without a redundant prelude import. These declarations describe bun-wasm's shim contract; they do not establish that upstream libc has the wrong WASI ABI.
 
 The vendored package omits upstream tests and Cargo's `.cargo_vcs_info.json`. Other retained source and build files match the published 0.2.186 crate.
 
@@ -2747,10 +2748,17 @@ revision. It does not claim to evaluate JavaScript macros. These hooks make
 workspace examples and test binaries link rather than excluding them from the
 quality gate. They do not add an upstream patch.
 
-The quality gate also compile-checks the supported QuickJS and browser-engine
-CLI builds for `wasm32-wasip1` with WASI SDK 34.0. This original build wiring keeps
-WASI-only POSIX and guest ABI source checked without pretending the JSC/tools
-configuration can build without its generated WebKit/Yarr prerequisites.
+The quality gate runs strict target Clippy for the supported QuickJS and
+browser-engine CLI builds for `wasm32-wasip1` with WASI SDK 34.0. It explicitly
+selects every authored production dependency and denies warnings without the
+build environment's cap. A temporary Clippy-only violation in the actual WASI
+POSIX library must fail before its original bytes are restored. This original
+wiring does not claim that JSC/tools can build without their generated
+WebKit/Yarr prerequisites. The same change removes two unused original graph
+facade methods, the now-stable C variadic feature attribute, and two needless
+borrows in the browser-engine paths. Shared tool parsing returns its existing
+three results as a tuple, so detecting a subcommand does not require retaining
+an unread named payload type or a dead-code exemption.
 
 ## JSC prebuild inputs
 
@@ -2872,3 +2880,31 @@ in every browser, with no retry. The real inherited-fd libc controls remain
 explicit expected failures until the separate patched-sysroot follow-up. Waffle
 #32's intrinsic and source-quality changes are also included; no upstream source
 is copied into this consumer.
+
+
+## 0013 strict WASI lint boundaries
+
+Class **Port**. Upstream remains Bun
+`9510e74152073d850a18758ca41114d8f214ffa6`; this patch changes only the WASI port.
+
+- `src/bun_core/util.rs` restores Unix-only reload/spawn blocks. WASI keeps its
+  explicit unsupported-reload arm and the existing unsupported-spawn result,
+  without entering an unreachable native wait path.
+- `src/bun_core/Global.rs` explicitly consumes the unused WASI thread name and
+  declares `quick_exit` only on its native callers' targets.
+  `src/bun_core/debug.rs` limits the frame offset alias to its x86_64/aarch64 users.
+- `src/errno/wasi_errno.rs` drops an unused trait import. `src/sys/copy_file.rs`
+  and `src/sys/lib.rs` match native-only imports, directory-entry decoding and
+  extended-attribute helpers to their consumers' cfgs.
+- `src/threading/ThreadPool.rs` matches `force_spawn` to its threaded caller's
+  cfg. `src/threading/Futex.rs` limits the single-thread wake helper's visibility
+  to its parent, matching the other platform implementations.
+- `src/crash_handler/lib.rs` excludes a native-only import and explicitly
+  consumes the report URL on WASI, where automatic crash reporting is disabled.
+- `src/io/lib.rs` and `src/io/posix_event_loop.rs` exclude unused native imports.
+  Their specific native poller logger, descriptor accessor, packed pollables,
+  dispatch helpers and unused WASI waker accessor receive WASI-only `dead_code`
+  allowances. `src/watcher/Watcher.rs` and `WatcherTrace.rs` do the same only for
+  native filesystem-event buffers, callback, trace and merge/dispatch helpers.
+  These declarations remain type-checked. No whole module, authored crate or
+  warning category is capped globally, and no Clippy lint is disabled.

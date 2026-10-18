@@ -18,9 +18,9 @@ fn main() {
         let _ = std::env::set_current_dir(&pwd);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(tool) = tool_args::before_command(&args) else {
+    let Some((command, forwarded, globals)) = tool_args::before_command(&args) else {
         eprintln!("error: bun-tools supports bun lint and bun fmt");
         std::process::exit(2);
     };
-    std::process::exit(lint_command::run(&tool.command, tool.args, tool.globals));
+    std::process::exit(lint_command::run(&command, forwarded, globals));
 }

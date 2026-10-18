@@ -1,7 +1,7 @@
 From 9d6704bf151f2aac9c0cf10a10d0ebf62e03aa00 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 01:30:35 +0300
-Subject: [PATCH 01/12] wasm: wasi arms for alloc/core/errno, 32-bit pointer
+Subject: [PATCH 01/13] wasm: wasi arms for alloc/core/errno, 32-bit pointer
  tags, treat wasi as unix in toolchain cfgs
 
 ---

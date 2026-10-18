@@ -55,13 +55,22 @@ and incremental compilation to limit runner disk use; it runs the same checks.
   targets get Clippy with `-D warnings`, locked workspace tests, and
   cargo-machete 0.9.2. No whole authored crate is excluded. These are native-host
   default-feature checks.
-- `quality:wasi` runs locked production `cargo check` on `wasm32-wasip1`, once
-  with the CLI's default QuickJS features and once with exactly the browser build's
-  `engine-host,bun-transpiler,bun-build` features and no defaults. WASI SDK 34.0 is
-  required. This checks the WASI-only POSIX implementation and guest ABI paths,
-  which native `--all-targets` cannot see. It is a compile check, not execution or
-  a second warnings policy: it retains the existing WASI upstream warning cap
-  from `env.sh`; the native owned-source Clippy gate still denies warnings.
+- `quality:wasi` runs locked production Clippy on `wasm32-wasip1` with
+  `-D warnings`, once with QuickJS defaults and once with the browser build's
+  `engine-host,bun-transpiler,bun-build` features and no defaults. Both commands
+  explicitly select the ten authored production crates: CLI, runtime, build,
+  glue, POSIX, semver, crypto-sys, transpiler, the engine-independent bun-jsc
+  shim and its host proc-macro. Dependencies alone are not
+  Clippy primary packages. WASI SDK 34.0 is required. The quality environment
+  removes `RUSTFLAGS` and `CARGO_ENCODED_RUSTFLAGS`, replaces the target's warning
+  cap with `-C link-self-contained=no`, and leaves the general build environment
+  unchanged. Native `--all-targets` cannot see these WASI-only paths.
+- After both target configurations pass, the WASI gate temporarily appends a
+  `needless_bool` violation to the actual cfg(wasi) POSIX library. The same
+  production Clippy command must reject it with exit 101 and the expected lint
+  and source path. The probe restores the original bytes in `finally`; signal
+  handlers stop its Cargo process group before restoration. A compile-only gate
+  cannot satisfy this control.
 
 The WASI JSC engine and lint/format tools are not included in that target check.
 Their build scripts require generated WebKit headers, JSC archives and a Yarr
@@ -73,7 +82,11 @@ with the matching JSC build inputs to verify that separate configuration.
 ## Upstream boundaries
 
 `vendor/` and `third_party/` contain pinned upstream implementations and patches.
-They compile as dependencies but do not inherit our formatting/lint policy.
+They compile as dependencies but do not inherit our formatting/Clippy policy.
+Bun's own rustc deny settings remain active. Patch 0013 fixes WASI cfg gaps and
+allows only `dead_code` on named native poller/watcher items unused on WASI.
+There is no crate-wide warning cap or new authored-source lint suppression.
+Unchanged dependency warnings, such as Wasmi's, remain visible.
 Three unchanged Bun graph modules included with `#[path]` are explicitly marked
 at their inclusion sites. Authored graph facades, Rust adapters and JS polyfills
 remain checked. rustfmt uses an explicit owned file list and `skip_children=true`
