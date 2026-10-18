@@ -219,14 +219,14 @@ const dependencyRows = ["quickjs", "jsc", "browser"].map(engine => {
     `${number(record(old.counts).pass)} → ${number(record(current.counts).pass)}`,
     `${number(old.timeouts)} → ${number(current.timeouts)}`];
 });
-section("docs/bun-test-suite/README.md", "dependency-replay", [
-  "### Dependency setup replay",
+section("docs/bun-test-suite/dependency-replay.md", "dependency-replay", [
+  "## Measured results",
   `The ${string(dependencyReplay.date)} replay selects the 49 files previously assigned to category c for an uninstalled suite dependency. It provisions pinned packages and the suite's missing bake alias. The same four guest artifacts, launcher, upstream revision and deadlines are used before and after. The supplemental dependency tree and the runner's alias setup change.`,
   table(["Engine", "Selected files", "Fully passing before → after", "Observed passes before → after", "File timeouts before → after"], dependencyRows),
   table(["Category", "Full-census failure assignments", "Updated recorded failure assignments"], categories.map(key => [key,
     String(number(record(summary.categories)[key])), String(assignmentCounts.get(key) ?? 0)])),
-  "[dependency-replay.json](dependency-replay.json) records all 49 outcomes and first failures on each engine, with input provenance and raw-result hashes. [dependency-files.txt](dependency-files.txt) fixes the selection. [Dependency setup](dependencies/README.md) gives the install and replay commands and version sources.",
-  "The selected rows in failures.tsv use this replay's QuickJS first failures, with category f only when the file fully passes on another engine. Passing and skip-only files have no failure row. Updated assignment counts and the triage groups are generated from failures.tsv. The full-census tables above and summary.json retain the earlier 2,305-file observation; this focused replay does not claim a new full-suite total.",
+  "[dependency-replay.json](dependency-replay.json) records all 49 outcomes and first failures on each engine, with input provenance and raw-result hashes. [dependency-files.txt](dependency-files.txt) fixes the selection. [Dependency setup](dependencies/setup.md) gives the install and replay commands and version sources.",
+  "The selected rows in failures.tsv use this replay's QuickJS first failures, with category f only when the file fully passes on another engine. Passing and skip-only files have no failure row. Updated assignment counts and the triage groups are generated from failures.tsv. The full-census report and summary.json retain the earlier 2,305-file observation; this focused replay does not claim a new full-suite total.",
 ].join("\n\n"));
 
 process.stdout.write(`Compatibility tables ${check ? "verified" : "refreshed"} from raw JSON.\n`);

@@ -2,7 +2,7 @@
 
 Each row describes the first observed blocker. Subsystem assignments marked 'needs reproduction' are provisional; they do not establish that every test needs the same fix. Full assignments and confidence are in [failures.tsv](failures.tsv).
 
-The groups include the later [dependency setup replay](README.md#dependency-setup-replay).
+The groups include the later [dependency setup replay](dependency-replay.md).
 The full-run comparisons, timeout index and ranked investigations below retain the earlier census.
 
 <!-- failure-groups:start -->

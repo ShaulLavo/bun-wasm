@@ -26,7 +26,7 @@ Versions follow `test/package.json` at Bun revision
 
 Install scripts remain disabled, including native addon compilation and binary downloads.
 Installing a package does not make its native bindings available to the guest.
-The [dependency replay](../README.md#dependency-setup-replay) records the first failures
+The [dependency replay](../dependency-replay.md) records the first failures
 after provisioning, including native addon and external-service requirements.
 
 `bake/*` is a suite source alias, not an npm package. The runner maps the two imported
