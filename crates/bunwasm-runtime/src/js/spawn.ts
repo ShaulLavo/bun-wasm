@@ -467,6 +467,7 @@
   function spawn(cmd: unknown, options?: SpawnOptions): Child {
     const spec = start(cmd, options, false);
     let observingStart = typeof spec.options._onSpawn === "function";
+    let pendingSpawn = false;
     internal.require("net");
     const sink = writer(spec.stdinFd);
     const outputs: (Pipe | null)[] = [];
@@ -569,7 +570,7 @@
         // Do not consume a completion racing entry: retain the record until startup is final.
         if (startup === AGAIN) return null;
         observingStart = false;
-        if (startup === 0) (spec.options._onSpawn as () => void)();
+        if (startup === 0) pendingSpawn = true;
       }
       return waitChild(spec);
     }
@@ -578,6 +579,11 @@
       if (!settled) {
         // Every consuming path, including kill probes, observes startup first.
         const status = observeAndWait();
+        // Kill probes cache entry synchronously, but Node events stay on the async step.
+        if (pendingSpawn) {
+          pendingSpawn = false;
+          (spec.options._onSpawn as () => void)();
+        }
         if (status) { sink.destroy(); finish(status); }
       }
       if (!settled) {

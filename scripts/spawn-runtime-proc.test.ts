@@ -694,8 +694,10 @@ for (const outcome of [[0, 0], [2, 44]] as const) {
     fake.select(record, outcome);
     fake.publish(record);
     child.kill(0);
+    expect(events).toEqual([]);
+    child.on("spawn", () => events.push("late-spawn"));
     await pump();
-    expect(events).toEqual(outcome[0] === 0 ? ["spawn", "exit"] : ["error"]);
+    expect(events).toEqual(outcome[0] === 0 ? ["spawn", "late-spawn", "exit"] : ["error"]);
     expect(fake.pipes.size).toBe(0);
   });
 }
