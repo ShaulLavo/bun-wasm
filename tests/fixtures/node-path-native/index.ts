@@ -9,22 +9,32 @@ assert.equal(w.normalize("bb..\\..\\x"), "x");
 assert.equal(path.posix.normalize("bb../../x"), "x");
 assert.equal(w.join("//server", "share", "dir", ".."), "\\\\server\\share\\");
 assert.equal(w.resolve("C:/base", "//other/share", "C:relative"), "C:\\base\\relative");
-const slash = "\\";
-const driveRoot = "C:" + slash;
-const uncRoot = slash + slash + "server" + slash + "share";
-const deviceRoot = slash + slash + "?" + slash;
-const dotDeviceRoot = slash + slash + "." + slash;
-assert.equal(w.resolve(slash + "foo"), slash + "foo");
-assert.equal(w.resolve(slash + "foo", "bar"), slash + "foo" + slash + "bar");
-assert.equal(w.resolve(driveRoot), driveRoot);
-assert.equal(w.resolve("C:"), driveRoot);
-assert.equal(w.resolve("C:foo"), driveRoot + "foo");
-assert.equal(w.resolve(uncRoot), uncRoot + slash);
-assert.equal(w.resolve(uncRoot + slash + "x"), uncRoot + slash + "x");
-assert.equal(w.resolve(deviceRoot), slash + "?");
-assert.equal(w.resolve(dotDeviceRoot), slash);
-assert.equal(w.resolve(deviceRoot + "C:" + slash), deviceRoot + "C:" + slash);
-assert.equal(w.resolve(dotDeviceRoot + "C:" + slash), dotDeviceRoot + "C:" + slash);
+const cwd = process.cwd();
+process.chdir("/");
+// Recorded with native Bun 1.4.2 (744846f84) at cwd /.
+const nativeWindowsResolutions: { paths: string[]; expected: string }[] = [
+  { paths: ["\\foo"], expected: "\\foo" },
+  { paths: ["\\foo", "bar"], expected: "\\foo\\bar" },
+  { paths: ["C:\\"], expected: "C:\\" },
+  { paths: ["C:"], expected: "C:\\" },
+  { paths: ["C:foo"], expected: "C:\\foo" },
+  { paths: ["C:\\base", "C:relative"], expected: "C:\\base\\relative" },
+  { paths: ["C:\\base", "D:relative"], expected: "D:\\relative" },
+  { paths: ["\\\\server\\share"], expected: "\\\\server\\share\\" },
+  { paths: ["\\\\server\\share\\x"], expected: "\\\\server\\share\\x" },
+  { paths: ["\\\\?\\"], expected: "\\?" },
+  { paths: ["\\\\.\\"], expected: "\\" },
+  { paths: ["\\\\?\\C:\\"], expected: "\\\\?\\C:\\" },
+  { paths: ["\\\\.\\C:\\"], expected: "\\\\.\\C:\\" },
+  { paths: ["bar", "bar"], expected: "\\bar\\bar" },
+  { paths: ["baz\\qux", ""], expected: "\\baz\\qux" },
+  { paths: ["bar", ".."], expected: "\\" },
+];
+try {
+  for (const { paths, expected } of nativeWindowsResolutions) assert.equal(w.resolve(...paths), expected, JSON.stringify(paths));
+} finally {
+  process.chdir(cwd);
+}
 assert.equal(w.relative("C:\\A\\B", "c:\\a\\C"), "..\\C");
 assert.equal(w.relative("\\\\server\\share-one", "\\\\server\\share-two"), "..\\share-two");
 assert.equal(path.resolve(undefined, "/absolute"), "/absolute");
