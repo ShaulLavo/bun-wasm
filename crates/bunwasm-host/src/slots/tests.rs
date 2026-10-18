@@ -952,6 +952,12 @@ fn both_wait_imports_encode_startup_failure_as_eight_bytes_without_consuming_on_
         f.write(512,&request);
         let pid=f.call("runtime_proc","spawn",(512,request.len() as i32)); assert!(pid>0);
         let job=f.call("runtime_proc","job_of",pid);
+        let subscription:Vec<u8>=[6u32,pid as u32,123,0].into_iter().flat_map(u32::to_le_bytes).collect();
+        f.write(256,&subscription);
+        assert_eq!(f.call("runtime_proc","poll",(256,1,5000,80)),1);
+        assert_eq!(f.word(80),123); assert_eq!(f.word(88),6);
+        assert_eq!(f.call("runtime_proc","start_status",pid),44);
+        assert_eq!(f.call("runtime_proc","start_status",pid),44);
         if by_job {
             assert_eq!(f.call("runtime_proc","wait_job",(job,1,65532)),process::FAULT);
             assert_eq!(f.call("runtime_proc","wait_job",(job,0,80)),0);
@@ -966,6 +972,8 @@ fn both_wait_imports_encode_startup_failure_as_eight_bytes_without_consuming_on_
             }
         }
         assert_eq!(f.word(80),2); assert_eq!(f.word(84),44);
+        assert_eq!(f.call("runtime_proc","start_status",pid),process::CHILD);
+        assert_eq!(f.call("runtime_proc","poll",(256,1,0,80)),process::CHILD);
         assert_eq!(f.call("runtime_proc","wait",(pid,80)),process::CHILD);
         if by_job { assert_eq!(f.call("runtime_proc","wait_job",(job,1,80)),process::CHILD); }
     }

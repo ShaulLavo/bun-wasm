@@ -21,8 +21,8 @@ test("explicit artifact must actually import the complete direct process ABI", (
   expect(existsSync(directory)).toBe(false);
 });
 
-for (const missing of ["job_of", "signal"]) test(`explicit artifact must directly import runtime_proc.${missing}`, () => {
-  const names = ["spawn", "pipe", "read", "write", "wait", "wait_job", "kill", "kill_job", "poll", "job_of", "signal"].filter(name => name !== missing);
+for (const missing of ["job_of", "signal", "start_status", "access_start", "access_take", "access_cancel"]) test(`explicit artifact must directly import runtime_proc.${missing}`, () => {
+  const names = ["spawn", "pipe", "read", "write", "wait", "wait_job", "kill", "kill_job", "poll", "job_of", "signal", "start_status", "access_start", "access_take", "access_cancel"].filter(name => name !== missing);
   // Original import-only module: admission inspects imports, never executes these stubs.
   const leb = (value: number): number[] => value < 128 ? [value] : [value % 128 + 128].concat(leb(Math.floor(value / 128)));
   const text = (value: string) => leb(value.length).concat(Array.from(new TextEncoder().encode(value)));

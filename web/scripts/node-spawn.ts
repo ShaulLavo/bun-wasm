@@ -134,6 +134,7 @@ export class NodeProcessBroker {
         const resource = this.supervisor.get(pid)?.descriptors.get(2)?.resource;
         const bytes = new TextEncoder().encode(`bun-wasm: ${error instanceof Error ? error.message : error}\n`);
         if (resource?.kind === "pipe" || resource?.kind === "terminal") resource.write([bytes]);
+        else if (pid === 1) writeSync(2, bytes);
       },
       onError: options.onError,
     });
@@ -188,13 +189,17 @@ export class NodeProcessBroker {
       if (message?.type === "runtime-proc") void this.broker.handle(message, pid);
     });
     worker.on("error", error => {
-      const bytes = new TextEncoder().encode(`node-host: ${error instanceof Error ? error.stack : error}\n`);
-      const stderr = this.supervisor.get(pid)?.descriptors.get(2)?.resource;
-      if (stderr?.kind === "pipe" || stderr?.kind === "terminal") stderr.write([bytes]);
-      else writeSync(2, bytes);
       const record = this.supervisor.get(pid);
-      if (record && startStatus(record.outcome) !== 0) this.supervisor.failStart(pid, error);
-      else this.supervisor.exit(pid, 126);
+      if (record && startStatus(record.outcome) !== 0) {
+        // The supervisor's startup diagnostic sink runs only after terminal selection wins.
+        this.supervisor.failStart(pid, error);
+        return;
+      }
+      const bytes = new TextEncoder().encode(`node-host: ${error instanceof Error ? error.stack : error}\n`);
+      const stderr = record?.descriptors.get(2)?.resource;
+      if (stderr?.kind === "pipe" || stderr?.kind === "terminal") stderr.write([bytes]);
+      else if (pid === 1) writeSync(2, bytes);
+      this.supervisor.exit(pid, 126);
     });
     worker.on("exit", code => {
       this.workers.delete(pid);

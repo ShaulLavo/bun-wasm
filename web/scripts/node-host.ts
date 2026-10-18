@@ -170,11 +170,14 @@ async function run(data: GuestData) {
       onExit: finish,
     });
   } catch (error) {
-    if (!entered) claimOutcome(state.signals.outcome, startFailure(error));
-    const bytes = new TextEncoder().encode(`${error instanceof Error ? error.stack : error}\n`);
-    const stderr = processHost?.descriptors.get(2)?.resource;
-    if (stderr?.kind === "pipe" || stderr?.kind === "terminal") stderr.write([bytes]);
-    else writeSync(2, bytes);
+    const result = entered ? { kind: "exited" as const, code: 1 } : startFailure(error);
+    const selected = claimOutcome(state.signals.outcome, result);
+    if (selected.kind === result.kind && selected.code === result.code) {
+      const bytes = new TextEncoder().encode(`${error instanceof Error ? error.stack : error}\n`);
+      const stderr = processHost?.descriptors.get(2)?.resource;
+      if (stderr?.kind === "pipe" || stderr?.kind === "terminal") stderr.write([bytes]);
+      else if (!request) writeSync(2, bytes);
+    }
     finish(1);
   }
 }

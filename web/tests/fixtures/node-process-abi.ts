@@ -7,6 +7,7 @@ import { workerProcessState, type WorkerProcessTransport } from "waffle/proc/wor
 import { createNodeSignalController } from "../../scripts/node-signals.ts";
 import type { SpawnRequest } from "waffle/proc/types";
 import type { PipePublicationRegistryHandle } from "waffle/proc/pipes";
+import { markStarted } from "waffle/proc/outcome";
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
 if (isMainThread) {
@@ -63,6 +64,9 @@ if (isMainThread) {
     view().setUint32(16, writing ? 1 : 0, true); view().setUint32(20, fd, true); view().setBigUint64(24, 42n, true);
     assert.ok(proc.poll!(16, 1, 1000, 32) >= 0);
   };
+  if (request?.env.action === "throw-before-entry") throw new Error("node-before-entry");
+  if (!markStarted(host.client.signals.outcome)) finish(0);
+  if (request?.env.action === "throw-after-entry") throw new Error("node-after-entry");
   try {
     if (request?.env.action === "spin") for (;;) {}
     if (request?.env.action === "omitted") {
@@ -120,8 +124,26 @@ if (isMainThread) {
     assert.equal(proc.wait_job!(job, 0, 0), 0); assert.deepEqual([view().getInt32(0, true), view().getInt32(4, true)], [0, 7]);
     assert.equal(proc.read!(read, 1024, 1), 0); assert.equal(proc.close!(read), 0);
     assert.deepEqual(wait(spawn("missing", [], "")), [2, 44]);
+    const [diagnosticRead, diagnosticWrite] = pipe();
+    const failed = spawn("/bin/bun", [{ child: 2, parent: diagnosticWrite }], "throw-before-entry");
+    assert.equal(proc.close!(diagnosticWrite), 0);
+    assert.deepEqual(wait(failed), [2, 29]);
+    const diagnosticLength = proc.read!(diagnosticRead, 1024, 4096);
+    assert.ok(diagnosticLength > 0);
+    assert.match(new TextDecoder().decode(bytes().subarray(1024, 1024 + diagnosticLength)), /node-before-entry/);
+    assert.equal(proc.read!(diagnosticRead, 1024, 1), 0);
+    assert.equal(proc.close!(diagnosticRead), 0);
+    // No stderr binding: an entered worker crash must not write to the controller's stderr.
+    assert.deepEqual(wait(spawn("/bin/bun", [], "throw-after-entry")), [0, 126]);
     const killed = spawn("/bin/bun", [], "spin");
-    assert.equal(proc.kill!(killed, 9), 0); assert.deepEqual(wait(killed), [1, 9]);
+    view().setUint32(16, 6, true); view().setInt32(20, killed, true); view().setBigUint64(24, 43n, true);
+    assert.equal(proc.poll!(16, 1, 5000, 32), 1);
+    assert.equal(view().getUint32(32, true), 43); assert.equal(view().getUint32(40, true), 6);
+    assert.equal(proc.start_status!(killed), 0);
+    assert.equal(proc.kill!(killed, 9), 0);
+    assert.equal(proc.start_status!(killed), 0);
+    assert.deepEqual(wait(killed), [1, 9]);
+    assert.equal(proc.start_status!(killed), -12);
     const group = spawn("/bin/node", [], "spin"), groupJob = proc.job_of!(group);
     assert.equal(proc.kill_job!(groupJob, 15), 0); assert.deepEqual(wait(group), [1, 15]);
     assert.equal(proc.wait_job!(groupJob, 0, 0), 0); assert.deepEqual([view().getInt32(0, true), view().getInt32(4, true)], [1, 15]);
