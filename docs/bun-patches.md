@@ -2790,7 +2790,15 @@ browser process control creates a real filesystem file, consumes its prefix in t
 then verifies the child reads the shared cursor and writes through inherited fd3 in Chromium,
 Firefox and WebKit. The package installer uses exclusive marker creation and rolls back only paths
 it created; a matching concurrent marker is shared and unrelated queued filesystem errors remain
-fatal.
+fatal. The formerly expected-failing libc controls are now strict successes: all 17 scenarios pass
+without retries in each of Chromium, Firefox and WebKit for browser, QuickJS and JSC artifacts.
+This supersedes the historical expected-failure notes for earlier pins below and above.
+
+Waffle #31 in this pin captures host intrinsics and validates shared-view identities. The measured
+core closure is 24,744 B minified / 8,073 B gzip; the core gate is now a tight 8,192 B gzip.
+The captured-intrinsics module is classified with eager reservation/control primitives, not the
+lazy process supervisor. Test-only wait, notify and outcome instrumentation uses module injection
+or a pre-import fixture observer; no production mutable hook or export was added.
 
 ## Node startup diagnostic drain
 
