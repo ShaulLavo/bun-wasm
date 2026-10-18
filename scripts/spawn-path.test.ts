@@ -33,6 +33,36 @@ test("PATH lookup skips earlier non-executable and non-directory matches", () =>
   f.fake.exit(child, 0);
 });
 
+for (const [directory, errno] of [["/missing/../bin", -44], ["/bin/bun/..", -54], ["missing/../bin", -44]] as const) {
+  const candidate = `${directory.startsWith("/") ? directory : `/work/${directory}`}/bun`;
+  test(`PATH admission preserves intermediate components in ${directory}`, () => {
+    const f = fixture({ [candidate]: errno, "/bin/bun": 0 });
+    expect(f.module.which("bun", { PATH: directory })).toBeNull();
+    expect(f.queries).toEqual([[candidate, "/work"]]);
+    expect(() => f.module.spawn(["bun"], { env: { PATH: directory } })).toThrow("ENOENT");
+    expect(f.fake.children.size).toBe(0);
+    expect(f.fake.open()).toBe(0);
+    f.queries.length = 0;
+    f.module.spawn(["bun"], { env: { PATH: `${directory}:/bin` } });
+    expect(f.queries).toEqual([[candidate, "/work"], ["/bin/bun", "/work"]]);
+    const child = Array.from(f.fake.children.values())[0]!;
+    expect(child.request.executable).toBe("/bin/bun");
+    f.fake.exit(child, 0);
+  });
+}
+
+for (const [command, errno, code] of [["/missing/../bin/bun", -44, "ENOENT"], ["/bin/bun/../node", -54, "ENOTDIR"], ["missing/../bin/bun", -44, "ENOENT"]] as const) {
+  test(`explicit command admission preserves intermediate components in ${command}`, () => {
+    const f = fixture({ [command]: errno, "/bin/bun": 0, "/bin/node": 0 });
+    expect(f.module.which(command, { PATH: "/bin" })).toBeNull();
+    expect(f.queries).toEqual([[command, "/work"]]);
+    expect(() => f.module.spawn([command], { env: { PATH: "/bin" } })).toThrow(code);
+    expect(f.queries).toEqual([[command, "/work"], [command, "/work"]]);
+    expect(f.fake.children.size).toBe(0);
+    expect(f.fake.open()).toBe(0);
+  });
+}
+
 test("missing commands preserve ENOENT while denied PATH matches preserve EACCES", () => {
   for (const [entries, code] of [[{}, "ENOENT"], [{ "/blocked/bun": -2 }, "EACCES"]] as const) {
     const f = fixture(entries);

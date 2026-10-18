@@ -213,10 +213,12 @@
       const result = native.procAccess(command, cwd);
       return result < 0 ? result : command;
     }
-    const path = internal.require("path");
     let denied = false;
     for (const directory of String(env.PATH ?? "/bin:/usr/bin").split(":")) {
-      const candidate = path.resolve(cwd, directory || ".", command);
+      // Admission must walk every original component: resolving `..` here could erase
+      // a missing directory or turn traversal through an executable into a valid path.
+      const base = directory.startsWith("/") ? directory : directory ? `${cwd}/${directory}` : cwd;
+      const candidate = `${base}/${command}`;
       const result = native.procAccess(candidate, cwd);
       if (result === 0) return candidate;
       if (result === -2) denied = true;
