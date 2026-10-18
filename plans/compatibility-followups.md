@@ -905,3 +905,43 @@ did not fix the focused failure. That experiment is reverted. Inspect native
 responses before proposing a fix. Do not change guest response scheduling or
 weaken the upstream assertion to mask the observation. The coordinator owns the
 small reproducer and control evidence until this follow-up is resolved or retired.
+
+### Process-runtime web gate blocker from HTTP review, 2026-10-18
+
+Status: Approved follow-up for the process-runtime lane. PR #80 does not change
+process integration.
+
+The full web gate cannot instantiate either the pre-review merged-main baseline
+`c8244547` or HTTP review guest `af670576` through `web/scripts/run.ts:42`. Both exit 1 with
+`TypeError: unsupported import runtime_proc.signal (function)` before the script
+runs. The shim constructs Waffle's `Wasi` without a `runtime_proc` namespace.
+Its source is also unchanged on main `7bc7ba37`. Reproduce from an owned worktree
+with its rebuilt QuickJS guest:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+cd web
+bun scripts/run.ts ../dist/bun.wasm -e 'console.log("import control")'
+```
+
+The same failure blocks all seven CLI network fixtures in both table and import
+modes. The three HTTP review regressions pass through the native launcher on all
+engines. The missing import precedes their HTTP code. The process-runtime lane
+should migrate the standalone shim to the current process adapter and preserve
+both host-slot modes. Do not add a fake signal handler to make instantiation pass.
+
+The same web run also reports `TypeError: #<p> is not an integer typed array` from
+`Atomics.load` while stopping a foreground browser process. The stack reaches
+`web/tests/foreground.ts:17`, `runForeground:39`, `playground.mjs:139`, and
+`browser-install.mjs:37`. This second failure has not been isolated against a
+baseline browser build. Reproduce with `scripts/test-web.sh`, using the installed
+Playwright path and an explicit temporary root. Inspect the process signal state
+passed to the runtime's `kill` implementation before changing HTTP code.
+
+Exact paired import commands, hashes, exit statuses and the full web log are
+retained in `/work/reports/bun-wasm-http-scoreboard-20261018/review-r1/` as
+`import-control.*`, `import-control-before.*`, `import-control-after.*`, and
+`gate-web.log`. The coordinator owns this evidence until the process-runtime
+follow-up is resolved or retired. No process-layer fix, retry or skip is included
+in PR #80.

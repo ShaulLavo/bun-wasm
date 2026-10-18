@@ -641,6 +641,35 @@ acceptance of PR #80. This replay uses Bun suite revision
 `d71508d31edf06765c12adf0df137ef531539f68`, independently of the earlier
 180-file census above.
 
+The focused review replay has identical selection, launcher, tools, runner and
+dependency hashes on both sides. It measures the merged-main baseline
+`c8244547` against production code at `af670576`.
+
+| Engine | Fully passing files | Observed passes | Observed failures | File timeouts |
+| --- | --- | --- | --- | --- |
+| QuickJS | 0/8 → 0/8 | 162 → 164 | 198 → 196 | 5 → 5 |
+| JSC | 0/8 → 0/8 | 163 → 158 | 197 → 190 | 4 → 4 |
+| Browser | 0/8 → 0/8 | 148 → 149 | 200 → 200 | 3 → 3 |
+
+JSC's lower observed count includes five late checks not reached before the
+15-second file deadline and a timing-sensitive URL-normalization case. A focused
+replay of the unmodified `bun-server.test.ts` completes all seven selected checks
+without a file timeout. Its pass/fail counts are 6/1 → 6/1 on QuickJS,
+6/1 → 7/0 on JSC, and 6/1 → 6/1 on browser. The baseline reproduces the QuickJS
+URL-normalization failure and the browser Node HTTP loop-ref failure. Every late
+check absent from JSC's full-file replay passes in its final focused control.
+No previously passing file is lost. All eight files still have pre-existing
+failures, so this subset does not replace the full scoreboard.
+
+The complete fixture gates record 242 passes and only `node-misc` on QuickJS
+and JSC. Browser records 241 passes with `build-outdir` and `npm-packages`.
+The coordinator lists these as existing main failures; a direct browser control
+produces identical `npm-packages` output on baseline and final guests. The tools
+guest was rebuilt before these gates to remove a stale host-slot ABI mismatch.
+The full web gate encounters a pre-existing missing `runtime_proc.signal` import
+in its standalone CLI shim. See the process-runtime web gate follow-up in
+`plans/compatibility-followups.md`; no process-layer code is changed here.
+
 ## Earlier HTTP upgrade measurements
 
 | Engine | Fully passing upstream files, before → after | Observed passes, before → after | File timeouts, before → after |
