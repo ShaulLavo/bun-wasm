@@ -1,16 +1,22 @@
+import { browserType } from "./browser-type.ts";
 // Fresh subprocess workers on the real browser worker bootstrap, across all wasm engines.
 // cd web && bun run build && bun tests/browser-subprocess.ts [chromium|firefox|webkit] [--api-only] [--engine=browser] [--repeat=20]
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { playwright, session, ready, writeFile, run } from "./playground.mjs";
+import { session, ready, writeFile, run } from "./playground.mjs";
 import { checkWorkers } from "./browser-workers.ts";
 const closedOutput = readFileSync(new URL("../../tests/fixtures/pipe-closed-child/index.ts", import.meta.url), "utf8");
 const orderedOutput = readFileSync(new URL("../../tests/fixtures/pipe-write-order/index.ts", import.meta.url), "utf8");
 const orderedChild = readFileSync(new URL("../../tests/fixtures/pipe-write-order/child.ts", import.meta.url), "utf8");
 const stdinRace = readFileSync(new URL("../../tests/fixtures/pipe-stdin-race/index.ts", import.meta.url), "utf8");
+const stdinLifecycle = readFileSync(new URL("../../tests/fixtures/spawn-stdin/index.ts", import.meta.url), "utf8");
+const stdinLifecycleExpected = readFileSync(new URL("../../tests/fixtures/spawn-stdin/expected.txt", import.meta.url), "utf8").trim().split("\n");
+const executableLifecycle = readFileSync(new URL("../../tests/fixtures/spawn-executable/index.ts", import.meta.url), "utf8");
+const executableChild = readFileSync(new URL("../../tests/fixtures/spawn-executable/child.ts", import.meta.url), "utf8");
 const configurationChecks = readFileSync(new URL("../../tests/fixtures/lint-fmt-config/index.ts", import.meta.url), "utf8");
 const configurationExpected = readFileSync(new URL("../../tests/fixtures/lint-fmt-config/expected.txt", import.meta.url), "utf8").trim().split("\n");
-const executableAliases = ["bun", "/bun", "/usr/local/bin/bun", "node", "/node", "/usr/local/bin/node"];
+const executableAliases = ["bun", "node", "/bin/bun", "/bin/node",
+  "/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node"];
 const apiProgram = `
 import { spawn, spawnSync, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -163,7 +169,8 @@ const deadline = setTimeout(() => { console.error("subprocess browser gate timed
 try {
   const url = await s.serve();
   for (const { browserName, iteration } of browsers.flatMap(browserName => Array.from({ length: repeats }, (_, index) => ({ browserName, iteration: index + 1 })))) {
-    const browser = await s.launch(playwright[browserName]);
+    const checkSubprocessCase = async () => {
+    const browser = await s.launch(browserType(browserName));
     const page = await browser.newPage();
     await page.goto(url);
     await ready(page);
@@ -178,6 +185,17 @@ try {
       for (const line of apiExpected) assert.ok(api.output.includes(line), `missing ${line} in ${api.output}`);
       console.log(`ok ${browserName} ${engine} #${iteration}: Bun/Node subprocess APIs, nested workers, large stdin, cwd, files, timeout`);
       if (apiOnly) continue;
+      await writeFile(page, "/home/user/spawn-executable/index.ts", executableLifecycle);
+      await writeFile(page, "/home/user/spawn-executable/child.ts", executableChild);
+      const executable = await run(page, "bun run spawn-executable/index.ts");
+      assert.equal(executable.code, 0, executable.output);
+      assert.ok(executable.output.includes("absolute self-spawn, fork and Worker preserve the admitted executable without PATH"), executable.output);
+      console.log(`ok ${browserName} ${engine}: current executable survives missing or cross-engine PATH in spawn, fork and Worker`);
+      await writeFile(page, "/home/user/spawn-stdin.ts", stdinLifecycle);
+      const stdin = await run(page, "bun run spawn-stdin.ts");
+      assert.equal(stdin.code, 0, stdin.output);
+      for (const line of stdinLifecycleExpected) assert.ok(stdin.output.includes(line), stdin.output);
+      console.log(`ok ${browserName} ${engine}: invalid stdin conversion, synchronous EPIPE and Node stdin destroy EOF`);
       await writeFile(page, "/home/user/lint-fmt-config.ts", configurationChecks);
       const configured = await run(page, "bun run lint-fmt-config.ts");
       assert.equal(configured.code, 0, configured.output);
@@ -193,7 +211,7 @@ try {
       }
       console.log(`ok ${browserName} ${engine}: closed child stdout/stderr reports EPIPE and exits`);
       await writeFile(page, "/child.ts", orderedChild);
-      for (const [name, source] of [["pipe-write-order.ts", orderedOutput], ["pipe-stdin-race.ts", stdinRace]]) {
+      for (const [name, source] of [["pipe-write-order.ts", orderedOutput], ["pipe-stdin-race.ts", stdinRace]] as const) {
         await writeFile(page, `/home/user/${name}`, source);
         const checked = await run(page, `bun run ${name}`);
         assert.equal(checked.code, 0, checked.output);
@@ -202,5 +220,8 @@ try {
       await checkWorkers(page, `${browserName} ${engine}`);
     }
     await browser.close();
+
+    };
+    await checkSubprocessCase();
   }
 } finally { clearTimeout(deadline); await s.cleanup(); }

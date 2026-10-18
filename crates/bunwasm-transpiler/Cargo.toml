@@ -19,6 +19,7 @@ bun_sourcemap = { path = "../../vendor/bun/src/sourcemap" }
 bun_sys = { path = "../../vendor/bun/src/sys" }
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
 
+bunwasm-glue = { path = "../bunwasm-glue" }
+
 [target.'cfg(target_os = "wasi")'.dependencies]
 bunwasm-posix = { path = "../bunwasm-posix" }
-bunwasm-glue = { path = "../bunwasm-glue" }

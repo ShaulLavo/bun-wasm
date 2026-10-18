@@ -10,6 +10,7 @@ let sample = 0;
 const decoder = new TextDecoder();
 let result: Record<string, unknown>;
 try {
+  const measureProcesses = async () => {
   await fs.mkdirp("/home/user"); await fs.flush();
   const benchmark = await measureProcessStarts(async (module, started) => {
     const pid = runtime.identities.pid(), job = runtime.identities.job();
@@ -28,7 +29,7 @@ try {
       if (handle < 0) throw new Error(`baseline spawn failed ${handle}`);
       let firstOutputMs: number | undefined;
       let stdout = "", stderr = "";
-      for (;;) {
+      const pollChild = async () => {
         for (const fd of [1, 2]) {
           const value = host.read(host.pipe(handle, fd));
           if (value instanceof Uint8Array) { if (fd === 1) { firstOutputMs ??= performance.now() - started; stdout += decoder.decode(value); } else stderr += decoder.decode(value); }
@@ -40,10 +41,17 @@ try {
         }
         if (performance.now() - started > 15_000) throw new Error("baseline child timed out");
         await new Promise(resolve => setTimeout(resolve, 1));
+      };
+      for (;;) {
+        const completed = await pollChild();
+        if (completed) return completed;
       }
     } finally { try { await broker.rootExit(0); } finally { broker.dispose(); host.dispose(); } }
   });
   result = { ok: true, benchmark };
+
+  };
+  await measureProcesses();
 } catch (error) { result = { ok: false, error: error instanceof Error ? error.stack : String(error) }; }
 finally {
   try { await runtime.dispose(); }

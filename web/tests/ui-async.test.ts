@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { EditorState } from "@codemirror/state";
 import { Shell } from "../src/shell";
+import { SharedFilesystem } from "waffle/browser/shared-fs";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -440,10 +441,7 @@ test("shell discards filesystem completion after the line was submitted", async 
 });
 
 async function filesystemFixture() {
-  const source = await Bun.file(new URL(import.meta.resolve("waffle/browser/shared-fs"))).text();
-  const code = source.slice(source.indexOf("export class SharedFilesystem")).replace("export class", "class");
-  const Filesystem = new Function(`${transpiler.transformSync(code)}; return SharedFilesystem;`)();
-  const fs = Object.create(Filesystem.prototype);
+  const fs = Object.create(SharedFilesystem.prototype);
   fs.writes = Promise.resolve();
   return fs;
 }

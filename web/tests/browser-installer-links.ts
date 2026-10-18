@@ -1,13 +1,14 @@
+import { browserType } from "./browser-type.ts";
 import assert from "node:assert/strict";
 import { createRegistry, packageFixture, tarEntry } from "../../tests/install/registry.mjs";
-import { playwright, ready, run, session, writeFile } from "./playground.mjs";
+import { ready, run, session, writeFile } from "./playground.mjs";
 
 const task = session("bun-wasm-installer-links-");
-let registry: Awaited<ReturnType<typeof createRegistry>>;
+let registry: Awaited<ReturnType<typeof createRegistry>> | undefined;
 const failures: string[] = [];
 
 async function check(browserName: string, engine: string, url: string) {
-  const browser = await task.launch(playwright[browserName]);
+  const browser = await task.launch(browserType(browserName));
   const context = await browser.newContext();
   const page = await context.newPage();
   const external: string[] = [];
@@ -27,10 +28,11 @@ async function check(browserName: string, engine: string, url: string) {
     await page.goto(`${url}?engine=${engine}`);
     assert.match(await ready(page), /ready/);
     await writeFile(page, "/home/user/package.json", JSON.stringify({ name: "page-bin-fixture", scripts: { dev: 'fixture-tool "two words"', explicit: "./fixture-tool.ts", runtime: "bun fixture-tool" } }));
-    await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);
+    await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry!.base)}\n`);
     await command("bun add is-odd");
     await writeFile(page, "/home/user/check-links.ts", 'import fs from "node:fs"; for (const bin of ["cli", "fixture-tool"]) console.log("link", bin, fs.existsSync("node_modules/.bin/" + bin));');
     for (const install of ["bun add @fixture/cli", "bun install --frozen-lockfile"]) {
+      const checkInstallerCase = async () => {
       const output = await command(install);
       const warnings = output.split("\n").filter(line => line.includes("bin link skipped:"));
       const links = await command("bun run check-links.ts");
@@ -42,6 +44,9 @@ async function check(browserName: string, engine: string, url: string) {
         if (!linked) skipped++;
       }
       assert.equal(warnings.length, skipped, output);
+
+      };
+      await checkInstallerCase();
     }
     await writeFile(page, "/home/user/check-lock.ts", 'import fs from "node:fs"; console.log("lock:", fs.readFileSync("bun.lock", "utf8").includes("@fixture/cli@1.0.0"));');
     assert.match(await command("bun run check-lock.ts"), /lock: true/);
@@ -51,7 +56,7 @@ async function check(browserName: string, engine: string, url: string) {
       ["bun run dev tail", "two words|tail"],
       ["bunx --no-install @fixture/cli local", "local"],
       ["bun x --no-install @fixture/cli local-x", "local-x"],
-    ]) {
+    ] as const) {
       const output = await command(text);
       assert.ok(output.includes(`page-cli ${args}`), output);
       assert.ok(output.includes("/home/user/node_modules/@fixture/cli/cli.ts"), output);
@@ -87,10 +92,14 @@ try {
   const browsers = process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "webkit"];
   const engines = (process.env.ENGINES ?? "browser,quickjs,jsc").split(",");
   for (const browser of browsers) {
+    const checkInstallerCase = async () => {
     for (const engine of engines) {
       try { await check(browser, engine, url); }
       catch (error) { failures.push(`${browser}/${engine}`); console.error(`FAIL ${browser}/${engine}`, error); }
     }
+
+    };
+    await checkInstallerCase();
   }
   console.log(`${browsers.length * engines.length - failures.length} passed, ${failures.length} failed`);
 } finally {

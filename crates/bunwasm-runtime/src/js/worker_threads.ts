@@ -13,7 +13,7 @@
   const messagePayloads = new WeakMap<Event, unknown>();
   const channels = new Map<string, Set<BroadcastChannel>>();
   const localPorts = new Map<string, MessagePort>();
-  const children = new Map<number, { ref: boolean; send(frame: unknown): void; pump(): boolean; event(frame: Record<string, unknown>): void }>();
+  const children = new Map<number, { ref: boolean; send(frame: unknown): void; pump(): boolean; watch(): Uint8Array; event(frame: Record<string, unknown>): void }>();
   const owners = new Map<string, { owner: Route | null; origin: Route; version: number; peer: string | null; sent: number; ready: boolean }>();
   const pending = new Map<string, Record<string, unknown>[]>();
   const members = new Map<string, { route: Route; group: string }>();
@@ -24,6 +24,7 @@
   let parentPort: MessagePort | null = null;
   let parentChannel: BunWasm.WorkerChannel | null = null;
   const config = workerConfig(process.env.BUNWASM_WORKER_INIT);
+  const controlFds = process.env.BUNWASM_WORKER_CONTROL;
   const route = config?.route || [];
   const threadId = route.reduce((parent, counter) => (parent + counter) * (parent + counter + 1) / 2 + counter + 1, 0);
   const envGroup = config?.envGroup || "root";
@@ -249,7 +250,7 @@
       return { id: state.id, peer: state.peer, version, sent: state.sent, received: state.received,
         queue: state.queue.slice(), pending: Array.from(state.pending), closing: state.peerClosing, closed: state.phase === "closed" };
     }
-    #bind() { const { queue, ...snapshot } = this.#snapshot(); root({ kind: "bind", snapshot, owner: route }); }
+    #bind() { const { queue: _queue, ...snapshot } = this.#snapshot(); root({ kind: "bind", snapshot, owner: route }); }
     static #restore(snapshot: Snapshot) { return new MessagePort(token, snapshot); }
     static #activate(value: unknown) { if (!(value instanceof MessagePort)) throw invalidPort(); value.#bind(); value.#accept(); }
     static #prepare(value: unknown): BunWasm.PortTransfer {
@@ -262,7 +263,7 @@
         validate() { if (value.#state !== state || state.phase !== "open") throw cloneError("MessagePort changed during transfer"); },
         commit() {
           value.unref(); localPorts.delete(state.id); value.#state = null;
-          const { queue, ...metadata } = snapshot;
+          const { queue: _queue, ...metadata } = snapshot;
           root({ kind: "moving", snapshot: metadata, origin: route });
         },
       };
@@ -582,7 +583,7 @@
       env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv, graph, resourceLimits: this.resourceLimits, web });
       const memoryLimitMb = (this.resourceLimits.maxOldGenerationSizeMb || 0) + (this.resourceLimits.maxYoungGenerationSizeMb || 0);
       let child: BunWasm.WorkerChild;
-      try { child = internal.require("spawn").spawn(["bun"].concat(target.argv, argv), {
+      try { child = internal.require("spawn").spawn([process.execPath].concat(target.argv, argv), {
         env, cwd: process.cwd(), stdin: options.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe",
         maxBuffer: Infinity,
         _worker: { resourceLimits: this.resourceLimits, memoryLimitMb: memoryLimitMb ? Math.ceil(memoryLimitMb) : undefined },
@@ -590,10 +591,10 @@
       this.#child = child;
       let control: BunWasm.WorkerChannel | null = null;
       try {
-        control = internal.require("worker_channel").open(native.hostChildPipe(child.pid, 5), native.hostChildPipe(child.pid, 4));
+        control = internal.require("worker_channel").open(child._workerChannel.input, child._workerChannel.output);
         this.#channel = control;
         transferPlan.commit();
-        children.set(this.#id, { ref: true, send: frame => { if (!this.#exited) this.#channel.send(frame); }, pump: () => this.#pump(), event: frame => this.#event(frame) });
+        children.set(this.#id, { ref: true, send: frame => { if (!this.#exited) this.#channel.send(frame); }, pump: () => this.#pump(), watch: () => this.#channel.subscriptions(), event: frame => this.#event(frame) });
         root({ kind: "member", path: this.#path, group });
         if (!route.length) claimTransferred(graph, this.#path);
         else root({ kind: "claim", graph, owner: this.#path });
@@ -679,7 +680,7 @@
     if (port instanceof BroadcastChannel) return undefined;
     throw invalidPort();
   }
-  function moveMessagePortToContext(port: unknown, context: unknown): never {
+  function moveMessagePortToContext(port: unknown, _context: unknown): never {
     if (!(port instanceof MessagePort)) throw invalidPort();
     if (portOps.isClosed(port)) throw Object.assign(new Error("Cannot send data on closed MessagePort"), { code: "ERR_CLOSED_MESSAGE_PORT" });
     throw Object.assign(new Error("VM contexts are not supported in bun-wasm"), { code: "ERR_NOT_SUPPORTED_IN_WASM" });
@@ -688,7 +689,11 @@
     if (!config || initialized) return;
     initialized = true;
     delete process.env.BUNWASM_WORKER_INIT;
-    parentChannel = internal.require("worker_channel").open(native.hostChildPipe(0, 4), native.hostChildPipe(0, 5));
+    delete process.env.BUNWASM_WORKER_CONTROL;
+    // The parent bound its two control pipe ends and published their numbers in the environment.
+    const control = JSON.parse(controlFds || "{}");
+    if (!Number.isInteger(control.input) || !Number.isInteger(control.output) || control.input < 3 || control.output < 3) throw new Error("Invalid worker control descriptors");
+    parentChannel = internal.require("worker_channel").open(control.input, control.output);
     const initial = codec.decode(config.graph);
     if (!Array.isArray(initial) || initial.length !== 3 || !(initial[2] instanceof MessagePort) || !Array.isArray(initial[1])) throw new Error("Invalid worker initial data");
     exports.workerData = initial[0]; parentPort = initial[2]; exports.parentPort = parentPort;
@@ -735,6 +740,12 @@
   internal.addIoWaiter({
     get ref() { return Boolean(parentChannel && (parentChannel.pending || parentPort?.hasRef()) || Array.from(children.values()).some(child => child.ref)); },
     step() { return pump() ? "progress" : false; },
+    // Every open control channel: the idle loop wakes for a frame from any of them.
+    subscriptions() {
+      const list = parentChannel ? [parentChannel.subscriptions()] : [];
+      for (const child of children.values()) list.push(child.watch());
+      return internal.concatBytes(list);
+    },
     fail(error) { if (parentChannel) internal.workerError?.(error); },
   });
   return exports;

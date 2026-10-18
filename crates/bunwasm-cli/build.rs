@@ -17,13 +17,22 @@ fn main() {
     println!("cargo:rustc-link-arg-bin=bun=--export=bun_wasm_host_slots");
     // Host-engine build: the exports web/src/engine-host.js calls.
     if std::env::var_os("CARGO_FEATURE_ENGINE_HOST").is_some() {
-        for name in ["bunwasm_ready", "bunwasm_alloc", "bunwasm_call", "bunwasm_describe", "bunwasm_result_ptr", "bunwasm_result_len"] {
+        for name in [
+            "bunwasm_ready",
+            "bunwasm_alloc",
+            "bunwasm_call",
+            "bunwasm_describe",
+            "bunwasm_result_ptr",
+            "bunwasm_result_len",
+        ] {
             println!("cargo:rustc-link-arg-bin=bun=--export={name}");
         }
     }
     // BoringSSL and JavaScriptCore share wasi-sdk's libc with Rust.
     {
         let sdk = std::env::var("WASI_SDK_PATH").expect("WASI_SDK_PATH (source env.sh)");
-        println!("cargo:rustc-link-arg-bin=bun={sdk}/share/wasi-sysroot/lib/wasm32-wasip1/crt1-command.o");
+        println!(
+            "cargo:rustc-link-arg-bin=bun={sdk}/share/wasi-sysroot/lib/wasm32-wasip1/crt1-command.o"
+        );
     }
 }

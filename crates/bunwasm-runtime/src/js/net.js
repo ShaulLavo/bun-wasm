@@ -11,7 +11,6 @@
   const caps = native.hostCaps;
   const { Request, Response, Headers, ReadableStream, DOMException } = internal.web;
 
-  const ERROR = -1;
   const AGAIN = -2;
 
   // --- I/O core -------------------------------------------------------------
@@ -33,6 +32,20 @@
     let n = 0;
     for (const w of waiters) if (w.ref) n++;
     return n;
+  };
+
+  // Sleeps in procPoll when every referenced waiter names what it waits on (runtime_proc
+  // descriptors and children); returns false when the caller should use the host poll instead.
+  internal.ioWait = function ioWait(timeout) {
+    const watched = [];
+    for (const waiter of waiters) {
+      if (!waiter.ref) continue;
+      const subscriptions = waiter.subscriptions && waiter.subscriptions();
+      if (!subscriptions || !subscriptions.length) return false;
+      watched.push(subscriptions);
+    }
+    if (!watched.length) return false;
+    return typeof native.procPoll(internal.concatBytes(watched), timeout) !== "number";
   };
 
   // Run each waiter once; returns whether anything made progress.
@@ -298,11 +311,8 @@
         if (chunk === AGAIN) return progressed ? "progress" : false;
         if (typeof chunk === "number") {
           this.reading = false;
-          if (chunk === 0) {
-            if (this.onEnd) this.onEnd();
-          } else {
-            this.fail(hostError(this.handle, "connection error"));
-          }
+          if (chunk === 0) this.onEnd?.();
+          else this.fail(hostError(this.handle, "connection error"));
           return true;
         }
         progressed = true;

@@ -45,7 +45,8 @@ def invoke(opts, wasm, scratch, file):
     if opts.engine == "browser":
         command = ["node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm)] + flags + ["--"] + script
     else:
-        command = ["wasmtime", "run"] + flags + [str(wasm)] + script
+        launcher = os.environ.get("BUN_WASM_LAUNCHER", str(Path(os.environ.get("CARGO_TARGET_DIR", "/work/tmp/bun-wasm-target")) / "release/bun-wasm"))
+        command = [launcher, "--wasm", str(wasm)] + flags + ["--"] + script
     started = time.monotonic()
     record = run(command, scratch)
     record.update({"file": path, "source_sha256": hashlib.sha256((scratch / path).read_bytes()).hexdigest(), "seconds": time.monotonic() - started})

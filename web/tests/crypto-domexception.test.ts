@@ -8,10 +8,10 @@ import { webcrypto } from "node:crypto";
 test("host crypto errors retain the DOMException brand", async () => {
   const source = (name: string) => readFileSync(new URL(`../../crates/bunwasm-runtime/src/js/${name}`, import.meta.url), "utf8");
   const native = { engine: "host", DOMException, timeOrigin: () => 0, platformInfo: { version: "test", arch: "wasm" } };
+  // oxlint-disable-next-line no-eval -- execute the actual classic-script polyfill factory
   const streams = (0, eval)(source("streams.js"));
   const root = process.env.BUN_WASM_TEST_TMP ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
   const scratch = mkdtempSync(join(root, "bun-wasm-crypto-brand-"));
-  let compression;
   try {
     const compile = (name: string) => {
       const output = join(scratch, `${name}.js`);
@@ -20,9 +20,10 @@ test("host crypto errors retain the DOMException brand", async () => {
         fileURLToPath(new URL(`../../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url)), output,
       ]);
       expect(compiled.exitCode).toBe(0);
+      // oxlint-disable-next-line no-eval -- execute the actual classic-script polyfill factory
       return (0, eval)(readFileSync(output, "utf8"));
     };
-    compression = compile("compression_streams")({ native });
+    const compression = compile("compression_streams")({ native });
     const webBrand = compile("web_brand")();
     const bodyStreams = compile("body_streams")();
     const modules = new Map<string, () => unknown>([
@@ -47,6 +48,7 @@ test("host crypto errors retain the DOMException brand", async () => {
       },
       native,
     };
+    // oxlint-disable-next-line no-eval -- execute the actual classic-script polyfill factory
     (0, eval)(source("web.js"))(internal);
     let error: unknown;
     try {

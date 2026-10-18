@@ -1,5 +1,6 @@
+import { browserType } from "./browser-type.ts";
 import { firstVisit } from "./first-visit.mjs";
-import { playwright, ready, session } from "./playground.mjs";
+import { ready, session } from "./playground.mjs";
 import { checkWebWorkers } from "./browser-workers.ts";
 
 const s = session("bun-wasm-global-web-workers-");
@@ -20,7 +21,7 @@ async function checkEngine(browser: Browser, url: string, engine: string, label:
 
 async function checkBrowser(browserName: string, url: string) {
   if (browserName !== "chromium" && browserName !== "webkit") throw new Error(`Unknown browser ${browserName}`);
-  const browser = await s.launch(playwright[browserName]);
+  const browser = await s.launch(browserType(browserName));
   try {
     for (const engine of ["quickjs", "jsc", "browser"]) {
       const label = `${browserName} ${engine}`;

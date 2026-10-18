@@ -933,7 +933,6 @@
     if (extracted.type && !headers.has("content-type")) headers.set("content-type", extracted.type);
   }
 
-  const STATUS_TEXT = { 200: "OK", 201: "Created", 204: "No Content", 301: "Moved Permanently", 302: "Found", 304: "Not Modified", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 500: "Internal Server Error" };
 
   class Response {
     #status;

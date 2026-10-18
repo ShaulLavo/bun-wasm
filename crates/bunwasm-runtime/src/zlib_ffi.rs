@@ -59,7 +59,12 @@ unsafe extern "C" {
     pub fn deflateReset(strm: *mut z_stream) -> c_int;
     pub fn deflateParams(strm: *mut z_stream, level: c_int, strategy: c_int) -> c_int;
     pub fn deflateSetDictionary(strm: *mut z_stream, dictionary: *const u8, length: uInt) -> c_int;
-    pub fn inflateInit2_(strm: *mut z_stream, window_bits: c_int, version: *const c_char, stream_size: c_int) -> c_int;
+    pub fn inflateInit2_(
+        strm: *mut z_stream,
+        window_bits: c_int,
+        version: *const c_char,
+        stream_size: c_int,
+    ) -> c_int;
     pub fn inflate(strm: *mut z_stream, flush: c_int) -> c_int;
     pub fn inflateEnd(strm: *mut z_stream) -> c_int;
     pub fn inflateReset(strm: *mut z_stream) -> c_int;

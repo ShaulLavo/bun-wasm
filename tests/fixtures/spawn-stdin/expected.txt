@@ -1,0 +1,3 @@
+invalid stdin rejected before launch
+synchronous stdin EPIPE preserves output and exit
+Node stdin destroy delivers EOF

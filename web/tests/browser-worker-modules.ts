@@ -1,7 +1,8 @@
+import { browserType } from "./browser-type.ts";
 // cd web && bun run build && node tests/browser-worker-modules.ts [chromium|webkit]
 import assert from "node:assert/strict";
 import type { Browser, BrowserContext } from "playwright";
-import { playwright, session, ready, writeFile, run } from "./playground.mjs";
+import { session, ready, writeFile, run } from "./playground.mjs";
 import { workerReviewCases } from "../../tests/fixtures/worker-review/cases.ts";
 
 const atomic = workerReviewCases.find(test => test.name === "atomic-transfer");
@@ -31,8 +32,9 @@ function uncontrolledChildren() {
 try {
   const url = process.env.BUN_WASM_TEST_URL ?? await s.serve();
   for (const name of process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "webkit"]) {
+    const checkWorkerModules = async () => {
     assert.ok(name === "chromium" || name === "webkit", `unsupported browser: ${name}`);
-    const browser: Browser = await s.launch(playwright[name]);
+    const browser: Browser = await s.launch(browserType(name));
     const context = await browser.newContext();
     const moduleErrors: { url: string; status: number; fromServiceWorker: boolean }[] = [];
     const evalRequests: string[] = [];
@@ -73,6 +75,9 @@ try {
     if (evalRequests.length) failures.push(`${name}: ${evalRequests.length} eval modules depended on HTTP`);
     console.log(`${name}: ${20 - failures.filter(failure => failure.startsWith(`${name} #`)).length}/20 atomic-transfer runs, ${moduleErrors.length} module HTTP errors, ${evalRequests.length} eval HTTP requests`);
     await browser.close();
+
+    };
+    await checkWorkerModules();
   }
   assert.deepEqual(failures, []);
 } finally { clearTimeout(deadline); await s.cleanup(); }

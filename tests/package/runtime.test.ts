@@ -1,11 +1,14 @@
 import { expect, test } from "bun:test";
-import { createRuntime, type RuntimeOptions } from "waffle";
+import { createRuntime, type Runtime, type RuntimeOptions } from "waffle";
 import { MemoryBackend } from "waffle/fs/backend";
 import { FilesystemService } from "waffle/fs/service";
 import type { FilesystemConnection } from "waffle/fs/protocol";
 import type { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessSupervisor } from "waffle/proc/supervisor";
-import { installBunAdapters, BunWasmProcessUnavailableError, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
+import { installBunAdapters as installReal, type BunAdapterOptions, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
+const workerUrl = "https://example.test/worker.js";
+const installBunAdapters = (runtime: Runtime, options: Omit<BunAdapterOptions, "workerUrl"> & { workerUrl?: string | URL } = {}) => installReal(runtime, { workerUrl, ...options });
+
 
 // Keep Runtime, filesystem transport/backend, executable admission and process supervisor real.
 // Only the browser filesystem worker is hosted in-process; no persistent store is created.
@@ -43,30 +46,32 @@ async function withRuntime(run: (runtime: ReturnType<typeof createRuntime>, regi
   }
 }
 
-test("fresh pinned Runtime installs without options and spawning /bin/bun reaches the typed boundary", async () => {
+test("fresh Runtime installs canonical files and executes through the generic launcher", async () => {
   await withRuntime(async (runtime, getRegistry) => {
-    const installation = await installBunAdapters(runtime);
+    const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    const installation = await installBunAdapters(runtime, { module });
     let supervisor: ProcessSupervisor | undefined;
     try {
       expect(await runtime.filesystem.readFile("/bin/bun")).toBeInstanceOf(Uint8Array);
       await runtime.processes();
       const registry = getRegistry();
-      const resolveError = await registry.resolve("/bin/bun").catch(error => error);
-      expect(resolveError).toBeInstanceOf(BunWasmProcessUnavailableError);
-      let failure: unknown;
-      supervisor = new ProcessSupervisor({ registry,
-        launch: () => { throw new Error("module loading must reject before execution"); },
-        startFailed: (_pid, error) => { failure = error; },
-      });
+      expect(await registry.resolve("/bin/bun")).toMatchObject({ module, adapter: "bun:browser" });
+      let launched = 0;
+      supervisor = new ProcessSupervisor({ registry, launch(context) {
+        launched++;
+        expect(context.module).toBe(module);
+        expect(context.request.executable).toBe("/bin/bun");
+        return { terminate() {} };
+      } });
       const root = supervisor.createRoot();
       const pid = supervisor.spawn(root, { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/", fds: [], job: 0 });
       await supervisor.start(pid);
-      expect(failure).toBeInstanceOf(BunWasmProcessUnavailableError);
-      expect(failure).toMatchObject({ code: "BUN_WASM_PROCESS_UNAVAILABLE" });
-      expect(supervisor.get(pid)?.result?.kind).toBe("start-failed");
+      expect(launched).toBe(1);
+      supervisor.exit(pid, 23);
+      expect(supervisor.wait(root, pid)).toEqual({ kind: "exited", code: 23, status: 23 });
       installation.dispose();
       expect(await runtime.filesystem.readFile("/bin/bun")).toBeInstanceOf(Uint8Array);
-      (await installBunAdapters(runtime)).dispose();
+      (await installBunAdapters(runtime, { module })).dispose();
     } finally { supervisor?.dispose(); installation.dispose(); }
   });
 });

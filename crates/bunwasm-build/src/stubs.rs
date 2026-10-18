@@ -15,8 +15,6 @@ use bun_bundler::bundle_v2::BundleV2;
 use bun_bundler::bytecode_order::{CodeNamesRef, LinkedPayload};
 use bun_bundler::options_impl::Format;
 
-type Error = bun_bundler::Error;
-
 #[cold]
 fn missing(what: &str) -> ! {
     panic!("{what} is not available in bun-wasm (needs JavaScriptCore)")
@@ -65,7 +63,9 @@ fn __bun_dispatch__JsEventLoop__Jsc__auto_tick(_owner: *mut ()) {
     missing(JS_LOOP)
 }
 #[unsafe(no_mangle)]
-fn __bun_dispatch__JsEventLoop__Jsc__js_poster(_owner: *mut ()) -> bun_event_loop::any_event_loop::JsPoster {
+fn __bun_dispatch__JsEventLoop__Jsc__js_poster(
+    _owner: *mut (),
+) -> bun_event_loop::any_event_loop::JsPoster {
     missing(JS_LOOP)
 }
 
@@ -181,7 +181,10 @@ fn __bun_jsc_bytecode_link_encoder_add_internal_module_from_source(
     missing(BYTECODE)
 }
 #[unsafe(no_mangle)]
-fn __bun_jsc_bytecode_link_encoder_finish(_encoder: Opaque, _module_count: usize) -> Option<LinkedPayload> {
+fn __bun_jsc_bytecode_link_encoder_finish(
+    _encoder: Opaque,
+    _module_count: usize,
+) -> Option<LinkedPayload> {
     missing(BYTECODE)
 }
 

@@ -1,16 +1,10 @@
 import type { Runtime } from "waffle";
-import type { LoadBunWasmOptions } from "./assets.js";
+import { loadBunWasm, type LoadBunWasmOptions } from "./assets.js";
 
-export type Engine = "quickjs" | "jsc" | "browser";
-
-/** The generic Waffle process bridge, not the legacy controller path, is required. */
-export class BunWasmProcessUnavailableError extends Error {
-  readonly code = "BUN_WASM_PROCESS_UNAVAILABLE";
-  constructor() {
-    super("bun-wasm process spawning requires the generic Waffle process bridge (step 7b)");
-    this.name = "BunWasmProcessUnavailableError";
-  }
-}
+import { bunLauncher } from "../web/src/bun-launcher.js";
+import { ENGINE_BIN } from "./executable-paths.js";
+export type { Engine } from "../web/src/bun-executor.js";
+import type { Engine } from "../web/src/bun-executor.js";
 
 export class BunWasmExecutableConflictError extends Error {
   readonly code = "BUN_WASM_EXECUTABLE_CONFLICT";
@@ -21,11 +15,11 @@ export class BunWasmExecutableConflictError extends Error {
 }
 
 export interface BunAdapterOptions extends LoadBunWasmOptions {
-  /** Bundler-produced module worker URL, reserved for the future process bridge. */
-  readonly workerUrl?: string | URL;
+  /** Bundler-produced module worker URL running bun-wasm/worker. */
+  readonly workerUrl: string | URL;
   /** Engine for the registered executable; defaults to browser. */
   readonly engine?: Engine;
-  /** Absolute canonical executable paths; defaults to /bin/bun. */
+  /** Absolute canonical executable paths; defaults to bun and node in the selected engine bin directory. */
   readonly executables?: readonly string[];
 }
 
@@ -41,15 +35,15 @@ const matchesMarker = (bytes: Uint8Array | undefined): boolean => bytes !== unde
   && bytes.length === executableMarker.length && bytes.every((byte, index) => byte === executableMarker[index]);
 
 /** Register Bun on a caller-owned Runtime, provisioning executable files without reserving a root. */
-export async function installBunAdapters(runtime: Runtime, options: BunAdapterOptions = {}): Promise<BunAdapterInstallation> {
+export async function installBunAdapters(runtime: Runtime, options: BunAdapterOptions): Promise<BunAdapterInstallation> {
   if (installations.has(runtime) || installing.has(runtime)) throw new Error("bun-wasm adapters are already installed on this Runtime");
-  if (options.workerUrl !== undefined && !options.workerUrl.toString()) throw new TypeError("workerUrl must not be empty");
+  if (!options?.workerUrl?.toString()) throw new TypeError("workerUrl is required");
   const engine = options.engine ?? "browser";
   if (!["quickjs", "jsc", "browser"].includes(engine)) throw new TypeError(`Unknown Bun engine: ${engine}`);
   if (engine !== "browser" && !options.module && !options.asset) {
     throw new TypeError(`${engine} requires its matching guest module or asset descriptor`);
   }
-  const names = Array.from(options.executables ?? ["/bin/bun"]);
+  const names = Array.from(options.executables ?? [`${ENGINE_BIN[engine]}/bun`, `${ENGINE_BIN[engine]}/node`]);
   for (const name of names) {
     if (!name.startsWith("/") || name === "/" || name.includes("\0")
       || name.slice(1).split("/").some(part => !part || part === "." || part === "..")) {
@@ -58,52 +52,20 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
   }
   const unregisters: Array<() => void> = [];
   const created: string[] = [];
-  // Packaging boundary: the generic process bridge is not implemented here yet.
-  // Keep this unconditional typed rejection until that bridge replaces these registrations.
-  const fail = async (): Promise<never> => { throw new BunWasmProcessUnavailableError(); };
   installing.add(runtime);
   try {
-    for (const name of ["quickjs", "jsc", "browser"] as const) unregisters.push(runtime.registerAdapter(`bun:${name}`, fail));
+    for (const name of ["quickjs", "jsc", "browser"] as const) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString() })));
     for (const name of names) unregisters.push(runtime.registerProgram(name, {
       adapter: `bun:${engine}`, cooperative: true,
-      // Program loading precedes launch in Waffle: refuse before any guest download.
-      module: fail,
+      module: () => loadBunWasm(options),
     }));
-    // Check every path before creating any files, so a conflict cannot leave a partial install.
-    for (const name of names) {
-      const entry = await runtime.filesystem.lookup(name);
-      if (entry && (entry.kind !== "file" || !matchesMarker(await runtime.filesystem.readFile(name)))) {
-        throw new BunWasmExecutableConflictError(name);
-      }
-    }
-    for (const name of names) {
-      const existing = await runtime.filesystem.lookup(name);
-      if (existing) {
-        if (existing.kind !== "file" || !matchesMarker(await runtime.filesystem.readFile(name))) throw new BunWasmExecutableConflictError(name);
-        continue;
-      }
-      await runtime.filesystem.mkdirp(name.slice(0, name.lastIndexOf("/")) || "/");
-      // Recheck after creating parents, rather than overwriting an entry created meanwhile.
-      if (await runtime.filesystem.lookup(name)) {
-        if (!matchesMarker(await runtime.filesystem.readFile(name))) throw new BunWasmExecutableConflictError(name);
-        continue;
-      }
-      await runtime.filesystem.writeFile(name, executableMarker);
-      created.push(name);
-    }
+    // Preflight every path before writing; provisionMarker rechecks after parent creation.
+    for (const name of names) await checkMarker(runtime.filesystem, name);
+    for (const name of names) await provisionMarker(runtime.filesystem, name, created);
   } catch (error) {
     for (const unregister of unregisters.reverse()) unregister();
-    // Waffle also queues mutation errors for drain; consume the already-caught failure
-    // before rollback reads, or their drain would fail without checking the marker.
-    try { await runtime.filesystem.drain(); } catch {}
-    for (const name of created.reverse()) {
-      try {
-        if (matchesMarker(await runtime.filesystem.readFile(name))) await runtime.filesystem.remove(name);
-      } catch {
-        // Clear a failed rollback mutation too, so cleanup of other markers can continue.
-        try { await runtime.filesystem.drain(); } catch {}
-      }
-    }
+    await clearMutationFailure(runtime.filesystem);
+    for (const name of created.reverse()) await rollbackMarker(runtime.filesystem, name);
     throw error;
   } finally { installing.delete(runtime); }
   let active = true;
@@ -117,4 +79,32 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
   };
   installations.set(runtime, installation);
   return installation;
+}
+
+async function checkMarker(filesystem: Runtime["filesystem"], path: string): Promise<boolean> {
+  const entry = await filesystem.lookup(path);
+  if (!entry) return false;
+  if (entry.kind !== "file" || !matchesMarker(await filesystem.readFile(path))) throw new BunWasmExecutableConflictError(path);
+  return true;
+}
+
+async function provisionMarker(filesystem: Runtime["filesystem"], path: string, created: string[]): Promise<void> {
+  if (await checkMarker(filesystem, path)) return;
+  await filesystem.mkdirp(path.slice(0, path.lastIndexOf("/")) || "/");
+  if (await checkMarker(filesystem, path)) return;
+  await filesystem.writeFile(path, executableMarker);
+  created.push(path);
+}
+
+async function clearMutationFailure(filesystem: Runtime["filesystem"]): Promise<void> {
+  // Waffle queues mutation failures for drain, including failures already caught here.
+  try { await filesystem.drain(); } catch {}
+}
+
+async function rollbackMarker(filesystem: Runtime["filesystem"], path: string): Promise<void> {
+  try {
+    if (matchesMarker(await filesystem.readFile(path))) await filesystem.remove(path);
+  } catch {
+    await clearMutationFailure(filesystem);
+  }
 }

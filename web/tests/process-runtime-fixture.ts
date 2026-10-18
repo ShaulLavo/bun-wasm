@@ -1,4 +1,5 @@
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
+import { MemFS } from "waffle/fs/memory";
 import { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessIdentityAllocator } from "waffle/proc/identity";
 import { ProcessTable } from "waffle/proc/table";
@@ -9,11 +10,25 @@ import type { Runtime, GuestLauncher, ProcessService, RuntimeFilesystem, Runtime
  * Production composition is covered by the runtime facade tests; these inject explicit owners
  * so legacy transport regressions can independently control filesystem and activation barriers.
  */
-export function processRuntimeFixture(filesystem: RuntimeFilesystem, options: {
+export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, options: {
   activate?: () => Promise<typeof import("waffle/proc")>;
 } = {}): Runtime {
+  const unused = (): never => { throw new Error("Unexpected filesystem operation in process-only fixture"); };
+  let filesystem: RuntimeFilesystem = {
+    state: { status: "ready" }, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
+    revoke: unused, reap: unused, quiesce: unused, drain: unused, flush: unused,
+    lookup: unused, readFile: unused, listFiles: unused,
+    mkdirp: unused, writeFile: unused, remove: unused, move: unused, ...overrides,
+  };
   const identities = new ProcessIdentityAllocator();
-  const registry = new ExecutableRegistry();
+  const files = new MemFS();
+  filesystem = Object.assign(Object.create(filesystem), {
+    async lookup(path: string) { const node = files.lookup(path); return node && { path, kind: node.kind }; },
+    async writeFile(path: string, bytes: Uint8Array) { files.writeFile(path, bytes); },
+    async mkdirp(path: string) { files.mkdirp(path); },
+    async resolvePath(path: string) { const node = files.lookup(path); return node && { path, kind: node.kind }; },
+  });
+  const registry = new ExecutableRegistry(path => filesystem.resolvePath(path));
   const table = new ProcessTable(identities);
   const adapters = new Map<string, GuestLauncher>();
   let broker: BrowserProcessBroker | undefined;
@@ -33,6 +48,7 @@ export function processRuntimeFixture(filesystem: RuntimeFilesystem, options: {
     registerAdapter(name, launch) {
       if (adapters.has(name)) throw new Error(`Adapter already registered: ${name}`);
       adapters.set(name, launch);
+      return () => { if (adapters.get(name) === launch) adapters.delete(name); };
     },
     registerProgram(name, program) {
       if (registry.has(name)) throw new Error(`Program already registered: ${name}`);
@@ -41,6 +57,12 @@ export function processRuntimeFixture(filesystem: RuntimeFilesystem, options: {
         const source = typeof program.source === "function" ? await program.source() : program.source!;
         return compileInterruptible(source);
       } : program.cooperative === true ? program.module : async () => { throw new TypeError("Third-party programs require source bytes"); } });
+      let registered = true;
+      return () => {
+        if (!registered) return;
+        registered = false;
+        registry.unregister(name);
+      };
     },
     processes() {
       if (disposed) return Promise.reject(new Error("Runtime is disposed"));

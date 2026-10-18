@@ -1,6 +1,7 @@
+import { browserType } from "./browser-type.ts";
 import assert from "node:assert/strict";
 import type { Page } from "playwright";
-import { playwright, ready, run, session, writeFile } from "./playground.mjs";
+import { ready, run, session, writeFile } from "./playground.mjs";
 import { stopShell } from "./stop-shell.ts";
 
 const s = session("bun-wasm-shell-stop-");
@@ -76,7 +77,7 @@ async function checkRootSignals(page: Page, base: string, browser: string, engin
 try {
   const base = await s.serve();
   for (const name of process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "webkit"]) {
-    const browser = await s.launch(playwright[name]);
+    const browser = await s.launch(browserType(name));
     const page = await browser.newPage();
     for (const engine of ["quickjs", "jsc", "browser"]) {
       await check(page, base, name, engine);

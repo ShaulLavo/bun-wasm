@@ -30,6 +30,6 @@ function count(results: Map<string, Result>, files: readonly string[]) {
 }
 console.log("| Cause | Engine | Before | After |\n| --- | --- | --- | --- |");
 for (const engine of ["quickjs", "jsc", "browser"]) {
-  const old = records(join(before, `before-${engine}.json`)), current = records(join(after, `after-${engine}.json`));
+  const old = records(join(before, `before-${engine}.json`)), current = records(join(after ?? before, `after-${engine}.json`));
   for (const [name, files] of Object.entries(groups)) console.log(`| ${name} | ${engine} | ${count(old, files)} | ${count(current, files)} |`);
 }

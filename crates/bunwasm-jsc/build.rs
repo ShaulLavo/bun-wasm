@@ -23,15 +23,30 @@ fn main() {
         // Host builds (cargo check, tests of pure-Rust parts) link nothing.
         return;
     }
-    let jsc = PathBuf::from(env::var("JSC_BUILD_DIR").unwrap_or_else(|_| "/work/tmp/bun-wasm-jsc".into()));
+    let jsc = PathBuf::from(
+        env::var("JSC_BUILD_DIR").unwrap_or_else(|_| "/work/tmp/bun-wasm-jsc".into()),
+    );
     let sdk = PathBuf::from(env::var("WASI_SDK_PATH").expect("WASI_SDK_PATH (source env.sh)"));
     let sysroot = sdk.join("share/wasi-sysroot");
     let obj = jsc.join("build/jsc");
-    for lib in ["lib/libJavaScriptCore.a", "lib/libWTF.a", "lib/libbmalloc.a"] {
-        assert!(obj.join(lib).exists(), "{} missing: run scripts/build-jsc.sh", obj.join(lib).display());
+    for lib in [
+        "lib/libJavaScriptCore.a",
+        "lib/libWTF.a",
+        "lib/libbmalloc.a",
+    ] {
+        assert!(
+            obj.join(lib).exists(),
+            "{} missing: run scripts/build-jsc.sh",
+            obj.join(lib).display()
+        );
         println!("cargo:rerun-if-changed={}", obj.join(lib).display());
     }
-    for lib in ["icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a"] {
+    for lib in [
+        "icu/prefix/lib/libicuuc.a",
+        "icu/prefix/lib/libicui18n.a",
+        "icu/prefix/lib/libicudata.a",
+        "shim/libwasi-compat.a",
+    ] {
         println!("cargo:rerun-if-changed={}", jsc.join(lib).display());
     }
 
@@ -40,12 +55,33 @@ fn main() {
 
     let libdir = sysroot.join("lib/wasm32-wasip1");
     println!("cargo:rustc-link-search=native={}", out.display());
-    println!("cargo:rustc-link-search=native={}", obj.join("lib").display());
-    println!("cargo:rustc-link-search=native={}", jsc.join("icu/prefix/lib").display());
-    println!("cargo:rustc-link-search=native={}", jsc.join("shim").display());
-    println!("cargo:rustc-link-search=native={}", libdir.join("noeh").display());
+    println!(
+        "cargo:rustc-link-search=native={}",
+        obj.join("lib").display()
+    );
+    println!(
+        "cargo:rustc-link-search=native={}",
+        jsc.join("icu/prefix/lib").display()
+    );
+    println!(
+        "cargo:rustc-link-search=native={}",
+        jsc.join("shim").display()
+    );
+    println!(
+        "cargo:rustc-link-search=native={}",
+        libdir.join("noeh").display()
+    );
     println!("cargo:rustc-link-search=native={}", libdir.display());
-    for lib in ["bunjsc_helpers", "JavaScriptCore", "WTF", "bmalloc", "icui18n", "icuuc", "icudata", "wasi-compat"] {
+    for lib in [
+        "bunjsc_helpers",
+        "JavaScriptCore",
+        "WTF",
+        "bmalloc",
+        "icui18n",
+        "icuuc",
+        "icudata",
+        "wasi-compat",
+    ] {
         println!("cargo:rustc-link-lib=static={lib}");
     }
     // libc++ (no exceptions), and the wasi-libc emulation library JSC's CPU-time code uses.
@@ -75,7 +111,9 @@ fn compile_helpers(sdk: &Path, obj: &Path, manifest: &Path, out: &Path) {
             "-o" | "-c" | "-MF" | "-MT" => {
                 words.next();
             }
-            "-include" | "-isystem" | "-iquote" | "-I" => flags.extend([w.to_owned(), words.next().unwrap().to_owned()]),
+            "-include" | "-isystem" | "-iquote" | "-I" => {
+                flags.extend([w.to_owned(), words.next().unwrap().to_owned()])
+            }
             "-MD" => {}
             w if w.starts_with('-') => flags.push(w.replace("\\\"", "\"")),
             _ => {}
@@ -96,7 +134,12 @@ fn compile_helpers(sdk: &Path, obj: &Path, manifest: &Path, out: &Path) {
     assert!(status.success(), "compiling helpers.cpp failed");
     let lib = out.join("libbunjsc_helpers.a");
     let _ = fs::remove_file(&lib);
-    let status = Command::new(sdk.join("bin/llvm-ar")).arg("rcs").arg(&lib).arg(&o).status().unwrap();
+    let status = Command::new(sdk.join("bin/llvm-ar"))
+        .arg("rcs")
+        .arg(&lib)
+        .arg(&o)
+        .status()
+        .unwrap();
     assert!(status.success());
 }
 

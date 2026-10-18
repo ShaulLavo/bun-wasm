@@ -60,8 +60,17 @@ runButton.onclick = () => {
   if (startup === "failed") { location.reload(); return; }
   if (startup === "ready") void runCurrent().catch(reportError);
 };
+runButton.disabled = true;
+newFileButton.disabled = true;
+engineSelect.disabled = true;
+fileSelect.disabled = true;
 const runtime = createRuntime({ filesystem: { storage, name: "bun-wasm-workspace" } });
 const fs = runtime.filesystem;
+fs.onStateChange = state => {
+  if (state.status === "waiting") {
+    setStatus("Waiting for this workspace to close in another tab. It will open here automatically.");
+  }
+};
 fs.onOwnershipLost = () => {
   startup = "failed";
   setStatus("", "error");
@@ -432,7 +441,13 @@ shell.start([
 ]);
 
 Object.assign(globalThis, { playground: { fs, shell, term, editor, previews } });
-startup = "ready";
+if (!fs.ownershipLost) {
+  startup = "ready";
+  runButton.disabled = false;
+  newFileButton.disabled = false;
+  engineSelect.disabled = false;
+  fileSelect.disabled = false;
+}
 pageSetUp();
 }
 
@@ -446,6 +461,7 @@ void main().catch(error => {
   const run = document.querySelector<HTMLButtonElement>("#run");
   if (run) {
     run.textContent = "Reload";
+    run.disabled = false;
     run.title = "Retry playground startup";
     run.onclick = () => location.reload();
   }

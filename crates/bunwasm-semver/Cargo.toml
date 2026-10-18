@@ -10,3 +10,7 @@ bun_jsc = { package = "bunwasm-bun-jsc", path = "../bunwasm-bun-jsc" }
 bun_core = { path = "../../vendor/bun/src/bun_core" }
 bun_semver = { path = "../../vendor/bun/src/semver" }
 bstr = "1"
+
+# Used by the pinned SemverObject.rs included with #[path].
+[package.metadata.cargo-machete]
+ignored = ["bun_core", "bun_semver", "bstr"]

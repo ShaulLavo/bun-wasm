@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+// oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
 const adapter = eval(readFileSync("runtime.js", "utf8"));
+// oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
 const bunBuiltinGlobals = eval(readFileSync("globals.js", "utf8"))();
 const catalog = JSON.parse(readFileSync("catalog.json", "utf8"));
 const testNames = ["retry", "cycle", "intrinsics", "unknown-intrinsic", "stub"];
@@ -9,6 +11,7 @@ const base = catalog.modules.length;
 const names = catalog.modules.map(module => module.name).concat(testNames.map(name => `internal:test-${name}`));
 const freelist = names.indexOf("internal:freelist");
 const counts = new Map();
+// oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
 const factories = new Map([[freelist, eval(readFileSync(`${freelist}.js`, "utf8"))]]);
 const bridged = {};
 const native = {

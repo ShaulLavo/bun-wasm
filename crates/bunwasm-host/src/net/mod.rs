@@ -30,7 +30,10 @@ pub struct Notify {
 
 impl Notify {
     fn new() -> Arc<Self> {
-        Arc::new(Notify { generation: Mutex::new(0), changed: Condvar::new() })
+        Arc::new(Notify {
+            generation: Mutex::new(0),
+            changed: Condvar::new(),
+        })
     }
 
     /// Called by background threads after they changed a handle's state.
@@ -123,7 +126,11 @@ impl Net {
 
     fn require_handle(&self) -> Result<(), ErrorInfo> {
         if self.next_handle >= crate::process::FIRST_HANDLE {
-            return Err(ErrorInfo::new("Error", "bun-wasm network handle space exhausted", Some("EAGAIN")));
+            return Err(ErrorInfo::new(
+                "Error",
+                "bun-wasm network handle space exhausted",
+                Some("EAGAIN"),
+            ));
         }
         Ok(())
     }
@@ -143,7 +150,8 @@ impl Net {
     }
 
     pub fn poll(&mut self, timeout_ms: i32) -> i32 {
-        let deadline = (timeout_ms >= 0).then(|| Instant::now() + Duration::from_millis(timeout_ms as u64));
+        let deadline =
+            (timeout_ms >= 0).then(|| Instant::now() + Duration::from_millis(timeout_ms as u64));
         let mut generation = self.notify.generation.lock().unwrap();
         while *generation == self.seen {
             match deadline {
@@ -153,7 +161,12 @@ impl Net {
                     if now >= deadline {
                         return 0;
                     }
-                    generation = self.notify.changed.wait_timeout(generation, deadline - now).unwrap().0;
+                    generation = self
+                        .notify
+                        .changed
+                        .wait_timeout(generation, deadline - now)
+                        .unwrap()
+                        .0;
                 }
             }
         }
@@ -162,7 +175,9 @@ impl Net {
     }
 
     pub fn fetch(&mut self, meta: &[u8], body: &[u8]) -> i32 {
-        if let Err(error) = self.require_handle() { return self.fail(error); }
+        if let Err(error) = self.require_handle() {
+            return self.fail(error);
+        }
         match fetch::Fetch::start(&self.clients, meta, body, self.notify.clone()) {
             Ok(request) => self.insert(Handle::Fetch(request)),
             Err(error) => self.fail(error),
@@ -206,7 +221,9 @@ impl Net {
     }
 
     pub fn listen(&mut self, host: &str, port: i32) -> i32 {
-        if let Err(error) = self.require_handle() { return self.fail(error); }
+        if let Err(error) = self.require_handle() {
+            return self.fail(error);
+        }
         match tcp::Listener::bind(host, port, self.notify.clone()) {
             Ok(listener) => self.insert(Handle::Listener(listener)),
             Err(error) => self.fail(error),
@@ -226,7 +243,9 @@ impl Net {
             Some(Handle::Listener(listener)) => listener,
             _ => return BADF,
         };
-        if let Err(error) = self.require_handle() { return self.fail(error); }
+        if let Err(error) = self.require_handle() {
+            return self.fail(error);
+        }
         match listener.accept() {
             Some(conn) => self.insert(Handle::Conn(conn)),
             None => AGAIN,
@@ -235,7 +254,10 @@ impl Net {
 
     pub fn shutdown(&mut self, handle: i32) -> i32 {
         match self.handles.get(&handle) {
-            Some(Handle::Conn(conn)) => { conn.shutdown(); 0 }
+            Some(Handle::Conn(conn)) => {
+                conn.shutdown();
+                0
+            }
             _ => BADF,
         }
     }
@@ -246,14 +268,22 @@ impl Net {
             Some(Handle::Listener(listener)) => Some(listener.local_addr()),
             _ => return Output::Code(BADF),
         };
-        address.map_or(Output::Code(AGAIN), |addr| Output::Bytes(tcp::addr_json(addr)))
+        address.map_or(Output::Code(AGAIN), |addr| {
+            Output::Bytes(tcp::addr_json(addr))
+        })
     }
 
     pub fn connect(&mut self, host: &str, port: i32) -> i32 {
         if !(0..=65535).contains(&port) {
-            return self.fail(ErrorInfo::new("RangeError", format!("Port should be >= 0 and < 65536. Received {port}."), Some("ERR_SOCKET_BAD_PORT")));
+            return self.fail(ErrorInfo::new(
+                "RangeError",
+                format!("Port should be >= 0 and < 65536. Received {port}."),
+                Some("ERR_SOCKET_BAD_PORT"),
+            ));
         }
-        if let Err(error) = self.require_handle() { return self.fail(error); }
+        if let Err(error) = self.require_handle() {
+            return self.fail(error);
+        }
         let conn = tcp::Conn::connect(host.to_string(), port as u16, self.notify.clone());
         self.insert(Handle::Conn(conn))
     }
@@ -267,7 +297,11 @@ impl Net {
             (_, None) => return Output::Code(BADF),
         };
         let error = error.unwrap_or_else(|| {
-            ErrorInfo::new("Error", format!("network operation failed for handle {handle}"), Some("ERR_NETWORK"))
+            ErrorInfo::new(
+                "Error",
+                format!("network operation failed for handle {handle}"),
+                Some("ERR_NETWORK"),
+            )
         });
         Output::Bytes(error.to_json())
     }

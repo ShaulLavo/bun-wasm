@@ -4,13 +4,16 @@
 //! conversions bunwasm-runtime's JSC engine (src/engine_jsc.rs) needs. Values are raw `JSValueRef`s: JSC finds the ones on the
 //! stack by scanning it conservatively, which on wasm only works after `wasm-opt --spill-pointers`
 //! (jsc/finalize.sh). Values kept anywhere else (statics, heap) must be `protect`ed.
+// JSValueRef is the engine value type, not a user-supplied address. All values
+// crossing this adapter belong to the context; C API calls document rooting below.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 pub mod sys;
 
 use core::ffi::c_void;
 use core::ptr;
 
-pub use sys::{JSContextRef, JSObjectRef, JSValueRef};
 use sys::*;
+pub use sys::{JSContextRef, JSObjectRef, JSValueRef};
 
 /// Bun version the runtime reports (vendor/bun/package.json), like bunwasm-runtime.
 pub const BUN_VERSION: &str = env!("BUNWASM_BUN_VERSION");
@@ -95,7 +98,11 @@ impl Js {
     }
 
     fn check<T>(self, exc: JSValueRef, value: T) -> JsResult<T> {
-        if exc.is_null() { Ok(value) } else { Err(Thrown::Value(exc)) }
+        if exc.is_null() {
+            Ok(value)
+        } else {
+            Err(Thrown::Value(exc))
+        }
     }
 
     pub fn eval(self, source: &str, url: &str) -> JsResult<JSValueRef> {
@@ -103,15 +110,24 @@ impl Js {
         let url = JsString::new(url);
         let mut exc = ptr::null();
         // SAFETY: valid context and strings.
-        let v = unsafe { JSEvaluateScript(self.ctx, src.raw(), ptr::null_mut(), url.raw(), 1, &mut exc) };
+        let v = unsafe {
+            JSEvaluateScript(self.ctx, src.raw(), ptr::null_mut(), url.raw(), 1, &mut exc)
+        };
         self.check(exc, v)
     }
 
-    pub fn call(self, f: JSValueRef, this: JSObjectRef, args: &[JSValueRef]) -> JsResult<JSValueRef> {
+    pub fn call(
+        self,
+        f: JSValueRef,
+        this: JSObjectRef,
+        args: &[JSValueRef],
+    ) -> JsResult<JSValueRef> {
         let f = self.to_object(f)?;
         let mut exc = ptr::null();
         // SAFETY: valid context; args outlive the call.
-        let v = unsafe { JSObjectCallAsFunction(self.ctx, f, this, args.len(), args.as_ptr(), &mut exc) };
+        let v = unsafe {
+            JSObjectCallAsFunction(self.ctx, f, this, args.len(), args.as_ptr(), &mut exc)
+        };
         self.check(exc, v)
     }
 
@@ -126,7 +142,16 @@ impl Js {
     pub fn set(self, obj: JSObjectRef, name: &str, value: JSValueRef) {
         let name = JsString::new(name);
         // SAFETY: valid context, object, name and value. Plain objects don't throw on set.
-        unsafe { JSObjectSetProperty(self.ctx, obj, name.raw(), value, kJSPropertyAttributeNone, ptr::null_mut()) }
+        unsafe {
+            JSObjectSetProperty(
+                self.ctx,
+                obj,
+                name.raw(),
+                value,
+                kJSPropertyAttributeNone,
+                ptr::null_mut(),
+            )
+        }
     }
 
     pub fn object(self) -> JSObjectRef {
@@ -207,14 +232,26 @@ impl Js {
         }
         if bytes.is_empty() {
             // SAFETY: valid context; zero-length array.
-            return unsafe { JSObjectMakeTypedArray(self.ctx, kJSTypedArrayTypeUint8Array, 0, ptr::null_mut()) };
+            return unsafe {
+                JSObjectMakeTypedArray(self.ctx, kJSTypedArrayTypeUint8Array, 0, ptr::null_mut())
+            };
         }
         let mut boxed = Box::new(bytes);
         let data = boxed.as_mut_ptr().cast::<c_void>();
         let len = boxed.len();
         let context = Box::into_raw(boxed).cast::<c_void>();
         // SAFETY: data stays valid until JSC calls free_bytes(context).
-        unsafe { JSObjectMakeTypedArrayWithBytesNoCopy(self.ctx, kJSTypedArrayTypeUint8Array, data, len, free_bytes, context, ptr::null_mut()) }
+        unsafe {
+            JSObjectMakeTypedArrayWithBytesNoCopy(
+                self.ctx,
+                kJSTypedArrayTypeUint8Array,
+                data,
+                len,
+                free_bytes,
+                context,
+                ptr::null_mut(),
+            )
+        }
     }
 
     /// The bytes of a typed array, DataView-less ArrayBuffer or nothing.
@@ -227,7 +264,11 @@ impl Js {
             }
             let obj = JSValueToObject(self.ctx, v, ptr::null_mut());
             let (p, len, offset) = if kind == kJSTypedArrayTypeArrayBuffer {
-                (JSObjectGetArrayBufferBytesPtr(self.ctx, obj, ptr::null_mut()), JSObjectGetArrayBufferByteLength(self.ctx, obj, ptr::null_mut()), 0)
+                (
+                    JSObjectGetArrayBufferBytesPtr(self.ctx, obj, ptr::null_mut()),
+                    JSObjectGetArrayBufferByteLength(self.ctx, obj, ptr::null_mut()),
+                    0,
+                )
             } else {
                 (
                     JSObjectGetTypedArrayBytesPtr(self.ctx, obj, ptr::null_mut()),
@@ -289,7 +330,13 @@ impl Js {
 
     pub fn set_unhandled_rejection_callback(self, f: JSObjectRef) {
         // SAFETY: the context was created by JSGlobalContextCreate.
-        unsafe { JSGlobalContextSetUnhandledRejectionCallback(self.ctx as JSGlobalContextRef, f, ptr::null_mut()) }
+        unsafe {
+            JSGlobalContextSetUnhandledRejectionCallback(
+                self.ctx as JSGlobalContextRef,
+                f,
+                ptr::null_mut(),
+            )
+        }
     }
 }
 
@@ -307,7 +354,11 @@ macro_rules! native {
         ) -> $crate::sys::JSValueRef {
             let $js = $crate::Js { ctx };
             // SAFETY: JSC passes argc valid values.
-            let $args: &[$crate::sys::JSValueRef] = if argc == 0 { &[] } else { unsafe { core::slice::from_raw_parts(argv, argc) } };
+            let $args: &[$crate::sys::JSValueRef] = if argc == 0 {
+                &[]
+            } else {
+                unsafe { core::slice::from_raw_parts(argv, argc) }
+            };
             let result: $crate::JsResult<$crate::sys::JSValueRef> = (|| $body)();
             match result {
                 Ok(v) => v,

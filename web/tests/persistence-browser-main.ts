@@ -28,7 +28,7 @@ Object.assign(globalThis, {
   persistenceHarness: {
     state,
     async open(name: string, persistence = true, storage: "indexeddb" | "opfs" = "indexeddb") {
-      fs?.dispose();
+      await fs?.dispose();
       state.ownershipLost = false; state.ownershipMessage = "";
       fs = new SharedFilesystem({ name, persistence, storage });
       fs.onOwnershipLost = () => {
@@ -47,8 +47,9 @@ Object.assign(globalThis, {
       return Promise.all(files.map(async path => ({ path, metadata: await fs!.lookup(path), bytes: Array.from((await fs!.readFile(path))!) })));
     },
     direct,
+    storageState() { return fs?.state.status; },
     async destroy() {
-      fs?.dispose(); fs = undefined;
+      await fs?.dispose(); fs = undefined;
       if (worker) { await direct("close"); worker.terminate(); worker = undefined; }
     },
     async deleteDatabase(name: string, storage: "indexeddb" | "opfs" = "indexeddb") {

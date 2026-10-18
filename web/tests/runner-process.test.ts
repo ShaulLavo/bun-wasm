@@ -1,14 +1,21 @@
+import { TaggedCells, controlLoad } from "waffle/proc/control";
 import type { RootProcessOptions } from "waffle/proc";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { ENGINES, startRun, type Engine } from "../src/runner";
 import { SubprocessBroker } from "../src/subprocess-broker";
+import { ENGINE_BIN } from "../../src/executable-paths.js";
 import type { SharedFilesystem } from "../src/shared-fs";
-import type { RunRequest } from "../src/worker";
-import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
-import { createSignalState, setSignalDisposition, takeSignal } from "waffle/proc/signals";
-import { SubprocessHost, type ChildTransport } from "../src/subprocess";
+import type { RunRequest } from "../src/bun-executor";
+import { claimOutcome, readOutcome } from "waffle/proc/outcome";
+import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
+import { WorkerProcessClient, workerProcessState } from "waffle/proc/worker-client";
+import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity } from "waffle/fs";
+
+/** The shared signal words of the process a request roots. */
+const signalsOf = (request: RunRequest) => workerProcessState(request.runtimeProcess!).signals;
+const pidOf = (request: RunRequest) => workerProcessState(request.runtimeProcess!).pid;
 
 function runConfirmation(run: ReturnType<typeof startRun>) {
   let confirmed = false;
@@ -16,59 +23,7 @@ function runConfirmation(run: ReturnType<typeof startRun>) {
   return { result, confirmed: () => confirmed };
 }
 
-test.each([{ signal: undefined, code: 130 }, { signal: 9 as const, code: 137 }])("non-isolated root commands start without SharedArrayBuffer and stop with $code", async ({ signal, code }) => {
-  const originalWorker = globalThis.Worker;
-  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
-  const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
-  const originalShared = globalThis.SharedArrayBuffer;
-  let sent: RunRequest | undefined;
-  let posted!: () => void;
-  const ready = new Promise<void>(resolve => { posted = resolve; });
-  let terminated = 0;
-  let revoked = 0;
-  const channel = new MessageChannel();
-  let release!: () => void;
-  const section = new Promise<void>(resolve => { release = resolve; });
-  const filesystem = { fork: () => ({ port: channel.port1 }), async quiesce() { revoked++; await section; } } as unknown as SharedFilesystem;
-  const runtime = processRuntimeFixture(filesystem);
-  let run: ReturnType<typeof startRun> | undefined;
-  try {
-    Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
-    Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: false });
-    globalThis.SharedArrayBuffer = undefined as unknown as typeof SharedArrayBuffer;
-    globalThis.Worker = class {
-      postMessage(request: RunRequest) { sent = request; posted(); }
-      terminate() { terminated++; }
-    } as unknown as typeof Worker;
-    const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-    run = startRun({ engine: "browser", module, args: ["-e", "0"], env: {}, runtime, moduleScope: false }, { stdout() {}, stderr() {} });
-    await ready;
-    expect(sent?.interrupt).toBeUndefined();
-    expect(sent?.net).toBeNull();
-    const waiting = runConfirmation(run);
-    run.kill(signal);
-    await Promise.resolve();
-    expect(waiting.confirmed()).toBe(false);
-    expect(terminated).toBe(0);
-    expect(revoked).toBe(1);
-    release();
-    expect(await waiting.result).toEqual({ code });
-    expect(terminated).toBe(1);
-  } finally {
-    release();
-    run?.kill(9);
-    globalThis.SharedArrayBuffer = originalShared;
-    try { await run?.done; await runtime.dispose(); }
-    finally {
-      globalThis.Worker = originalWorker;
-      if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation); else Reflect.deleteProperty(globalThis, "location");
-      if (originalIsolation) Object.defineProperty(globalThis, "crossOriginIsolated", originalIsolation); else Reflect.deleteProperty(globalThis, "crossOriginIsolated");
-      channel.port1.close(); channel.port2.close();
-    }
-  }
-});
-
-function isolatedRoot(isolated = true, engine: Engine = "browser", options: Parameters<typeof processRuntimeFixture>[1] = {}) {
+function isolatedRoot(isolated = true, engine: Engine = "browser", options: Parameters<typeof processRuntimeFixture>[1] = {}, args = ["-e", "0"], prepare?: (runtime: ReturnType<typeof processRuntimeFixture>) => void) {
   const originalWorker = globalThis.Worker;
   const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
@@ -90,11 +45,15 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
   let release!: () => void;
   const quiescence = new Promise<void>(resolve => { release = resolve; });
   class FakeWorker {
+    // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
+    constructor() { worker ??= this; }
+    onerror: ((event: ErrorEvent) => void) | null = null;
     onmessage: ((event: MessageEvent) => void) | null = null;
     terminated = 0;
     postMessage(value: RunRequest) {
-      request ??= value; worker ??= this; requests.set(value.pid!, value); workers.set(value.pid!, this);
-      pending.get(value.pid!)?.(value); posted();
+      // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
+      request ??= value; worker ??= this; const pid = pidOf(value); requests.set(pid, value); workers.set(pid, this);
+      pending.get(pid)?.(value); posted();
     }
     terminate() { this.terminated++; }
     exit(code: number, signal?: number) { this.onmessage?.({ data: { type: "exit", code, signal, sleep: "atomics" } } as MessageEvent); }
@@ -113,8 +72,9 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
     async quiesce() { revoked++; await quiescence; },
   } as unknown as SharedFilesystem;
   const runtime = processRuntimeFixture(filesystem, options);
+  prepare?.(runtime);
   const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-  const run = startRun({ engine, module, args: ["-e", "0"], env: {}, runtime, moduleScope: false }, {
+  const run = startRun({ engine, module, args, env: {}, runtime, moduleScope: false }, {
     stdout(data) { output.push(new TextDecoder().decode(data)); }, stderr() {}, phase(name) { phases.push(name); },
   });
   return {
@@ -128,6 +88,7 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
         pending.set(pid, request => { clearTimeout(timer); launchTimers.delete(timer); pending.delete(pid); resolve(request); });
       });
     },
+    async record() { return (await (await runtime.processes()).ready()).get(pidOf(request))!; },
     revoked: () => revoked, reaped: () => reaped, rejected: () => rejected,
     async dispose() {
       try {
@@ -149,39 +110,56 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
   };
 }
 
+/** A worker-side client for the root a run adopted; its spawn messages go to the run's handler. */
+function rootClient(request: RunRequest, deliver: (message: object) => void) {
+  const transport = request.runtimeProcess!;
+  const descriptors = new DescriptorTable();
+  const client = new WorkerProcessClient({ transport, descriptors,
+    codec: { export() { throw new Error("unexpected export"); }, import() { throw new Error("unexpected import"); }, discard() {} },
+    postMessage: message => deliver(message),
+    prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (transport.data as { pipeRegistry: unknown }).pipeRegistry } }),
+  });
+  const which = async (command: string) => {
+    const candidates = command.includes("/") ? [command] : request.env.PATH!.split(":").map(directory => `${directory || "."}/${command}`);
+    for (const candidate of candidates) {
+      const query = client.accessStart(client.pid, candidate, "/");
+      let result = client.accessTake(client.pid, query);
+      while (result === -6) { await new Promise(resolve => setTimeout(resolve, 0)); result = client.accessTake(client.pid, query); }
+      if (result === 0) return candidate;
+    }
+    throw new Error(`No executable: ${command}`);
+  };
+  return { client, which, async spawn(command: string) {
+    const executable = await which(command);
+    return client.spawn(client.pid, { executable, argv: [command], cwd: "/", env: request.env, job: -1, fds: [] });
+  }, dispose: () => descriptors.dispose() };
+}
+
 const engines: Engine[] = ["quickjs", "jsc", "browser"];
 
 for (const engine of engines) {
-  test(`${engine} roots launch bun/node aliases with their selected engine and existing module`, async () => {
+  test(`${engine} roots find bun/node through PATH with their selected engine and existing module`, async () => {
     const fetch = spyOn(globalThis, "fetch").mockRejectedValue(new Error("Root engine aliases must not download another guest"));
     const state = isolatedRoot(false, engine);
-    const host = new SubprocessHost({
-      identity: state.runtime.identities.buffer, pid: 1, jobId: 1, output() {},
-      launch(meta, child) {
-        state.worker.onmessage?.({ data: { type: "spawn", request: {
-          executable: meta.argv[0]!, argv: meta.argv, cwd: "/", env: {}, pid: child.pid, parentPid: child.parentPid,
-          jobId: child.jobId, child, filesystem: createFilesystemIdentity(), trace: false, spawnBroker: true,
-        } } } as MessageEvent);
-        return { terminate() {} };
-      },
-    });
+    let root: ReturnType<typeof rootClient> | undefined;
     try {
       await state.ready;
-      for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) {
-        const pid = host.spawn(JSON.stringify({ argv: [name] }));
+      root = rootClient(state.request, message => state.worker.onmessage?.({ data: message } as MessageEvent));
+      state.release();
+      expect(await root.which("bun")).toBe(`${ENGINE_BIN[engine]}/bun`);
+      for (const name of ["bun", "node", `${ENGINE_BIN[engine]}/bun`, `${ENGINE_BIN[engine]}/node`]) {
+        const pid = await root.spawn(name);
         const entry = await state.requestFor(pid);
         expect(entry.engine).toBe(engine);
         expect(entry.adapter).toBe("bun");
         expect(entry.module).toBe(state.request.module);
         state.workerFor(pid).exit(0);
-        const deadline = performance.now() + 1000;
-        while (host.wait(pid) === -2 && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
-        expect(host.wait(pid)).toBe(0);
-        host.close(pid);
+        const supervisor = await state.runtime.processes().then(service => service.ready());
+        expect((await supervisor.waitForExit(root.client.pid, pid)).status).toBe(0);
       }
       expect(fetch).not.toHaveBeenCalled();
     } finally {
-      try { host.detach(); host.dispose(); await state.dispose(); }
+      try { root?.dispose(); await state.dispose(); }
       finally { fetch.mockRestore(); }
     }
   });
@@ -201,7 +179,7 @@ for (const engine of engines) {
       const entries = new Map(register.mock.calls);
       const loaded = new Set<WebAssembly.Module>();
       for (const selected of engines) {
-        const entry = entries.get(`bun-${selected}`);
+        const entry = entries.get(`${ENGINE_BIN[selected]}/bun`);
         if (!entry) throw new Error(`Missing explicit engine registration: ${selected}`);
         if (entry.adapter !== "bun") throw new Error(`Explicit ${selected} program must use the Bun adapter`);
         expect(entry.engine).toBe(selected);
@@ -225,7 +203,7 @@ for (const engine of engines) {
   });
 }
 
-test("concurrent roots on one runtime keep engine-correct aliases without replacing other roots", async () => {
+test("concurrent roots on one runtime inherit independent engine PATHs without replacing other roots", async () => {
   const originalWorker = globalThis.Worker;
   const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
@@ -233,7 +211,7 @@ test("concurrent roots on one runtime keep engine-correct aliases without replac
   const workers: FakeWorker[] = [];
   const requests = new Map<number, RunRequest>();
   const runs: ReturnType<typeof startRun>[] = [];
-  const hosts: SubprocessHost[] = [];
+  const clients: ReturnType<typeof rootClient>[] = [];
   const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
   const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) =>
     String(input).endsWith(".gz") ? new Response(null, { status: 404 })
@@ -248,7 +226,7 @@ test("concurrent roots on one runtime keep engine-correct aliases without replac
     request!: RunRequest;
     terminated = false;
     constructor() { workers.push(this); }
-    postMessage(request: RunRequest) { this.request = request; requests.set(request.pid!, request); }
+    postMessage(request: RunRequest) { this.request = request; requests.set(pidOf(request), request); }
     terminate() { this.terminated = true; }
   }
   async function received(pid: number): Promise<RunRequest> {
@@ -271,31 +249,22 @@ test("concurrent roots on one runtime keep engine-correct aliases without replac
       while (!worker.request && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
       expect(worker.request).toBeDefined();
       const root = worker.request;
-      const host = new SubprocessHost({ identity: runtime.identities.buffer, pid: root.pid, jobId: root.jobId, output() {},
-        launch(meta, child) {
-          worker.onmessage?.({ data: { type: "spawn", request: {
-            executable: meta.argv[0]!, argv: meta.argv, cwd: "/", env: {}, pid: child.pid, parentPid: child.parentPid,
-            jobId: child.jobId, child, filesystem: createFilesystemIdentity(), trace: false, spawnBroker: true,
-          } } } as MessageEvent);
-          return { terminate() {} };
-        },
-      });
-      hosts.push(host);
-      for (const alias of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) {
-        const pid = host.spawn(JSON.stringify({ argv: [alias] }));
+      const client = rootClient(root, message => worker.onmessage?.({ data: message } as MessageEvent));
+      clients.push(client);
+      expect(await client.which("bun")).toBe(`${ENGINE_BIN[root.engine]}/bun`);
+      for (const alias of ["bun", "node", `${ENGINE_BIN[root.engine]}/bun`, `${ENGINE_BIN[root.engine]}/node`]) {
+        const pid = await client.spawn(alias);
         const child = await received(pid);
         expect(child.engine).toBe(root.engine);
         expect(child.adapter).toBe("bun");
-        workers.find(worker => worker.request?.pid === pid)!.onmessage?.({ data: { type: "exit", code: 0, sleep: "atomics" } } as MessageEvent);
-        const deadline = performance.now() + 1000;
-        while (host.wait(pid) === -2 && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
-        expect(host.wait(pid)).toBe(0);
-        host.close(pid);
+        workers.find(candidate => candidate.request && pidOf(candidate.request) === pid)!.onmessage?.({ data: { type: "exit", code: 0, sleep: "atomics" } } as MessageEvent);
+        const supervisor = await runtime.processes().then(service => service.ready());
+        expect((await supervisor.waitForExit(client.client.pid, pid)).status).toBe(0);
       }
     }
     expect(roots.every(worker => !worker.terminated)).toBe(true);
   } finally {
-    for (const host of hosts) { host.detach(); host.dispose(); }
+    for (const client of clients) client.dispose();
     for (const run of runs) run.kill(9);
     try { await Promise.all(runs.map(run => run.done)); await runtime.dispose(); }
     finally {
@@ -309,16 +278,83 @@ test("concurrent roots on one runtime keep engine-correct aliases without replac
   }
 });
 
+test("Preview1 roots keep independent explicit modules and 100 launches register no per-run executables", async () => {
+  const originalWorker = globalThis.Worker;
+  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
+  const ports: MessagePort[] = [];
+  const workers: FakeWorker[] = [];
+  const runs: ReturnType<typeof startRun>[] = [];
+  const registered: string[] = [];
+  function connect(identity = createFilesystemIdentity()) {
+    const channel = new MessageChannel(); channel.port2.close(); ports.push(channel.port1);
+    return { ...identity, port: channel.port1 };
+  }
+  const runtime = processRuntimeFixture({ fork: () => connect(), connect, revoke() {}, reap() {}, async quiesce() {} } as unknown as SharedFilesystem);
+  const register = runtime.registerProgram.bind(runtime);
+  runtime.registerProgram = (name, program) => { registered.push(name); return register(name, program); };
+  class FakeWorker {
+    onmessage: ((event: MessageEvent) => void) | null = null;
+    request?: RunRequest;
+    terminated = false;
+    constructor() { workers.push(this); }
+    postMessage(request: RunRequest) { this.request = request; }
+    terminate() { this.terminated = true; }
+    exit() { this.onmessage?.({ data: { type: "exit", code: 0, sleep: "atomics" } } as MessageEvent); }
+  }
+  const launch = async (module: WebAssembly.Module, engine: Engine = "browser", adapter: "bun" | "preview1" = "preview1") => {
+    const run = startRun({ engine, adapter, module, args: [], env: {}, runtime, moduleScope: false }, { stdout() {}, stderr() {} });
+    runs.push(run);
+    const worker = workers.at(-1)!;
+    const deadline = performance.now() + 1000;
+    while (!worker.request && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+    expect(worker.request?.module).toBe(module);
+    expect(worker.request?.adapter).toBe(adapter);
+    expect(worker.request?.env.PATH?.split(":")[0]).toBe(ENGINE_BIN[engine]);
+    return { run, worker };
+  };
+  try {
+    Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
+    Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
+    globalThis.Worker = FakeWorker as unknown as typeof Worker;
+    const first = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    const second = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, 2, 1, 120]));
+    const a = await launch(first), b = await launch(second);
+    expect(a.worker.request!.module).not.toBe(b.worker.request!.module);
+    a.worker.exit(); b.worker.exit();
+    await Promise.all([a.run.done, b.run.done]);
+    for (let index = 0; index < 100; index++) {
+      const { run, worker } = await launch(index % 2 ? first : second, engines[index % engines.length]!, "bun");
+      worker.exit();
+      expect(await run.done).toEqual({ code: 0 });
+    }
+    expect(registered).toEqual(["/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node", "/bin/bun", "/bin/node"]);
+    for (const path of registered) expect(await runtime.filesystem.lookup(path)).toMatchObject({ kind: "file" });
+    // Page-launched modules never become executable files or retain a per-launch registry key.
+    expect(await runtime.filesystem.lookup("/bin/preview1-root-1")).toBeUndefined();
+    expect(await runtime.filesystem.lookup("/usr/libexec/preview1-root")).toBeUndefined();
+    expect(workers.every(worker => worker.terminated)).toBe(true);
+  } finally {
+    for (const run of runs) run.kill(9);
+    try { await Promise.all(runs.map(run => run.done)); await runtime.dispose(); }
+    finally {
+      for (const port of ports) port.close();
+      globalThis.Worker = originalWorker;
+      if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation); else Reflect.deleteProperty(globalThis, "location");
+      if (originalIsolation) Object.defineProperty(globalThis, "crossOriginIsolated", originalIsolation); else Reflect.deleteProperty(globalThis, "crossOriginIsolated");
+    }
+  }
+});
+
 test("one isolated Ctrl-C claims DEFAULT 130 immediately before quiescent physical stop", async () => {
   const state = isolatedRoot();
   try {
     await state.ready;
-    expect(state.request.signalState).toBeInstanceOf(SharedArrayBuffer);
-    expect(state.request.outcome).toBeInstanceOf(SharedArrayBuffer);
+    expect(signalsOf(state.request).signalState).toBeInstanceOf(TaggedCells);
     const waiting = runConfirmation(state.run);
     state.run.kill();
-    expect(readOutcome(outcomeWord(state.request.outcome))).toEqual({ kind: "signaled", code: 2, status: 130 });
-    await Promise.resolve();
+    expect(readOutcome(signalsOf(state.request).outcome)).toEqual({ kind: "signaled", code: 2, status: 130 });
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(waiting.confirmed()).toBe(false);
     expect(state.revoked()).toBe(1);
     expect(state.worker.terminated).toBe(0);
@@ -336,16 +372,18 @@ for (const code of [0, 23, 130]) {
     const state = isolatedRoot();
     try {
       await state.ready;
-      const signalState = createSignalState(state.request.signalState);
+      const signalState = signalsOf(state.request).signalState;
       setSignalDisposition(signalState, 2, 2);
       state.run.kill();
       expect(takeSignal(signalState)).toBe(2);
       expect(takeSignal(signalState)).toBe(0);
-      expect(readOutcome(outcomeWord(state.request.outcome))).toBeNull();
+      expect(readOutcome(signalsOf(state.request).outcome)).toBeNull();
       expect(state.revoked()).toBe(0);
+      const root = await state.record();
       state.worker.exit(code);
       expect(await state.run.done).toEqual({ code });
-      expect(readOutcome(outcomeWord(state.request.outcome))).toEqual({ kind: "exited", code, status: code });
+      expect(root.result).toEqual({ kind: "exited", code, status: code });
+      expect(() => readOutcome(root.outcome)).toThrow("collected");
       expect(state.reaped()).toBe(1);
     } finally { await state.dispose(); }
   });
@@ -355,12 +393,12 @@ test("root IGNORE leaves no pending signal or terminal result", async () => {
   const state = isolatedRoot();
   try {
     await state.ready;
-    const signalState = createSignalState(state.request.signalState);
+    const signalState = signalsOf(state.request).signalState;
     setSignalDisposition(signalState, 2, 1);
     state.run.kill();
     expect(takeSignal(signalState)).toBe(0);
-    expect(Atomics.load(new Int32Array(state.request.interrupt!), 0)).toBe(0);
-    expect(readOutcome(outcomeWord(state.request.outcome))).toBeNull();
+    expect(controlLoad(signalsOf(state.request).interrupt, 0)).toBe(0);
+    expect(readOutcome(signalsOf(state.request).outcome)).toBeNull();
     expect(state.revoked()).toBe(0);
     state.worker.exit(0);
     expect(await state.run.done).toEqual({ code: 0 });
@@ -371,15 +409,17 @@ test("removing a root handler restores the next explicit INT default", async () 
   const state = isolatedRoot();
   try {
     await state.ready;
-    const signalState = createSignalState(state.request.signalState);
+    const signalState = signalsOf(state.request).signalState;
     setSignalDisposition(signalState, 2, 2);
     state.run.kill(2);
     expect(takeSignal(signalState)).toBe(2);
     expect(setSignalDisposition(signalState, 2, 0)).toBe(false);
+    const root = await state.record();
     state.run.kill(2);
     state.release();
     expect(await state.run.done).toEqual({ code: 130 });
-    expect(readOutcome(outcomeWord(state.request.outcome))?.kind).toBe("signaled");
+    expect(root.result?.kind).toBe("signaled");
+    expect(() => readOutcome(root.outcome)).toThrow("collected");
   } finally { await state.dispose(); }
 });
 
@@ -387,11 +427,13 @@ test.each([0, 143])("a root exit already claimed as %s wins a later default sign
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "exited", code });
+    const root = await state.record();
+    claimOutcome(signalsOf(state.request).outcome, { kind: "exited", code });
     state.run.kill(2);
     state.release();
     expect(await state.run.done).toEqual({ code });
-    expect(readOutcome(outcomeWord(state.request.outcome))).toEqual({ kind: "exited", code, status: code });
+    expect(root.result).toEqual({ kind: "exited", code, status: code });
+    expect(() => readOutcome(root.outcome)).toThrow("collected");
   } finally { await state.dispose(); }
 });
 
@@ -399,10 +441,12 @@ test("root acknowledgement adopts a previously claimed typed signal rather than 
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "signaled", code: 15 });
+    const root = await state.record();
+    claimOutcome(signalsOf(state.request).outcome, { kind: "signaled", code: 15 });
     state.worker.exit(143);
     expect(await state.run.done).toEqual({ code: 143 });
-    expect(readOutcome(outcomeWord(state.request.outcome))).toEqual({ kind: "signaled", code: 15, status: 143 });
+    expect(root.result).toEqual({ kind: "signaled", code: 15, status: 143 });
+    expect(() => readOutcome(root.outcome)).toThrow("collected");
   } finally { await state.dispose(); }
 });
 
@@ -412,7 +456,7 @@ for (const signal of [2, 9, 13, 15]) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await state.ready;
-      claimOutcome(outcomeWord(state.request.outcome), { kind: "signaled", code: signal });
+      claimOutcome(signalsOf(state.request).outcome, { kind: "signaled", code: signal });
       const timeout = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("root signal outcome was not observed")), 250); });
       const waiting = runConfirmation(state.run);
       await new Promise(resolve => setTimeout(resolve, 12));
@@ -431,7 +475,7 @@ test("root capability messages cannot cross a selected fatal outcome before its 
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "signaled", code: 15 });
+    claimOutcome(signalsOf(state.request).outcome, { kind: "signaled", code: 15 });
     state.worker.onmessage?.({ data: { type: "stdout", data: new TextEncoder().encode("late output") } } as MessageEvent);
     state.worker.onmessage?.({ data: { type: "phase", name: "late-phase", duration: 0 } } as MessageEvent);
     expect(state.output).toEqual([]);
@@ -442,40 +486,21 @@ test("root capability messages cannot cross a selected fatal outcome before its 
   } finally { await state.dispose(); }
 });
 
-test.each([false, true])("an unadmitted spawn after root fatal selection releases its transport (already observed: %s)", async observed => {
-  const state = isolatedRoot();
-  await state.ready;
-  let transport!: ChildTransport;
-  const host = new SubprocessHost({ identity: state.runtime.identities.buffer, output() {}, launch(_meta, child) { transport = child; return { terminate() {} }; } });
-  try {
-    const pid = host.spawn(JSON.stringify({ argv: ["fixture"] }));
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "signaled", code: 15 });
-    if (observed) { state.run.kill(2); state.release(); await state.run.done; }
-    state.worker.onmessage?.({ data: { type: "spawn", request: {
-      executable: "fixture", argv: ["fixture"], cwd: "/", env: {}, pid, parentPid: 1,
-      jobId: transport.jobId, child: transport, filesystem: createFilesystemIdentity(), trace: false, spawnBroker: true,
-    } } } as MessageEvent);
-    expect(host.wait(pid)).toBe(137);
-    expect(state.rejected()).toBe(1);
-    expect(Atomics.load(new Int32Array(transport.budget), transport.slot + 2)).toBe(0);
-    state.release();
-    expect(await state.run.done).toEqual({ code: 143 });
-  } finally { host.detach(); host.dispose(); await state.dispose(); }
-});
-
 test("a second implicit UI stop still force-kills a root that handled the first Ctrl-C", async () => {
   const state = isolatedRoot();
   try {
     await state.ready;
-    const signalState = createSignalState(state.request.signalState);
+    const signalState = signalsOf(state.request).signalState;
     setSignalDisposition(signalState, 2, 2);
     state.run.kill();
     expect(takeSignal(signalState)).toBe(2);
-    expect(readOutcome(outcomeWord(state.request.outcome))).toBeNull();
+    expect(readOutcome(signalsOf(state.request).outcome)).toBeNull();
+    const root = await state.record();
     state.run.kill();
     state.release();
     expect(await state.run.done).toEqual({ code: 137 });
-    expect(readOutcome(outcomeWord(state.request.outcome))).toEqual({ kind: "signaled", code: 9, status: 137 });
+    expect(root.result).toEqual({ kind: "signaled", code: 9, status: 137 });
+    expect(() => readOutcome(root.outcome)).toThrow("collected");
   } finally { await state.dispose(); }
 });
 
@@ -484,7 +509,7 @@ for (const code of [1, 126]) {
     const state = isolatedRoot();
     try {
       await state.ready;
-      claimOutcome(outcomeWord(state.request.outcome), { kind: "exited", code });
+      claimOutcome(signalsOf(state.request).outcome, { kind: "exited", code });
       state.worker.onmessage?.({ data: { type: "error", code, message: "crash details\nstack frame", sleep: "atomics" } } as MessageEvent);
       expect(await state.run.done).toEqual({ code, error: "bun.wasm crashed: crash details\r\nstack frame" });
       expect(state.reaped()).toBe(1);
@@ -496,40 +521,17 @@ test("typed fatal winner suppresses a later ordinary crash diagnostic", async ()
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "signaled", code: 15 });
+    claimOutcome(signalsOf(state.request).outcome, { kind: "signaled", code: 15 });
     state.worker.onmessage?.({ data: { type: "error", code: 1, message: "stale crash", sleep: "atomics" } } as MessageEvent);
     expect(await state.run.done).toEqual({ code: 143 });
   } finally { await state.dispose(); }
 });
 
-for (const signal of [2, 9, 13, 15]) {
-  test(`non-isolated default ${signal} notification is terminal but not a quiescent acknowledgement`, async () => {
-    const state = isolatedRoot(false);
-    try {
-      await state.ready;
-      expect(state.request.outcome).toBeUndefined();
-      const waiting = runConfirmation(state.run);
-      state.worker.onmessage?.({ data: { type: "default-signal", signal } } as MessageEvent);
-      await Promise.resolve();
-      expect(waiting.confirmed()).toBe(false);
-      expect(state.revoked()).toBe(1);
-      expect(state.reaped()).toBe(0);
-      expect(state.worker.terminated).toBe(0);
-      state.worker.exit(0);
-      await Promise.resolve();
-      expect(waiting.confirmed()).toBe(false);
-      state.release();
-      expect(await waiting.result).toEqual({ code: 128 + signal });
-      expect(state.worker.terminated).toBe(1);
-    } finally { await state.dispose(); }
-  });
-}
-
 test("an earlier ordinary root winner does not inherit a losing crash diagnostic", async () => {
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "exited", code: 0 });
+    claimOutcome(signalsOf(state.request).outcome, { kind: "exited", code: 0 });
     state.worker.onmessage?.({ data: { type: "error", code: 1, message: "losing crash", sleep: "atomics" } } as MessageEvent);
     expect(await state.run.done).toEqual({ code: 0 });
   } finally { await state.dispose(); }
@@ -539,6 +541,7 @@ for (const acknowledged of [false, true]) test(`runner root job completion uses 
   let broker!: SubprocessBroker;
   const original = SubprocessBroker.prototype.register;
   const register = spyOn(SubprocessBroker.prototype, "register").mockImplementation(function(this: SubprocessBroker, name, entry) {
+    // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
     broker = this;
     original.call(this, name, entry);
   });
@@ -546,21 +549,24 @@ for (const acknowledged of [false, true]) test(`runner root job completion uses 
   try {
     await state.ready;
     const supervisor = await broker.ready();
+    const root = supervisor.get(1)!;
     const background = supervisor.reserveSpawn(1, { executable: "bun", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     const waiting = runConfirmation(state.run);
     if (acknowledged) state.worker.exit(23);
     else state.run.kill(9);
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(waiting.confirmed()).toBe(acknowledged);
-    expect(supervisor.get(1)!.result?.status ?? null).toBe(acknowledged ? 23 : null);
-    expect(supervisor.jobEmpty(1, 1)).toBe(acknowledged);
+    expect(root.result?.status ?? null).toBe(acknowledged ? 23 : null);
+    expect(root.jobSafe).toBe(acknowledged);
+    expect(supervisor.job(1)?.pendingMembers ?? 0).toBe(acknowledged ? 0 : 1);
     // Runner physical stop and supervisor confirmation share exactly one fence.
     expect(state.revoked()).toBe(acknowledged ? 0 : 1);
     state.release();
     expect((await waiting.result).code).toBe(acknowledged ? 23 : 137);
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(supervisor.get(1)!.result?.status).toBe(acknowledged ? 23 : 137);
-    expect(supervisor.jobEmpty(1, 1)).toBe(true);
+    expect(root.result?.status).toBe(acknowledged ? 23 : 137);
+    expect(root.jobSafe).toBe(true);
+    expect(supervisor.job(1)?.pendingMembers ?? 0).toBe(0);
     expect(supervisor.get(background)!.result).toBeNull();
     expect(state.worker.terminated).toBe(1);
   } finally { register.mockRestore(); await state.dispose(); broker.dispose(); }
@@ -573,6 +579,7 @@ test("run.done waits for deferred root activation and descriptor release", async
   const activation = new Promise<void>(resolve => { activate = resolve; });
   const original = SubprocessBroker.prototype.register;
   const register = spyOn(SubprocessBroker.prototype, "register").mockImplementation(function(this: SubprocessBroker, name, entry) {
+    // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
     broker = this;
     original.call(this, name, entry);
   });
@@ -590,9 +597,12 @@ test("run.done waits for deferred root activation and descriptor release", async
   // Install the descriptor before readiness resolves: the generic owner may observe the
   // selected root outcome before a caller's subsequent .then callback runs.
   const state = isolatedRoot(true, "browser", { activate: async () => { await activation; return { ...proc, ProcessSupervisor: DescriptorSupervisor }; } });
-  const supervisor = broker.ready();
+  let supervisor!: ReturnType<SubprocessBroker["ready"]>;
   try {
     await state.ready;
+    // The service adopts a root before it activates; adoption of a root waits for any
+    // activation already requested, so the deferred activation starts after the worker did.
+    supervisor = broker.ready();
     const waiting = runConfirmation(state.run);
     state.run.kill(9);
     state.release();
@@ -611,7 +621,7 @@ test("run.done waits for deferred root activation and descriptor release", async
     expect(state.worker.terminated).toBe(1);
   } finally {
     activate();
-    await supervisor;
+    await supervisor?.catch(() => {});
     register.mockRestore();
     await state.dispose();
     broker.dispose();
@@ -639,16 +649,18 @@ for (const partial of [false, true]) test(`run.done safely handles rejected defe
   });
   const original = SubprocessBroker.prototype.register;
   const register = spyOn(SubprocessBroker.prototype, "register").mockImplementation(function(this: SubprocessBroker, name, entry) {
+    // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
     broker = this;
     original.call(this, name, entry);
   });
   const report = spyOn(console, "error").mockImplementation(() => {});
   const state = isolatedRoot(true, "browser", { activate: () => activation });
-  // Observe the explicit ready request too; rootExit must handle only its activation
-  // rejection, while the runner's own filesystem fence remains mandatory.
-  const attempted = broker.ready().catch(error => error);
+  let attempted!: Promise<unknown>;
   try {
     await state.ready;
+    // Observe the explicit ready request too; rootExit must handle only its activation
+    // rejection, while the runner's own filesystem fence remains mandatory.
+    attempted = broker.ready().catch(error => error);
     const waiting = runConfirmation(state.run);
     state.run.kill(9);
     failActivation();
@@ -696,7 +708,7 @@ test("typed root startup failures preserve their diagnostic and shell status", a
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "start-failed", code: 13 });
+    claimOutcome(signalsOf(state.request).outcome, { kind: "start-failed", code: 13 });
     state.worker.onmessage?.(new MessageEvent("message", { data: { type: "error", code: 126, message: "invalid executable", sleep: "atomics" } }));
     state.release();
     expect(await state.run.done).toEqual({ code: 126, error: "bun.wasm crashed: invalid executable" });
@@ -723,4 +735,75 @@ for (const terminal of [{ code: 0 }, { code: 143, signal: 15 }]) test(`worker cl
   } finally {
     try { await state.dispose(); } finally { report.mockRestore(); }
   }
+});
+
+
+test("process runtime fixture releases program registrations idempotently", async () => {
+  const runtime = processRuntimeFixture({} as SharedFilesystem);
+  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  const program = { adapter: "fixture", module, cooperative: true } as const;
+  const unregisterAdapter = runtime.registerAdapter("fixture", async () => { throw new Error("unused launcher"); });
+  try {
+    const unregister = runtime.registerProgram("/bin/fixture", program);
+    expect(() => runtime.registerProgram("/bin/fixture", program)).toThrow("already registered");
+    unregister();
+    const replacement = runtime.registerProgram("/bin/fixture", program);
+    unregister();
+    expect(() => runtime.registerProgram("/bin/fixture", program)).toThrow("already registered");
+    replacement();
+    runtime.registerProgram("/bin/fixture", program)();
+  } finally { unregisterAdapter(); await runtime.dispose(); }
+});
+
+test("page lint/fmt roots lazily compile verified tools once and retain the selected engine", async () => {
+  const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+  const build = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+  const originalBuilds = Object.getOwnPropertyDescriptor(globalThis, "__bunwasmBuilds");
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => new Response(Bun.gzipSync(bytes)), { preconnect: globalThis.fetch.preconnect }));
+  const compile = spyOn(WebAssembly, "compile");
+  try {
+    Object.defineProperty(globalThis, "__bunwasmBuilds", { configurable: true, value: { "bun-tools.wasm": build } });
+    let tools: WebAssembly.Module | undefined;
+    for (const engine of ["quickjs", "jsc", "browser"] as const) {
+      const state = isolatedRoot(false, engine, {}, engine === "jsc" ? ["--cwd", "/", "fmt"] : ["lint"]);
+      try {
+        await state.ready;
+        tools ??= state.request.module;
+        expect(state.request.module).toBe(tools);
+        expect(state.request.engine).toBe(engine);
+        expect(state.request.args[0]).toBe(`${ENGINE_BIN[engine]}/bun`);
+        expect(state.request.runtimeProcess).toBeDefined();
+        state.worker.exit(0);
+        expect((await state.run.done).code).toBe(0);
+      } finally { await state.dispose(); }
+    }
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(compile).toHaveBeenCalledTimes(1);
+  } finally {
+    fetch.mockRestore(); compile.mockRestore();
+    if (originalBuilds) Object.defineProperty(globalThis, "__bunwasmBuilds", originalBuilds);
+    else Reflect.deleteProperty(globalThis, "__bunwasmBuilds");
+  }
+});
+
+
+test("worker failure before deferred executable markers cannot adopt a late running root", async () => {
+  const gate = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const state = isolatedRoot(true, "browser", {}, ["-e", "0"], runtime => {
+    const lookup = runtime.filesystem.lookup.bind(runtime.filesystem);
+    runtime.filesystem.lookup = async path => { entered.resolve(); await gate.promise; return lookup(path); };
+  });
+  try {
+    await entered.promise;
+    state.worker.onerror!({ preventDefault() {}, message: "early worker failure" } as ErrorEvent);
+    state.release();
+    expect(await state.run.done).toMatchObject({ code: 1 });
+    expect(state.worker.terminated).toBe(1);
+    gate.resolve();
+    // Await every marker in the serialized preparation chain before inspecting service ownership.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const supervisor = await (await state.runtime.processes()).ready();
+    expect(supervisor.get(1)).toBeUndefined();
+  } finally { gate.resolve(); await state.dispose(); }
 });

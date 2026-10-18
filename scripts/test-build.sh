@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the tests/build fixtures through native `bun build` and bun-build.wasm
-# (wasmtime) and compare the output trees byte for byte, plus the printed
+# (the runtime_proc command-line host) and compare the output trees byte for byte, plus the printed
 # summary with the "in Nms" timing masked.
 #
 #   scripts/test-build.sh                 # all fixtures
@@ -37,16 +37,18 @@ else
   echo "scratch: $scratch"
 fi
 
-# Precompile once so timings measure the build, not Cranelift.
-cwasm="$scratch/bun-build.cwasm"
-wasmtime compile "$wasm" -o "$cwasm"
+# The launcher owns compilation caching and supplies runtime_proc imports.
+launcher="${BUN_WASM_LAUNCHER:-$CARGO_TARGET_DIR/release/bun-wasm}"
+if [[ ! -x "$launcher" ]]; then
+  (cd "$root" && cargo build -j "${JOBS:-12}" --release -p bunwasm-host) || exit 2
+fi
 
 # run <time-file> <dir> <cmd...>: run in <dir>, stdout+stderr to <dir>.log,
 # "<seconds> <peak-rss-kib> <exit>" to <time-file>.
 measure() {
   local tf=$1 dir=$2
   shift 2
-  python3 - "$tf" "$dir" "$@" <<'PY'
+  python3 -I - "$tf" "$dir" "$@" <<'PY'
 import resource, subprocess, sys, time
 tf, cwd, cmd = sys.argv[1], sys.argv[2], sys.argv[3:]
 t = time.monotonic()
@@ -83,7 +85,7 @@ for name in "${fixtures[@]}"; do
 
     measure "$case_dir/native.time" "$case_dir/native" "$bun_native" build "${args[@]}"
     measure "$case_dir/wasm.time" "$case_dir/wasm" \
-      wasmtime run --allow-precompiled --dir "$case_dir/wasm::/proj" "$cwasm" --cwd /proj "${args[@]}"
+      "$launcher" --wasm "$wasm" --dir "$case_dir/wasm::/proj" --env PWD=/proj -- --cwd /proj "${args[@]}"
 
     read -r nt nrss ncode <"$case_dir/native.time"
     read -r wt wrss wcode <"$case_dir/wasm.time"

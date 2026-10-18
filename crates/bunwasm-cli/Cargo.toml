@@ -28,7 +28,6 @@ bunwasm-runtime = { path = "../bunwasm-runtime", default-features = false }
 bunwasm-transpiler = { path = "../bunwasm-transpiler", optional = true }
 bunwasm-build = { path = "../bunwasm-build", optional = true }
 
-serde_json = "1"
 
 [target.'cfg(target_os = "wasi")'.dependencies]
 bunwasm-glue = { path = "../bunwasm-glue", optional = true }

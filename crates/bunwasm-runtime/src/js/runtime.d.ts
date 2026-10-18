@@ -121,7 +121,7 @@ declare namespace BunWasm {
     builtin(name: "node:stream"): {
       Transform: CompressionConstructor;
       Readable: new(options: { read(): void }) => WorkerReadable;
-      Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: () => void): void }) => WorkerWritable;
+      Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: () => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
     };
   }
   interface Internal { web: { Response: { _setUrl(response: Response, url: string): void } } }
