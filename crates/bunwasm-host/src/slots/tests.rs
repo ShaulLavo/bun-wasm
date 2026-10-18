@@ -29,6 +29,13 @@ impl Fixture {
         let stdio = Stdio::inherited();
         let mut wasi = wasmtime_wasi::WasiCtxBuilder::new();
         stdio.install(&mut wasi, cancel.clone());
+        wasi.preopened_dir(
+            env!("CARGO_MANIFEST_DIR"),
+            "/",
+            wasmtime_wasi::DirPerms::all(),
+            wasmtime_wasi::FilePerms::all(),
+        )
+        .unwrap();
         let processes =
             process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
         let mut store = Store::new(
@@ -256,4 +263,389 @@ fn restoring_default_preserves_standard_ignored_signals() {
             process::NOTSUP
         );
     }
+}
+
+impl Fixture {
+    fn open_manifest(&mut self, directory: i32) -> i32 {
+        self.write(1024, b"Cargo.toml");
+        assert_eq!(
+            self.call(
+                "wasi_snapshot_preview1",
+                "path_open",
+                (directory, 0, 1024, 10, 0, 2i64, 0i64, 0, 1080)
+            ),
+            0
+        );
+        self.word(1080)
+    }
+}
+
+#[test]
+fn inherited_fd_three_does_not_shadow_or_revive_the_preopen() {
+    let mut f = Fixture::new();
+    let [read, write] = f.store.data_mut().processes.pipe().unwrap();
+    assert_eq!(f.store.data_mut().processes.renumber(read, 3), 0);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (3, 256)),
+        -process::NOTSUP
+    );
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (4, 256)),
+        0
+    );
+    f.write(1024, b"Cargo.toml");
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "path_open",
+            (3, 0, 1024, 10, 0, 2i64, 0i64, 0, 1080)
+        ),
+        -process::BADF
+    );
+    let file = f.open_manifest(4);
+    assert_ne!(file, 3);
+    // File creation must not leave an underlying alias at the pipe number.
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "path_filestat_get",
+            (3, 0, 1024, 10, 2048)
+        ),
+        -process::BADF
+    );
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 3), 0);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_fdstat_get", (3, 256)),
+        -process::BADF
+    );
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (3, 256)),
+        -process::NOTSUP
+    );
+    assert_eq!(
+        f.store.data_mut().processes.write(write, b"x"),
+        process::PIPE
+    );
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", file), 0);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (4, 256)),
+        0
+    );
+}
+
+#[test]
+fn renumber_files_and_streams_replaces_the_destination_without_hidden_entries() {
+    let mut f = Fixture::new();
+    let [read, write] = f.pipe();
+    let file = f.open_manifest(3);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_renumber", (read, 7)),
+        0
+    );
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_renumber", (file, 7)),
+        0
+    );
+    assert_eq!(
+        f.call("runtime_proc", "write", (write, 0, 1)),
+        process::PIPE
+    );
+    f.iovec(2048, 8);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_read", (7, 32, 1, 48)),
+        0
+    );
+    assert_eq!(f.bytes(2048, 8), b"[package");
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 7), 0);
+    let [read, _write] = f.pipe();
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_renumber", (read, 3)),
+        0
+    );
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 3), 0);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (3, 256)),
+        -process::BADF
+    );
+}
+
+#[test]
+fn preview1_poll_reports_process_readiness_hangup_and_regular_files() {
+    let mut f = Fixture::new();
+    let [read, write] = f.pipe();
+    let file = f.open_manifest(3);
+    let mut subscriptions = [0u8; 96];
+    subscriptions[..8].copy_from_slice(&41u64.to_le_bytes());
+    subscriptions[8] = 1;
+    subscriptions[16..20].copy_from_slice(&read.to_le_bytes());
+    subscriptions[48..56].copy_from_slice(&42u64.to_le_bytes());
+    subscriptions[56] = 1;
+    subscriptions[64..68].copy_from_slice(&file.to_le_bytes());
+    f.write(512, &subscriptions);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "poll_oneoff", (512, 2048, 2, 128)),
+        0
+    );
+    assert_eq!(f.word(128), 1);
+    assert_eq!(f.word(2048), 42);
+    assert_eq!(f.word(2056) & 0xffff, 0);
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", write), 0);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "poll_oneoff", (512, 2048, 1, 128)),
+        0
+    );
+    assert_eq!(f.word(128), 1);
+    assert_eq!(f.word(2048), 41);
+    assert_eq!(f.bytes(2072, 2), &1u16.to_le_bytes());
+    assert_eq!(f.bytes(512, 96), subscriptions);
+}
+
+#[test]
+fn imports_can_find_memory_during_a_wasm_start_section() {
+    fn section(wasm: &mut Vec<u8>, id: u8, bytes: &[u8]) {
+        assert!(bytes.len() < 128);
+        wasm.extend_from_slice(&[id, bytes.len() as u8]);
+        wasm.extend_from_slice(bytes);
+    }
+    let mut f = Fixture::new();
+    let mut wasm = b"\0asm\x01\0\0\0".to_vec();
+    section(&mut wasm, 1, &[2, 0x60, 2, 0x7f, 0x7f, 1, 0x7f, 0x60, 0, 0]);
+    let mut import = vec![1, 22];
+    import.extend_from_slice(b"wasi_snapshot_preview1");
+    import.push(13);
+    import.extend_from_slice(b"fd_fdstat_get");
+    import.extend_from_slice(&[0, 0]);
+    section(&mut wasm, 2, &import);
+    section(&mut wasm, 3, &[1, 1]);
+    section(&mut wasm, 5, &[1, 0, 1]);
+    section(
+        &mut wasm,
+        7,
+        &[1, 6, b'm', b'e', b'm', b'o', b'r', b'y', 2, 0],
+    );
+    section(&mut wasm, 8, &[1]);
+    section(
+        &mut wasm,
+        10,
+        &[1, 9, 0, 0x41, 1, 0x41, 16, 0x10, 0, 0x1a, 0x0b],
+    );
+    let module = Module::new(f.store.engine(), wasm).unwrap();
+    f.store.data_mut().memory = None;
+    let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+    let memory = instance.get_memory(&mut f.store, "memory").unwrap();
+    assert_eq!(
+        &memory.data(&f.store)[24..32],
+        &((1u64 << 6) | (1u64 << 27)).to_le_bytes()
+    );
+}
+
+#[test]
+fn virtual_files_survive_stdio_replacement_high_handles_and_allocator_reuse() {
+    let mut f = Fixture::new();
+    for fd in 0..3 {
+        let file = f.open_manifest(3);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_renumber", (file, fd)),
+            0
+        );
+        assert_eq!(f.call("wasi_snapshot_preview1", "fd_renumber", (fd, fd)), 0);
+        f.iovec(2048, 8);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_read", (fd, 32, 1, 48)),
+            0
+        );
+        assert_eq!(f.bytes(2048, 8), b"[package");
+        assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", fd), 0);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_fdstat_get", (fd, 256)),
+            -process::BADF
+        );
+    }
+    let file = f.open_manifest(3);
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "fd_renumber",
+            (file, process::FIRST_HANDLE)
+        ),
+        0
+    );
+    let [read, _write] = f.pipe();
+    assert!(read > process::FIRST_HANDLE);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_close", process::FIRST_HANDLE),
+        0
+    );
+    let first = f.open_manifest(3);
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", first), 0);
+    let reused = f.open_manifest(3);
+    assert_eq!(first, reused);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_renumber", (reused, reused)),
+        0
+    );
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_renumber", (read, read)),
+        0
+    );
+}
+
+#[test]
+fn moved_directory_translates_all_path_handle_positions_without_stream_aliases() {
+    let mut f = Fixture::new();
+    let [read, _write] = f.pipe();
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_renumber", (read, 7)),
+        0
+    );
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_renumber", (3, 11)), 0);
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "fd_prestat_dir_name",
+            (11, 256, 16)
+        ),
+        0
+    );
+    assert_eq!(f.bytes(256, 1), b"/");
+    let file = f.open_manifest(11);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_filestat_get", (file, 2048)),
+        0
+    );
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_fdstat_get", (file, 256)),
+        0
+    );
+    f.write(1024, b"Cargo.toml");
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "path_filestat_get",
+            (11, 0, 1024, 10, 2048)
+        ),
+        0
+    );
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "path_link",
+            (11, 0, 1024, 10, 7, 1024, 10)
+        ),
+        -process::BADF
+    );
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "path_link",
+            (7, 0, 1024, 10, 11, 1024, 10)
+        ),
+        -process::BADF
+    );
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "path_rename",
+            (11, 1024, 10, 7, 1024, 10)
+        ),
+        -process::BADF
+    );
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "path_rename",
+            (7, 1024, 10, 11, 1024, 10)
+        ),
+        -process::BADF
+    );
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "path_symlink",
+            (1024, 10, 7, 1024, 10)
+        ),
+        -process::BADF
+    );
+    for name in ["fd_datasync", "fd_sync"] {
+        assert_eq!(f.call("wasi_snapshot_preview1", name, 7), -process::BADF);
+    }
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_advise", (7, 0i64, 0i64, 0)),
+        -process::BADF
+    );
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_allocate", (7, 0i64, 0i64)),
+        -process::BADF
+    );
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_seek", (7, 0i64, 0, 256)),
+        -process::BADF
+    );
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_tell", (7, 256)),
+        -process::BADF
+    );
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "fd_readdir",
+            (7, 2048, 64, 0i64, 256)
+        ),
+        -process::BADF
+    );
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_fdstat_set_flags", (7, 0)),
+        -process::BADF
+    );
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "fd_fdstat_set_rights",
+            (7, 0i64, 0i64)
+        ),
+        -process::BADF
+    );
+}
+
+#[test]
+fn preview1_poll_preserves_duplicate_streams_unknown_handles_and_relative_clocks() {
+    let mut f = Fixture::new();
+    let [read, write] = f.pipe();
+    let dup = f.call("runtime_proc", "dup", read);
+    f.write(256, b"x");
+    assert_eq!(f.call("runtime_proc", "write", (write, 256, 1)), 1);
+    let mut subscriptions = [0u8; 144];
+    for (index, fd) in [read, dup, 99].into_iter().enumerate() {
+        let at = index * 48;
+        subscriptions[at..at + 8].copy_from_slice(&(index as u64 + 51).to_le_bytes());
+        subscriptions[at + 8] = 1;
+        subscriptions[at + 16..at + 20].copy_from_slice(&fd.to_le_bytes());
+    }
+    f.write(512, &subscriptions);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "poll_oneoff", (512, 2048, 3, 128)),
+        0
+    );
+    assert_eq!(f.word(128), 3);
+    assert_eq!(f.word(2048), 51);
+    assert_eq!(f.word(2080), 52);
+    assert_eq!(f.word(2112), 53);
+    assert_eq!(f.bytes(2120, 2), &8u16.to_le_bytes());
+    assert_eq!(f.bytes(512, 144), subscriptions);
+    let mut clock = [0u8; 48];
+    clock[..8].copy_from_slice(&61u64.to_le_bytes());
+    clock[16..20].copy_from_slice(&1u32.to_le_bytes());
+    clock[24..32].copy_from_slice(&10_000_000u64.to_le_bytes());
+    f.write(512, &clock);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "poll_oneoff", (512, 2048, 1, 128)),
+        0
+    );
+    assert!(started.elapsed() >= std::time::Duration::from_millis(5));
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert_eq!(f.word(128), 1);
+    assert_eq!(f.word(2048), 61);
+    assert_eq!(f.bytes(2056, 2), &[0, 0]);
+    assert_eq!(f.bytes(512, 48), clock);
 }
