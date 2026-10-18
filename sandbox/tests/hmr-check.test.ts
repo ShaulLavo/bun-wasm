@@ -29,7 +29,7 @@ test("template navigation waits for the new document even when a subresource sta
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
     if (new URL(request.url).pathname === "/pending") return new Response(new ReadableStream());
     const selected = new URL(request.url).searchParams.has("template");
-    const html = selected ? '<h1>Vanilla ready</h1><img src="/pending">' : `<select id="template" onchange="location.assign('/?template=' + this.value)"><option>react</option><option>vanilla</option></select>`;
+    const html = selected ? '<h1>Vanilla ready</h1><img src="/pending">' : `<select id="template" onchange="if (this.value !== 'stay') location.assign('/?template=' + this.value)"><option>react</option><option>vanilla</option><option>stay</option></select>`;
     return new Response(html, { headers: { "content-type": "text/html" } });
   } });
   let browser;
@@ -40,6 +40,9 @@ test("template navigation waits for the new document even when a subresource sta
     await selectAndNavigate(page, "#template", "vanilla", 1_000);
     await expect(page.locator("h1").textContent()).resolves.toBe("Vanilla ready");
     expect(await page.evaluate(() => document.readyState)).toBe("interactive");
+    await page.goto(server.url.href);
+    await expect(selectAndNavigate(page, "#template", "stay", 150)).rejects.toThrow("Navigation after selecting #template=stay");
+    expect(page.url()).toBe(server.url.href);
   } finally {
     try { await browser?.close(); }
     finally { server.stop(true); }

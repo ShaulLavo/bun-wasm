@@ -48,7 +48,7 @@ async function check(browserName, engine) {
       console.log(`  ok   ${tag} ${name} (${Date.now() - started} ms)`);
     } catch (err) {
       results.push({ name, ok: false, error: String(err) });
-      console.log(`  FAIL ${tag} ${name}: ${err instanceof Error ? err.stack : String(err)}`);
+      console.log(`  FAIL ${tag} ${name}: ${err instanceof Error ? err.stack ?? String(err) : String(err)}`);
       await shot(`fail-${name.replace(/\W+/g, "-")}`).catch(error => console.log(`      failure screenshot: ${error}`));
       throw err;
     }
@@ -73,9 +73,10 @@ async function check(browserName, engine) {
       page = await context.newPage();
       page.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
       page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));
+      page.on("requestfailed", (request) => logs.push(`requestfailed: ${request.url()} ${request.failure()?.errorText}`));
       app = page.frameLocator("#preview");
     });
-    await step("0 navigation", () => page.goto(visit.url));
+    await step("0 navigation", () => page.goto(visit.url, { waitUntil: "commit", timeout: STARTUP_MS }));
     await step("1 renders", async () => {
       await app.locator("button.counter").waitFor({ timeout: STARTUP_MS });
       await app.locator("h1", { hasText: "Hello from bun.wasm" }).waitFor({ timeout: STEP_MS });
@@ -125,7 +126,7 @@ async function check(browserName, engine) {
       if (!href || !new URL(href, page.url()).pathname.includes("/__preview/")) throw new Error(`label link: ${href}`);
       const tab = await context.newPage();
       try {
-        await tab.goto(new URL(href, page.url()).href);
+        await tab.goto(new URL(href, page.url()).href, { waitUntil: "commit", timeout: STEP_MS });
         await tab.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
         await Promise.all([waitForHmrConnection(page, "#preview"), waitForHmrConnection(tab)]);
         const documentId = await tab.evaluate(() => {
@@ -174,9 +175,10 @@ async function check(browserName, engine) {
     await step("6b initial build error overlay and recovery", async () => {
       await setFile("src/App.tsx", [["<h1>", "<h1 "]]);
       await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
-      const navigated = page.waitForEvent("framenavigated", { predicate: (frame) => frame.parentFrame() !== null });
-      await page.locator("#restart").click();
-      await navigated;
+      await Promise.all([
+        page.waitForEvent("framenavigated", { predicate: (frame) => frame.parentFrame() === page.mainFrame(), timeout: STEP_MS }),
+        page.locator("#restart").click({ timeout: STEP_MS }),
+      ]);
       await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
       await setFile("src/App.tsx", [["<h1 ", "<h1>"]]);
       await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
