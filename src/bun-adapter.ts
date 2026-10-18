@@ -1,4 +1,5 @@
 import type { Runtime } from "waffle";
+import { FilesystemClient } from "waffle/fs/client";
 import { FilesystemError } from "waffle/fs/protocol";
 import { loadBunWasm, type LoadBunWasmOptions } from "./assets.js";
 
@@ -35,21 +36,28 @@ const executableMarker = new TextEncoder().encode("bun-wasm registered executabl
 const matchesMarker = (bytes: Uint8Array | undefined): boolean => bytes !== undefined
   && bytes.length === executableMarker.length && bytes.every((byte, index) => byte === executableMarker[index]);
 
-async function createExecutable(runtime: Runtime, name: string): Promise<boolean> {
+async function createExecutable(filesystem: FilesystemClient, name: string): Promise<boolean> {
   try {
-    await runtime.filesystem.writeFile(name, executableMarker, { exclusive: true });
+    await filesystem.asyncCall("writeFile", [name, false, true], executableMarker);
     return true;
   } catch (error) {
     if (!(error instanceof FilesystemError) || error.errno !== 20) throw error;
-    // A rejected mutation is also queued for drain. Consume that same EEXIST before
-    // inspecting the winner, without swallowing an unrelated queued storage failure.
-    try { await runtime.filesystem.drain(); }
-    catch (queuedError) { if (queuedError !== error) throw queuedError; }
-    const entry = await runtime.filesystem.lookup(name);
-    if (entry?.kind !== "file" || !matchesMarker(await runtime.filesystem.readFile(name))) {
+    const entry = await filesystem.asyncCall("lookup", [name]);
+    if (entry?.kind !== "file" || !matchesMarker(await filesystem.asyncCall("readFile", [name]))) {
       throw new BunWasmExecutableConflictError(name);
     }
     return false;
+  }
+}
+
+async function rollbackExecutables(filesystem: FilesystemClient, created: string[]): Promise<void> {
+  for (const name of created.reverse()) {
+    try {
+      if (!matchesMarker(await filesystem.asyncCall("readFile", [name]))) continue;
+      await filesystem.asyncCall("remove", [name]);
+    } catch {
+      // A failed operation owns its own result; continue without touching page errors.
+    }
   }
 }
 
@@ -71,8 +79,14 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
   }
   const unregisters: Array<() => void> = [];
   const created: string[] = [];
+  let filesystem: FilesystemClient | undefined;
   installing.add(runtime);
   try {
+    // The page-side ordering primitive waits for previously queued writes without
+    // consuming their explicit-drain-owned failure. The fork has no page write queue:
+    // every installer operation observes only its own completion, including EEXIST.
+    await runtime.filesystem.resolvePath("/");
+    filesystem = new FilesystemClient(runtime.filesystem.fork());
     for (const name of ["quickjs", "jsc", "browser"] as const) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString() })));
     for (const name of names) unregisters.push(runtime.registerProgram(name, {
       adapter: `bun:${engine}`, cooperative: true,
@@ -80,30 +94,23 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
     }));
     // Check every path before creating any files, so a conflict cannot leave a partial install.
     for (const name of names) {
-      const entry = await runtime.filesystem.lookup(name);
-      if (entry && (entry.kind !== "file" || !matchesMarker(await runtime.filesystem.readFile(name)))) {
+      const entry = await filesystem.asyncCall("lookup", [name]);
+      if (entry && (entry.kind !== "file" || !matchesMarker(await filesystem.asyncCall("readFile", [name])))) {
         throw new BunWasmExecutableConflictError(name);
       }
     }
     for (const name of names) {
-      await runtime.filesystem.mkdirp(name.slice(0, name.lastIndexOf("/")) || "/");
-      if (await createExecutable(runtime, name)) created.push(name);
+      await filesystem.asyncCall("mkdirp", [name.slice(0, name.lastIndexOf("/")) || "/"]);
+      if (await createExecutable(filesystem, name)) created.push(name);
     }
   } catch (error) {
     for (const unregister of unregisters.reverse()) unregister();
-    // Waffle also queues mutation errors for drain; consume the already-caught failure
-    // before rollback reads, or their drain would fail without checking the marker.
-    try { await runtime.filesystem.drain(); } catch {}
-    for (const name of created.reverse()) {
-      try {
-        if (matchesMarker(await runtime.filesystem.readFile(name))) await runtime.filesystem.remove(name);
-      } catch {
-        // Clear a failed rollback mutation too, so cleanup of other markers can continue.
-        try { await runtime.filesystem.drain(); } catch {}
-      }
-    }
+    if (filesystem) await rollbackExecutables(filesystem, created);
     throw error;
-  } finally { installing.delete(runtime); }
+  } finally {
+    try { filesystem?.dispose(); }
+    finally { installing.delete(runtime); }
+  }
   let active = true;
   const installation: BunAdapterInstallation = {
     dispose() {

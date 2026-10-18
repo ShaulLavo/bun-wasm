@@ -2773,24 +2773,39 @@ builds wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13` from the in
 `waffle/scripts/build-wasi-libc.sh`. Its `preopen-scan.patch` skips occupied inherited descriptors
 only when `fd_fdstat_get` succeeds and stops on the first real BADF. `scripts/build-wasi-sysroot.ts`
 records the exact Waffle revision, SDK VERSION, builder hash, patch hash and libc hash, claims an
-atomic output lock, stages publication, and refuses stale or caller-owned outputs. It symlinks only
+atomic output lock, stages next to the destination for same-filesystem atomic publication, and refuses
+stale or caller-owned outputs. Reuse verifies the SDK overlay targets against the selected SDK, even
+when two SDK directories have identical VERSION files. It symlinks only
 unchanged SDK C++ headers and noeh libraries; CRT, libc and emulation archives come from the
 patched sysroot. Every guest and native C/C++ consumer receives that sysroot explicitly, while
 Rust self-contained libc remains disabled. The JSC/ICU side uses the same receipt boundary:
 `jsc/build-icu.sh` fingerprints the ICU source, wasi-sdk VERSION, patched sysroot receipt, compiler
-versions and build script before accepting an existing cache; a missing or mismatched receipt on a
+versions, effective host compiler commands and paths, compiler/include/linker environment, and build
+script before accepting an existing cache; a failed compiler probe or missing or mismatched receipt on a
 nonempty cache is an error rather than a silent reuse of older libc inputs. `jsc/common.sh` extends
 the JSC prebuild fingerprint with that receipt and the effective toolchain, and `scripts/build-bun-jsc.sh`
 requires the matching stamp before linking a guest.
 
 `crates/bunwasm-runtime/src/natives.rs` is original bun-wasm code, not a copied wasi-libc or Node
 implementation. Its open-file table stores real descriptors, allowing inherited fd3/fd4 resources
-to use the same read/write/fstat/ftruncate namespace and preserving shared open-file cursors. The
-browser process control creates a real filesystem file, consumes its prefix in the external root,
-then verifies the child reads the shared cursor and writes through inherited fd3 in Chromium,
-Firefox and WebKit. The package installer uses exclusive marker creation and rolls back only paths
-it created; a matching concurrent marker is shared and unrelated queued filesystem errors remain
-fatal. The formerly expected-failing libc controls are now strict successes: all 17 scenarios pass
+to use the same read/write/fstat/ftruncate namespace and preserving shared open-file cursors. Empty
+writes validate descriptors, interrupted writes retry, and later failures return committed partial
+progress. Direct writes flush both output streams first because inherited descriptors can alias
+stdout or stderr. Native inherited fstat preserves the libc mode, including pipes and devices.
+On WASI the original adapter reads typed preview1 metadata through the existing `wasi` 0.11.1
+bindings instead: preview1 has no FIFO tag, and both process hosts encode pipes as UNKNOWN.
+The adapter maps that host pipe representation (which has no POSIX file-type bits) to FIFO and
+preserves preview1's device, socket and filesystem kinds. No binding implementation is copied.
+The original `src/js/node_fs.js` Stats predicates test those type bits rather than hard-coding false.
+The browser process controls create a real filesystem file and inherited pipe, verify shared open-file
+cursors and pipe/device metadata, reject empty writes to closed descriptors, and preserve buffered
+output ordering across direct fd aliases in Chromium, Firefox and WebKit. The package installer uses exclusive marker creation and rolls back only paths
+it created. A borrowed public FilesystemClient observes each mutation's own completion, including
+exclusive-create EEXIST, and is disposed after success or failure. The page-side resolvePath ordering
+primitive makes earlier undrained writes visible without consuming the caller-owned sticky failure.
+A matching concurrent marker is shared; unrelated page failures remain available to the caller's
+explicit drain in either request ordering. The formerly expected-failing libc controls are now
+strict successes: the original 17 scenarios pass
 without retries in each of Chromium, Firefox and WebKit for browser, QuickJS and JSC artifacts.
 This supersedes the historical expected-failure notes for earlier pins below and above.
 

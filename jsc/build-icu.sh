@@ -12,12 +12,26 @@ mkdir -p "$ICU_DIR"
 # A native archive is reusable only for the exact source, compiler and patched
 # sysroot inputs. Never bless an older SDK build merely because its files exist.
 stamp="$ICU_DIR/.bunwasm-inputs"
+host_cc="${CC:-cc}"
+host_cxx="${CXX:-c++}"
 inputs="$({
   printf 'ICU_VERSION=%s\nICU_SHA256=%s\nSYSROOT=%s\nSDK=%s\n' "$ICU_VERSION" "$ICU_SHA256" "$BUN_WASM_SYSROOT" "$WASI_SDK_PATH"
   cat "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" "$WASI_SDK_PATH/VERSION"
   sha256sum "$JSC_SRC/build-icu.sh"
-  "$WASI_SDK_PATH/bin/clang" --version
-  cc --version
+  for variable in CC CXX AR RANLIB LD CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CPATH C_INCLUDE_PATH \
+    CPLUS_INCLUDE_PATH LIBRARY_PATH LD_LIBRARY_PATH SDKROOT PKG_CONFIG_PATH; do
+    printf '%s=%s\n' "$variable" "${!variable-}"
+  done
+  # Configure accepts compiler command strings, including wrappers and flags.
+  # Use the same effective defaults for probing and the host configure invocation.
+  for compiler in "$host_cc" "$host_cxx"; do
+    printf 'host-compiler=%s\n' "$compiler"
+    read -r -a command <<< "$compiler"
+    command -v "${command[0]}" || exit 1
+    "${command[@]}" --version || exit 1
+  done
+  "$WASI_SDK_PATH/bin/clang" --version || exit 1
+  "$WASI_SDK_PATH/bin/clang++" --version || exit 1
 } | sha256sum | cut -d' ' -f1)"
 if [[ -f "$stamp" ]]; then
   if [[ "$(cat "$stamp")" != "$inputs" ]]; then
@@ -45,7 +59,7 @@ echo "$ICU_SHA256  $tgz" | sha256sum -c --quiet
 if [[ ! -x "$host/bin/icupkg" ]]; then
   rm -rf "$ICU_DIR/host-src" && mkdir -p "$ICU_DIR/host-src"
   tar -xf "$tgz" -C "$ICU_DIR/host-src" --strip-components=1
-  (cd "$host" && $CAGE bash -c "./configure --enable-static --disable-shared --disable-tests --disable-samples \
+  (cd "$host" && $CAGE env CC="$host_cc" CXX="$host_cxx" bash -c "./configure --enable-static --disable-shared --disable-tests --disable-samples \
       --disable-extras --disable-layoutex --disable-icuio > ../../host-configure.log 2>&1 && make -j$JOBS > ../../host-make.log 2>&1")
 fi
 

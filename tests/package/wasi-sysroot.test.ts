@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, readlink, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildWasiSysroot, type SysrootOptions } from "../../scripts/build-wasi-sysroot.ts";
@@ -10,12 +10,10 @@ async function fixture(run: (options: SysrootOptions) => Promise<void>) {
   const options = {
     waffle: join(directory, "waffle"), revision: "0".repeat(40),
     sdk: join(directory, "sdk"), output: join(directory, "output"),
-    scratch: join(directory, "scratch"),
   };
   try {
     await mkdir(join(options.waffle, "scripts"), { recursive: true });
     await mkdir(join(options.waffle, "patches/wasi-libc"), { recursive: true });
-    await mkdir(options.scratch);
     for (const path of ["include/c++", "include/wasm32-wasip1/noeh", "lib/wasm32-wasip1/noeh"]) {
       await mkdir(join(options.sdk, "share/wasi-sysroot", path), { recursive: true });
     }
@@ -34,7 +32,7 @@ await Bun.write(output + "/lib/wasm32-wasip1/libc.a", "fixture patched libc");
 }
 
 async function cleanScratch(options: SysrootOptions) {
-  expect(await readdir(options.scratch)).toEqual([]);
+  expect((await readdir(resolve(options.output, ".."))).filter(name => name.startsWith(".bun-wasm-sysroot-"))).toEqual([]);
   expect(await Bun.file(`${options.output}.lock`).exists()).toBe(false);
   expect((await readdir(resolve(options.output, ".."))).includes("output.lock")).toBe(false);
 }
@@ -90,7 +88,7 @@ test("sysroot setup never steals or removes another builder's claim", async () =
     await writeFile(join(`${options.output}.lock`, "owner-data"), "another build");
     await expect(buildWasiSysroot(options)).rejects.toThrow();
     expect(await Bun.file(join(`${options.output}.lock`, "owner-data")).text()).toBe("another build");
-    expect(await readdir(options.scratch)).toEqual([]);
+    expect((await readdir(resolve(options.output, ".."))).filter(name => name.startsWith(".bun-wasm-sysroot-"))).toEqual([]);
   });
 });
 
@@ -107,7 +105,7 @@ test("sysroot setup rejects malformed receipts without modifying caller data", a
 
 test("sysroot interruption terminates its builder and removes only owned stage and claim", async () => {
   await fixture(async options => {
-    const started = join(options.scratch, "started");
+    const started = `${options.output}.started`;
     await writeFile(join(options.waffle, "scripts/builder.ts"), `
 await Bun.write(${JSON.stringify(started)}, String(process.pid));
 setInterval(() => {}, 1000);
@@ -127,5 +125,34 @@ setInterval(() => {}, 1000);
     } finally {
       if (child.exitCode === null) { child.kill("SIGTERM"); await child.exited; }
     }
+  });
+});
+
+test("same-version SDK switches refuse old overlay targets, including dangling links", async () => {
+  await fixture(async options => {
+    await buildWasiSysroot(options);
+    const sdk = `${options.sdk}-other`;
+    await cp(options.sdk, sdk, { recursive: true });
+    await expect(buildWasiSysroot({ ...options, sdk })).rejects.toThrow("Sysroot SDK overlay changed");
+    await rm(options.sdk, { recursive: true });
+    await expect(buildWasiSysroot({ ...options, sdk })).rejects.toThrow("Sysroot SDK overlay changed");
+    expect(await Bun.file(join(options.output, "lib/wasm32-wasip1/libc.a")).text()).toBe("fixture patched libc");
+    await cleanScratch(options);
+  });
+});
+
+test("publication stages next to its destination, independently of TMPDIR", async () => {
+  await fixture(async options => {
+    const observed = `${options.output}.stage`;
+    await writeFile(join(options.waffle, "scripts/builder.ts"), `
+import { dirname } from "node:path";
+await Bun.write(${JSON.stringify(observed)}, dirname(process.argv[2]));
+await Bun.write(process.argv[2] + "/lib/wasm32-wasip1/libc.a", "fixture patched libc");
+`);
+    await buildWasiSysroot(options);
+    const stage = await Bun.file(observed).text();
+    expect(resolve(stage, "..")).toBe(resolve(options.output, ".."));
+    expect(stage).not.toBe(tmpdir());
+    await cleanScratch(options);
   });
 });

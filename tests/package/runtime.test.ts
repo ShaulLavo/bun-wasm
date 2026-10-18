@@ -132,7 +132,7 @@ for (const winner of ["file", "directory"] as const) {
   });
 }
 
-test("real Runtime shares a concurrent identical marker after draining its exclusive-create failure", async () => {
+test("real Runtime shares a concurrent identical marker without a queued exclusive-create failure", async () => {
   const race = racingBackend("marker");
   await withRuntime(async runtime => {
     const installation = await installBunAdapters(runtime);
@@ -157,4 +157,47 @@ test("real Runtime rollback preserves a concurrent identical marker when a later
     expect(new TextDecoder().decode(await runtime.filesystem.readFile("/bin/bun"))).toBe("bun-wasm registered executable\n");
     expect(new TextDecoder().decode(await runtime.filesystem.readFile("/blocked"))).toBe("caller-owned parent file");
   }, race.backend);
+});
+
+for (const order of ["before", "after"] as const) {
+  test(`real Runtime preserves an unrelated queued ENOTDIR ${order} an exclusive collision`, async () => {
+    const race = racingBackend("marker");
+    const execute = race.backend.execute.bind(race.backend);
+    let queueFailure: (() => void) | undefined;
+    race.backend.execute = (operation, args, bytes) => {
+      if (operation === "writeFile" && args[0] === "/bin/bun" && args[2] === true) queueFailure?.();
+      return execute(operation, args, bytes);
+    };
+    await withRuntime(async runtime => {
+      await runtime.filesystem.writeFile("/blocked", "caller-owned parent file");
+      let unrelated: Promise<unknown> | undefined;
+      const enqueue = () => { unrelated = runtime.filesystem.writeFile("/blocked/unrelated", "failure").catch(error => error); };
+      if (order === "before") enqueue();
+      else queueFailure = enqueue;
+      const installation = await installBunAdapters(runtime);
+      try {
+        expect(race.raced()).toBe(true);
+        expect(unrelated).toBeDefined();
+        const failure = await unrelated;
+        expect(failure).toMatchObject({ errno: 29 });
+        // The caller, not the installer, owns consumption of this page-queue failure.
+        await expect(runtime.filesystem.drain()).rejects.toBe(failure);
+        await runtime.filesystem.drain();
+        expect(new TextDecoder().decode(await runtime.filesystem.readFile("/bin/bun"))).toBe("bun-wasm registered executable\n");
+      } finally { installation.dispose(); }
+    }, race.backend);
+  });
+}
+
+test("real Runtime installer observes an undrained page write before reading through its borrowed client", async () => {
+  await withRuntime(async runtime => {
+    // Neither mkdir nor write has been awaited or drained when installation begins.
+    const parent = runtime.filesystem.mkdirp("/bin");
+    const pending = runtime.filesystem.writeFile("/bin/bun", "caller-owned queued command");
+    await expect(installBunAdapters(runtime)).rejects.toBeInstanceOf(BunWasmExecutableConflictError);
+    await Promise.all([parent, pending]);
+    expect(new TextDecoder().decode(await runtime.filesystem.readFile("/bin/bun"))).toBe("caller-owned queued command");
+    await runtime.filesystem.remove("/bin/bun");
+    (await installBunAdapters(runtime)).dispose();
+  });
 });

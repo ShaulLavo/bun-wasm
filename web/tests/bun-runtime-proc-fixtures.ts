@@ -175,6 +175,10 @@ const mainScenarios: BunRuntimeScenario[] = [
   { name: "detached-excluded-from-foreground-kill", commands: [{ source: detachedTree, kind: 1, status: 9 }], action: "kill-detached", stdout: "external-root-ok\n" },
   { name: "dispose-live-descendants", commands: [{ source: tree }], action: "dispose", stdout: "" },
   { name: "worker-control-fd-isolation", commands: [{ source: workerControls }], stdout: "grandchild-no-controls\nworker-high-fds-ok\nexternal-root-ok\n" },
+  { name: "inherited-descriptor-semantics", pipe: "input", input: "x", commands: [{
+    source: `const f=require('node:fs');const pipe=f.fstatSync(0),terminal=f.fstatSync(3);if(!pipe.isFIFO()||pipe.isFile()||pipe.isCharacterDevice()||pipe.isBlockDevice())throw Error('inherited pipe type');if(!terminal.isCharacterDevice()||terminal.isFile()||terminal.isFIFO()||terminal.isBlockDevice())throw Error('inherited terminal type');for(const run of [()=>f.writeSync(1000000,Buffer.alloc(0)),()=>f.writevSync(1000000,[Buffer.alloc(0)]),()=>f.writevSync(1000000,[Buffer.alloc(0),Buffer.alloc(0)])]){let code;try{run()}catch(e){code=e.code}if(code!=='EBADF')throw Error('empty closed descriptor '+code)}f.writeSync(1,'buffered;');f.writeSync(3,'alias;');f.writeSync(1,'buffered-v;');f.writevSync(3,[Buffer.from('alias-v;')]);f.writeSync(1,'done\\n');`,
+    fds: [{ child: 0, parent: "reader" }, { child: 1, parent: 1 }, { child: 2, parent: 2 }, { child: 3, parent: 1 }],
+  }], stdout: "buffered;alias;buffered-v;alias-v;done\nexternal-root-ok\n" },
   { name: "start-failed", commands: [{ executable: "/bin/broken-bun", source: "", kind: 2, status: 29 }], stdout: "external-root-ok\n" },
   { name: "preopen-root", commands: [{ source: `console.log(await Bun.file('preopen-data').text());` }], stdout: "ROOT_PREOPEN_OK\nexternal-root-ok\n" },
 ];

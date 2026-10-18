@@ -12,7 +12,14 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::AsRawFd;
+#[cfg(not(target_os = "wasi"))]
+use std::os::fd::FromRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
+#[cfg(target_os = "wasi")]
+use std::os::wasi::fs::FileTypeExt;
+#[cfg(not(target_os = "wasi"))]
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -87,21 +94,21 @@ fn millis(time: io::Result<SystemTime>) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn stat_record(meta: &fs::Metadata) -> Val {
+fn stat_record(meta: &fs::Metadata, descriptor_mode: Option<u32>) -> Val {
     let ft = meta.file_type();
     let (kind_bits, perm) = if ft.is_dir() {
         (0o040000, 0o755)
     } else if ft.is_symlink() {
         (0o120000, 0o777)
     } else {
-        (0o100000, 0o644)
+        (special_file_bits(ft), 0o644)
     };
     let (dev, ino, nlink) = inode_info(meta);
     let mtime = millis(meta.modified());
     Record::new()
         .set("dev", dev)
         .set("ino", ino)
-        .set("mode", (kind_bits | perm) as f64)
+        .set("mode", descriptor_mode.unwrap_or(kind_bits | perm) as f64)
         .set("nlink", nlink)
         .set("uid", 0)
         .set("gid", 0)
@@ -114,6 +121,22 @@ fn stat_record(meta: &fs::Metadata) -> Val {
         .set("ctimeMs", mtime)
         .set("birthtimeMs", millis(meta.created()))
         .into()
+}
+
+#[cfg(any(unix, target_os = "wasi"))]
+fn special_file_bits(kind: fs::FileType) -> u32 {
+    #[cfg(unix)]
+    if kind.is_fifo() { return 0o010000; }
+    if kind.is_char_device() { return 0o020000; }
+    if kind.is_block_device() { return 0o060000; }
+    if kind.is_socket() { return 0o140000; }
+    if kind.is_file() { return 0o100000; }
+    0
+}
+
+#[cfg(not(any(unix, target_os = "wasi")))]
+fn special_file_bits(kind: fs::FileType) -> u32 {
+    if kind.is_file() { 0o100000 } else { 0 }
 }
 
 #[cfg(target_os = "wasi")]
@@ -155,7 +178,8 @@ pub struct FdTable {
     files: HashMap<i32, File>,
 }
 
-fn descriptor_metadata(fd: i32) -> io::Result<fs::Metadata> {
+#[cfg(not(target_os = "wasi"))]
+fn descriptor_metadata(fd: i32) -> io::Result<(fs::Metadata, u32)> {
     let mut stat = MaybeUninit::<libc::stat>::uninit();
     // Validate the descriptor before borrowing it. Guest native calls are synchronous;
     // no JS can close or reuse it between this check and metadata().
@@ -166,7 +190,42 @@ fn descriptor_metadata(fd: i32) -> io::Result<fs::Metadata> {
     // return (including errors). Owned opens remain in FdTable; inherited fds remain
     // owned by their host until an explicit close or process exit.
     let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd as _) });
-    file.metadata()
+    let mode = unsafe { stat.assume_init() }.st_mode as u32;
+    Ok((file.metadata()?, mode))
+}
+
+#[cfg(not(target_os = "wasi"))]
+fn descriptor_stat(fd: i32) -> io::Result<Val> {
+    let (meta, mode) = descriptor_metadata(fd)?;
+    Ok(stat_record(&meta, Some(mode)))
+}
+
+#[cfg(target_os = "wasi")]
+fn descriptor_stat(fd: i32) -> io::Result<Val> {
+    // Preview1 has no FIFO tag. Waffle and the native process host identify pipe
+    // endpoints as UNKNOWN. Read typed preview1 metadata so those inherited pipes
+    // retain their host-specific FIFO identity rather than having no POSIX type.
+    // Capability errors still propagate; this does not bypass descriptor rights.
+    let stat = unsafe { wasi::fd_filestat_get(fd as wasi::Fd) }
+        .map_err(|error| io::Error::from_raw_os_error(i32::from(error.raw())))?;
+    let kind = match stat.filetype {
+        wasi::FILETYPE_UNKNOWN => 0o010000,
+        wasi::FILETYPE_BLOCK_DEVICE => 0o060000,
+        wasi::FILETYPE_CHARACTER_DEVICE => 0o020000,
+        wasi::FILETYPE_DIRECTORY => 0o040000,
+        wasi::FILETYPE_REGULAR_FILE => 0o100000,
+        wasi::FILETYPE_SOCKET_DGRAM | wasi::FILETYPE_SOCKET_STREAM => 0o140000,
+        wasi::FILETYPE_SYMBOLIC_LINK => 0o120000,
+        _ => 0,
+    };
+    Ok(Record::new()
+        .set("dev", stat.dev as f64).set("ino", stat.ino as f64)
+        .set("mode", (kind | 0o644) as f64).set("nlink", stat.nlink as f64)
+        .set("uid", 0).set("gid", 0).set("rdev", 0).set("size", stat.size as f64)
+        .set("blksize", 4096).set("blocks", stat.size.div_ceil(512) as f64)
+        .set("atimeMs", stat.atim as f64 / 1_000_000.0)
+        .set("mtimeMs", stat.mtim as f64 / 1_000_000.0)
+        .set("ctimeMs", stat.ctim as f64 / 1_000_000.0).set("birthtimeMs", 0).into())
 }
 
 fn open_options(flags: &str) -> OpenOptions {
@@ -321,7 +380,7 @@ fn install_fs(t: &mut Table) {
         let lstat = a.bool(1);
         let meta = if lstat { fs::symlink_metadata(path) } else { fs::metadata(path) };
         let meta = meta.map_err(|e| io_error(e, if lstat { "lstat" } else { "stat" }, Some(path)))?;
-        Ok(stat_record(&meta))
+        Ok(stat_record(&meta, None))
     });
     t.add("mkdir", |a| {
         let path = a.str(0)?;
@@ -462,7 +521,12 @@ fn writev(state: &State, args: Args<'_>) -> NativeResult {
         Val::Bytes(bytes) => Ok(bytes.as_slice()),
         _ => Err(NativeError::type_error("expected a byte buffer")),
     }).collect::<Result<Vec<_>, _>>()?;
-    if fd == 1 || fd == 2 { state.flush(); }
+    // Inherited descriptors can alias either output stream. Flush before every
+    // direct write, not only writes whose descriptor number is 1 or 2.
+    flush_descriptor_output(state).map_err(|e| io_error(e, "writev", None))?;
+    if buffers.iter().all(|bytes| bytes.is_empty()) {
+        return write_chunk(fd, &[], None).map(|n| Val::Num(n as f64)).map_err(|e| io_error(e, "writev", None));
+    }
     let descriptor = fd;
     let position = args.opt_num(2).filter(|&n| n >= 0.0).map(|n| n as libc::off_t);
     let mut written = 0usize;
@@ -481,14 +545,65 @@ fn writev(state: &State, args: Args<'_>) -> NativeResult {
     Ok(Val::Num(written as f64))
 }
 
+fn flush_descriptor_output(state: &State) -> io::Result<()> {
+    state.flush_stdout()?;
+    io::stderr().flush()
+}
+
+fn retry_interrupted(mut operation: impl FnMut() -> io::Result<usize>) -> io::Result<usize> {
+    loop {
+        match operation() {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            result => return result,
+        }
+    }
+}
+
 fn write_chunk(fd: libc::c_int, bytes: &[u8], position: Option<libc::off_t>) -> io::Result<usize> {
-    // The argument frame owns these bytes until the synchronous call returns.
-    let written = unsafe { match position {
-        Some(position) => libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position),
-        None => libc::write(fd, bytes.as_ptr().cast(), bytes.len()),
-    } };
-    if written < 0 { return Err(io::Error::last_os_error()); }
-    Ok(written as usize)
+    retry_interrupted(|| {
+        // The argument frame owns these bytes until the synchronous call returns.
+        let written = unsafe { match position {
+            Some(position) => libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position),
+            None => libc::write(fd, bytes.as_ptr().cast(), bytes.len()),
+        } };
+        if written < 0 { return Err(io::Error::last_os_error()); }
+        Ok(written as usize)
+    })
+}
+
+// Preserve committed progress when a later chunk fails. The initial empty syscall
+// is deliberate: even zero-byte writes must validate their descriptor.
+fn write_chunks_with(bytes: &[u8], position: Option<libc::off_t>,
+    mut write: impl FnMut(&[u8], Option<libc::off_t>) -> io::Result<usize>) -> io::Result<usize> {
+    let mut written = 0;
+    loop {
+        let offset = position.map(|base| base.checked_add(written as libc::off_t)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))).transpose();
+        let result = offset.and_then(|offset| retry_interrupted(|| write(&bytes[written..], offset)));
+        match result {
+            Ok(0) if written == bytes.len() => return Ok(written),
+            Ok(0) if written == 0 => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(0) => return Ok(written),
+            Ok(count) => written += count,
+            Err(_) if written > 0 => return Ok(written),
+            Err(error) => return Err(error),
+        }
+        if written == bytes.len() { return Ok(written); }
+    }
+}
+
+fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
+    let fd = args.i32(0)?;
+    let bytes = args.bytes(1)?;
+    if bytes.is_empty() {
+        return write_chunk(fd, bytes, None).map(|n| Val::Num(n as f64)).map_err(|e| io_error(e, "write", None));
+    }
+    if fd == 1 { state.write_stdout(bytes).map_err(|e| io_error(e, "write", None))?; return Ok(Val::Num(bytes.len() as f64)); }
+    if fd == 2 { state.write_stderr(bytes).map_err(|e| io_error(e, "write", None))?; return Ok(Val::Num(bytes.len() as f64)); }
+    flush_descriptor_output(state).map_err(|e| io_error(e, "write", None))?;
+    let position = args.opt_num(2).filter(|p| *p >= 0.0).map(|p| p as libc::off_t);
+    write_chunks_with(bytes, position, |bytes, offset| write_chunk(fd, bytes, offset))
+        .map(|n| Val::Num(n as f64)).map_err(|e| io_error(e, "write", None))
 }
 
 fn install_fds(t: &mut Table, state: &Rc<State>) {
@@ -531,30 +646,11 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         Ok(Val::Bytes(buf))
     });
     let st = state.clone();
-    t.add("write", move |a| {
-        let fd = a.i32(0)?;
-        let bytes = a.bytes(1)?;
-        match fd {
-            1 => st.write_stdout(bytes).map_err(|e| io_error(e, "write", None))?,
-            2 => st.write_stderr(bytes).map_err(|e| io_error(e, "write", None))?,
-            _ => {
-                let position = a.opt_num(2).filter(|p| *p >= 0.0).map(|p| p as libc::off_t);
-                let mut written = 0;
-                while written < bytes.len() {
-                    let offset = position.map(|p| p + written as libc::off_t);
-                    let count = write_chunk(fd, &bytes[written..], offset).map_err(|e| io_error(e, "write", None))?;
-                    if count == 0 { return Err(io_error(io::ErrorKind::WriteZero.into(), "write", None)); }
-                    written += count;
-                }
-            }
-        }
-        Ok(Val::Num(bytes.len() as f64))
-    });
+    t.add("write", move |a| write_descriptor(&st, a));
     let st = state.clone();
     t.add("writev", move |a| writev(&st, a));
     t.add("fstat", |a| {
-        let meta = descriptor_metadata(a.i32(0)?).map_err(|e| io_error(e, "fstat", None))?;
-        Ok(stat_record(&meta))
+        descriptor_stat(a.i32(0)?).map_err(|e| io_error(e, "fstat", None))
     });
     t.add("ftruncate", |a| {
         let result = unsafe { libc::ftruncate(a.i32(0)?, a.opt_num(1).unwrap_or(0.0) as libc::off_t) };
@@ -1004,6 +1100,58 @@ mod builtin_tests {
         inherited.seek(SeekFrom::Start(8)).unwrap();
         let mut suffix = [0]; inherited.read_exact(&mut suffix).unwrap();
         assert_eq!(suffix, [b'?']);
+    }
+
+    #[test]
+    fn writes_preserve_partial_progress_and_retry_interruptions() {
+        let mut attempts = 0;
+        assert_eq!(write_chunks_with(b"abcd", Some(10), |bytes, offset| {
+            attempts += 1;
+            if attempts == 1 { return Err(io::ErrorKind::Interrupted.into()); }
+            if attempts == 2 { assert_eq!(bytes, b"abcd"); assert_eq!(offset, Some(10)); return Ok(2); }
+            assert_eq!(bytes, b"cd"); assert_eq!(offset, Some(12));
+            Err(io::ErrorKind::WouldBlock.into())
+        }).unwrap(), 2);
+        assert_eq!(attempts, 3);
+        assert_eq!(write_chunks_with(b"a", None, |_, _| Err(io::ErrorKind::PermissionDenied.into())).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(write_chunks_with(b"ab", Some(libc::off_t::MAX), |_, _| Ok(1)).unwrap(), 1);
+        assert_eq!(write_chunks_with(b"a", None, |_, _| Ok(0)).unwrap_err().kind(), io::ErrorKind::WriteZero);
+        assert_eq!(write_chunks_with(b"", None, |bytes, _| { assert!(bytes.is_empty()); Err(io::Error::from_raw_os_error(libc::EBADF)) }).unwrap_err().raw_os_error(), Some(libc::EBADF));
+        let mut interrupted = true;
+        assert_eq!(retry_interrupted(|| { if interrupted { interrupted = false; Err(io::ErrorKind::Interrupted.into()) } else { Ok(7) } }).unwrap(), 7);
+    }
+
+    #[test]
+    fn empty_writes_reject_closed_descriptors() {
+        let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
+        let natives = table(&state);
+        // Negative descriptors cannot be concurrently allocated by another test.
+        let error = call(&natives, "write", &[Val::Num(-1.0), Val::Bytes(vec![])]).unwrap_err();
+        assert!(error.props.contains(&("code".into(), Val::from("EBADF"))));
+        // A descriptor outside the process limit is likewise guaranteed closed.
+        for vectors in [vec![], vec![Val::Bytes(vec![])], vec![Val::Bytes(vec![]), Val::Bytes(vec![])]] {
+            let error = call(&natives, "writev", &[Val::Num(i32::MAX as f64), Val::Array(vectors)]).unwrap_err();
+            assert!(error.props.contains(&("code".into(), Val::from("EBADF"))));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_pipe_and_character_device_keep_their_type() {
+        use std::os::unix::net::UnixStream;
+        let (socket, _peer) = UnixStream::pair().unwrap();
+        let mut pipes = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(pipes.as_mut_ptr()) }, 0);
+        let reader = unsafe { File::from_raw_fd(pipes[0]) };
+        let _writer = unsafe { File::from_raw_fd(pipes[1]) };
+        let device = File::open("/dev/null").unwrap();
+        let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
+        let natives = table(&state);
+        for (fd, kind) in [(reader.as_raw_fd(), 0o010000), (device.as_raw_fd(), 0o020000), (socket.as_raw_fd(), 0o140000)] {
+            let Val::Object(fields) = call(&natives, "fstat", &[Val::Num(fd as f64)]).unwrap() else { panic!("stat object"); };
+            let (_, Val::Num(mode)) = fields.iter().find(|(key, _)| key == "mode").unwrap() else { panic!("mode"); };
+            assert_eq!(*mode as u32 & 0o170000, kind);
+        }
     }
 
     #[test]

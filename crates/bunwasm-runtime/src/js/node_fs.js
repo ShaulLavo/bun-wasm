@@ -95,16 +95,16 @@
       return (this.mode & constants.S_IFMT) === constants.S_IFLNK;
     }
     isBlockDevice() {
-      return false;
+      return (this.mode & constants.S_IFMT) === constants.S_IFBLK;
     }
     isCharacterDevice() {
-      return false;
+      return (this.mode & constants.S_IFMT) === constants.S_IFCHR;
     }
     isFIFO() {
-      return false;
+      return (this.mode & constants.S_IFMT) === constants.S_IFIFO;
     }
     isSocket() {
-      return false;
+      return (this.mode & constants.S_IFMT) === constants.S_IFSOCK;
     }
   }
 
