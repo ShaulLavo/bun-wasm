@@ -1438,7 +1438,7 @@ version = "0.0.28"
 
 [[package]]
 name = "bunwasm-lint-native"
-version = "0.0.24"
+version = "0.0.28"
 dependencies = [
  "serde_json",
  "zstd-sys",
@@ -1513,7 +1513,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-tools"
-version = "0.0.24"
+version = "0.0.28"
 dependencies = [
  "bun_alloc",
  "bun_ast",

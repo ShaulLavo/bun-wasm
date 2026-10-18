@@ -144,7 +144,9 @@ async function loadVerifiedTools(url: string, progress: (text: string) => void):
   await verifyArtifact("bun-tools.wasm", wasm, build);
   progress(`compiling bun-tools.wasm (${mb(wasm.length)})…`);
   const module = await WebAssembly.compile(wasm);
-  await cacheEngine(key, build, new Response(wasm, { headers: { "content-type": "application/wasm", "content-length": String(wasm.length) } }));
+  if (await cacheEngine(key, build, new Response(wasm, { headers: { "content-type": "application/wasm", "content-length": String(wasm.length) } }))) {
+    performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
+  }
   return { module, size: wasm.length, build };
 }
 
@@ -435,8 +437,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       request.outcome = rootOutcome;
       rootPid = request.pid = state.pid;
       rootJob = request.jobId = state.job;
-    } else await subprocess.prepareRoot();
-    releaseRootConsumer();
+    } else if (isolated) await subprocess.prepareRoot();
+    if (generic || isolated) releaseRootConsumer();
     prepared = true;
     if (!finished) {
       worker.postMessage(request, [request.filesystem.port]);
