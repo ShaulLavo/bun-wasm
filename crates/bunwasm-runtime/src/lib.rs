@@ -163,10 +163,7 @@ impl State {
     /// default disposition withdraws them exactly as it would a pending service signal.
     pub(crate) fn signal(&self, signal: i32, operation: i32) -> i32 {
         if signal == 0 && operation == 0 {
-            let deferred = self.deferred_signals.borrow_mut().take();
-            if deferred > 0 {
-                return deferred;
-            }
+            return host::next_signal(&mut self.deferred_signals.borrow_mut(), || host::signal(0, 0));
         } else if (operation == 0 || operation == 1) && self.deferred_signals.borrow_mut().withdraw(signal) {
             if operation == 1 {
                 return host::signal(signal, 1);
