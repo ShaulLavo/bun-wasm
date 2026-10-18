@@ -58,7 +58,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle 0.0.48's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
-| [CMake toolchain cache preflight](#cmake-toolchain-cache-preflight) | Port | Reject an existing CMake cache whose recorded compiler, target, system, processor or sysroot does not match the requested native or WASI build before reconfiguration. |
+| [CMake toolchain cache preflight](#cmake-toolchain-cache-preflight) | Port | Reject an existing CMake cache whose recorded compiler, toolchain file, target, system, processor or sysroot does not match the requested native or WASI configure/build. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
 | [Vendor source synchronization](#vendor-source-synchronization) | Host feature | Original patch-tree verification updates existing clones and detached worktrees without overwriting local changes. |
@@ -2913,14 +2913,18 @@ or a pre-import fixture observer; no production mutable hook or export was added
 
 Class **Port**, implemented in the original build boundary. `scripts/check-cmake-cache.cmake` is a
 read-only, fail-closed validator for existing Ninja CMake build directories. Before BoringSSL or
-JavaScriptCore reconfigure, it resolves the recorded C and C++ compiler paths, CMake system and
-processor, compiler target flags in `rules.ninja`, and (for WASI) the configured sysroot. A missing
-or malformed cache is rejected with a fresh-directory diagnostic; a fresh directory is allowed to
-configure normally. The validator never edits or removes the caller's cache. `crates/bunwasm-crypto-sys/build.rs`
-and `jsc/configure.sh` invoke it before their existing configure commands. The regression fixture
-configures an actual native C/C++ Ninja cache, checks matching reuse, compiler/target/system/
-processor/sysroot mismatches, incomplete metadata, and byte-for-byte cache preservation after every
-rejection. This is build safety for the wasm port, not a copied CMake implementation.
+JavaScriptCore configure/build, it resolves the recorded C and C++ compiler paths, toolchain file,
+CMake system and processor, compiler target flags in `rules.ninja`, and configured sysroot. Native
+builds reject an unexpected toolchain or sysroot; WASI builds require the requested paths to match
+and exist. A missing or malformed cache is rejected with a fresh-directory diagnostic; a fresh
+directory is allowed to configure normally. The validator never edits or removes the caller's cache.
+`crates/bunwasm-crypto-sys/build.rs` checks before configure and build; the original shared shell
+adapter `scripts/check-wasi-cmake-cache.sh` covers `jsc/configure.sh`, `jsc/build.sh`, and
+`scripts/real-runtime-network-tls.sh` before shim, configure or Ninja work. Regression fixtures use
+actual C/C++ Ninja caches, cover matching reuse and compiler/toolchain/target/system/processor/
+sysroot mismatches, deleted toolchain files, incomplete metadata, and byte-for-byte preservation.
+Build-command sentinels verify the real shell entry points refuse mismatches without launching
+compilers, Ninja or services. This is build safety for the wasm port, not a copied CMake implementation.
 
 ## Node startup diagnostic drain
 

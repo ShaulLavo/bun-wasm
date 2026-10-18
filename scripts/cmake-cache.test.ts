@@ -1,17 +1,17 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const guard = join(import.meta.dir, "check-cmake-cache.cmake");
 function preflight(build: string, overrides: Record<string, string> = {}) {
-  const inputs = { BUILD_DIR: build, EXPECTED_C: "/usr/bin/cc", EXPECTED_CXX: "/usr/bin/c++", EXPECTED_SYSTEM: "native", ...overrides };
+  const inputs = { BUILD_DIR: build, EXPECTED_C: "/usr/bin/cc", EXPECTED_CXX: "/usr/bin/c++", EXPECTED_SYSTEM: "native", EXPECTED_TOOLCHAIN_FILE: "", ...overrides };
   return Bun.spawnSync(["cmake"].concat(Object.entries(inputs).map(([key, value]) => `-D${key}=${value}`), ["-P", guard]), { stdout: "pipe", stderr: "pipe" });
 }
 
 // Every fixture owns one tiny CMake source/build tree and synchronous compiler probes.
 // No project build, downloaded inputs, daemon or shared cache is created or modified.
-function fixture(run: (build: string) => void) {
+function fixture(run: (build: string) => void, configure: (root: string) => string[] = () => []) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-cmake-cache-"));
   try {
     const source = join(root, "source"), build = join(root, "build");
@@ -19,7 +19,7 @@ function fixture(run: (build: string) => void) {
     writeFileSync(join(source, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\nproject(cache_fixture C CXX)\nadd_library(c STATIC fixture.c)\nadd_library(cxx STATIC fixture.cc)\n");
     writeFileSync(join(source, "fixture.c"), "int c_fixture(void) { return 1; }\n");
     writeFileSync(join(source, "fixture.cc"), "int cxx_fixture() { return 2; }\n");
-    const configured = Bun.spawnSync(["cmake", "-S", source, "-B", build, "-G", "Ninja", "-DCMAKE_C_COMPILER=/usr/bin/cc", "-DCMAKE_CXX_COMPILER=/usr/bin/c++"], { stdout: "pipe", stderr: "pipe" });
+    const configured = Bun.spawnSync(["cmake", "-S", source, "-B", build, "-G", "Ninja", "-DCMAKE_C_COMPILER=/usr/bin/cc", "-DCMAKE_CXX_COMPILER=/usr/bin/c++"].concat(configure(root)), { stdout: "pipe", stderr: "pipe" });
     expect(configured.exitCode, configured.stderr.toString()).toBe(0);
     run(build);
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -101,4 +101,64 @@ test("CMake preflight fails closed on incomplete compiler metadata", () => {
     rmSync(join(build, "CMakeFiles", directory!, "CMakeCCompiler.cmake"));
     refuseUnchanged(build, {}, "missing compiler/target metadata");
   });
+});
+
+function wasiEntryPoint(build: string, entry: string) {
+  const root = join(build, "..", entry.replaceAll("/", "_"));
+  const bin = join(root, "bin"), sdk = join(root, "sdk"), jsc = join(root, "jsc");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(join(sdk, "bin"), { recursive: true });
+  mkdirSync(join(jsc, "build"), { recursive: true });
+  symlinkSync(build, join(jsc, "build/jsc"), "dir");
+  const marker = join(root, "unexpected-build"), guardTool = "#!/bin/sh\nprintf 'unexpected build\\n' >> \"$CMAKE_PREFLIGHT_MARKER\"\nexit 91\n";
+  for (const tool of [join(bin, "systemd-run"), join(sdk, "bin/clang"), join(sdk, "bin/clang++")]) {
+    writeFileSync(tool, guardTool);
+    chmodSync(tool, 0o755);
+  }
+  writeFileSync(join(bin, "wasm-opt"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(bin, "wasm-opt"), 0o755);
+  const args = ["bash", join(import.meta.dir, "..", entry)];
+  if (entry.startsWith("scripts/")) args.push(join(build, "../source"), build);
+  const cache = readFileSync(join(build, "CMakeCache.txt")), rules = readFileSync(join(build, "CMakeFiles/rules.ninja"));
+  const result = Bun.spawnSync(args, {
+    stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, WASI_SDK_PATH: sdk, JSC_BUILD_DIR: jsc, BUN_WASM_SYSROOT: root, CAGE: "", CMAKE_PREFLIGHT_MARKER: marker },
+  });
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr.toString()).toContain("CMake toolchain mismatch");
+  expect(existsSync(marker)).toBe(false);
+  expect(existsSync(join(jsc, "shim"))).toBe(false);
+  expect(readFileSync(join(build, "CMakeCache.txt"))).toEqual(cache);
+  expect(readFileSync(join(build, "CMakeFiles/rules.ninja"))).toEqual(rules);
+}
+
+test("configure and build entry points refuse native caches before shim, configure or Ninja work", () => {
+  fixture(build => {
+    for (const entry of ["jsc/configure.sh", "jsc/build.sh", "scripts/real-runtime-network-tls.sh"]) {
+      wasiEntryPoint(build, entry);
+    }
+  });
+});
+
+test("CMake preflight requires the configured toolchain file to exist and match the requested file", () => {
+  fixture(build => {
+    const toolchain = join(build, "../toolchain.cmake"), other = join(build, "../other.cmake");
+    writeFileSync(other, "# another toolchain\n");
+    expect(preflight(build, { EXPECTED_TOOLCHAIN_FILE: toolchain }).exitCode).toBe(0);
+    refuseUnchanged(build, {}, "requested native defaults");
+    refuseUnchanged(build, { EXPECTED_TOOLCHAIN_FILE: other }, "toolchain file is");
+    rmSync(toolchain);
+    refuseUnchanged(build, { EXPECTED_TOOLCHAIN_FILE: toolchain }, "toolchain file is missing");
+  }, root => {
+    const toolchain = join(root, "toolchain.cmake");
+    writeFileSync(toolchain, "# native fixture toolchain\n");
+    return [`-DCMAKE_TOOLCHAIN_FILE=${toolchain}`];
+  });
+});
+
+test("native CMake caches cannot silently retain a foreign sysroot", () => {
+  fixture(build => {
+    expect(preflight(build, { EXPECTED_SYSROOT: "/" }).exitCode).toBe(0);
+    refuseUnchanged(build, {}, "configured sysroot is /, requested native defaults");
+  }, () => ["-DCMAKE_SYSROOT:PATH=/"]);
 });
