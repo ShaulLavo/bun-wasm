@@ -128,14 +128,16 @@ jobs:
           source env.sh
           bash scripts/sync-bun.sh
           bash scripts/sync-crypto.sh
-      - uses: Swatinem/rust-cache@v2
-        id: rust-cache
+      - uses: actions/cache@v4
+        id: native-cache
         with:
-          workspaces: . -> target
-          cache-workspace-crates: true
-          cache-all-crates: true
-          cache-on-failure: true
-          key: native-${{ hashFiles('scripts/quality-rust.ts', 'scripts/quality-wasi*.ts', 'scripts/build-wasi-sysroot.ts', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock') }}
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/bin/cargo-machete
+            ${{ env.CARGO_TARGET_DIR }}
+          key: native-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts') }}-${{ hashFiles('crates/**') }}
+          restore-keys: native-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts') }}-
       - name: Install pinned Rust dependency checker
         run: |
           source env.sh

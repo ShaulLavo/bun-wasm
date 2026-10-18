@@ -15,8 +15,10 @@ test("JavaScript quality does not set up or compile Rust", () => {
 test("native checks share one conditional job and the cached target directory", () => {
   expect(rust).toContain("needs.quality.outputs.rust == 'true'");
   expect(rust).toContain("CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target");
-  expect(rust).toContain("workspaces: . -> target");
-  expect(rust).toContain("cache-workspace-crates: true");
+  expect(rust).toContain("${{ env.CARGO_TARGET_DIR }}");
+  expect(rust).toContain("${{ env.CARGO_HOME }}/registry");
+  expect(rust).toContain("restore-keys: native-v2-");
+  expect(rust).not.toContain("Swatinem/rust-cache");
   expect(rust).toContain("bun run quality --native");
   expect(rust).not.toContain("cargo test");
 });

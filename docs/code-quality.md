@@ -42,13 +42,18 @@ remain checked; their features are not interchangeable. All Clippy commands use
 `--no-deps` so upstream dependencies compile but do not become lint targets.
 
 The native job keeps `CARGO_TARGET_DIR` at the explicitly cached workspace
-`target/`, rather than an uncached runner-temp directory. It caches workspace
-artifacts too. The pinned nightly's checksum-freshness mode avoids treating a
+`target/`, rather than an uncached runner-temp directory. It caches the complete
+Cargo target and registry, including vendored path dependencies, test binaries
+and workspace crates. Swatinem's target cleaner excludes in-repository path
+dependencies outside the workspace, including Bun's large parser crates; the
+native job uses an explicit cache instead. The pinned nightly's checksum-freshness mode avoids treating a
 fresh checkout's timestamps as source edits. Rustup, Bun downloads, pinned
 upstream sources, and WASI SDK/sysroot each have caches. The sysroot cache key
 includes the runner image and builder/dependency inputs; its existing receipt
 still verifies every tool and archive. Rust cache keys include upstream patches,
-third-party inputs and native gate/build scripts. Cache logs show restored paths,
+third-party inputs and native gate/build scripts. A source hash refreshes the
+cache after crate edits, with a same-toolchain/input restore prefix for reuse.
+Cache logs show restored paths,
 keys, sizes and hits. A hit alone is not proof that Cargo reused build output.
 
 Moving native work to the PC or UpCloud requires an owner-approved runner or
