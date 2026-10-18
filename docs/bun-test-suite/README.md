@@ -217,6 +217,31 @@ The suite revision was `cd95fa7a13b3f13be73e512b38ec111c1c228084`. The artifact 
 
 ## Reading the results
 
+<!-- dependency-replay:start -->
+### Dependency setup replay
+
+The 2026-10-18 replay selects the 49 files previously assigned to category c for an uninstalled suite dependency. It provisions pinned packages and the suite's missing bake alias. The same four guest artifacts, launcher, upstream revision and deadlines are used before and after. The supplemental dependency tree and the runner's alias setup change.
+
+| Engine | Selected files | Fully passing before → after | Observed passes before → after | File timeouts before → after |
+| --- | --- | --- | --- | --- |
+| quickjs | 49 | 0 → 8 | 306 → 375 | 0 → 0 |
+| jsc | 49 | 0 → 8 | 306 → 375 | 0 → 0 |
+| browser | 49 | 0 → 9 | 304 → 378 | 0 → 0 |
+
+| Category | Full-census failure assignments | Updated recorded failure assignments |
+| --- | --- | --- |
+| a | 84 | 95 |
+| b | 81 | 82 |
+| c | 54 | 5 |
+| d | 1451 | 1479 |
+| e | 93 | 93 |
+| f | 23 | 24 |
+
+[dependency-replay.json](dependency-replay.json) records all 49 outcomes and first failures on each engine, with input provenance and raw-result hashes. [dependency-files.txt](dependency-files.txt) fixes the selection. [Dependency setup](dependencies/README.md) gives the install and replay commands and version sources.
+
+The selected rows in failures.tsv use this replay's QuickJS first failures, with category f only when the file fully passes on another engine. Passing and skip-only files have no failure row. Updated assignment counts and the triage groups are generated from failures.tsv. The full-census tables above and summary.json retain the earlier 2,305-file observation; this focused replay does not claim a new full-suite total.
+<!-- dependency-replay:end -->
+
 [summary.json](summary.json) records artifact hashes, upstream revision, deadlines, categories, engine comparisons and changes since the previous baseline. [failures.tsv](failures.tsv) gives every failing file a first error, test name, category and confidence. [triage.md](triage.md) groups those assignments and lists all timeouts and formerly passing files. [investigations.md](investigations.md) explains the regressions, timeout controls and the ten next fixes.
 
 A fully passing file must exit zero, finish a test report, have at least one pass, and have no reported failures or unhandled errors. Empty and skip-only files are separate. Observed totals include skips, todos and the runner's synthetic collection failures. They exclude tests that never registered. A timeout preserves only the results seen before the deadline.
@@ -297,7 +322,7 @@ QuickJS and JSC use the native launcher and its networking/subprocess ABI. The b
 
 Every worker owns a source snapshot, restores tracked changes and deletes generated files after each test, verifies clean Git status, then clears its temp directory. Snapshot attributes preserve fixture bytes. Per-file process groups are killed and reaped on timeout/interruption. The runner removes its scratch directory on success, failure and handled signals. After an uncatchable SIGKILL, inspect the named scratch directory and its processes before deleting it.
 
-The current supplemental dependency tree has 2,483 hashed files, compared with 4,248 in the historical baseline. Root upstream dependencies retain the same 537 files and hash. The changed runner, suite revision, and supplemental dependency hash make these runs non-comparable as isolated runtime gains. Native addons and the full upstream framework/app dependency graph are not installed. Missing packages remain setup blockers.
+The last full census used 2,483 hashed supplemental dependency files, compared with 4,248 in the historical baseline. Root upstream dependencies retained the same 537 files and hash. The changed runner, suite revision, and supplemental dependency hash make those runs non-comparable as isolated runtime gains. The later [dependency setup replay](#dependency-setup-replay) expands the pinned dependency tree and updates its selected failure rows. Native addon bindings remain unavailable in the guest.
 
 `bun:jsc.heapStats()` exposes engine memory totals with unavailable per-type/protected counters left empty or zero. Passing leak assertions against these counters does not establish leak freedom. `isASANEnabled()` is false, and unsupported unsafe operations still throw. Self-spawn runs fresh wasm instances, never native Bun. External programs, child IPC, terminals, real OS process trees and several stdio modes remain unsupported.
 

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -181,6 +182,51 @@ section("docs/bun-test-suite/README.md", "history-comparison", [
     ["File deadline / test deadline", "15 seconds / 2,000 ms", "15 seconds / 2,000 ms"],
   ]),
   "The historical inputs are preserved in [historical-summary.json](historical-summary.json). The current inputs are in [summary.json](summary.json). No historical artifact was rerun with the current runner and dependencies. Regenerate these tables with `bun scripts/refresh-compatibility-docs.ts`; `--check` rejects stale tables.",
+].join("\n\n"));
+
+const dependencyReplay = record(json("docs/bun-test-suite/dependency-replay.json"));
+const parsedAssignments = spawnSync("python3", ["-c", "import csv,json,sys; print(json.dumps(list(csv.DictReader(sys.stdin, delimiter='\\t'))))"], {
+  input: readFileSync(root + "docs/bun-test-suite/failures.tsv", "utf8"), encoding: "utf8", maxBuffer: 8 * 1024 * 1024,
+});
+if (parsedAssignments.error) throw parsedAssignments.error;
+if (parsedAssignments.status !== 0) throw new Error(parsedAssignments.stderr);
+const assignmentCounts = new Map<string, number>();
+const failureGroups = new Map<string, [Record<string, unknown>, ...Record<string, unknown>[]]>();
+for (const row of array(JSON.parse(parsedAssignments.stdout)).map(record)) {
+  const category = string(row.category);
+  if (!categories.includes(category)) throw new Error(`Unknown failure category ${category}`);
+  assignmentCounts.set(category, (assignmentCounts.get(category) ?? 0) + 1);
+  const key = category + "\t" + string(row.topic);
+  const group = failureGroups.get(key);
+  if (group) group.push(row);
+  else failureGroups.set(key, [row]);
+}
+const orderedGroups = Array.from(failureGroups.entries());
+orderedGroups.sort(([first], [second]) => first < second ? -1 : first > second ? 1 : 0);
+section("docs/bun-test-suite/triage.md", "failure-groups", table(
+  ["Category", "First blocker / topic", "Files", "Example file", "Test", "Error"],
+  orderedGroups.map(([, rows]) => {
+    const first = rows[0];
+    return [string(first.category), string(first.topic), String(rows.length), string(first.file), string(first.test).slice(0, 100), string(first.error).slice(0, 180)];
+  }),
+));
+const dependencyEngines = record(dependencyReplay.engines);
+const dependencyRows = ["quickjs", "jsc", "browser"].map(engine => {
+  const runs = record(dependencyEngines[engine]);
+  const old = record(record(runs.before).summary);
+  const current = record(record(runs.after).summary);
+  return [engine, String(number(old.files)), `${number(old.fully_passing)} → ${number(current.fully_passing)}`,
+    `${number(record(old.counts).pass)} → ${number(record(current.counts).pass)}`,
+    `${number(old.timeouts)} → ${number(current.timeouts)}`];
+});
+section("docs/bun-test-suite/README.md", "dependency-replay", [
+  "### Dependency setup replay",
+  `The ${string(dependencyReplay.date)} replay selects the 49 files previously assigned to category c for an uninstalled suite dependency. It provisions pinned packages and the suite's missing bake alias. The same four guest artifacts, launcher, upstream revision and deadlines are used before and after. The supplemental dependency tree and the runner's alias setup change.`,
+  table(["Engine", "Selected files", "Fully passing before → after", "Observed passes before → after", "File timeouts before → after"], dependencyRows),
+  table(["Category", "Full-census failure assignments", "Updated recorded failure assignments"], categories.map(key => [key,
+    String(number(record(summary.categories)[key])), String(assignmentCounts.get(key) ?? 0)])),
+  "[dependency-replay.json](dependency-replay.json) records all 49 outcomes and first failures on each engine, with input provenance and raw-result hashes. [dependency-files.txt](dependency-files.txt) fixes the selection. [Dependency setup](dependencies/README.md) gives the install and replay commands and version sources.",
+  "The selected rows in failures.tsv use this replay's QuickJS first failures, with category f only when the file fully passes on another engine. Passing and skip-only files have no failure row. Updated assignment counts and the triage groups are generated from failures.tsv. The full-census tables above and summary.json retain the earlier 2,305-file observation; this focused replay does not claim a new full-suite total.",
 ].join("\n\n"));
 
 process.stdout.write(`Compatibility tables ${check ? "verified" : "refreshed"} from raw JSON.\n`);
