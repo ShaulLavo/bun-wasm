@@ -129,6 +129,11 @@
     emitWarning(warning);
   }
 
+  function publishAdded(target, type, undo) {
+    if (!internal.listenerChanged) return;
+    try { internal.listenerChanged(target, type); } catch (error) { undo(); throw error; }
+  }
+
   function addListener(target, type, listener, prepend) {
     checkListener(listener);
     let events = ensureEvents(target);
@@ -140,7 +145,8 @@
     if (existing === undefined) {
       events[type] = listener;
       target._eventsCount++;
-      if (internal.listenerChanged) internal.listenerChanged(target, type);
+      // A rejected registration (an unsupported signal) leaves no trace of the listener.
+      publishAdded(target, type, () => { delete events[type]; target._eventsCount--; });
       return target;
     }
     let list = existing;
@@ -152,7 +158,10 @@
     } else {
       list.push(listener);
     }
-    if (internal.listenerChanged) internal.listenerChanged(target, type);
+    publishAdded(target, type, () => {
+      if (typeof existing === "function") events[type] = existing;
+      else list.splice(list.indexOf(listener), 1);
+    });
     warnIfLeaking(target, type, list);
     return target;
   }

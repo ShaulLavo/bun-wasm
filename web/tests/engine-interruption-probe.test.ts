@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { WasiExit } from "waffle/core";
 import { ProcessSignalExit } from "waffle/proc/abi";
 import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
-import { DefaultSignal } from "../src/default-signal";
+import { RuntimeWorkerSignal } from "waffle/browser/worker";
 import { assertFatalEngineCompletion, assertNativeEngineCompletion, engineInterruptionFailure, observeEngineImports, observeEventLoopWait, observedEngineStart, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 
 function fixture() {
@@ -11,9 +11,7 @@ function fixture() {
   const requested = new Int32Array(new SharedArrayBuffer(4));
   const pending = new Int32Array(new SharedArrayBuffer(65 * 4));
   const view = new DataView(memory.buffer);
-  const packet = 64, result = 96;
-  view.setInt32(packet, 18, true); view.setInt32(packet + 8, 4, true);
-  return { probe, memory, requested, pending, view, packet, result };
+  return { probe, memory, requested, pending, view, number: 0, mode: 4 };
 }
 test("fatal proof failure retains full probe and process context as diagnostic JSON", () => {
   const f = fixture(), original = new Error("checkpoint assertion");
@@ -39,12 +37,11 @@ test("diagnostic collection failure preserves the original proof error", () => {
 });
 test("mode4 checkpoint observes selected signal and preserves real shared pending bit", () => {
   const f = fixture(); let calls = 0;
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-    sock_send() { calls++; f.view.setInt32(f.result, 0, true); return 0; }, fd_write() { return 0; },
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { calls++; return 0; } }, wasi_snapshot_preview1: { fd_write() { return 0; },
   } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
   Atomics.store(f.requested, 0, 2); Atomics.store(f.pending, 2, 6);
-  expect((imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toBe(0);
+  expect((imports.runtime_proc!.signal as Function)(f.number, f.mode)).toBe(0);
   expect(calls).toBe(1);
   const evidence = snapshotProbe(f.probe);
   expect(evidence.checkpoints).toBe(1); expect(evidence.checkpointAfterSignal).toBe(1);
@@ -56,42 +53,40 @@ test("mode4 checkpoint observes selected signal and preserves real shared pendin
 });
 test("probe rejects fake mode4 preservation and distinguishes mode0 dequeue after yield", () => {
   const f = fixture();
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-    sock_send() { Atomics.store(f.pending, 2, 2); f.view.setInt32(f.result, 2, true); return 0; }, fd_write() { return 0; },
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { Atomics.store(f.pending, 2, 2); return 2; } }, wasi_snapshot_preview1: { fd_write() { return 0; },
   } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
-  const send = imports.wasi_snapshot_preview1!.sock_send as Function;
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
+  const send = imports.runtime_proc!.signal as Function;
   Atomics.store(f.pending, 2, 6);
-  send(0x7fffb0b0, f.packet, 5, 0, f.result);
+  send(f.number, f.mode);
   expect(snapshotProbe(f.probe).pendingLostAtCheckpoint).toBe(1);
   expect(snapshotProbe(f.probe).checkpointNonzero).toBe(1);
   expect(snapshotProbe(f.probe).handledSignal).toBe(0);
-  f.view.setInt32(f.packet + 8, 0, true);
-  send(0x7fffb0b0, f.packet, 5, 0, f.result);
+  f.mode = 0;
+  send(f.number, f.mode);
   expect(snapshotProbe(f.probe).handledBeforeLoopFinished).toBe(1);
   Atomics.store(f.probe, probeCell.loopFinishedWrites, 1);
-  send(0x7fffb0b0, f.packet, 5, 0, f.result);
+  send(f.number, f.mode);
   expect(snapshotProbe(f.probe).handledBeforeLoopFinished).toBe(1);
   expect(snapshotProbe(f.probe).handledSignal).toBe(2);
   expect(snapshotProbe(f.probe).checkpoints).toBe(1);
 });
 test("unrelated host calls cannot fabricate checkpoint evidence", () => {
   const f = fixture();
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
-  const send = imports.wasi_snapshot_preview1!.sock_send as Function;
-  send(0, f.packet, 5, 0, f.result);
-  send(0x7fffb0b0, f.packet, 4, 0, f.result);
-  f.view.setInt32(f.packet + 4, 2, true);
-  send(0x7fffb0b0, f.packet, 5, 0, f.result);
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { return 0; } }, wasi_snapshot_preview1: { fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
+  const send = imports.runtime_proc!.signal as Function;
+  send(2, 2);
+  send(15, 1);
+  send(0, 3);
   expect(snapshotProbe(f.probe).checkpoints).toBe(0);
 });
 test("probe preserves the typed host exception and records actual callback unwind", () => {
   const f = fixture(), fatal = new ProcessSignalExit(15);
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { throw fatal; }, fd_write() { return 0; } } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { throw fatal; } }, wasi_snapshot_preview1: { fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
   Atomics.store(f.requested, 0, 15);
-  expect(() => (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toThrow(fatal);
+  expect(() => (imports.runtime_proc!.signal as Function)(f.number, f.mode)).toThrow(fatal);
   expect(snapshotProbe(f.probe).checkpointThrew).toBe(1);
   expect(snapshotProbe(f.probe).checkpointReturned).toBe(0);
 });
@@ -100,12 +95,11 @@ test("signal published inside an in-flight mode4 callback is observed at its act
     const f = fixture(), fatal = new ProcessSignalExit(signal);
     let calls = 0;
     Atomics.store(f.requested, 0, previousSignal);
-    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-      sock_send() { calls++; Atomics.store(f.requested, 0, signal); throw fatal; }, fd_write() { return 0; },
+    const imports: WebAssembly.Imports = { runtime_proc: { signal() { calls++; Atomics.store(f.requested, 0, signal); throw fatal; } }, wasi_snapshot_preview1: { fd_write() { return 0; },
     } };
-    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+    observeEngineImports(imports, f.probe, () => f.memory, f.pending);
     let caught: unknown;
-    try { (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result); }
+    try { (imports.runtime_proc!.signal as Function)(f.number, f.mode); }
     catch (error) { caught = error; }
     expect(caught).toBe(fatal);
     expect(calls).toBe(1);
@@ -122,12 +116,11 @@ test("fatal checkpoint signal is authoritative before wake publication reaches t
     const f = fixture(), fatal = new ProcessSignalExit(15);
     let calls = 0;
     Atomics.store(f.requested, 0, previousSignal);
-    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-      sock_send() { calls++; throw fatal; }, fd_write() { return 0; },
+    const imports: WebAssembly.Imports = { runtime_proc: { signal() { calls++; throw fatal; } }, wasi_snapshot_preview1: { fd_write() { return 0; },
     } };
-    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+    observeEngineImports(imports, f.probe, () => f.memory, f.pending);
     let caught: unknown;
-    try { (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result); }
+    try { (imports.runtime_proc!.signal as Function)(f.number, f.mode); }
     catch (error) { caught = error; }
     // The fatal decision/typed throw precedes requestSignal's later publishWake.
     const beforePublication = snapshotProbe(f.probe);
@@ -144,12 +137,12 @@ test("fatal checkpoint signal is authoritative before wake publication reaches t
 test("signal present before a throwing checkpoint is counted once, unrelated exceptions do not select one", () => {
   for (const signal of [0, 2, 15]) {
     const f = fixture(), fatal = new Error("callback error");
-    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-      sock_send() { throw fatal; }, fd_write() { return 0; },
+    const imports: WebAssembly.Imports = { runtime_proc: { signal() { throw fatal; } }, wasi_snapshot_preview1: { fd_write() { return 0; },
     } };
-    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+    observeEngineImports(imports, f.probe, () => f.memory, f.pending);
     Atomics.store(f.requested, 0, signal);
-    expect(() => (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toThrow(fatal);
+    if (signal) Atomics.store(f.pending, signal, 6);
+    expect(() => (imports.runtime_proc!.signal as Function)(f.number, f.mode)).toThrow(fatal);
     const evidence = snapshotProbe(f.probe);
     expect(evidence.checkpointAfterSignal).toBe(signal ? 1 : 0);
     expect(evidence.checkpointSignal).toBe(0);
@@ -160,11 +153,11 @@ test("normal checkpoint return does not fabricate a fatal observation from a lat
   for (const previousSignal of [0, 2]) {
     const f = fixture();
     Atomics.store(f.requested, 0, previousSignal);
-    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-      sock_send() { Atomics.store(f.requested, 0, 15); f.view.setInt32(f.result, 0, true); return 0; }, fd_write() { return 0; },
+    if (previousSignal) Atomics.store(f.pending, previousSignal, 6);
+    const imports: WebAssembly.Imports = { runtime_proc: { signal() { Atomics.store(f.requested, 0, 15); return 0; } }, wasi_snapshot_preview1: { fd_write() { return 0; },
     } };
-    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
-    expect((imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result)).toBe(0);
+    observeEngineImports(imports, f.probe, () => f.memory, f.pending);
+    expect((imports.runtime_proc!.signal as Function)(f.number, f.mode)).toBe(0);
     const evidence = snapshotProbe(f.probe);
     expect(evidence.checkpointAfterSignal).toBe(previousSignal ? 1 : 0);
     expect(evidence.checkpointSignal).toBe(previousSignal);
@@ -174,8 +167,8 @@ test("normal checkpoint return does not fabricate a fatal observation from a lat
 });
 test("catch/finally writes are visible even when real revoked stdio throws", () => {
   const f = fixture(), fatal = new Error("revoked stdio");
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { throw fatal; } } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { return 0; } }, wasi_snapshot_preview1: { fd_write() { throw fatal; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
   const bytes = new TextEncoder().encode("CATCH-RAN\nFINALLY-RAN\nAFTER-RAN\n");
   new Uint8Array(f.memory.buffer, 512, bytes.length).set(bytes);
   f.view.setUint32(256, 512, true); f.view.setUint32(260, bytes.length, true);
@@ -185,8 +178,8 @@ test("catch/finally writes are visible even when real revoked stdio throws", () 
 });
 test("runtime diagnostics quoting marker source are not executed catch/finally/continuation writes", () => {
   const f = fixture();
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { return 0; } }, wasi_snapshot_preview1: { fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
   const text = "1 | try { while(true){} } catch(error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');\nInternalError: interrupted\n";
   const bytes = new TextEncoder().encode(text);
   new Uint8Array(f.memory.buffer, 512, bytes.length).set(bytes);
@@ -198,8 +191,8 @@ test("runtime diagnostics quoting marker source are not executed catch/finally/c
 });
 test("marker substrings and unterminated source tokens do not fabricate execution evidence", () => {
   const f = fixture();
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { return 0; } }, wasi_snapshot_preview1: { fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
   const bytes = new TextEncoder().encode("NOT-CATCH-RAN\nFINALLY-RAN-not\nError: AFTER-RAN\nCATCH-RAN");
   new Uint8Array(f.memory.buffer, 512, bytes.length).set(bytes);
   f.view.setUint32(256, 512, true); f.view.setUint32(260, bytes.length, true);
@@ -209,8 +202,8 @@ test("marker substrings and unterminated source tokens do not fabricate executio
 });
 test("exact marker records survive split fd_write calls and iovecs without joining different fds", () => {
   const f = fixture();
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { return 0; } }, wasi_snapshot_preview1: { fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
   const write = (fd: number, parts: string[]) => {
     let pointer = 512;
     for (const [index, part] of parts.entries()) {
@@ -230,8 +223,8 @@ test("exact marker records survive split fd_write calls and iovecs without joini
 });
 test("split quoted source remains diagnostic while a subsequent exact marker is still rejected", () => {
   const f = fixture();
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { return 0; } }, wasi_snapshot_preview1: { fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
   const write = (text: string) => {
     const bytes = new TextEncoder().encode(text);
     new Uint8Array(f.memory.buffer, 512, bytes.length).set(bytes);
@@ -251,32 +244,28 @@ test("output observation accepts a resizable wasm memory buffer", () => {
   const view = new DataView(buffer), bytes = new TextEncoder().encode("ready\n");
   new Uint8Array(buffer, 512, bytes.length).set(bytes);
   view.setUint32(256, 512, true); view.setUint32(260, bytes.length, true);
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send() { return 0; }, fd_write() { return 0; } } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { return 0; } }, wasi_snapshot_preview1: { fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
   expect((imports.wasi_snapshot_preview1!.fd_write as Function)(2, 256, 1, 300)).toBe(0);
   expect(snapshotProbe(f.probe).readyWrites).toBe(1);
 });
-test("baseline masks only optional slot18 before _start and still observes unwind", () => {
-  const f = fixture(), pointer = 1024, fatal = new Error("start unwind");
-  f.view.setUint32(pointer, 1, true); f.view.setUint32(pointer + 4, 19, true);
-  for (let slot = 0; slot < 19; slot++) f.view.setUint32(pointer + 8 + slot * 4, 0xffffffff, true);
-  const start = observedEngineStart({ memory: f.memory, bun_wasm_host_slots: () => pointer,
-    _start() { expect(f.view.getUint32(pointer + 8 + 18 * 4, true)).toBe(0); throw fatal; },
-  }, f.probe, false);
-  expect(() => start()).toThrow(fatal);
-  expect(f.view.getUint32(pointer + 8 + 17 * 4, true)).toBe(0xffffffff);
+test("masked baseline refuses to claim disabled engine hooks by masking a removed optional slot", () => {
+  const f = fixture(); let starts = 0;
+  const start = observedEngineStart({ _start() { starts++; return 0; } }, f.probe, false);
+  expect(() => start()).toThrow("No hook-disabled baseline");
+  expect(starts).toBe(0);
   const evidence = snapshotProbe(f.probe);
-  expect(evidence.slotMasked).toBe(1); expect(evidence.startEntered).toBe(1); expect(evidence.startLeft).toBe(1);
+  expect(evidence.slotMasked).toBe(0); expect(evidence.startEntered).toBe(0); expect(evidence.startLeft).toBe(0);
 });
 test("timed samples leave the production checkpoint import completely untouched", () => {
   const f = fixture();
   const send = () => 0;
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: { sock_send: send, fd_write() { return 0; } } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending, false);
-  expect(imports.wasi_snapshot_preview1!.sock_send).toBe(send);
+  const imports: WebAssembly.Imports = { runtime_proc: { signal: send }, wasi_snapshot_preview1: { fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending, false);
+  expect(imports.runtime_proc!.signal).toBe(send);
   expect(snapshotProbe(f.probe).checkpoints).toBe(0);
 });
-test("enabled run preserves slot18 and the actual _start result", () => {
+test("enabled run preserves the direct generic import and the actual _start result", () => {
   const f = fixture();
   const start = observedEngineStart({ _start: () => 42 }, f.probe, true);
   expect(start()).toBe(42);
@@ -331,27 +320,25 @@ test("idle evidence records native ok separately without claiming signal-notify 
     expect(evidence.idleWaitNotEqual).toBe(0); expect(evidence.idleWaitBlocked).toBe(1);
   } finally { restore(); }
 });
-test("one-shot native interrupt injection returns real op4 negative without host send or throw", () => {
+test("one-shot native interrupt injection returns real mode4 negative without host call or throw", () => {
   const f = fixture(); let calls = 0;
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-    sock_send() { calls++; f.view.setInt32(f.result, 0, true); return 0; }, fd_write() { return 0; },
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { calls++; return 0; } }, wasi_snapshot_preview1: { fd_write() { return 0; },
   } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
   Atomics.store(f.probe, probeCell.nativeInterruptRequested, 1);
-  const send = imports.wasi_snapshot_preview1!.sock_send as Function;
-  f.view.setInt32(f.packet + 8, 0, true);
-  send(0x7fffb0b0, f.packet, 5, 0, f.result);
+  const send = imports.runtime_proc!.signal as Function;
+  f.mode = 0;
+  send(f.number, f.mode);
   expect(Atomics.load(f.probe, probeCell.nativeInterruptRequested)).toBe(1);
-  f.view.setInt32(f.packet + 8, 4, true);
-  expect(send(0x7fffb0b0, f.packet, 5, 0, f.result)).toBe(0);
-  expect(f.view.getInt32(f.result, true)).toBe(-1);
+  f.mode = 4;
+  expect(send(f.number, f.mode)).toBe(-1);
   expect(calls).toBe(1);
   const injected = snapshotProbe(f.probe);
   expect(injected.nativeInterruptInjected).toBe(1); expect(injected.checkpointNonzero).toBe(1);
   expect(injected.checkpointReturned).toBe(1); expect(injected.checkpointThrew).toBe(0);
   expect(Atomics.load(f.requested, 0)).toBe(0);
-  send(0x7fffb0b0, f.packet, 5, 0, f.result);
-  expect(calls).toBe(2); expect(f.view.getInt32(f.result, true)).toBe(0);
+  expect(send(f.number, f.mode)).toBe(0);
+  expect(calls).toBe(2);
   expect(snapshotProbe(f.probe).nativeInterruptInjected).toBe(1);
 });
 test("idle timeout stretching preserves foreign, non-budget-cell and zero-time waits", () => {
@@ -379,17 +366,16 @@ test("notify mutation touches only the exact process-budget wake cell and restor
   expect(target.notify).toBe(native);
 });
 test("fatal completion admits matching production signal types at the checkpoint and _start", () => {
-  for (const Fatal of [DefaultSignal, ProcessSignalExit]) {
+  for (const Fatal of [RuntimeWorkerSignal, ProcessSignalExit]) {
     for (const signal of [2, 15]) {
       const f = fixture(), fatal = new Fatal(signal), outcome = outcomeWord();
       let calls = 0;
       Atomics.store(f.requested, 0, signal === 15 ? 2 : 0);
-      const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-        sock_send() { calls++; claimOutcome(outcome, { kind: "signaled", code: signal }); throw fatal; }, fd_write() { return 0; },
+      const imports: WebAssembly.Imports = { runtime_proc: { signal() { calls++; claimOutcome(outcome, { kind: "signaled", code: signal }); throw fatal; } }, wasi_snapshot_preview1: { fd_write() { return 0; },
       } };
-      observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+      observeEngineImports(imports, f.probe, () => f.memory, f.pending);
       const start = observedEngineStart({ _start() {
-        (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result);
+        (imports.runtime_proc!.signal as Function)(f.number, f.mode);
       } }, f.probe, true);
       let caught: unknown;
       try { start(); } catch (error) { caught = error; }
@@ -411,19 +397,19 @@ test("fatal completion admits matching production signal types at the checkpoint
 });
 test("selected fatal outcome cannot turn a RuntimeError or name/code forgery into typed fatal evidence", () => {
   const errors = [new WebAssembly.RuntimeError("unreachable mutant")].concat(
-    ["DefaultSignal", "ProcessSignalExit"].map(name => Object.assign(new Error("forged terminal exit"), { name, signal: 15, status: 143, code: 143 })),
+    ["RuntimeWorkerSignal", "ProcessSignalExit"].map(name => Object.assign(new Error("forged terminal exit"), { name, signal: 15, status: 143, code: 143 })),
   );
   for (const error of errors) {
     const f = fixture(), outcome = outcomeWord();
     let calls = 0;
     claimOutcome(outcome, { kind: "signaled", code: 15 });
     Atomics.store(f.requested, 0, 15);
-    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-      sock_send() { calls++; throw error; }, fd_write() { return 0; },
+    Atomics.store(f.pending, 15, 6);
+    const imports: WebAssembly.Imports = { runtime_proc: { signal() { calls++; throw error; } }, wasi_snapshot_preview1: { fd_write() { return 0; },
     } };
-    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+    observeEngineImports(imports, f.probe, () => f.memory, f.pending);
     const start = observedEngineStart({ _start() {
-      (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result);
+      (imports.runtime_proc!.signal as Function)(f.number, f.mode);
     } }, f.probe, true);
     let caught: unknown;
     try { start(); } catch (thrown) { caught = thrown; }
@@ -439,20 +425,19 @@ test("selected fatal outcome cannot turn a RuntimeError or name/code forgery int
   }
 });
 test("fatal admission rejects a typed checkpoint followed by an unrelated trap or different terminal signal", () => {
-  for (const replacement of [new WebAssembly.RuntimeError("trap after checkpoint"), new DefaultSignal(2)]) {
-    const f = fixture(), fatal = new DefaultSignal(15);
-    const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-      sock_send() { throw fatal; }, fd_write() { return 0; },
+  for (const replacement of [new WebAssembly.RuntimeError("trap after checkpoint"), new RuntimeWorkerSignal(2)]) {
+    const f = fixture(), fatal = new RuntimeWorkerSignal(15);
+    const imports: WebAssembly.Imports = { runtime_proc: { signal() { throw fatal; } }, wasi_snapshot_preview1: { fd_write() { return 0; },
     } };
-    observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+    observeEngineImports(imports, f.probe, () => f.memory, f.pending);
     const start = observedEngineStart({ _start() {
-      try { (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result); }
+      try { (imports.runtime_proc!.signal as Function)(f.number, f.mode); }
       catch (error) { expect(error).toBe(fatal); throw replacement; }
     } }, f.probe, true);
     expect(() => start()).toThrow(replacement);
     const evidence = snapshotProbe(f.probe);
     expect(evidence.checkpointFatalSignal).toBe(15);
-    expect(evidence.startFatalSignal).toBe(replacement instanceof DefaultSignal ? 2 : 0);
+    expect(evidence.startFatalSignal).toBe(replacement instanceof RuntimeWorkerSignal ? 2 : 0);
     expect(() => assertFatalEngineCompletion(evidence, 15)).toThrow("typed fatal");
     expect(() => assertFatalEngineCompletion(evidence, 2)).toThrow("typed fatal");
   }
@@ -475,13 +460,12 @@ test("native completion admission accepts normal return and actual imported Wasi
 });
 test("native-path RuntimeError mutant after negative callback cannot pass as engine unwind", () => {
   const f = fixture(), trap = new WebAssembly.RuntimeError("unreachable mutant");
-  const imports: WebAssembly.Imports = { wasi_snapshot_preview1: {
-    sock_send() { throw new Error("negative injection must bypass host"); }, fd_write() { return 0; },
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { throw new Error("negative injection must bypass host"); } }, wasi_snapshot_preview1: { fd_write() { return 0; },
   } };
-  observeEngineImports(imports, f.probe, () => f.memory, f.requested, f.pending);
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
   Atomics.store(f.probe, probeCell.nativeInterruptRequested, 1);
   const start = observedEngineStart({ _start() {
-    (imports.wasi_snapshot_preview1!.sock_send as Function)(0x7fffb0b0, f.packet, 5, 0, f.result);
+    (imports.runtime_proc!.signal as Function)(f.number, f.mode);
     throw trap;
   } }, f.probe, true);
   expect(() => start()).toThrow(trap);

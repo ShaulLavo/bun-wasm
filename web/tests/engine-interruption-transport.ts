@@ -1,24 +1,19 @@
-import type { RunRequest } from "../src/worker";
+import type { RuntimeWorkerRequest } from "waffle/browser/worker";
+import type { RunRequest } from "../src/bun-executor";
 import { workerProcessState } from "waffle/proc/worker-client";
 
-/** Views of the real request, including generic signal records at nonzero offsets.
- * Never allocate a substitute budget: a detached wait word would fabricate proof. */
-export function engineInterruptionTransport(request: RunRequest) {
-  const runtime = request.runtimeProcess && workerProcessState(request.runtimeProcess);
-  const requestedSignal = runtime?.signals.requestedSignal
-    ?? (request.child?.requestedSignal ?? request.requestedSignal);
-  const signalState = runtime?.signals.signalState
-    ?? (request.child?.signalState ?? request.signalState);
-  const budget = request.child?.budget ?? request.budget;
-  const interrupt = runtime?.signals.interrupt ?? (request.child?.interrupt ?? request.interrupt);
-  const waitWord = request.adapter === "preview1"
-    ? interrupt instanceof Int32Array ? interrupt : interrupt && new Int32Array(interrupt)
-    : budget && new Int32Array(budget, 4, 1);
-  if (!requestedSignal || !signalState || !waitWord) throw new Error("interruption probe requires the production signal and wait transport");
+type ProbeRequest = Pick<RuntimeWorkerRequest, "runtimeProcess"> & Partial<Pick<RunRequest, "engine" | "adapter">>;
+/** Exact views of the real generic request, including nonzero signal-record offsets.
+ * Bun's runtime_proc.poll waits on service readiness; preview1 poll_oneoff waits on its
+ * process interrupt cell. Never manufacture a legacy budget or a detached wait word. */
+export function engineInterruptionTransport(request: ProbeRequest) {
+  if (!request.runtimeProcess) throw new Error("interruption probe requires the production signal and wait transport");
+  const state = workerProcessState(request.runtimeProcess);
+  const preview1 = request.engine === undefined || request.adapter === "preview1";
   return {
-    route: runtime ? "runtimeProcess" as const : "legacy" as const,
-    requestedSignal: requestedSignal instanceof Int32Array ? requestedSignal : new Int32Array(requestedSignal),
-    signalState: signalState instanceof Int32Array ? signalState : new Int32Array(signalState),
-    waitWord,
+    route: "runtimeProcess" as const,
+    requestedSignal: state.signals.requestedSignal,
+    signalState: state.signals.signalState,
+    waitWord: preview1 ? state.signals.interrupt : state.wake,
   };
 }

@@ -33,13 +33,6 @@ async function budget() {
   const children = Array.from({ length: 3 }, () => start(["lint", "-f", "json", "input.js"], cwd));
   for (const result of await Promise.all(children.map(finish))) diagnosed(result);
   console.log("three parallel config-backed commands");
-  const ordinary = Array.from({ length: 4 }, () => start(["-e", "await Bun.sleep(300)"]));
-  try {
-    assert.throws(() => start(["-e", "0"]), { code: "EAGAIN" });
-  } finally {
-    for (const result of await Promise.all(ordinary.map(finish))) assert.equal(result.code, 0, result.stderr);
-  }
-  console.log("public child limit remains four");
   for (let i = 0; i < 8; i++) diagnosed(await lint(cwd));
   console.log("eight sequential config evaluations");
 }

@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm-web",
-  "version": "0.0.42",
+  "version": "0.0.43",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,8 @@
     "dev": "bun build.ts && bun serve.ts",
     "check": "tsc -p .",
     "test": "bun test ./tests/*.test.js ./tests/*.test.ts",
-    "test:browser": "bun tests/browser-smoke.mjs"
+    "test:browser": "bun tests/browser-smoke.mjs",
+    "test:browser:bun-runtime-proc": "bun tests/bun-runtime-proc-browser.ts"
   },
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.5",
@@ -19,7 +20,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "codemirror": "^6.0.2",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#5677fc64dd7443a073747284702e1fba92d6b7c0"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#a0a0f8794cde02410a11be38771b31cdbd3af89a"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

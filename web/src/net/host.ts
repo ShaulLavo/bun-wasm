@@ -78,7 +78,7 @@ export class NetHost {
         hostShutdown: (handle: number) => this.host.shutdown(handle),
         hostLocalAddr: (handle: number) => this.host.localAddr(handle),
       },
-      caps: Object.fromEntries(SLOT_NAMES.map((name) => [name, name !== "poll" && name !== "signal"])),
+      caps: Object.fromEntries(SLOT_NAMES.map((name) => [name, name !== "poll"])),
       onNews: (cb) => this.host.onNews(cb),
     };
   }

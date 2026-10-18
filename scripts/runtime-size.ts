@@ -27,22 +27,28 @@ export function initialJavaScript(outputs: OutputGraph, roots: readonly string[]
   return Array.from(seen).sort();
 }
 
-const CORE_BUDGET_KIB = 7;
+// Waffle 0.0.41: typed startup, directory and fd-3 support; measured 7,516 B.
+const CORE_BUDGET_KIB = 7.5;
 export function checkCoreBudget(gzipBytes: number): void {
   const budget = CORE_BUDGET_KIB * 1024;
   if (gzipBytes > budget) throw new Error(`core exceeds ${budget} B gzip budget by ${gzipBytes - budget} B; inspect runtime/core imports and the layer report`);
 }
 
-/** Reservation and synchronous signal-control primitives are eager, not the process service. */
+/** Reservation/directory cells, signal control and typed startup values are eager, not the
+ * supervisor, executable registry or worker service. Their bytes remain in the size totals. */
 export function processServiceInputs(inputs: readonly string[], runtime: RuntimePackage): string[] {
   return inputs.filter(path => {
     const match = /^(?:dist\/)?proc\/(.+)\.(?:ts|js)$/.exec(runtime.relativeInput(path) ?? "");
-    return match !== null && !["identity", "stub", "outcome", "wait-status", "signals", "types"].includes(match[1]!);
+    return match !== null && !["identity", "stub", "control", "directory", "outcome", "start-errno", "start-failure", "wait-status", "signals", "types"].includes(match[1]!);
   });
 }
 export function checkLazyProcessService(inputs: readonly string[], runtime: RuntimePackage): void {
   const eager = processServiceInputs(inputs, runtime);
   if (eager.length) throw new Error(`process service is eager before first spawn: ${eager.join(", ")}`);
+}
+/** Bun supplies launch/engine policy; Waffle owns processes, signals and pipes. */
+export function bunProcessAdapterInputs(inputs: readonly string[]): string[] {
+  return inputs.filter(path => /(?:^|\/)web\/src\/(?:bun-executor|bun-launcher|subprocess-broker)\.ts$/.test(path));
 }
 /** Own Bun programs need only the tiny fatal-outcome check, never the load-time compiler. */
 export function checkLazyInterruptRewriter(inputs: readonly string[], runtime: RuntimePackage): void {
@@ -111,7 +117,7 @@ async function application(name: "web" | "sandbox", splitting: boolean, serviceW
   const inputs = Array.from(new Set(initialKeys.flatMap((key) => Object.keys(outputs[key]!.inputs)))).sort();
   const runtime = resolveRuntimePackage(resolve(root, name, "src/main.ts"));
   const procInputs = processServiceInputs(inputs, runtime);
-  const bunAdapterInputs = inputs.filter(path => /(?:\/|^)subprocess(?:[-.]|\/)/.test(path));
+  const bunAdapterInputs = bunProcessAdapterInputs(inputs);
   if (splitting) {
     checkLazyProcessService(inputs, runtime);
     checkLazyInterruptRewriter(inputs, runtime);
@@ -126,7 +132,7 @@ async function application(name: "web" | "sandbox", splitting: boolean, serviceW
     otherBunLightDownloads: ["index.html", "main.css", "bun-browser.wasm.gz"].concat(name === "sandbox" ? ["template.json"] : []),
     excludedDownloads: ["bun.wasm.gz", "bun-jsc.wasm.gz", "*.map"],
     proc: { eager: procInputs.length > 0, inputs: procInputs, bunAdapterInputs,
-      note: "The generic registry/table/supervisor loads on first spawn; Bun's existing slot and pipe adapter remains in its initial closure (pipe replacement is step 4b)." },
+      note: "Waffle owns the runtime_proc service and process-owned pipes; Bun contributes only launch and engine policy. Static service imports remain measured and gated separately from those Bun adapters." },
   };
 }
 
@@ -138,7 +144,6 @@ export async function runtimeSizeReport() {
     layer("net", ["waffle/browser/net/host", "waffle/browser/net/helper", "waffle/browser/preview"], 14),
     layer("proc", ["waffle/proc"], 8),
     layer("proc-stub", ["waffle/proc/stub", "waffle/proc/outcome"], 1),
-    layer("bun-process-adapter", ["web/src/subprocess.ts", "web/src/subprocess-broker.ts"], 8),
   ]);
   // This separately linked preview client uses a source-wrapper plugin; measure its real build.
   const net = layers.find((layer) => layer.name === "net")!;

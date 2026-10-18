@@ -17,6 +17,7 @@ test("packed package includes a working public worker, no demo or guest binaries
     const { stdout: listing } = await execute("tar", ["-tzf", join(scratch, archive)], { timeout: 10_000 });
     const files = listing.trim().split("\n");
     expect(files).toContain("package/src/worker-entry.ts");
+    expect(files).toContain("package/web/src/tool-command.ts");
     expect(files).toContain("package/dist/package/index.js");
     expect(files.some(name => /\.wasm(?:\.gz)?$/.test(name))).toBe(false);
     expect(files).not.toContain("package/web/src/main.ts");
@@ -31,7 +32,7 @@ test("packed package includes a working public worker, no demo or guest binaries
       import { loadBunWasm } from "bun-wasm/asset";
       import "bun-wasm/worker";
       import type { Runtime } from "waffle";
-      export async function install(runtime: Runtime) { return installBunAdapters(runtime); }
+      export async function install(runtime: Runtime) { return installBunAdapters(runtime, { workerUrl: "https://example.test/worker.js" }); }
       export { loadBunWasm, BunWasmExecutableConflictError };
     `);
     // Check the actual tarball and its exact peer, including the complete worker import
