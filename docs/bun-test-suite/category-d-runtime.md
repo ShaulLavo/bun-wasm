@@ -55,8 +55,6 @@ The manifest remains a historical selection when the live scoreboard changes.
 | `error: expect(received).toThrowErrorMatchingInlineSnapshot()` | 3 | `js/bun/spawn/readablestream-helpers.test.ts` |
 | `error: zlib.zstdCompressSync is not supported in bun-wasm: brotli is not compiled into bun.wasm` | 3 | `js/web/streams/compression.test.ts` |
 | `TypeError: Cannot convert undefined or null to object` | 3 | `js/bun/ini/ini.test.ts` |
-| `"error: expected 200 ""OK"", got 400 ""Bad Request"""` | 2 | `js/third_party/express/express.json.test.ts` |
-| `"TypeError: The ""callback"" argument must be of type function. Received type number (1)"` | 2 | `js/node/timers/node-timers.test.ts` |
 | `AssertionError: Missing expected exception (TypeError).` | 2 | `js/node/url/url-canParse-whatwg.test.js` |
 | `BuildError: Unexpected <` | 2 | `js/bun/resolve/xml/xml.test.js` |
 | `Error:` | 2 | `js/web/websocket/websocket-client-short-read.test.ts` |
@@ -69,32 +67,20 @@ The manifest remains a historical selection when the live scoreboard changes.
 | `error: expect(received).toBeFunction()` | 2 | `internal/sigaction-layout.test.ts` |
 | `error: expect(received).toBeInstanceOf(expected)` | 2 | `js/node/assert/assert-typedarray-deepequal.test.ts` |
 | `error: expect(received).toStartWith(expected)` | 2 | `cli/lint/messages.test.ts` |
+| `error: expected 200 "OK", got 400 "Bad Request"` | 2 | `js/third_party/express/express.json.test.ts` |
 | `error: secretOrPrivateKey must be an asymmetric key when using ES256` | 2 | `js/third_party/jsonwebtoken/jwt.asymmetric_signing.test.js` |
 | `error: zlib.zstdCompress is not supported in bun-wasm: brotli is not compiled into bun.wasm` | 2 | `regression/issue/23314/zstd-large-decompression.test.ts` |
 | `SyntaxError: Could not find export 'expectTypeOf' in module 'bun:test'` | 2 | `js/bun/test/expect-type-doctest.test.ts` |
 | `TypeError: cannot read property 'name' of undefined` | 2 | `js/bun/util/bun-cryptohasher.test.ts` |
 | `TypeError: object is not extensible` | 2 | `js/bun/namespace-prototype-pollution.test.ts` |
-| `"AssertionError: Expected ""Error: foo"` | 1 | `js/node/util/node-inspect-tests/parallel/util-format.test.js` |
-| `"AssertionError: wonky format(http://google.com"" onload=""alert(42)/) == http://google.com/%22%20onload=%22alert(42)/"` | 1 | `js/node/url/url-format.test.js` |
-| `"error: ""generate-string"" fixture exited with code 1"` | 1 | `js/bun/util/v8-heap-snapshot.test.ts` |
-| `"error: [/usr/local/bin/bun] Not all stdin was sent. Unsent: [""abc\n"",""pause\n"",""def\n""]"` | 1 | `js/node/process/stdin/stdin-fixtures.test.ts` |
-| `"error: error: Module not found ""node"""` | 1 | `cli/run/as-node.test.ts` |
-| `"error: error: Module not found ""start:dev"""` | 1 | `cli/run/run-process-env.test.ts` |
-| `"error: error: Module not found ""test"""` | 1 | `cli/run/run-quote.test.ts` |
-| `"error: Expected "";"" but found "":"""` | 1 | `cli/run/run-extensionless.test.ts` |
-| `"error: Expected "";"" but found ""wah"""` | 1 | `cli/run/run-shell.test.ts` |
-| `"error: Expected closing JSX tag to match opening tag ""<div>"""` | 1 | `regression/issue/14477/14477.test.ts` |
-| `"error: Expected stdout to be ""{\n  \""line\"": 3,\n  \""column\"": 17,\n  \""originalLine\"": 1,\n  \""originalColumn\"": 18\n}"" but got ""{}"""` | 1 | `js/bun/test/stack.test.ts` |
-| `"error: Failed to create user config-precedence: 500 {""error"":""Internal Server Error""}"` | 1 | `cli/install/config-precedence.test.ts` |
-| `"error: Failed to create user publish-tests: 500 {""error"":""Internal Server Error""}"` | 1 | `cli/install/bun-publish.test.ts` |
-| `"error: Module not found ""--bun"""` | 1 | `cli/run/commonjs-no-export.test.ts` |
-| `"RangeError: Unsupported encoding label ""ibm866"""` | 1 | `js/web/encoding/text-decoder-single-byte.test.ts` |
-| `"RangeError: Unsupported encoding label ""IBM866"""` | 1 | `js/web/encoding/text-decoder-wpt.test.ts` |
-| `"RangeError: Unsupported encoding label ""shift_jis"""` | 1 | `js/web/encoding/text-decoder-cjk.test.ts` |
-| `"TypeError: The ""data"" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object"` | 1 | `js/node/fs/fs-promises-writeFile-async-iterator.test.ts` |
+| `TypeError: The "callback" argument must be of type function. Received type number (1)` | 2 | `js/node/timers/node-timers.test.ts` |
+| `AssertionError: Expected "Error: foo` | 1 | `js/node/util/node-inspect-tests/parallel/util-format.test.js` |
 | `AssertionError: Missing expected exception (RangeError).` | 1 | `js/node/fs/fs-write-offset-bound.test.ts` |
+| `AssertionError: wonky format(http://google.com" onload="alert(42)/) == http://google.com/%22%20onload=%22alert(42)/` | 1 | `js/node/url/url-format.test.js` |
 | `ERR: error: bun audit is not supported in bun-wasm` | 1 | `cli/install/bun-audit.test.ts` |
 | `error: 'handshake' never fired` | 1 | `js/web/websocket/websocket-handshake-event.test.ts` |
+| `error: "generate-string" fixture exited with code 1` | 1 | `js/bun/util/v8-heap-snapshot.test.ts` |
+| `error: [/usr/local/bin/bun] Not all stdin was sent. Unsent: ["abc\n","pause\n","def\n"]` | 1 | `js/node/process/stdin/stdin-fixtures.test.ts` |
 | `error: 4` | 1 | `cli/run/esm-defineProperty.test.ts` |
 | `error: bun create is not supported in bun-wasm` | 1 | `cli/install/bun-create.test.ts` |
 | `error: bun init is not supported in bun-wasm` | 1 | `cli/init/init.test.ts` |
@@ -111,6 +97,9 @@ The manifest remains a historical selection when the live scoreboard changes.
 | `error: Cannot find module '#foo/wildcard.js' from '/bun/test/js/bun/resolve/resolve-test.js'` | 1 | `js/bun/resolve/resolve.test.ts` |
 | `error: cannot GET /?q=https%3A%2F%2Fgoogle.com'.bb.com%2F1.html (400)` | 1 | `js/third_party/express/res.location.test.ts` |
 | `error: Error message` | 1 | `js/node/util/node-inspect-tests/internal-inspect.test.js` |
+| `error: error: Module not found "node"` | 1 | `cli/run/as-node.test.ts` |
+| `error: error: Module not found "start:dev"` | 1 | `cli/run/run-process-env.test.ts` |
+| `error: error: Module not found "test"` | 1 | `cli/run/run-quote.test.ts` |
 | `error: expect(received).not.toBeNull()` | 1 | `cli/run/crash-report-command-char.test.ts` |
 | `error: expect(received).not.toMatch(expected)` | 1 | `regression/issue/17327.test.ts` |
 | `error: expect(received).rejects.toThrow(expected)` | 1 | `js/node/timers.promises/timers.promises.test.ts` |
@@ -124,15 +113,22 @@ The manifest remains a historical selection when the live scoreboard changes.
 | `error: expect(received).toEndWith(expected)` | 1 | `js/bun/webview/webview-chrome-disconnect.test.ts` |
 | `error: expect(received).toStrictEqual(expected)` | 1 | `cli/install/bun-dedupe.test.ts` |
 | `error: expect(received).toThrowError(expected)` | 1 | `js/node/url/url-parse-ipv6.test.ts` |
+| `error: Expected ";" but found ":"` | 1 | `cli/run/run-extensionless.test.ts` |
+| `error: Expected ";" but found "wah"` | 1 | `cli/run/run-shell.test.ts` |
 | `error: expected body '<!DOCTYPE html>\n' +` | 1 | `js/third_party/express/res.sendFile.test.ts` |
 | `error: Expected BuildMessage, got BuildError` | 1 | `js/bun/resolve/build-error.test.ts` |
+| `error: Expected closing JSX tag to match opening tag "<div>"` | 1 | `regression/issue/14477/14477.test.ts` |
 | `error: Expected elapsed time to be less than 180` | 1 | `js/web/timers/setInterval.test.js` |
+| `error: Expected stdout to be "{\n  \"line\": 3,\n  \"column\": 17,\n  \"originalLine\": 1,\n  \"originalColumn\": 18\n}" but got "{}"` | 1 | `js/bun/test/stack.test.ts` |
 | `error: Expected success but got code 1. stderr: error: Only bun pm ls is supported in bun-wasm` | 1 | `cli/install/bun-pm-pkg.test.ts` |
 | `error: expected undefined to have npm string width 0 but got 9` | 1 | `js/bun/util/stringWidth.test.ts` |
+| `error: Failed to create user config-precedence: 500 {"error":"Internal Server Error"}` | 1 | `cli/install/config-precedence.test.ts` |
+| `error: Failed to create user publish-tests: 500 {"error":"Internal Server Error"}` | 1 | `cli/install/bun-publish.test.ts` |
 | `error: Failed to read asymmetric key` | 1 | `js/third_party/jsonwebtoken/validateAsymmetricKey.test.js` |
 | `error: get: Symbol(nodejs.util.inspect.custom)` | 1 | `js/node/util/node-inspect-tests/parallel/util-inspect-proxy.test.js` |
 | `error: Initial install failed` | 1 | `regression/issue/malformed-integrity-base64.test.ts` |
 | `error: inspector.url is not supported in bun-wasm: no debugger` | 1 | `js/node/inspector/inspector.test.ts` |
+| `error: Module not found "--bun"` | 1 | `cli/run/commonjs-no-export.test.ts` |
 | `error: No such module: constants` | 1 | `js/node/process-binding.test.ts` |
 | `error: No such module: tty_wrap` | 1 | `js/node/nodettywrap.test.ts` |
 | `error: objdump executable not found. Please install it.` | 1 | `js/bun/symbols.test.ts` |
@@ -153,6 +149,9 @@ The manifest remains a historical selection when the live scoreboard changes.
 | `InternalError: out of memory` | 1 | `regression/issue/8254.test.ts` |
 | `NotSupportedError: Crypto generate failed` | 1 | `regression/issue/11029-crypto-verify-null-algorithm.test.ts` |
 | `RangeError: Offset +02:00 is invalid for 2024-06-15T12:34:56 in Europe/Berlin` | 1 | `js/bun/bun-object/deep-equals-temporal.test.ts` |
+| `RangeError: Unsupported encoding label "ibm866"` | 1 | `js/web/encoding/text-decoder-single-byte.test.ts` |
+| `RangeError: Unsupported encoding label "IBM866"` | 1 | `js/web/encoding/text-decoder-wpt.test.ts` |
+| `RangeError: Unsupported encoding label "shift_jis"` | 1 | `js/web/encoding/text-decoder-cjk.test.ts` |
 | `ReferenceError: Atomics is not defined` | 1 | `js/web/atomics.test.ts` |
 | `ReferenceError: expectTypeOf is not defined` | 1 | `js/bun/test/expect-type-global.test.ts` |
 | `ReferenceError: PerformanceMark is not defined` | 1 | `js/web/web-globals.test.js` |
@@ -188,6 +187,7 @@ The manifest remains a historical selection when the live scoreboard changes.
 | `TypeError: formData() is not supported in bun-wasm` | 1 | `regression/issue/27478.test.ts` |
 | `TypeError: no setter for property` | 1 | `js/bun/util/bun-main.test.ts` |
 | `TypeError: not an object` | 1 | `js/node/process/call-constructor.test.js` |
+| `TypeError: The "data" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object` | 1 | `js/node/fs/fs-promises-writeFile-async-iterator.test.ts` |
 | `TypeError: value is not disposable` | 1 | `js/bun/test/mock-disposable.test.ts` |
 <!-- first-errors:end -->
 

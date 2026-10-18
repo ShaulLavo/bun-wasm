@@ -1,5 +1,12 @@
 declare namespace BunWasm {
   interface Native {
+    nodePath: {
+      lexical(windows: boolean, operation: "isAbsolute", path: Uint8Array): boolean;
+      lexical(windows: boolean, operation: "parse", path: Uint8Array): Record<"root" | "dir" | "base" | "ext" | "name", Uint8Array>;
+      lexical(windows: boolean, operation: "basename" | "dirname" | "extname" | "normalize", path: Uint8Array, suffix?: Uint8Array): Uint8Array;
+      join(windows: boolean, paths: Uint8Array[]): Uint8Array;
+      relative(windows: boolean, from: Uint8Array, to: Uint8Array): Uint8Array;
+    };
     registerObjectModule(name: string): string;
     clearObjectModules(): void;
     readonly engine: "quickjs" | "jsc" | "host";

@@ -130,26 +130,38 @@ section("docs/app-matrix/README.md", "replay", [
   "```sh\nbun scripts/refresh-compatibility-docs.ts\nbun scripts/refresh-compatibility-docs.ts --check\n```",
 ].join("\n\n"));
 
+const summary = record(json("docs/bun-test-suite/summary.json"));
+const historical = record(json("docs/bun-test-suite/historical-summary.json"));
+const oldQuickjs = record(historical.summary);
+const currentQuickjs = record(summary.summary);
+const quickjsChange = `QuickJS ${number(oldQuickjs.fully_passing)} → ${number(currentQuickjs.fully_passing)}`;
 const history = array(json("docs/bun-test-suite/progress.json")).map(record);
 const categories = ["a", "b", "c", "d", "e", "f"];
 const historyRows = history.map(row => [string(row.date), string(row.commit), String(number(row.fully_passing)), String(number(row.tests_passing)), String(number(row.timeouts))].concat(categories.map(key => String(number(record(row.categories)[key])))));
 section("docs/bun-test-suite/README.md", "progress", [
   "## Progress",
-  "QuickJS 282 → 411 is the sole comparable baseline by matched file selection. JSC and browser are non-comparable because their selections changed. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim for any engine.",
+  `${quickjsChange} is the sole comparable baseline by matched file selection. JSC and browser are non-comparable because their selections changed. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim for any engine.`,
   table(["Date", "Runtime commit", "Files fully passing", "Tests passing", "Timeouts"].concat(categories), historyRows),
   "Category counts use each run's classifier. Category movement alone is not a compatibility gain.",
 ].join("\n\n"));
 
-const summary = record(json("docs/bun-test-suite/summary.json"));
-const historical = record(json("docs/bun-test-suite/historical-summary.json"));
+summary.previous_baseline ??= {};
+summary.before_after ??= {};
+const previousBaseline = record(summary.previous_baseline);
+const beforeAfter = record(summary.before_after);
 for (const engine of ["quickjs", "jsc", "browser"]) {
-  const prior = record(record(summary.previous_baseline)[engine]);
-  const comparison = record(record(summary.before_after)[engine]);
+  previousBaseline[engine] ??= {};
+  beforeAfter[engine] ??= {};
+  const prior = record(previousBaseline[engine]);
+  const comparison = record(beforeAfter[engine]);
   const old = record(engine === "quickjs" ? historical.summary : record(historical.comparison)[engine]);
   const current = record(engine === "quickjs" ? summary.summary : record(summary.comparison)[engine]);
   const status = engine === "quickjs" ? "comparable" : "non-comparable";
   const scope = engine === "quickjs" ? "same-selection baseline" : "different selections";
-  const reason = (engine === "quickjs" ? "QuickJS is the sole matched-selection baseline, with 2,305 files on both sides. " : "Historical selection covered only js/bun, js/node, and js/web; current selection covers all files. ") + "Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim.";
+  const reason = (engine === "quickjs" ? `QuickJS is the sole matched-selection baseline, with ${number(current.files).toLocaleString("en-US")} files on both sides. ` : "Historical selection covered only js/bun, js/node, and js/web; current selection covers all files. ") + "Runner hash, suite revision, and supplemental dependency hash changed, preventing an isolated runtime-gain claim.";
+  prior.fully_passing = number(old.fully_passing);
+  prior.observed_passes = number(record(old.counts).pass);
+  prior.timeouts = number(old.timeouts);
   prior.comparison_status = status;
   prior.comparison_scope = scope;
   prior.reason = reason;
@@ -160,6 +172,9 @@ for (const engine of ["quickjs", "jsc", "browser"]) {
   comparison.comparison_scope = scope;
   comparison.selected_files = [number(old.files), number(current.files)];
   comparison.reason = reason;
+  comparison.fully_passing = [number(old.fully_passing), number(current.fully_passing)];
+  comparison.observed_passes = [number(record(old.counts).pass), number(record(current.counts).pass)];
+  comparison.timeouts = [number(old.timeouts), number(current.timeouts)];
 }
 write("docs/bun-test-suite/summary.json", JSON.stringify(summary, null, 2) + "\n");
 const headlineRows = ["quickjs", "jsc", "browser"].map(engine => {
@@ -170,7 +185,7 @@ const headlineRows = ["quickjs", "jsc", "browser"].map(engine => {
 });
 section("docs/bun-test-suite/README.md", "history-comparison", [
   "## Historical and current observations",
-  "QuickJS 282 → 411 is the sole comparable baseline by matched file selection, with all 2,305 files selected on both sides. JSC and browser are non-comparable. They previously selected 1,082 files under js/bun, js/node, and js/web, while each current run selected all 2,305 files. Runner, suite, and supplemental-dependency hashes changed on all engines, so the matched QuickJS selection does not establish an isolated runtime gain.",
+  `${quickjsChange} is the sole comparable baseline by matched file selection, with all ${number(currentQuickjs.files).toLocaleString("en-US")} files selected on both sides. JSC and browser are non-comparable. They previously selected ${number(record(record(historical.comparison).jsc).files).toLocaleString("en-US")} files under js/bun, js/node, and js/web, while each current run selected all ${number(currentQuickjs.files).toLocaleString("en-US")} files. Runner, suite, and supplemental-dependency hashes changed on all engines, so the matched QuickJS selection does not establish an isolated runtime gain.`,
   table(["Engine", "Historical selected files", "Current selected files", "Historical result", "Current result", "Comparison"], headlineRows),
   table(["Input on all engines", "Historical", "Current"], [
     ["Suite revision", string(record(historical.provenance).suite_commit), string(record(summary.provenance).suite_commit)],

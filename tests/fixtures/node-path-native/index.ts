@@ -10,9 +10,12 @@ assert.equal(path.posix.normalize("bb../../x"), "x");
 assert.equal(w.join("//server", "share", "dir", ".."), "\\\\server\\share\\");
 assert.equal(w.resolve("C:/base", "//other/share", "C:relative"), "C:\\base\\relative");
 assert.equal(w.relative("C:\\A\\B", "c:\\a\\C"), "..\\C");
+assert.equal(w.relative("\\\\server\\share-one", "\\\\server\\share-two"), "..\\share-two");
+assert.equal(path.resolve(undefined, "/absolute"), "/absolute");
 assert.equal(w.toNamespacedPath("//server/share/file"), "\\\\?\\UNC\\server\\share\\file");
 assert.equal(w._makeLong, w.toNamespacedPath);
 assert.equal(path._makeLong, path.toNamespacedPath);
+assert.equal(w.matchesGlob("src\\file.ts", "**\\*.ts"), true);
 assert.deepEqual(w.parse("C:\\dir\\file.txt"), { root: "C:\\", dir: "C:\\dir", base: "file.txt", ext: ".txt", name: "file" });
 console.log("Windows roots, drives, UNC and namespaces");
 
