@@ -1,5 +1,5 @@
 // Fresh subprocess workers on the real browser worker bootstrap, across all wasm engines.
-// cd web && bun run build && bun tests/browser-subprocess.ts [chromium|webkit]
+// cd web && bun run build && bun tests/browser-subprocess.ts [chromium|firefox|webkit] [--api-only] [--engine=browser] [--repeat=20]
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { playwright, session, ready, writeFile, run } from "./playground.mjs";
@@ -111,7 +111,8 @@ for (const [signal, number] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]]
     const reader = child.stdout.getReader();
     try {
       const first = await reader.read();
-      if (first.done || new TextDecoder().decode(first.value).trim() !== "signal-ready") throw new Error("signal child was not ready");
+      if (first.done) throw new Error("signal child exited before readiness " + JSON.stringify({ signal, mode, exit: await child.exited, stderr: await new Response(child.stderr).text() }));
+      if (new TextDecoder().decode(first.value).trim() !== "signal-ready") throw new Error("signal child was not ready: " + JSON.stringify(Array.from(first.value)));
       child.kill(signal);
       // Parent-side signal classification is synchronous. Only release the ignored child
       // after delivery, so an early ordinary exit cannot make this check pass accidentally.
@@ -148,16 +149,26 @@ const apiExpected = [
   `api signal handled ${signal} 0 0 null`,
   `api signal removed ${signal} ${status} null "${signal}"`,
 ]));
+const args = process.argv.slice(2);
+const repeats = Number(args.find(arg => arg.startsWith("--repeat="))?.slice(9) ?? 1);
+assert.ok(Number.isSafeInteger(repeats) && repeats > 0 && repeats <= 1000, "--repeat must be an integer from 1 to 1000");
+const engineFilter = args.find(arg => arg.startsWith("--engine="))?.slice(9);
+const engines = ["quickjs", "jsc", "browser"].filter(engine => !engineFilter || engine === engineFilter);
+assert.ok(engines.length, "--engine must be quickjs, jsc or browser");
+const requestedBrowsers = args.filter(arg => !arg.startsWith("--"));
+const browsers = requestedBrowsers.length ? requestedBrowsers : ["chromium", "webkit"];
+for (const name of browsers) assert.ok(name === "chromium" || name === "firefox" || name === "webkit", `unsupported browser: ${name}`);
+const apiOnly = args.includes("--api-only");
 const s = session("bun-wasm-self-spawn-browser-");
 const deadline = setTimeout(() => { console.error("subprocess browser gate timed out"); void s.cleanup().finally(() => process.exit(1)); }, 900_000);
 try {
   const url = await s.serve();
-  for (const browserName of process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "webkit"]) {
+  for (const { browserName, iteration } of browsers.flatMap(browserName => Array.from({ length: repeats }, (_, index) => ({ browserName, iteration: index + 1 })))) {
     const browser = await s.launch(playwright[browserName]);
     const page = await browser.newPage();
     await page.goto(url);
     await ready(page);
-    for (const engine of ["quickjs", "jsc", "browser"]) {
+    for (const engine of engines) {
       await page.goto(`${url}?engine=${engine}`);
       await ready(page);
       await writeFile(page, "/home/user/cycle/a.js", 'import { b } from "./b.js"; export function a() { return "a"; } console.log(b());');
@@ -166,7 +177,8 @@ try {
       const api = await run(page, "bun run subprocess-api.js");
       assert.equal(api.code, 0, api.output);
       for (const line of apiExpected) assert.ok(api.output.includes(line), `missing ${line} in ${api.output}`);
-      console.log(`ok ${browserName} ${engine}: Bun/Node subprocess APIs, nested workers, large stdin, cwd, files, timeout`);
+      console.log(`ok ${browserName} ${engine} #${iteration}: Bun/Node subprocess APIs, nested workers, large stdin, cwd, files, timeout`);
+      if (apiOnly) continue;
       await writeFile(page, "/home/user/lint-fmt-config.ts", configurationChecks);
       const configured = await run(page, "bun run lint-fmt-config.ts");
       assert.equal(configured.code, 0, configured.output);
