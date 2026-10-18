@@ -45,8 +45,16 @@ function forwardRequest(upstream, incoming, outgoing) {
   // uncompressed bodies because sw.js is rewritten as text below.
   const headers = { ...incoming.headers, host: target.host, "accept-encoding": "identity" };
   const request = target.protocol === "https:" ? httpsRequest : httpRequest;
-  const forwarded = request(target, { method: incoming.method, headers }, (response) => forwardResponse(target, outgoing, response));
-  forwarded.on("error", (error) => outgoing.destroy(error));
+  const forwarded = request(target, {
+    method: incoming.method,
+    headers,
+    autoSelectFamilyAttemptTimeout: 2_000,
+    signal: AbortSignal.timeout(180_000),
+  }, (response) => forwardResponse(target, outgoing, response));
+  forwarded.on("error", (error) => {
+    console.error(`first-visit proxy ${target.href}: ${error.stack ?? error}`);
+    outgoing.destroy(error);
+  });
   incoming.pipe(forwarded);
 }
 
