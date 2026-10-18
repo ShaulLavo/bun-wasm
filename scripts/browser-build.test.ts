@@ -30,3 +30,23 @@ test("browser build uses consumer exports through a dotted Git cache, not siblin
     expect(installed.relativeInput(join(dirname(cached), "unrelated/proc/supervisor.ts"))).toBeUndefined();
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
+
+test("isolated consumer exports and runtime relative imports share process class identity", async () => {
+  const scratch = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-class-identity-"));
+  try {
+    const consumer = join(scratch, "consumer"), cached = join(consumer, "node_modules/.bun/waffle@commit/node_modules/waffle");
+    await mkdir(cached, { recursive: true });
+    await writeFile(join(cached, "package.json"), JSON.stringify({ name: "waffle", type: "module", exports: { "./control": "./control.ts", "./client": "./client.ts" } }));
+    await writeFile(join(cached, "control.ts"), "export class Cell { value = 42; }");
+    await writeFile(join(cached, "client.ts"), 'import { Cell } from "./control.ts"; export const create = () => new Cell();');
+    await symlink(cached, join(consumer, "node_modules/waffle"));
+    const entry = join(consumer, "main.ts");
+    await writeFile(entry, 'import { Cell } from "waffle/control"; import { create } from "waffle/client"; if (!(create() instanceof Cell)) throw new Error("process cell identity split");');
+    const { outdir: _outdir, ...config } = browserBuildConfig([entry], join(scratch, "output"), { splitting: false });
+    const result = await Bun.build(config);
+    expect(result.success).toBe(true);
+    await import(`data:text/javascript;base64,${Buffer.from(await result.outputs[0]!.text()).toString("base64")}`);
+    const inputs = Object.keys(result.metafile!.inputs).filter(path => path.endsWith("/control.ts"));
+    expect(inputs).toHaveLength(1);
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});
