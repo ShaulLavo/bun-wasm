@@ -15,7 +15,7 @@ export interface BunRuntimeScenario {
   pipe?: "pipeline" | "input" | "signal";
   input?: string;
   /** Root opens this real file, consumes its prefix, then shares its cursor with the child. */
-  fileCursor?: boolean;
+  fileCursor?: "sequential" | "positioned";
   stdout: string;
   stderr?: string;
   action?: "kill" | "dispose" | "kill-detached";
@@ -73,9 +73,11 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
   if (scenario.fileCursor) {
     const path = encoder.encode("home/user/inherited-cursor"); memory.set(path, 2048);
     // The external root has no inherited extras, so its actual root preopen is fd3.
+    // Positioned reads additionally need FD_SEEK; metadata identifies the regular-file path.
+    const rights = scenario.fileCursor === "positioned" ? (1 << 21) | 6 : 2;
     // path_open(fd, lookupflags, path, len, oflags, rights, inheriting, fdflags, result).
     body.push(...check(call(10, constant(3), constant(0), constant(2048), constant(path.length), constant(0),
-      [0x42, 2], [0x42, 0], constant(0), constant(128)), 0, 211), ...load(128), ...set(0),
+      [0x42].concat(sint(rights)), [0x42, 0], constant(0), constant(128)), 0, 211), ...load(128), ...set(0),
       ...check(call(7, get(0), constant(1024), constant(2)), 2, 212),
       ...check(load(1024).concat(constant(65535), [0x71]), 0x7878, 213));
   }
@@ -173,6 +175,14 @@ const mainScenarios: BunRuntimeScenario[] = [
     { source: `const input=await Bun.stdin.text();if(input!=='pipeline-out\\npipeline-err\\n')throw Error(JSON.stringify(input));console.log('pipeline-merged-ok');`, fds: [{ child: 0, parent: "reader" }, { child: 1, parent: 1 }, { child: 2, parent: 2 }] },
   ], stdout: "pipeline-merged-ok\nexternal-root-ok\n" },
   { name: "stdin-reader-lifetime", pipe: "input", input: "payload!", commands: [{ source: readerLifetime, fds: [{ child: 0, parent: "reader" }, { child: 1, parent: 1 }, { child: 2, parent: 2 }] }], stdout: "payload\nparent-reader-alive\nexternal-root-ok\n" },
+  { name: "readv-process-stdin", pipe: "input", input: "abc", commands: [{
+    source: `const f=require('node:fs'),first=Buffer.alloc(4,'.'),tail=new Uint8Array(5).fill(46),views=[first,new DataView(tail.buffer,1,3)];let sync=true;const pending=new Promise((resolve,reject)=>f.readv(0,views,(error,count,buffers)=>{if(error)return reject(error);if(sync||count!==3||buffers!==views||first.toString()!=='abc.'||Buffer.from(tail).toString()!=='.....')return reject(Error('pipe readv scatter/timing'));resolve()}));sync=false;await pending;await new Promise((resolve,reject)=>f.readv(0,views,(error,count,buffers)=>error?reject(error):count===0&&buffers===views&&first.toString()==='abc.'?resolve():reject(Error('pipe readv EOF'))));console.log('readv-stdin-ok');`,
+    fds: [{ child: 0, parent: "reader" }, { child: 1, parent: 1 }, { child: 2, parent: 2 }],
+  }], stdout: "readv-stdin-ok\nexternal-root-ok\n" },
+  { name: "readv-inherited-file-cursor", fileCursor: "positioned", commands: [{
+    source: `const f=require('node:fs'),positioned=[Buffer.alloc(2),Buffer.alloc(2)];if(f.readvSync(4,positioned,2)!==4||Buffer.concat(positioned).toString()!=='curs')throw Error('positioned readv');const first=Buffer.alloc(4,'.'),middle=new Uint8Array(4).fill(46),last=Buffer.alloc(2),views=[first.subarray(1,3),new DataView(middle.buffer,1,2),last];await new Promise((resolve,reject)=>f.readv(4,views,(error,count,buffers)=>{if(error)return reject(error);if(count!==6||buffers!==views||first.toString()!=='.cu.'||Buffer.from(middle).toString()!=='.rs.'||last.toString()!=='or')return reject(Error('shared cursor readv'));resolve()}));f.writeSync(3,'readv-file-ok\\n');`,
+    fds: ordinary.concat([{ child: 3, parent: 1 }, { child: 4, parent: "reader" }]),
+  }], stdout: "readv-file-ok\nexternal-root-ok\n" },
   { name: "postleader-job-wait", commands: [{ source: `Bun.spawn(['bun','-e',"await Bun.sleep(100);console.log('postleader-child');"],{stdin:'inherit',stdout:'inherit',stderr:'inherit'});process.exit(0);` }], stdout: "postleader-child\nexternal-root-ok\n" },
   { name: "guest-kill-job-descendants", pipe: "signal", commands: [{ source: readyTree, kind: 1, status: 9,
     fds: [{ child: 0, parent: 0 }, { child: 1, parent: "writer" }, { child: 2, parent: 2 }] }], stdout: "external-root-ok\n" },
@@ -191,6 +201,6 @@ export const bunRuntimeProcScenarios: readonly BunRuntimeScenario[] = mainScenar
   name: `preopen-inherited-${inherited.join("-")}`,
   commands: [{ source: `console.log(await Bun.file('preopen-data').text());`,
     fds: ordinary.concat(inherited.map(fd => ({ child: fd, parent: 1 }))) }], stdout: "ROOT_PREOPEN_OK\nexternal-root-ok\n",
-})), [{ name: "preopen-blocks-fd4-read-fd3-write", fileCursor: true,
+})), [{ name: "preopen-blocks-fd4-read-fd3-write", fileCursor: "sequential",
   commands: [{ source: `const f=require('node:fs'),b=Buffer.alloc(6);if(f.readSync(4,b,0,6,null)!==6||b.toString()!=='cursor')throw Error('inherited file cursor');if(await Bun.file('preopen-data').text()!=='ROOT_PREOPEN_OK')throw Error('relocated root');f.writeSync(3,'FD3:'+b.toString()+'\\n');`,
   fds: ordinary.concat([{ child: 3, parent: 1 }, { child: 4, parent: "reader" }]) }], stdout: "FD3:cursor\nexternal-root-ok\n" }]);

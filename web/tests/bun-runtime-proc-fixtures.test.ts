@@ -47,7 +47,8 @@ for (const scenario of bunRuntimeProcScenarios) test(`external generic root fixt
     },
     wasi_snapshot_preview1: {
       path_open(fd: number, flags: number, path: number, length: number, oflags: number, rights: bigint, inheriting: bigint, fdflags: number, result: number) {
-        expect([fd, flags, oflags, rights, inheriting, fdflags]).toEqual([3, 0, 0, 2n, 0n, 0]);
+        const expectedRights = scenario.fileCursor === "positioned" ? (1n << 21n) | 6n : 2n;
+        expect([fd, flags, oflags, rights, inheriting, fdflags]).toEqual([3, 0, 0, expectedRights, 0n, 0]);
         expect(new TextDecoder().decode(new Uint8Array(memory.buffer, path, length))).toBe("home/user/inherited-cursor");
         new DataView(memory.buffer).setUint32(result, 123, true); return 0;
       },

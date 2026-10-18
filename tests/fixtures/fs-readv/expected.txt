@@ -1,0 +1,2 @@
+readv shared Bun/Node cases
+mixed views, short reads, cursor, EOF, callbacks, handles and errors passed
