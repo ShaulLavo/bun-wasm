@@ -590,3 +590,29 @@ test("a supported signal name the process service rejects as unsupported is an E
   }
   expect(child.killed).toBe(false);
 });
+
+for (const selected of [[0, 23], [0, 143], [1, 9]] as const) {
+  test(`spawnSync TERM timeout retains actual outcome ${selected[0]}:${selected[1]}`, () => {
+    let now = 0;
+    let requested = false;
+    const fake = service({ now: () => now++, onPoll() {
+      if (!requested) return;
+      const child = Array.from(fake.children.values())[0]!;
+      fake.select(child, selected[0] === 0 ? [0, selected[1]] : [1, selected[1]]);
+      fake.publish(child);
+    } });
+    fake.native.procKill = (_pid: number, signal: number) => {
+      fake.calls.push(`kill:${signal}`);
+      expect(signal).toBe(15);
+      requested = true;
+      return 0; // TERM handler is queued; its later result is not necessarily signal death.
+    };
+    const { module } = load(fake);
+    const result = module.spawnSync(["bun", "term-handler"], { timeout: 1, killSignal: "SIGTERM" });
+    expect(result.exitedDueToTimeout).toBe(true);
+    expect(result.exitCode).toBe(selected[0] === 0 ? selected[1] : null);
+    expect(result.signalCode).toBe(selected[0] === 1 ? "SIGKILL" : null);
+    expect(fake.calls.filter(call => call.startsWith("kill:"))).toEqual(["kill:15"]);
+    expect(fake.open()).toBe(0);
+  });
+}

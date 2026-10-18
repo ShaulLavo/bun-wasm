@@ -75,7 +75,7 @@ function jsonNumber(local: number, end: number): number[] {
 
 export function runtimeProcFixture(): Uint8Array<ArrayBuffer> {
   const slots = { read: "@read@", write: "@write@", alias: "@alias@" };
-  let request = JSON.stringify({ executable: "bun", argv: ["abi-child"], env: { PWD: "/" }, cwd: "/", job: 1,
+  let request = JSON.stringify({ executable: "/bin/bun", argv: ["abi-child"], env: { PWD: "/" }, cwd: "/", job: 1,
     fds: [{ child: 0, parent: slots.read }, { child: 1, parent: slots.write }, { child: 10, parent: slots.alias },
       { child: 2, parent: 2 }, { child: 11, parent: 1 }] });
   const positions: number[] = [];
@@ -157,7 +157,7 @@ export const runtimeProcJobWaitStages: Readonly<Record<number, string>> = {
 export function runtimeProcJobWaitFixture(): Uint8Array<ArrayBuffer> {
   const memory = new Uint8Array(4096), encoder = new TextEncoder();
   function request(pointer: number, argc: number, fds: { child: number; parent: number | string }[], job: number | string = 0) {
-    let json = JSON.stringify({ executable: "bun", argv: Array.from({ length: argc }, () => "job"), env: { PWD: "/" }, cwd: "/", job, fds });
+    let json = JSON.stringify({ executable: "/bin/bun", argv: Array.from({ length: argc }, () => "job"), env: { PWD: "/" }, cwd: "/", job, fds });
     const slots: Record<string, number> = {};
     for (;;) {
       const match = /"@([a-z]+)@"/.exec(json);

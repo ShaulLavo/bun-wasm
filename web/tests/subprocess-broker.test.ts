@@ -1,3 +1,4 @@
+import { controlLoad } from "waffle/proc/control";
 import { expect, test } from "bun:test";
 import { readOutcome } from "waffle/proc/outcome";
 import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
@@ -69,11 +70,11 @@ for (const delivery of ["kill", "killJob"] as const) test(`${delivery} only queu
     await state.broker.adoptRuntimeRoot(state.root);
     const shared = workerProcessState(state.root);
     setSignalDisposition(shared.signals.signalState, 2, 2);
-    const before = Atomics.load(shared.wake, 0);
+    const before = controlLoad(shared.wake, 0);
     await (delivery === "kill" ? state.broker.kill(shared.pid, 2) : state.broker.killJob(shared.job, 2));
     expect(takeSignal(shared.signals.signalState)).toBe(2);
     expect(readOutcome(shared.signals.outcome)).toBeNull();
-    expect(Atomics.load(shared.wake, 0)).toBeGreaterThan(before);
+    expect(controlLoad(shared.wake, 0)).toBeGreaterThan(before);
   } finally { await state.dispose(); }
 });
 
@@ -93,7 +94,7 @@ test("rootExit before a root is adopted is a no-op, and after adoption confirms 
     await state.broker.rootExit(7);
     const shared = workerProcessState(state.root);
     expect(readOutcome(shared.signals.outcome)).toEqual({ kind: "exited", code: 7, status: 7 });
-    expect(Atomics.load(shared.confirmed, 0)).toBe(1);
+    expect(controlLoad(shared.confirmed, 0)).toBe(1);
   } finally { await state.dispose(); }
 });
 

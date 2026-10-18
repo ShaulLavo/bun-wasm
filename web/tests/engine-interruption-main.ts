@@ -1,3 +1,4 @@
+import { controlLoad, controlStore, controlAdd } from "waffle/proc/control";
 import { createRuntime, type Runtime } from "waffle";
 import type { Engine, RunRequest } from "../src/bun-executor";
 import type { RuntimeWorkerRequest } from "waffle/browser/worker";
@@ -73,7 +74,7 @@ class ObservedWorker extends NativeWorker {
     else super.postMessage(message, options);
   }
   override terminate(): void {
-    Atomics.add(this.probe, probeCell.terminateRequests, 1);
+    controlAdd(this.probe, probeCell.terminateRequests, 1);
     if (!this.deferStop) this.forceTerminate();
   }
   forceTerminate(): void { super.terminate(); activeWorkers.delete(this); }
@@ -124,7 +125,7 @@ function guestFinished(worker: ObservedWorker | undefined): boolean {
   // Wait for that FIFO barrier as well as actual unwind before declaring a marker
   // impossible; runReturned alone can beat queued generic/root output delivery.
   return Boolean(worker?.exitObserved && (worker.guestEngine === "browser" && worker.guestAdapter !== "preview1"
-    || Atomics.load(worker.probe, probeCell.runReturned) === 1));
+    || controlLoad(worker.probe, probeCell.runReturned) === 1));
 }
 function equal(actual: unknown, expected: unknown, label: string): void { if (actual !== expected) throw new Error(`${label}: ${JSON.stringify(actual)} !== ${JSON.stringify(expected)}`); }
 function truth(value: unknown, label: string): asserts value { if (!value) throw new Error(label); }
@@ -149,7 +150,7 @@ async function scope(module: WebAssembly.Module, engine: Engine, route: EngineIn
   } catch (error) { await disposeRuntime(owner); throw error; }
   const resources = currentCase;
   const context = { read: () => Array.from(base.children.values(), child => ({
-    pid: child.pid, engine, route, adapter, requestedSignal: Atomics.load(child.requestedSignal, 0),
+    pid: child.pid, engine, route, adapter, requestedSignal: controlLoad(child.requestedSignal, 0),
     ordinaryStatus: base.wait(child), stdout: child.stdout, stderr: child.stderr,
     evidence: guestWorkers.has(child.pid) ? snapshotProbe(guestWorkers.get(child.pid)!.probe) : null,
   })), final: undefined as unknown };
@@ -238,7 +239,7 @@ async function testDefault(module: WebAssembly.Module, engine: Engine, signal: 2
     const child = owned.spawn(nestedHandler ? handledSignalGuest(true) : defaultSignalGuest());
     diagnostics = () => {
       const worker = guestWorkers.get(child.pid);
-      return { evidence: worker ? snapshotProbe(worker.probe) : null, requestedSignal: Atomics.load(child.requestedSignal, 0),
+      return { evidence: worker ? snapshotProbe(worker.probe) : null, requestedSignal: controlLoad(child.requestedSignal, 0),
         ordinaryStatus: owned.wait(child), stdout: child.stdout, stderr: child.stderr };
     };
     const worker = await owned.ready(child);
@@ -246,7 +247,7 @@ async function testDefault(module: WebAssembly.Module, engine: Engine, signal: 2
     // Default cases never yield; nested cases first finish finite CPU work, then
     // dispatch handled SIGINT on the event loop before entering the guarded loop.
     await new Promise<void>(resolve => setTimeout(resolve, 20));
-    equal(Atomics.load(worker.probe, probeCell.startLeft), 0, "guest is still executing before the signal");
+    equal(controlLoad(worker.probe, probeCell.startLeft), 0, "guest is still executing before the signal");
     if (nestedHandler) {
       equal(await owned.kill(child, 2), 0, "initial handled SIGINT accepted");
       await until(() => { owned.drain(child); return child.stderr.includes("handler-ready\n"); }, "CPU loop entered registered SIGINT handler", 15_000, () => guestFinished(worker));
@@ -262,9 +263,9 @@ async function testDefault(module: WebAssembly.Module, engine: Engine, signal: 2
     equal(result.kind, "signaled", "typed signal outcome"); equal(result.code, signal, "selected signal");
     if (engine === "browser") {
       await until(() => !activeWorkers.has(worker), "Bun light physical termination requested");
-      truth(Atomics.load(worker.probe, probeCell.terminateRequests) > 0, "Bun light still calls native Worker.terminate");
+      truth(controlLoad(worker.probe, probeCell.terminateRequests) > 0, "Bun light still calls native Worker.terminate");
     } else {
-      await until(() => Atomics.load(worker.probe, probeCell.runReturned) === 1,
+      await until(() => controlLoad(worker.probe, probeCell.runReturned) === 1,
         () => `${engine} real _start unwind after signal ${signal}; evidence=${JSON.stringify(snapshotProbe(worker.probe))}`);
       const evidence = snapshotProbe(worker.probe);
       assertFatalEngineCompletion(evidence, signal);
@@ -292,17 +293,17 @@ async function testNativeInterrupt(module: WebAssembly.Module, engine: Engine): 
     const child = owned.spawn(defaultSignalGuest());
     diagnostics = () => ({ stdout: child.stdout, stderr: child.stderr });
     const worker = await owned.ready(child);
-    diagnostics = () => ({ evidence: snapshotProbe(worker.probe), requestedSignal: Atomics.load(child.requestedSignal, 0),
+    diagnostics = () => ({ evidence: snapshotProbe(worker.probe), requestedSignal: controlLoad(child.requestedSignal, 0),
       ordinaryStatus: owned.wait(child), stdout: child.stdout, stderr: child.stderr });
     await new Promise<void>(resolve => setTimeout(resolve, 20));
-    equal(Atomics.load(worker.probe, probeCell.startLeft), 0, "native interrupt guest remains CPU-bound");
-    Atomics.store(worker.probe, probeCell.nativeInterruptRequested, 1);
-    await until(() => Atomics.load(worker.probe, probeCell.runReturned) === 1,
+    equal(controlLoad(worker.probe, probeCell.startLeft), 0, "native interrupt guest remains CPU-bound");
+    controlStore(worker.probe, probeCell.nativeInterruptRequested, 1);
+    await until(() => controlLoad(worker.probe, probeCell.runReturned) === 1,
       () => `${engine} native true-return callback _start unwind; evidence=${JSON.stringify(snapshotProbe(worker.probe))}`);
     await until(() => { owned.drain(child); return owned.wait(child) !== -2; }, "native interrupt ordinary outcome", 15_000, () => guestFinished(worker));
     const result = await owned.outcome(child);
     equal(result.kind, "exited", "native interrupt does not fabricate a selected fatal host outcome");
-    equal(Atomics.load(child.requestedSignal, 0), 0, "no host signal was requested");
+    equal(controlLoad(child.requestedSignal, 0), 0, "no host signal was requested");
     const evidence = snapshotProbe(worker.probe);
     assertNativeEngineCompletion(evidence);
     if (evidence.startWasiExit) equal(evidence.startWasiExitCode, result.code, "typed WASI exit matches ordinary process outcome");
@@ -327,10 +328,10 @@ async function testHandled(module: WebAssembly.Module, engine: Engine, route: En
   try {
     const child = owned.spawn(handledSignalGuest());
     const worker = await owned.ready(child);
-    equal(Atomics.load(child.signalState, 2) & 3, 2, "handler registered before readiness");
+    equal(controlLoad(child.signalState, 2) & 3, 2, "handler registered before readiness");
     equal(await owned.kill(child, 2), 0, "handled SIGINT accepted");
     await owned.exit(child, 23);
-    await until(() => Atomics.load(worker.probe, probeCell.runReturned) === 1, "handled loop returned from _start");
+    await until(() => controlLoad(worker.probe, probeCell.runReturned) === 1, "handled loop returned from _start");
     const result = await owned.outcome(child);
     equal(result.kind, "exited", "handler retains ordinary chosen exit"); equal(result.code, 23, "handler chosen status");
     equal(child.stdout, "continued 1 true\n", "ordinary continuation after queued handler");
@@ -347,26 +348,26 @@ async function testIdleHandled(module: WebAssembly.Module, engine: Engine, route
     try {
       const child = owned.spawn(idleSignalGuest);
       const worker = await owned.ready(child);
-      equal(Atomics.load(child.signalState, 2) & 3, 2, "idle SIGINT handler registered");
-      await until(() => Atomics.load(worker.probe, probeCell.idleWaiting) === 1, "guest entered stretched ordinary event-loop service-readiness wait", 15_000, () => guestFinished(worker));
-      const generation = Atomics.load(worker.probe, probeCell.idleWaitActiveGeneration);
+      equal(controlLoad(child.signalState, 2) & 3, 2, "idle SIGINT handler registered");
+      await until(() => controlLoad(worker.probe, probeCell.idleWaiting) === 1, "guest entered stretched ordinary event-loop service-readiness wait", 15_000, () => guestFinished(worker));
+      const generation = controlLoad(worker.probe, probeCell.idleWaitActiveGeneration);
       await new Promise<void>(resolve => setTimeout(resolve, 20));
-      equal(Atomics.load(worker.probe, probeCell.idleWaitActiveGeneration), generation, "same long wait generation remains entered");
-      equal(Atomics.load(worker.probe, probeCell.idleWaiting), 1, "idle wait is still entered immediately before kill");
-      Atomics.store(worker.probe, probeCell.idleWaitSampleGeneration, generation);
+      equal(controlLoad(worker.probe, probeCell.idleWaitActiveGeneration), generation, "same long wait generation remains entered");
+      equal(controlLoad(worker.probe, probeCell.idleWaiting), 1, "idle wait is still entered immediately before kill");
+      controlStore(worker.probe, probeCell.idleWaitSampleGeneration, generation);
       if (suppressNotify) mutation = suppressBudgetNotifications(worker.transport!.waitWord);
       const started = performance.now();
       equal(await owned.kill(child, 2, delivery), 0, "idle handled SIGINT accepted");
       await until(() => { owned.drain(child); return child.stderr.includes("idle-handled\n"); }, "idle event-loop dispatched SIGINT", 15_000, () => guestFinished(worker));
       const handlerLatencyMs = performance.now() - started;
       await owned.exit(child, 23);
-      await until(() => Atomics.load(worker.probe, probeCell.runReturned) === 1, "idle handler guest _start returned");
+      await until(() => controlLoad(worker.probe, probeCell.runReturned) === 1, "idle handler guest _start returned");
       const result = await owned.outcome(child);
       equal(result.kind, "exited", "idle handler retains ordinary exit"); equal(result.code, 23, "idle chosen status");
       equal(child.stderr, "ready\nidle-handled\n", "idle handler output");
       const evidence = snapshotProbe(worker.probe);
       equal(evidence.handledSignal, 2, "idle event loop dequeued authoritative pending SIGINT with mode0");
-      equal(Atomics.load(child.signalState, 2) & 4, 0, "idle event loop cleared shared pending bit");
+      equal(controlLoad(child.signalState, 2) & 4, 0, "idle event loop cleared shared pending bit");
       equal(evidence.checkpointNonzero, 0, "idle mode4 checkpoint never dequeues");
       let causalRejection: string | undefined;
       if (suppressNotify) {
@@ -429,16 +430,16 @@ async function testSleepSyncSignals(module: WebAssembly.Module, engine: Engine):
     try {
       const child = owned.spawn(sleepSyncSignalGuest(true));
       const worker = await owned.ready(child);
-      await until(() => Atomics.load(worker.probe, probeCell.idleWaiting) === 1,
+      await until(() => controlLoad(worker.probe, probeCell.idleWaiting) === 1,
         "sleepSync handled guest is blocked in its production wait", 15_000, () => guestFinished(worker));
-      equal(Atomics.load(child.signalState, 10) & 3, 2, "SIGUSR1 handler registered before sleep");
+      equal(controlLoad(child.signalState, 10) & 3, 2, "SIGUSR1 handler registered before sleep");
       equal(await owned.kill(child, 10, delivery), 0, "SIGUSR1 accepted during sleepSync");
       await until(() => child.stderr.includes("after-pump 1\n"), "SIGUSR1 callback delivered after sleepSync", 15_000, () => guestFinished(worker));
       await owned.exit(child, 0);
       const result = await owned.outcome(child);
       equal(result.kind, "exited", "handled sleepSync keeps ordinary process outcome");
       equal(result.code, 0, "handled sleepSync exits normally");
-      await until(() => Atomics.load(worker.probe, probeCell.runReturned) === 1, "handled sleepSync _start returned");
+      await until(() => controlLoad(worker.probe, probeCell.runReturned) === 1, "handled sleepSync _start returned");
       const evidence = snapshotProbe(worker.probe);
       const elapsed = assertHandledSleepSync(child.stderr, evidence);
       checks.push({ engine, route, delivery, name: "runtimeProcess-page-sleepSync-SIGUSR1-deferred-handler", evidence: { elapsed, result, stderr: child.stderr, evidence } });
@@ -449,7 +450,7 @@ async function testSleepSyncSignals(module: WebAssembly.Module, engine: Engine):
     try {
       const child = owned.spawn(sleepSyncSignalGuest(false));
       const worker = await owned.ready(child);
-      await until(() => Atomics.load(worker.probe, probeCell.idleWaiting) === 1,
+      await until(() => controlLoad(worker.probe, probeCell.idleWaiting) === 1,
         "sleepSync fatal guest is blocked in its production wait", 15_000, () => guestFinished(worker));
       equal(await owned.kill(child, 10, delivery), 0, "default SIGUSR1 accepted during sleepSync");
       await until(() => guestFinished(worker), "default SIGUSR1 unwound sleeping guest", 15_000);
@@ -475,7 +476,7 @@ async function testPreview1Clock(root: boolean): Promise<void> {
     let child: Child | undefined;
     let stdout = "", stderr = "";
     const context = { read: () => ({ root, stdout: child?.stdout ?? stdout, stderr: child?.stderr ?? stderr,
-      requestedSignal: child ? Atomics.load(child.requestedSignal, 0) : undefined,
+      requestedSignal: child ? controlLoad(child.requestedSignal, 0) : undefined,
       ordinaryStatus: child ? owned?.wait(child) : undefined,
       evidence: (worker ?? (root ? guestWorkers.get(1) : undefined)) ? snapshotProbe((worker ?? guestWorkers.get(1))!.probe) : null }), final: undefined as unknown };
     currentCase?.contexts.push(context);
@@ -499,12 +500,12 @@ async function testPreview1Clock(root: boolean): Promise<void> {
       truth(worker, "actual Preview1 production worker observed");
       const observed = worker;
       equal(observed.transport?.route, "runtimeProcess", "signal-only imports use the generic process transport");
-      await until(() => Atomics.load(observed.probe, probeCell.idleWaiting) === 1, "Preview1 clock entered actual shared interrupt wait", 15_000, () => guestFinished(observed));
-      const generation = Atomics.load(observed.probe, probeCell.idleWaitActiveGeneration);
+      await until(() => controlLoad(observed.probe, probeCell.idleWaiting) === 1, "Preview1 clock entered actual shared interrupt wait", 15_000, () => guestFinished(observed));
+      const generation = controlLoad(observed.probe, probeCell.idleWaitActiveGeneration);
       await new Promise<void>(resolve => setTimeout(resolve, 20));
-      equal(Atomics.load(observed.probe, probeCell.idleWaitActiveGeneration), generation, "same Preview1 clock wait remains entered");
-      equal(Atomics.load(observed.probe, probeCell.idleWaiting), 1, "Preview1 clock is blocked before page kill");
-      Atomics.store(observed.probe, probeCell.idleWaitSampleGeneration, generation);
+      equal(controlLoad(observed.probe, probeCell.idleWaitActiveGeneration), generation, "same Preview1 clock wait remains entered");
+      equal(controlLoad(observed.probe, probeCell.idleWaiting), 1, "Preview1 clock is blocked before page kill");
+      controlStore(observed.probe, probeCell.idleWaitSampleGeneration, generation);
       if (suppressNotify) mutation = suppressBudgetNotifications(observed.transport!.waitWord);
       const started = performance.now();
       if (root) run!.kill(2); else equal(await owned!.kill(child!, 2, "page-kill"), 0, "page Preview1 SIGINT accepted");
@@ -517,10 +518,10 @@ async function testPreview1Clock(root: boolean): Promise<void> {
         const result = await run!.done; equal(result.error, undefined, "Preview1 root did not crash");
         equal(result.code, 23, "Preview1 root ordinary exit");
       } else { await owned!.exit(child!, 23); owned!.drain(child!); stdout = child!.stdout; stderr = child!.stderr; }
-      await until(() => Atomics.load(observed.probe, probeCell.runReturned) === 1, "Preview1 actual _start returned");
+      await until(() => controlLoad(observed.probe, probeCell.runReturned) === 1, "Preview1 actual _start returned");
       equal(stdout, "", "Preview1 stdout is empty");
       equal(stderr, "ready\npoll-eintr\npoll-clean\n", "EINTR, authoritative dequeue and final nonsticky clock wait");
-      equal(Atomics.load(observed.transport!.signalState, 2) & 4, 0, "Preview1 pending bit consumed only by interrupted");
+      equal(controlLoad(observed.transport!.signalState, 2) & 4, 0, "Preview1 pending bit consumed only by interrupted");
       const evidence = snapshotProbe(observed.probe);
       assertNativeEngineCompletion(evidence);
       let causalRejection: string | undefined;
@@ -571,9 +572,9 @@ async function benchmark(module: WebAssembly.Module, engine: Engine, pristine?: 
         const child = owned.spawn(source);
         await owned.exit(child, 0);
         const worker = guestWorkers.get(child.pid); truth(worker, "benchmark worker missing");
-        await until(() => Atomics.load(worker.probe, probeCell.runReturned) === 1, "benchmark _start returned");
+        await until(() => controlLoad(worker.probe, probeCell.runReturned) === 1, "benchmark _start returned");
         const match = /BENCH (\d+) (\d+)/.exec(child.stdout); truth(match, `benchmark output: ${child.stdout} ${child.stderr}`);
-        equal(Atomics.load(worker.probe, probeCell.slotMasked), hooks ? 0 : 1, "disabled baseline masks optional signal slot before _start");
+        equal(controlLoad(worker.probe, probeCell.slotMasked), hooks ? 0 : 1, "disabled baseline masks optional signal slot before _start");
         return { milliseconds: Number(match[1]), checksum: Number(match[2]) };
       } finally { await owned.dispose(); }
     }, Boolean(pristine));

@@ -50,8 +50,8 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
   let pointer = 4096;
   for (const [index, command] of scenario.commands.entries()) {
     const spec: Omit<SpawnRequest, "fds"> & { fds: BunRuntimeCommand["fds"] } = {
-      executable: command.executable ?? "bun", argv: ["bun", "-e", command.source],
-      env: { PWD: "/home/user" }, cwd: "/home/user", job: 0,
+      executable: command.executable ?? "/bin/bun", argv: ["bun", "-e", command.source],
+      env: { PWD: "/home/user", PATH: "/bin:/usr/bin" }, cwd: "/home/user", job: 0,
       fds: command.fds ?? [{ child: 0, parent: 0 }, { child: 1, parent: 1 }, { child: 2, parent: 2 }],
     };
     let json = JSON.stringify(spec);
@@ -148,7 +148,7 @@ const mainScenarios: BunRuntimeScenario[] = [
   { name: "detached-excluded-from-foreground-kill", commands: [{ source: detachedTree, status: 137 }], action: "kill-detached", stdout: "external-root-ok\n" },
   { name: "dispose-live-descendants", commands: [{ source: tree }], action: "dispose", stdout: "" },
   { name: "worker-control-fd-isolation", commands: [{ source: workerControls }], stdout: "grandchild-no-controls\nworker-high-fds-ok\nexternal-root-ok\n" },
-  { name: "start-failed", commands: [{ executable: "broken-bun", source: "", status: 126 }], stdout: "external-root-ok\n" },
+  { name: "start-failed", commands: [{ executable: "/bin/broken-bun", source: "", status: 126 }], stdout: "external-root-ok\n" },
   { name: "preopen-root", commands: [{ source: `console.log(await Bun.file('preopen-data').text());` }], stdout: "ROOT_PREOPEN_OK\nexternal-root-ok\n" },
 ];
 export const bunRuntimeProcScenarios: readonly BunRuntimeScenario[] = mainScenarios.concat([[3], [3, 4], [3, 5], [3, 1000000]].map<BunRuntimeScenario>(inherited => ({

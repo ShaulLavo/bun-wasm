@@ -1,3 +1,4 @@
+import { controlLoad, controlStore } from "waffle/proc/control";
 import { expect, test } from "bun:test";
 import { Wasi } from "waffle/core/wasi";
 import { MemFS } from "waffle/fs/memory";
@@ -7,7 +8,7 @@ import { createNodeSignalController } from "../scripts/node-signals";
 test("Node executor readiness ignores stale hints and expires a WASI clock normally", () => {
   const controller = createNodeSignalController();
   const interrupt = new Int32Array(controller.buffers.interrupt);
-  Atomics.store(interrupt, 0, 15);
+  controlStore(interrupt, 0, 15);
   expect(controller.pending()).toBe(false);
   const memory = new WebAssembly.Memory({ initial: 1 });
   const wasi = new Wasi({ fs: new MemFS(), args: [], env: {}, preopens: {}, interrupt,
@@ -21,7 +22,7 @@ test("Node executor readiness ignores stale hints and expires a WASI clock norma
     view.setUint8(8, 0); view.setUint32(16, 1, true); view.setBigUint64(24, 0n, true);
     expect(imports.poll_oneoff!(0, 128, 1, 256)).toBe(0);
     expect(view.getUint32(256, true)).toBe(1);
-    expect(Atomics.load(interrupt, 0)).toBe(15);
+    expect(controlLoad(interrupt, 0)).toBe(15);
     expect(controller.pending()).toBe(false);
   } finally { wasi.descriptors.dispose(); }
 });

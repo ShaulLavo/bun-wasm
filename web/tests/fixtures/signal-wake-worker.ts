@@ -1,3 +1,4 @@
+import { controlLoad } from "waffle/proc/control";
 import { parentPort, workerData } from "node:worker_threads";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { MemFS } from "waffle/fs/memory";
@@ -23,6 +24,6 @@ Atomics.wait = ((word: Int32Array, index: number, expected: number, milliseconds
 }) as typeof Atomics.wait;
 try {
   abi.imports.poll!(0, 0, -1, 0);
-  parentPort!.postMessage({ phase: "done", generation, result, pending: Atomics.load(signals.signalState, 2),
-    interrupt: Atomics.load(signals.interrupt, 0), sequence: Atomics.load(wake, 0) });
+  parentPort!.postMessage({ phase: "done", generation, result, pending: controlLoad(signals.signalState, 2),
+    interrupt: controlLoad(signals.interrupt, 0), sequence: controlLoad(wake, 0) });
 } finally { Atomics.wait = nativeWait; descriptors.dispose(); parentPort!.close(); }

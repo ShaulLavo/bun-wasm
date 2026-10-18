@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import type { Runtime, GuestLauncher, ProgramDefinition } from "waffle";
-import { installBunAdapters, BunWasmProcessUnavailableError, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
+import { installBunAdapters as installReal, type BunAdapterOptions, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
+const workerUrl = "https://example.test/worker.js";
+const installBunAdapters = (runtime: Runtime, options: Omit<BunAdapterOptions, "workerUrl"> & { workerUrl?: string | URL } = {}) => installReal(runtime, { workerUrl, ...options });
+
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
 function fixture() {
@@ -33,7 +36,7 @@ test("install provisions /bin/bun and owns registrations without reserving a Run
   const f = fixture();
   const install = await installBunAdapters(f.runtime);
   expect(Array.from(f.adapters.keys())).toEqual(["bun:quickjs", "bun:jsc", "bun:browser"]);
-  expect(Array.from(f.programs.keys())).toEqual(["/bin/bun"]);
+  expect(Array.from(f.programs.keys())).toEqual(["/bin/bun", "/bin/node"]);
   expect(f.programs.get("/bin/bun")?.adapter).toBe("bun:browser");
   expect(f.directories.has("/bin")).toBe(true);
   expect(f.files.has("/bin/bun")).toBe(true);
@@ -50,7 +53,7 @@ test("concurrent and duplicate installs reject; disposal unregisters once and pe
   const first = await pending;
   await expect(installBunAdapters(f.runtime)).rejects.toThrow("already installed");
   first.dispose(); first.dispose();
-  expect(f.removed.length).toBe(4);
+  expect(f.removed.length).toBe(5);
   const second = await installBunAdapters(f.runtime);
   first.dispose();
   expect(f.adapters.size).toBe(3);
@@ -69,16 +72,18 @@ test("failed registration rolls back only this installation", async () => {
   (await installBunAdapters(f.runtime)).dispose();
 });
 
-test("every engine rejects with the typed unimplemented-process-bridge boundary", async () => {
+test("every engine forwards to the production process worker", async () => {
   const f = fixture();
-  const install = await installBunAdapters(f.runtime);
+  const install = await installBunAdapters(f.runtime, { module });
   try {
-    for (const launch of f.adapters.values()) {
-      await expect(launch({} as never, {} as never)).rejects.toBeInstanceOf(BunWasmProcessUnavailableError);
-      await expect(launch({} as never, {} as never)).rejects.toMatchObject({ code: "BUN_WASM_PROCESS_UNAVAILABLE" });
+    const launches: any[] = [];
+    const context = { module, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { PATH: "/bin" }, cwd: "/" } };
+    for (const [name, launch] of f.adapters) {
+      await launch(context as never, { launchWorker(_context: unknown, options: unknown) { launches.push(options); return { terminate() {} }; } } as never);
+      expect(launches.at(-1)).toMatchObject({ workerUrl, request: { engine: name.slice(4), module, args: ["/bin/bun", "-e", "0"] } });
     }
     const load = f.programs.get("/bin/bun")!.module as () => Promise<WebAssembly.Module>;
-    await expect(load()).rejects.toMatchObject({ code: "BUN_WASM_PROCESS_UNAVAILABLE" });
+    expect(await load()).toBe(module);
   } finally { install.dispose(); }
 });
 
@@ -92,12 +97,11 @@ test("caller can choose canonical aliases or keep program registration separatel
   (await installBunAdapters(f.runtime, { executables: [] })).dispose();
 });
 
-test("disabled bridge refuses before guest fetch or compilation", async () => {
+test("provided guest module loads without fetching", async () => {
   const f = fixture();
-  const install = await installBunAdapters(f.runtime, { fetch: async () => { throw new Error("unexpected download"); } });
-  const definition = f.programs.get("/bin/bun")!;
-  await expect((definition.module as () => Promise<WebAssembly.Module>)()).rejects.toBeInstanceOf(BunWasmProcessUnavailableError);
-  install.dispose();
+  const install = await installBunAdapters(f.runtime, { module, fetch: async () => { throw new Error("unexpected download"); } });
+  try { expect(await (f.programs.get("/bin/bun")!.module as () => Promise<WebAssembly.Module>)()).toBe(module); }
+  finally { install.dispose(); }
 });
 
 test("different files and directories produce a typed conflict without overwriting caller data", async () => {
@@ -121,6 +125,6 @@ test("invalid executable names and explicit engines are validated before registr
   }
   await expect(installBunAdapters(f.runtime, { engine: "quickjs" })).rejects.toThrow("matching guest");
   const install = await installBunAdapters(f.runtime, { engine: "quickjs", module });
-  expect(f.programs.get("/bin/bun")?.adapter).toBe("bun:quickjs");
+  expect(f.programs.get("/opt/bun/quickjs/bin/bun")?.adapter).toBe("bun:quickjs");
   install.dispose();
 });

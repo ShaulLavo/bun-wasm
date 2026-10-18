@@ -1,3 +1,5 @@
+import type { ControlCells } from "waffle/proc/control";
+import { controlLoad, controlStore, controlAdd, controlCas } from "waffle/proc/control";
 import { WasiExit } from "waffle/core";
 import { ProcessSignalExit } from "waffle/proc/abi";
 import { RuntimeWorkerSignal } from "waffle/browser/worker";
@@ -53,7 +55,7 @@ export const probeLength = 43;
 export interface EngineInterruptionOptions { evidence: SharedArrayBuffer; hooks: boolean; observeCheckpoints: boolean; idleWaitTimeoutMs: number; }
 
 export function snapshotProbe(probe: Int32Array): Record<keyof typeof probeCell, number> {
-  return Object.fromEntries(Object.entries(probeCell).map(([key, index]) => [key, Atomics.load(probe, index)])) as Record<keyof typeof probeCell, number>;
+  return Object.fromEntries(Object.entries(probeCell).map(([key, index]) => [key, controlLoad(probe, index)])) as Record<keyof typeof probeCell, number>;
 }
 
 export function engineInterruptionFailure(label: string, error: unknown, diagnostics: () => unknown): Error {
@@ -65,7 +67,7 @@ export function engineInterruptionFailure(label: string, error: unknown, diagnos
 
 /** Decorate only the guest's actual imported WASI functions, preserving their behavior. */
 export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32Array,
-  memory: () => WebAssembly.Memory, signalState: Int32Array, observeCheckpoints = true): void {
+  memory: () => WebAssembly.Memory, signalState: ControlCells, observeCheckpoints = true): void {
   const wasi = imports.wasi_snapshot_preview1;
   if (!wasi) throw new Error("engine interruption guest has no preview1 imports");
   const process = imports.runtime_proc;
@@ -78,44 +80,44 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
     // signal is dequeued. Scan the authoritative per-signal pending cells instead, so a
     // mode-4 checkpoint cannot mistake an old request for a live pending delivery.
     let pendingBefore = 0;
-    if (checkpoint && Atomics.load(probe, probeCell.loopFinishedWrites) === 0) {
+    if (checkpoint && controlLoad(probe, probeCell.loopFinishedWrites) === 0) {
       for (let candidate = 1; candidate <= 64; candidate++) {
-        if (Atomics.load(signalState, candidate) & 4) { pendingBefore = candidate; break; }
+        if (controlLoad(signalState, candidate) & 4) { pendingBefore = candidate; break; }
       }
     }
     const signalBefore = checkpoint ? pendingBefore : 0;
     if (checkpoint) {
-      Atomics.add(probe, probeCell.checkpoints, 1);
-      if (signalBefore) Atomics.add(probe, probeCell.checkpointAfterSignal, 1);
+      controlAdd(probe, probeCell.checkpoints, 1);
+      if (signalBefore) controlAdd(probe, probeCell.checkpointAfterSignal, 1);
     }
     try {
       let delivered: number;
-      if (checkpoint && Atomics.compareExchange(probe, probeCell.nativeInterruptRequested, 1, 0) === 1) {
+      if (checkpoint && controlCas(probe, probeCell.nativeInterruptRequested, 1, 0) === 1) {
         // Return the actual direct ABI negative response. No host call, fabricated outcome
         // or throwing callback may be responsible for this native-engine unwind proof.
         delivered = -1;
-        Atomics.add(probe, probeCell.nativeInterruptInjected, 1);
+        controlAdd(probe, probeCell.nativeInterruptInjected, 1);
       } else delivered = signal(number, mode) as number;
       if (checkpoint) {
-        Atomics.add(probe, probeCell.checkpointReturned, 1);
-        if (signalBefore) Atomics.store(probe, probeCell.checkpointSignal, signalBefore);
-        if (delivered !== 0) Atomics.add(probe, probeCell.checkpointNonzero, 1);
-        if (pendingBefore) Atomics.add(probe, Atomics.load(signalState, 2) & 4
+        controlAdd(probe, probeCell.checkpointReturned, 1);
+        if (signalBefore) controlStore(probe, probeCell.checkpointSignal, signalBefore);
+        if (delivered !== 0) controlAdd(probe, probeCell.checkpointNonzero, 1);
+        if (pendingBefore) controlAdd(probe, controlLoad(signalState, 2) & 4
           ? probeCell.pendingPreservedBeforeLoopFinished : probeCell.pendingLostAtCheckpoint, 1);
       } else if (delivered > 0) {
-        Atomics.store(probe, probeCell.handledSignal, delivered);
-        if (Atomics.load(probe, probeCell.loopFinishedWrites) === 0) Atomics.add(probe, probeCell.handledBeforeLoopFinished, 1);
+        controlStore(probe, probeCell.handledSignal, delivered);
+        if (controlLoad(probe, probeCell.loopFinishedWrites) === 0) controlAdd(probe, probeCell.handledBeforeLoopFinished, 1);
       }
       return delivered;
     } catch (error) {
       if (checkpoint) {
-        Atomics.add(probe, probeCell.checkpointThrew, 1);
+        controlAdd(probe, probeCell.checkpointThrew, 1);
         // Only a production terminal exception identifies this fatal checkpoint; a
         // selected outcome cannot promote a coincidental RuntimeError into evidence.
         if (error instanceof RuntimeWorkerSignal || error instanceof ProcessSignalExit) {
-          if (!signalBefore) Atomics.add(probe, probeCell.checkpointAfterSignal, 1);
-          Atomics.store(probe, probeCell.checkpointSignal, error.signal);
-          Atomics.store(probe, probeCell.checkpointFatalSignal, error.signal);
+          if (!signalBefore) controlAdd(probe, probeCell.checkpointAfterSignal, 1);
+          controlStore(probe, probeCell.checkpointSignal, error.signal);
+          controlStore(probe, probeCell.checkpointFatalSignal, error.signal);
         }
       }
       throw error;
@@ -145,13 +147,13 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
         text += decoder.decode(new Uint8Array(buffer, pointer, length).slice(), { stream: true });
       }
       text += decoder.decode();
-      Atomics.add(probe, probeCell.writes, 1);
+      controlAdd(probe, probeCell.writes, 1);
       const previousLine = partialLines.get(fd);
       let line: string | null = previousLine === undefined ? "" : previousLine;
       for (const character of text) {
         if (character === "\n") {
           const cell = markers.find(([marker]) => marker === line)?.[1];
-          if (cell !== undefined) Atomics.add(probe, cell, 1);
+          if (cell !== undefined) controlAdd(probe, cell, 1);
           line = "";
         } else if (line !== null) {
           const next: string = line + character;
@@ -165,30 +167,30 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
 }
 
 /** Test-only idle proof; never installed in timed CPU overhead runs. */
-export function observeEventLoopWait(probe: Int32Array, word: Int32Array,
+export function observeEventLoopWait(probe: Int32Array, word: ControlCells,
   target: Pick<typeof Atomics, "wait"> = Atomics, timeoutOverrideMs = 0): () => void {
   const native = target.wait;
   target.wait = (array, index, value, timeout) => {
     const observed = array.buffer === word.buffer && array.byteOffset + index * array.BYTES_PER_ELEMENT === word.byteOffset
       && (timeout === undefined || timeout > 0);
     if (!observed) return Reflect.apply(native, target, [array, index, value, timeout]);
-    const generation = Atomics.add(probe, probeCell.idleWaitEntries, 1) + 1;
-    Atomics.store(probe, probeCell.idleWaitActiveGeneration, generation);
-    Atomics.store(probe, probeCell.idleWaiting, 1);
+    const generation = controlAdd(probe, probeCell.idleWaitEntries, 1) + 1;
+    controlStore(probe, probeCell.idleWaitActiveGeneration, generation);
+    controlStore(probe, probeCell.idleWaiting, 1);
     try {
       const result = Reflect.apply(native, target, [array, index, value, timeoutOverrideMs || timeout]);
-      Atomics.add(probe, probeCell.idleWaitReturns, 1);
+      controlAdd(probe, probeCell.idleWaitReturns, 1);
       // not-equal never slept: it cannot substantiate actual native blocking.
-      if (result === "ok" || result === "timed-out") Atomics.add(probe, probeCell.idleWaitBlocked, 1);
-      if (result === "ok") Atomics.add(probe, probeCell.idleWaitOk, 1);
-      else if (result === "timed-out") Atomics.add(probe, probeCell.idleWaitTimedOut, 1);
-      else if (result === "not-equal") Atomics.add(probe, probeCell.idleWaitNotEqual, 1);
-      if (Atomics.load(probe, probeCell.idleWaitSampleGeneration) === generation) {
-        Atomics.store(probe, probeCell.idleWaitSampleResult, result === "ok" ? 1 : result === "timed-out" ? 2 : 3);
-        Atomics.store(probe, probeCell.idleWaitSampleCompleted, generation);
+      if (result === "ok" || result === "timed-out") controlAdd(probe, probeCell.idleWaitBlocked, 1);
+      if (result === "ok") controlAdd(probe, probeCell.idleWaitOk, 1);
+      else if (result === "timed-out") controlAdd(probe, probeCell.idleWaitTimedOut, 1);
+      else if (result === "not-equal") controlAdd(probe, probeCell.idleWaitNotEqual, 1);
+      if (controlLoad(probe, probeCell.idleWaitSampleGeneration) === generation) {
+        controlStore(probe, probeCell.idleWaitSampleResult, result === "ok" ? 1 : result === "timed-out" ? 2 : 3);
+        controlStore(probe, probeCell.idleWaitSampleCompleted, generation);
       }
       return result;
-    } finally { Atomics.store(probe, probeCell.idleWaiting, 0); Atomics.store(probe, probeCell.idleWaitActiveGeneration, 0); }
+    } finally { controlStore(probe, probeCell.idleWaiting, 0); controlStore(probe, probeCell.idleWaitActiveGeneration, 0); }
   };
   return () => { target.wait = native; };
 }
@@ -214,7 +216,7 @@ export function assertCausalIdleWake(evidence: ReturnType<typeof snapshotProbe>,
 }
 
 /** Mutation control: suppress only this exact shared wait-cell address. */
-export function suppressBudgetNotifications(word: Int32Array,
+export function suppressBudgetNotifications(word: ControlCells,
   target: Pick<typeof Atomics, "notify"> = Atomics): { count(): number; restore(): void } {
   const native = target.notify;
   let suppressed = 0;
@@ -231,24 +233,24 @@ export function observedEngineStart(exports: WebAssembly.Exports, probe: Int32Ar
   const start = exports._start;
   return () => {
     if (!hooks) throw new Error("No hook-disabled baseline: the guest installs its runtime_proc engine callback unconditionally; masking a removed Bun slot or returning zero from the import cannot disable that callback");
-    Atomics.add(probe, probeCell.startEntered, 1);
+    controlAdd(probe, probeCell.startEntered, 1);
     try {
       const result = start();
-      Atomics.add(probe, probeCell.startNormalReturn, 1);
+      controlAdd(probe, probeCell.startNormalReturn, 1);
       return result;
     } catch (error) {
       if (error instanceof WasiExit) {
-        Atomics.add(probe, probeCell.startWasiExit, 1);
-        Atomics.store(probe, probeCell.startWasiExitCode, error.code);
+        controlAdd(probe, probeCell.startWasiExit, 1);
+        controlStore(probe, probeCell.startWasiExitCode, error.code);
       } else {
         // Keep typed fatal throws in "other" so native true-return admission
         // remains strict; default-fatal admission additionally checks their type.
-        Atomics.add(probe, probeCell.startOtherException, 1);
+        controlAdd(probe, probeCell.startOtherException, 1);
         if (error instanceof RuntimeWorkerSignal || error instanceof ProcessSignalExit) {
-          Atomics.store(probe, probeCell.startFatalSignal, error.signal);
+          controlStore(probe, probeCell.startFatalSignal, error.signal);
         }
       }
       throw error;
-    } finally { Atomics.add(probe, probeCell.startLeft, 1); }
+    } finally { controlAdd(probe, probeCell.startLeft, 1); }
   };
 }

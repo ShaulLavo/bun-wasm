@@ -22,12 +22,25 @@ const { createBunExecutor } = await import("../src/bun-executor");
 afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); });
 
 const name = (value: string) => [value.length].concat(Array.from(new TextEncoder().encode(value)));
-const section = (id: number, bytes: number[]) => [id, bytes.length].concat(bytes);
-/** Exports memory, an empty `_start` and `bunwasm_ready` returning `ready`. */
-function guest(ready: number): WebAssembly.Module {
+const unsigned = (value: number): number[] => {
+  const bytes: number[] = [];
+  do { const byte = value & 127; value >>>= 7; bytes.push(byte | (value ? 128 : 0)); } while (value);
+  return bytes;
+};
+const section = (id: number, bytes: number[]) => [id].concat(unsigned(bytes.length), bytes);
+const PROCESS_IMPORTS = [
+  "access_cancel", "access_start", "access_take", "default_signal", "dup", "getpid",
+  "interrupted", "job_of", "kill", "kill_job", "pipe", "poll", "read", "signal", "spawn",
+  "wait", "wait_job", "write",
+] as const;
+/** Exports memory, an empty `_start` and `bunwasm_ready` returning `ready`.
+ * Imports are linked but invoked directly by the test, so their dummy Wasm type is unused. */
+function guest(ready: number, imports: readonly { namespace: string; name: string }[] = []): WebAssembly.Module {
   return new WebAssembly.Module(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0].concat(
-    section(1, [2, 0x60, 0, 0, 0x60, 0, 1, 0x7f]), section(3, [2, 0, 1]), section(5, [1, 0, 1]),
-    section(7, [3].concat(name("memory"), [2, 0], name("_start"), [0, 0], name("bunwasm_ready"), [0, 1])),
+    section(1, [2, 0x60, 0, 0, 0x60, 0, 1, 0x7f]),
+    imports.length ? section(2, [imports.length].concat(imports.flatMap(entry => name(entry.namespace).concat(name(entry.name), [0, 0])))) : [],
+    section(3, [2, 0, 1]), section(5, [1, 0, 1]),
+    section(7, [3].concat(name("memory"), [2, 0], name("_start"), [0, imports.length], name("bunwasm_ready"), [0, imports.length + 1])),
     section(10, [2, 2, 0, 0x0b, 4, 0, 0x41, ready, 0x0b]),
   )));
 }
@@ -181,6 +194,69 @@ test("every network slot refuses to run once the process has a fatal outcome", a
   const result = await runCapturingSignals(options => { signals = options; }, createRing());
   expect(installed).toHaveLength(1);
   expect(exits(result.messages)).toEqual([{ type: "exit", code: 143, signal: 15, sleep: "atomics" }]);
+});
+
+for (const kind of ["exited", "signaled"] as const) test(`every process import checks authoritative ${kind} admission before guest memory or service access`, async () => {
+  const connection = createFilesystemConnection();
+  const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
+  const signals = workerProcessState(runtimeProcess).signals;
+  const messages: WorkerMessage[] = [];
+  const host: BunExecutorHost & RuntimeWorkerHost = {
+    crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message: WorkerMessage) { messages.push(message); },
+    async fetch() { throw new Error("a dead process must not fetch"); },
+  };
+  const request: RunRequest = { engine: "browser", module: guest(0, PROCESS_IMPORTS.map(name => ({ namespace: "runtime_proc", name }))), args: ["/bin/bun"], env: {},
+    filesystem: connection.client, runtimeProcess, trace: false, net: null, moduleCache: null };
+  const executor = createBunExecutor(request, host);
+  const refused = new Map<string, unknown>();
+  let imports: Record<string, (...args: number[]) => unknown> = {};
+  let memoryReads = 0;
+  let serviceMessages = 0;
+  try {
+    await bootstrap(request, { ...executor,
+      setup(context) {
+        context.fs.preopen = () => 1;
+        context.fs.retain = () => {};
+        context.fs.release = () => {};
+        executor.setup?.(context);
+      },
+      imports(linked) { imports = linked.runtime_proc as typeof imports; },
+      run({ instance }) {
+        const memory = instance.exports.memory as WebAssembly.Memory;
+        // An invalid pointer alone is insufficient: an ABI might swallow its fault and
+        // still return. Poison the memory accessor and assert it is never inspected.
+        Object.defineProperty(memory, "buffer", { configurable: true, get() {
+          memoryReads++;
+          throw new Error("dead process inspected guest memory");
+        } });
+        try {
+          claimOutcome(signals.outcome, { kind, code: kind === "signaled" ? 15 : 23 });
+          const before = messages.length;
+          for (const [name, call] of Object.entries(imports)) {
+            try { call(0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff); }
+            catch (error) { refused.set(name, error); }
+          }
+          serviceMessages = messages.length - before;
+        } finally { Reflect.deleteProperty(memory, "buffer"); }
+        return 0;
+      },
+    }, host);
+  } finally { connection.client.port.close(); connection.server.port.close(); }
+  // Keep this list explicit, so silently dropping an import cannot reduce coverage.
+  expect(Object.keys(imports).sort()).toEqual([
+    "access_cancel", "access_start", "access_take", "default_signal", "dup", "getpid",
+    "interrupted", "job_of", "kill", "kill_job", "pipe", "poll", "read", "signal", "spawn",
+    "wait", "wait_job", "write",
+  ]);
+  expect(Array.from(refused.keys()).sort()).toEqual(Object.keys(imports).sort());
+  for (const [name, error] of refused) {
+    expect(error, name).toBeInstanceOf(kind === "signaled" ? DefaultSignal : WasiExit);
+  }
+  expect(memoryReads).toBe(0);
+  expect(serviceMessages).toBe(0);
+  expect(exits(messages)).toEqual([{ type: "exit", code: kind === "signaled" ? 143 : 23,
+    signal: kind === "signaled" ? 15 : undefined, sleep: "atomics" }]);
 });
 
 test("without a networking ring no slots are installed", async () => {

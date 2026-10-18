@@ -80,7 +80,7 @@ test("parent fixture keeps byte checks while retrying nonblocking AGAIN and shor
   });
   memory = instance.exports.memory as WebAssembly.Memory;
   (instance.exports._start as () => void)();
-  expect(spawned).toEqual({ executable: "bun", argv: ["abi-child"], env: { PWD: "/" }, cwd: "/", job: 1,
+  expect(spawned).toEqual({ executable: "/bin/bun", argv: ["abi-child"], env: { PWD: "/" }, cwd: "/", job: 1,
     fds: [{ child: 0, parent: 123 }, { child: 1, parent: 126 }, { child: 10, parent: 126 }, { child: 2, parent: 2 }, { child: 11, parent: 1 }] });
   expect(closed).toEqual([124, 125, 123, 126, 1124, 1125]);
   expect(writes).toEqual(["ping", "runtime-proc-ok\n"]);

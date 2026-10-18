@@ -282,6 +282,9 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 
 | import | signature |
 |---|---|
+| `runtime_proc.access_start` | `(path_ptr, path_len, cwd_ptr, cwd_len, mode) -> request` |
+| `runtime_proc.access_take` | `(request) -> 0` or negative WASI errno (`-6` while pending) |
+| `runtime_proc.access_cancel` | `(request) -> 0` |
 | `runtime_proc.spawn` | `(desc_ptr, desc_len) -> pid` |
 | `runtime_proc.job_of` | `(pid) -> job`; `job_of(0)` is the caller's own job |
 | `runtime_proc.pipe` | `(out_ptr) -> 0` (two `u32`: read end, write end) |
@@ -295,6 +298,10 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 | `runtime_proc.signal` | `(sig, mode) -> result`, see [Signal dispositions](#signal-dispositions) |
 | `wasi_snapshot_preview1.fd_close` | `(fd) -> errno`, the only way to close a pipe end |
 
+Executable access requests observe live filesystem metadata and executable registry admission.
+The guest asks for executable mode `1`, consumes each completion once, and cancels outstanding
+requests if waiting fails. Query results use negative WASI errno, not native libc errno numbers.
+
 The guest does not import `dup`, `interrupted` or `default_signal` (`signal(0, 0)` dequeues like
 `interrupted`; a selected default action unwinds inside the host). A host that instantiates bun.wasm must provide the namespace; a plain `wasmtime run` of
 bun.wasm no longer links. Results are `>= 0` or a negative WASI errno (`EAGAIN` is `-6`, `EPIPE`
@@ -303,14 +310,17 @@ bun.wasm no longer links. Results are `>= 0` or a negative WASI errno (`EAGAIN` 
 The guest never chooses descriptor numbers for itself. `spawn` takes UTF-8 JSON:
 
 ```json
-{"executable":"bun","argv":["bun","run","/app.ts"],"cwd":"/","env":{"HOME":"/"},"job":0,
+{"executable":"/bin/bun","argv":["bun","run","/app.ts"],"cwd":"/","env":{"HOME":"/"},"job":0,
  "fds":[{"child":0,"parent":7},{"child":1,"parent":8},{"child":2,"parent":2}]}
 ```
 
-- `argv[0]` is preserved and `executable` is `argv[0]`; the host's registry selects the program.
-  Bun registers `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and `/usr/local/bin/node`
-  and the explicit `bun-quickjs`, `bun-jsc` and `bun-browser` engine names; generic aliases keep
-  the page or root engine. No native executable is ever started.
+- The guest resolves `executable` through the live access-query ABI before allocating pipes.
+  Names containing `/` bypass PATH; otherwise entries are tried in order, including empty entries
+  as cwd. ENOENT and ENOTDIR candidates are skipped; EACCES is remembered while later executable
+  candidates remain eligible. Bun.which uses the same lookup. Absolute paths are never rewritten.
+  Program files and engine PATH defaults are documented in the [package guide](../README.md#installation-and-ownership).
+  The worker supplies the resolved executable as guest argv[0], making process.execPath a real
+  executable path; spawn error metadata still names the caller's original command.
 - `env` replaces the child environment; the host sets `PWD` to `cwd`.
 - `job` is the caller's own job, from `job_of(0)`, so job-wide signals and waits from the owner
   reach grandchildren; the guest never waits for or signals that job as a whole. If `job_of(0)`

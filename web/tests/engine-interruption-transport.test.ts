@@ -1,3 +1,4 @@
+import { controlLoad, controlStore, controlAdd } from "waffle/proc/control";
 import { expect, test } from "bun:test";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
@@ -16,11 +17,11 @@ test("generic engine probe uses authoritative offset signals and the actual runt
   expect(selected.waitWord.byteOffset).toBe(state.wake.byteOffset);
   expect(selected.waitWord.byteOffset).toBe(4);
   expect(selected.waitWord.length).toBe(1);
-  Atomics.store(selected.requestedSignal, 0, 15);
-  Atomics.store(selected.signalState, 2, 6);
-  expect(Atomics.load(state.signals.requestedSignal, 0)).toBe(15);
-  expect(Atomics.load(state.signals.signalState, 2)).toBe(6);
-  expect(Atomics.load(new Int32Array(runtimeProcess.directory), 0)).not.toBe(15);
+  controlStore(selected.requestedSignal, 0, 15);
+  controlStore(selected.signalState, 2, 6);
+  expect(controlLoad(state.signals.requestedSignal, 0)).toBe(15);
+  expect(controlLoad(state.signals.signalState, 2)).toBe(6);
+  expect(controlLoad(new Int32Array(runtimeProcess.directory), 0)).not.toBe(15);
 });
 
 test("probe rejects a request without its actual production transport", () => {
@@ -36,15 +37,15 @@ for (const root of [false, true]) test(`Preview1 ${root ? "Bun composition root"
   expect(selected.waitWord.byteOffset).toBe(state.signals.interrupt.byteOffset);
   expect(selected.waitWord.length).toBe(1);
   expect(selected.waitWord.byteOffset).not.toBe(state.wake.byteOffset);
-  Atomics.store(selected.waitWord, 0, 2);
-  expect(Atomics.load(state.signals.interrupt, 0)).toBe(2);
-  expect(Atomics.load(state.wake, 0)).toBe(0);
+  controlStore(selected.waitWord, 0, 2);
+  expect(controlLoad(state.signals.interrupt, 0)).toBe(2);
+  expect(controlLoad(state.wake, 0)).toBe(0);
 });
 
 test("both Bun engines observe the same service-owned readiness sequence", () => {
   const runtimeProcess = createWorkerProcessTransport();
   const quickjs = engineInterruptionTransport({ runtimeProcess, engine: "quickjs" });
   const jsc = engineInterruptionTransport({ runtimeProcess, engine: "jsc" });
-  Atomics.add(quickjs.waitWord, 0, 1);
-  expect(Atomics.load(jsc.waitWord, 0)).toBe(1);
+  controlAdd(quickjs.waitWord, 0, 1);
+  expect(controlLoad(jsc.waitWord, 0)).toBe(1);
 });

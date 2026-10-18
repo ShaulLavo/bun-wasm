@@ -1,4 +1,4 @@
-import type { Engine } from "./bun-executor.js";
+import type { Engine } from "../web/src/bun-executor.js";
 
 /** Persistent executable locations shared by demo roots, their PATH and package installations. */
 export const ENGINE_BIN: Readonly<Record<Engine, string>> = {

@@ -13,7 +13,7 @@ import { workerProcessState, wakeWorkerProcess, type WorkerProcessTransport } fr
 import type { PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import type { SpawnRequest } from "waffle/proc/types";
 import { installCliFetch } from "./node-install-net.mjs";
-import { NodeProcessBroker, validateNodeCwd } from "./node-spawn.ts";
+import { nodeModule, NodeProcessBroker, validateNodeCwd } from "./node-spawn.ts";
 import { createNodeSignalController } from "./node-signals.ts";
 import { createNodeProcess, type NodeWasiImports } from "./node-process.ts";
 
@@ -63,7 +63,8 @@ function settings(): Settings {
 
 async function main() {
   const config = settings();
-  const module = await WebAssembly.compile(readFileSync(config.wasmPath));
+  const baseModule = await WebAssembly.compile(readFileSync(config.wasmPath));
+  const module = await nodeModule({ args: config.args, baseModule, wasmPath: config.wasmPath });
   const broker = new NodeProcessBroker({ module,
     launch(context, transport) {
       validateNodeCwd(config.preopens, context.request.cwd);

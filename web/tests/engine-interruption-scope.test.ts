@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
 import { createRuntime, type Runtime } from "waffle";
+import { FilesystemService } from "waffle/fs/service";
+import { MemoryBackend } from "waffle/fs/backend";
+import type { FilesystemConnection } from "waffle/fs/protocol";
 import type { RunRequest, WorkerMessage } from "../src/bun-executor";
 import { workerProcessState } from "waffle/proc/worker-client";
 import { createRuntimeEngineScope } from "./engine-interruption-scope";
@@ -7,7 +10,7 @@ import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 
 /** Keep production page ownership, allocator, filesystem admission and launchRuntime intact.
- * Only the Worker boundary is fake: no interpreter or filesystem backend executes in this realm.
+ * Only guest execution is fake; real filesystem admission uses the in-memory service.
  */
 function runtimeRealm() {
   const NativeWorker = globalThis.Worker;
@@ -19,6 +22,7 @@ function runtimeRealm() {
   class FakeWorker {
     onmessage: ((event: MessageEvent<WorkerMessage>) => void) | null = null;
     onerror = null;
+    private readonly service = new FilesystemService(new MemoryBackend());
     request?: RunRequest;
     stopped = false;
     private readonly ownedPorts = new Set<MessagePort>();
@@ -32,15 +36,11 @@ function runtimeRealm() {
       }
       this.ownedPorts.add(port);
     }
-    postMessage(message: RunRequest | { connect: { port: MessagePort } }) {
+    postMessage(message: RunRequest | { connect: FilesystemConnection }) {
       if ("connect" in message) {
         const service = message.connect.port;
         this.own(service);
-        service.onmessage = event => {
-          // The real SharedFilesystem connects each identity through its existing service port.
-          const port: MessagePort | undefined = event.data?.connect?.port;
-          if (port) this.own(port);
-        };
+        this.service.connect(message.connect);
       } else {
         this.request = message;
         this.own(message.filesystem.port);
@@ -48,6 +48,7 @@ function runtimeRealm() {
     }
     terminate() {
       this.stopped = true;
+      this.service.dispose();
       for (const port of this.ownedPorts) { port.onmessage = null; port.close(); }
     }
   }
@@ -93,7 +94,7 @@ test("generic engine scope reaches real launchRuntime with the process transport
     }
     const worker = realm.workers[0]!, request = worker.request!;
     expect(request.runtimeProcess).toBeDefined();
-    expect(request.args).toEqual(["bun", "-e", "fixture-source"]);
+    expect(request.args).toEqual(["/usr/libexec/engine-probe", "-e", "fixture-source"]);
     const state = workerProcessState(request.runtimeProcess!);
     expect(state.pid).toBe(child.pid);
     expect(child.signalState.buffer).toBe(state.signals.signalState.buffer);

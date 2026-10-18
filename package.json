@@ -46,9 +46,10 @@
     "web/src/buffer-transfer.ts",
     "web/src/native-stream-state.ts",
     "web/src/content-modules.ts",
-    "web/src/subprocess.ts",
-    "web/src/worker-pipes.ts",
-    "web/src/net"
+    "web/src/net",
+    "src/executable-paths.ts",
+    "web/src/bun-launcher.ts",
+    "web/src/bun-executor.ts"
   ],
   "scripts": {
     "build": "bun build.ts",
@@ -59,13 +60,13 @@
     "publish-guest": "bun scripts/publish-guest.ts"
   },
   "peerDependencies": {
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e41f4cdd6eaa376888b4eb24d6557789b98b59f9"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#b1f2b7dddb32eb52c6423c0ab12dc2e21ea699ea"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "typescript": "^7.0.2",
     "vite": "8.3.4",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e41f4cdd6eaa376888b4eb24d6557789b98b59f9"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#b1f2b7dddb32eb52c6423c0ab12dc2e21ea699ea"
   },
   "trustedDependencies": [
     "waffle"

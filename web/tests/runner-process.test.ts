@@ -1,9 +1,10 @@
+import { controlLoad } from "waffle/proc/control";
 import type { RootProcessOptions } from "waffle/proc";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { ENGINES, startRun, type Engine } from "../src/runner";
 import { SubprocessBroker } from "../src/subprocess-broker";
-import { ENGINE_BIN } from "../src/executable-paths";
+import { ENGINE_BIN } from "../../src/executable-paths.js";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { RunRequest } from "../src/bun-executor";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
@@ -388,7 +389,7 @@ test("root IGNORE leaves no pending signal or terminal result", async () => {
     setSignalDisposition(signalState, 2, 1);
     state.run.kill();
     expect(takeSignal(signalState)).toBe(0);
-    expect(Atomics.load(signalsOf(state.request).interrupt, 0)).toBe(0);
+    expect(controlLoad(signalsOf(state.request).interrupt, 0)).toBe(0);
     expect(readOutcome(signalsOf(state.request).outcome)).toBeNull();
     expect(state.revoked()).toBe(0);
     state.worker.exit(0);

@@ -1,3 +1,4 @@
+import { controlLoad } from "waffle/proc/control";
 import { expect, test } from "bun:test";
 import { Wasi } from "waffle/core/wasi";
 import { MemFS } from "waffle/fs/memory";
@@ -30,11 +31,11 @@ test("dequeue preserves later pending signals and releases the final WASI wait",
     requestSignal(signals, 2); requestSignal(signals, 15);
     expect(clock()).toBe(27);
     expect(signal(0, 4)).toBe(0);
-    expect(Atomics.load(signals.interrupt, 0)).toBe(15);
+    expect(controlLoad(signals.interrupt, 0)).toBe(15);
     expect(signal(0, 0)).toBe(2);
     expect(clock()).toBe(27);
     expect(signal(0, 0)).toBe(15);
-    expect(Atomics.load(signals.interrupt, 0)).toBe(0);
+    expect(controlLoad(signals.interrupt, 0)).toBe(0);
     expect(signal(0, 0)).toBe(0);
     expect(clock()).toBe(0);
     expect(waits).toBe(0);

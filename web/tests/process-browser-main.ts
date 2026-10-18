@@ -1,3 +1,4 @@
+import { controlLoad } from "waffle/proc/control";
 import { createRuntime, type Runtime, type RuntimeOptions, type ProcessService } from "waffle";
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
 import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
@@ -162,8 +163,8 @@ try {
         await exit(child, status!);
         const result = await recorded;
         equal(result.kind, "signaled", "signal outcome kind"); equal(result.code, signal, "unregistered signal is claimed by the supervisor");
-        equal(Atomics.load(child.state.signals.signalState, signal!), 0, "default signal never becomes pending handled work");
-        truth(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0) !== 0, "signal default action revokes filesystem access");
+        equal(controlLoad(child.state.signals.signalState, signal!), 0, "default signal never becomes pending handled work");
+        truth(controlLoad(new Int32Array(child.filesystem.revocations[0]!), 0) !== 0, "signal default action revokes filesystem access");
       } finally { await s.dispose(); }
     });
   }
@@ -182,7 +183,7 @@ try {
       const s = await scope({ handled: { module: module(mode), adapter: "preview1", cooperative: true } });
       try {
         const child = s.spawn("handled"); await ready(child); const recorded = s.wait(child.pid);
-        equal(Atomics.load(child.state.signals.signalState, signal), 2, "handler registered before readiness");
+        equal(controlLoad(child.state.signals.signalState, signal), 2, "handler registered before readiness");
         await s.service.kill(child.pid, signal); await exit(child, status);
         const result = await recorded;
         equal(result.kind, "exited", "handled signal preserves ordinary exit kind"); equal(result.code, status, "own exit code is not inferred to be a signal");
@@ -193,12 +194,12 @@ try {
     const s = await scope({ ignored: { module: module("ignored-pipe"), adapter: "preview1", cooperative: true } });
     try {
       const child = s.spawn("ignored"); await ready(child);
-      const interruptBefore = Atomics.load(child.state.signals.interrupt, 0);
+      const interruptBefore = controlLoad(child.state.signals.interrupt, 0);
       await s.service.kill(child.pid, 13);
-      equal(Atomics.load(child.state.signals.signalState, 13), 1, "ignored PIPE has no pending bit");
-      equal(Atomics.load(child.state.signals.interrupt, 0), interruptBefore, "ignored PIPE does not request an interrupt wake");
+      equal(controlLoad(child.state.signals.signalState, 13), 1, "ignored PIPE has no pending bit");
+      equal(controlLoad(child.state.signals.interrupt, 0), interruptBefore, "ignored PIPE does not request an interrupt wake");
       equal(waitStatus(child), -2, "ignored PIPE leaves guest alive");
-      equal(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "ignored PIPE does not revoke filesystem");
+      equal(controlLoad(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "ignored PIPE does not revoke filesystem");
       const recorded = s.wait(child.pid);
       await s.service.kill(child.pid, 2); await exit(child, 0);
       equal((await recorded).kind, "exited", "ignored PIPE cannot overwrite later ordinary exit");
@@ -210,7 +211,7 @@ try {
       const child = s.spawn("once"); await ready(child);
       await s.service.kill(child.pid, 2);
       await until(() => { drain(child); return child.stdout.includes("handling\n"); }, "once handler removed acknowledgement");
-      equal(Atomics.load(child.state.signals.signalState, 2), 0, "last removal resets disposition and clears consumed pending");
+      equal(controlLoad(child.state.signals.signalState, 2), 0, "last removal resets disposition and clears consumed pending");
       equal(waitStatus(child), -2, "removal cannot reinterpret already consumed first signal");
       const recorded = s.wait(child.pid);
       await s.service.kill(child.pid, 2); await exit(child, 130);
@@ -240,9 +241,9 @@ try {
       equal(child.owner.abi.imports.kill!(child.pid, 2), 0, "guest runtime_proc.kill publishes the shared request");
       await until(() => { drain(child); return child.stdout.includes("handling\n"); }, "signal handler output");
       // The acknowledgement proves dequeue completed; no arbitrary delay is needed.
-      equal(Atomics.load(child.state.signals.signalState, 2), 2, "INT pending bit was consumed, disposition remains handled");
+      equal(controlLoad(child.state.signals.signalState, 2), 2, "INT pending bit was consumed, disposition remains handled");
       equal(waitStatus(child), -2, "catchable INT must not force termination");
-      equal(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "handled INT must not revoke");
+      equal(controlLoad(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "handled INT must not revoke");
       const recorded = s.wait(child.pid); await s.service.kill(child.pid, 9); await exit(child, 137);
       equal((await recorded).code, 9, "KILL overrides an in-progress handler");
       equal(child.stdout.split("handling\n").length - 1, 1, "broker observation never redelivers a consumed INT request");
@@ -263,8 +264,8 @@ try {
       equal((await unhandledExit).kind, "signaled", "default member exits on INT");
       equal(waitStatus(parent), -2, "handled member remains alive");
       equal(waitStatus(ignored), -2, "ignored member remains alive");
-      equal(Atomics.load(ignored.state.signals.signalState, 2), 1, "ignored member never queues INT");
-      for (const child of [parent, ignored]) equal(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "nondefault member keeps filesystem capability");
+      equal(controlLoad(ignored.state.signals.signalState, 2), 1, "ignored member never queues INT");
+      for (const child of [parent, ignored]) equal(controlLoad(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "nondefault member keeps filesystem capability");
       const remaining = Promise.all([s.wait(parent.pid), s.wait(ignored.pid)]);
       await s.service.killJob(parent.state.job, 9);
       for (const result of await remaining) { equal(result.kind, "signaled", "KILL ignores member dispositions"); equal(result.status, 137, "KILL member status"); }
@@ -323,7 +324,7 @@ try {
       }
       await exit(foreground, 130);
       truth(readOutcome(foreground.state.signals.outcome), "parent has selected its terminal outcome");
-      truth(Atomics.load(new Int32Array(foreground.filesystem.revocations[0]!), 0) !== 0, "exited parent guest capability is revoked");
+      truth(controlLoad(new Int32Array(foreground.filesystem.revocations[0]!), 0) !== 0, "exited parent guest capability is revoked");
       const supervisor = await s.service.ready();
       await until(() => supervisor.jobEmpty(foreground.state.parentPid, foreground.state.job), "foreground job host-work fences");
       supervisor.reapJob(foreground.state.parentPid, foreground.state.job);
@@ -366,7 +367,7 @@ try {
           const parentCode = `Bun.spawn(['bun','-e',${JSON.stringify(childCode)}],{stdin:'ignore',stdout:'ignore',stderr:'ignore'}).unref(); console.log('parent');`;
           const parent = s.spawn("bun", { argv: ["bun", "-e", parentCode] });
           await exit(parent, 0); equal(parent.stdout, "parent\n", "real guest parent exited without waiting for child");
-          const liveDescendants = () => workerProcessSlots(parent.transport).filter(slot => { const state = workerProcessState(parent.transport, slot); return state.parentPid === parent.pid && Atomics.load(state.confirmed, 0) === 0; });
+          const liveDescendants = () => workerProcessSlots(parent.transport).filter(slot => { const state = workerProcessState(parent.transport, slot); return state.parentPid === parent.pid && controlLoad(state.confirmed, 0) === 0; });
           truth(liveDescendants().length > 0, "unawaited child still owns capacity after its parent exits");
           equal(await s.filesystem.readFile(marker), undefined, "orphan has not been allowed to finish before parent exit");
           await s.filesystem.writeFile(permit, "go");

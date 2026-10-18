@@ -185,7 +185,7 @@
     if (!Array.isArray(cmd) || !cmd.length) throw new TypeError("cmd must be a non-empty array");
     validateCommandLength(cmd);
     if (options.ipc !== undefined) throw unsupported("Child process IPC");
-    const argv = cmd.map(String);
+    const argv = internal.require("package_scripts").spawnArguments(cmd.map(String), options.cwd);
     if (argv.some((arg) => arg.includes("\0"))) throw new TypeError("Command arguments cannot contain null bytes");
     const proc = process as unknown as BunWasm.GuestProcess;
     if (!native.hostCaps.proc_spawn) throw unsupported("Spawning a process without host process support");

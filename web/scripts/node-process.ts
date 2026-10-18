@@ -1,3 +1,4 @@
+import { readOutcome } from "waffle/proc/outcome";
 import { readSync } from "node:fs";
 import { DescriptorTable, OpenDescription, type Descriptor, type Resource, type Stream } from "waffle/core/descriptors";
 import { ProcessErrno, ProcessError } from "waffle/proc/types";
@@ -117,7 +118,7 @@ export function createNodeProcess(options: NodeProcessOptions) {
   let abi: ProcessABI;
   const guard = <T extends (...args: number[]) => number>(fn: T) => (...args: number[]) => {
     try {
-      if (Atomics.load(client.signals.outcome, 0) !== 0n) {
+      if (readOutcome(client.signals.outcome) !== null) {
         // ProcessABI checks typed default outcomes at signal checkpoints. Never allow guest
         // JS to catch a default action and continue writing inherited native stdio.
         abi.imports.interrupted!();

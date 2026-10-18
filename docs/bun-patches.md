@@ -2097,6 +2097,16 @@ ordinary outcome has already won. Unknown callback terminals are rejected rather
 their input can be shared. No new upstream patch, copied
 implementation or compatibility branch is introduced.
 
+The original executable lookup adapters in `js/spawn.ts`, `host.rs` and `natives.rs` share
+`runtime_proc.access_start/access_take/access_cancel` between Bun.which and spawn. Lookup reads
+live host metadata, searches inherited PATH in order, treats an empty entry as cwd, and never
+rewrites slash-containing commands. `src/executable-paths.ts` defines the persistent browser,
+QuickJS and JSC bun/node paths used by the public installer and demo. Preview1 roots use their
+explicit modules; recursive fixtures register their own absolute files. The public installer
+now connects its reviewed file ownership/rollback implementation to `web/src/bun-launcher.ts`,
+replacing the temporary process-unavailable boundary without copying upstream implementation.
+Package-script/bunx argument normalization remains ahead of executable lookup.
+
 The Bun guest's child-process adapter is original code over that ABI.
 `crates/bunwasm-runtime/src/host.rs` declares the `runtime_proc` imports and `natives.rs` exposes
 them as `procSpawn`, `procPipe`, `procRead`, `procWrite`, `procWait`, `procWaitJob`, `procKill`,

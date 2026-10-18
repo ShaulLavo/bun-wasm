@@ -55,3 +55,15 @@ test("empty PATH entries mean cwd and explicit paths bypass PATH", () => {
   expect(() => f.module.spawn(["/not-directory/bun"])).toThrow("ENOTDIR");
   expect(f.module.which("")).toBeNull();
 });
+
+test("package command normalization precedes the shared PATH lookup", () => {
+  const fake = service();
+  const seen: unknown[] = [];
+  const f = load(fake, { spawnArguments(argv, cwd) { seen.push([argv, cwd]); return ["bun", "x"].concat(argv.slice(1)); } });
+  f.module.spawn(["bunx", "package-name"], { cwd: "/tmp" });
+  const child = Array.from(fake.children.values())[0]!;
+  expect(seen).toEqual([[["bunx", "package-name"], "/tmp"]]);
+  expect(child.request.argv).toEqual(["bun", "x", "package-name"]);
+  expect(child.request.executable).toBe("/bin/bun");
+  fake.exit(child, 0);
+});

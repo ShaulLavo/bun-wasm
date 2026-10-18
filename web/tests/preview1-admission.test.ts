@@ -16,11 +16,16 @@ for (const admission of ["this-broker", "other-broker", "runtime"] as const) tes
   const state = rootFixture();
   const registering = admission === "other-broker" ? new SubprocessBroker("https://example.test/worker.js", state.runtime) : state.broker;
   const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
-  if (admission === "runtime") state.runtime.registerProgram("tool", { adapter: "preview1", source: bytes });
-  else registering.register("tool", { adapter: "preview1", bytes });
+  const executable = "/usr/libexec/test-guest";
+  if (admission === "runtime") {
+    await state.runtime.filesystem.mkdirp("/usr/libexec");
+    await state.runtime.filesystem.writeFile(executable, new Uint8Array([1]));
+    state.runtime.registerProgram(executable, { adapter: "preview1", source: bytes });
+  }
+  else registering.register(executable, { adapter: "preview1", bytes });
   try {
     await state.broker.adoptRuntimeRoot(state.root);
-    const pid = state.client.spawn(state.client.pid, { executable: "tool", argv: ["tool"], env: {}, cwd: "/", job: -1, fds: [] });
+    const pid = state.client.spawn(state.client.pid, { executable, argv: ["tool"], env: {}, cwd: "/", job: -1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, state.client.pid);
     for (let turn = 0; turn < 100 && !requests.length; turn++) await new Promise(resolve => setTimeout(resolve, 0));
     expect(requests).toHaveLength(1);

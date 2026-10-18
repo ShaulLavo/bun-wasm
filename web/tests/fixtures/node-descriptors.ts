@@ -1,3 +1,4 @@
+import { controlStore } from "waffle/proc/control";
 // Exercise the actual Node WASI fd table, not a stub that happens to choose different numbers.
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -138,19 +139,19 @@ try {
     assert.equal(child.view().getUint32(1040, true), opened);
     // A stale interrupt hint must not manufacture EINTR; authoritative handled state must,
     // even when a racing consumer has already cleared the hint.
-    Atomics.store(child.host.client.signals.interrupt, 0, 15);
+    controlStore(child.host.client.signals.interrupt, 0, 15);
     assert.equal(child.poll([{ type: 2, fd: controls.output }]).status, 0);
-    Atomics.store(child.host.client.signals.signalState, 15, 6);
-    Atomics.store(child.host.client.signals.interrupt, 0, 0);
+    controlStore(child.host.client.signals.signalState, 15, 6);
+    controlStore(child.host.client.signals.interrupt, 0, 0);
     assert.equal(child.poll([{ type: 2, fd: controls.output }]).status, 27);
-    Atomics.store(child.host.client.signals.signalState, 15, 0);
+    controlStore(child.host.client.signals.signalState, 15, 0);
     const publisher = new Worker(new URL("./node-descriptor-signal.ts", import.meta.url), {
       workerData: child.host.client.signals.signalState,
     });
     try {
       await new Promise<void>((resolve, reject) => { publisher.once("message", () => resolve()); publisher.once("error", reject); });
       assert.equal(child.poll([{ type: 0, timeout: 2000000000n }, { type: 1, fd: controls.input }]).status, 27);
-    } finally { await publisher.terminate(); Atomics.store(child.host.client.signals.signalState, 15, 0); }
+    } finally { await publisher.terminate(); controlStore(child.host.client.signals.signalState, 15, 0); }
     assert.deepEqual(child.poll([{ type: 0 }, { type: 0, timeout: 60000000000n }, { type: 1, fd: controls.input }]).events
       .map(event => event.userdata), [0n]);
     for (let index = 0; index < 50; index++) {

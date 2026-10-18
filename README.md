@@ -42,12 +42,9 @@ Exports are explicit:
 
 ### Installation and ownership
 
-**Current boundary:** this packaging change does not yet include the generic process bridge
-(step 7b). Invoking a registered Bun adapter throws `BunWasmProcessUnavailableError`, with code
-`BUN_WASM_PROCESS_UNAVAILABLE`. It does not silently use the old Bun controller path. The default
-asset descriptor is `null` until the matching process-bridge guest is built and published; callers
-can supply a descriptor or a compiled module. The 7b change completes execution without changing
-the installation contract.
+Registered programs launch ordinary Waffle processes through the generic `runtime_proc` bridge.
+Supply the bundler-produced worker URL and, until the matching immutable guest is published,
+a compiled module or verified asset descriptor. No legacy Bun-specific process controller is used.
 
 ```ts
 import { installBunAdapters } from "bun-wasm";
@@ -62,15 +59,23 @@ const installation = await installBunAdapters(runtime, {
   // asset: { url, sha256, bytes },
 });
 
-// Registers bun:quickjs, bun:jsc, bun:browser and the selected engine at /bin/bun.
+// Registers bun:quickjs, bun:jsc, bun:browser and the selected engine at its real bun/node paths.
 // Optional executables: ["/opt/bun/browser"] chooses other paths; [] leaves programs caller-owned.
-// With the default browser engine, await installBunAdapters(runtime) needs no options.
-// After step 7b, ordinary Waffle spawn requests select these registered executable names.
+// Ordinary Waffle spawn requests select these registered executable paths.
 
 installation.dispose(); // idempotent; unregisters only this installation's adapters/programs
 // Existing processes continue. A new spawn no longer resolves this installation's Bun command.
 // Installing again on the same Runtime works. A second simultaneous installation is rejected.
 ```
+
+Executable locations are defined by `src/executable-paths.ts`: browser uses `/bin/{bun,node}`,
+QuickJS uses `/opt/bun/quickjs/bin/{bun,node}`, and JSC uses `/opt/bun/jsc/bin/{bun,node}`.
+Each install defaults to the selected engine's two files; `executables` overrides them. The demo
+registers all six files once and prepends its root engine's directory to inherited `PATH`.
+Bun.spawn and Bun.which share live executable-access lookup: slash-containing names bypass PATH,
+entries are searched in order, and an empty entry means cwd. Absolute paths always mean exactly
+that registered program. A Preview1 root uses its supplied module directly, without an implicit
+self executable; a recursive Preview1 program must register its own absolute file path.
 
 The installer makes no process/root reservations and does not own preview1 adapters, filesystem
 services, terminal streams, shell jobs, or the Runtime lifetime. Registration failures roll back

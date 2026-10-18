@@ -1,7 +1,8 @@
+import type { ControlCells } from "waffle/proc/control";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { FilesystemClient, createProcessFilesystemIdentity, type FilesystemIdentity } from "waffle/fs";
 import { ProcessABI } from "waffle/proc/abi";
-import { readOutcome } from "waffle/proc/outcome";
+import { readOutcome, type OutcomeWord } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from "waffle/proc/worker-client";
 import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
 import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
@@ -16,8 +17,8 @@ export type EngineSignalDelivery = "host" | "page-kill" | "page-killJob";
 export interface EngineInterruptionChild {
   pid: number;
   jobId: number;
-  requestedSignal: Int32Array;
-  signalState: Int32Array;
+  requestedSignal: ControlCells;
+  signalState: ControlCells;
   stdout: string;
   stderr: string;
 }
@@ -42,7 +43,7 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
   const descriptors = new DescriptorTable();
   const identities: FilesystemIdentity[] = [];
   const children = new Map<number, EngineInterruptionChild>();
-  const outcomes = new Map<number, BigInt64Array>();
+  const outcomes = new Map<number, OutcomeWord>();
   let service: ProcessService | undefined;
   let rootPid: number | undefined;
   let fs: FilesystemClient | undefined;
@@ -67,7 +68,10 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
     const decoder = new TextDecoder();
     runtime.registerAdapter(adapter === "preview1" ? "preview1" : `bun:${engine}`,
       adapter === "preview1" ? preview1Launcher({ workerUrl }) : bunLauncher(engine, { workerUrl }));
-    runtime.registerProgram("bun", { module, adapter: adapter === "preview1" ? "preview1" : `bun:${engine}`, cooperative: true });
+    const executable = "/usr/libexec/engine-probe";
+    await filesystem.mkdirp("/usr/libexec");
+    await filesystem.writeFile(executable, new Uint8Array([1]));
+    runtime.registerProgram(executable, { module, adapter: adapter === "preview1" ? "preview1" : `bun:${engine}`, cooperative: true });
     for (const fd of [0, 1, 2]) {
       const installed = descriptors.open({ kind: "terminal", read: () => 0,
         write: chunks => chunks.reduce((size, bytes) => size + bytes.length, 0),
@@ -108,7 +112,7 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
       service: pageService, children,
       spawn(source: string) {
         if (children.size) throw new Error("one generic guest per interruption scope");
-        const request = new TextEncoder().encode(JSON.stringify({ executable: "bun", argv: ["bun", "-e", source], cwd: "/home/user", env: {}, job: -1,
+        const request = new TextEncoder().encode(JSON.stringify({ executable, argv: ["bun", "-e", source], cwd: "/home/user", env: {}, job: -1,
           fds: [0, 1, 2].map(fd => ({ parent: fd, child: fd })) }));
         new Uint8Array(memory.buffer, 64, request.length).set(request);
         const pid = abi.imports.spawn!(64, request.length);

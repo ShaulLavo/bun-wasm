@@ -31,7 +31,7 @@ test("packed package includes a working public worker, no demo or guest binaries
       import { loadBunWasm } from "bun-wasm/asset";
       import "bun-wasm/worker";
       import type { Runtime } from "waffle";
-      export async function install(runtime: Runtime) { return installBunAdapters(runtime); }
+      export async function install(runtime: Runtime) { return installBunAdapters(runtime, { workerUrl: "https://example.test/worker.js" }); }
       export { loadBunWasm, BunWasmExecutableConflictError };
     `);
     // Check the actual tarball and its exact peer, including the complete worker import

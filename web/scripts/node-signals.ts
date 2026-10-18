@@ -18,8 +18,8 @@ export function createNodeSignalController(source?: NodeSignalBuffers | SignalTr
   };
   const transport = {
     signalState: createSignalState(buffers.signalState),
-    interrupt: buffers.interrupt instanceof Int32Array ? buffers.interrupt : new Int32Array(buffers.interrupt),
-    requestedSignal: buffers.requestedSignal instanceof Int32Array ? buffers.requestedSignal : new Int32Array(buffers.requestedSignal),
+    interrupt: buffers.interrupt instanceof SharedArrayBuffer ? new Int32Array(buffers.interrupt) : buffers.interrupt,
+    requestedSignal: buffers.requestedSignal instanceof SharedArrayBuffer ? new Int32Array(buffers.requestedSignal) : buffers.requestedSignal,
     outcome: outcomeWord(buffers.outcome),
   };
   return {

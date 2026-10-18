@@ -9,8 +9,8 @@ import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
 import { measureStartup } from "./startup";
 import { SubprocessBroker } from "./subprocess-broker";
-import { ENGINE_BIN, engineEnvironment } from "./executable-paths";
-import { claimOutcome, readOutcome } from "waffle/proc/outcome";
+import { ENGINE_BIN, engineEnvironment } from "../../src/executable-paths.js";
+import { claimOutcome, readOutcome, type OutcomeWord } from "waffle/proc/outcome";
 import { waitStatus } from "waffle/proc/wait-status";
 import type { Engine, RunRequest, WorkerMessage } from "./bun-executor";
 
@@ -211,7 +211,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     moduleCache,
     slots: slotsMode(),
   };
-  let rootOutcome: BigInt64Array | null = null;
+  let rootOutcome: OutcomeWord | null = null;
   let rootPid = pid, rootJob = job;
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
   let rootAcknowledged = false;

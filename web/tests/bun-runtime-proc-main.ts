@@ -1,6 +1,6 @@
 import { createRuntime, type Runtime, type ProcessService } from "waffle";
 import { createWorkerProcessTransport, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
-import { installBunAdapters } from "../src/bun-adapter";
+import { installBunAdapters } from "../../src/bun-adapter.js";
 import { runtimeProcFixture } from "./runtime-proc-fixtures";
 import { bunRuntimeProcFixture, bunRuntimeProcPending, bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
 
@@ -44,7 +44,7 @@ async function until(condition: () => boolean, label: string) {
   }
 }
 let runtime: Runtime | undefined;
-let installation: ReturnType<typeof installBunAdapters> | undefined;
+let installation: Awaited<ReturnType<typeof installBunAdapters>> | undefined;
 let rootWorker: Worker | undefined;
 let rootConnection: ReturnType<Runtime["filesystem"]["fork"]> | undefined;
 let result: Record<string, unknown> | undefined;
@@ -71,20 +71,23 @@ try {
       workerUrl: new URL("./preview1-worker.js", location.href).href,
       request: { module: context.module, args: context.request.argv, env: context.request.env, interruptible: context.interruptible },
     }));
-    runtime.registerProgram("bun", { adapter: "preview1", module, cooperative: true });
+    await runtime.filesystem.mkdirp("/bin");
+    await runtime.filesystem.writeFile("/bin/bun", "fixture");
+    runtime.registerProgram("/bin/bun", { adapter: "preview1", module, cooperative: true });
   } else {
     const options = { workerUrl: new URL("./worker.js", location.href).href, engine: "browser" as const, module,
-      executables: ["bun", "/bin/bun", "bun-browser"] };
+      executables: ["/bin/bun", "/bin/node"] };
     // Disposal must unregister aliases and adapters, not merely clear a private installed flag.
-    const first = installBunAdapters(runtime, options);
+    const first = await installBunAdapters(runtime, options);
     first.dispose(); first.dispose();
     const unregisterProbe = runtime.registerAdapter("bun:browser", () => { throw new Error("unregister probe must never launch"); });
     unregisterProbe();
     const probeAdapter = runtime.registerAdapter("test:unregister", () => { throw new Error("alias probe must never launch"); });
-    const unregisterProgram = runtime.registerProgram("bun", { adapter: "test:unregister", module: new WebAssembly.Module(runtimeProcFixture()), cooperative: true });
+    const unregisterProgram = runtime.registerProgram("/bin/bun", { adapter: "test:unregister", module: new WebAssembly.Module(runtimeProcFixture()), cooperative: true });
     unregisterProgram(); probeAdapter();
-    installation = installBunAdapters(runtime, options);
-    if (name === "start-failed") runtime.registerProgram("broken-bun", {
+    installation = await installBunAdapters(runtime, options);
+    if (name === "start-failed") await runtime.filesystem.writeFile("/bin/broken-bun", "fixture");
+    if (name === "start-failed") runtime.registerProgram("/bin/broken-bun", {
       adapter: "bun:browser", cooperative: true,
       module: () => { throw new Error("bun-runtime-proc-start-failed-control"); },
     });

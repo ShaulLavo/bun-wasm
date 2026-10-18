@@ -31,7 +31,7 @@ test("a Preview1-first runtime does not register its guest as the immutable Bun 
     const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     runs.push(startRun({ runtime, engine: "browser", adapter: "preview1", module, args: [], env: {}, moduleScope: false }, { stdout() {}, stderr() {} }));
     runs.push(startRun({ runtime, engine: "browser", module, args: [], env: {}, moduleScope: false }, { stdout() {}, stderr() {} }));
-    const program = registrations.get("bun-browser")!;
+    const program = registrations.get("/bin/bun")!;
     expect(program.adapter).toBe("bun");
     if (!("module" in program)) throw new Error("Expected a compiled Bun engine program");
     expect(typeof program.module).toBe("function");

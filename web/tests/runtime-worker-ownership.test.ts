@@ -1,6 +1,7 @@
+import { controlLoad } from "waffle/proc/control";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, test } from "bun:test";
-import { claimOutcome } from "waffle/proc/outcome";
+import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "waffle/fs";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
@@ -114,19 +115,19 @@ test("generic host failure confirms after its filesystem fence before physical t
     const worker = state.workers.get(pid)!;
     let confirmedAtTermination = -1;
     worker.terminate = () => {
-      confirmedAtTermination = Atomics.load(workerProcessState(transport).confirmed, 0);
+      confirmedAtTermination = controlLoad(workerProcessState(transport).confirmed, 0);
       return physicalTermination;
     };
     worker.onerror?.({ preventDefault() {}, message: "worker startup failed" } as ErrorEvent);
     const waiting = state.broker.wait(pid);
     expect(supervisor.wait(1, pid)).toBeNull();
-    expect(Atomics.load(workerProcessState(transport).confirmed, 0)).toBe(0);
+    expect(controlLoad(workerProcessState(transport).confirmed, 0)).toBe(0);
     expect(state.quiescences()).toBe(1);
     expect(confirmedAtTermination).toBe(-1);
     state.release();
     expect(await waiting).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
     await Promise.resolve();
-    expect(Atomics.load(workerProcessState(transport).confirmed, 0)).toBe(1);
+    expect(controlLoad(workerProcessState(transport).confirmed, 0)).toBe(1);
     expect(confirmedAtTermination).toBe(1);
     expect(supervisor.jobEmpty(1, workerProcessState(transport).job)).toBe(true);
     // Physical termination is deliberately unresolved; it cannot be the safe point.
@@ -149,16 +150,16 @@ test("generic process and job confirmation both wait for the filesystem fence", 
       await state.broker.kill(pid, 9);
       const waiting = state.broker.wait(pid);
       expect(supervisor.wait(1, pid)).toBeNull();
-      expect(Atomics.load(workerProcessState(transport).confirmed, 0)).toBe(0);
+      expect(controlLoad(workerProcessState(transport).confirmed, 0)).toBe(0);
       expect(supervisor.jobEmpty(1, job)).toBe(false);
       expect(supervisor.waitJob(1, job)).toBeNull();
-      expect(Atomics.load(wake, 0)).toBe(0);
+      expect(controlLoad(wake, 0)).toBe(0);
       expect(state.quiescences()).toBe(1);
       state.release();
       expect((await waiting).status).toBe(137);
       await new Promise(resolve => setTimeout(resolve, 0));
       expect(supervisor.jobEmpty(1, job)).toBe(true);
-      expect(Atomics.load(wake, 0)).toBe(1);
+      expect(controlLoad(wake, 0)).toBe(1);
       expect(state.workers.get(pid)!.terminated).toBe(true);
     } finally { unlisten(); }
   } finally { await state.dispose(); }
@@ -179,7 +180,7 @@ test("an unlaunched generic job is fenced before becoming empty", async () => {
     await state.broker.kill(pid, 9);
     const waiting = state.broker.wait(pid);
     expect(supervisor.wait(1, pid)).toBeNull();
-    expect(Atomics.load(workerProcessState(transport).confirmed, 0)).toBe(0);
+    expect(controlLoad(workerProcessState(transport).confirmed, 0)).toBe(0);
     expect(state.workers.has(pid)).toBe(false);
     expect(supervisor.jobEmpty(1, job)).toBe(false);
     expect(state.quiescences()).toBe(1);
@@ -201,9 +202,9 @@ test("rejecting a repeated spawn cannot revoke or safe-confirm an already admitt
     await supervisor.start(pid);
     state.broker.rejectRuntimeMessage(repeated);
     const child = workerProcessState(repeated.transport);
-    expect(Atomics.load(child.signals.outcome, 0)).toBe(0n);
-    expect(Atomics.load(child.confirmed, 0)).toBe(0);
-    expect(Atomics.load(child.jobConfirmed, 0)).toBe(0);
+    expect(readOutcome(child.signals.outcome)).toBeNull();
+    expect(controlLoad(child.confirmed, 0)).toBe(0);
+    expect(controlLoad(child.jobConfirmed, 0)).toBe(0);
     expect(state.quiescences()).toBe(0);
     expect(supervisor.jobEmpty(1, child.job)).toBe(false);
     state.workers.get(pid)!.message({ type: "exit", code: 23, sleep: "atomics" });
@@ -255,12 +256,12 @@ test("a killed generic child cannot queue a new spawn capability", async () => {
     expect(state.workers.has(descendant)).toBe(false);
     const rejected = workerProcessState(queued.transport);
     expect(rejected.signals.outcome[0]).not.toBe(0n);
-    expect(Atomics.load(rejected.confirmed, 0)).toBe(0);
-    expect(Atomics.load(rejected.jobConfirmed, 0)).toBe(0);
+    expect(controlLoad(rejected.confirmed, 0)).toBe(0);
+    expect(controlLoad(rejected.jobConfirmed, 0)).toBe(0);
     state.release();
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(Atomics.load(rejected.confirmed, 0)).toBe(1);
-    expect(Atomics.load(rejected.jobConfirmed, 0)).toBe(1);
+    expect(controlLoad(rejected.confirmed, 0)).toBe(1);
+    expect(controlLoad(rejected.jobConfirmed, 0)).toBe(1);
   } finally { await state.dispose(); }
 });
 

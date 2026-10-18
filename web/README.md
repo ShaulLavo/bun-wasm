@@ -142,7 +142,7 @@ role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `1
   tree, so the root, its children and the shell spawn through the page runtime's one service.
 - `src/subprocess-broker.ts`, `src/bun-launcher.ts`: Bun's composition over that service. The
   launchers start one worker per `bun:<engine>` or `preview1` process; the broker adopts a run's
-  root, resolves the `bun`/`node` aliases to the run's engine and forwards signals.
+  root and forwards generic requests and signals without rewriting executable names.
 - `src/main.ts`: layout, editor tabs, Run button.
 
 The guest gets `/` preopened and `PWD=/home/user`. WASI has no working directory of its own, so
@@ -155,13 +155,13 @@ The Bun guest imports Waffle's `runtime_proc` process ABI directly (`spawn`, `pi
 left are the 14 network ones (`src/net/trampoline.ts`). A synchronous wasm call
 reserves a pid immediately and the page runtime lazily loads Waffle's `proc/` service to start one
 worker per process. The executable registry maps a name to a compiled module and guest
-adapter; modules are shared between fresh workers, never retained guest instances. `bun`, `/bun`,
-`node`, `/node`, `/usr/local/bin/bun` and `/usr/local/bin/node` select Bun light. `bun-quickjs`, `bun-jsc` and `bun-browser` select
-an engine explicitly instead of inheriting the parent's engine. Other registered preview1
-programs use the same service; missing programs exit 127 and unrunnable programs exit 126.
+adapter; modules are shared between fresh workers, never retained guest instances. Executable
+locations and PATH lookup are documented in [the package guide](../README.md#installation-and-ownership).
+Preview1 roots keep their explicitly supplied modules and do not register self aliases. A fixture
+that spawns itself registers a real file such as `/usr/libexec/test-guest`.
 The module service-worker scope is prepared for every parent engine, so Bun light children can
 load cyclic modules even when their parent uses QuickJS or JSC. The host never starts a native executable. The headless Node adapter maintains its explicit
-Bun alias registry and real filesystem preopens.
+canonical executable registry and real filesystem preopens.
 
 Each process has separate argv, environment, cwd and descriptors. Pipes are Waffle's process-owned
 rings; closing the last writer sends EOF and `wait` polls the exit status.
