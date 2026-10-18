@@ -46,8 +46,10 @@ export const probeCell = {
   startWasiExitCode: 38,
   checkpointFatalSignal: 39,
   startFatalSignal: 40,
+  processPollCalls: 41,
+  processPollThrows: 42,
 } as const;
-export const probeLength = 41;
+export const probeLength = 43;
 export interface EngineInterruptionOptions { evidence: SharedArrayBuffer; hooks: boolean; observeCheckpoints: boolean; idleWaitTimeoutMs: number; }
 
 export function snapshotProbe(probe: Int32Array): Record<keyof typeof probeCell, number> {
