@@ -115,7 +115,7 @@ const engineRows = ["quickjs", "jsc", "browser"].flatMap(engine => scopes.map(ho
 const mirrorBlocks = before.rows.filter(row => row.status === "blocked" && row.blocker.includes("/esbuild-wasm")).length;
 const appProvenance = [before, recording, after].map(run => [run.path.split("/").at(-1) ?? run.path, string(run.provenance.revision), createHash("sha256").update(readFileSync(root + run.path)).digest("hex")]);
 const artifactRows = ["quickjs", "jsc", "browser"].map(engine => [engine, string(record(before.provenance.artifacts)[engine]), string(record(after.provenance.artifacts)[engine])]);
-section("docs/app-matrix/guide.md", "replay", [
+section("docs/app-matrix/README.md", "replay", [
   "## Current full replay after mirror recording",
   "The recording and corrected offline replay have zero registry misses and zero registry errors. Counts below exclude the recording's native Bun controls.",
   table(["App", "Pass", "Fail", "Blocked", "First blocker"], appRows),
@@ -134,7 +134,7 @@ section("docs/app-matrix/guide.md", "replay", [
 const history = array(json("docs/bun-test-suite/progress.json")).map(record);
 const categories = ["a", "b", "c", "d", "e", "f"];
 const historyRows = history.map(row => [string(row.date), string(row.commit), String(number(row.fully_passing)), String(number(row.tests_passing)), String(number(row.timeouts))].concat(categories.map(key => String(number(record(row.categories)[key])))));
-section("docs/bun-test-suite/guide.md", "progress", [
+section("docs/bun-test-suite/README.md", "progress", [
   "## Progress",
   "QuickJS 282 → 411 is the sole comparable baseline by matched file selection. JSC and browser are non-comparable because their selections changed. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim for any engine.",
   table(["Date", "Runtime commit", "Files fully passing", "Tests passing", "Timeouts"].concat(categories), historyRows),
@@ -169,7 +169,7 @@ const headlineRows = ["quickjs", "jsc", "browser"].map(engine => {
   const result = (run: Record<string, unknown>) => `${number(run.fully_passing)} fully passing files; ${number(record(run.counts).pass)} observed passes; ${number(run.timeouts)} timeouts`;
   return [engine, String(number(old.files)), String(number(current.files)), result(old), result(current), engine === "quickjs" ? "Comparable baseline (matched selection)" : "Non-comparable"];
 });
-section("docs/bun-test-suite/guide.md", "history-comparison", [
+section("docs/bun-test-suite/README.md", "history-comparison", [
   "## Historical and current observations",
   "QuickJS 282 → 411 is the sole comparable baseline by matched file selection, with all 2,305 files selected on both sides. JSC and browser are non-comparable. They previously selected 1,082 files under js/bun, js/node, and js/web, while each current run selected all 2,305 files. Runner, suite, and supplemental-dependency hashes changed on all engines, so the matched QuickJS selection does not establish an isolated runtime gain.",
   table(["Engine", "Historical selected files", "Current selected files", "Historical result", "Current result", "Comparison"], headlineRows),
@@ -219,14 +219,14 @@ const dependencyRows = ["quickjs", "jsc", "browser"].map(engine => {
     `${number(record(old.counts).pass)} → ${number(record(current.counts).pass)}`,
     `${number(old.timeouts)} → ${number(current.timeouts)}`];
 });
-section("docs/bun-test-suite/dependency-replay.md", "dependency-replay", [
-  "## Measured results",
+section("docs/bun-test-suite/README.md", "dependency-replay", [
+  "### Dependency setup replay",
   `The ${string(dependencyReplay.date)} replay selects the 49 files previously assigned to category c for an uninstalled suite dependency. It provisions pinned packages and the suite's missing bake alias. The same four guest artifacts, launcher, upstream revision and deadlines are used before and after. The supplemental dependency tree and the runner's alias setup change.`,
   table(["Engine", "Selected files", "Fully passing before → after", "Observed passes before → after", "File timeouts before → after"], dependencyRows),
   table(["Category", "Full-census failure assignments", "Updated recorded failure assignments"], categories.map(key => [key,
     String(number(record(summary.categories)[key])), String(assignmentCounts.get(key) ?? 0)])),
-  "[dependency-replay.json](dependency-replay.json) records all 49 outcomes and first failures on each engine, with input provenance and raw-result hashes. [dependency-files.txt](dependency-files.txt) fixes the selection. [Dependency setup](dependencies/setup.md) gives the install and replay commands and version sources.",
-  "The selected rows in failures.tsv use this replay's QuickJS first failures, with category f only when the file fully passes on another engine. Passing and skip-only files have no failure row. Updated assignment counts and the triage groups are generated from failures.tsv. The full-census guide and summary.json retain the earlier 2,305-file observation; this focused replay does not claim a new full-suite total.",
+  "[dependency-replay.json](dependency-replay.json) records all 49 outcomes and first failures on each engine, with input provenance and raw-result hashes. [dependency-files.txt](dependency-files.txt) fixes the selection. [Dependency setup](dependencies/README.md) gives the install and replay commands and version sources.",
+  "The selected rows in failures.tsv use this replay's QuickJS first failures, with category f only when the file fully passes on another engine. Passing and skip-only files have no failure row. Updated assignment counts and the triage groups are generated from failures.tsv. The full-census tables above and summary.json retain the earlier 2,305-file observation; this focused replay does not claim a new full-suite total.",
 ].join("\n\n"));
 
 process.stdout.write(`Compatibility tables ${check ? "verified" : "refreshed"} from raw JSON.\n`);

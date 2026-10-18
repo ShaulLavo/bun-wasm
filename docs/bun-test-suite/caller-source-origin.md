@@ -41,7 +41,7 @@ wasm hash in provenance. The baseline wasm was copied before building the new ru
 
 ## Reproduce
 
-Build all three engines and install dependencies as described in [the suite guide](guide.md#reproduce).
+Build all three engines and install dependencies as described in [the suite guide](README.md#reproduce).
 Then run the fixed selection for each engine:
 
 ```sh

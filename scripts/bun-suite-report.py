@@ -201,7 +201,7 @@ def investigation_index(data, delta):
     text = "\n\n## Regressions from the previous baseline\n\n"
     regressions = delta.get("regressions", [])
     text += ("\n".join("- `" + path + "`" for path in regressions) if regressions else "No formerly fully passing file fails in this run." if delta else "No previous full run supplied; regression comparison unavailable.") + "\n"
-    text += "\n## Timeout index\n\nEvery row has a 15-second wall deadline. A completed report can also come from a child test command; it does not prove that the parent completed. Reproduce with the [suite guide](guide.md) command and the exact file path below. See [investigations.md](investigations.md) for longer reruns and diagnoses.\n\n"
+    text += "\n## Timeout index\n\nEvery row has a 15-second wall deadline. A completed report can also come from a child test command; it does not prove that the parent completed. Reproduce with the README command and the exact file path below. See [investigations.md](investigations.md) for longer reruns and diagnoses.\n\n"
     new = set(delta.get("new_timeouts", []))
     rows = [[r["file"], "new" if r["file"] in new else "existing", r["complete"], r["counts"]["pass"], r["failing_tests"][-1] if r["failing_tests"] else "no named failure", next(iter(error_lines(r)), "no error captured")[:180]] for r in data["results"] if r["timed_out"]]
     return text + markdown_table(["File", "Change", "Report observed", "Passes", "Last failure observed", "First error"], rows) + "\n"
@@ -265,10 +265,10 @@ def main():
         text += "\n" + markdown_table(["Engine", "Compared files", "Fully passing", "Observed passes", "File timeouts", "QuickJS failures passing here", "QuickJS passes failing here"], [[engine, len(records), sum(r["fully_passing"] for r in records.values()), sum(r["counts"]["pass"] for r in records.values()), sum(r["timed_out"] for r in records.values()), summary["comparison"][engine]["quickjs_fail_other_pass"], summary["comparison"][engine]["quickjs_pass_other_fail"]] for engine, records in comparisons.items()]) + "\n"
         for engine, records in comparisons.items():
             text += f"\n### {engine} comparison\n\n" + tables({"results": list(records.values())}) + "\n"
-    guide = opts.output / "guide.md"
-    template = guide.read_text() if guide.exists() else "# Bun's upstream suite\n\n<!-- baseline:start -->\n<!-- baseline:end -->\n"
+    readme = opts.output / "README.md"
+    template = readme.read_text() if readme.exists() else "# Bun's upstream suite\n\n<!-- baseline:start -->\n<!-- baseline:end -->\n"
     template = re.sub(r"<!-- progress:start -->.*?<!-- progress:end -->", "", template, flags=re.S).rstrip() + "\n\n<!-- progress:start -->\n" + history + "<!-- progress:end -->\n"
-    guide.write_text(re.sub(r"<!-- baseline:start -->.*?<!-- baseline:end -->", lambda match: "<!-- baseline:start -->\n" + text + "<!-- baseline:end -->", template, flags=re.S))
+    readme.write_text(re.sub(r"<!-- baseline:start -->.*?<!-- baseline:end -->", lambda match: "<!-- baseline:start -->\n" + text + "<!-- baseline:end -->", template, flags=re.S))
     print(json.dumps(summary, indent=2))
 
 
