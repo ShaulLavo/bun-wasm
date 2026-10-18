@@ -129,6 +129,7 @@ export function createNodeNet({ net, http, https, zlib }) {
         const next = new URL(location, url);
         const keepBody = status === 307 || status === 308;
         const nextRequest = keepBody ? request : { method: request.method === "HEAD" ? "HEAD" : "GET", headers: request.headers.filter(([k]) => !/^content-/i.test(k)), body: null, redirect: request.redirect };
+        if (next.origin !== url.origin) nextRequest.headers = nextRequest.headers.filter(([name]) => !/^(authorization|proxy-authorization|cookie2?|www-authenticate)$/i.test(name));
         send(h, next, nextRequest, redirects + 1);
         return;
       }
@@ -171,7 +172,7 @@ export function createNodeNet({ net, http, https, zlib }) {
       try {
         url = new URL(meta.url);
       } catch {
-        return fail({ name: "TypeError", message: `Failed to parse URL from ${meta.url}` });
+        return fail({ name: "TypeError", message: "Failed to parse fetch URL" });
       }
       if (url.protocol !== "http:" && url.protocol !== "https:") {
         return fail({ name: "TypeError", message: `fetch: unsupported protocol ${url.protocol}` });

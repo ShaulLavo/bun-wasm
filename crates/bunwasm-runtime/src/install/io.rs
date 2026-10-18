@@ -17,6 +17,7 @@ const LIMIT: usize = 256 * 1024 * 1024;
 pub struct Registry {
     pub url: String,
     authorization: Option<String>,
+    secrets: Vec<String>,
 }
 
 impl Registry {
@@ -24,6 +25,7 @@ impl Registry {
         Ok(Self {
             url: source_url(url)?.trim_end_matches('/').into(),
             authorization: None,
+            secrets: Vec::new(),
         })
     }
 
@@ -45,41 +47,35 @@ impl Registry {
             (_, None, None) => None,
             _ => return Err("Registry authentication requires both username and password".into()),
         };
+        registry.secrets = [token, password].into_iter().flatten().map(str::to_owned).collect();
+        if let Some((_, value)) = registry.authorization.as_deref().and_then(|value| value.split_once(' ')) {
+            registry.secrets.push(value.into());
+        }
         Ok(registry)
     }
 
     fn authorization_for(&self, url: &url::Url) -> Option<&str> {
         let registry = url::Url::parse(&self.url).ok()?;
-        let path = registry.path().trim_end_matches('/');
-        let same_registry = url.origin() == registry.origin()
-            && (url.path() == path || url.path().starts_with(&format!("{path}/")));
-        same_registry
+        (url.origin() == registry.origin())
             .then_some(self.authorization.as_deref())
             .flatten()
     }
 
-    fn redact(&self, message: &str) -> String {
-        let message = redact(message);
-        match self
-            .authorization
-            .as_ref()
-            .and_then(|value| value.split_once(' '))
-        {
-            Some((scheme, value)) => {
-                let message = message.replace(value, "[redacted]");
-                if scheme != "Basic" {
-                    return message;
-                }
-                let decoded = String::from_utf8(encoding::base64_decode(value)).unwrap_or_default();
-                match decoded.split_once(':') {
-                    Some((_, password)) if !password.is_empty() => {
-                        message.replace(password, "[redacted]")
-                    }
-                    _ => message,
-                }
-            }
-            None => message,
+    fn safe_text(&self, message: &str) -> bool {
+        !has_embedded_auth(message) && self.redact(message) == message
+    }
+
+    pub fn safe_metadata(&self, value: &Value) -> bool {
+        match value {
+            Value::String(value) => self.safe_text(value),
+            Value::Array(values) => values.iter().all(|value| self.safe_metadata(value)),
+            Value::Object(values) => values.iter().all(|(key, value)| self.safe_text(key) && self.safe_metadata(value)),
+            _ => true,
         }
+    }
+
+    pub fn redact(&self, message: &str) -> String {
+        self.secrets.iter().fold(redact(message), |message, secret| message.replace(secret, "[redacted]"))
     }
 }
 
@@ -97,10 +93,7 @@ fn auth_field<'a>(config: &'a Value, field: &str) -> Result<Option<&'a str>> {
 }
 
 fn request_url(value: &str) -> Result<url::Url> {
-    if [":_authToken=", ":_auth=", ":username=", ":_password="]
-        .iter()
-        .any(|key| value.contains(key))
-    {
+    if has_embedded_auth(value) {
         return Err(
             "Embedded registry authentication is not supported for package installation".into(),
         );
@@ -125,6 +118,9 @@ pub fn source_url(value: &str) -> Result<String> {
 }
 
 pub fn redact(message: &str) -> String {
+    if has_embedded_auth(message) {
+        return "[redacted registry authentication]".into();
+    }
     let mut result = String::new();
     let mut rest = message;
     while let Some(at) = rest.find("://") {
@@ -156,6 +152,13 @@ fn redact_url(value: &str) -> String {
     url.set_query(None);
     url.set_fragment(None);
     url.into()
+}
+
+fn has_embedded_auth(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [":_authtoken=", ":_auth=", ":username=", ":_username=", ":_password="]
+        .iter()
+        .any(|key| lower.contains(key))
 }
 
 pub fn parsed(source: &[u8], format: &str, parser: &dyn Transpiler) -> Result<Value> {
@@ -275,8 +278,7 @@ fn cacheable(bytes: &[u8], tarball: bool, registry: &Registry) -> bool {
     let Ok(metadata) = serde_json::from_slice::<Value>(bytes) else {
         return false;
     };
-    let text = metadata.to_string();
-    registry.redact(&text) == text
+    registry.safe_metadata(&metadata)
 }
 
 fn request(
@@ -304,7 +306,7 @@ fn request(
             .unwrap()
             .push(json!(["cache-control", "no-cache"]));
     }
-    let meta = json!({"method":"GET", "url":url, "headers":headers, "redirect":"follow"});
+    let meta = json!({"method":"GET", "url":url, "headers":headers, "redirect":"follow", "credentialPolicy":"package"});
     let handle = host::fetch(meta.to_string().as_bytes(), &[]);
     if handle < 0 {
         return Err(network_error(handle, registry));

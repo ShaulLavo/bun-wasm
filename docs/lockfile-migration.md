@@ -133,6 +133,14 @@ secrets, including cached packuments. Configured authorization has separate posi
 controls. Unsupported secret-bearing dependency metadata rejects before the lock
 writer publishes it.
 
+Trace-enabled Bearer and Basic cases inspect host stderr. Embedded npm auth and
+configured-credential echoes are checked in decoded metadata, cache files and
+lock output. Redirect controls cover unsafe URLs, host and port changes, and a
+scheme-only origin comparison. A native TLS downgrade control confirms Bun drops
+the header. Same-origin archives outside the registry path require authentication.
+Malformed and unsupported supplied integrity values reject before requests,
+lock publication or extraction, even though native Bun 1.4.2 clears those values.
+
 SHA-256 and SHA-384 cases compare the complete native/guest lock bytes, perform
 clean frozen extraction on both installers, and reject a corrupt archive. Bun's
 native installer verifies both algorithms, so the portable verifier implements them

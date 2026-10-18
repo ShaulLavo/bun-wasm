@@ -66,7 +66,7 @@ pub fn read(
         return Ok(None);
     };
     if source != "package-lock.json" {
-        hydrate_metadata(&mut packages, config);
+        hydrate_metadata(&mut packages, config)?;
     }
     eprintln!("migrated lockfile from {source}");
     Ok(Some(
@@ -136,7 +136,8 @@ fn record(name: &str, meta: &Value, registry: &str) -> Result<Value> {
     let tarball = clean_transport(tarball)?;
     let standard = transport(name, version, &tarball)?.is_empty();
     let integrity = match meta["integrity"].as_str() {
-        Some(value) if !value.is_empty() => io::normalized_integrity(value).unwrap_or_default(),
+        Some(value) if !value.is_empty() => io::normalized_integrity(value)
+            .ok_or("InvalidNPMLockfile: invalid package integrity")?,
         _ if fragment.len() == 40 && fragment.bytes().all(|c| c.is_ascii_hexdigit()) => {
             let bytes = (0..40)
                 .step_by(2)
@@ -720,8 +721,8 @@ fn graph(
     Ok(())
 }
 
-pub fn write(lock: &Value) -> Result<String> {
-    super::write_lock(lock)
+pub fn write(lock: &Value, registry: &io::Registry) -> Result<String> {
+    super::write_lock(lock, registry)
 }
 
 pub fn package_meta(meta: &Value) -> Value {
@@ -819,7 +820,7 @@ fn graph_children(meta: &Value) -> Result<BTreeMap<String, (String, bool, bool)>
     Ok(children)
 }
 
-fn hydrate_metadata(packages: &mut BTreeMap<String, Value>, registry: &io::Registry) {
+fn hydrate_metadata(packages: &mut BTreeMap<String, Value>, registry: &io::Registry) -> Result<()> {
     let mut cache: BTreeMap<String, Option<Value>> = BTreeMap::new();
     for row in packages.values_mut() {
         let Some((name, version)) = row[0].as_str().and_then(|id| id.rsplit_once('@')) else {
@@ -834,12 +835,13 @@ fn hydrate_metadata(packages: &mut BTreeMap<String, Value>, registry: &io::Regis
             .entry(name.clone())
             .or_insert_with(|| registry_metadata(&name, registry));
         if let Some(manifest) = manifest {
-            hydrate_row(row, &manifest["versions"][&version]);
+            hydrate_row(row, &manifest["versions"][&version])?;
         }
     }
+    Ok(())
 }
 
-fn hydrate_row(row: &mut Value, meta: &Value) {
+fn hydrate_row(row: &mut Value, meta: &Value) -> Result<()> {
     let info = resolve::lock_info(meta);
     for field in ["bin", "hasInstallScript", "os", "cpu"] {
         if row[2][field].is_null() && !info[field].is_null() {
@@ -848,9 +850,10 @@ fn hydrate_row(row: &mut Value, meta: &Value) {
     }
     if row[3] == "" && meta["dist"]["integrity"].is_string() {
         row[3] = io::normalized_integrity(meta["dist"]["integrity"].as_str().unwrap())
-            .unwrap_or_default()
+            .ok_or("InvalidNPMLockfile: invalid package integrity")?
             .into();
     }
+    Ok(())
 }
 
 fn registry_metadata(name: &str, registry: &io::Registry) -> Option<Value> {

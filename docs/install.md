@@ -44,9 +44,10 @@ including when a dist-tag changes. `--frozen-lockfile` rejects changes.
 Tarballs and packuments are cached in `$BUN_INSTALL_CACHE_DIR`, or
 `$HOME/.bun/install/cache/bun-wasm` (relative to cwd when HOME is absent).
 Packuments expire after five minutes; integrity-checked tarballs do not expire.
-The browser also persists installer downloads in Cache Storage under
-`bun-wasm-install-v1`, across worker runs. It does not cache ordinary guest
-fetches. These caches can be removed to reclaim space.
+The browser also persists unauthenticated tarballs in Cache Storage under
+`bun-wasm-install-v1`, across worker runs. Metadata uses the guest cache, where
+configured credentials can be checked before persistence. These caches can be
+removed to reclaim space.
 `BUN_CONFIG_HTTP_IDLE_TIMEOUT` sets the download idle timeout in seconds, with
 a default of 300. Failed downloads are not retried.
 
@@ -354,13 +355,19 @@ token = "YOUR_TOKEN"
 ```
 
 A `username` and `password` pair configures Basic authorization instead. Headers
-apply only to the configured registry's origin and path. A tarball on another
-origin receives no configured authorization. Authentication values never become
-part of `bun.lock` or diagnostics. Metadata responses containing credential-bearing
+apply to the configured registry's full origin, including same-origin archives
+outside its metadata path. Scheme, host or port changes drop authentication.
+Package redirects containing userinfo, queries or embedded npm authentication
+reject before the next request. Browser redirects whose destination is opaque
+reject because the destination cannot be checked.
+Authentication values never become part of `bun.lock`, diagnostics or host traces.
+Metadata responses containing credential-bearing
 URLs or configured authentication values are not cached. Unsafe metadata cache
-entries are discarded before reuse.
+entries are discarded before reuse. The lock writer checks decoded metadata
+strings and rejects echoed credentials before publication.
 
 Archive verification supports SHA-512, SHA-384, SHA-256 and legacy SHA-1. Migration
 and verification use the same accepted algorithms. The strongest supported digest
 wins. Serialized SRI padding matches native Bun; verification compares decoded
-bytes so the native lock survives a frozen installation.
+bytes so the native lock survives a frozen installation. Supplied malformed or
+unsupported integrity rejects instead of becoming an absent checksum.

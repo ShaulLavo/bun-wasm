@@ -114,77 +114,81 @@ fn execute(command: &str, args: Vec<String>, parser: &dyn Transpiler, registry_o
         add_names(&mut manifest, &opts)?;
     }
     let registry = match registry_override { Some(registry) => registry, None => registry(&opts, parser)? };
-    let locked = if Path::new("bun.lock").exists() {
-        io::read(Path::new("bun.lock"), "JSONC", parser)?
-    } else {
-        migration::read(if member.is_some() { &root_manifest } else { &old_manifest }, parser, &registry)?
-            .unwrap_or_else(|| json!({}))
-    };
-    let mut resolution_lock = locked.clone();
-    if command == "update" {
-        opts.refresh = true;
-        unlock(
-            &mut resolution_lock,
-            &opts,
-            member.as_ref().and_then(|_| manifest["name"].as_str()),
-        );
-    }
-    let mut resolver = Resolver::new(registry, resolution_lock, opts.refresh);
-    if command == "update" && member.is_some() {
-        resolver.member_update = Some(resolve::MemberUpdate {
-            member: manifest["name"].as_str().ok_or("Workspace package needs a name")?.to_owned(),
-            dependencies: resolve::dependencies(&manifest, opts.production, true).into_keys().filter(|name| selected(name, &opts)).collect(),
-        });
-    }
-    let project_manifest = if member.is_some() { &root_manifest } else { &manifest };
-    resolver.workspaces = local::workspaces(
-        &std::env::current_dir().map_err(|e| e.to_string())?,
-        project_manifest,
-        parser,
-    )?;
-    if let Some(member) = &member {
-        if let Some(local) = resolver.workspaces.values_mut().find(|local| &local.path == member) {
-            local.meta = manifest.clone();
+    let redactor = registry.clone();
+    let result: Result<()> = (|| {
+        let locked = if Path::new("bun.lock").exists() {
+            io::read(Path::new("bun.lock"), "JSONC", parser)?
+        } else {
+            migration::read(if member.is_some() { &root_manifest } else { &old_manifest }, parser, &registry)?
+                .unwrap_or_else(|| json!({}))
+        };
+        let mut resolution_lock = locked.clone();
+        if command == "update" {
+            opts.refresh = true;
+            unlock(
+                &mut resolution_lock,
+                &opts,
+                member.as_ref().and_then(|_| manifest["name"].as_str()),
+            );
         }
-    }
-    resolver.resolve(project_manifest, opts.production)?;
-    if command != "remove" && command != "update" {
-        finalize_additions(&mut manifest, &opts, &resolver, member.as_deref())?;
-    }
-    if command == "update" {
-        finalize_updates(&mut manifest, &opts, &resolver, member.as_deref())?;
-    }
-    if let Some(member) = &member {
-        if let Some(local) = resolver.workspaces.values_mut().find(|local| &local.path == member) {
-            local.meta = manifest.clone();
+        let mut resolver = Resolver::new(registry, resolution_lock, opts.refresh);
+        if command == "update" && member.is_some() {
+            resolver.member_update = Some(resolve::MemberUpdate {
+                member: manifest["name"].as_str().ok_or("Workspace package needs a name")?.to_owned(),
+                dependencies: resolve::dependencies(&manifest, opts.production, true).into_keys().filter(|name| selected(name, &opts)).collect(),
+            });
         }
-    }
-    let lock = lockfile(if member.is_some() { &root_manifest } else { &manifest }, &resolver)?;
-    if opts.frozen && !same_lock(&locked, &lock, parser, opts.production)? {
-        return Err("lockfile had changes, but lockfile is frozen".into());
-    }
-    let installed = if opts.lockfile_only {
-        0
-    } else {
-        let count = install_packages(&mut resolver)?;
-        prune(&locked, &resolver)?;
-        link_bins(&resolver)?;
-        count
-    };
-    if manifest != old_manifest {
-        io::write(
-            &manifest_path,
-            format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()).as_bytes(),
+        let project_manifest = if member.is_some() { &root_manifest } else { &manifest };
+        resolver.workspaces = local::workspaces(
+            &std::env::current_dir().map_err(|e| e.to_string())?,
+            project_manifest,
+            parser,
         )?;
-    }
-    if !opts.production && fs::read_to_string("bun.lock").ok().as_deref() != Some(lock.as_str()) {
-        io::write(Path::new("bun.lock"), lock.as_bytes())?;
-        eprintln!("Saved lockfile");
-    }
-    if !opts.silent {
-        report(command, &opts, &resolver, installed, start, member.as_deref());
-    }
-    Ok(())
+        if let Some(member) = &member {
+            if let Some(local) = resolver.workspaces.values_mut().find(|local| &local.path == member) {
+                local.meta = manifest.clone();
+            }
+        }
+        resolver.resolve(project_manifest, opts.production)?;
+        if command != "remove" && command != "update" {
+            finalize_additions(&mut manifest, &opts, &resolver, member.as_deref())?;
+        }
+        if command == "update" {
+            finalize_updates(&mut manifest, &opts, &resolver, member.as_deref())?;
+        }
+        if let Some(member) = &member {
+            if let Some(local) = resolver.workspaces.values_mut().find(|local| &local.path == member) {
+                local.meta = manifest.clone();
+            }
+        }
+        let lock = lockfile(if member.is_some() { &root_manifest } else { &manifest }, &resolver)?;
+        if opts.frozen && !same_lock(&locked, &lock, parser, opts.production)? {
+            return Err("lockfile had changes, but lockfile is frozen".into());
+        }
+        let installed = if opts.lockfile_only {
+            0
+        } else {
+            let count = install_packages(&mut resolver)?;
+            prune(&locked, &resolver)?;
+            link_bins(&resolver)?;
+            count
+        };
+        if manifest != old_manifest {
+            io::write(
+                &manifest_path,
+                format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()).as_bytes(),
+            )?;
+        }
+        if !opts.production && fs::read_to_string("bun.lock").ok().as_deref() != Some(lock.as_str()) {
+            io::write(Path::new("bun.lock"), lock.as_bytes())?;
+            eprintln!("Saved lockfile");
+        }
+        if !opts.silent {
+            report(command, &opts, &resolver, installed, start, member.as_deref());
+        }
+        Ok(())
+    })();
+    result.map_err(|error| redactor.redact(&error))
 }
 
 fn manifest(command: &str, parser: &dyn Transpiler) -> Result<Value> {
@@ -319,7 +323,7 @@ fn install_packages(resolver: &mut Resolver) -> Result<usize> {
             if !package.optional {
                 return Err(format!("{}@{}: {error}", package.name, package.version));
             }
-            eprintln!("warn: optional dependency {}: {}", package.name, io::redact(&error));
+            eprintln!("warn: optional dependency {}: {}", package.name, resolver.registry.redact(&error));
             resolver.packages.remove(&key);
             continue;
         }
@@ -440,10 +444,13 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> Result<String> {
         };
         packages.insert(key.clone(), row);
     }
-    write_lock(&json!({"configVersion": resolver.locked["configVersion"].as_u64().unwrap_or(1), "workspaces": workspaces, "packages": packages}))
+    write_lock(&json!({"configVersion": resolver.locked["configVersion"].as_u64().unwrap_or(1), "workspaces": workspaces, "packages": packages}), &resolver.registry)
 }
 
-fn write_lock(lock: &Value) -> Result<String> {
+fn write_lock(lock: &Value, registry: &io::Registry) -> Result<String> {
+    if !registry.safe_metadata(lock) {
+        return Err("Lockfile contains credential-bearing or unsupported URL metadata".into());
+    }
     let config = lock["configVersion"].as_u64().unwrap_or(1);
     let mut out = format!("{{\n  \"lockfileVersion\": 2,\n  \"configVersion\": {config},\n  \"workspaces\": {{\n");
     if let Some(workspaces) = lock["workspaces"].as_object() {
@@ -455,19 +462,12 @@ fn write_lock(lock: &Value) -> Result<String> {
     }
     if lock["packages"].as_object().is_none_or(|packages| packages.is_empty()) {
         out.push_str("  },\n  \"packages\": {}\n}\n");
-        return checked_lock_text(out);
+        return Ok(out);
     }
     out.push_str("  },\n  \"packages\": {\n");
     if let Some(packages) = lock["packages"].as_object() { write_package_rows(packages, &mut out); }
     out.push_str("  }\n}\n");
-    checked_lock_text(out)
-}
-
-fn checked_lock_text(text: String) -> Result<String> {
-    if io::redact(&text) != text {
-        return Err("Lockfile contains credential-bearing or unsupported URL metadata".into());
-    }
-    Ok(text)
+    Ok(out)
 }
 
 fn write_package_rows(packages: &serde_json::Map<String, Value>, out: &mut String) {
@@ -592,7 +592,7 @@ fn pm(opts: &Options, parser: &dyn Transpiler) -> Result<()> {
         let manifest = manifest("install", parser)?;
         let registry = registry(opts, parser)?;
         let lock = migration::read(&manifest, parser, &registry)?.ok_or("No lockfile found to migrate")?;
-        return io::write(Path::new("bun.lock"), migration::write(&lock)?.as_bytes());
+        return io::write(Path::new("bun.lock"), migration::write(&lock, &registry)?.as_bytes());
     }
     if opts.names.first().map(String::as_str) != Some("ls") {
         return Err("Only bun pm ls is supported in bun-wasm".into());

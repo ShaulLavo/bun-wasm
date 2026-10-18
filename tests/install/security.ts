@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { packageFixture } from "./registry.mjs";
+import { packageRedirect } from "../../web/src/net/package-fetch.ts";
 
 type CapturedRequest = { url: string; authorization: string | null };
 type Result = { code: number | null; stdout: string; stderr: string };
@@ -14,6 +15,7 @@ let secret = "fixture-private-secret";
 let configuredSecret = "fixture-configured-secret";
 const fixture = packageFixture("security-dep", "1.0.0");
 const children = new Set<ReturnType<typeof spawn>>();
+const tlsServers = new Set<ReturnType<typeof Bun.serve>>();
 let requests: CapturedRequest[] = [];
 let tarballMode = "plain";
 let failure = "";
@@ -45,7 +47,8 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request): Respo
   if (tarballMode === "embedded") tarball = base + `/:_authToken=${secret}/security-dep.tgz`;
   if (tarballMode === "external") tarball = String(outside.url) + "security-dep.tgz";
   const extra = tarballMode === "optional-range" ? { optionalDependencies: { missing: `https://fixture-user:${secret}@other.invalid/missing.tgz` } } : echo ? { bin: { "security-dep": echo } } : {};
-  return Response.json({ name: "security-dep", versions: { "1.0.0": { ...fixture.manifest, ...extra, dist: { tarball, integrity } } } });
+  const tags = tarballMode === "echo-error" ? { "1.0.0": configuredSecret } : {};
+  return Response.json({ name: "security-dep", "dist-tags": tags, versions: { "1.0.0": { ...fixture.manifest, ...extra, dist: { tarball, integrity } } } });
 } });
 base = String(server.url).replace(/\/$/, "");
 let closed = false;
@@ -57,6 +60,7 @@ async function cleanup() {
   await Promise.all(exits);
   await server.stop(true);
   await outside.stop(true);
+  for (const server of tlsServers) await server.stop(true);
   rmSync(scratch, { recursive: true, force: true });
 }
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => void cleanup().then(() => process.exit(130)));
@@ -103,7 +107,7 @@ function checkSecrets(cwd: string, result: Result, configured = false) {
     for (const entry of readdirSync(cache)) for (const value of secrets) assert.equal(readFileSync(join(cache, entry), "utf8").includes(value), false, "metadata cache exposed credentials");
   }
   for (const request of requests) {
-    assert.equal(request.url.includes(secret), false, "request URL exposed credentials");
+    for (const value of secrets) assert.equal(request.url.includes(value), false, "request URL exposed credentials");
     if (!configured) assert.equal(request.authorization, null, "URL credentials produced an authorization header");
     if (new URL(request.url).origin !== base) assert.equal(request.authorization, null, "other origin received configured credentials");
   }
@@ -188,12 +192,12 @@ function configuredProject(name: string, registry = base, basic = false) {
   return cwd;
 }
 
-function record(name: string, native: Result, guest: Result, nativeRequests: CapturedRequest[]) {
+function record(name: string, native: Result, guest: Result, nativeRequests: CapturedRequest[], observations: Record<string, unknown> = {}) {
   if (!evidence) return;
   const values = [secret, configuredSecret, Buffer.from(`fixture-user:${configuredSecret}`).toString("base64")];
   const clean = (value: string) => values.reduce((text, value) => text.replaceAll(value, "[planted-secret]"), value);
   mkdirSync(evidence, { recursive: true });
-  writeFileSync(join(evidence, `${name}-comparison.json`), clean(JSON.stringify({ native, guest, nativeRequests, guestRequests: requests }, null, 2)));
+  writeFileSync(join(evidence, `${name}-comparison.json`), clean(JSON.stringify({ native, guest, nativeRequests, guestRequests: requests, observations }, null, 2)));
 }
 
 async function traceAuth(basic: boolean) {
@@ -216,8 +220,11 @@ async function metadataSecret(mode: string) {
   if (mode === "embedded-tarball") tarballMode = "embedded";
   if (mode === "embedded-bin") echo = base + `/:_authToken=${secret}/bin`;
   if (mode === "echo-token") echo = `bin/${configuredSecret}`;
+  if (mode === "echo-password") echo = `bin/${configuredSecret}`;
   if (mode === "echo-basic") echo = `bin/${Buffer.from(`fixture-user:${configuredSecret}`).toString("base64")}`;
-  const nativeCwd = configuredProject(`${mode}-native`), guestCwd = configuredProject(`${mode}-guest`);
+  if (mode === "echo-error") tarballMode = mode;
+  const basic = mode === "echo-basic" || mode === "echo-password";
+  const nativeCwd = configuredProject(`${mode}-native`, base, basic), guestCwd = configuredProject(`${mode}-guest`, base, basic);
   const native = await run(nativeCwd, ["install", "--lockfile-only"], null, true);
   const nativeRequests = requests; requests = [];
   const guest = await run(guestCwd, ["install", "--lockfile-only"], null);
@@ -225,7 +232,8 @@ async function metadataSecret(mode: string) {
   assert.notEqual(guest.code, 0, "unsafe package metadata must reject");
   assert.equal(existsSync(join(guestCwd, "bun.lock")), false);
   assert.equal(existsSync(join(guestCwd, "node_modules/security-dep")), false);
-  record(mode, native, guest, nativeRequests);
+  const nativeLock = existsSync(join(nativeCwd, "bun.lock")) ? readFileSync(join(nativeCwd, "bun.lock"), "utf8") : "";
+  record(mode, native, guest, nativeRequests, { nativeLockContainsSecret: [secret, configuredSecret, Buffer.from(`fixture-user:${configuredSecret}`).toString("base64")].some(value => nativeLock.includes(value)) });
 }
 
 async function redirectCase(mode: string) {
@@ -260,6 +268,7 @@ async function archiveAuth() {
 }
 
 async function invalidIntegrity(value: string) {
+  value += `-${secret}`;
   const nativeCwd = project("invalid-integrity-native"), guestCwd = project("invalid-integrity-guest");
   foreignLock(nativeCwd, value); foreignLock(guestCwd, value);
   const native = await run(nativeCwd, ["pm", "migrate"], base, true);
@@ -272,6 +281,29 @@ async function invalidIntegrity(value: string) {
   assert.equal(existsSync(join(guestCwd, "node_modules/security-dep")), false);
   assert.equal(requests.length, 0);
   record("invalid-integrity", native, guest, nativeRequests);
+}
+
+async function schemeRedirect() {
+  const tlsServer = Bun.serve({ hostname: "127.0.0.1", port: 0, tls: {
+    cert: readFileSync(join(root, "tests/fixtures/crypto-x509/agent1-cert.pem")),
+    key: readFileSync(join(root, "tests/fixtures/crypto-x509/agent1-key.pem")),
+  }, fetch(request) {
+    requests.push({ url: request.url, authorization: request.headers.get("authorization") });
+    return new Response(null, { status: 302, headers: { location: String(outside.url) + "security-dep.tgz" } });
+  } });
+  tlsServers.add(tlsServer);
+  const cwd = project("scheme-native");
+  const source = `const r = await fetch(${JSON.stringify(String(tlsServer.url))}, { headers: { authorization: ${JSON.stringify(`Bearer ${configuredSecret}`)} }, tls: { rejectUnauthorized: false } }); if (!r.ok) process.exit(1);`;
+  const native = await run(cwd, ["-e", source], null, true);
+  assert.equal(native.code, 0, native.stderr);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1]?.authorization, null, "native Bun leaked credentials on downgrade");
+  const nativeRequests = requests; requests = [];
+  const headers = new Headers({ authorization: `Bearer ${configuredSecret}` });
+  packageRedirect(new URL("https://registry.invalid:443/"), "http://registry.invalid:443/archive", headers);
+  assert.equal(headers.has("authorization"), false, "same-port scheme change retained credentials");
+  record("scheme-redirect", native, { code: 0, stdout: "full-origin helper removed authorization", stderr: "" }, nativeRequests);
+  await tlsServer.stop(true); tlsServers.delete(tlsServer);
 }
 
 const cases: [string, () => Promise<void>][] = [
@@ -301,12 +333,15 @@ const cases: [string, () => Promise<void>][] = [
   ["embedded-bin", () => metadataSecret("embedded-bin")],
   ["echo-token", () => metadataSecret("echo-token")],
   ["echo-basic", () => metadataSecret("echo-basic")],
+  ["echo-password", () => metadataSecret("echo-password")],
+  ["echo-error", () => metadataSecret("echo-error")],
   ["redirect-same", () => redirectCase("same")],
   ["redirect-port", () => redirectCase("port")],
   ["redirect-host", () => redirectCase("host")],
   ["redirect-query", () => redirectCase("query")],
   ["redirect-userinfo", () => redirectCase("userinfo")],
   ["redirect-embedded", () => redirectCase("embedded")],
+  ["redirect-scheme", schemeRedirect],
   ["same-origin-archive", archiveAuth],
   ["invalid-integrity", () => invalidIntegrity("sha512-invalid")],
   ["unsupported-integrity", () => invalidIntegrity("md5-invalid")],

@@ -322,7 +322,7 @@ impl Resolver {
         let package = match result {
             Ok(package) => package,
             Err(error) if optional => {
-                eprintln!("warn: optional dependency {name}: {}", io::redact(&error));
+                eprintln!("warn: optional dependency {name}: {}", self.registry.redact(&error));
                 return Ok(());
             }
             Err(error) => return Err(error),

@@ -110,7 +110,7 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
                 let meta = &memory[range(memory, meta, meta_len)?];
                 let body = &memory[range(memory, body, body_len)?];
                 let handle = host.net.fetch(meta, body);
-                trace(host, format_args!("fetch({}, {} body bytes) -> {handle}", text(meta), body.len()));
+                trace(host, format_args!("fetch({} metadata bytes, {} body bytes) -> {handle}", meta.len(), body.len()));
                 Ok(handle)
             })
         }),
@@ -118,7 +118,7 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
             with_memory(&mut caller, |memory, host| {
                 let output = host.net.fetch_head(handle);
                 if let Output::Bytes(bytes) = &output {
-                    trace(host, format_args!("fetch_head({handle}) -> {}", text(bytes)));
+                    trace(host, format_args!("fetch_head({handle}) -> {} metadata bytes", bytes.len()));
                 }
                 let n = put(memory, buf, cap, output)?;
                 if n < 0 && n != crate::net::AGAIN {
@@ -185,7 +185,7 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
             with_memory(&mut caller, |memory, host| {
                 let output = if handle >= crate::process::FIRST_HANDLE { host.processes.error(handle) } else { host.net.error(handle) };
                 if let Output::Bytes(bytes) = &output {
-                    trace(host, format_args!("error({handle}) -> {}", text(bytes)));
+                    trace(host, format_args!("error({handle}) -> {} error bytes", bytes.len()));
                 }
                 put(memory, buf, cap, output)
             })

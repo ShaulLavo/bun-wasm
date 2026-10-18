@@ -29,7 +29,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`third_party/licenses/lol-html-LICENSE`](#htmlrewriter) | Port | Retain the vendored parser's BSD license for wasm distribution. |
 | [Third-party interrupt instrumentation](#third-party-interrupt-instrumentation) | Host feature | Original TypeScript binary rewriter, content-addressed loader and rescued browser fixtures; module-internal countdowns avoid per-entry host calls. |
 | [Portable installer and package command adapters](#portable-installer-and-package-commands) | Host feature | Original filesystem, lockfile and command adapters over Bun's matcher, parsers and semver. |
-| [Foreign lockfile migration](#foreign-lockfile-migration) | Host feature | Original format adapters and adapted Bun validation preserve selected records, workspace locations, optional edges and credential-free sources. |
+| [Foreign lockfile migration](#foreign-lockfile-migration) | Host feature | Original format and credential-boundary adapters preserve selected records, workspace locations, optional edges and credential-free sources. |
 | [Migration archive fixtures](#migration-archive-fixtures) | Host feature | Unchanged abbrev archives verify the real npm workspace fixture and extraction against its recorded checksums. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
@@ -2278,19 +2278,23 @@ Berry optional-edge classification adapt the corresponding rules from Bun at
 - `src/install/pnpm.rs` supplies importer and link-target validation rules.
 - `src/install/lockfile/Tree.rs` supplies ancestor visibility and finite placement semantics.
 - `src/install/integrity.rs` supplies the supported hash algorithms, strongest-digest selection and SRI padding used by the portable verifier.
-- `src/install/npm.rs` and `src/install/NetworkTask.rs` supply configured Bearer/Basic authorization and registry-origin/path scoping rules.
+- `src/install/npm.rs` and `src/install/NetworkTask.rs` supply configured Bearer/Basic authorization and registry-origin selection rules, checked against native Bun 1.4.2 for archives outside the metadata path.
 
 The local implementation uses serde values and the portable filesystem rather than
 Bun's package-manager graph. Unsupported selection rules fail before publication.
 No vendor source or patch changes. The original request adapter now owns URL
 normalization for migration and ordinary installation. It drops URL userinfo,
 rejects transport queries, and keeps configured authorization out of URLs and lock
-records. Host error text and optional warnings use the shared URL redactor. The
-lock writer rejects credential-bearing URL metadata before publication. The
-original cache adapter also refuses credential-bearing metadata before persistence
-or reuse. The
+records. Host error text and optional warnings use the credential-aware redactor.
+The lock writer checks decoded strings for embedded npm authentication and
+configured secrets before publication. The original cache adapter uses the same
+check before persistence or reuse. Native and TypeScript host redirect adapters
+validate package destinations and remove sensitive headers on full-origin changes.
+Host tracing prints metadata sizes rather than header values or payload text.
+These redirect, trace and decoded-metadata guards are original adapters. The
 portable verifier implements SHA-512, SHA-384, SHA-256 and SHA-1 and compares decoded
-digests, including Bun's serialized padding for SHA-256 and SHA-384.
+digests, including Bun's serialized padding for SHA-256 and SHA-384. Malformed
+nonempty integrity rejects rather than weakening the input to an absent checksum.
 The text format follows Bun's `src/install/lockfile/bun.lock.rs`; selected references
 and bin representations are checked against native Bun rather than inferred from
 pretty JSON. Registry metadata can fill omitted bin, platform and script fields,
