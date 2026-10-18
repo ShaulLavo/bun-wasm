@@ -36,8 +36,10 @@ export function resolveRuntimePackage(consumerEntry: string) {
       const output = resolve(path, target);
       if (!target.startsWith("./") || inside(path, output) === undefined) throw new Error(`Invalid runtime export: ${target}`);
       if (!existsSync(output)) throw new Error(`Missing runtime export: ${output}`);
-      if (inside(physical, realpathSync(output)) === undefined) throw new Error(`Runtime export escapes installed package: ${target}`);
-      return output;
+      const physicalOutput = realpathSync(output);
+      if (inside(physical, physicalOutput) === undefined) throw new Error(`Runtime export escapes installed package: ${target}`);
+      // Match the paths Bun uses for relative imports, preserving class identity.
+      return physicalOutput;
     },
     relativeInput(input: string, base = process.cwd()): string | undefined {
       const absolute = resolve(base, input);

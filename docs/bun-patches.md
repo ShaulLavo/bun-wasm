@@ -630,15 +630,18 @@ Node, WebKit, PGlite, or SQLite implementation.
 Unbundled Node host adapters import Waffle's exported JavaScript memory helper through
 `waffle/core/memory-views`, so headless CLI workflows remain dependency-free.
 The original browser-build adapter resolves declared exports through the consuming app.
-It returns equivalent public installed-package paths so encoded isolated-cache directory
-names do not trigger Bun's double-dot plugin-path rejection. No upstream code is copied.
+It validates the installed-package boundary and returns canonical file paths, including
+isolated-cache directory names. No upstream code is copied.
 
 ## Browser package resolution
 
 Class **Host feature** for the original adapter in `scripts/browser-build.ts`. The adapter resolves
-the consuming app's `waffle` exports with Bun, then maps the resolved file back through
-the consumer's package path. This keeps the returned path absolute without exposing Bun's isolated
-package-cache spelling to the build plugin. No upstream source is copied.
+the consuming app's declared `waffle` browser exports and verifies that each target stays inside
+the installed package. It returns the physical file path so bare package imports and relative
+imports share one module identity. Returning a symlink alias duplicated `FilesystemError` in
+browser bundles and broke the installer's typed EEXIST handling during reinstall. A synthetic
+symlinked-package build checks error-constructor identity, alongside real-browser reinstall
+acceptance. No upstream source is copied.
 
 ## Portable semver host functions
 
