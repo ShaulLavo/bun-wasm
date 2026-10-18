@@ -333,17 +333,23 @@ pub fn signal(signal: i32, operation: i32) -> i32 {
     proc_call!(runtime_proc::signal(signal, operation))
 }
 
-/// Sleep through the host when present so child cancellation can interrupt timers
-/// and Bun.sleepSync, including instances with no open network handles.
-pub fn sleep(duration: std::time::Duration) {
-    if !provided(Slot::Poll as usize) {
-        std::thread::sleep(duration);
-        return;
+/// Waits for up to `timeout_ms` with nothing to watch except this process itself. `runtime_proc.poll`
+/// with no subscriptions returns early for a handled signal or an interrupt, so idle timers and
+/// `Bun.sleepSync` stay cancellable and signals wake an idle guest. Without the process ABI (host
+/// unit tests) it is a plain sleep.
+pub fn idle(timeout_ms: i32) {
+    if proc_poll(&[], timeout_ms).is_err() {
+        std::thread::sleep(std::time::Duration::from_millis(timeout_ms.max(0) as u64));
     }
+}
+
+/// Sleep so child cancellation and signals can interrupt timers and `Bun.sleepSync`, including
+/// instances with no open handles. Bounded steps re-enter the signal checkpoint.
+pub fn sleep(duration: std::time::Duration) {
     let started = std::time::Instant::now();
     while started.elapsed() < duration {
         let left = duration.saturating_sub(started.elapsed());
-        poll(left.as_millis().clamp(1, 25) as i32);
+        idle(left.as_millis().clamp(1, 25) as i32);
     }
 }
 
@@ -363,5 +369,15 @@ mod signal_tests {
         assert_eq!(proc_pipe(), Err(UNSUPPORTED));
         assert_eq!(proc_poll(&[], 0), Err(UNSUPPORTED));
         assert_eq!(signal(0, 4), UNSUPPORTED);
+    }
+
+    #[test]
+    fn idle_without_the_process_abi_still_waits_the_requested_time() {
+        let started = std::time::Instant::now();
+        idle(20);
+        assert!(started.elapsed() >= std::time::Duration::from_millis(20));
+        let started = std::time::Instant::now();
+        sleep(std::time::Duration::from_millis(30));
+        assert!(started.elapsed() >= std::time::Duration::from_millis(30));
     }
 }
