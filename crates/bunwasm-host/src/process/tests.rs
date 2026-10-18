@@ -206,14 +206,15 @@ fn arbitrary_bindings_are_retained_and_not_implicitly_inherited() {
 #[test]
 fn spawn_rejects_unhandable_filesystem_fd_without_partial_child() {
     let mut processes = processes();
-    assert_eq!(
-        processes.spawn(&request(
-            "bun",
-            serde_json::json!([{"child":1,"parent":27}])
-        )),
-        BADF
-    );
-    assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/runtime-proc-spawn-requests.json"
+    )).unwrap();
+    let case = cases.as_array().unwrap().iter()
+        .find(|case| case["name"] == "untransferable parent descriptor").unwrap();
+    // Preview1 owns this filesystem descriptor, not the transferable process table.
+    processes.reserve_file(91);
+    assert_eq!(processes.spawn(&serde_json::to_vec(&case["request"]).unwrap()), BADF);
+    assert_eq!(processes.runtime.active.load(Ordering::Acquire), 0);
     assert_eq!(processes.runtime.state.lock().unwrap().processes.len(), 1);
 }
 
