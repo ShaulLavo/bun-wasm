@@ -3,7 +3,7 @@
 # jsc shell). Usage: jsc/build.sh [ninja targets...]
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-bash "$REPO/scripts/check-wasi-cmake-cache.sh" "$JSC_OBJ" "$JSC_TOOLCHAIN_FILE"
+bash "$REPO/scripts/check-wasi-cmake-cache.sh" "$JSC_OBJ" "$JSC_TOOLCHAIN_FILE" --require-configured
 build_shim
 
 # The derived-sources generators need ERB; Arch's ruby ships it as a separate gem.

@@ -62,7 +62,6 @@ fn crypto(manifest: &Path, out: &Path) {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| out.join("boringssl"));
     // CMake can silently retain a native compiler when a WASI toolchain is requested.
-    // Validate the existing compiler and target before allowing reconfiguration.
     let guard = manifest.join("../../scripts/check-cmake-cache.cmake");
     println!("cargo:rerun-if-changed={}", guard.display());
     check_crypto_cache(manifest, &build, wasm, &guard);

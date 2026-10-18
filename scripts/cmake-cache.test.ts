@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Real compiler identification can exceed Bun's 5-second unit-test budget on CI.
-// Its independent process-group deadline also tears down compiler descendants.
 setDefaultTimeout(30_000);
 const timeoutWrapper = join(import.meta.dir, "run-with-timeout.mts");
 const guard = join(import.meta.dir, "check-cmake-cache.cmake");
@@ -13,8 +12,6 @@ function preflight(build: string, overrides: Record<string, string> = {}) {
   return Bun.spawnSync(["cmake"].concat(Object.entries(inputs).map(([key, value]) => `-D${key}=${value}`), ["-P", guard]), { stdout: "pipe", stderr: "pipe" });
 }
 
-// Every fixture owns one tiny CMake source/build tree and synchronous compiler probes.
-// No project build, downloaded inputs, daemon or shared cache is created or modified.
 function fixture(run: (build: string) => void, configure: (root: string) => string[] = () => []) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-cmake-cache-"));
   try {
@@ -31,7 +28,7 @@ function fixture(run: (build: string) => void, configure: (root: string) => stri
 
 function refuseUnchanged(build: string, overrides: Record<string, string>, diagnostic: string) {
   const cache = join(build, "CMakeCache.txt"), rules = join(build, "CMakeFiles/rules.ninja");
-  const beforeCache = readFileSync(cache), beforeRules = readFileSync(rules);
+  const beforeCache = readFileSync(cache), beforeRules = readFileSync(rules), beforeFiles = retainedFiles(build);
   const result = preflight(build, overrides);
   expect(result.exitCode).not.toBe(0);
   expect(result.stderr.toString()).toContain("CMake toolchain mismatch");
@@ -40,6 +37,7 @@ function refuseUnchanged(build: string, overrides: Record<string, string>, diagn
   expect(message).toContain("Choose a fresh build directory");
   expect(readFileSync(cache)).toEqual(beforeCache);
   expect(readFileSync(rules)).toEqual(beforeRules);
+  expect(retainedFiles(build)).toEqual(beforeFiles);
 }
 
 test("CMake preflight allows fresh directories and matching native caches without modifying them", () => {
@@ -53,7 +51,6 @@ test("CMake preflight allows fresh directories and matching native caches withou
 
 test("a genuinely native-configured cache fails before WASI reconfiguration", () => {
   fixture(build => {
-    // Keep compiler paths identical to isolate the target-system check from compiler identity.
     refuseUnchanged(build, { EXPECTED_SYSTEM: "WASI", EXPECTED_PROCESSOR: "wasm32", EXPECTED_TARGET: "wasm32-wasip1" }, "requested WASI");
   });
 });
@@ -74,7 +71,6 @@ test("CMake preflight checks every compiler rule rather than accepting one match
   fixture(build => {
     const path = join(build, "CMakeFiles/rules.ninja");
     const rules = readFileSync(path, "utf8");
-    // Mutate the real generated rules only to exercise mixed-target metadata.
     const targets = rules.replaceAll(/(  command = [^\n]*?)( \$DEFINES)/g, "$1 --target=wasm32-wasip1$2");
     expect(targets).not.toBe(rules);
     writeFileSync(path, targets);
@@ -115,7 +111,7 @@ function wasiEntryPoint(build: string, entry: string) {
   mkdirSync(join(jsc, "build"), { recursive: true });
   symlinkSync(build, join(jsc, "build/jsc"), "dir");
   const marker = join(root, "unexpected-build"), guardTool = "#!/bin/sh\nprintf 'unexpected build\\n' >> \"$CMAKE_PREFLIGHT_MARKER\"\nexit 91\n";
-  for (const tool of [join(bin, "systemd-run"), join(sdk, "bin/clang"), join(sdk, "bin/clang++")]) {
+  for (const tool of [join(bin, "systemd-run"), join(bin, "ninja"), join(sdk, "bin/clang"), join(sdk, "bin/clang++")]) {
     writeFileSync(tool, guardTool);
     chmodSync(tool, 0o755);
   }
@@ -123,17 +119,22 @@ function wasiEntryPoint(build: string, entry: string) {
   chmodSync(join(bin, "wasm-opt"), 0o755);
   const args = ["bash", join(import.meta.dir, "..", entry)];
   if (entry.startsWith("scripts/")) args.push(join(build, "../source"), build);
-  const cache = readFileSync(join(build, "CMakeCache.txt")), rules = readFileSync(join(build, "CMakeFiles/rules.ninja"));
+  const cachePath = join(build, "CMakeCache.txt");
+  const cache = existsSync(cachePath) ? readFileSync(cachePath) : null;
+  const rules = readFileSync(join(build, "CMakeFiles/rules.ninja"));
+  const before = retainedFiles(build);
   const result = Bun.spawnSync(args, {
     stdout: "pipe", stderr: "pipe",
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, WASI_SDK_PATH: sdk, JSC_BUILD_DIR: jsc, BUN_WASM_SYSROOT: root, CAGE: "", CMAKE_PREFLIGHT_MARKER: marker },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, WASI_SDK_PATH: sdk, JSC_BUILD_DIR: jsc, BUN_WASM_SYSROOT: root, CAGE: "", CMAKE_PREFLIGHT_MARKER: marker, WASM_TOOLS: join(root, "tools") },
   });
   expect(result.exitCode).not.toBe(0);
   expect(result.stderr.toString()).toContain("CMake toolchain mismatch");
   expect(existsSync(marker)).toBe(false);
   expect(existsSync(join(jsc, "shim"))).toBe(false);
-  expect(readFileSync(join(build, "CMakeCache.txt"))).toEqual(cache);
+  expect(existsSync(cachePath)).toBe(cache !== null);
+  if (cache !== null) expect(readFileSync(cachePath)).toEqual(cache);
   expect(readFileSync(join(build, "CMakeFiles/rules.ninja"))).toEqual(rules);
+  expect(retainedFiles(build)).toEqual(before);
 }
 
 test("configure and build entry points refuse native caches before shim, configure or Ninja work", () => {
@@ -198,4 +199,111 @@ test("matching explicit compile and link sysroots remain reusable", () => {
   fixture(build => {
     expect(preflight(build, { EXPECTED_SYSROOT: "/" }).exitCode).toBe(0);
   }, () => ["-DCMAKE_SYSROOT:PATH=/", "-DCMAKE_SYSROOT_COMPILE:PATH=/", "-DCMAKE_SYSROOT_LINK:PATH=/"]);
+});
+
+function retainedFiles(build: string) {
+  return new Map(readdirSync(build, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => {
+      const path = join(entry.parentPath, entry.name);
+      return [path, readFileSync(path)];
+    }));
+}
+
+test("deleted CMake caches reject retained native output before any build entrypoint work", () => {
+  fixture(build => {
+    rmSync(join(build, "CMakeCache.txt"));
+    const before = retainedFiles(build);
+    const result = preflight(build);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain("missing CMakeCache.txt");
+    expect(retainedFiles(build)).toEqual(before);
+    for (const entry of ["jsc/configure.sh", "jsc/build.sh", "scripts/real-runtime-network-tls.sh"]) {
+      wasiEntryPoint(build, entry);
+    }
+  });
+});
+
+test("build-only preflight and JSC reject fresh directories without creating build output", () => {
+  fixture(build => {
+    const fresh = join(build, "not-created");
+    expect(preflight(fresh, { REQUIRE_CONFIGURED: "ON" }).exitCode).not.toBe(0);
+    const jsc = join(build, "not-created-jsc");
+    const result = Bun.spawnSync(["bash", join(import.meta.dir, "../jsc/build.sh")], {
+      env: { ...process.env, JSC_BUILD_DIR: jsc }, stdout: "pipe", stderr: "pipe",
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain("missing CMakeCache.txt");
+    expect(existsSync(jsc)).toBe(false);
+    expect(existsSync(fresh)).toBe(false);
+  });
+});
+
+function wasiFixture(run: (build: string, inputs: Record<string, string>) => void, configure: (root: string) => string[] = () => []) {
+  let inputs: Record<string, string> = {};
+  fixture(build => run(build, inputs), root => {
+    const sdk = process.env.WASI_SDK_PATH ?? "/work/cache/wasm-tools/wasi-sdk";
+    const c = existsSync(join(sdk, "bin/clang")) ? join(sdk, "bin/clang") : "/usr/bin/clang";
+    const cxx = existsSync(join(sdk, "bin/clang++")) ? join(sdk, "bin/clang++") : "/usr/bin/clang++";
+    const sysroot = process.env.BUN_WASM_SYSROOT ?? join(root, "sysroot with spaces");
+    if (!existsSync(sysroot)) mkdirSync(sysroot, { recursive: true });
+    const toolchain = join(root, "wasi.cmake");
+    writeFileSync(toolchain, `set(CMAKE_SYSTEM_NAME WASI)
+set(CMAKE_SYSTEM_PROCESSOR wasm32)
+set(CMAKE_C_COMPILER "${c}")
+set(CMAKE_CXX_COMPILER "${cxx}")
+set(CMAKE_C_COMPILER_TARGET wasm32-wasip1)
+set(CMAKE_CXX_COMPILER_TARGET wasm32-wasip1)
+set(CMAKE_SYSROOT "${sysroot}" CACHE PATH "fixture sysroot")
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+`);
+    inputs = { EXPECTED_C: c, EXPECTED_CXX: cxx, EXPECTED_SYSTEM: "WASI", EXPECTED_PROCESSOR: "wasm32", EXPECTED_TARGET: "wasm32-wasip1", EXPECTED_SYSROOT: sysroot, EXPECTED_TOOLCHAIN_FILE: toolchain };
+    return [`-DCMAKE_TOOLCHAIN_FILE=${toolchain}`].concat(configure(root));
+  });
+}
+
+test("matching real WASI compiler commands are accepted without changing retained files", () => {
+  wasiFixture((build, inputs) => {
+    const before = retainedFiles(build);
+    const result = preflight(build, inputs);
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(retainedFiles(build)).toEqual(before);
+  });
+});
+
+function refuseLanguageFlags(flag: string) {
+  wasiFixture((build, inputs) => {
+    refuseUnchanged(build, inputs, flag.includes("target") ? "compiler target" : "sysroot");
+  }, () => [`-DCMAKE_C_FLAGS=${flag}`, `-DCMAKE_CXX_FLAGS=${flag}`]);
+}
+
+for (const flag of ["--target=wasm64-unknown-unknown", "-target wasm64-unknown-unknown", '--sysroot="/"', "-isysroot /"]) {
+  test(`real CMake language flags cannot override the WASI toolchain with ${flag}`, () => refuseLanguageFlags(flag));
+}
+
+function refusePropertyFlags(kind: string, flag: string) {
+  wasiFixture((build, inputs) => {
+    refuseUnchanged(build, inputs, flag.includes("target") ? "wasm64-unknown-unknown" : "sysroot");
+  }, root => propertyFlags(root, kind, flag));
+}
+
+function propertyFlags(root: string, kind: string, flag: string) {
+  if (kind === "configuration") return ["-DCMAKE_BUILD_TYPE=Release", `-DCMAKE_C_FLAGS_RELEASE=${flag}`, `-DCMAKE_CXX_FLAGS_RELEASE=${flag}`];
+  if (kind === "linker configuration") return ["-DCMAKE_BUILD_TYPE=Release", `-DCMAKE_EXE_LINKER_FLAGS_RELEASE=${flag}`];
+  const path = join(root, "source/CMakeLists.txt");
+  const operation = kind === "target compile" ? "target_compile_options" : "target_link_options";
+  writeFileSync(path, readFileSync(path, "utf8") + `${operation}(executable PRIVATE "${flag}")\n`);
+  return [];
+}
+
+for (const kind of ["configuration", "linker configuration", "target compile", "target link"]) {
+  test(`real CMake ${kind} options cannot override the WASI target`, () => refusePropertyFlags(kind, "--target=wasm64-unknown-unknown"));
+  test(`real CMake ${kind} options cannot override the WASI sysroot`, () => refusePropertyFlags(kind, "--sysroot=/"));
+}
+
+test("CMake response-file compile flags cannot override the WASI target", () => {
+  wasiFixture((build, inputs) => {
+    expect(readFileSync(join(build, "CMakeFiles/rules.ninja"), "utf8")).toContain("rspfile_content");
+    refuseUnchanged(build, inputs, "wasm64-unknown-unknown");
+  }, () => ["-DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON", "-DCMAKE_C_FLAGS=--target=wasm64-unknown-unknown", "-DCMAKE_CXX_FLAGS=--target=wasm64-unknown-unknown"]);
 });

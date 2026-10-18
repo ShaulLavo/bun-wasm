@@ -2,6 +2,7 @@
 # Sparse, blobless checkout of Bun's WebKit fork at the pinned commit, with webkit-wasi.patch applied.
 # Idempotent: an existing checkout at the right commit is re-patched only if the patch is missing.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+mkdir -p "$JSC_BUILD_DIR"
 
 paths=(Source/JavaScriptCore Source/WTF Source/bmalloc Source/cmake Source/ThirdParty/unifdef
   Source/ThirdParty/xdgmime Tools/Scripts Tools/cmake)

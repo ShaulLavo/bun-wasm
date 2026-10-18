@@ -2914,15 +2914,25 @@ or a pre-import fixture observer; no production mutable hook or export was added
 Class **Port**, implemented in the original build boundary. `scripts/check-cmake-cache.cmake` is a
 read-only, fail-closed validator for existing Ninja CMake build directories. Before BoringSSL or
 JavaScriptCore configure/build, it resolves the recorded C and C++ compiler paths, toolchain file,
-CMake system and processor, compiler target flags in `rules.ninja`, and effective compile/link
-sysroots, including `CMAKE_SYSROOT_COMPILE` and `CMAKE_SYSROOT_LINK` overrides. Native builds reject
-an unexpected toolchain or sysroot; WASI builds require the requested paths to match and exist. A missing or malformed cache is rejected with a fresh-directory diagnostic; a fresh
-directory is allowed to configure normally. The validator never edits or removes the caller's cache.
+CMake system and processor, compiler/linker rule options, and the generated Ninja `FLAGS`,
+`LINK_FLAGS` and `LANGUAGE_COMPILE_FLAGS` bindings. These bindings include configuration and target
+properties that follow the toolchain prefix, including options passed through CMake response files.
+Native builds reject a foreign target, toolchain or sysroot. WASI builds require matching target
+options and existing sysroot paths, including `CMAKE_SYSROOT_COMPILE` and `CMAKE_SYSROOT_LINK`
+overrides. Validation reads generated files without invoking Ninja or compilers. A missing cache
+with retained CMake output is rejected; only genuinely unconfigured directories may configure.
+Build-only JSC reuse requires a valid cache even for a fresh directory. The shared JSC environment
+no longer creates a build directory before that rejection. The validator never edits or removes
+the caller's cache.
 `crates/bunwasm-crypto-sys/build.rs` checks before configure and build; the original shared shell
 adapter `scripts/check-wasi-cmake-cache.sh` covers `jsc/configure.sh`, `jsc/build.sh`, and
 `scripts/real-runtime-network-tls.sh` before shim, configure or Ninja work. Regression fixtures use
 actual C/C++ Ninja caches, cover matching reuse and compiler/toolchain/target/system/processor/
-sysroot mismatches, deleted toolchain files, incomplete metadata, and byte-for-byte preservation.
+sysroot mismatches, deleted toolchain/cache files, incomplete metadata, and byte-for-byte
+preservation of every retained file. Real WASI C/C++ configurations cover language flags, release
+flags, linker flags and target compile/link properties overriding the target or sysroot, plus
+matching read-only reuse. SDK compilers are used when installed; otherwise the fixture uses the
+installed Clang cross-target support with static probes and no system headers.
 Build-command sentinels verify the real shell entry points refuse mismatches without launching
 compilers, Ninja or services. Real configure probes use the existing descendant-safe command
 wrapper with a 15-second deadline inside a 30-second integration-test budget, accommodating

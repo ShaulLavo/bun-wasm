@@ -25,7 +25,6 @@ CAGE="${CAGE-systemd-run --user --scope -q -p MemoryMax=5G -p CPUWeight=20 nice 
 # section and takes minutes on JSC. Links here run without it; finalize.sh runs it explicitly.
 WASM_OPT="$(command -v wasm-opt)"
 PATH_NO_BINARYEN="$(echo "$PATH" | tr ':' '\n' | grep -v binaryen | paste -sd:)"
-mkdir -p "$JSC_BUILD_DIR"
 
 JSC_INPUTS_STAMP="$JSC_BUILD_DIR/build/jsc/.bunwasm-inputs"
 
