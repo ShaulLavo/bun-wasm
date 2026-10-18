@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,17 @@ export interface PublicationSnapshot {
 
 /** Missing siblings are a hard failure for publication, never a skipped gate. */
 export async function verifyPublicationInputs(dist: string, descriptor: GuestDescriptor): Promise<void> {
+  const allowedReceipts = new Set(artifacts.map(name => `${name}.build.json`));
+  const entries = await readdir(dist).catch(error => {
+    if (error.code !== "ENOENT") throw error;
+    return [] as string[];
+  });
+  const unexpectedReceipts = entries
+    .filter(name => name.endsWith(".wasm.build.json") && !allowedReceipts.has(name))
+    .map(name => join(dist, name));
+  if (unexpectedReceipts.length) {
+    throw new Error(`Guest publication has unexpected build receipts: ${unexpectedReceipts.join(", ")}`);
+  }
   const missing: string[] = [];
   for (const name of artifacts) {
     const path = join(dist, name);
@@ -36,13 +47,14 @@ export async function verifyPublicationInputs(dist: string, descriptor: GuestDes
     if (!receiptMetadata?.isFile() || receiptMetadata.size === 0) missing.push(receiptPath);
   }
   if (missing.length) throw new Error(`Guest publication requires the full interruption matrix and build receipts; missing: ${missing.join(", ")}`);
+  let matched = false;
   for (const name of artifacts) {
     const candidate = await readFile(join(dist, name));
     verifyGuestBuildReceipt(candidate, JSON.parse(await readFile(`${join(dist, name)}.build.json`, "utf8")));
     const described = describeGuest(candidate);
-    if (described.sha256 === descriptor.sha256 && described.bytes === descriptor.bytes) return;
+    if (described.sha256 === descriptor.sha256 && described.bytes === descriptor.bytes) matched = true;
   }
-  throw new Error("Guest publication integrity mismatch: upload is not one of the tested matrix artifacts");
+  if (!matched) throw new Error("Guest publication integrity mismatch: upload is not one of the tested matrix artifacts");
 }
 
 /** The caller owns directory cleanup. Copy into new inodes, never links to a live build. */

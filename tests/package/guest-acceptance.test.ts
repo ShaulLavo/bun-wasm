@@ -65,6 +65,24 @@ test("publication rejects a receipt that does not match its artifact", async () 
   });
 });
 
+test("publication verifies later receipts even when the first artifact matches", async () => {
+  await fixture(async dist => {
+    for (const name of names) await writeFile(join(dist, name), wasm);
+    await writeReceipts(dist);
+    await writeFile(join(dist, "bun-jsc.wasm.build.json"), "{}\n");
+    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("Invalid guest build receipt");
+  });
+});
+
+test("publication rejects unexpected build receipts", async () => {
+  await fixture(async dist => {
+    for (const name of names) await writeFile(join(dist, name), wasm);
+    await writeReceipts(dist);
+    await writeFile(join(dist, "extra.wasm.build.json"), "{}\n");
+    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow(join(dist, "extra.wasm.build.json"));
+  });
+});
+
 test("aborted publication cannot launch browser acceptance or upload", async () => {
   await fixture(async dist => {
     for (const name of names) await writeFile(join(dist, name), wasm);

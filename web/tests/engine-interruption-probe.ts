@@ -115,16 +115,7 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
       }
       return delivered;
     } catch (error) {
-      if (checkpoint) {
-        controlAdd(probe, probeCell.checkpointThrew, 1);
-        // Only a production terminal exception identifies this fatal checkpoint; a
-        // selected outcome cannot promote a coincidental RuntimeError into evidence.
-        if (error instanceof RuntimeWorkerSignal || error instanceof ProcessSignalExit || error instanceof DefaultSignal) {
-          if (!signalBefore) controlAdd(probe, probeCell.checkpointAfterSignal, 1);
-          controlStore(probe, probeCell.checkpointSignal, error.signal);
-          controlStore(probe, probeCell.checkpointFatalSignal, error.signal);
-        }
-      }
+      if (checkpoint) recordCheckpointFailure(probe, signalBefore, error);
       throw error;
     }
   };
@@ -191,6 +182,15 @@ export function observePreview1Dequeue(imports: WebAssembly.Imports, probe: Int3
     controlStore(probe, probeCell.preview1PendingAfter, controlLoad(signalState, 2) & 4);
     return delivered;
   };
+}
+
+function recordCheckpointFailure(probe: Int32Array, signalBefore: number, error: unknown): void {
+  controlAdd(probe, probeCell.checkpointThrew, 1);
+  // Only a production terminal exception proves fatal delivery, not a coincidental trap.
+  if (!(error instanceof RuntimeWorkerSignal || error instanceof ProcessSignalExit || error instanceof DefaultSignal)) return;
+  if (!signalBefore) controlAdd(probe, probeCell.checkpointAfterSignal, 1);
+  controlStore(probe, probeCell.checkpointSignal, error.signal);
+  controlStore(probe, probeCell.checkpointFatalSignal, error.signal);
 }
 
 /** Test-only idle proof; never installed in timed CPU overhead runs. */
