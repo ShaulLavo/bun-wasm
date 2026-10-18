@@ -384,15 +384,26 @@ impl DeferredSignals {
 /// pending is folded into `deferred` first, so a signal that arrived again while an earlier copy
 /// was parked coalesces into one delivery (as the service's single pending bit would), and a
 /// selected fatal outcome unwinds inside `dequeue` before any parked callback runs.
-pub(crate) fn next_signal(deferred: &mut DeferredSignals, mut dequeue: impl FnMut() -> i32) -> i32 {
-    loop {
+pub(crate) fn next_signal(deferred: &mut DeferredSignals, dequeue: impl FnMut() -> i32) -> i32 {
+    drain_signals(deferred, dequeue);
+    deferred.take()
+}
+
+/// Moves what the service holds into `deferred`. Standard signals coalesce, so at most one entry
+/// per signal number is pending: draining stops after that many, even when a sender republishes
+/// continually, and the caller always makes progress (a callback, or its deadline check).
+fn drain_signals(deferred: &mut DeferredSignals, mut dequeue: impl FnMut() -> i32) {
+    for _ in 0..SIGNAL_LIMIT {
         let signal = dequeue();
         if signal <= 0 {
-            return deferred.take();
+            return;
         }
         deferred.defer(signal);
     }
 }
+
+/// Signal numbers 1 through 64.
+const SIGNAL_LIMIT: usize = 64;
 
 /// Sleep so child cancellation and signals can interrupt timers and `Bun.sleepSync`, including
 /// instances with no open handles. Each step first dequeues handled signals (a selected default
@@ -406,13 +417,7 @@ pub(crate) fn sleep_with(
 ) {
     let started = std::time::Instant::now();
     while started.elapsed() < duration {
-        loop {
-            let signal = dequeue();
-            if signal <= 0 {
-                break;
-            }
-            deferred.defer(signal);
-        }
+        drain_signals(deferred, &mut dequeue);
         let left = duration.saturating_sub(started.elapsed());
         idle(left.as_millis().clamp(1, 25) as i32);
     }
@@ -486,6 +491,23 @@ mod signal_tests {
         deferred.defer(10);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| next_signal(&mut deferred, || panic!("signal death"))));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn a_sender_that_republishes_forever_cannot_starve_delivery_or_the_sleep_deadline() {
+        let mut deferred = DeferredSignals::default();
+        let mut calls = 0;
+        // Every dequeue succeeds and the service immediately holds another one.
+        let signal = next_signal(&mut deferred, || { calls += 1; 10 });
+        assert_eq!(signal, 10);
+        assert_eq!(calls, 64);
+        let mut calls = 0;
+        let started = std::time::Instant::now();
+        sleep_with(std::time::Duration::from_millis(40), &mut deferred, || { calls += 1; 12 }, |ms| std::thread::sleep(std::time::Duration::from_millis(ms as u64)));
+        assert!(started.elapsed() >= std::time::Duration::from_millis(40));
+        assert!(started.elapsed() < std::time::Duration::from_millis(400));
+        assert!(calls % 64 == 0 && calls >= 64);
+        assert_eq!(deferred.take(), 12);
     }
 
     #[test]
