@@ -718,7 +718,7 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("close", move |a| {
         let fd = a.i32(0)?;
-        if fd <= 2 {
+        if (0..=2).contains(&fd) {
             return ok();
         }
         match st.fds.borrow_mut().files.remove(&fd) {
@@ -735,9 +735,6 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     t.add("read", |a| {
         let fd = a.i32(0)?;
         let mut buf = vec![0u8; a.num(1)? as usize];
-        if fd == 0 && buf.is_empty() {
-            return Ok(Val::Bytes(buf));
-        }
         let position = a.opt_num(2).filter(|p| *p >= 0.0);
         // Positional reads must not advance the shared open-file cursor.
         let count = unsafe {
@@ -1518,6 +1515,28 @@ mod builtin_tests {
             .unwrap(),
             7
         );
+    }
+
+    #[test]
+    fn invalid_descriptors_reject_close_and_empty_io() {
+        let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
+        let natives = table(&state);
+        for fd in [-1, -7, i32::MIN, i32::MAX] {
+            for (name, args) in [
+                ("close", vec![Val::Num(f64::from(fd))]),
+                ("read", vec![Val::Num(f64::from(fd)), Val::Num(0.0)]),
+                ("fstat", vec![Val::Num(f64::from(fd))]),
+                ("ftruncate", vec![Val::Num(f64::from(fd)), Val::Num(0.0)]),
+                ("write", vec![Val::Num(f64::from(fd)), Val::Bytes(vec![])]),
+                ("writev", vec![Val::Num(f64::from(fd)), Val::Array(vec![])]),
+            ] {
+                let error = call(&natives, name, &args).unwrap_err();
+                assert!(
+                    error.props.contains(&("code".into(), Val::from("EBADF"))),
+                    "{name}({fd}): {error:?}"
+                );
+            }
+        }
     }
 
     #[test]
