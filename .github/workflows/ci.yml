@@ -25,6 +25,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       TMPDIR: ${{ runner.temp }}
+      WASM_TOOLS: ${{ runner.temp }}/wasm-tools
       GIT_AUTHOR_NAME: bun-wasm CI
       GIT_AUTHOR_EMAIL: ci@localhost
       GIT_COMMITTER_NAME: bun-wasm CI
@@ -41,6 +42,7 @@ jobs:
         with:
           toolchain: nightly-2026-09-15
           components: rustfmt, clippy
+          targets: wasm32-wasip1
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -48,6 +50,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config
+      - name: Install pinned WASI SDK
+        run: |
+          archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
+          trap 'rm -f "$archive"' EXIT
+          curl --fail --location --silent --show-error \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz \
+            -o "$archive"
+          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
+          mkdir -p "$WASM_TOOLS/wasi-sdk"
+          tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Install locked JavaScript tools and application dependencies
         run: |
           bun install --frozen-lockfile

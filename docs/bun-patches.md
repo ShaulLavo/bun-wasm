@@ -2258,7 +2258,7 @@ guest namespace: absolute symlink targets begin at guest `/`, relative targets b
 link's parent, and missing/non-directory components before `..` remain errors. Resolution
 is bounded to 40 links. After that original-component walk succeeds, the resolved guest
 path must equal the lexical registration key: aliases that change that key are rejected
-with EACCES, matching pinned Waffle `b7dded1e` and the Node host. Waffle's browser filesystem
+with EACCES, matching pinned Waffle `0a9fe12b` and the Node host. Waffle's browser filesystem
 does not implement symlinks. Admission returns the absolute canonical guest path, never a host
 canonical path. Marker directories and access threads are owned and cleaned by the native
 runtime. These traversal rules are an original Rust adapter, not copied filesystem code.
@@ -2747,6 +2747,11 @@ revision. It does not claim to evaluate JavaScript macros. These hooks make
 workspace examples and test binaries link rather than excluding them from the
 quality gate. They do not add an upstream patch.
 
+The quality gate also compile-checks the supported QuickJS and browser-engine
+CLI builds for `wasm32-wasip1` with WASI SDK 34.0. This original build wiring keeps
+WASI-only POSIX and guest ABI source checked without pretending the JSC/tools
+configuration can build without its generated WebKit/Yarr prerequisites.
+
 ## JSC prebuild inputs
 
 Class **Host feature**, original build adapters in `jsc/common.sh` and
@@ -2824,7 +2829,7 @@ service, pipes and interrupt rewriting still cannot load before first use.
 
 Class **Host feature**. `web/scripts/node-spawn.ts` is an original Node broker
 adapter consuming Waffle's public `waffle/browser/diagnostic` export at
-`b7dded1e12eeae9d36f2ae23b12be69353719d86` (0.0.44, MIT), implemented upstream in
+`0a9fe12bf73cce81047999d0499543dfe0d9e513` (0.0.46, MIT), implemented upstream in
 `browser/diagnostic.ts`. The former local adaptation of that file from
 `a0a0f8794cde02410a11be38771b31cdbd3af89a` is deleted; no diagnostic implementation
 is copied or adapted locally. Positive writes reset the five-second no-progress
@@ -2855,3 +2860,15 @@ gzip; its light initial graph is 1,272,421 B / 390,095 B. Sandbox totals are
 same-source gzip-level-9 measurements include all tagged process/startup
 primitives and the upstream post-entry diagnostic additions; no budget was
 raised and the process supervisor remains lazy.
+
+The 0.0.46 consumer follow-up pins every Waffle dependency and lockfile to its
+#33 merge, `0a9fe12bf73cce81047999d0499543dfe0d9e513`. That upstream change fixes
+job-completion collection racing with tagged-cell retirement, including the
+sealed-but-not-retired losing-waiter interval. Tagged retired capabilities still
+report ESRCH; an already collected wait reports ECHILD. Bun's failure-only Wasm
+fixture keeps recording the exact wait return and untouched result bytes, but
+the temporary Firefox nested-child exception is removed: this failure is fatal
+in every browser, with no retry. The real inherited-fd libc controls remain
+explicit expected failures until the separate patched-sysroot follow-up. Waffle
+#32's intrinsic and source-quality changes are also included; no upstream source
+is copied into this consumer.

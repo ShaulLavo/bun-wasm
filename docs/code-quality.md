@@ -11,6 +11,7 @@ bun install --frozen-lockfile
 scripts/sync-bun.sh
 scripts/sync-crypto.sh
 cargo install cargo-machete --version 0.9.2 --locked --jobs 1
+# WASI_SDK_PATH must contain WASI SDK 34.0. CI verifies the release archive hash.
 bun run quality
 ```
 
@@ -53,7 +54,21 @@ and incremental compilation to limit runner disk use; it runs the same checks.
   Rust file under `crates/` is formatted, then all 14 workspace crates and all host
   targets get Clippy with `-D warnings`, locked workspace tests, and
   cargo-machete 0.9.2. No whole authored crate is excluded. These are native-host
-  default-feature checks, not a claim to build every engine/WASI feature matrix.
+  default-feature checks.
+- `quality:wasi` runs locked production `cargo check` on `wasm32-wasip1`, once
+  with the CLI's default QuickJS features and once with exactly the browser build's
+  `engine-host,bun-transpiler,bun-build` features and no defaults. WASI SDK 34.0 is
+  required. This checks the WASI-only POSIX implementation and guest ABI paths,
+  which native `--all-targets` cannot see. It is a compile check, not execution or
+  a second warnings policy: it retains the existing WASI upstream warning cap
+  from `env.sh`; the native owned-source Clippy gate still denies warnings.
+
+The WASI JSC engine and lint/format tools are not included in that target check.
+Their build scripts require generated WebKit headers, JSC archives and a Yarr
+compile database from `scripts/build-jsc.sh`. A stock WASI SDK cannot provide
+those artifacts. Their host workspace code remains checked, but this is not a
+claim of full WASI JSC/tools coverage. Run their existing supported build scripts
+with the matching JSC build inputs to verify that separate configuration.
 
 ## Upstream boundaries
 
@@ -76,7 +91,7 @@ covered. See [the source ledger](bun-patches.md) for provenance.
 `--fail-on-empty`. Renaming a local variable does not bypass structural Rust
 comparison. Removing one baseline clone does not buy room for a different clone.
 The initial baseline contains 21 clone pairs, including 8 Rust pairs,
-with 458 files scanned. Five TS pairs come from test setup added by main while
+with 459 files scanned. Five TS pairs come from test setup added by main while
 this PR was being implemented: two poll-test pairs, two runtime-root fixture pairs, and one
 spawn-outcome test pair. They are recorded in this initial baseline, not admitted by
 a percentage allowance. Refresh counts
@@ -96,5 +111,6 @@ file is removed in `finally`. The structural probe changes names, literals and
 one statement, so it does not merely prove exact matching twice.
 
 Run individual checks with `bun run quality:lint`, `quality:types`,
-`quality:unused`, `quality:duplicates`, `quality:probes` or `quality:rust`.
+`quality:unused`, `quality:duplicates`, `quality:probes`, `quality:rust` or
+`quality:wasi`.
 Apply Rust formatting with `bun scripts/quality-rust.ts --write`.
