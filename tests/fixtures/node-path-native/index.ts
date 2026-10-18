@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import path from "node:path";
+
+const w = path.win32;
+assert.equal(w.basename("C:\\dir\\file.txt"), "file.txt");
+assert.equal(w.dirname("\\\\server\\share\\file.txt"), "\\\\server\\share\\");
+assert.equal(w.extname("C:\\dir.with.dot\\file"), "");
+assert.equal(w.normalize("bb..\\..\\x"), "x");
+assert.equal(path.posix.normalize("bb../../x"), "x");
+assert.equal(w.join("//server", "share", "dir", ".."), "\\\\server\\share\\");
+assert.equal(w.resolve("C:/base", "//other/share", "C:relative"), "C:\\base\\relative");
+assert.equal(w.relative("C:\\A\\B", "c:\\a\\C"), "..\\C");
+assert.equal(w.toNamespacedPath("//server/share/file"), "\\\\?\\UNC\\server\\share\\file");
+assert.equal(w._makeLong, w.toNamespacedPath);
+assert.equal(path._makeLong, path.toNamespacedPath);
+assert.deepEqual(w.parse("C:\\dir\\file.txt"), { root: "C:\\", dir: "C:\\dir", base: "file.txt", ext: ".txt", name: "file" });
+console.log("Windows roots, drives, UNC and namespaces");
+
+for (const p of [path.posix, w]) {
+  const separator = p.sep;
+  const raw = "\ud800\ufeff日本😀";
+  assert.equal(p.basename("dir" + separator + raw), raw);
+  assert.equal(p.normalize(raw + separator + ".." + separator + raw), raw);
+  assert.equal(p.format({ dir: "d".repeat(70000), name: raw, ext: "txt" }), "d".repeat(70000) + separator + raw + ".txt");
+  const converted: string[] = [];
+  const first = Object.assign(new String("ignored"), { [Symbol.toPrimitive]() { converted.push("first"); return "base"; } });
+  const second = Object.assign(new String("ignored"), { [Symbol.toPrimitive]() { converted.push("second"); return "file"; } });
+  assert.equal(p.join(first, second), "base" + separator + "file");
+  assert.deepEqual(converted, ["first", "second"]);
+}
+console.log("UTF-16, long paths and argument coercion");
