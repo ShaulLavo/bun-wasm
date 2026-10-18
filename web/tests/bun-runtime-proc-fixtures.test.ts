@@ -77,3 +77,52 @@ test("pipeline fixture starts every real child before blocking on the first job"
 });
 
 for (const pending of bunRuntimeProcPending) test.todo(pending);
+
+for (const control of [
+  { returned: -27, kind: 0, value: 0 },
+  { returned: -12, kind: 2, value: 44 },
+  { returned: 0, kind: 0, value: 0 },
+]) {
+  test(`external root retains wait_job failure and diagnostic values (${control.returned})`, () => {
+    let instance: WebAssembly.Instance;
+    let stdout = "", stderr = "", status: number | undefined;
+    const stopped = new Error("fixture proc_exit");
+    const module = new WebAssembly.Module(bunRuntimeProcFixture({
+      name: "wait-diagnostic-control", commands: [{ source: "" }], stdout: "external-root-ok\n",
+    }));
+    instance = new WebAssembly.Instance(module, {
+      runtime_proc: {
+        spawn: () => 2,
+        job_of: () => 3,
+        wait_job: (_job: number, _flags: number, pointer: number) => {
+          const view = new DataView((instance.exports.memory as WebAssembly.Memory).buffer);
+          view.setUint32(pointer, control.kind, true);
+          view.setInt32(pointer + 4, control.value, true);
+          return control.returned;
+        },
+        write: (fd: number, pointer: number, length: number) => {
+          const bytes = new Uint8Array((instance.exports.memory as WebAssembly.Memory).buffer, pointer, length);
+          if (fd === 2) stderr += new TextDecoder().decode(bytes);
+          else stdout += new TextDecoder().decode(bytes);
+          return length;
+        },
+        pipe: () => 0, read: () => -6, poll: () => 0, kill_job: () => 0,
+      },
+      wasi_snapshot_preview1: {
+        fd_close: () => 0,
+        proc_exit: (code: number) => { status = code; throw stopped; },
+      },
+    });
+    try { (instance.exports._start as () => void)(); }
+    catch (error) { expect(error).toBe(stopped); }
+    if (control.returned === 0) {
+      expect(status).toBeUndefined();
+      expect(stdout).toBe("external-root-ok\n");
+      expect(stderr).toBe("");
+    } else {
+      expect(status).toBe(205);
+      expect(stdout).toBe("");
+      expect(stderr).toBe(`runtime-proc wait_job errno=${String(-control.returned).padStart(10, "0")} result-kind=${String(control.kind).padStart(10, "0")} result-value=${String(control.value).padStart(10, "0")}\n`);
+    }
+  });
+}
