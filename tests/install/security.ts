@@ -10,8 +10,8 @@ type Result = { code: number | null; stdout: string; stderr: string };
 const root = resolve(import.meta.dir, "../..");
 const scratch = mkdtempSync("/work/tmp/bun-wasm-install-security-");
 const evidence = process.env.INSTALL_SECURITY_EVIDENCE;
-const secret = "fixture-private-secret";
-const configuredSecret = "fixture-configured-secret";
+let secret = "fixture-private-secret";
+let configuredSecret = "fixture-configured-secret";
 const fixture = packageFixture("security-dep", "1.0.0");
 const children = new Set<ReturnType<typeof spawn>>();
 let requests: CapturedRequest[] = [];
@@ -20,21 +20,31 @@ let failure = "";
 let integrity = fixture.integrity;
 let corrupt = false;
 let base = "";
+let redirect = "";
+let echo = "";
+let requireArchiveAuth = false;
+let trace = false;
 const outside = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request): Response {
   requests.push({ url: request.url, authorization: request.headers.get("authorization") });
+  if (new URL(request.url).pathname.endsWith(".json")) return Response.json({ name: "security-dep", versions: { "1.0.0": { ...fixture.manifest, dist: { tarball: String(outside.url) + "security-dep.tgz", integrity: fixture.integrity } } } });
   return new Response(Uint8Array.from(fixture.archive).buffer);
 } });
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request): Response | Promise<Response> {
   requests.push({ url: request.url, authorization: request.headers.get("authorization") });
   const archive = new URL(request.url).pathname.endsWith(".tgz");
+  if (redirect && !archive && new URL(request.url).pathname !== "/redirected") return new Response(null, { status: 302, headers: { location: redirect } });
   if (failure === (archive ? "archive-timeout" : "metadata-timeout")) return new Promise<Response>(() => {});
   if (failure === (archive ? "archive-status" : "metadata-status")) return new Response("fixture failure", { status: 503 });
-  if (archive) return new Response(corrupt ? new Uint8Array([0, 1, 2]).buffer : Uint8Array.from(fixture.archive).buffer);
+  if (archive) {
+    if (requireArchiveAuth && request.headers.get("authorization") !== `Bearer ${configuredSecret}`) return new Response("unauthorized", { status: 401 });
+    return new Response(corrupt ? new Uint8Array([0, 1, 2]).buffer : Uint8Array.from(fixture.archive).buffer);
+  }
   let tarball = base + "/archives/security-dep-1.0.0.tgz";
   if (tarballMode === "userinfo") tarball = tarball.replace("://", `://fixture-user:${secret}@`);
   if (tarballMode === "query") tarball += `?authToken=${secret}`;
+  if (tarballMode === "embedded") tarball = base + `/:_authToken=${secret}/security-dep.tgz`;
   if (tarballMode === "external") tarball = String(outside.url) + "security-dep.tgz";
-  const extra = tarballMode === "optional-range" ? { optionalDependencies: { missing: `https://fixture-user:${secret}@other.invalid/missing.tgz` } } : {};
+  const extra = tarballMode === "optional-range" ? { optionalDependencies: { missing: `https://fixture-user:${secret}@other.invalid/missing.tgz` } } : echo ? { bin: { "security-dep": echo } } : {};
   return Response.json({ name: "security-dep", versions: { "1.0.0": { ...fixture.manifest, ...extra, dist: { tarball, integrity } } } });
 } });
 base = String(server.url).replace(/\/$/, "");
@@ -62,6 +72,7 @@ function foreignLock(cwd: string, sri: string) {
 }
 async function run(cwd: string, args: string[], registry: string | null = base, native = false): Promise<Result> {
   const environment: Record<string, string | undefined> = { ...process.env, HOME: cwd, BUN_INSTALL_CACHE_DIR: join(cwd, "cache"), BUN_CONFIG_HTTP_IDLE_TIMEOUT: "1" };
+  if (trace) { environment.BUN_WASM_TRACE = "1"; environment.WASI_TRACE = "1"; }
   for (const name of ["BUN_CONFIG_REGISTRY", "NPM_CONFIG_REGISTRY", "npm_config_registry"]) delete environment[name];
   if (registry !== null) environment.NPM_CONFIG_REGISTRY = registry;
   const options = ["--wasm", resolve(root, process.env.BUN_WASM ?? "dist/bun.wasm"), "--dir", `${cwd}::/`, "--env", "PWD=/", "--env", "HOME=/", "--env", "BUN_INSTALL_CACHE_DIR=/cache", "--env", "BUN_CONFIG_HTTP_IDLE_TIMEOUT=1"];
@@ -78,18 +89,23 @@ async function run(cwd: string, args: string[], registry: string | null = base, 
   try { return { code: await new Promise<number | null>((done, reject) => { child.once("error", reject); child.once("close", done); }), stdout, stderr }; }
   finally { clearTimeout(timer); children.delete(child); }
 }
-function checkSecrets(cwd: string, result: Result) {
+function checkSecrets(cwd: string, result: Result, configured = false) {
   assert.equal(result.stdout.includes(secret), false, "stdout exposed URL credentials");
   assert.equal(result.stderr.includes(secret), false, "stderr/error exposed URL credentials");
   assert.equal((result.stdout + result.stderr).includes(configuredSecret), false, "configured authorization appeared in diagnostics");
-  if (existsSync(join(cwd, "bun.lock"))) assert.equal(readFileSync(join(cwd, "bun.lock"), "utf8").includes(secret), false, "lock exposed URL credentials");
+  const basic = Buffer.from(`fixture-user:${configuredSecret}`).toString("base64");
+  assert.equal((result.stdout + result.stderr).includes(basic), false, "Basic authorization appeared in diagnostics");
+  assert.equal((result.stdout + result.stderr).includes(`Basic ${basic.slice(0, 12)}`), false, "truncated Basic authorization appeared in diagnostics");
+  const secrets = [secret, configuredSecret, basic];
+  if (existsSync(join(cwd, "bun.lock"))) for (const value of secrets) assert.equal(readFileSync(join(cwd, "bun.lock"), "utf8").includes(value), false, "lock exposed credentials");
   const cache = join(cwd, "cache");
   if (existsSync(cache)) {
-    for (const entry of readdirSync(cache)) assert.equal(readFileSync(join(cache, entry), "utf8").includes(secret), false, "metadata cache exposed URL credentials");
+    for (const entry of readdirSync(cache)) for (const value of secrets) assert.equal(readFileSync(join(cache, entry), "utf8").includes(value), false, "metadata cache exposed credentials");
   }
   for (const request of requests) {
     assert.equal(request.url.includes(secret), false, "request URL exposed credentials");
-    assert.equal(request.authorization, null, "URL credentials produced an authorization header");
+    if (!configured) assert.equal(request.authorization, null, "URL credentials produced an authorization header");
+    if (new URL(request.url).origin !== base) assert.equal(request.authorization, null, "other origin received configured credentials");
   }
 }
 async function credentials(name: string, mode: string, error = "") {
@@ -127,13 +143,14 @@ async function credentials(name: string, mode: string, error = "") {
 async function configuredAuth(mode = "bearer") {
   requests = []; failure = mode === "status" ? "metadata-status" : ""; tarballMode = mode === "external" ? "external" : "plain";
   const cwd = project(`configured-auth-${mode}`);
-  const credentials = mode === "basic" ? `username = "fixture-user"\npassword = ${JSON.stringify(configuredSecret)}` : `token = ${JSON.stringify(configuredSecret)}`;
+  const credentials = mode.startsWith("basic") ? `username = "fixture-user"\npassword = ${JSON.stringify(configuredSecret)}` : `token = ${JSON.stringify(configuredSecret)}`;
   writeFileSync(join(cwd, "bunfig.toml"), `[install.registry]\nurl = ${JSON.stringify(base)}\n${credentials}\n`);
   const result = await run(cwd, ["install"], null);
+  checkSecrets(cwd, result, true);
   assert.equal((result.stdout + result.stderr).includes(configuredSecret), false);
   assert.equal(result.code === 0, mode !== "status", result.stderr);
   assert.ok(requests.length > 0);
-  const expected = mode === "basic" ? `Basic ${Buffer.from(`fixture-user:${configuredSecret}`).toString("base64")}` : `Bearer ${configuredSecret}`;
+  const expected = mode.startsWith("basic") ? `Basic ${Buffer.from(`fixture-user:${configuredSecret}`).toString("base64")}` : `Bearer ${configuredSecret}`;
   for (const request of requests) assert.equal(request.authorization, request.url.startsWith(base + "/") ? expected : null);
   if (existsSync(join(cwd, "bun.lock"))) assert.equal(readFileSync(join(cwd, "bun.lock"), "utf8").includes(configuredSecret), false);
   if (evidence) {
@@ -163,6 +180,100 @@ async function hashCase(algorithm: string) {
     const rejected = await run(guest, ["install", "--frozen-lockfile"]); assert.notEqual(rejected.code, 0); assert.match(rejected.stderr, /integrity/i);
   } finally { corrupt = false; }
 }
+
+function configuredProject(name: string, registry = base, basic = false) {
+  const cwd = project(name);
+  const auth = basic ? `username = "fixture-user"\npassword = ${JSON.stringify(configuredSecret)}` : `token = ${JSON.stringify(configuredSecret)}`;
+  writeFileSync(join(cwd, "bunfig.toml"), `[install.registry]\nurl = ${JSON.stringify(registry)}\n${auth}\n`);
+  return cwd;
+}
+
+function record(name: string, native: Result, guest: Result, nativeRequests: CapturedRequest[]) {
+  if (!evidence) return;
+  const values = [secret, configuredSecret, Buffer.from(`fixture-user:${configuredSecret}`).toString("base64")];
+  const clean = (value: string) => values.reduce((text, value) => text.replaceAll(value, "[planted-secret]"), value);
+  mkdirSync(evidence, { recursive: true });
+  writeFileSync(join(evidence, `${name}-comparison.json`), clean(JSON.stringify({ native, guest, nativeRequests, guestRequests: requests }, null, 2)));
+}
+
+async function traceAuth(basic: boolean) {
+  trace = true;
+  const kind = basic ? "basic" : "bearer";
+  const nativeCwd = configuredProject(`trace-${kind}-native`, base, basic);
+  const guestCwd = configuredProject(`trace-${kind}-guest`, base, basic);
+  const native = await run(nativeCwd, ["install"], null, true);
+  assert.equal(native.code, 0, native.stderr);
+  const nativeRequests = requests; requests = [];
+  const guest = await run(guestCwd, ["install"], null);
+  checkSecrets(guestCwd, guest, true);
+  assert.equal(guest.code, 0, guest.stderr);
+  assert.match(guest.stderr, /\[bun_wasm\]/, "trace must be enabled");
+  record(basic ? "trace-basic" : "trace-bearer", native, guest, nativeRequests);
+  trace = false;
+}
+
+async function metadataSecret(mode: string) {
+  if (mode === "embedded-tarball") tarballMode = "embedded";
+  if (mode === "embedded-bin") echo = base + `/:_authToken=${secret}/bin`;
+  if (mode === "echo-token") echo = `bin/${configuredSecret}`;
+  if (mode === "echo-basic") echo = `bin/${Buffer.from(`fixture-user:${configuredSecret}`).toString("base64")}`;
+  const nativeCwd = configuredProject(`${mode}-native`), guestCwd = configuredProject(`${mode}-guest`);
+  const native = await run(nativeCwd, ["install", "--lockfile-only"], null, true);
+  const nativeRequests = requests; requests = [];
+  const guest = await run(guestCwd, ["install", "--lockfile-only"], null);
+  checkSecrets(guestCwd, guest, true);
+  assert.notEqual(guest.code, 0, "unsafe package metadata must reject");
+  assert.equal(existsSync(join(guestCwd, "bun.lock")), false);
+  assert.equal(existsSync(join(guestCwd, "node_modules/security-dep")), false);
+  record(mode, native, guest, nativeRequests);
+}
+
+async function redirectCase(mode: string) {
+  const target = String(outside.url) + "metadata.json";
+  redirect = mode === "same" ? base + "/redirected" : mode === "query" ? target + `?token=${secret}` : mode === "userinfo" ? target.replace("://", `://fixture-user:${secret}@`) : mode === "embedded" ? String(outside.url) + `:_authToken=${secret}/metadata.json` : mode === "host" ? target.replace("127.0.0.1", "localhost") : target;
+  const nativeCwd = configuredProject(`redirect-${mode}-native`), guestCwd = configuredProject(`redirect-${mode}-guest`);
+  const native = await run(nativeCwd, ["install"], null, true);
+  const nativeRequests = requests; requests = [];
+  const guest = await run(guestCwd, ["install"], null);
+  checkSecrets(guestCwd, guest, true);
+  const unsafe = ["query", "userinfo", "embedded"].includes(mode);
+  assert.equal(guest.code === 0, !unsafe, guest.stderr);
+  if (unsafe) assert.equal(requests.length, 1, "unsafe redirect was sent");
+  if (!unsafe) assert.equal(native.code, 0, native.stderr);
+  for (const request of requests) assert.equal(request.authorization, new URL(request.url).origin === base ? `Bearer ${configuredSecret}` : null);
+  record(`redirect-${mode}`, native, guest, nativeRequests);
+}
+
+async function archiveAuth() {
+  requireArchiveAuth = true;
+  const nativeCwd = configuredProject("archive-auth-native", base + "/registry"), guestCwd = configuredProject("archive-auth-guest", base + "/registry");
+  const native = await run(nativeCwd, ["install"], null, true);
+  assert.equal(native.code, 0, native.stderr);
+  assert.ok(requests.some(request => request.url.includes("/archives/") && request.authorization === `Bearer ${configuredSecret}`));
+  const nativeRequests = requests; requests = [];
+  const guest = await run(guestCwd, ["install"], null);
+  checkSecrets(guestCwd, guest, true);
+  assert.equal(guest.code, 0, guest.stderr);
+  assert.ok(requests.some(request => request.url.includes("/archives/") && request.authorization === `Bearer ${configuredSecret}`));
+  record("same-origin-archive", native, guest, nativeRequests);
+  requireArchiveAuth = false;
+}
+
+async function invalidIntegrity(value: string) {
+  const nativeCwd = project("invalid-integrity-native"), guestCwd = project("invalid-integrity-guest");
+  foreignLock(nativeCwd, value); foreignLock(guestCwd, value);
+  const native = await run(nativeCwd, ["pm", "migrate"], base, true);
+  const nativeRequests = requests; requests = [];
+  const guest = await run(guestCwd, ["install"], base);
+  checkSecrets(guestCwd, guest);
+  assert.notEqual(guest.code, 0, "supplied invalid integrity must reject");
+  assert.match(guest.stderr, /integrity/i);
+  assert.equal(existsSync(join(guestCwd, "bun.lock")), false);
+  assert.equal(existsSync(join(guestCwd, "node_modules/security-dep")), false);
+  assert.equal(requests.length, 0);
+  record("invalid-integrity", native, guest, nativeRequests);
+}
+
 const cases: [string, () => Promise<void>][] = [
   ["registry-env", () => credentials("registry-env", "registry")],
   ["registry-cli", () => credentials("registry-cli", "registry-cli")],
@@ -184,10 +295,27 @@ const cases: [string, () => Promise<void>][] = [
   ["optional-range-redaction", () => credentials("optional-range", "optional-range")],
   ["sha256", () => hashCase("sha256")],
   ["sha384", () => hashCase("sha384")],
+  ["trace-bearer", () => traceAuth(false)],
+  ["trace-basic", () => traceAuth(true)],
+  ["embedded-tarball", () => metadataSecret("embedded-tarball")],
+  ["embedded-bin", () => metadataSecret("embedded-bin")],
+  ["echo-token", () => metadataSecret("echo-token")],
+  ["echo-basic", () => metadataSecret("echo-basic")],
+  ["redirect-same", () => redirectCase("same")],
+  ["redirect-port", () => redirectCase("port")],
+  ["redirect-host", () => redirectCase("host")],
+  ["redirect-query", () => redirectCase("query")],
+  ["redirect-userinfo", () => redirectCase("userinfo")],
+  ["redirect-embedded", () => redirectCase("embedded")],
+  ["same-origin-archive", archiveAuth],
+  ["invalid-integrity", () => invalidIntegrity("sha512-invalid")],
+  ["unsupported-integrity", () => invalidIntegrity("md5-invalid")],
 ];
 try {
   for (const [name, check] of cases) {
     if (process.env.INSTALL_SECURITY_CASES && !process.env.INSTALL_SECURITY_CASES.split(",").includes(name)) continue;
+    requests = []; tarballMode = "plain"; failure = ""; echo = ""; redirect = ""; trace = false; requireArchiveAuth = false;
+    secret = `fixture-private-${name}-secret`; configuredSecret = `fixture-configured-${name}-secret`;
     try { await check(); console.log(`PASS ${name}`); } catch (error) { console.error(`FAIL ${name}`, error); process.exitCode = 1; }
   }
 } finally { await cleanup(); }
