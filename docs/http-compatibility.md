@@ -576,8 +576,8 @@ backpressure need a separate change. The reproduced upload cycle and raw
 controls are recorded in the compatibility follow-up plan.
 
 Bun Response streams now send headers and chunks before EOF. Socket write
-completion controls further reads. Unknown-length streams use chunked framing;
-explicit Content-Length streams retain that header. Byte-backed Responses keep
+completion controls further reads. Unknown-length streams use chunked framing, including when the Response has a
+user-supplied Content-Length. Byte-backed Responses keep
 the existing fixed-length path. HEAD and bodyless responses send no stream body.
 
 The embedded streams library also uses Bun's reader-lock error text. The
@@ -603,6 +603,43 @@ These bounded observations include newly reached failures. They do not establish
 native memory ownership or leak freedom. TLS transport, CONNECT dispatch,
 request timeout policy, queued pipelined response objects and Bun's direct stream
 extension remain separate compatibility work.
+
+## Response-stream review controls, 2026-10-18
+
+Native Bun 1.4.2 supplies the expected values for three regression fixtures.
+The controls use loopback sockets and no external providers.
+
+| Case | Native Bun | Guest before the review fix |
+| --- | --- | --- |
+| Stream produces `abc`, declared length is 1, 3, or 5 | Omits Content-Length, sends chunked `abc`, next request succeeds | Retains the declared length |
+| Client closes during a pending response | Cancels the owned stream reader once with `undefined`; an iterator receives `return(undefined)` | Peer EOF leaves the active response pending |
+| Another caller owns the stream reader | Calls the server error handler and leaves that reader locked and uncancelled | Existing ownership guard retained |
+| Fetch body aborts with null, zero, false, string, or Error | Rejects with the original value by identity | Null becomes a new AbortError |
+
+Bun's `node:http` control retains explicit Content-Length and writes all three
+bytes for the same lengths. Its separate response writer is unchanged. Counting
+stream bytes against the supplied header would differ from Bun.serve. Unknown
+stream lengths therefore always select chunked framing; byte-backed responses
+keep their fixed-length path.
+
+The streaming response owns its reader and temporary connection callbacks.
+Peer EOF closes that connection, and the existing close callback cancels only
+the owned reader. Both callbacks are restored when streaming finishes. Native
+Bun passes `undefined` on disconnect. The fixture checks this reason and exactly
+one cancellation for a stream and a custom async iterator. An async generator
+already awaiting an unrelated unresolved promise cannot be preempted by its
+`return()` method; native Bun has the same limit.
+
+The fetch adapter uses `signal.aborted` to select the original reason, including
+null and other falsy values. The header-wait path has the same identity contract.
+The new fixtures are `net-bun-response-length`, `net-bun-response-disconnect`,
+and `net-fetch-abort-reasons`. They failed on all three baseline guests before
+the production changes. Native output, baseline logs, artifact hashes, and the
+focused eight-file suite replay are retained under
+`/work/reports/bun-wasm-http-scoreboard-20261018/review-r1/` until coordinator
+acceptance of PR #80. This replay uses Bun suite revision
+`d71508d31edf06765c12adf0df137ef531539f68`, independently of the earlier
+180-file census above.
 
 ## Earlier HTTP upgrade measurements
 

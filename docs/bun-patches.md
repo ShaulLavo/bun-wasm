@@ -1741,6 +1741,13 @@ body chunks without waiting for EOF. Each socket write finishes before another
 chunk is read. Fixed byte bodies retain their existing Content-Length path.
 These adapters use Bun's unchanged tests at
 `5e0baa66516f3af00b008cdf1521c681317741e8` as behavioral references.
+The review refinement uses native Bun 1.4.2 as a behavioral reference. Unknown-
+length Bun response streams ignore a supplied Content-Length and use chunked
+framing. The response reader owns its EOF and close callbacks, which cancel it
+with native Bun's undefined disconnect reason and leave externally locked
+streams alone. Fetch body and header waits preserve the exact AbortSignal
+reason, including null and other falsy values. These are original adapter
+corrections; no native Bun or Node source is copied.
 Node request dispatch retains its existing complete-upload behavior.
 
 HTTPS requests continue to use the host's TLS fetch transport. The raw socket

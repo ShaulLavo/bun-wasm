@@ -9,7 +9,7 @@
   "use strict";
   const native = internal.native;
   const caps = native.hostCaps;
-  const { Request, Response, Headers, ReadableStream, DOMException } = internal.web;
+  const { Request, Response, Headers } = internal.web;
 
   const AGAIN = -2;
 
@@ -152,7 +152,7 @@
       if (!signal) return;
       onAbort = () => {
         closeHandle();
-        reject(signal.reason || new DOMException("The operation was aborted.", "AbortError"));
+        reject(signal.reason);
       };
       if (signal.aborted) onAbort();
       else signal.addEventListener("abort", onAbort, { once: true });

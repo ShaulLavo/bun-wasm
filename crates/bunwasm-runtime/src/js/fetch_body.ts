@@ -16,9 +16,6 @@
       done = true;
       options.onEnd?.();
     }
-    function abortReason(): unknown {
-      return options.signal?.reason ?? new DOMException("The operation was aborted.", "AbortError");
-    }
     return new ReadableStream({
       type: "bytes",
       pull(controller: ReadableByteStreamController) {
@@ -26,12 +23,12 @@
         return new Promise<void>((resolve, reject) => {
           function fail(error: unknown): void {
             finish();
-            reject(options.signal?.aborted ? abortReason() : error);
+            reject(options.signal?.aborted ? options.signal.reason : error);
           }
           options.addWaiter({
             step() {
               if (done) { resolve(); return true; }
-              if (options.signal?.aborted) { fail(abortReason()); return true; }
+              if (options.signal?.aborted) { fail(options.signal.reason); return true; }
               const chunk = options.read(options.handle);
               if (chunk === options.again) return false;
               if (chunk === 0) {

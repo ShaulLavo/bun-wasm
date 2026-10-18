@@ -3,6 +3,7 @@
   type Connection = {
     closed: boolean;
     onClose?: (() => void) | null;
+    onEnd?: (() => void) | null;
     write(bytes: Uint8Array, callback?: (error?: unknown) => void): void;
     destroy(error?: unknown): void;
   };
@@ -34,35 +35,39 @@
     throw new TypeError("Expected a string, ArrayBuffer or ArrayBufferView in the response body");
   }
 
-  async function writeChunk(connection: Connection, bytes: Uint8Array, chunked: boolean): Promise<void> {
+  async function writeChunk(connection: Connection, bytes: Uint8Array): Promise<void> {
     if (!bytes.length) return;
-    if (chunked) await write(connection, encoder.encode(`${bytes.length.toString(16)}\r\n`));
+    await write(connection, encoder.encode(`${bytes.length.toString(16)}\r\n`));
     await write(connection, bytes);
-    if (chunked) await write(connection, crlf);
+    await write(connection, crlf);
   }
 
   async function stream(connection: Connection, response: BodyResponse, source: ReadableStream<unknown>, pairs: Pair[], serialize: Serialize, reportError: (error: unknown) => void): Promise<boolean> {
     if (response.bodyUsed || source.locked) throw new TypeError("Body already used");
     const reader = source.getReader();
     const previousClose = connection.onClose;
+    const previousEnd = connection.onEnd;
     const closed = () => {
       previousClose?.();
       void reader.cancel().catch(reportError);
     };
+    const ended = () => {
+      previousEnd?.();
+      connection.destroy();
+    };
     connection.onClose = closed;
+    connection.onEnd = ended;
     response._bodyUsed = true;
-    const length = response.headers.get("content-length");
-    const chunked = length === null;
-    pairs.push(chunked ? ["transfer-encoding", "chunked"] : ["content-length", length]);
+    pairs.push(["transfer-encoding", "chunked"]);
     try {
       await write(connection, serialize(response.status, response.statusText, pairs));
       while (!connection.closed) {
         const result = await reader.read();
         if (result.done) break;
-        await writeChunk(connection, chunkBytes(result.value), chunked);
+        await writeChunk(connection, chunkBytes(result.value));
       }
       if (connection.closed) return false;
-      if (chunked) await write(connection, terminal);
+      await write(connection, terminal);
       return true;
     } catch (error) {
       reportError(error);
@@ -70,6 +75,7 @@
       return false;
     } finally {
       if (connection.onClose === closed) connection.onClose = previousClose;
+      if (connection.onEnd === ended) connection.onEnd = previousEnd;
       reader.releaseLock();
     }
   }
