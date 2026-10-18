@@ -415,3 +415,15 @@ fn a_completed_unreaped_job_rejects_new_members() {
     assert_eq!(p.spawn(&serde_json::to_vec(&meta).unwrap()), CHILD);
     assert_eq!(p.wait_job(job, 0), Ok(0));
 }
+
+#[test]
+fn oversized_json_job_ids_do_not_saturate_into_the_root_job() {
+    let mut processes = processes();
+    for job in [2147483648u64, 4294967295, 9007199254740992] {
+        let bytes = serde_json::to_vec(&serde_json::json!({"executable":"bun","argv":[],"env":{},"cwd":"/","job":job,"fds":[]})).unwrap();
+        assert!(Request::decode(&bytes).is_ok());
+        assert_eq!(processes.spawn(&bytes), SRCH);
+        assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
+    }
+    assert_eq!(processes.runtime.state.lock().unwrap().processes.len(), 1);
+}

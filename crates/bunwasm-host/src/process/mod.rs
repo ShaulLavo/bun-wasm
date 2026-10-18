@@ -664,6 +664,17 @@ impl Processes {
 
     /// Poll is level-triggered and never consumes a child or job result.
     pub fn poll(&self, subscriptions: &[u8], timeout: i32) -> Result<Vec<u8>, i32> {
+        self.poll_with_files(subscriptions, timeout, |_| false)
+    }
+
+    /// Native filesystem operations are synchronous, so local files and
+    /// directories are immediately ready just like canonical file resources.
+    pub fn poll_with_files(
+        &self,
+        subscriptions: &[u8],
+        timeout: i32,
+        is_file: impl Fn(i32) -> bool,
+    ) -> Result<Vec<u8>, i32> {
         if timeout < -1 || subscriptions.len() % 16 != 0 {
             return Err(INVAL);
         }
@@ -684,6 +695,7 @@ impl Processes {
                 let kind = u32::from_le_bytes(sub[..4].try_into().unwrap());
                 let id = i32::from_le_bytes(sub[4..8].try_into().unwrap());
                 let (ready, hangup) = match kind {
+                    0 | 1 if is_file(id) => (true, false),
                     0 | 1 => descriptors::get(&self.fds, id)?.readiness(kind == 1, &self.notify),
                     2 => match self.wait(id) {
                         Ok(_) => (true, false),
