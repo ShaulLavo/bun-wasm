@@ -1007,9 +1007,7 @@
       return this._stream;
     }
     clone() {
-      if (this.bodyUsed || this._stream?.locked) throw new TypeError("Body already used");
-      let body = this._body;
-      if (this._stream) [this._stream, body] = bodyStreams.tee(this._stream);
+      const body = bodyStreams.clone(this);
       const copy = new Response(body, { status: this.#status, statusText: this.#statusText, headers: this.#headers });
       copy.#url = this.#url;
       return copy;
@@ -1073,9 +1071,7 @@
       return this._stream;
     }
     clone() {
-      if (this.bodyUsed || this._stream?.locked) throw new TypeError("Body already used");
-      let body = this._body;
-      if (this._stream) [this._stream, body] = bodyStreams.tee(this._stream);
+      const body = bodyStreams.clone(this);
       return new Request(this, { body });
     }
     get [Symbol.toStringTag]() {

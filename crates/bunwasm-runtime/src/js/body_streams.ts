@@ -10,5 +10,17 @@
     if (bytes) for (const branch of branches) bodies.set(branch, bytes);
     return branches;
   }
-  return { remember, tee, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
+  type Body = {
+    readonly bodyUsed: boolean;
+    _body: Uint8Array | null;
+    _stream: ReadableStream<unknown> | null;
+  };
+  function clone(body: Body): Uint8Array | ReadableStream<unknown> | null {
+    if (body.bodyUsed || body._stream?.locked) throw new TypeError("Body already used");
+    if (!body._stream) return body._body;
+    const [source, copy] = tee(body._stream);
+    body._stream = source;
+    return copy;
+  }
+  return { remember, tee, clone, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
 })

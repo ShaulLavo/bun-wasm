@@ -23,11 +23,20 @@ function tsv(text: string): string[][] {
 type Failure = { file: string; test: string; error: string };
 function failures(path: string): Failure[] {
   const [header, ...rows] = tsv(readFileSync(path, "utf8"));
-  const columns = ["file", "category", "topic", "test", "error"].map(name => header.indexOf(name));
-  if (columns.some(index => index < 0)) throw new Error("Missing scoreboard columns");
-  const [file, category, topic, test, error] = columns;
+  if (!header) throw new Error("Missing scoreboard header");
+  const column = (name: string): number => {
+    const index = header.indexOf(name);
+    if (index < 0) throw new Error(`Missing scoreboard column ${name}`);
+    return index;
+  };
+  const file = column("file"), category = column("category"), topic = column("topic");
+  const test = column("test"), error = column("error");
   return rows.filter(row => row[category] === "d" && row[topic] === "HTTP/server/fetch/WebSocket semantics")
-    .map(row => ({ file: row[file], test: row[test], error: row[error] }));
+    .map(row => {
+      const fileName = row[file], testName = row[test], message = row[error];
+      if (fileName === undefined || testName === undefined || message === undefined) throw new Error("Incomplete scoreboard row");
+      return { file: fileName, test: testName, error: message };
+    });
 }
 
 type Result = { file: string; first_errors: string[]; excerpt: string; fully_passing: boolean; timed_out: boolean; complete: boolean; exit: number; counts: { pass: number; fail: number; skip: number; todo: number; errors: number } };

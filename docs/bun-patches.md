@@ -1747,7 +1747,10 @@ framing. The response reader owns its EOF and close callbacks, which cancel it
 with native Bun's undefined disconnect reason and leave externally locked
 streams alone. Fetch body and header waits preserve the exact AbortSignal
 reason, including null and other falsy values. These are original adapter
-corrections; no native Bun or Node source is copied.
+corrections; no native Bun or Node source is copied. The shared body-stream
+helper owns clone validation and tee metadata for Request and Response. The
+strictly typed stream generator produces byte-identical output for its pinned
+input.
 Node request dispatch retains its existing complete-upload behavior.
 
 HTTPS requests continue to use the host's TLS fetch transport. The raw socket

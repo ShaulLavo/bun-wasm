@@ -25,7 +25,8 @@
         "scripts/transpile-runtime.ts",
         "scripts/vendor-node-streams.mjs",
         "scripts/wasm-size-breakdown.ts",
-        "scripts/stream-polyfill-node-hooks.mjs"
+        "scripts/stream-polyfill-node-hooks.ts",
+        "scripts/http-suite-report.ts"
       ],
       "project": [
         "src/**/*.ts",
