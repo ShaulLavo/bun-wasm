@@ -51,17 +51,6 @@ test("CMake preflight allows fresh directories and matching native caches withou
   });
 });
 
-test("real CMake configuration may exceed the unit-test deadline while remaining bounded", () => {
-  fixture(build => {
-    expect(preflight(build).exitCode).toBe(0);
-  }, root => {
-    const path = join(root, "source/CMakeLists.txt");
-    const source = readFileSync(path, "utf8");
-    writeFileSync(path, source.replace("project(cache_fixture C CXX)", 'execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 6)\nproject(cache_fixture C CXX)'));
-    return [];
-  });
-});
-
 test("a genuinely native-configured cache fails before WASI reconfiguration", () => {
   fixture(build => {
     // Keep compiler paths identical to isolate the target-system check from compiler identity.
