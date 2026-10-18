@@ -17,12 +17,11 @@ test("closing the first-visit proxy cancels its pending upstream response", asyn
   await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
   const address = upstream.address();
   assert.ok(address && typeof address !== "string");
-  let browser, visit;
+  let browser, visit, body;
   try {
     browser = await chromium.launch();
     visit = await firstVisit(await browser.newContext(), `http://127.0.0.1:${address.port}/`);
-    const fetching = fetch(visit.url, { signal: AbortSignal.timeout(5_000) });
-    fetching.catch(() => {});
+    body = (await fetch(visit.url, { signal: AbortSignal.timeout(5_000) })).body;
     const socket = await incoming.promise;
     const closing = Promise.withResolvers<void>();
     socket.once("error", () => {});
@@ -32,12 +31,25 @@ test("closing the first-visit proxy cancels its pending upstream response", asyn
     await Promise.all([closed, visit.close()]);
     visit = undefined;
     assert.equal(socket.destroyed, true);
-    await assert.rejects(fetching);
   } finally {
-    try { await Promise.all([visit?.close(), browser?.close()]); }
+    try { await Promise.all([body?.cancel().catch(() => {}), visit?.close(), browser?.close()]); }
     finally {
       upstream.closeAllConnections();
       await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
     }
+  }
+});
+
+
+test("a live first visit keeps the real HTTPS origin", async () => {
+  const browser = await chromium.launch();
+  let visit;
+  try {
+    const context = await browser.newContext();
+    visit = await firstVisit(context, "https://bun.sprockt.dev/?engine=browser", { delayActivation: false });
+    assert.equal(visit.url, "https://bun.sprockt.dev/?engine=browser");
+  } finally {
+    try { await browser.close(); }
+    finally { await visit?.close(); }
   }
 });

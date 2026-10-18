@@ -71,7 +71,7 @@ async function check(browserName, engine) {
       await installHmrConnection(context);
       const url = new URL(base);
       url.searchParams.set("engine", engine);
-      visit = await firstVisit(context, url.href);
+      visit = await firstVisit(context, url.href, { delayActivation: url.protocol !== "https:" });
       page = await context.newPage();
       page.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
       page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));
