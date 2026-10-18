@@ -1,0 +1,73 @@
+{
+  "name": "bun-wasm",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "browser": "./src/index.ts",
+      "node": "./dist/package/index.js",
+      "default": "./src/index.ts"
+    },
+    "./worker": {
+      "types": "./src/worker-entry.ts",
+      "bun": "./src/worker-entry.ts",
+      "browser": "./src/worker-entry.ts",
+      "node": "./dist/package/worker-entry.js",
+      "default": "./src/worker-entry.ts"
+    },
+    "./asset": {
+      "types": "./src/assets.ts",
+      "bun": "./src/assets.ts",
+      "browser": "./src/assets.ts",
+      "node": "./dist/package/assets.js",
+      "default": "./src/assets.ts"
+    }
+  },
+  "files": [
+    "dist/package",
+    "build.ts",
+    "prepare.ts",
+    "README.md",
+    "src/index.ts",
+    "src/assets.ts",
+    "src/bun-adapter.ts",
+    "src/guest-asset.generated.ts",
+    "src/worker-entry.ts",
+    "web/src/worker.ts",
+    "web/src/engine-host.js",
+    "web/src/engine-host.d.ts",
+    "web/src/crypto-host.js",
+    "web/src/crypto-inputs.js",
+    "web/src/default-signal.ts",
+    "web/src/promise-reactions.ts",
+    "web/src/buffer-transfer.ts",
+    "web/src/native-stream-state.ts",
+    "web/src/content-modules.ts",
+    "web/src/subprocess.ts",
+    "web/src/worker-pipes.ts",
+    "web/src/net"
+  ],
+  "scripts": {
+    "build": "bun build.ts",
+    "prepare": "bun prepare.ts",
+    "check": "tsc -p tsconfig.package.json",
+    "test": "bun test ./tests/package/*.test.ts",
+    "generate-guest": "bun scripts/guest-artifact.ts",
+    "publish-guest": "bun scripts/publish-guest.ts"
+  },
+  "peerDependencies": {
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e41f4cdd6eaa376888b4eb24d6557789b98b59f9"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2",
+    "vite": "8.3.4",
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e41f4cdd6eaa376888b4eb24d6557789b98b59f9"
+  },
+  "trustedDependencies": [
+    "waffle"
+  ]
+}
