@@ -2864,12 +2864,16 @@ versions, effective host compiler commands and paths, compiler/include/linker en
 script before accepting an existing cache; a failed compiler probe or missing or mismatched receipt on a
 nonempty cache is an error rather than a silent reuse of older libc inputs. `jsc/common.sh` extends
 the JSC prebuild fingerprint with that receipt and the effective toolchain, and `scripts/build-bun-jsc.sh`
-requires the matching stamp before linking a guest.
+requires the matching stamp before linking a guest. Each guest build also checks that the clean
+imported Bun tree matches the checked-in patch series before compilation. Its final optimized Wasm
+gets the shared [guest build receipt](guest-build-receipts.md), recording the vendor commit/tree,
+patched-sysroot receipt hash and exact artifact hash/size. The build refuses a source or input-receipt
+change before writing that sidecar; browser acceptance and publication can consume the same format.
 
 `crates/bunwasm-runtime/src/natives.rs` is original bun-wasm code, not a copied wasi-libc or Node
 implementation. Its open-file table stores real descriptors, allowing inherited fd3/fd4 resources
 to use the same read/write/fstat/ftruncate namespace and preserving shared open-file cursors. Empty
-writes validate descriptors, interrupted writes retry, and later failures return committed partial
+reads and writes validate descriptors, negative closes return EBADF, interrupted writes retry, and later failures return committed partial
 progress. Direct writes flush both output streams first because inherited descriptors can alias
 stdout or stderr. Native inherited fstat preserves the libc mode, including pipes and devices.
 On WASI, preview1 has no FIFO tag and both process hosts encode pipes as UNKNOWN.
