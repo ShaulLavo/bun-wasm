@@ -58,7 +58,8 @@ test("failed registration rolls back only this installation", () => {
 
 test.each(["quickjs", "jsc", "browser"] as const)("external %s launch delegates to Waffle's generic worker service", async engine => {
   const f = fixture();
-  const install = installBunAdapters(f.runtime, { workerUrl: "worker.js", module });
+  const workerUrl = "/assets/worker-entry-fixture.js";
+  const install = installBunAdapters(f.runtime, { workerUrl, module });
   const launch = f.adapters.get(`bun:${engine}`)!;
   let launched: unknown;
   let terminated = false;
@@ -74,8 +75,10 @@ test.each(["quickjs", "jsc", "browser"] as const)("external %s launch delegates 
   await expect(accepted).resolves.toBe(handle);
   expect(terminated).toBe(false);
   expect(launched).toMatchObject({
-    workerUrl: "worker.js",
-    request: { engine, adapter: "bun", module, args: ["bun", "run"], env: { TEST: "1", PWD: "/tmp" }, net: null },
+    workerUrl,
+    // Public Vite workers do not have the site's named module-serving cache. Browser-engine
+    // cyclic imports therefore remain outside this entry's capabilities.
+    request: { engine, adapter: "bun", module, args: ["bun", "run"], env: { TEST: "1", PWD: "/tmp" }, net: null, moduleCache: null },
   });
   install.dispose();
 });

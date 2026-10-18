@@ -83,6 +83,14 @@ launchers. The browser engine retains direct host `fetch`, subject to browser re
 as CORS; it does not gain a shared socket namespace. Sharing networking between processes is
 tracked in [browser runtime plan, row 6](plans/browser-runtime.md#build-plan).
 
+### Browser-engine import cycles
+
+With `engine: "browser"`, the public Vite worker supports acyclic ESM imports only. Circular ESM
+imports fail with `ERR_CIRCULAR_IMPORT`: the bundled `/assets/worker-entry-<hash>.js` worker does not
+have a named module store. Cycles need a named module store and service-worker control. The site's
+scoped `/__bunwasm/worker.js` path retains that support; the public package does not install it.
+This restriction does not apply to QuickJS/JSC module loading. See [browser-engine module serving](docs/engine-browser.md#es-modules-native-with-live-bindings).
+
 ### Worker bundling
 
 The example above is the tested Vite pattern. Vite must emit ES module workers:
@@ -116,8 +124,9 @@ before compiling. It accepts raw Wasm, gzip bodies, and transparently HTTP-decod
 The loader snapshots integrity metadata at call time and stops streaming once the decompressed
 body exceeds the declared size, or the compressed body exceeds that size plus a 64 KiB allowance.
 A URL override still uses the selected descriptor's integrity values; it does not disable checking.
-A compiled `module` bypasses network access for tests and offline applications. No site-relative
-URL, local checkout path, localStorage, service worker, or demo cache is required by this API.
+A compiled `module` bypasses network access for tests and offline applications. The **asset loader**
+requires no site-relative URL, local checkout path, localStorage, service worker, or demo cache.
+This does not remove the browser engine's separate module-serving requirement for cyclic imports.
 
 Immutable guests live outside static-site deployments. Publication and descriptor generation are
 documented in [site/README.md](site/README.md). A guest must come from the matching host source
