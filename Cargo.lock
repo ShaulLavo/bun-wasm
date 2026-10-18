@@ -1495,7 +1495,6 @@ dependencies = [
  "subtle",
  "tar",
  "url",
- "wasi",
  "wasmi",
  "x25519-dalek",
  "zstd-sys",

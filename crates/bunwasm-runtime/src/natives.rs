@@ -12,10 +12,8 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-#[cfg(not(target_os = "wasi"))]
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::os::fd::AsRawFd;
-#[cfg(not(target_os = "wasi"))]
 use std::os::fd::FromRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
@@ -194,7 +192,6 @@ pub struct FdTable {
     files: HashMap<i32, File>,
 }
 
-#[cfg(not(target_os = "wasi"))]
 fn descriptor_metadata(fd: i32) -> io::Result<(fs::Metadata, u32)> {
     let mut stat = MaybeUninit::<libc::stat>::uninit();
     // Validate the descriptor before borrowing it. Guest native calls are synchronous;
@@ -207,49 +204,21 @@ fn descriptor_metadata(fd: i32) -> io::Result<(fs::Metadata, u32)> {
     // owned by their host until an explicit close or process exit.
     let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd as _) });
     let mode = unsafe { stat.assume_init() }.st_mode as u32;
+    // Preview1 has no FIFO tag: both process hosts encode pipe endpoints as
+    // UNKNOWN, which libc preserves with no POSIX type bits. Adapt that host
+    // representation without bypassing fd_filestat_get capability checks.
+    #[cfg(target_os = "wasi")]
+    let mode = if mode & 0o170000 == 0 {
+        mode | 0o010000
+    } else {
+        mode
+    };
     Ok((file.metadata()?, mode))
 }
 
-#[cfg(not(target_os = "wasi"))]
 fn descriptor_stat(fd: i32) -> io::Result<Val> {
     let (meta, mode) = descriptor_metadata(fd)?;
     Ok(stat_record(&meta, Some(mode)))
-}
-
-#[cfg(target_os = "wasi")]
-fn descriptor_stat(fd: i32) -> io::Result<Val> {
-    // Preview1 has no FIFO tag. Waffle and the native process host identify pipe
-    // endpoints as UNKNOWN. Read typed preview1 metadata so those inherited pipes
-    // retain their host-specific FIFO identity rather than having no POSIX type.
-    // Capability errors still propagate; this does not bypass descriptor rights.
-    let stat = unsafe { wasi::fd_filestat_get(fd as wasi::Fd) }
-        .map_err(|error| io::Error::from_raw_os_error(i32::from(error.raw())))?;
-    let kind = match stat.filetype {
-        wasi::FILETYPE_UNKNOWN => 0o010000,
-        wasi::FILETYPE_BLOCK_DEVICE => 0o060000,
-        wasi::FILETYPE_CHARACTER_DEVICE => 0o020000,
-        wasi::FILETYPE_DIRECTORY => 0o040000,
-        wasi::FILETYPE_REGULAR_FILE => 0o100000,
-        wasi::FILETYPE_SOCKET_DGRAM | wasi::FILETYPE_SOCKET_STREAM => 0o140000,
-        wasi::FILETYPE_SYMBOLIC_LINK => 0o120000,
-        _ => 0,
-    };
-    Ok(Record::new()
-        .set("dev", stat.dev as f64)
-        .set("ino", stat.ino as f64)
-        .set("mode", (kind | 0o644) as f64)
-        .set("nlink", stat.nlink as f64)
-        .set("uid", 0)
-        .set("gid", 0)
-        .set("rdev", 0)
-        .set("size", stat.size as f64)
-        .set("blksize", 4096)
-        .set("blocks", stat.size.div_ceil(512) as f64)
-        .set("atimeMs", stat.atim as f64 / 1_000_000.0)
-        .set("mtimeMs", stat.mtim as f64 / 1_000_000.0)
-        .set("ctimeMs", stat.ctim as f64 / 1_000_000.0)
-        .set("birthtimeMs", 0)
-        .into())
 }
 
 fn open_options(flags: &str) -> OpenOptions {

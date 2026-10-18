@@ -359,7 +359,8 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
     const executor = createBunExecutor(request, host);
     let call!: (...args: number[]) => unknown;
     let waits = 0, scans = 0;
-    let result: unknown, nativeResult: unknown;
+    let result: unknown;
+    let nativeResult: ReturnType<typeof actualControl.controlWait> | undefined;
     let original = -1;
     try {
       await bootstrap(request, { ...executor,
@@ -381,7 +382,7 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
           if (route === "runtime_proc") { view.setUint32(0, 0, true); view.setUint32(4, fd, true); }
           else { view.setUint8(8, 1); view.setUint32(16, fd, true); }
           original = controlLoad(state.wake, 0);
-          observeWait = (word, index, _expected) => {
+          observeWait = (word, index, expected) => {
             waits++;
             expect(word.buffer).toBe(state.wake.buffer);
             expect(word.byteOffset + index * 4).toBe(state.wake.byteOffset);

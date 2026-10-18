@@ -2868,10 +2868,10 @@ to use the same read/write/fstat/ftruncate namespace and preserving shared open-
 writes validate descriptors, interrupted writes retry, and later failures return committed partial
 progress. Direct writes flush both output streams first because inherited descriptors can alias
 stdout or stderr. Native inherited fstat preserves the libc mode, including pipes and devices.
-On WASI the original adapter reads typed preview1 metadata through the existing `wasi` 0.11.1
-bindings instead: preview1 has no FIFO tag, and both process hosts encode pipes as UNKNOWN.
-The adapter maps that host pipe representation (which has no POSIX file-type bits) to FIFO and
-preserves preview1's device, socket and filesystem kinds. No binding implementation is copied.
+On WASI, preview1 has no FIFO tag and both process hosts encode pipes as UNKNOWN.
+The original adapter maps that host pipe representation (which libc preserves with no POSIX
+file-type bits) to FIFO, preserving device, socket and filesystem kinds and propagating
+metadata capability errors. No upstream implementation or new binding dependency is copied.
 The original `src/js/node_fs.js` Stats predicates test those type bits rather than hard-coding false.
 The browser process controls create a real filesystem file and inherited pipe, verify shared open-file
 cursors and pipe/device metadata, reject empty writes to closed descriptors, and preserve buffered

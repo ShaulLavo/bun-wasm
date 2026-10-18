@@ -1,6 +1,6 @@
 import { createRuntime, type Runtime, type ProcessService } from "waffle";
 import { createWorkerProcessTransport, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
-import { installBunAdapters } from "../../src/bun-adapter.js";
+import { installBunAdapters, type BunAdapterOptions } from "../../src/bun-adapter.js";
 import { runtimeProcFixture } from "./runtime-proc-fixtures";
 import { bunRuntimeProcFixture, bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
 
@@ -81,7 +81,7 @@ try {
     const workerUrl = new URL("./worker.js", location.href).href;
     // Explicit opt-in only: this mode exercises the package's public default descriptor,
     // with no engine/module/asset/URL override and no local artifact fallback.
-    const options = publishedDefault ? { workerUrl } : { workerUrl, engine,
+    const options: BunAdapterOptions = publishedDefault ? { workerUrl } : { workerUrl, engine,
       module: await WebAssembly.compileStreaming(fetch("./bun-guest.wasm")),
       executables: ["/bin/bun", "/bin/node"] };
     // Disposal must unregister aliases and adapters, not merely clear a private installed flag.

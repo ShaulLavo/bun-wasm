@@ -1,6 +1,7 @@
+import { createNotifyObserver } from "./notify-observer";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import type { Runtime } from "waffle";
-import { afterAll, expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { DescriptorTable } from "waffle/core/descriptors";
@@ -13,16 +14,7 @@ import { startRun, type RunOptions } from "../src/runner";
 import type { RunRequest } from "../src/worker";
 import type { SharedFilesystem } from "../src/shared-fs";
 
-// Observe the existing public boundary, not mutable globals captured by Waffle.
-// Dependency injection is confined to this test harness; Waffle's runtime has no hook.
-const intrinsicsPath = Bun.resolveSync("waffle/proc/control", import.meta.dir).replace(/control\.(ts|js)$/, "intrinsics.$1");
-const actualIntrinsics = { ...await import(intrinsicsPath) };
-let observeNotify: typeof Atomics.notify | undefined;
-mock.module(intrinsicsPath, () => ({ ...actualIntrinsics,
-  atomicsNotify: (...args: Parameters<typeof Atomics.notify>) =>
-    (observeNotify ?? actualIntrinsics.atomicsNotify)(...args),
-}));
-afterAll(() => { mock.module(intrinsicsPath, () => actualIntrinsics); });
+const notifyObserver = createNotifyObserver();
 
 function imported(name: string, namespace = "runtime_proc"): WebAssembly.Module {
   const text = (value: string) => [value.length].concat(Array.from(new TextEncoder().encode(value)));
@@ -415,9 +407,9 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
       const generation = Atomics.load(word, 0);
       // Reuse the browser causal-wake negative control on the real production request,
       // never a manufactured word. Even suppressed notify must advance this generation.
-      observeNotify = (selected, index = 0) => {
+      notifyObserver.current = (selected, index = 0) => {
         if (selected.buffer === word.buffer && selected.byteOffset + index * 4 === word.byteOffset) { suppressed++; return 0; }
-        return actualIntrinsics.atomicsNotify(selected, index);
+        return notifyObserver.notify(selected, index);
       };
       if (delivery === "kill") await state.broker.kill(pid, 2);
       else await state.broker.killJob(shared.job, 2);
@@ -430,7 +422,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
       expect(takeSignal(shared.signals.signalState)).toBe(0);
       expect(suppressed).toBe(1);
     } finally {
-      observeNotify = undefined;
+      notifyObserver.current = undefined;
       try { await state.dispose(); } finally { globalThis.Worker = nativeWorker; }
     }
   });
