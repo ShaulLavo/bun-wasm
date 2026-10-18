@@ -58,10 +58,12 @@ services, terminal streams, shell jobs, or the Runtime lifetime. Registration fa
 all registrations already made by that installation. Unrelated registrations are preserved.
 Installation creates parent directories and a small executable marker at each registered absolute
 path. A different existing file or directory rejects with `BunWasmExecutableConflictError`
-(`BUN_WASM_EXECUTABLE_CONFLICT`) and is never deliberately replaced. Matching markers can be
-reused; disposal leaves them in the caller-owned filesystem, so reinstall works without deleting
-files that existing processes might use. The installer currently checks and writes files separately,
-so those operations are not atomic against concurrent external writers.
+(`BUN_WASM_EXECUTABLE_CONFLICT`) and is never overwritten. Markers are created atomically with
+Waffle's exclusive-write option, so an external writer that wins after the initial checks keeps
+its file or directory. A matching marker can be shared, including a concurrent winner; failed
+installation rolls back only paths it successfully created, not those shared markers. Unrelated
+storage errors remain errors. Disposal leaves markers in the caller-owned filesystem, so
+reinstall works without deleting files that existing processes might use.
 Callers that register extra programs with Waffle are responsible for their own unregister handles.
 
 ### Current networking limitations
@@ -123,8 +125,10 @@ bun run build
 To repeat the public default's real-process acceptance after rebuilding the matching browser guest,
 explicitly opt into network downloads. The gate compares the build receipt with the descriptor and
 checks that each real guest scenario fetches the public immutable URL, never the local artifact.
-Its generic byte-fixture control stays artifact-free; inherited-fd libc limitations remain explicit
-expected failures. Browser profiles, listener and scratch bundles are removed on exit.
+Its generic byte-fixture control stays artifact-free. The inherited-fd controls use a real
+filesystem file: the external root consumes its prefix, the child reads the shared cursor at fd4,
+and fd3 remains the inherited output descriptor. Browser profiles, listener and scratch bundles
+are removed on exit.
 
 ```sh
 BUN_WASM_RUNTIME_PROC_ARTIFACT="$PWD/dist/bun-browser.wasm" \

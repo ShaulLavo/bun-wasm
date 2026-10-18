@@ -1,3 +1,4 @@
+import { createNotifyObserver } from "./notify-observer";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { Worker } from "node:worker_threads";
@@ -6,6 +7,8 @@ import { setSignalDisposition, SIGNAL_PENDING } from "waffle/proc/signals";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import type { SharedFilesystem } from "../src/shared-fs";
+
+const notifyObserver = createNotifyObserver();
 
 async function proveWake(operation: "kill" | "killJob", suppressNotify: boolean, deadlineMilliseconds = 2500) {
   // This run owns one worker, delivery/deadline timers, and its broker. Teardown is installed
@@ -19,17 +22,16 @@ async function proveWake(operation: "kill" | "killJob", suppressNotify: boolean,
   const broker = new SubprocessBroker("http://localhost/worker.js", runtime);
   const selected = state.wake;
   const before = Atomics.load(selected, 0);
-  const nativeNotify = Atomics.notify;
   let worker: Worker | undefined, deliveryTimer: ReturnType<typeof setTimeout> | undefined;
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let sampledGeneration = 0, suppressed = 0;
   try {
     await broker.adoptRuntimeRoot(transport);
     setSignalDisposition(signals.signalState, 2, 2);
-    if (suppressNotify) Atomics.notify = ((word: Int32Array, index: number, count?: number) => {
+    if (suppressNotify) notifyObserver.current = (word, index = 0) => {
       if (word.buffer === selected.buffer && word.byteOffset + index * 4 === selected.byteOffset) { suppressed++; return 0; }
-      return nativeNotify(word, index, count);
-    }) as typeof Atomics.notify;
+      return notifyObserver.notify(word, index);
+    };
     const result = await new Promise<{ generation: number; result: string; pending: number; interrupt: number; sequence: number }>((resolve, reject) => {
       deadlineTimer = setTimeout(() => reject(new Error("signal wait deadline exceeded")), deadlineMilliseconds);
       worker = new Worker(new URL("./fixtures/signal-wake-worker.ts", import.meta.url), { workerData: { transport } });
@@ -53,7 +55,7 @@ async function proveWake(operation: "kill" | "killJob", suppressNotify: boolean,
     expect(result.sequence).toBeGreaterThan(before);
     if (suppressNotify) expect(suppressed).toBeGreaterThan(0);
   } finally {
-    Atomics.notify = nativeNotify;
+    notifyObserver.current = undefined;
     if (deliveryTimer) clearTimeout(deliveryTimer);
     if (deadlineTimer) clearTimeout(deadlineTimer);
     try { if (worker) await worker.terminate(); }

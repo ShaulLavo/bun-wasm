@@ -47,7 +47,7 @@ for (const artifact of ["", "dist/bun-browser.wasm"]) test(`real Bun acceptance 
   const result = Bun.spawnSync({ cmd: [process.execPath, driver],
     env: { ...process.env, BUN_WASM_RUNTIME_PROC_ARTIFACT: artifact }, stdout: "pipe", stderr: "pipe" });
   expect(result.exitCode).toBe(1);
-  expect(new TextDecoder().decode(result.stderr)).toContain("BUN_WASM_RUNTIME_PROC_ARTIFACT must name the explicit absolute matching rebuilt Bun browser artifact");
+  expect(new TextDecoder().decode(result.stderr)).toContain("BUN_WASM_RUNTIME_PROC_ARTIFACT must name the explicit absolute matching rebuilt Bun artifact for the selected engine");
   expect(new TextDecoder().decode(result.stdout)).not.toContain('"resources"');
 });
 

@@ -12,6 +12,7 @@ fn crypto(manifest: &Path, out: &Path) {
         "BUNWASM_BORINGSSL_SOURCE",
         "BUNWASM_BORINGSSL_BUILD",
         "WASI_SDK_PATH",
+        "BUN_WASM_SYSROOT",
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -27,7 +28,8 @@ fn crypto(manifest: &Path, out: &Path) {
     let build = std::env::var_os("BUNWASM_BORINGSSL_BUILD")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| out.join("boringssl"));
-    if !build.join("libcrypto.a").exists() {
+    // Reconfigure even an existing explicit cache: CMake tracks sysroot/compiler inputs.
+    {
         let mut configure = Command::new("cmake");
         configure
             .arg("-S")
@@ -95,9 +97,9 @@ fn crypto(manifest: &Path, out: &Path) {
     println!("cargo:rustc-link-search=native={}", build.display());
     println!("cargo:rustc-link-lib=static=crypto");
     if wasm {
-        let sdk = std::env::var("WASI_SDK_PATH").unwrap();
-        println!("cargo:rustc-link-search=native={sdk}/share/wasi-sysroot/lib/wasm32-wasip1/noeh");
-        println!("cargo:rustc-link-search=native={sdk}/share/wasi-sysroot/lib/wasm32-wasip1");
+        let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
+        println!("cargo:rustc-link-search=native={sysroot}/lib/wasm32-wasip1/noeh");
+        println!("cargo:rustc-link-search=native={sysroot}/lib/wasm32-wasip1");
         println!("cargo:rustc-link-lib=static=c++");
         println!("cargo:rustc-link-lib=static=c++abi");
     } else {

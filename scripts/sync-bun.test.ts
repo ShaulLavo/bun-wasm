@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-function fixture(run: (f: { root: string; repository: string; vendor: string; base: string; first: string; final: string; git: (cwd: string, ...args: string[]) => string; sync: () => ReturnType<typeof Bun.spawnSync> }) => void) {
+function fixture(run: (f: { root: string; repository: string; vendor: string; base: string; first: string; final: string; git: (cwd: string, ...args: string[]) => string; sync: (args?: string[]) => ReturnType<typeof Bun.spawnSync> }) => void) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-source-test-"));
   try {
     const repository = join(root, "upstream"), vendor = join(root, "vendor", "bun");
@@ -37,7 +37,7 @@ function fixture(run: (f: { root: string; repository: string; vendor: string; ba
     const script = readFileSync(new URL("./sync-bun.sh", import.meta.url), "utf8").replace(/^BUN_COMMIT=.*$/m, `BUN_COMMIT=${base}`);
     writeFileSync(join(root, "scripts", "sync-bun.sh"), script);
     writeFileSync(join(root, "env.sh"), 'export TMPDIR="$BUN_WASM_TEST_TMP"\n');
-    const sync = () => Bun.spawnSync(["bash", join(root, "scripts", "sync-bun.sh"), "--source-only"], {
+    const sync = (args: string[] = []) => Bun.spawnSync(["bash", join(root, "scripts", "sync-bun.sh"), "--source-only"].concat(args), {
       env: { ...process.env, BUN_WASM_TEST_TMP: root },
     });
     run({ root, repository, vendor, base, first, final, git, sync });
@@ -77,5 +77,28 @@ for (const untracked of [false, true]) test(`source sync refuses ${untracked ? "
     expect((result.stderr ?? "").toString()).toContain("has local changes; refusing");
     expect(readFileSync(path, "utf8")).toBe("keep this work\n");
     expect(git(vendor, "rev-parse", "HEAD")).toBe(first);
+  });
+});
+
+// Builds check the checked-in patch bytes without silently advancing source.
+test("source check rejects stale source without changing HEAD, then accepts synchronized source", () => {
+  fixture(({ repository, vendor, first, final, git, sync }) => {
+    const stale = sync(["--check"]);
+    expect(stale.exitCode).toBe(1);
+    expect((stale.stderr ?? "").toString()).toContain("differs from the checked-in patch series");
+    expect(git(vendor, "rev-parse", "HEAD")).toBe(first);
+    expect(sync().exitCode).toBe(0);
+    expect(sync(["--check"]).exitCode).toBe(0);
+    expect(git(vendor, "rev-parse", "HEAD")).toBe(final);
+    expect(git(repository, "worktree", "list", "--porcelain").match(/^worktree /gm)?.length).toBe(2);
+  });
+});
+
+test("source check never creates a missing checkout", () => {
+  fixture(({ repository, vendor, git, sync }) => {
+    git(repository, "worktree", "remove", vendor);
+    const result = sync(["--check"]);
+    expect(result.exitCode).toBe(1);
+    expect((result.stderr ?? "").toString()).toContain("missing vendor/bun checkout");
   });
 });

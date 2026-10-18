@@ -8,19 +8,25 @@ source "$root/env.sh"
 BUN_COMMIT=9510e74152073d850a18758ca41114d8f214ffa6
 bun_dir=$root/vendor/bun
 source_only=0
+check_only=0
 new_checkout=0
 sync_args=("$@")
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --source-only) source_only=1; shift ;;
+    --check) check_only=1; shift ;;
     --bun-dir) bun_dir=${2:?--bun-dir requires a path}; shift 2 ;;
-    *) echo "usage: $0 [--source-only] [--bun-dir PATH]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--source-only|--check] [--bun-dir PATH]" >&2; exit 2 ;;
   esac
 done
 
 # A linked worktree has a .git file, not a directory. Never replace an existing
 # directory that is not a Git checkout, or discard source changes during sync.
 if [[ ! -e "$bun_dir/.git" ]]; then
+  if [[ "$check_only" == 1 ]]; then
+    echo "error: missing vendor/bun checkout; run scripts/sync-bun.sh" >&2
+    exit 1
+  fi
   if [[ -e "$bun_dir" ]]; then
     echo "error: $bun_dir exists but is not a Git checkout" >&2
     exit 1
@@ -57,6 +63,14 @@ for patch in "${patches[@]}"; do
 done
 desired=$(GIT_INDEX_FILE="$scratch/index" git -C "$bun_dir" write-tree)
 current=$(git -C "$bun_dir" rev-parse 'HEAD^{tree}')
+if [[ "$check_only" == 1 ]]; then
+  if [[ "$current" != "$desired" ]]; then
+    echo "error: vendor/bun differs from the checked-in patch series; run scripts/sync-bun.sh" >&2
+    exit 1
+  fi
+  echo "vendor/bun source verified at $(git -C "$bun_dir" rev-parse HEAD) (tree $current)"
+  exit 0
+fi
 if [[ "$current" != "$desired" ]]; then
   if [[ "$(git -C "$bun_dir" rev-parse --verify 'wasm^{tree}' 2>/dev/null || true)" == "$desired" ]]; then
     target=$(git -C "$bun_dir" rev-parse wasm)

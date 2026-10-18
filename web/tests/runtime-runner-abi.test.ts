@@ -1,3 +1,4 @@
+import { createNotifyObserver } from "./notify-observer";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import type { Runtime } from "waffle";
 import { expect, test } from "bun:test";
@@ -9,10 +10,11 @@ import { WorkerPipeBroker } from "waffle/proc/worker-pipes";
 import { PipeController, attachPipePublicationRegistry, type PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { readOutcome } from "waffle/proc/outcome";
-import { suppressBudgetNotifications } from "./engine-interruption-probe";
 import { startRun, type RunOptions } from "../src/runner";
 import type { RunRequest } from "../src/worker";
 import type { SharedFilesystem } from "../src/shared-fs";
+
+const notifyObserver = createNotifyObserver();
 
 function imported(name: string, namespace = "runtime_proc"): WebAssembly.Module {
   const text = (value: string) => [value.length].concat(Array.from(new TextEncoder().encode(value)));
@@ -388,7 +390,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
       terminate() {}
     } as unknown as typeof Worker;
     const state = registryFixture();
-    let mutation: ReturnType<typeof suppressBudgetNotifications> | undefined;
+    let suppressed = 0;
     try {
       state.broker.register("/bin/fixture", { module: imported("signal"), adapter: "bun", engine });
       await state.broker.adoptRuntimeRoot(state.root);
@@ -405,19 +407,22 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
       const generation = Atomics.load(word, 0);
       // Reuse the browser causal-wake negative control on the real production request,
       // never a manufactured word. Even suppressed notify must advance this generation.
-      mutation = suppressBudgetNotifications(word);
+      notifyObserver.current = (selected, index = 0) => {
+        if (selected.buffer === word.buffer && selected.byteOffset + index * 4 === word.byteOffset) { suppressed++; return 0; }
+        return notifyObserver.notify(selected, index);
+      };
       if (delivery === "kill") await state.broker.kill(pid, 2);
       else await state.broker.killJob(shared.job, 2);
-      expect(mutation.count()).toBe(1);
+      expect(suppressed).toBe(1);
       expect(Atomics.load(word, 0)).toBe(generation + 1);
       expect(takeSignal(shared.signals.signalState)).toBe(2);
       expect(readOutcome(shared.signals.outcome)).toBeNull();
       expect(supervisor.get(pid)!.result).toBeNull();
       await new Promise(resolve => setTimeout(resolve, 12));
       expect(takeSignal(shared.signals.signalState)).toBe(0);
-      expect(mutation.count()).toBe(1);
+      expect(suppressed).toBe(1);
     } finally {
-      mutation?.restore();
+      notifyObserver.current = undefined;
       try { await state.dispose(); } finally { globalThis.Worker = nativeWorker; }
     }
   });

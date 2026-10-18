@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=BUN_WASM_SYSROOT");
     let package = "../../vendor/bun/package.json";
     println!("cargo:rerun-if-changed={package}");
     let text = std::fs::read_to_string(package).unwrap();
@@ -22,8 +23,6 @@ fn main() {
     ] {
         println!("cargo:rustc-link-arg-bin=bun-tools={flag}");
     }
-    let sdk = std::env::var("WASI_SDK_PATH").expect("source env.sh");
-    println!(
-        "cargo:rustc-link-arg-bin=bun-tools={sdk}/share/wasi-sysroot/lib/wasm32-wasip1/crt1-command.o"
-    );
+    let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
+    println!("cargo:rustc-link-arg-bin=bun-tools={sysroot}/lib/wasm32-wasip1/crt1-command.o");
 }

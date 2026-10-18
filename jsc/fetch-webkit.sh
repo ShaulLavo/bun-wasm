@@ -6,7 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 paths=(Source/JavaScriptCore Source/WTF Source/bmalloc Source/cmake Source/ThirdParty/unifdef
   Source/ThirdParty/xdgmime Tools/Scripts Tools/cmake)
 
-if [[ ! -d "$WEBKIT_DIR/.git" ]]; then
+if [[ ! -e "$WEBKIT_DIR/.git" ]]; then
   git init -q "$WEBKIT_DIR"
   git -C "$WEBKIT_DIR" remote add origin https://github.com/oven-sh/WebKit.git
   git -C "$WEBKIT_DIR" config remote.origin.promisor true
