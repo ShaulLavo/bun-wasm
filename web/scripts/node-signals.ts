@@ -1,5 +1,5 @@
 import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
-import { createSignalState, requestSignal, type SignalTransport } from "waffle/proc/signals";
+import { createSignalState, requestSignal, signalPending, type SignalTransport } from "waffle/proc/signals";
 
 /** The main Node thread and its root guest share the same signal and terminal-decision words. */
 export interface NodeSignalBuffers {
@@ -25,6 +25,7 @@ export function createNodeSignalController(source?: NodeSignalBuffers | SignalTr
   return {
     buffers,
     request(signal: number) { return requestSignal(transport, signal); },
+    pending() { return signalPending(transport); },
     finish(code: number, signal?: number) {
       return claimOutcome(transport.outcome, signal === undefined
         ? { kind: "exited", code: code & 0xff }
