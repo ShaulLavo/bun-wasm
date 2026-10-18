@@ -56,8 +56,8 @@ Installation creates parent directories and a small executable marker at each re
 path. A different existing file or directory rejects with `BunWasmExecutableConflictError`
 (`BUN_WASM_EXECUTABLE_CONFLICT`) and is never deliberately replaced. Matching markers can be
 reused; disposal leaves them in the caller-owned filesystem, so reinstall works without deleting
-files that existing processes might use. File checks and writes are not atomic against concurrent
-external writers because Waffle's host filesystem API does not yet offer exclusive creation.
+files that existing processes might use. The installer currently checks and writes files separately,
+so those operations are not atomic against concurrent external writers.
 Callers that register extra programs with Waffle are responsible for their own unregister handles.
 
 ### Current networking limitations

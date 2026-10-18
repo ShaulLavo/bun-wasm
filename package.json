@@ -61,13 +61,13 @@
     "publish-guest": "bun scripts/publish-guest.ts"
   },
   "peerDependencies": {
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#4087eae447fc536b6c0a78e5f14b8049be11c467"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#cbb138b55034c7a6988e385021d9e1251fea0e34"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "typescript": "^7.0.2",
     "vite": "8.3.4",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#4087eae447fc536b6c0a78e5f14b8049be11c467"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#cbb138b55034c7a6988e385021d9e1251fea0e34"
   },
   "trustedDependencies": [
     "waffle"

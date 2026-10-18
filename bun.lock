@@ -8,10 +8,10 @@
         "@types/bun": "^1.4.3",
         "typescript": "^7.0.2",
         "vite": "8.3.4",
-        "waffle": "git+https://github.com/ShaulLavo/waffle.git#4087eae447fc536b6c0a78e5f14b8049be11c467",
+        "waffle": "git+https://github.com/ShaulLavo/waffle.git#cbb138b55034c7a6988e385021d9e1251fea0e34",
       },
       "peerDependencies": {
-        "waffle": "git+https://github.com/ShaulLavo/waffle.git#4087eae447fc536b6c0a78e5f14b8049be11c467",
+        "waffle": "git+https://github.com/ShaulLavo/waffle.git#cbb138b55034c7a6988e385021d9e1251fea0e34",
       },
     },
   },
@@ -149,7 +149,7 @@
 
     "vite": ["vite@8.3.4", "", { "dependencies": { "lightningcss": "^1.33.0", "picomatch": "^4.0.7", "postcss": "^8.5.29", "rolldown": "~1.2.12", "tinyglobby": "^0.2.17" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^20.19.0 || >=22.12.0", "@vitejs/devtools": "^0.7.1", "esbuild": "^0.27.0 || ^0.28.0", "jiti": ">=1.21.0", "less": "^4.0.0", "sass": "^1.70.0", "sass-embedded": "^1.70.0", "stylus": ">=0.54.8", "sugarss": "^5.0.0", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "@vitejs/devtools", "esbuild", "jiti", "less", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-IftLE8phJhdNRIGNEV4JCCvfNScoZQVfcXaN8TQropWGJtOHcu+iAB9pHcuGvmEb/kddw0LBe/jS8ztdC6xdiQ=="],
 
-    "waffle": ["waffle@github:ShaulLavo/waffle#4087eae", {}, "ShaulLavo-waffle-4087eae", "sha512-Lr+FK4/9bZ1aSNx7I9RIDMCDA9TQDbLu6JCNzdhcs8dJCyyepFaDeuZmnbvgVmrrLxayMHyn52yomdN+/ViXRw=="],
+    "waffle": ["waffle@github:ShaulLavo/waffle#cbb138b", {}, "ShaulLavo-waffle-cbb138b", "sha512-ux2YniRU8M5Td/sBE4nCFrB1+mPktuh304u92xZHD7f8wJMdBrU5rDzFEKt72GOH8ss6s+hDqbFlELyJ9P9jhg=="],
 
     "@types/node/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
   }

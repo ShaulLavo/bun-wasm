@@ -2521,7 +2521,7 @@ as the rest of the spawn facade tests.
 
 The former Bun-only `SubprocessHost`, startup supervisor and startup-probe helper
 are removed. Waffle owns process launch and worker lifecycle. Both `wait` and `wait_job` consume an eight-byte kind/value result from Waffle
-`4087eae447fc536b6c0a78e5f14b8049be11c467` (`proc/{types,abi,outcome}.ts` and
+`cbb138b55034c7a6988e385021d9e1251fea0e34` (`proc/{types,abi,outcome}.ts` and
 `proc/worker-{client,abi}.ts`), shared by the root, web and sandbox consumers. START_FAILED
 is kind 2 with a positive WASI errno: ENOENT, EACCES, ENOTDIR, ENOEXEC, ENOMEM, EAGAIN
 or EIO. Original Rust guest/native bridges and `spawn.ts` preserve this distinction;
@@ -2538,6 +2538,8 @@ once and drops the startup subscription; all seven failure-ordering tests are en
 A live-child test writes stdin in its spawn listener before any output or completion.
 Native entry and terminal selection share one lock, so a canceled launch cannot enter
 `_start`. Node WASI validates exports and completes host setup before marking entry.
+The Node host imports Waffle's shared `startFailure` normalizer through the public
+`waffle/proc` export; the package owns errno normalization rather than a copied local mapping.
 These guest, native and Node bridges are original adapters; no upstream implementation
 is copied here.
 

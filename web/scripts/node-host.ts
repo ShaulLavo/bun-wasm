@@ -13,7 +13,7 @@ import { workerProcessState, wakeWorkerProcess, type WorkerProcessTransport } fr
 import type { PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import type { SpawnRequest } from "waffle/proc/types";
 import { claimOutcome, markStarted } from "waffle/proc/outcome";
-import { ExecutableFormatError, startFailure } from "waffle/proc/start-failure";
+import { ExecutableFormatError, startFailure } from "waffle/proc";
 import { installCliFetch } from "./node-install-net.mjs";
 import { nodeModule, NodeProcessBroker, validateNodeCwd } from "./node-spawn.ts";
 import { createNodeSignalController } from "./node-signals.ts";
