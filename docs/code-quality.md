@@ -46,13 +46,15 @@ The native job keeps `CARGO_TARGET_DIR` at the explicitly cached workspace
 Cargo target and registry, including vendored path dependencies, test binaries
 and workspace crates. Swatinem's target cleaner excludes in-repository path
 dependencies outside the workspace, including Bun's large parser crates; the
-native job uses an explicit cache instead. The pinned nightly uses checksum freshness for Rust source. Cargo still uses
+native job uses an explicit cache instead. The pinned nightly uses checksum
+freshness for Rust source. Cargo still uses
 modification times for build-script inputs. `quality-input-times.ts` records
 content hashes and timestamps inside the cached target. Before compiling, it
 restores timestamps only for unchanged files and directories under the owned
 source/build-input roots. Changed, added or renamed inputs get a fresh time.
 This keeps a fresh checkout from rebuilding every embedded runtime or C archive,
-without hiding real edits. Symlinks are fingerprinted without modifying targets. Rustup, Bun downloads, pinned
+without hiding real edits. Symlinks are fingerprinted without modifying targets.
+Rustup, Bun downloads, pinned
 upstream sources, and WASI SDK/sysroot each have caches. The sysroot cache key
 includes the runner image and builder/dependency inputs; its existing receipt
 still verifies every tool and archive. Rust cache keys include upstream patches,

@@ -1,4 +1,3 @@
-// Temporary native-input CI cache measurement. Removed before delivery.
 #[path = "../../../vendor/bun/src/semver_jsc/SemverObject.rs"]
 pub mod semver_object;
 
