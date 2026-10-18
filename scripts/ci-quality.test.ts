@@ -30,7 +30,6 @@ test("Rust tests are compiled and run once, with Clippy covering test targets", 
   expect(script).toContain('"test", "--locked", "--workspace", "--release"');
 });
 
-
 test("local quality retains all gates and rejects invalid selections", () => {
   expect(qualityGates([])).toEqual(qualityGates(["--javascript"]).concat(qualityGates(["--native"])));
   expect(qualityGates(["--javascript"])).toEqual(["lint", "types", "unused", "duplicates", "probes"]);
@@ -56,6 +55,9 @@ test("both WASI feature graphs and the failing lint control stay blocking", () =
 });
 
 test("cached build inputs are compared before the native gate", () => {
-  expect(rust.indexOf("bun scripts/quality-input-times.ts")).toBeGreaterThan(0);
+  const inputTimes = rust.indexOf("bun scripts/quality-input-times.ts");
+  expect(inputTimes).toBeGreaterThan(rust.indexOf("name: Prepare pinned upstream sources"));
+  expect(inputTimes).toBeGreaterThan(rust.indexOf("id: native-cache"));
+  expect(inputTimes).toBeGreaterThan(rust.indexOf("name: Build patched WASI sysroot"));
   expect(rust.indexOf("bun scripts/quality-input-times.ts")).toBeLessThan(rust.indexOf("bun run quality --native"));
 });
