@@ -20,6 +20,7 @@ function worker(base: string, mount: string, contentType = "text/html", encoding
   const handlers = new Map<string, (event: any) => void>();
   const cached = new Map<string, Response>();
   const requests: string[] = [];
+  const cacheWrites: string[] = [];
   const scope = `${base}${mount}/`;
   const page = {
     url: `${base}index.html`,
@@ -35,14 +36,22 @@ function worker(base: string, mount: string, contentType = "text/html", encoding
   };
   const clients = { async matchAll() { return [page]; }, async get() { return undefined; }, async claim() {} };
   runInNewContext(source, {
-    self: { registration: { scope }, clients, addEventListener(type: string, handler: (event: any) => void) { handlers.set(type, handler); } },
+    self: { registration: { scope }, clients, async skipWaiting() {}, addEventListener(type: string, handler: (event: any) => void) { handlers.set(type, handler); } },
     location: { origin: new URL(base).origin },
-    caches: { async match(request: Request) { return cached.get(request.url); } },
+    caches: {
+      async match(request: Request) { return cached.get(request.url); },
+      async open() { return {
+        async match() { return undefined; },
+        async put(request: Request | string) { cacheWrites.push(typeof request === "string" ? request : request.url); },
+        async keys() { return []; },
+      }; },
+    },
     async fetch(request: Request | string) { requests.push(typeof request === "string" ? request : request.url); return new Response("app chunk"); },
     URL, Response, Request, Headers, ReadableStream, TextEncoder, TextDecoder, MessageChannel, Uint8Array, setTimeout, clearTimeout,
   });
   return {
-    cached, requests,
+    cached, requests, cacheWrites,
+    install() { handlers.get("install")!({}); },
     fetch(path: string, clientId = ""): Promise<Response> | undefined {
       let response: Promise<Response> | undefined;
       handlers.get("fetch")!({ request: new Request(`${base}${path}`), clientId, respondWith(value: Response | Promise<Response>) { response = Promise.resolve(value); } });
@@ -90,4 +99,15 @@ test("Bun websocket script policy does not rewrite encoded or non-HTML responses
     expect(await response?.text()).toBe("<!doctype html><html>preview</html>");
     expect(response?.headers.get("cross-origin-embedder-policy")).toBeNull();
   }
+});
+
+
+test("tools stay out of service-worker precaching and retain their fingerprint query", async () => {
+  const sw = worker("https://example.test/nested/app/", "__bunwasm");
+  sw.install();
+  expect(sw.requests).toEqual([]);
+  const response = await sw.fetch("__bunwasm/bun-tools.wasm.gz?v=expected-fingerprint");
+  expect(response?.status).toBe(200);
+  expect(sw.requests).toEqual(["https://example.test/nested/app/bun-tools.wasm.gz?v=expected-fingerprint"]);
+  expect(sw.cacheWrites).toEqual([]);
 });
