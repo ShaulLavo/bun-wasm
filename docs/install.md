@@ -148,7 +148,7 @@ Tests never contact npm. `web/tests/browser-install.mjs` drives
 `bun add is-odd` and a TS import in the playground across Chromium/WebKit and all
 three engines. The headless Node host uses a separate fetch worker during synchronous
 Rust CLI startup, then keeps its existing asynchronous network adapter for JS.
-See [the fixture README](../tests/install/README.md).
+See [the fixture README](guides/installer-fixtures.md).
 
 Raw bounded upstream results and command logs live in
 `/work/reports/bun-wasm-install/` for coordinator review. The install subset is
@@ -274,7 +274,7 @@ integration measurement; the report does not claim to measure those later heads.
 
 The esbuild package checks cover synchronous APIs and watch edits without an
 explicit rebuild request on every engine, including Chromium and WebKit pages.
-See [the package-check instructions](../tests/esbuild/README.md) for offline
+See [the package-check instructions](guides/esbuild-checks.md) for offline
 mirror requirements and the retained official package recording.
 
 ## Historical combined installer measurement, 2026-10-17

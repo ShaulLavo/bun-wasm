@@ -69,6 +69,129 @@ its destroyed TCP socket against Node. Completing TCP destruction in a later
 check phase preserves request-close before socket-close and prevents the
 Streams integration from changing that order.
 
+## HTTP scoreboard census, 2026-10-18
+
+The starting scoreboard at `2ea5c62fa6bb63cc5396cb345e3897956bb710f1` assigns
+180 files to category d, HTTP/server/fetch/WebSocket semantics. Within those
+180, 32 have no named failure. The recorded count of 25 does not match this
+checkout. These are first-error groups, not 180 confirmed HTTP protocol bugs.
+An assertion method such as `toBe` does not identify one shared cause.
+
+There is no live HTTP PR at the start of this work. The previous HTTP, TCP and
+portable ws lanes merged as PRs #35, #14 and #16. The 11 Socket.IO collection
+failures all report the same missing `ws` builtin in their raw excerpts.
+PR #42 already fixed that CommonJS lookup. The fresh QuickJS control passes
+three of those files; the other eight are skip-only. TLS, QUIC, Unix sockets,
+private engine instrumentation and subprocess-dependent fixtures remain
+separate from the portable HTTP adapters.
+
+Generate this table and its complete file membership with
+`node scripts/http-suite-report.ts <scoreboard.tsv> <suite.json>`. The optional
+second argument reads the raw JSON to recover errors hidden by the recorded excerpt placeholder.
+The raw historical JSON is
+`/work/reports/bun-wasm-main-2026-10-17/suite/quickjs.json`.
+
+<!-- http-first-errors:start -->
+| First error | Files | Example |
+| --- | --- | --- |
+| error: expect(received).toBe(expected) | 37 | js/bun/http/async-iterator-stream.test.ts |
+| ^ this test timed out after 2000ms. | 16 | js/bun/http/node-http-pipeline-callbacks.test.ts |
+| ENOENT: no such file or directory | 13 | js/third_party/socket.io/socket.io-close.test.ts |
+| error: expect(received).toContain(expected) | 13 | cli/test/isolation.test.ts |
+| error: Bun.serve TLS is not supported by this networking host | 11 | cli/install/migration/pnpm-comprehensive.test.ts |
+| error: expect(received).toEqual(expected) | 11 | js/bun/dns/dns-prefetch.test.ts |
+| File timeout without a captured error | 7 | js/bun/http/bun-serve-html-build-holds-server.test.ts |
+| TypeError: not a function | 5 | js/bun/http/listener-getsockname.test.ts |
+| error: expect(received).toThrow(expected) | 4 | js/web/fetch/fetch.unix.test.ts |
+| error: expect(received).toMatch(expected) | 3 | js/bun/http/form-data-set-append.test.js |
+| SyntaxError: WebSocket requires a ws:// URL without credentials or a fragment | 3 | js/web/websocket/websocket-unix.test.ts |
+| TypeError: cannot read property 'Server' of undefined | 3 | js/third_party/grpc-js/test-call-propagation.test.ts |
+| AssertionError: Expected values to be strictly equal: | 2 | js/node/http/node-http-agent-free-socket.test.ts |
+| error: expect(received).not.toContain(expected) | 2 | cli/install/bun-update-transitive.test.ts |
+| error: expect(received).toMatchInlineSnapshot(expected) | 2 | js/web/fetch/response.test.ts |
+| error: Expected process to exit with code 0 but got 1 | 2 | js/bun/http/leaks-test.test.ts |
+| error: No such built-in module: node:quic | 2 | js/bun/http/serve-http3.test.ts |
+| error: Unix sockets and TLS sockets are not supported in bun-wasm | 2 | js/bun/http/bun-listen-connect-args.test.ts |
+| error: Unix sockets are not supported in bun-wasm | 2 | js/node/net/handle-leak.test.ts |
+| error: zlib.brotliCompressSync is not supported in bun-wasm: brotli is not compiled into bun.wasm | 2 | js/web/fetch/fetch-gzip.test.ts |
+| TypeError: parent class must be constructor | 2 | js/first_party/undici/undici-primordials.test.ts |
+| AssertionError: path.win32.resolve("c:/blah\\blah","d:/games","c:../a") | 1 | js/node/path/resolve.test.js |
+| BuildError: Expected ";" but found "RSA" | 1 | js/bun/http/bun-serve-ssl.test.ts |
+| BuildError: Unexpected � | 1 | js/web/fetch/fetch.brotli.test.ts |
+| bun-wasm: bun.wasm trapped: error while executing at wasm backtrace: | 1 | js/node/http/node-http-uaf.test.ts |
+| EACCES: permission denied | 1 | bake/dev/ecosystem.test.ts |
+| error: bun create is not supported in bun-wasm | 1 | cli/create/create-jsx.test.ts |
+| error: expect(received).not.toStartWith(expected) | 1 | js/bun/http/proxy-stress-lifecycle.test.ts |
+| error: expect(received).toBeDefined() | 1 | regression/issue/24575.test.ts |
+| error: expect(received).toBeGreaterThan(expected) | 1 | regression/issue/40111.test.ts |
+| error: expect(received).toBeGreaterThanOrEqual(expected) | 1 | js/bun/http/proxy-stress-concurrent.test.ts |
+| error: expect(received).toBeObject() | 1 | js/node/perf_hooks/perf_hooks.test.ts |
+| error: expect(received).toBeTruthy() | 1 | js/deno/fetch/response.test.ts |
+| error: expect(received).toHaveLength(expected) | 1 | js/web/fetch/utf8-bom.test.ts |
+| error: expect(received).toInclude(expected) | 1 | js/web/fetch/headers-case.test.ts |
+| error: expect(received).toMatchObject(expected) | 1 | js/node/http/node-http-upgrade-body.test.ts |
+| error: expect(received).toStrictEqual(expected) | 1 | js/node/net/node-net-server.test.ts |
+| error: expect(received).toThrow() | 1 | js/bun/http/server-url-invalid.test.ts |
+| error: expect(received).toThrowErrorMatchingInlineSnapshot(expected) | 1 | js/web/fetch/blob-write.test.ts |
+| error: No such module: http_parser | 1 | js/node/http/node-http-parser.test.ts |
+| error: WebSocket proxy and TLS options are not supported by this networking host | 1 | js/web/websocket/websocket-buffered-amount.test.ts |
+| error: WebSocket was closed before the connection was established | 1 | regression/issue/012040.test.ts |
+| QuotaExceededError: The ArrayBufferView's byte length (1000000) exceeds the number of bytes of entropy available via this API (65536) | 1 | js/web/fetch/body.test.ts |
+| SyntaxError: Could not find export 'estimateShallowMemoryUsageOf' in module 'bun:jsc' | 1 | js/bun/websocket/websocket-server.test.ts |
+| SyntaxError: The URL's protocol must be one of "ws:", "wss:", "http:", "https:", or "ws+unix:" | 1 | cli/inspect/inspect-inline-sourcemap.test.ts |
+| SyntaxError: Unexpected end of JSON input | 1 | js/bun/http/serve-stream-body-error.test.ts |
+| TypeError: Body already used | 1 | js/bun/http/serve-reused-response.test.ts |
+| TypeError: cannot read property 'counter' of undefined | 1 | regression/issue/18595.test.ts |
+| TypeError: cannot read property 'hash' of undefined | 1 | packages/s3-server/test/server.test.ts |
+| TypeError: class constructors must be invoked with 'new' | 1 | js/node/net/server.spec.ts |
+| TypeError: formData() is not supported in bun-wasm | 1 | js/bun/http/fetch-file-upload.test.ts |
+| TypeError: Invalid URL: "1" | 1 | js/bun/http/bun-serve-fetch-invalid-args.test.ts |
+| TypeError: Invalid URL: "http://undefined:undefined/api/hotels" | 1 | js/third_party/express/express.test.ts |
+| TypeError: protocol must be http:, https: or s3: | 1 | js/web/fetch/fetch-args.test.ts |
+| TypeError: Request with a GET or HEAD method cannot have a body. | 1 | js/web/fetch/fetch.upgrade.test.ts |
+| TypeError: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch() | 1 | js/web/fetch/chunked-trailing.test.js |
+| TypeError: UnexpectedRedirect fetching "http://127.0.0.1:43277/". For more information, pass `verbose: true` in the second argument to fetch() | 1 | js/web/fetch/fetch-redirect.test.ts |
+<!-- http-first-errors:end -->
+
+The generic assertions split across independent behavior. Static-route aliases,
+ETags and directory routes differ from header conversion, fetch decompression,
+body conversion, socket ownership and WebSocket framing. Their shared assertion
+text is not a reason to replace those implementations together.
+
+The server's whole-body buffering is a shared cause that the current code and
+runtime controls confirm. `serveHttp` waits for a complete upload before it
+calls a Node request listener. A client waiting for a response before ending
+its upload cannot make progress. `writeResponse` also waits for `arrayBuffer()`
+before sending Bun Response headers. A stream that waits for a client handshake
+cannot make progress either. The new fixtures reproduce both cycles without
+subprocesses or external network access.
+
+The typed server driver now dispatches Node request headers first, forwards
+incremental body chunks and trailers, and updates `req.complete` at the body
+terminator. IncomingMessage backpressure pauses host reads. Request reading
+resumes from `_read`. Connection reuse waits for both upload completion and the
+response. Upgrade requests retain the complete-body and buffered-head contract.
+
+Bun Response streams now send headers and chunks before EOF. Socket write
+completion controls further reads. Unknown-length streams use chunked framing;
+explicit Content-Length streams retain that header. Byte-backed Responses keep
+the existing fixed-length path. HEAD and bodyless responses send no stream body.
+
+The embedded streams library also uses Bun's reader-lock error text. The
+unchanged upstream file starts a body read before asserting the lock error. A
+wording mismatch leaves that read pending when test cleanup closes its server;
+the later rejection was attributed to the following deflate test. Tracing shows
+the rejection belongs to the prior handle, while direct wrapped and raw deflate
+controls pass. The generator now preserves Bun's message without changing
+locking or scheduling.
+
+The exact 180-file before and after replays use the unchanged upstream tests,
+15-second file deadlines and 2,000 ms test deadlines on all three engines.
+These bounded observations include newly reached failures. They do not establish
+native memory ownership or leak freedom. TLS transport, CONNECT dispatch,
+request timeout policy, queued pipelined response objects and Bun's direct stream
+extension remain separate compatibility work.
+
 ## Measurements
 
 | Engine | Fully passing upstream files, before → after | Observed passes, before → after | File timeouts, before → after |
@@ -165,7 +288,7 @@ lookups, the eager Host header and numeric key ordering.
 The focused fixtures also support `--no-build` and `--engine`.
 The exact upstream file selection is recorded in each result's `selection` field.
 Repeat it with `scripts/bun-suite.sh --network loopback --jobs 2 --timeout 10` and
-an engine-specific output path. [The upstream suite guide](bun-test-suite/README.md#reproduce)
+an engine-specific output path. [The upstream suite guide](bun-test-suite/results.md#reproduce)
 describes dependencies and source snapshots.
 
 ```sh

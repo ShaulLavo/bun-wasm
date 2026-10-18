@@ -8,6 +8,7 @@ const ts = createRequire(resolve(root, "vendor/bun/package.json"))("typescript")
 const source = readFileSync(process.argv[2], "utf8");
 if (createHash("sha256").update(source).digest("hex") !== "5c36bb87ddfddc29a25420608770e9f26b54bb9233f5b59d56771854bb1bbcf8") throw new Error("Streams ponyfill input changed");
 const tree = ts.createSourceFile("ponyfill.mjs", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+let readerLockErrors = 0;
 const counts = { readableInit: 0, writableInit: 0, readableClose: 0, writableClose: 0, readableError: 0, writableError: 0 };
 function directStates(node) {
   const found = [];
@@ -23,7 +24,12 @@ const transformed = ts.transform(tree, [context => {
   const f = context.factory;
   function visit(node) {
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "TypeError" && node.arguments?.some(argument => ts.isStringLiteral(argument) && /locked|already has a writer/i.test(argument.text))) {
-      return f.createCallExpression(f.createIdentifier("__bunNodeInvalidState"), undefined, Array.from(node.arguments));
+      const args = Array.from(node.arguments, argument => {
+        if (!ts.isStringLiteral(argument) || argument.text !== "This stream has already been locked for exclusive reading by another reader") return argument;
+        readerLockErrors++;
+        return f.createStringLiteral("ReadableStream is locked");
+      });
+      return f.createCallExpression(f.createIdentifier("__bunNodeInvalidState"), undefined, args);
     }
     if (!ts.isFunctionLike(node) || !node.body || !ts.isBlock(node.body)) return ts.visitEachChild(node, visit, context);
     const original = node.getText(tree);
@@ -48,6 +54,7 @@ const transformed = ts.transform(tree, [context => {
   return node => ts.visitNode(node, visit);
 }]);
 if (Object.values(counts).some(count => count !== 1)) throw new Error(`Stream completion algorithms changed: ${JSON.stringify(counts)}`);
+if (readerLockErrors !== 2) throw new Error(`Reader lock errors changed: ${readerLockErrors}`);
 const body = ts.createPrinter({ removeComments: true }).printFile(transformed.transformed[0]);
 transformed.dispose();
 const hooks = `function __bunNodeInvalidState(message) {

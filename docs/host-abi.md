@@ -406,7 +406,7 @@ termination, a shared critical-section admission fence proves host filesystem op
 an ordinary guest exit acknowledgement also provides that proof. Merely calling
 `Worker.terminate()` does not.
 Node workers share their real preopens. See
-[the browser host notes](../web/README.md#bun-subprocess-workers) for networking and isolation.
+[the browser host notes](guides/playground.md#bun-subprocess-workers) for networking and isolation.
 
 The guest exposes Bun spawn APIs and Node spawn/exec/fork wrappers over these
 slots. Fork launches a bun child; IPC channels and native descriptors are not

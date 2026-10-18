@@ -134,7 +134,13 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters and `web/src/engine-host.js` provider capture`](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 | [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, write-side shutdown and bounded native handle allocation over the existing host ABI. |
-| [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming, Agent pool and upgrade response adapters shared by all engines. |
+| [libc README detail](#vendored-readme-detail) | Port | Preserve upstream documentation in docs with a short local index. |
+| [tar README detail](#vendored-readme-detail) | Port | Preserve upstream documentation in docs with a short local index. |
+| [wasmi README detail](#vendored-readme-detail) | Port | Preserve upstream documentation in docs with a short local index. |
+| [rquickjs-sys README detail](#vendored-readme-detail) | Port | Preserve upstream documentation in docs with a short local index. |
+| [Embedded WHATWG Streams](#whatwg-reader-lock-errors) | Port | Pinned portable streams with Bun reader-lock error text. |
+| [Streams AST hooks](#whatwg-reader-lock-errors) | Host feature | Original generator adapter preserves Node completion hooks and error codes. |
+| [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming request/response bodies, Agent pool and upgrade response adapters shared by all engines. |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
 | [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns and bounded immediate batches. |
 | [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations, with Node listener identity. |
@@ -981,7 +987,7 @@ File `jsc/webkit-wasi.patch`. The following hunks have class **Port**.
 | `Source/cmake/OptionsJSCOnly.cmake` | Disable native API tests for WASI. | The cross-build includes unsupported test targets. |
 | `Source/cmake/WebKitCommon.cmake` | Recognize CMake's WASI system name. | Configure rejects the OS. |
 
-`jsc/wasi-jsc.cmake`, `jsc/configure.sh`, and `jsc/shim/wasi-compat.{h,c}` plus `madvise.c` are our **Port** configuration and glue, not edits to upstream source. They select the C-loop interpreter, system malloc, single-thread GC, and disabled JIT/Wasm tiers; supply temporary-file helpers and inert signal/scheduling declarations; and link the WASI support library. Without them the target cannot configure or link. `jsc/finalize.sh` runs Binaryen's `--spill-pointers`, without which conservative GC misses references in wasm locals. See [the JSC notes](../jsc/README.md).
+`jsc/wasi-jsc.cmake`, `jsc/configure.sh`, and `jsc/shim/wasi-compat.{h,c}` plus `madvise.c` are our **Port** configuration and glue, not edits to upstream source. They select the C-loop interpreter, system malloc, single-thread GC, and disabled JIT/Wasm tiers; supply temporary-file helpers and inert signal/scheduling declarations; and link the WASI support library. Without them the target cannot configure or link. `jsc/finalize.sh` runs Binaryen's `--spill-pointers`, without which conservative GC misses references in wasm locals. See [the JSC notes](guides/javascriptcore.md).
 
 ### WebKit module import slots
 
@@ -1615,10 +1621,45 @@ Local closure suppresses future delivery while selected messages finish, with
 promise continuations between messages. BroadcastChannel receive returns
 `undefined` without consuming its messages, matching native Bun 1.4.2.
 
+## Vendored README detail
+
+Class **Port**, documentation only. The repository's short-README rule moves the
+full upstream text into `docs/guides/upstream/` and leaves original short indexes
+at the old paths. Relative links are rebased. The omitted wasmi logo is linked
+from its upstream revision. No native implementation changes accompany this move.
+
+| Upstream README and revision | Local detail |
+| --- | --- |
+| `rust-lang/libc`, `README.md`, crate 0.2.186 | `docs/guides/upstream/libc.md` |
+| `composefs/tar-rs`, `README.md`, 0.4.46, `fc459c149f83bf4daceaa52e17d351989002e1a9` | `docs/guides/upstream/tar.md` |
+| `wasmi-labs/wasmi`, `crates/wasmi/README.md`, 0.46.0, `50ac76771d631f642e8c4c61bf44c99546024461` | `docs/guides/upstream/wasmi.md` |
+| `DelSkayn/rquickjs`, `sys/README.md`, crate 0.13.0 | `docs/guides/upstream/rquickjs-sys.md` |
+
+## WHATWG reader lock errors
+
+The generated `crates/bunwasm-runtime/src/js/streams_polyfill.js` is a **Port** of
+`web-streams-polyfill@4.2.0`, upstream `dist/ponyfill.mjs`, with SHA-256
+`5c36bb87ddfddc29a25420608770e9f26b54bb9233f5b59d56771854bb1bbcf8`.
+The relevant source algorithms are
+`src/lib/readable-stream/default-reader.ts` and
+`src/lib/readable-stream/byob-reader.ts` at that package revision.
+
+`scripts/stream-polyfill-node-hooks.ts` is an **original adapter**, class
+**Host feature**. It keeps the existing Node completion hooks and
+`ERR_INVALID_STATE` code, and changes the two exclusive-reader lock messages to
+`ReadableStream is locked`, matching Bun. The input hash, six completion-hook
+sites and two message sites are checked before output is written. This changes
+error text, not reader locking, option validation or read scheduling.
+`scripts/vendor-streams.py` regenerates the bundled artifact and retains the
+upstream MIT license under `third_party/streams/`.
+
 ## HTTP framing
 
 Class **Host feature**, **original adapters** in `src/js/net.js`,
-`src/js/http_common.ts`, `src/js/http_body.ts`, `src/js/http_agent.ts`, socket-close
+`src/js/http_common.ts`, `src/js/http_body.ts`, `src/js/http_agent.ts`,
+`src/js/http_serve.ts`, `src/js/http_response.ts`, `src/js/fetch_body.ts`,
+`src/js/body_streams.ts`,
+byte-stream metadata in `src/js/web.js`, socket-close
 completion in `src/js/node_net.js`, and the `node:http` registry
 in `src/js/builtins.js`. No upstream implementation is copied or patched.
 Bun's `src/js/node/http.ts` depends on native HTTP bindings, so this change keeps
@@ -1660,6 +1701,16 @@ The Streams main integration keeps HTTP transport work in Writable lifecycle
 hooks. The original TCP adapter defers socket-destroy completion to the check
 phase so the completed request stream closes before its socket, as in Node.
 `net-http-close-order` compares this order unchanged on Node and all engines.
+
+The 2026-10-18 server refinement uses original typed adapters for incremental
+request delivery and Bun response streaming. Node request listeners run after
+headers arrive. The existing body decoder forwards chunks and trailers into
+IncomingMessage, whose backpressure pauses host reads. Completion waits for
+both the body terminator and response finish before reusing the connection.
+Bun Response streams send headers and body chunks without waiting for EOF.
+Each socket write finishes before another chunk is read. Fixed byte bodies
+retain their existing Content-Length path. These adapters use Bun's unchanged
+tests at `5e0baa66516f3af00b008cdf1521c681317741e8` as behavioral references.
 
 HTTPS requests continue to use the host's TLS fetch transport. The raw socket
 ABI has no TLS capability, so HTTPS upgrades without a caller-supplied connection

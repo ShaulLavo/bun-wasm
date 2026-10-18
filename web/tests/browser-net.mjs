@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { stopForeground } from "./foreground.ts";
+import { fixtureOutputPattern } from "./fixture-output.ts";
 
 const here = new URL(".", import.meta.url).pathname;
 const web = join(here, "..");
@@ -303,9 +304,9 @@ async function runEngine(browserName, engine, type, options, appUrl, fixtureBase
     const expected = readFileSync(join(web, "../tests/fixtures", fixture, "expected.txt"), "utf8").trim();
     await page.evaluate(src => globalThis.playground.fs.writeFile("/home/user/tcp.ts", src), source);
     await page.evaluate(() => globalThis.playground.shell.submit("bun run tcp.ts"));
-    const marker = expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const output = await waitFor(page, new RegExp(marker + "|error:|crashed"));
-    check(`${name}: ${fixture}`, output.includes(expected), output.slice(-1500));
+    const marker = fixtureOutputPattern(expected);
+    const output = await waitFor(page, new RegExp(marker.source + "|error:|crashed"));
+    check(`${name}: ${fixture}`, marker.test(output), output.slice(-1500));
   }
 
   await checkHtmlEntry(page, context, appUrl, name);
