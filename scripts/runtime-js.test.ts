@@ -48,6 +48,7 @@ test("embeds TypeScript factories, leaves JavaScript raw, and excludes declarati
   expect(table).toContain(join(source, "old.js"));
   expect(table).not.toContain("ambient");
   const generated = readFileSync(join(out, "runtime-js/leaf.js"), "utf8");
+  // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
   expect((0, eval)(generated)(41)).toBe(42);
   expect(generated).not.toContain(": number");
 });
@@ -59,6 +60,7 @@ test("transpiles TypeScript overrides and tracks their files", () => {
   const result = runBuild(override);
   expect(result.exitCode).toBe(0);
   expect(result.stdout.toString()).toContain(`cargo:rerun-if-changed=${join(override, "leaf.ts")}`);
+  // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
   expect((0, eval)(readFileSync(join(out, "runtime-js/leaf.js"), "utf8"))(21)).toBe(42);
 });
 
@@ -77,10 +79,12 @@ test("embeds the converted runtime factories under their original names", () => 
   const table = readFileSync(join(out, "polyfills.rs"), "utf8");
   expect(table).toContain('("glob", include_str!(');
   expect(table).toContain('("bun_builtin_globals", include_str!(');
+  // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
   const globals = (0, eval)(readFileSync(join(out, "runtime-js/bun_builtin_globals.js"), "utf8"))();
   expect(Object.isFrozen(globals)).toBe(true);
   expect(globals.Array).toBe(Array);
   expect(globals.Buffer).toBe(Buffer);
+  // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
   const { Glob } = (0, eval)(readFileSync(join(out, "runtime-js/glob.js"), "utf8"))({
     native: {
       globMatch: (pattern: string, path: string) => pattern === path,

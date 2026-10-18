@@ -1406,17 +1406,18 @@
     const result = { values: { __proto__: null }, positionals: [] };
     if (returnTokens) result.tokens = tokens;
 
+    function storeNegativeOption(token, options, values) {
+      if (!token.name.startsWith("no-") || token.value !== undefined || hasOwn(options, token.name)) return false;
+      const positive = token.name.slice(3);
+      if (optionsGetOwn(options, positive, "type") !== "boolean") return false;
+      token.name = positive;
+      storeOption(positive, false, options, values, false);
+      return true;
+    }
+
     for (const token of tokens) {
       if (token.kind === "option") {
-        if (allowNegative && token.name.startsWith("no-") && token.value === undefined && !hasOwn(options, token.name)) {
-          // Bun reports `--no-foo` as a token for "foo" and stores false.
-          const positive = token.name.slice(3);
-          if (optionsGetOwn(options, positive, "type") === "boolean") {
-            token.name = positive;
-            storeOption(positive, false, options, result.values, false);
-            continue;
-          }
-        }
+        if (allowNegative && storeNegativeOption(token, options, result.values)) continue;
         if (strict) {
           checkOptionUsage(parseConfig, token);
           checkOptionLikeValue(token);

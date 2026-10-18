@@ -123,3 +123,4 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
   installations.set(runtime, installation);
   return installation;
 }
+

@@ -1,5 +1,5 @@
 interface InitScriptTarget {
-  addInitScript(script: () => void): Promise<void>;
+  addInitScript(script: () => void): Promise<unknown>;
 }
 interface HmrPage {
   waitForFunction(predicate: (selector: string | null) => boolean, selector: string | null, options: { timeout: number }): Promise<unknown>;

@@ -60,6 +60,7 @@ for (const name of ["chromium", "webkit"]) {
         require(name) {
           if (cache.has(name)) return cache.get(name);
           if (!sources[name]) throw new Error("Missing runtime module " + name);
+          // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
           const value = (0, eval)(sources[name])(internal);
           cache.set(name, value);
           return value;

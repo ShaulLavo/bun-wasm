@@ -2,7 +2,7 @@
 // This is intentionally not a Bun root: only its registered children execute Bun JavaScript.
 import type { SpawnRequest } from "waffle/proc/types";
 
-export interface BunRuntimeCommand {
+interface BunRuntimeCommand {
   executable?: string;
   source: string;
   fds?: { child: number; parent: number | "reader" | "writer" }[];
@@ -49,6 +49,22 @@ const decimal = (value: number[], end: number) => value.concat(set(2), constant(
   get(3), get(2), constant(10), [0x70], constant(48), [0x6a, 0x3a, 0, 0],
   get(3), constant(1), [0x6b], set(3), get(2), constant(10), [0x6e, 0x22, 2, 0x0d, 0, 0x0b]);
 
+function encodeDescriptorMarkers(spec: Omit<SpawnRequest, "fds"> & { fds: BunRuntimeCommand["fds"] }, pointer: number, body: number[]) {
+  let json = JSON.stringify(spec);
+  for (const [name, local] of [["reader", 0], ["writer", 1]] as const) {
+    for (;;) {
+      const marker = JSON.stringify(name), start = json.indexOf(marker);
+      if (start === -1) break;
+      // Ten columns accommodate every legal signed runtime descriptor. Fill right-to-left.
+      json = json.slice(0, start) + "          " + json.slice(start + marker.length);
+      body.push(...get(local), ...set(2), ...constant(pointer + start + 9), ...set(3), 0x03, 0x40,
+        ...get(3), ...get(2), ...constant(10), 0x70, ...constant(48), 0x6a, 0x3a, 0, 0,
+        ...get(3), ...constant(1), 0x6b, ...set(3), ...get(2), ...constant(10), 0x6e, 0x22, 2, 0x0d, 0, 0x0b);
+    }
+  }
+  return json;
+}
+
 /** All spawns happen before any wait: pipelines must run concurrently, not buffer in the page. */
 export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<ArrayBuffer> {
   const memory = new Uint8Array(60_000);
@@ -70,18 +86,7 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
       env: { PWD: "/home/user", PATH: "/bin:/usr/bin" }, cwd: "/home/user", job: 0,
       fds: command.fds ?? [{ child: 0, parent: 0 }, { child: 1, parent: 1 }, { child: 2, parent: 2 }],
     };
-    let json = JSON.stringify(spec);
-    for (const [name, local] of [["reader", 0], ["writer", 1]] as const) {
-      for (;;) {
-        const marker = JSON.stringify(name), start = json.indexOf(marker);
-        if (start === -1) break;
-        // Ten columns accommodate every legal signed runtime descriptor. Fill right-to-left.
-        json = json.slice(0, start) + "          " + json.slice(start + marker.length);
-        body.push(...get(local), ...set(2), ...constant(pointer + start + 9), ...set(3), 0x03, 0x40,
-          ...get(3), ...get(2), ...constant(10), 0x70, ...constant(48), 0x6a, 0x3a, 0, 0,
-          ...get(3), ...constant(1), 0x6b, ...set(3), ...get(2), ...constant(10), 0x6e, 0x22, 2, 0x0d, 0, 0x0b);
-      }
-    }
+    const json = encodeDescriptorMarkers(spec, pointer, body);
     const bytes = encoder.encode(json);
     if (pointer + bytes.length > memory.length) throw new RangeError("external root fixture exceeds one memory page");
     memory.set(bytes, pointer);

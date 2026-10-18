@@ -76,7 +76,8 @@ function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngi
   try {
     mkdirSync(join(root, "bin")); mkdirSync(join(root, "opt/bun"), { recursive: true });
     for (const name of ["bun", "node"]) writeFileSync(join(root, "bin", name), new Uint8Array());
-    for (const engine of ["quickjs", "jsc"] as const) if (engines[engine]) {
+    for (const engine of ["quickjs", "jsc"] as const) {
+      if (!engines[engine]) continue;
       const bin = join(root, "opt/bun", engine, "bin"); mkdirSync(bin, { recursive: true });
       for (const name of ["bun", "node"]) writeFileSync(join(bin, name), new Uint8Array());
     }

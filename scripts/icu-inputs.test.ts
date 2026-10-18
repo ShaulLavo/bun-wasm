@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-function fixture(run: (root: string, invoke: (env?: Record<string, string>) => ReturnType<typeof Bun.spawnSync>) => void) {
+function fixture(run: (root: string, invoke: (env?: NodeJS.ProcessEnv) => { exitCode: number; stdout: Uint8Array }) => void) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-icu-inputs-"));
   // This fixture owns one temporary tree and synchronous children, never downloads
   // or configures real ICU, and installs teardown before invoking the build script.
@@ -26,7 +26,7 @@ WASI_SDK_PATH=${JSON.stringify(join(root, "sdk"))}
     executable("bin/bun", "exit 0");
     executable("bin/curl", "echo 'fixture refuses downloads' >&2; exit 71");
     for (const tool of ["bin/cc", "bin/c++", "sdk/bin/clang", "sdk/bin/clang++"]) executable(tool, "echo 'fixture compiler version 1'");
-    const invoke = (env: Record<string, string> = {}) => Bun.spawnSync(["bash", join(root, "jsc/build-icu.sh")], {
+    const invoke = (env: NodeJS.ProcessEnv = {}) => Bun.spawnSync(["bash", join(root, "jsc/build-icu.sh")], {
       env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, CC: join(root, "bin/cc"), CXX: join(root, "bin/c++"), CPATH: "", C_INCLUDE_PATH: "", CPLUS_INCLUDE_PATH: "", ...env },
     });
     expect(invoke().exitCode).toBe(71);

@@ -14,6 +14,9 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [Quality fixes in adapted source](#quality-fixes-in-adapted-source) | Port | Mechanical formatting and lint fixes in the existing Bun/Node ports, without changing their upstream revision. |
+| [Native-host XML and optional hooks](#native-host-xml-and-optional-hooks) | Host feature | Scalar XML indexing and explicit unsupported trace/macro hooks let the full workspace link on the native host. |
+| [Quality checks and original adapters](#quality-checks-and-original-adapters) | Host feature | Original quality commands and tighter host/test typings, with small control-flow extractions. |
 | [Bun public transpiler adapter](#public-transpiler-adapter) | Port | Adapt the real Rust parse/print and scan paths to the engine-independent native boundary. |
 | [Generated `bun:wrap` helpers](#bun-wrap-helpers) | Host feature | Load Bun's unmodified runtime helpers through the builtin registry. |
 | [Partial strict comparison](#partial-strict-comparison) | Port | Translate Bun's native partial-comparison rules to TypeScript for all engines. |
@@ -70,6 +73,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [0010](#0010-semantic-import-locations) | Host feature | Collect semantic import locations in Bun's scan and print passes for host module linking. |
 | [0011](#0011-lint-layout-assertions) | Port | Make semantic type-argument and lint-message size assertions pointer-width aware. |
 | [0012](#0012-wasi-lint-rule-docs) | Port | Generate and embed Bun's compressed lint rule docs in WASI artifacts. |
+| [0013](#0013-strict-wasi-lint-boundaries) | Port | Correct native-only cfgs and mark individual native poller/watcher declarations unused on WASI. |
 | [`jsc/webkit-wasi.patch`, platform hunks](#webkit-platform-hunks) | Port | Compile the C-loop interpreter and WTF for WASI. |
 | [`jsc/webkit-wasi.patch`, module slots](#webkit-module-import-slots) | Upstream bug | Give import slots a full JSValue stride and initialize the whole slot. |
 | [`jsc/webkit-wasi.patch`, non-JIT declarations](#webkit-non-jit-declarations) | Upstream bug | Expose a required enum without DFG and add two missing includes. |
@@ -144,7 +148,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, write-side shutdown and bounded native handle allocation over the existing host ABI. |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming, Agent pool and upgrade response adapters shared by all engines. |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
-| [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns and bounded immediate batches. |
+| [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns, pending-signal dispatch before check callbacks, and bounded immediate batches. |
 | [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations, with Node listener identity. |
 | [`src/js/exit_provenance.ts` and lifecycle hooks](#runtime-exit-provenance) | Host feature | Original opt-in exit diagnostics over the existing event loop and error handlers. |
 | [`scripts/generate-ws.sh` and builtin resolution](#portable-ws-builtin) | Host feature | Original module wrapper supplies Bun's builtin ws import and require on every engine. |
@@ -468,8 +472,15 @@ path or revision.
 The scheduler gives I/O a turn between callback turns, even when callbacks keep
 queuing immediates or timers remain due. Immediate callbacks queued during an
 existing batch wait for the next batch, so due timers can run. Microtasks still
-drain between callback turns. This uses the existing I/O waiter interface and adds
-no host ABI slot.
+drain between callback turns. Before entering callbacks, the scheduler also drains
+pending handled signals and yields to the job queue when a handler ran, at most
+once before letting I/O and callbacks progress. This bound prevents a handler
+that resends its signal from a microtask from starving callbacks. JSC can
+execute the entry module during the job drain, after Rust's initial signal poll;
+without this checkpoint a signal received during synchronous sleep ran after the
+next immediate. The checkpoint stays outside engine interruption callbacks and
+preserves the existing I/O phase. This uses the existing signal and I/O interfaces
+and adds no host ABI slot.
 
 ## Portable filesystem watcher
 
@@ -1017,7 +1028,7 @@ This is a judgment call. The build failures are in a non-JIT configuration and d
 
 `third_party/libc` is libc **0.2.186**, selected by `[patch.crates-io]`. Class **Port**.
 
-Only two source files differ from the published crate. `src/wasi/mod.rs` adds the unused POSIX fields to `rusage`, exposes the existing p2 socket definitions on p1, and exports `posix_compat`. New `src/wasi/posix_compat.rs` declares missing mmap, signal, process, spawn, terminal, resource, scheduling, and socket APIs and constants. `bunwasm-posix` supplies absent symbols. Without this layer Bun's POSIX-oriented crates fail to compile or link for wasip1. These declarations describe bun-wasm's shim contract; they do not establish that upstream libc has the wrong WASI ABI.
+Only two source files differ from the published crate. `src/wasi/mod.rs` adds the unused POSIX fields to `rusage`, exposes the existing p2 socket definitions on p1, and exports `posix_compat`. New `src/wasi/posix_compat.rs` declares missing mmap, signal, process, spawn, terminal, resource, scheduling, and socket APIs and constants. `bunwasm-posix` supplies absent symbols. Without this layer Bun's POSIX-oriented crates fail to compile or link for wasip1. The compatibility module reuses p2's existing `MSG_NOSIGNAL` rather than exporting a second ambiguous definition, and imports its types through the parent module without a redundant prelude import. These declarations describe bun-wasm's shim contract; they do not establish that upstream libc has the wrong WASI ABI.
 
 The vendored package omits upstream tests and Cargo's `.cargo_vcs_info.json`. Other retained source and build files match the published 0.2.186 crate.
 
@@ -2692,6 +2703,71 @@ does not embed its implementation or create a second runtime. Existing worker an
 imports use explicit extensions for strict module resolution. No upstream patch or
 copied implementation was introduced by this packaging work.
 
+## Quality fixes in adapted source
+
+The quality pass keeps Bun at `9510e74152073d850a18758ca41114d8f214ffa6`
+and preserves the revisions already recorded above for Node and other ports.
+It formats authored Rust under `crates/`, including the adapted bundler/dev-server
+facades, compression, X.509 and installer code. Clippy fixes replace needless
+borrows, explicit closures and manual loops with equivalent standard operations.
+The Node zlib port and other mixed runtime factories lose unused bindings and
+get explicit names for intentionally unused ABI arguments. No upstream patch or
+generated bundle changes. These are maintenance changes to the existing ports,
+not newly copied implementations or upstream bug claims.
+
+The unchanged Bun incremental graph, packed map and serialized failure modules
+remain upstream-owned even though authored facades include them by path. Local
+attributes document that boundary instead of silencing all Rust. Host-only
+unused ABI fields are identified separately from WASI callback code.
+
+## Quality checks and original adapters
+
+The quality runner, failure probes, lint/unused/clone configurations, TypeScript
+projects and CI wiring are original bun-wasm tooling. Existing original package,
+filesystem, subprocess, shell, native-stream, crypto and browser test adapters
+get typed test doubles, checked entrypoints and named control-flow helpers.
+The preview WebSocket declaration describes our bundler's export of the existing
+classic-script factory; it does not import another WebSocket implementation.
+The JSC Rust adapter retains its raw engine-value API, with a specific documented
+Clippy exception for those engine-owned handles. The source ledger's prior
+classifications and upstream paths still apply to each mixed file.
+
+Host builds now link the existing native glue and bundler hooks too, so workspace
+examples and tests resolve the same ABI symbols as WASI builds. Machete exceptions
+name dependencies referenced only by unchanged path-included Bun modules. Browser
+fixtures keep consumer-local build inputs but leave Playwright profiles under the
+short host temporary root, avoiding Chromium Unix-socket path limits.
+
+## Native-host XML and optional hooks
+
+`crates/bunwasm-glue/src/native_host.rs` is an original scalar adapter for the
+native XML kernel ABI. Its indexing rules follow
+`src/parsers/xml_index.rs` and `src/jsc/bindings/highway_xml.cpp`, and its buffer
+contract follows `src/highway/lib.rs`, all at Bun revision
+`9510e74152073d850a18758ca41114d8f214ffa6`. It retains tag state, encoded
+noncharacters and UTF-16 surrogate state across chunks without linking Highway's
+C++ SIMD implementation. Tests cover both byte and UTF-16 chunk boundaries.
+WASI still selects Bun's existing scalar producer and does not link this module.
+
+The same host-only module returns unsupported from Bun's optional Linux tracing
+hooks. The original macro hook in `crates/bunwasm-glue/src/extra.rs` returns
+`MacroFailed`, matching the declaration in Bun's `src/js_parser/lib.rs` at that
+revision. It does not claim to evaluate JavaScript macros. These hooks make
+workspace examples and test binaries link rather than excluding them from the
+quality gate. They do not add an upstream patch.
+
+The quality gate runs strict target Clippy for the supported QuickJS and
+browser-engine CLI builds for `wasm32-wasip1` with WASI SDK 34.0. It explicitly
+selects every authored production dependency and denies warnings without the
+build environment's cap. A temporary Clippy-only violation in the actual WASI
+POSIX library must fail before its original bytes are restored. This original
+wiring does not claim that JSC/tools can build without their generated
+WebKit/Yarr prerequisites. The same change removes two unused original graph
+facade methods, the now-stable C variadic feature attribute, and two needless
+borrows in the browser-engine paths. Shared tool parsing returns its existing
+three results as a tuple, so detecting a subcommand does not require retaining
+an unread named payload type or a dead-code exemption.
+
 ## JSC prebuild inputs
 
 Class **Host feature**, original build adapters in `jsc/common.sh` and
@@ -2862,3 +2938,31 @@ in every browser, with no retry. The real inherited-fd libc controls remain
 explicit expected failures until the separate patched-sysroot follow-up. Waffle
 #32's intrinsic and source-quality changes are also included; no upstream source
 is copied into this consumer.
+
+
+## 0013 strict WASI lint boundaries
+
+Class **Port**. Upstream remains Bun
+`9510e74152073d850a18758ca41114d8f214ffa6`; this patch changes only the WASI port.
+
+- `src/bun_core/util.rs` restores Unix-only reload/spawn blocks. WASI keeps its
+  explicit unsupported-reload arm and the existing unsupported-spawn result,
+  without entering an unreachable native wait path.
+- `src/bun_core/Global.rs` explicitly consumes the unused WASI thread name and
+  declares `quick_exit` only on its native callers' targets.
+  `src/bun_core/debug.rs` limits the frame offset alias to its x86_64/aarch64 users.
+- `src/errno/wasi_errno.rs` drops an unused trait import. `src/sys/copy_file.rs`
+  and `src/sys/lib.rs` match native-only imports, directory-entry decoding and
+  extended-attribute helpers to their consumers' cfgs.
+- `src/threading/ThreadPool.rs` matches `force_spawn` to its threaded caller's
+  cfg. `src/threading/Futex.rs` limits the single-thread wake helper's visibility
+  to its parent, matching the other platform implementations.
+- `src/crash_handler/lib.rs` excludes a native-only import and explicitly
+  consumes the report URL on WASI, where automatic crash reporting is disabled.
+- `src/io/lib.rs` and `src/io/posix_event_loop.rs` exclude unused native imports.
+  Their specific native poller logger, descriptor accessor, packed pollables,
+  dispatch helpers and unused WASI waker accessor receive WASI-only `dead_code`
+  allowances. `src/watcher/Watcher.rs` and `WatcherTrace.rs` do the same only for
+  native filesystem-event buffers, callback, trace and merge/dispatch helpers.
+  These declarations remain type-checked. No whole module, authored crate or
+  warning category is capped globally, and no Clippy lint is disabled.

@@ -44,6 +44,7 @@ function fixture(module: WebAssembly.Module, options: Partial<RunOptions> | ((ru
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
   globalThis.Worker = class {
+    // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
     constructor(readonly url: string) { rootWorker ??= this; }
     onmessage?: (event: { data: WorkerProcessMessage }) => void;
     postMessage(request: RunRequest) { sent ??= request; requests.push(request); workerUrls.set(request, this.url); posted(); }
@@ -76,18 +77,25 @@ function fixture(module: WebAssembly.Module, options: Partial<RunOptions> | ((ru
   };
 }
 
+async function waitForChild(state: ReturnType<typeof fixture>, pid: number) {
+  const deadline = performance.now() + 1000;
+  while (!state.requests.some(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid) && performance.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+}
+
 for (const name of ["pipe", "read", "spawn", "poll"]) test(`runner automatically supplies generic ownership for runtime_proc.${name}`, async () => {
   const state = fixture(imported(name));
   try {
     await state.ready;
     expect(state.request().runtimeProcess).toBeDefined();
     expect((state.request().runtimeProcess!.data as { pipeRegistry: unknown }).pipeRegistry).toBeDefined();
-  } finally { await await state.dispose(); }
+  } finally { await state.dispose(); }
 });
 for (const name of ["signal", "interrupted", "default_signal"]) test(`runner supplies generic ownership even for runtime_proc.${name} alone`, async () => {
   const state = fixture(imported(name));
   try { await state.ready; expect(state.request().runtimeProcess).toBeDefined(); }
-  finally { await await state.dispose(); }
+  finally { await state.dispose(); }
 });
 
 test("preview1 roots keep their explicit module and Bun executable paths launch real Bun", async () => {
@@ -119,8 +127,7 @@ test("preview1 roots keep their explicit module and Bun executable paths launch 
       });
       for (const alias of ["/bin/bun", "/bin/node"]) {
         const pid = client.spawn(1, { executable: alias, argv: [alias], env: {}, cwd: "/", job: 1, fds: [] });
-        const deadline = performance.now() + 1000;
-        while (!state.requests.some(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+        await waitForChild(state, pid);
         const child = state.requests.find(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid);
         expect(child).toBeDefined();
         expect(state.urlFor(child!)).toBe("http://localhost/worker.js");
@@ -158,7 +165,7 @@ test("UI signals freeze canonical root pipe publication only for fatal actions",
     expect(writer.tryWrite([new Uint8Array([2])])).toBeLessThan(0);
     reader.close(); writer.close();
     expect(await state.run.done).toEqual({ code: 137 });
-  } finally { controller?.dispose(); await await state.dispose(); }
+  } finally { controller?.dispose(); await state.dispose(); }
 });
 
 function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("waffle/proc")> }) {
@@ -270,7 +277,7 @@ test("explicit Preview1 children run without installing Bun slots", async () => 
     const child = state.requests.find(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid);
     expect(child).toBeDefined();
     expect(state.urlFor(child!)).toBe("http://localhost/preview1-worker.js");
-  } finally { descriptors.dispose(); await await state.dispose(); }
+  } finally { descriptors.dispose(); await state.dispose(); }
 });
 
 test("disposal before lazy pipe activation closes the subsequently created pipe broker", async () => {
@@ -301,7 +308,7 @@ test("explicit root metadata without a filesystem forks an identity and preserve
     expect(state.request().filesystem.owner).toBeDefined();
     expect((transport.data as { marker: string }).marker).toBe("preserved");
     expect((transport.data as { filesystem: unknown }).filesystem).toBeDefined();
-  } finally { await await state.dispose(); }
+  } finally { await state.dispose(); }
 });
 
 test("pipe-only generic work uses the responsive relay without activating the process supervisor", async () => {

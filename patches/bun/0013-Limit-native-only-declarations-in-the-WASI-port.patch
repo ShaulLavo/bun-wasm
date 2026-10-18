@@ -1,0 +1,402 @@
+From e3b6344d0ce9cde2d2f4a50c0de06fcdbb4e7376 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Sun, 18 Oct 2026 16:16:51 +0300
+Subject: [PATCH 13/13] Limit native-only declarations in the WASI port
+
+---
+ src/bun_core/Global.rs      |  4 +++-
+ src/bun_core/debug.rs       |  1 +
+ src/bun_core/util.rs        |  6 +++---
+ src/crash_handler/lib.rs    |  4 +++-
+ src/errno/wasi_errno.rs     |  1 -
+ src/io/lib.rs               | 10 +++++++++-
+ src/io/posix_event_loop.rs  |  9 ++++++++-
+ src/sys/copy_file.rs        |  4 ++--
+ src/sys/lib.rs              |  9 +++++----
+ src/threading/Futex.rs      |  2 +-
+ src/threading/ThreadPool.rs |  1 +
+ src/watcher/Watcher.rs      |  8 ++++++++
+ src/watcher/WatcherTrace.rs |  1 +
+ 13 files changed, 45 insertions(+), 15 deletions(-)
+
+diff --git a/src/bun_core/Global.rs b/src/bun_core/Global.rs
+index 49279df1..145498f5 100644
+--- a/src/bun_core/Global.rs
++++ b/src/bun_core/Global.rs
+@@ -579,6 +579,8 @@ pub const arch_name: &str = if cfg!(target_arch = "x86_64") {
+ // ──────────────────────────────────────────────────────────────────────────
+ 
+ pub fn set_thread_name(name: &ZStr) {
++    #[cfg(target_os = "wasi")]
++    let _ = name;
+     // Android needs the same path as Linux, but Rust's `target_os = "linux"`
+     // excludes it — include android explicitly.
+     #[cfg(any(target_os = "linux", target_os = "android"))]
+@@ -684,7 +686,7 @@ unsafe extern "C" {
+     #[cfg(any(unix, target_os = "wasi"))]
+     #[link_name = "exit"]
+     safe fn libc_exit(code: c_int) -> !;
+-    #[cfg(all(any(unix, target_os = "wasi"), not(target_os = "macos")))]
++    #[cfg(all(unix, not(target_os = "macos")))]
+     safe fn quick_exit(code: c_int) -> !;
+ }
+ 
+diff --git a/src/bun_core/debug.rs b/src/bun_core/debug.rs
+index 5838a8e2..1e211b78 100644
+--- a/src/bun_core/debug.rs
++++ b/src/bun_core/debug.rs
+@@ -280,6 +280,7 @@ impl StackIterator {
+     }
+ }
+ 
++#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+ pub(crate) const PC_OFFSET: usize = StackIterator::PC_OFFSET;
+ 
+ /// Capture the current thread's call stack.
+diff --git a/src/bun_core/util.rs b/src/bun_core/util.rs
+index 6d8a9057..86d34e77 100644
+--- a/src/bun_core/util.rs
++++ b/src/bun_core/util.rs
+@@ -4365,7 +4365,7 @@ pub fn reload_process(clear_terminal: bool, may_return: bool) {
+         }
+     }
+ 
+-    #[cfg(any(unix, target_os = "wasi"))]
++    #[cfg(unix)]
+     // SAFETY: FFI calls receive only locally-built NUL-terminated argv/envp arrays; on success
+     // `execve` never returns, on failure errno is read. No borrowed Rust state observed after.
+     unsafe {
+@@ -4601,7 +4601,7 @@ fn spawn_sync_inherit_impl(
+     if argv.is_empty() {
+         return Err(crate::CrateError::FileNotFound);
+     }
+-    #[cfg(any(unix, target_os = "wasi"))]
++    #[cfg(unix)]
+     // SAFETY: argv strings are owned `ZBox`es (NUL-terminated) kept alive in
+     // `cargs` for the duration of the spawn; `ptrs`/`environ` are null-
+     // terminated `*const c_char` arrays as required by `posix_spawn_bun` /
+@@ -4822,7 +4822,7 @@ fn spawn_sync_inherit_impl(
+         let code = status.code().unwrap_or(-1);
+         Ok(SpawnStatus { code })
+     }
+-    #[cfg(not(any(any(unix, target_os = "wasi"), windows)))]
++    #[cfg(not(any(unix, windows)))]
+     {
+         let _ = (argv, stdin);
+         Err(crate::CrateError::Unexpected)
+diff --git a/src/crash_handler/lib.rs b/src/crash_handler/lib.rs
+index 53a97a12..a60d5e2d 100644
+--- a/src/crash_handler/lib.rs
++++ b/src/crash_handler/lib.rs
+@@ -459,7 +459,7 @@ mod draft {
+     use core::ffi::c_int;
+     #[cfg(windows)]
+     use core::ffi::c_long;
+-    #[cfg(not(windows))]
++    #[cfg(all(not(windows), not(target_os = "wasi")))]
+     use core::ffi::c_void;
+     use core::fmt;
+     // D101: `core::fmt::Write` intentionally NOT in scope here — `bun_io::Write`
+@@ -2761,6 +2761,8 @@ mod draft {
+     /// information (PII). The stackframes point to Bun's open-source native code
+     /// (not user code), and are safe to share publicly and with the Bun team.
+     fn report(url: &[u8]) {
++        #[cfg(target_os = "wasi")]
++        let _ = url;
+         if !is_reporting_enabled() {
+             return;
+         }
+diff --git a/src/errno/wasi_errno.rs b/src/errno/wasi_errno.rs
+index 5c144e36..4becfdc8 100644
+--- a/src/errno/wasi_errno.rs
++++ b/src/errno/wasi_errno.rs
+@@ -180,7 +180,6 @@ pub mod uv_e {
+     crate::__uv_e_rows!(__v);
+ }
+ 
+-use super::GetErrno;
+ 
+ // wasi-libc wrappers return -1 and set the thread-local errno.
+ impl_get_errno_libc!(i32, u32, isize, i64, usize);
+diff --git a/src/io/lib.rs b/src/io/lib.rs
+index 68ed490b..893c2a78 100644
+--- a/src/io/lib.rs
++++ b/src/io/lib.rs
+@@ -671,7 +671,7 @@ pub use open_for_writing_mod::{open_for_writing, open_for_writing_impl};
+ 
+ // ════════════════════════════════════════════════════════════════════════════
+ 
+-#[cfg(not(windows))]
++#[cfg(all(not(windows), not(target_os = "wasi")))]
+ use core::ffi::c_int;
+ use core::sync::atomic::Ordering;
+ 
+@@ -683,6 +683,7 @@ use bun_sys::{self as sys, E, Fd};
+ // named `io_loop` but the runtime tagname is `"loop"` so `BUN_DEBUG_loop=1` works.
+ #[cfg(not(windows))]
+ #[allow(non_upper_case_globals)]
++#[cfg_attr(target_os = "wasi", allow(dead_code))] // Native pollers are unused by synchronous WASI IO.
+ pub(crate) static io_loop: bun_core::output::ScopedLogger =
+     bun_core::output::ScopedLogger::new("loop", bun_core::output::Visibility::Visible);
+ // All `log!` call sites are inside epoll/kqueue paths (Linux/macOS/FreeBSD); on
+@@ -698,6 +699,7 @@ bun_core::define_scoped_log!(log, io_loop); // hand-declared static above (tagna
+ // unnecessary; every caller is gated.
+ #[cfg(any(unix, target_os = "wasi"))]
+ mod safe_c {
++    #[cfg(not(target_os = "wasi"))]
+     use core::ffi::c_int;
+     unsafe extern "C" {
+         #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+@@ -1087,6 +1089,7 @@ impl IoRequestLoop {
+     // these so any Windows call site fails at compile time rather than
+     // compiling cleanly and only panicking at runtime.
+     #[cfg(not(windows))]
++    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+     pub(crate) fn pollfd(&self) -> Fd {
+         #[cfg(any(target_os = "linux", target_os = "android"))]
+         {
+@@ -1383,16 +1386,20 @@ pub enum PollableTag {
+ /// packed addr:49 + tag:15 layout locally.
+ #[cfg(not(windows))]
+ #[derive(Clone, Copy)]
++#[cfg_attr(target_os = "wasi", allow(dead_code))]
+ struct Pollable {
+     value: u64,
+ }
+ 
+ #[cfg(not(windows))]
++#[cfg_attr(target_os = "wasi", allow(dead_code))]
+ const POLLABLE_ADDR_BITS: u64 = 49;
+ #[cfg(not(windows))]
++#[cfg_attr(target_os = "wasi", allow(dead_code))]
+ const POLLABLE_ADDR_MASK: u64 = (1u64 << POLLABLE_ADDR_BITS) - 1;
+ 
+ #[cfg(not(windows))]
++#[cfg_attr(target_os = "wasi", allow(dead_code))]
+ impl Pollable {
+     fn init(t: PollableTag, p: *mut Poll) -> Pollable {
+         let addr = p as usize as u64;
+@@ -1984,6 +1991,7 @@ pub mod waker {
+         }
+ 
+         #[inline]
++        #[cfg_attr(target_os = "wasi", allow(dead_code))]
+         pub(crate) fn get_fd(&self) -> Fd {
+             Fd::INVALID
+         }
+diff --git a/src/io/posix_event_loop.rs b/src/io/posix_event_loop.rs
+index 8b6e7e48..cf51c11d 100644
+--- a/src/io/posix_event_loop.rs
++++ b/src/io/posix_event_loop.rs
+@@ -1,4 +1,4 @@
+-#[cfg(any(unix, target_os = "wasi"))]
++#[cfg(unix)]
+ use core::ffi::c_int;
+ #[cfg(not(windows))]
+ use core::ffi::c_void;
+@@ -20,6 +20,7 @@ pub type Loop = UwsLoop;
+ // reachable from non-Windows `Loop` consumers, so the Windows arm is a no-op.
+ #[cfg(not(windows))]
+ #[inline]
++#[cfg_attr(target_os = "wasi", allow(dead_code))] // Native pollers are unused by synchronous WASI IO.
+ fn loop_add_active(loop_: &mut Loop, value: u32) {
+     loop_.active = loop_.active.saturating_add(value);
+ }
+@@ -80,6 +81,7 @@ fn kevent_change_error(data: i64) -> sys::Result<()> {
+ /// ignores the same errnos for its kqueue/epoll delete operations.
+ #[cfg(not(windows))]
+ #[inline]
++#[cfg_attr(target_os = "wasi", allow(dead_code))]
+ fn deregistration_already_gone(errno: sys::E) -> bool {
+     matches!(errno, sys::E::ENOENT | sys::E::EBADF)
+ }
+@@ -307,6 +309,7 @@ pub struct FilePoll {
+ 
+ #[cfg(not(windows))]
+ impl FilePoll {
++    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+     fn update_flags(&mut self, updated: FlagsSet) {
+         let mut flags = self.flags;
+         flags.remove(Flags::Readable);
+@@ -424,6 +427,7 @@ impl FilePoll {
+             || self.flags.contains(Flags::PollMemoryPressure)
+     }
+ 
++    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+     pub(crate) fn on_update(&mut self, size_or_offset: i64) {
+         if self.flags.contains(Flags::OneShot) && !self.flags.contains(Flags::NeedsRearm) {
+             self.flags.insert(Flags::NeedsRearm);
+@@ -490,6 +494,7 @@ impl FilePoll {
+     }
+ 
+     /// Only intended to be used from EventLoop.Pollable
++    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+     fn activate(&mut self, loop_: &mut Loop) {
+         self.flags.remove(Flags::Closed);
+ 
+@@ -1422,11 +1427,13 @@ impl Store {
+ // `TaggedPtr` directly with the same tag scheme (`1024 - index`).
+ #[cfg(not(windows))]
+ #[derive(Copy, Clone)]
++#[cfg_attr(target_os = "wasi", allow(dead_code))]
+ pub(crate) struct Pollable {
+     repr: bun_collections::TaggedPtr,
+ }
+ 
+ #[cfg(not(windows))]
++#[cfg_attr(target_os = "wasi", allow(dead_code))]
+ impl Pollable {
+     /// Tag value for `FilePoll` (index 0 → `1024 - 0`).
+     pub(crate) const FILE_POLL_TAG: u16 = 1024;
+diff --git a/src/sys/copy_file.rs b/src/sys/copy_file.rs
+index 1bc5b8cf..df4127c4 100644
+--- a/src/sys/copy_file.rs
++++ b/src/sys/copy_file.rs
+@@ -4,11 +4,11 @@
+ 
+ use core::sync::atomic::{AtomicI32, Ordering};
+ 
+-#[cfg(not(windows))]
++#[cfg(all(not(windows), not(target_os = "wasi")))]
+ use crate::E;
+ #[cfg(not(windows))]
+ use crate::Fd;
+-#[cfg(not(any(target_os = "linux", target_os = "android")))]
++#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "wasi")))]
+ use crate::Tag;
+ #[cfg(not(windows))]
+ use bun_core::vec::UninitBuf;
+diff --git a/src/sys/lib.rs b/src/sys/lib.rs
+index 3874ec68..9b64d23f 100644
+--- a/src/sys/lib.rs
++++ b/src/sys/lib.rs
+@@ -294,7 +294,7 @@ pub mod dir_iterator {
+     }
+ 
+     /// `posix.DT.* → Entry.Kind` (Linux/Darwin/FreeBSD share the BSD `DT_*` values).
+-    #[cfg(any(unix, target_os = "wasi"))]
++    #[cfg(unix)]
+     #[inline]
+     fn kind_from_dt(dt: u8) -> EntryKind {
+         match dt {
+@@ -1020,7 +1020,7 @@ pub use tmp::Tmpfile;
+ // `#[cfg(windows)]` arms in dependents.
+ pub mod windows;
+ 
+-#[cfg(not(windows))]
++#[cfg(all(not(windows), not(target_os = "wasi")))]
+ use core::ffi::c_int;
+ use core::ffi::{c_char, c_void};
+ 
+@@ -1490,9 +1490,9 @@ impl Tag {
+     pub const clone3: Tag = Tag(107);
+     pub const uv_os_setpriority: Tag = Tag(108);
+     pub const flock: Tag = Tag(109);
+-    #[cfg(not(windows))]
++    #[cfg(all(not(windows), not(target_os = "wasi")))]
+     pub(crate) const flistxattr: Tag = Tag(110);
+-    #[cfg(not(windows))]
++    #[cfg(all(not(windows), not(target_os = "wasi")))]
+     pub(crate) const fgetxattr: Tag = Tag(111);
+     // `inotify_init1`/`inotify_add_watch` fold under the generic `.watch`
+     // tag; `INotifyWatcher.rs` spells it `.inotify`. Alias to `.watch`
+@@ -2749,6 +2749,7 @@ mod posix_impl {
+         Ok(())
+     }
+     /// What `call` writes. It is given a buffer and its length, or null and 0: then it returns how long one has to be.
++    #[cfg(not(target_os = "wasi"))]
+     fn filled(tag: Tag, mut call: impl FnMut(*mut libc::c_void, usize) -> isize) -> Maybe<Vec<u8>> {
+         let size = check!(call(core::ptr::null_mut(), 0), tag) as usize;
+         let mut buffer = vec![0u8; size];
+diff --git a/src/threading/Futex.rs b/src/threading/Futex.rs
+index 5f08a93b..080481f3 100644
+--- a/src/threading/Futex.rs
++++ b/src/threading/Futex.rs
+@@ -486,7 +486,7 @@ mod wasm_single_thread_impl {
+         }
+     }
+ 
+-    pub fn wake(_ptr: *const AtomicU32, _max_waiters: u32) {}
++    pub(super) fn wake(_ptr: *const AtomicU32, _max_waiters: u32) {}
+ }
+ 
+ #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+diff --git a/src/threading/ThreadPool.rs b/src/threading/ThreadPool.rs
+index 3727be64..ec98a9df 100644
+--- a/src/threading/ThreadPool.rs
++++ b/src/threading/ThreadPool.rs
+@@ -745,6 +745,7 @@ impl ThreadPool {
+         self.sync.load(Ordering::Relaxed).spawned() > 0
+     }
+ 
++    #[cfg(not(all(target_arch = "wasm32", not(target_feature = "atomics"))))]
+     fn force_spawn(&self) {
+         // Try to notify a thread
+         let is_waking = false;
+diff --git a/src/watcher/Watcher.rs b/src/watcher/Watcher.rs
+index 89bce27b..9090959f 100644
+--- a/src/watcher/Watcher.rs
++++ b/src/watcher/Watcher.rs
+@@ -99,7 +99,9 @@ pub type ChangedFilePath = Option<&'static ZStr>;
+ pub struct Watcher {
+     // This will always be [MAX_COUNT]WatchEvent,
+     // We avoid statically allocating because it increases the binary size.
++    #[cfg_attr(target_os = "wasi", allow(dead_code))] // WASI has no native filesystem watcher.
+     pub(crate) watch_events: Box<[WatchEvent]>,
++    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+     pub(crate) changed_filepaths: [ChangedFilePath; MAX_COUNT],
+ 
+     /// The platform-specific implementation of the watcher
+@@ -130,9 +132,11 @@ pub struct Watcher {
+     /// Scratch snapshot of `watchlist.eventlist_index` used by
+     /// `watch_loop_cycle`; owned by the watcher thread.
+     #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
++    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+     pub(crate) eventlist_index_scratch: Vec<platform::EventListIndex>,
+ 
+     pub(crate) ctx: *mut (),
++    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+     pub(crate) on_file_update: fn(*mut (), &mut [WatchEvent], &[ChangedFilePath], &WatchList),
+     pub(crate) on_error: fn(*mut (), sys::Error),
+ 
+@@ -223,6 +227,7 @@ impl Watcher {
+     /// The platform `watch_loop_cycle` fills `self.watch_events[..event_count]`
+     /// and `self.changed_filepaths[..changed_count]` and calls this instead of
+     /// open-coding the lock/trace/callback sequence.
++    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+     pub(crate) fn dispatch_file_updates(&mut self, event_count: usize, changed_count: usize) {
+         let _guard = self.mutex.lock_guard();
+         if !self.running.load() {
+@@ -986,10 +991,12 @@ impl WatchEvent {
+     }
+ 
+     #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi", windows))]
++    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+     pub(crate) fn sort_by_index(event: WatchEvent, rhs: WatchEvent) -> core::cmp::Ordering {
+         event.index.cmp(&rhs.index)
+     }
+ 
++    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+     pub(crate) fn merge(&mut self, other: WatchEvent) {
+         self.name_len += other.name_len;
+         self.op = Op::merge(self.op, other.op);
+@@ -1010,6 +1017,7 @@ bitflags::bitflags! {
+ }
+ 
+ impl Op {
++    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+     pub(crate) fn merge(before: Op, after: Op) -> Op {
+         before | after
+     }
+diff --git a/src/watcher/WatcherTrace.rs b/src/watcher/WatcherTrace.rs
+index 3301de3b..d9bba1c6 100644
+--- a/src/watcher/WatcherTrace.rs
++++ b/src/watcher/WatcherTrace.rs
+@@ -32,6 +32,7 @@ pub(crate) fn init() {
+ /// Write trace events to the trace file if enabled.
+ /// This is called from the watcher thread, so no locking is needed.
+ /// Events are assumed to be already deduped by path.
++#[cfg_attr(target_os = "wasi", allow(dead_code))] // WASI has no native filesystem watcher.
+ pub(crate) fn write_events(
+     watchlist: &WatchList,
+     events: &[WatchEvent],

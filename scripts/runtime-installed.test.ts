@@ -108,7 +108,7 @@ test("browser builds resolve Waffle through the installed consumer package", asy
     const installed = resolveRuntimePackage(entry);
     expect(installed.metadata.name).toBe("waffle");
     expect(installed.relativeInput(installed.source("waffle/core"))).toBe("core/index.ts");
-    const { outdir, ...config } = browserBuildConfig([entry], join(scratch, "dist"), { runtimeWorker: true });
+    const { outdir: _outdir, ...config } = browserBuildConfig([entry], join(scratch, "dist"), { runtimeWorker: true });
     const result = await Bun.build(config);
     if (!result.success) throw new Error(result.logs.map(String).join("\n"));
     const inputs = Object.keys(result.metafile!.inputs);

@@ -5,7 +5,12 @@ import { join, resolve } from "node:path";
 import { workerReviewCases } from "./fixtures/worker-review/cases.ts";
 
 const args = process.argv.slice(2);
-const option = (name: string, fallback = "") => args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
+const option = (name: string, fallback = "") => {
+  if (!args.includes(name)) return fallback;
+  const value = args[args.indexOf(name) + 1];
+  if (!value) throw new Error(`Missing value for ${name}`);
+  return value;
+};
 const engine = option("--engine", "browser");
 const host = option("--host", engine === "browser" ? "node" : "native");
 const artifact = resolve(option("--wasm", `dist/${engine === "quickjs" ? "bun" : `bun-${engine}`}.wasm`));
@@ -23,16 +28,17 @@ if (host === "node-control") scratch = mkdtempSync(join(process.env.BUN_WASM_SCR
 for (const test of selected) {
   const control = scratch ? `${scratch}/${test.name}.cjs` : "";
   if (control) writeFileSync(control, test.code);
-  const command = host === "node-control" ? [process.execPath, control]
+  const command: [string, ...string[]] = host === "node-control" ? [process.execPath, control]
     : host === "node" ? [process.execPath, "--no-warnings", `${root}/web/scripts/node-host.mjs`, "--wasm", artifact, "--net", "--", "-e", test.code]
     : [launcher, "--wasm", artifact, "--engine", `${engine}=${artifact}`, "--env", `PATH=/opt/bun/${engine}/bin:/bin:/usr/bin`, "--", "-e", test.code];
   const result = await new Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string; timeout: boolean }>(resolve => {
     let stdout = ""; let stderr = ""; let timeout = false;
-    active = spawn(command[0], command.slice(1), { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command[0], command.slice(1), { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+    active = child;
     const timer = setTimeout(() => { timeout = true; active?.kill("SIGKILL"); }, test.timeout ?? 90_000);
-    active.stdout?.on("data", chunk => { stdout += chunk; });
-    active.stderr?.on("data", chunk => { stderr += chunk; });
-    active.on("close", (code, signal) => { clearTimeout(timer); active = undefined; resolve({ code, signal, stdout, stderr, timeout }); });
+    child.stdout?.on("data", chunk => { stdout += chunk; });
+    child.stderr?.on("data", chunk => { stderr += chunk; });
+    child.on("close", (code, signal) => { clearTimeout(timer); active = undefined; resolve({ code, signal, stdout, stderr, timeout }); });
   });
   const pass = result.code === test.exit && !result.timeout && test.output.every(line => result.stdout.split("\n").includes(line)) && (!test.error || result.stderr.includes(test.error));
   results.push({ name: test.name, engine, host, pass, ...result });

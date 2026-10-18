@@ -1,7 +1,6 @@
 //! bun-wasm additions: POSIX declarations wasi-libc does not provide.
 //! Values follow Linux/musl so code written against Linux constants behaves
 //! the same; the functions are implemented by the `bunwasm-posix` crate.
-use crate::prelude::*;
 use super::*;
 
 // ── sys/mman.h (musl values) ────────────────────────────────────────────
@@ -298,7 +297,6 @@ extern "C" {
 
 // ── sockets (flags p2.rs lacks) ─────────────────────────────────────────
 pub const MSG_DONTWAIT: c_int = 0x40;
-pub const MSG_NOSIGNAL: c_int = 0x4000;
 
 // ── raw syscalls, hostname, statfs, ELF program headers ─────────────────
 extern "C" {

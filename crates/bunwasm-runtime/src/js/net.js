@@ -11,7 +11,6 @@
   const caps = native.hostCaps;
   const { Request, Response, Headers, ReadableStream, DOMException } = internal.web;
 
-  const ERROR = -1;
   const AGAIN = -2;
 
   // --- I/O core -------------------------------------------------------------
@@ -345,11 +344,8 @@
         if (chunk === AGAIN) return progressed ? "progress" : false;
         if (typeof chunk === "number") {
           this.reading = false;
-          if (chunk === 0) {
-            if (this.onEnd) this.onEnd();
-          } else {
-            this.fail(hostError(this.handle, "connection error"));
-          }
+          if (chunk === 0) this.onEnd?.();
+          else this.fail(hostError(this.handle, "connection error"));
           return true;
         }
         progressed = true;

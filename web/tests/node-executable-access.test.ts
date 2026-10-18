@@ -49,8 +49,7 @@ for (const engines of [{}, { quickjs }, { jsc }, { quickjs, jsc }]) test(`Node m
         expect(existsSync(native)).toBe(engine in engines);
         expect(await f.query(path)).toBe(engine in engines ? 0 : -44);
         const result = await f.spawn(path);
-        if (engine in engines) expect(result.status).toBe(status);
-        else expect(result).toMatchObject({ kind: "start-failed", error: "ENOENT" });
+        expect(result).toMatchObject(engine in engines ? { status } : { kind: "start-failed", error: "ENOENT" });
       }
     }
   } finally { await f.close(); }

@@ -50,9 +50,21 @@ pub fn embed(manifest: &Path, out: &Path) {
     println!("cargo:rerun-if-changed={}", runtime.display());
     println!("cargo:rerun-if-changed={}", generator.display());
     let destination = out.join("bun-wrap.js");
-    let output = Command::new("node").arg(generator).arg(runtime).arg(&destination).output().expect("generate bun:wrap");
-    assert!(output.status.success(), "generate bun:wrap: {}", String::from_utf8_lossy(&output.stderr));
-    table.push_str(&format!("    (\"bun_wrap\", include_str!({:?})),\n", destination.display().to_string()));
+    let output = Command::new("node")
+        .arg(generator)
+        .arg(runtime)
+        .arg(&destination)
+        .output()
+        .expect("generate bun:wrap");
+    assert!(
+        output.status.success(),
+        "generate bun:wrap: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    table.push_str(&format!(
+        "    (\"bun_wrap\", include_str!({:?})),\n",
+        destination.display().to_string()
+    ));
     table.push_str("];\n");
     fs::write(out.join("polyfills.rs"), table).unwrap();
 }

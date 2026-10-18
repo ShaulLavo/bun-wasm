@@ -305,6 +305,45 @@ const monotonicNow = performance.now.bind(performance), realtimeNow = Date.now.b
 function installPoll(wasi: NodeWasiImports["wasi_snapshot_preview1"], nativePoll: ((...args: number[]) => number) | undefined,
   memory: () => WebAssembly.Memory, descriptors: DescriptorTable, client: WorkerProcessClient, isSignalPending: () => boolean,
   guard: (fn: (...args: number[]) => number) => (...args: number[]) => number) {
+  type Subscription = { ptr: number; type: number; fd: number; userdata: bigint; deadline: number };
+  type Views = ReturnType<typeof memoryViews>;
+  function pollNative(items: Subscription[], views: Views, input: number, output: number, count: number, result: number) {
+    for (const item of items) if (item.type !== 0) views.view().setUint32(item.ptr + 16, nativeDescriptor(descriptors.get(item.fd))!, true);
+    try { return nativePoll!(input, output, count, result); }
+    finally {
+      for (const item of items) if (item.type !== 0) views.view().setUint32(item.ptr + 16, item.fd, true);
+    }
+  }
+  function pollSubscription(item: Subscription, views: Views, at: number, result: number) {
+    const event = { error: 0, ready: true, nbytes: 0n, hangup: false, remaining: Infinity, nativeError: 0 };
+    if (item.type === 0) {
+      if (item.fd > 3) return { ...event, error: 28 };
+      const remaining = item.deadline - monotonicNow();
+      return { ...event, ready: remaining <= 0, remaining };
+    }
+    const entry = descriptors.get(item.fd);
+    if (!entry) return { ...event, error: 8 };
+    if ((entry.rightsBase & POLL) === 0n) return { ...event, error: 76 };
+    const nativeFd = nativeDescriptor(entry);
+    if (nativeFd !== undefined) {
+      // Preserve Node's actual event metadata, even alongside process streams.
+      views.view().setUint32(item.ptr + 16, nativeFd, true);
+      try { event.nativeError = nativePoll?.(item.ptr, at, 1, result) ?? 52; }
+      finally { views.view().setUint32(item.ptr + 16, item.fd, true); }
+      if (event.nativeError) return event;
+      event.ready = views.view().getUint32(result, true) !== 0;
+      if (!event.ready) return event;
+      const view = views.view();
+      event.error = view.getUint16(at + 8, true);
+      event.nbytes = view.getBigUint64(at + 16, true);
+      event.hangup = (view.getUint16(at + 24, true) & 1) !== 0;
+      return event;
+    }
+    if (entry.resource.kind !== "pipe" && entry.resource.kind !== "terminal") return { ...event, error: 8 };
+    const state = entry.resource.readiness();
+    return { ...event, ready: item.type === 1 ? state.readable || state.hangup : state.writable || state.hangup,
+      hangup: state.hangup, nbytes: item.type === 1 ? BigInt(state.nbytes ?? 0) : 0n };
+  }
   wasi.poll_oneoff = guard((input, output, count, result) => {
     if (!count) return 28;
     if (isSignalPending()) return 27;
@@ -320,12 +359,10 @@ function installPoll(wasi: NodeWasiImports["wasi_snapshot_preview1"], nativePoll
         deadline: absolute ? monotonicNow() + delay - (clock === 0 ? realtimeNow() : monotonicNow()) : monotonicNow() + delay };
     });
     if (subscriptions.some(item => item.type > 2)) return 28;
-    // Node's native poll retains its own file/clock semantics when no process stream is present.
+    // Node retains file/clock semantics when no process stream is present.
     if (nativePoll && subscriptions.some(item => item.type !== 0) &&
       subscriptions.every(item => item.type === 0 || nativeDescriptor(descriptors.get(item.fd)) !== undefined)) {
-      for (const item of subscriptions) if (item.type !== 0) initial.setUint32(item.ptr + 16, nativeDescriptor(descriptors.get(item.fd))!, true);
-      try { return nativePoll(input!, output!, count!, result!); }
-      finally { for (const item of subscriptions) if (item.type !== 0) views.view().setUint32(item.ptr + 16, item.fd, true); }
+      return pollNative(subscriptions, views, input!, output!, count!, result!);
     }
     for (;;) {
       const expected = Atomics.load(client.wake, 0);
@@ -333,39 +370,9 @@ function installPoll(wasi: NodeWasiImports["wasi_snapshot_preview1"], nativePoll
       if (isSignalPending()) return 27;
       let emitted = 0, timeout = Infinity;
       for (const item of subscriptions) {
-        let error = 0, ready = false, nbytes = 0n, hangup = false;
-        if (item.type === 0) {
-          if (item.fd > 3) { error = 28; ready = true; }
-          else {
-            const remaining = item.deadline - monotonicNow();
-            timeout = Math.min(timeout, remaining); ready = remaining <= 0;
-          }
-        }
-        else {
-          const entry = descriptors.get(item.fd);
-          if (!entry) { error = 8; ready = true; }
-          else if ((entry.rightsBase & POLL) === 0n) { error = 76; ready = true; }
-          else if (nativeDescriptor(entry) !== undefined) {
-            // Native entries are files/directories from path_open. Ask Node for their actual
-            // event metadata even when other subscriptions belong to process streams.
-            const at = output! + emitted * 32;
-            views.view().setUint32(item.ptr + 16, nativeDescriptor(entry)!, true);
-            try { error = nativePoll?.(item.ptr, at, 1, result!) ?? 52; }
-            finally { views.view().setUint32(item.ptr + 16, item.fd, true); }
-            if (error) return error;
-            ready = views.view().getUint32(result!, true) !== 0;
-            if (ready) {
-              const event = views.view();
-              error = event.getUint16(at + 8, true); nbytes = event.getBigUint64(at + 16, true);
-              hangup = (event.getUint16(at + 24, true) & 1) !== 0;
-            }
-          }
-          else if (entry.resource.kind === "pipe" || entry.resource.kind === "terminal") {
-            const state = entry.resource.readiness();
-            ready = item.type === 1 ? state.readable || state.hangup : state.writable || state.hangup;
-            hangup = state.hangup; nbytes = item.type === 1 ? BigInt(state.nbytes ?? 0) : 0n;
-          } else { error = 8; ready = true; }
-        }
+        const { error, ready, nbytes, hangup, remaining, nativeError } = pollSubscription(item, views, output! + emitted * 32, result!);
+        if (nativeError) return nativeError;
+        timeout = Math.min(timeout, remaining);
         if (!ready) continue;
         const ptr = output! + emitted++ * 32;
         views.range(ptr, 32).fill(0);
