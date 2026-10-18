@@ -43,10 +43,9 @@ function resolveWindowsWithCwd(): string {
     );
   resolver = resolver.replace("normalize_string_t::<T, { Platform::Windows }>", "normalize_string_t::<T>");
   if (normalize.includes("Platform") || resolver.includes("Platform")) throw new Error("Unexpected platform-dependent path helper");
-  return `mod windows_resolver {
-use bun_core::strings;
+  const generated = `mod windows_resolver {
+use super::{ffi, strings, MAX_PATH_BYTES, PATH_MAX_WIDE, w_path_buffer_pool, cast_slice, cast_slice_mut};
 use bun_node_path::{PathCharCwd, is_sep_windows_t, CHAR_BACKWARD_SLASH, CHAR_FORWARD_SLASH, CHAR_STR_DOT};
-use bun_paths::{MAX_PATH_BYTES, PATH_MAX_WIDE};
 type MaybeSlice<'a, T> = bun_sys::Result<&'a [T]>;
 const CHAR_COLON: u8 = b':';
 const CHAR_DOT: u8 = b'.';
@@ -67,6 +66,7 @@ ${normalize}
 ${resolver}
 }
 `;
+  return generated.replaceAll("bun_core::ffi::", "ffi::").replaceAll("bun_paths::w_path_buffer_pool::", "w_path_buffer_pool::").replaceAll("bytemuck::cast_slice", "cast_slice");
 }
 
 writeFileSync(outputPath, resolveWindowsWithCwd().concat(relative("posix", "relative_windows_t"), relative("windows", "resolve_posix_t")));

@@ -1,4 +1,7 @@
+use bun_core::{ffi, strings};
 use bun_node_path as path;
+use bun_paths::{MAX_PATH_BYTES, PATH_MAX_WIDE, w_path_buffer_pool};
+use bytemuck::{cast_slice, cast_slice_mut};
 
 use crate::engine::{Args, NativeError, NativeResult, Record, Val};
 use crate::natives::Table;

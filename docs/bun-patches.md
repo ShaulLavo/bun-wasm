@@ -1144,7 +1144,9 @@ and six private helpers from the same upstream file. Class **Port**. It replaces
 two cwd reads with a supplied guest cwd slice and specializes the tail normalizer
 to Windows. Bun's device selection, separator handling, tail normalization and
 output writes remain unchanged. The generated upstream functions retain their
-original control flow. The original host adapter passes validated UTF-16 paths
+original control flow. Dependency imports come through the authored adapter so
+Cargo dependency analysis sees the crates used by generated source. The original
+host adapter passes validated UTF-16 paths
 and the current guest cwd to this resolver. It replaces the previous handwritten
 Windows resolution algorithm, which could create a false UNC root by joining
 cwd `/` and a relative tail before normalization.
