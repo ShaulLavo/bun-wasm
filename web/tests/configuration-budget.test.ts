@@ -64,7 +64,7 @@ test("failed helper launch and invalid metadata cannot consume reserved capacity
   try {
     for (let i = 0; i < 8; i++) {
       expect(host.spawn(configuration)).toBe(-1);
-      expect(host.lastError).toContain("fixture failure");
+      expect(JSON.parse(host.lastError!)).toMatchObject({ code: "EACCES", errno: -13, path: "bun", syscall: "posix_spawn" });
       expect(host.children.size).toBe(0);
       expect(host.handles.size).toBe(0);
     }
