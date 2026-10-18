@@ -1,12 +1,27 @@
 import assert from "node:assert/strict";
 
 const encoder = new TextEncoder();
+let requested = Promise.withResolvers<void>();
 const server = Bun.serve({
   port: 0,
-  fetch() {
+  fetch(request) {
+    if (new URL(request.url).pathname === "/headers") {
+      requested.resolve();
+      return new Promise<Response>(() => {});
+    }
     return new Response(new ReadableStream({ start(source) { source.enqueue(encoder.encode("open")); } }));
   },
 });
+
+async function checkHeaders(label: string, reason: unknown): Promise<void> {
+  requested = Promise.withResolvers<void>();
+  const controller = new AbortController();
+  const response = fetch(new URL("headers", server.url), { signal: controller.signal });
+  await requested.promise;
+  controller.abort(reason);
+  await assert.rejects(response, error => Object.is(error, reason));
+  console.log("headers abort", label, "identity");
+}
 
 async function check(label: string, reason: unknown): Promise<void> {
   const controller = new AbortController();
@@ -21,6 +36,11 @@ async function check(label: string, reason: unknown): Promise<void> {
 }
 
 try {
+  await checkHeaders("null", null);
+  await checkHeaders("zero", 0);
+  await checkHeaders("false", false);
+  await checkHeaders("string", "stopped");
+  await checkHeaders("error", new Error("stopped"));
   await check("null", null);
   await check("zero", 0);
   await check("false", false);
