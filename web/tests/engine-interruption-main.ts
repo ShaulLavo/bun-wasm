@@ -1,3 +1,4 @@
+import { observedAtomics } from "./engine-interruption-atomics";
 import { controlLoad, controlStore, controlAdd } from "waffle/proc/control";
 import { createRuntime, type Runtime } from "waffle";
 import type { Engine, RunRequest } from "../src/bun-executor";
@@ -198,7 +199,7 @@ async function scope(module: WebAssembly.Module, engine: Engine, route: EngineIn
 async function runCase(identity: FunctionalCaseIdentity, body: () => Promise<unknown>) {
   const resources: CaseResources = { workers: new Set(), contexts: [], cleanupErrors: [] };
   const beforeWorkers = new Set(activeWorkers), beforeScopes = new Set(scopes);
-  const settings = { hooks, observeCheckpoints, idleWaitTimeoutMs, instrumentPreview1Root, notify: Atomics.notify };
+  const settings = { hooks, observeCheckpoints, idleWaitTimeoutMs, instrumentPreview1Root, notify: observedAtomics.notify };
   let passed = false;
   currentCase = resources;
   try {
@@ -217,7 +218,7 @@ async function runCase(identity: FunctionalCaseIdentity, body: () => Promise<unk
       }
       for (const [pid, worker] of guestWorkers) if (resources.workers.has(worker)) guestWorkers.delete(pid);
       if (hooks !== settings.hooks || observeCheckpoints !== settings.observeCheckpoints
-        || idleWaitTimeoutMs !== settings.idleWaitTimeoutMs || instrumentPreview1Root !== settings.instrumentPreview1Root || Atomics.notify !== settings.notify) {
+        || idleWaitTimeoutMs !== settings.idleWaitTimeoutMs || instrumentPreview1Root !== settings.instrumentPreview1Root || observedAtomics.notify !== settings.notify) {
         resources.cleanupErrors.push(new Error("case instrumentation settings were not restored"));
       }
       if (Array.from(activeWorkers).some(worker => !beforeWorkers.has(worker))
@@ -355,7 +356,7 @@ async function testIdleHandled(module: WebAssembly.Module, engine: Engine, route
       equal(controlLoad(worker.probe, probeCell.idleWaitActiveGeneration), generation, "same long wait generation remains entered");
       equal(controlLoad(worker.probe, probeCell.idleWaiting), 1, "idle wait is still entered immediately before kill");
       controlStore(worker.probe, probeCell.idleWaitSampleGeneration, generation);
-      if (suppressNotify) mutation = suppressBudgetNotifications(worker.transport!.waitWord);
+      if (suppressNotify) mutation = suppressBudgetNotifications(worker.transport!.waitWord, observedAtomics);
       const started = performance.now();
       equal(await owned.kill(child, 2, delivery), 0, "idle handled SIGINT accepted");
       await until(() => { owned.drain(child); return child.stderr.includes("idle-handled\n"); }, "idle event-loop dispatched SIGINT", 15_000, () => guestFinished(worker));
@@ -506,7 +507,7 @@ async function testPreview1Clock(root: boolean): Promise<void> {
       equal(controlLoad(observed.probe, probeCell.idleWaitActiveGeneration), generation, "same Preview1 clock wait remains entered");
       equal(controlLoad(observed.probe, probeCell.idleWaiting), 1, "Preview1 clock is blocked before page kill");
       controlStore(observed.probe, probeCell.idleWaitSampleGeneration, generation);
-      if (suppressNotify) mutation = suppressBudgetNotifications(observed.transport!.waitWord);
+      if (suppressNotify) mutation = suppressBudgetNotifications(observed.transport!.waitWord, observedAtomics);
       const started = performance.now();
       if (root) run!.kill(2); else equal(await owned!.kill(child!, 2, "page-kill"), 0, "page Preview1 SIGINT accepted");
       await until(() => {
@@ -521,8 +522,11 @@ async function testPreview1Clock(root: boolean): Promise<void> {
       await until(() => controlLoad(observed.probe, probeCell.runReturned) === 1, "Preview1 actual _start returned");
       equal(stdout, "", "Preview1 stdout is empty");
       equal(stderr, "ready\npoll-eintr\npoll-clean\n", "EINTR, authoritative dequeue and final nonsticky clock wait");
-      equal(controlLoad(observed.transport!.signalState, 2) & 4, 0, "Preview1 pending bit consumed only by interrupted");
       const evidence = snapshotProbe(observed.probe);
+      equal(evidence.preview1PollPending, 4, "Preview1 EINTR preserves the authoritative pending bit");
+      equal(evidence.preview1Delivered, 2, "Preview1 interrupted dequeues actual SIGINT");
+      equal(evidence.preview1PendingAfter, 0, "Preview1 pending bit consumed only by interrupted");
+      equal(evidence.preview1EmptyDequeues, 1, "Preview1 second dequeue is empty");
       assertNativeEngineCompletion(evidence);
       let causalRejection: string | undefined;
       if (suppressNotify) {

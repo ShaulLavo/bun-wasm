@@ -3,6 +3,7 @@ import { controlLoad, controlStore, controlAdd, controlCas } from "waffle/proc/c
 import { WasiExit } from "waffle/core";
 import { ProcessSignalExit } from "waffle/proc/abi";
 import { RuntimeWorkerSignal } from "waffle/browser/worker";
+import { DefaultSignal } from "../src/default-signal";
 
 // Test-only evidence shared between the page and the instrumented guest worker.
 // Counts come from real WASI imports / _start, never the supervisor's logical exit.
@@ -50,8 +51,12 @@ export const probeCell = {
   startFatalSignal: 40,
   processPollCalls: 41,
   processPollThrows: 42,
+  preview1PollPending: 43,
+  preview1Delivered: 44,
+  preview1PendingAfter: 45,
+  preview1EmptyDequeues: 46,
 } as const;
-export const probeLength = 43;
+export const probeLength = 47;
 export interface EngineInterruptionOptions { evidence: SharedArrayBuffer; hooks: boolean; observeCheckpoints: boolean; idleWaitTimeoutMs: number; }
 
 export function snapshotProbe(probe: Int32Array): Record<keyof typeof probeCell, number> {
@@ -114,7 +119,7 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
         controlAdd(probe, probeCell.checkpointThrew, 1);
         // Only a production terminal exception identifies this fatal checkpoint; a
         // selected outcome cannot promote a coincidental RuntimeError into evidence.
-        if (error instanceof RuntimeWorkerSignal || error instanceof ProcessSignalExit) {
+        if (error instanceof RuntimeWorkerSignal || error instanceof ProcessSignalExit || error instanceof DefaultSignal) {
           if (!signalBefore) controlAdd(probe, probeCell.checkpointAfterSignal, 1);
           controlStore(probe, probeCell.checkpointSignal, error.signal);
           controlStore(probe, probeCell.checkpointFatalSignal, error.signal);
@@ -163,6 +168,27 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
       partialLines.set(fd, line);
     }
     return write(fd, vectors, count, written);
+  };
+}
+
+/** Sample authoritative pending state inside the actual imports, before root
+ * completion collects its process incarnation. Never read collected TaggedCells. */
+export function observePreview1Dequeue(imports: WebAssembly.Imports, probe: Int32Array, signalState: ControlCells): void {
+  const process = imports.runtime_proc, wasi = imports.wasi_snapshot_preview1;
+  const interrupted = process?.interrupted, poll = wasi?.poll_oneoff;
+  if (typeof interrupted !== "function" || typeof poll !== "function") throw new Error("Preview1 proof requires actual interrupted and poll_oneoff imports");
+  wasi!.poll_oneoff = (...args: number[]) => {
+    const result = poll(...args);
+    if (result === 27) controlStore(probe, probeCell.preview1PollPending, controlLoad(signalState, 2) & 4);
+    return result;
+  };
+  process!.interrupted = () => {
+    const delivered = interrupted() as number;
+    if (delivered === 0) controlAdd(probe, probeCell.preview1EmptyDequeues, 1);
+    if (delivered !== 2) return delivered;
+    controlStore(probe, probeCell.preview1Delivered, delivered);
+    controlStore(probe, probeCell.preview1PendingAfter, controlLoad(signalState, 2) & 4);
+    return delivered;
   };
 }
 
@@ -246,7 +272,7 @@ export function observedEngineStart(exports: WebAssembly.Exports, probe: Int32Ar
         // Keep typed fatal throws in "other" so native true-return admission
         // remains strict; default-fatal admission additionally checks their type.
         controlAdd(probe, probeCell.startOtherException, 1);
-        if (error instanceof RuntimeWorkerSignal || error instanceof ProcessSignalExit) {
+        if (error instanceof RuntimeWorkerSignal || error instanceof ProcessSignalExit || error instanceof DefaultSignal) {
           controlStore(probe, probeCell.startFatalSignal, error.signal);
         }
       }

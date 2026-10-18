@@ -88,12 +88,12 @@ function assertGreenResult(result: Record<string, any>, benchmark: boolean): voi
   assert.ok(Array.isArray(result.outcomes) && result.outcomes.length > 0, "page functional outcomes");
   assert.ok(result.outcomes.every((outcome: any) => outcome.ok === true && outcome.cleanup?.safe === true), "all page functional cases passed safely");
   assert.deepEqual(result.pageErrors ?? [], [], "page errors");
-  assert.equal(result.checks.length, 28, "fourteen legacy host, twelve page/generic-route and two actual Preview1 clock cases");
-  assert.equal(result.checks.filter((check: any) => check.route === "runtimeProcess").length, 10, "new-route fatal, pending and page-idle proof on both engines");
+  assert.equal(result.checks.length, 32, "fourteen engine proofs each plus four browser/Preview1 proofs");
+  assert.equal(result.checks.filter((check: any) => check.route === "runtimeProcess").length, 14, "new-route fatal, pending, page-idle and sleepSync proof on both engines");
   for (const engine of ["quickjs", "jsc"]) {
-    assert.equal(result.checks.filter((check: any) => check.engine === engine).length, 12, `${engine} complete legacy/new-route case set`);
+    assert.equal(result.checks.filter((check: any) => check.engine === engine).length, 14, `${engine} complete legacy/new-route case set`);
   }
-  assert.equal(new Set(result.checks.map((check: any) => `${check.engine}:${check.name}`)).size, 28, "all named proofs are distinct");
+  assert.equal(new Set(result.checks.map((check: any) => `${check.engine}:${check.name}`)).size, 32, "all named proofs are distinct");
   assert.equal(result.cleanup.activeWorkers, 0, "worker cleanup");
   if (benchmark) assert.equal(result.benchmarks.length, 2, "per-engine overhead measurements");
 }
@@ -302,10 +302,10 @@ async function main(): Promise<boolean> {
         // The caller owns a supplied bundle. Only this run's profile/build scratch is removed.
         const out = process.env.ENGINE_INTERRUPTION_BROWSER_BUNDLE ? resolve(process.env.ENGINE_INTERRUPTION_BROWSER_BUNDLE) : join(scratch, "browser");
         if (!process.env.ENGINE_INTERRUPTION_BROWSER_BUNDLE) {
-          await buildBrowserEntries([join(import.meta.dir, "engine-interruption-main.ts"), join(import.meta.dir, "engine-interruption-worker.ts"),
+          await buildBrowserEntries([join(import.meta.dir, "engine-interruption-page.ts"), join(import.meta.dir, "engine-interruption-worker.ts"),
             join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts")], out, { runtimeWorker: true });
           assertRunning();
-          await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./engine-interruption-main.js"></script>');
+          await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./engine-interruption-page.js"></script>');
         }
         assertRunning();
         server = Bun.serve({ hostname: "127.0.0.1", port: 0, reusePort: false, async fetch(request) {

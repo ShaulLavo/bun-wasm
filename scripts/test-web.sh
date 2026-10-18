@@ -109,10 +109,14 @@ if [[ $browser == 1 ]]; then
   bun tests/browser-interrupt.ts chromium firefox webkit || failed=1
   bun tests/browser-runtime-proc.ts chromium webkit || failed=1
   node tests/browser-stack.mjs || failed=1
-  if [[ -f "$root/dist/bun-jsc.wasm" && -f "$root/dist/bun-browser.wasm" ]]; then
-    bun tests/browser-engine-interruption.ts || failed=1
+  missing_interruption=()
+  for artifact in bun.wasm bun-jsc.wasm bun-browser.wasm; do
+    [[ -f "$root/dist/$artifact" ]] || missing_interruption+=("dist/$artifact")
+  done
+  if (( ${#missing_interruption[@]} == 0 )); then
+    bun run test:browser:engine-interruption || failed=1
   else
-    echo "skip engine interruption: needs dist/bun-jsc.wasm and dist/bun-browser.wasm alongside bun.wasm"
+    echo "SKIPPED engine interruption: missing ${missing_interruption[*]}"
   fi
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
     node tests/browser-worker-modules.ts || failed=1

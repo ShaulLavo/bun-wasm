@@ -135,3 +135,30 @@ BUN_WASM_RUNTIME_PROC_ARTIFACT="$PWD/dist/bun-browser.wasm" \
 BUN_WASM_RUNTIME_PROC_PUBLISHED_DEFAULT=1 \
   bun web/tests/bun-runtime-proc-browser.ts chromium firefox webkit
 ```
+
+### Required full-build interruption acceptance
+
+The immutable guest publication command runs the real engine-interruption harness in
+Chromium, Firefox and WebKit **before** contacting storage or changing a descriptor. Build
+all three artifacts from the source revision being published: `dist/bun.wasm`,
+`dist/bun-jsc.wasm` and `dist/bun-browser.wasm`. The upload (raw or gzip) must match one
+of those exact artifacts; missing builds, failed proofs or unsafe cleanup stop publication.
+Use `--dist /absolute/full-build-directory` when the matching builds are elsewhere.
+
+```sh
+source env.sh
+export PLAYWRIGHT_BROWSERS_PATH=/work/cache/ms-playwright
+bun scripts/publish-guest.ts dist/bun-browser.wasm --output src/guest-asset.generated.ts
+```
+
+To run the same acceptance without publishing, use
+`cd web && bun run test:browser:engine-interruption`. Set
+`BUN_WASM_INTERRUPTION_DIST=/absolute/full-build-directory` to select matching builds.
+On the PC, run either command through the shared heavy runner with `--class browser`.
+The harness records per-browser outcomes, exact artifact hashes, native wait samples,
+notify-removal negative controls and owned-resource cleanup in its JSON output.
+
+GitHub's browser jobs intentionally use no Rust/dist builds. `scripts/test-web.sh` runs
+this artifact-backed gate when all builds exist, or prints `SKIPPED` with every missing
+file. Publication never skips it. Unit coverage checks admission/cleanup and a real
+native worker regression, but cannot replace this three-browser full-build acceptance.

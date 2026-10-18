@@ -41,4 +41,29 @@ test("Bun worker captures host messaging, events and native fetch before guest r
   expect(Object.isFrozen(captured)).toBe(true);
 });
 
-test.todo("same-realm Atomics and shared-view tampering cannot observe or override another process: pending Waffle intrinsic-capture fix; dynamic global Atomics currently exposes host views");
+test("same-realm Atomics and shared-view replacement cannot intercept worker signals or native waits", async () => {
+  const evidence = new Int32Array(new SharedArrayBuffer(4));
+  const gate = new Int32Array(new SharedArrayBuffer(4));
+  let worker: Worker | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  let wake: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = Promise.withResolvers<unknown>();
+    deadline = setTimeout(() => result.reject(new Error("intrinsic-capture worker deadline exceeded")), 5_000);
+    const notify = () => {
+      if (Atomics.load(evidence, 0) !== 1) return result.reject(new Error("worker did not enter its wait"));
+      if (Atomics.notify(gate, 0) !== 1) result.reject(new Error("worker was not natively blocked"));
+    };
+    worker = new Worker(new URL("./fixtures/worker-signals-intrinsics.ts", import.meta.url).href);
+    worker.onerror = event => result.reject(new Error(event.message));
+    worker.onmessage = event => {
+      if (event.data.phase === "done") return result.resolve(event.data);
+      wake = setTimeout(notify, 20);
+    };
+    worker.postMessage({ evidence: evidence.buffer, gate: gate.buffer });
+    expect(await result.promise).toEqual({ phase: "done", waited: "ok", action: "handled", delivered: 2, requested: 2, intercepted: 0 });
+  } finally {
+    clearTimeout(deadline); clearTimeout(wake);
+    await worker?.terminate();
+  }
+}, 10_000);

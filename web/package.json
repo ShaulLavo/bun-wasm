@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm-web",
-  "version": "0.0.46",
+  "version": "0.0.47",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "dev": "bun build.ts && bun serve.ts",
     "check": "tsc -p .",
     "test": "bun test ./tests/*.test.js ./tests/*.test.ts",
+    "test:browser:engine-interruption": "bun tests/browser-engine-interruption.ts chromium firefox webkit",
     "test:browser": "bun tests/browser-smoke.mjs",
     "test:browser:bun-runtime-proc": "bun tests/bun-runtime-proc-browser.ts"
   },
