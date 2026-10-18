@@ -70,6 +70,31 @@ async function opfsWaitCheck(base: string) {
   } finally { await context.close(); }
 }
 
+async function startupFailureCheck(base: string) {
+  const context = await browser!.newContext();
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  try {
+    await page.goto(`${base}/playground/?fail-startup=1`);
+    await page.waitForFunction(() => document.querySelector<HTMLElement>("#status")?.dataset.kind === "error");
+    assert.match(await page.locator("#status").innerText(), /injected filesystem startup failure/);
+    assert.doesNotMatch(await page.locator("#status").innerText(), /opened in another tab/);
+    assert.equal(await page.evaluate(() => !!(globalThis as any).playground?.editor), false);
+    const reload = page.locator("#run");
+    assert.equal(await reload.innerText(), "Reload");
+    assert.equal(await reload.isEnabled(), true);
+    for (const selector of ["#new-file", "#engine", "#file-select"]) {
+      assert.equal(await page.locator(selector).isDisabled(), true);
+    }
+    await Promise.all([page.waitForNavigation({ timeout: 4_000 }), reload.click()]);
+    await page.waitForFunction(() => !!(globalThis as any).playground?.editor);
+    assert.equal(await page.locator("#run").isEnabled(), true);
+    assert.deepEqual(errors, []);
+    console.log(`ok ${engine} playground: ordinary filesystem startup failure has a working Reload and recovers`);
+  } finally { await context.close(); }
+}
+
 async function startupStealChecks(base: string) {
   for (const app of ["sandbox", "playground"]) {
     for (const rejectPending of [false, true]) await startupSteal(base, app, rejectPending);
@@ -174,6 +199,7 @@ try {
   page.on("response", response => { if (response.status() >= 400) console.error(`HTTP ${response.status()}: ${response.url()}`); });
   const base = `http://127.0.0.1:${server.port}`;
 
+  await startupFailureCheck(base);
   await startupStealChecks(base);
   await opfsWaitCheck(base);
   if (process.env.STARTUP_STEAL_ONLY !== "1") {

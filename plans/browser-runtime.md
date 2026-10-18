@@ -540,9 +540,11 @@ stays visible. The complete message says "This workspace was opened in another t
 continue here." It also explains that unsaved changes in that tab weren't kept and can be copied
 before reloading. Saves acknowledged before takeover remain durable.
 
-OPFS keeps `ifAvailable: true`, without stealing. Its writes use native sync access handles and
-cannot be fenced atomically by an IndexedDB transaction. An occupied OPFS workspace explains that
-a tab or browser-history page owns it and asks the user to close those tabs before reopening.
+OPFS queues an occupied workspace lock without stealing, following Waffle #21. Its writes use
+native sync access handles and cannot be fenced atomically by an IndexedDB transaction. A waiting
+page explains that another tab owns the workspace and continues automatically in the same document
+when that owner closes; controls remain disabled until setup completes. Ordinary startup failures
+enable Reload, and the app browser gate clicks it and verifies editor readiness after navigation.
 IndexedDB uses a separate lock namespace so opening that backend cannot steal an OPFS lock.
 The runtime track, bun-wasm-a8, owns review of this persistence boundary.
 

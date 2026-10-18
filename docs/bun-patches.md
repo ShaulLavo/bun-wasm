@@ -596,7 +596,9 @@ The original worker/controller adapters in `waffle/fs/service.ts` and `web/src/s
 now send startup failures as plain message and stack fields before revoking pending requests.
 Unprintable rejection reasons and throwing stack getters still produce a diagnostic, and a
 failed diagnostic transfer still dispatches the worker error fallback.
-The playground catches startup rejection, displays the complete diagnostic, and offers Reload.
+The playground catches startup rejection, displays the complete diagnostic, and enables Reload
+for ordinary filesystem failures as well as ownership loss. The original startup fault fixture
+checks the failed state, clicks Reload and requires a usable editor after navigation.
 OPFS waits for an occupied Web Lock, reports waiting in the UI and resumes automatically after
 the owner releases it. IndexedDB retains its default original takeover adapter. A new holder steals the lock, allocates a persisted epoch, and checks that epoch
 inside every write transaction. A displaced page stops persistence and preserves visible editor text.

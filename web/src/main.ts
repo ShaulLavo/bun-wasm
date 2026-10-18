@@ -461,6 +461,7 @@ void main().catch(error => {
   const run = document.querySelector<HTMLButtonElement>("#run");
   if (run) {
     run.textContent = "Reload";
+    run.disabled = false;
     run.title = "Retry playground startup";
     run.onclick = () => location.reload();
   }
