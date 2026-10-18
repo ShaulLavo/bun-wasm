@@ -51,6 +51,7 @@
     get attributes() {
       const values = this.call("attributes") ?? [];
       const version = this.#attributesVersion;
+      // oxlint-disable-next-line no-this-alias -- Retain the owner for callbacks whose receiver differs.
       const token = this;
       return (function* () {
         for (const pair of values) {
@@ -166,6 +167,7 @@
       try { reader = input.body?.getReader(); }
       catch (error) { this.close(); throw error; }
       if (reader) Reflect.set(input, "_bodyUsed", true);
+      // oxlint-disable-next-line no-this-alias -- Retain the owner for callbacks whose receiver differs.
       const rewrite = this;
       return new ReadableStream<Uint8Array>({
         start(controller) {

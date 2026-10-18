@@ -1,0 +1,36 @@
+{
+  "path": [
+    "build.ts",
+    "prepare.ts",
+    "src",
+    "web",
+    "sandbox",
+    "scripts",
+    "site",
+    "crates",
+    "tests/package"
+  ],
+  "format": [
+    "typescript",
+    "javascript",
+    "rust"
+  ],
+  "minTokens": 100,
+  "minLines": 10,
+  "mode": "mild",
+  "ignore": [
+    "**/node_modules/**",
+    "**/generated/**",
+    "**/*.generated.ts",
+    "**/bunwasm-runtime/src/js/temporal.js",
+    "**/bunwasm-runtime/src/js/streams_polyfill.js",
+    "**/bunwasm-runtime/src/js/node_stream_core.js",
+    "**/bunwasm-runtime/src/js/ws_builtin.js",
+    "**/bunwasm-runtime/src/js/bun_console_constructor.js"
+  ],
+  "reporters": [
+    "console"
+  ],
+  "similarity": 0.8,
+  "minNodes": 40
+}

@@ -138,6 +138,7 @@ export async function assertSafariDriverOwnership(owned: SafariDriverOwnership, 
   let accepted = pids.length > 0 && pids.every(pid => tree.has(pid));
   const root = tree.get(owned.driver.pid);
   if (!accepted && pids.length === 1 && owned.allocatedPort === port && root) {
+    const checkSafariInterruption = async () => {
     const candidate = rows.find(row => row.pid === pids[0]);
     // Real Safari launches HTTPService through launchd (PPID 1, separate group),
     // not as our child. Only associate this exact system executable on the free
@@ -160,6 +161,9 @@ export async function assertSafariDriverOwnership(owned: SafariDriverOwnership, 
         }
       }
     }
+
+    };
+    await checkSafariInterruption();
   }
   assertSafariDriverAlive(owned.driver);
   if (!accepted) {
@@ -207,9 +211,13 @@ export async function stopSafariDriver(owned: SafariDriverOwnership, port: numbe
     // A verified descendant can be an Apple XPC service: never signal it, even
     // if its parent/group happens to match. Signal the original root only.
     if (remaining().some(row => row.pid === owned.driver.pid)) {
+const signalOwnedDriver = () => {
       try { signal(owned.driver.pid, kind); }
       catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error; }
-    }
+
+};
+signalOwnedDriver();
+}
     do {
       rows = await inspect.processes(shutdownDeadline);
       // Retain known children across reparenting/group changes, and notice new

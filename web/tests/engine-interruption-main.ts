@@ -391,15 +391,18 @@ async function testIdleHandled(module: WebAssembly.Module, engine: Engine, route
     const trials: (Awaited<ReturnType<typeof runTrial>> & { warmup: boolean })[] = [];
     let complete = true;
     for (const delivery of deliveries) {
-      const identity = { engine, route, name: "idle-handled-SIGINT", delivery };
-      const negative = await runCase({ ...identity, control: "notify-removal" }, () => runTrial(true, delivery));
-      if (negative.ok) negativeControls.push(negative.result as Awaited<ReturnType<typeof runTrial>>);
-      else complete = false;
-      for (let trial = 0; trial < 8; trial++) {
-        const positive = await runCase({ ...identity, control: "positive", trial }, () => runTrial(false, delivery));
-        if (positive.ok) trials.push({ warmup: trial === 0, ...positive.result as Awaited<ReturnType<typeof runTrial>> });
+      const runDeliveryTrials = async () => {
+        const identity = { engine, route, name: "idle-handled-SIGINT", delivery };
+        const negative = await runCase({ ...identity, control: "notify-removal" }, () => runTrial(true, delivery));
+        if (negative.ok) negativeControls.push(negative.result as Awaited<ReturnType<typeof runTrial>>);
         else complete = false;
-      }
+        for (let trial = 0; trial < 8; trial++) {
+          const positive = await runCase({ ...identity, control: "positive", trial }, () => runTrial(false, delivery));
+          if (positive.ok) trials.push({ warmup: trial === 0, ...positive.result as Awaited<ReturnType<typeof runTrial>> });
+          else complete = false;
+        }
+      };
+      await runDeliveryTrials();
     }
     if (!complete) return;
     const times = trials.filter(trial => !trial.warmup).map(trial => trial.handlerLatencyMs);

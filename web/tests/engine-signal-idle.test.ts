@@ -68,7 +68,7 @@ test("signal handler exit does not run another timer or finish again", () => {
   expect(f.finished()).toBe(0);
 });
 
-for (const [input, expected] of [[-1, 255], [-2147483648, 0], [256, 0], [511, 255], [143, 143], [0, 0], [undefined, 0]]) {
+for (const [input, expected] of [[-1, 255], [-2147483648, 0], [256, 0], [511, 255], [143, 143], [0, 0], [undefined, 0]] as const) {
   test(`host-engine exit ${input} publishes byte status ${expected}`, () => {
     const statuses: number[] = [];
     const host = Object.assign(Object.create(EngineHost.prototype), { exit(code: number) { statuses.push(code); } });

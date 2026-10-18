@@ -33,7 +33,6 @@ try {
   assert.equal(execFileSync("ss", ["-H", "-ltn", `sport = :${port}`], { encoding: "utf8" }).trim(), "", `Port ${port} is already in use`);
   // Only this directory, server, browser and profile belong to this test.
   scratch = await mkdtemp(resolve(import.meta.dir, "../node_modules/.browser-splitting-"));
-  process.env.TMPDIR = scratch;
   const out = join(scratch, "dist");
   const fsSource = JSON.stringify(resolve(import.meta.dir, "../src/fs.ts"));
   await Bun.write(join(scratch, "shared.ts"), `

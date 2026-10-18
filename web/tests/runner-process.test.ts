@@ -45,11 +45,13 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
   let release!: () => void;
   const quiescence = new Promise<void>(resolve => { release = resolve; });
   class FakeWorker {
+    // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
     constructor() { worker ??= this; }
     onerror: ((event: ErrorEvent) => void) | null = null;
     onmessage: ((event: MessageEvent) => void) | null = null;
     terminated = 0;
     postMessage(value: RunRequest) {
+      // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
       request ??= value; worker ??= this; const pid = pidOf(value); requests.set(pid, value); workers.set(pid, this);
       pending.get(pid)?.(value); posted();
     }
@@ -539,6 +541,7 @@ for (const acknowledged of [false, true]) test(`runner root job completion uses 
   let broker!: SubprocessBroker;
   const original = SubprocessBroker.prototype.register;
   const register = spyOn(SubprocessBroker.prototype, "register").mockImplementation(function(this: SubprocessBroker, name, entry) {
+    // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
     broker = this;
     original.call(this, name, entry);
   });
@@ -576,6 +579,7 @@ test("run.done waits for deferred root activation and descriptor release", async
   const activation = new Promise<void>(resolve => { activate = resolve; });
   const original = SubprocessBroker.prototype.register;
   const register = spyOn(SubprocessBroker.prototype, "register").mockImplementation(function(this: SubprocessBroker, name, entry) {
+    // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
     broker = this;
     original.call(this, name, entry);
   });
@@ -645,6 +649,7 @@ for (const partial of [false, true]) test(`run.done safely handles rejected defe
   });
   const original = SubprocessBroker.prototype.register;
   const register = spyOn(SubprocessBroker.prototype, "register").mockImplementation(function(this: SubprocessBroker, name, entry) {
+    // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
     broker = this;
     original.call(this, name, entry);
   });
@@ -754,7 +759,7 @@ test("page lint/fmt roots lazily compile verified tools once and retain the sele
   const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
   const build = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
   const originalBuilds = Object.getOwnPropertyDescriptor(globalThis, "__bunwasmBuilds");
-  const fetch = spyOn(globalThis, "fetch").mockImplementation(async () => new Response(Bun.gzipSync(bytes)));
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => new Response(Bun.gzipSync(bytes)), { preconnect: globalThis.fetch.preconnect }));
   const compile = spyOn(WebAssembly, "compile");
   try {
     Object.defineProperty(globalThis, "__bunwasmBuilds", { configurable: true, value: { "bun-tools.wasm": build } });

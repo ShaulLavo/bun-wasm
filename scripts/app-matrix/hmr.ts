@@ -31,6 +31,7 @@ export function observeHmr(page: Page) {
     const firstMessage = messages.length;
     try {
       if (!connected) {
+        const checkHmrCase = async () => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
@@ -40,6 +41,9 @@ export function observeHmr(page: Page) {
         } finally {
           if (timer !== undefined) clearTimeout(timer);
         }
+
+        };
+        await checkHmrCase();
       }
       writeFileSync(path, original.replace(change.search, change.replacement));
       await page.locator(selector).filter({ hasText: change.replacement }).waitFor({ timeout });

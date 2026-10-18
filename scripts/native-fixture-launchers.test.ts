@@ -91,7 +91,7 @@ test("native Bun harnesses do not use the plain wasmtime CLI", () => {
   ];
   for (const file of migrated) {
     const source = readFileSync(join(root, file), "utf8");
-    expect(source).not.toMatch(/wasmtime[\"']?,?\s+[\"']?run/);
+    expect(source).not.toMatch(/wasmtime["']?,?\s+["']?run/);
     expect(source).toContain("--wasm");
   }
 });

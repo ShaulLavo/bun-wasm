@@ -47,8 +47,16 @@ impl Registry {
             (_, None, None) => None,
             _ => return Err("Registry authentication requires both username and password".into()),
         };
-        registry.secrets = [token, password].into_iter().flatten().map(str::to_owned).collect();
-        if let Some((_, value)) = registry.authorization.as_deref().and_then(|value| value.split_once(' ')) {
+        registry.secrets = [token, password]
+            .into_iter()
+            .flatten()
+            .map(str::to_owned)
+            .collect();
+        if let Some((_, value)) = registry
+            .authorization
+            .as_deref()
+            .and_then(|value| value.split_once(' '))
+        {
             registry.secrets.push(value.into());
         }
         Ok(registry)
@@ -69,13 +77,19 @@ impl Registry {
         match value {
             Value::String(value) => self.safe_text(value),
             Value::Array(values) => values.iter().all(|value| self.safe_metadata(value)),
-            Value::Object(values) => values.iter().all(|(key, value)| self.safe_text(key) && self.safe_metadata(value)),
+            Value::Object(values) => values
+                .iter()
+                .all(|(key, value)| self.safe_text(key) && self.safe_metadata(value)),
             _ => true,
         }
     }
 
     pub fn redact(&self, message: &str) -> String {
-        self.secrets.iter().fold(redact(message), |message, secret| message.replace(secret, "[redacted]"))
+        self.secrets
+            .iter()
+            .fold(redact(message), |message, secret| {
+                message.replace(secret, "[redacted]")
+            })
     }
 }
 
@@ -156,9 +170,15 @@ fn redact_url(value: &str) -> String {
 
 fn has_embedded_auth(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    [":_authtoken=", ":_auth=", ":username=", ":_username=", ":_password="]
-        .iter()
-        .any(|key| lower.contains(key))
+    [
+        ":_authtoken=",
+        ":_auth=",
+        ":username=",
+        ":_username=",
+        ":_password=",
+    ]
+    .iter()
+    .any(|key| lower.contains(key))
 }
 
 pub fn parsed(source: &[u8], format: &str, parser: &dyn Transpiler) -> Result<Value> {

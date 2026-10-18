@@ -4,9 +4,11 @@ fn main() {
     bunwasm_glue::init();
     let a: Vec<String> = std::env::args().collect();
     let n: usize = a[1].parse().unwrap();
-    let mut args = bunwasm_build::BuildArgs::default();
-    args.entry_points = vec![a[2].clone()];
-    args.outdir = Some(a[3].clone());
+    let mut args = bunwasm_build::BuildArgs {
+        entry_points: vec![a[2].clone()],
+        outdir: Some(a[3].clone()),
+        ..Default::default()
+    };
     let mut first: Option<Vec<Vec<u8>>> = None;
     for i in 0..n {
         args.set_minify(i % 2 == 1);

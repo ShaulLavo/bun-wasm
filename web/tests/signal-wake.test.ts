@@ -1,5 +1,6 @@
+import { createNotifyObserver } from "./notify-observer";
 import { processRuntimeFixture } from "./process-runtime-fixture";
-import { afterAll, expect, mock, spyOn, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { Worker } from "node:worker_threads";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
 import { setSignalDisposition, SIGNAL_PENDING } from "waffle/proc/signals";
@@ -7,15 +8,7 @@ import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/wo
 import { SubprocessBroker } from "../src/subprocess-broker";
 import type { SharedFilesystem } from "../src/shared-fs";
 
-// Dependency injection is confined to this test harness; Waffle's runtime has no hook.
-const intrinsicsPath = Bun.resolveSync("waffle/proc/control", import.meta.dir).replace(/control\.(ts|js)$/, "intrinsics.$1");
-const actualIntrinsics = { ...await import(intrinsicsPath) };
-let observeNotify: typeof Atomics.notify | undefined;
-mock.module(intrinsicsPath, () => ({ ...actualIntrinsics,
-  atomicsNotify: (...args: Parameters<typeof Atomics.notify>) =>
-    (observeNotify ?? actualIntrinsics.atomicsNotify)(...args),
-}));
-afterAll(() => { mock.module(intrinsicsPath, () => actualIntrinsics); });
+const notifyObserver = createNotifyObserver();
 
 async function proveWake(operation: "kill" | "killJob", suppressNotify: boolean, deadlineMilliseconds = 2500) {
   // This run owns one worker, delivery/deadline timers, and its broker. Teardown is installed
@@ -35,9 +28,9 @@ async function proveWake(operation: "kill" | "killJob", suppressNotify: boolean,
   try {
     await broker.adoptRuntimeRoot(transport);
     setSignalDisposition(signals.signalState, 2, 2);
-    if (suppressNotify) observeNotify = (word, index = 0) => {
+    if (suppressNotify) notifyObserver.current = (word, index = 0) => {
       if (word.buffer === selected.buffer && word.byteOffset + index * 4 === selected.byteOffset) { suppressed++; return 0; }
-      return actualIntrinsics.atomicsNotify(word, index);
+      return notifyObserver.notify(word, index);
     };
     const result = await new Promise<{ generation: number; result: string; pending: number; interrupt: number; sequence: number }>((resolve, reject) => {
       deadlineTimer = setTimeout(() => reject(new Error("signal wait deadline exceeded")), deadlineMilliseconds);
@@ -62,7 +55,7 @@ async function proveWake(operation: "kill" | "killJob", suppressNotify: boolean,
     expect(result.sequence).toBeGreaterThan(before);
     if (suppressNotify) expect(suppressed).toBeGreaterThan(0);
   } finally {
-    observeNotify = undefined;
+    notifyObserver.current = undefined;
     if (deliveryTimer) clearTimeout(deliveryTimer);
     if (deadlineTimer) clearTimeout(deadlineTimer);
     try { if (worker) await worker.terminate(); }

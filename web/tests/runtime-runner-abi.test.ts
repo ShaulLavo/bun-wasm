@@ -1,6 +1,7 @@
+import { createNotifyObserver } from "./notify-observer";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import type { Runtime } from "waffle";
-import { afterAll, expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { DescriptorTable } from "waffle/core/descriptors";
@@ -13,16 +14,7 @@ import { startRun, type RunOptions } from "../src/runner";
 import type { RunRequest } from "../src/worker";
 import type { SharedFilesystem } from "../src/shared-fs";
 
-// Observe the existing public boundary, not mutable globals captured by Waffle.
-// Dependency injection is confined to this test harness; Waffle's runtime has no hook.
-const intrinsicsPath = Bun.resolveSync("waffle/proc/control", import.meta.dir).replace(/control\.(ts|js)$/, "intrinsics.$1");
-const actualIntrinsics = { ...await import(intrinsicsPath) };
-let observeNotify: typeof Atomics.notify | undefined;
-mock.module(intrinsicsPath, () => ({ ...actualIntrinsics,
-  atomicsNotify: (...args: Parameters<typeof Atomics.notify>) =>
-    (observeNotify ?? actualIntrinsics.atomicsNotify)(...args),
-}));
-afterAll(() => { mock.module(intrinsicsPath, () => actualIntrinsics); });
+const notifyObserver = createNotifyObserver();
 
 function imported(name: string, namespace = "runtime_proc"): WebAssembly.Module {
   const text = (value: string) => [value.length].concat(Array.from(new TextEncoder().encode(value)));
@@ -44,6 +36,7 @@ function fixture(module: WebAssembly.Module, options: Partial<RunOptions> | ((ru
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
   globalThis.Worker = class {
+    // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
     constructor(readonly url: string) { rootWorker ??= this; }
     onmessage?: (event: { data: WorkerProcessMessage }) => void;
     postMessage(request: RunRequest) { sent ??= request; requests.push(request); workerUrls.set(request, this.url); posted(); }
@@ -76,18 +69,25 @@ function fixture(module: WebAssembly.Module, options: Partial<RunOptions> | ((ru
   };
 }
 
+async function waitForChild(state: ReturnType<typeof fixture>, pid: number) {
+  const deadline = performance.now() + 1000;
+  while (!state.requests.some(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid) && performance.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+}
+
 for (const name of ["pipe", "read", "spawn", "poll"]) test(`runner automatically supplies generic ownership for runtime_proc.${name}`, async () => {
   const state = fixture(imported(name));
   try {
     await state.ready;
     expect(state.request().runtimeProcess).toBeDefined();
     expect((state.request().runtimeProcess!.data as { pipeRegistry: unknown }).pipeRegistry).toBeDefined();
-  } finally { await await state.dispose(); }
+  } finally { await state.dispose(); }
 });
 for (const name of ["signal", "interrupted", "default_signal"]) test(`runner supplies generic ownership even for runtime_proc.${name} alone`, async () => {
   const state = fixture(imported(name));
   try { await state.ready; expect(state.request().runtimeProcess).toBeDefined(); }
-  finally { await await state.dispose(); }
+  finally { await state.dispose(); }
 });
 
 test("preview1 roots keep their explicit module and Bun executable paths launch real Bun", async () => {
@@ -119,8 +119,7 @@ test("preview1 roots keep their explicit module and Bun executable paths launch 
       });
       for (const alias of ["/bin/bun", "/bin/node"]) {
         const pid = client.spawn(1, { executable: alias, argv: [alias], env: {}, cwd: "/", job: 1, fds: [] });
-        const deadline = performance.now() + 1000;
-        while (!state.requests.some(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+        await waitForChild(state, pid);
         const child = state.requests.find(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid);
         expect(child).toBeDefined();
         expect(state.urlFor(child!)).toBe("http://localhost/worker.js");
@@ -158,7 +157,7 @@ test("UI signals freeze canonical root pipe publication only for fatal actions",
     expect(writer.tryWrite([new Uint8Array([2])])).toBeLessThan(0);
     reader.close(); writer.close();
     expect(await state.run.done).toEqual({ code: 137 });
-  } finally { controller?.dispose(); await await state.dispose(); }
+  } finally { controller?.dispose(); await state.dispose(); }
 });
 
 function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("waffle/proc")> }) {
@@ -270,7 +269,7 @@ test("explicit Preview1 children run without installing Bun slots", async () => 
     const child = state.requests.find(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid);
     expect(child).toBeDefined();
     expect(state.urlFor(child!)).toBe("http://localhost/preview1-worker.js");
-  } finally { descriptors.dispose(); await await state.dispose(); }
+  } finally { descriptors.dispose(); await state.dispose(); }
 });
 
 test("disposal before lazy pipe activation closes the subsequently created pipe broker", async () => {
@@ -301,7 +300,7 @@ test("explicit root metadata without a filesystem forks an identity and preserve
     expect(state.request().filesystem.owner).toBeDefined();
     expect((transport.data as { marker: string }).marker).toBe("preserved");
     expect((transport.data as { filesystem: unknown }).filesystem).toBeDefined();
-  } finally { await await state.dispose(); }
+  } finally { await state.dispose(); }
 });
 
 test("pipe-only generic work uses the responsive relay without activating the process supervisor", async () => {
@@ -408,9 +407,9 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
       const generation = Atomics.load(word, 0);
       // Reuse the browser causal-wake negative control on the real production request,
       // never a manufactured word. Even suppressed notify must advance this generation.
-      observeNotify = (selected, index = 0) => {
+      notifyObserver.current = (selected, index = 0) => {
         if (selected.buffer === word.buffer && selected.byteOffset + index * 4 === word.byteOffset) { suppressed++; return 0; }
-        return actualIntrinsics.atomicsNotify(selected, index);
+        return notifyObserver.notify(selected, index);
       };
       if (delivery === "kill") await state.broker.kill(pid, 2);
       else await state.broker.killJob(shared.job, 2);
@@ -423,7 +422,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
       expect(takeSignal(shared.signals.signalState)).toBe(0);
       expect(suppressed).toBe(1);
     } finally {
-      observeNotify = undefined;
+      notifyObserver.current = undefined;
       try { await state.dispose(); } finally { globalThis.Worker = nativeWorker; }
     }
   });

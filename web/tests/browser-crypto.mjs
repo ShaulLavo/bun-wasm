@@ -16,6 +16,7 @@ try {
   const [, url] = await s.start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, {ROOT:root, PORT:"0"});
   const source = readFileSync(new URL("../../tests/fixtures/crypto-native-provider/index.js", import.meta.url), "utf8");
   for (const name of ["chromium", "webkit"]) {
+    const checkCryptoCase = async () => {
     const browser = await s.launch(playwright[name]);
     const context = await browser.newContext();
     const visit = await firstVisit(context, `${url}?engine=browser`);
@@ -42,6 +43,9 @@ try {
       await visit.close();
       await browser.close();
     }
+
+    };
+    await checkCryptoCase();
   }
 } finally {
   await s.cleanup();

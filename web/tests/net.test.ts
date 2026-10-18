@@ -8,7 +8,6 @@ import { MemFS } from "../src/fs";
 import { Wasi } from "waffle/core";
 
 const encode = (s: string) => new TextEncoder().encode(s);
-const decode = (b: Uint8Array) => new TextDecoder().decode(b);
 
 test("trampoline module forwards each arity to its import", () => {
   const bytes = trampolineModule([1, 3, 4, 1]);
@@ -56,7 +55,11 @@ test("guest TCP pipes keep reads open after write shutdown", async () => {
   const { NetHost } = await import("../src/net/host");
   const host = new NetHost(createRing(), () => {});
   const api = host.engineNet().natives;
-  const call = (name: string, ...args: unknown[]) => Reflect.apply(api[name], null, args);
+  const call = (name: string, ...args: unknown[]) => {
+    const fn = api[name];
+    if (!fn) throw new Error(`Missing native ${name}`);
+    return Reflect.apply(fn, null, args);
+  };
   const listener = call("hostListen", "127.0.0.1", 0);
   const port = call("hostLocalPort", listener);
   const client = call("hostConnect", "127.0.0.1", port);
@@ -76,7 +79,7 @@ test("guest TCP pipes keep reads open after write shutdown", async () => {
   expect(call("hostRead", client)).toBe(0);
   for (const handle of [peer, client, listener]) expect(call("hostClose", handle)).toBe(0);
   expect(call("hostConnect", "127.0.0.1", port)).toBe(-1);
-  expect(JSON.parse(call("hostError", 0)).code).toBe("ECONNREFUSED");
+  expect(JSON.parse(String(call("hostError", 0))).code).toBe("ECONNREFUSED");
   expect(call("hostConnect", "example.com", 80)).toBe(-4);
-  expect(JSON.parse(call("hostError", 0)).code).toBe("ENOTSUP");
+  expect(JSON.parse(String(call("hostError", 0))).code).toBe("ENOTSUP");
 });

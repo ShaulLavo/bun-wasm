@@ -1422,6 +1422,7 @@
 
   function escapeSnapshot(text) {
     return text.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${")
+      // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
       .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, (ch) => ({ "\b": "\\b", "\v": "\\v", "\f": "\\f" })[ch] || `\\x${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
   }
 

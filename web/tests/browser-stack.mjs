@@ -46,6 +46,7 @@ async function outcome(page, mode, n) {
 async function depth(attempt, label) {
   let trapped = false;
   for (const mode of modes) {
+    const checkStackCase = async () => {
     // Each bind prefixes the name with "bound ", so deeper chains run out of memory first.
     let high = mode === 'bound' ? 2000 : 200000;
     const row = { host: label, mode, at_max: await attempt(mode, high) };
@@ -60,6 +61,9 @@ async function depth(attempt, label) {
     }
     console.log(JSON.stringify(row));
     trapped ||= row.at_max === 'trap' || row.beyond === 'trap';
+
+    };
+    await checkStackCase();
   }
   return trapped;
 }
@@ -92,9 +96,13 @@ async function checkEngine(browser, name, url, engine) {
 try {
   const url = await s.serve();
   for (const name of browsers) {
+    const checkStackCase = async () => {
     const browser = await s.launch(playwright[name]);
     try {
       for (const engine of engines) await checkEngine(browser, name, url, engine);
     } finally { await browser.close(); }
+
+    };
+    await checkStackCase();
   }
 } finally { await s.cleanup(); }

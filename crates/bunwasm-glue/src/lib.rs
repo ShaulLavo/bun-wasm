@@ -14,6 +14,8 @@ extern crate bunwasm_crypto_sys;
 mod bun_native;
 mod bundler;
 mod extra;
+#[cfg(not(target_os = "wasi"))]
+mod native_host;
 
 pub use bun_native::set_stack_size;
 

@@ -12,11 +12,11 @@ function fixture(failure: "ENOENT" | "EACCES" = "ENOENT") {
 test("rejected admission releases pipe capabilities on every attempt", () => {
   const fake = service({ failSpawn: -44 });
   const { module: api } = load(fake);
-  for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 8; i++) {
     expect(() => api.spawn(["missing"])).toThrow(/ENOENT/);
     expect(fake.open()).toBe(0);
     expect(fake.children.size).toBe(0);
-  }
+    }
 });
 
 for (const method of ["spawn", "spawnSync"]) test(`Bun.${method} throws ENOENT for a missing executable`, () => {
@@ -108,7 +108,7 @@ test("Node spawn reports EACCES before close for an unrunnable executable", asyn
     const child = api.nodeChildProcess().spawn("broken", ["argument"]);
     let failure;
     child.on("error", (error: Error) => { failure = error; });
-    const closed = await new Promise(resolve => child.once("close", (code, signal) => resolve([code, signal])));
+    const closed = await new Promise(resolve => child.once("close", (code: number | null, signal: string | null) => resolve([code, signal])));
     expect(failure).toMatchObject({ code: "EACCES", errno: -13, syscall: "spawn broken", path: "broken", spawnargs: ["argument"] });
     expect(child.exitCode).toBe(-13);
     expect(closed).toEqual([-13, null]);
@@ -122,8 +122,8 @@ test("a null abort reason reaches Node's asynchronous error path", async () => {
     const controller = new AbortController();
     controller.abort(null);
     const child = api.nodeChildProcess().spawn("bun", [], { signal: controller.signal });
-    let failure = "unset";
-    child.on("error", (error) => { failure = error; });
+    let failure: unknown = "unset";
+    child.on("error", (error: unknown) => { failure = error; });
     await new Promise(resolve => child.once("close", resolve));
     expect(failure).toBeNull();
   } finally { host.dispose(); }
@@ -222,7 +222,7 @@ test("Node spawn waits for entry, then allows stdin from its spawn listener with
   const { module: api, waiters, pumpTurn, pump } = load(fake);
   const events: string[] = [];
   const child = api.nodeChildProcess().spawn("/bin/bun", ["read-stdin"]);
-  child.on("error", error => { throw error; });
+  child.on("error", (error: unknown) => { throw error; });
   child.on("spawn", () => { events.push("spawn"); child.stdin.end("from-spawn"); });
   child.on("exit", () => events.push("exit"));
   const closed = new Promise(resolve => child.once("close", () => { events.push("close"); resolve(undefined); }));

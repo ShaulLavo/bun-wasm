@@ -134,7 +134,7 @@ async function readLimited(stream: ReadableStream<Uint8Array<ArrayBuffer>>, limi
       if (result.value.byteLength === 0) continue;
       length += result.value.byteLength;
       if (length > limit) {
-        try { await reader.cancel(); } catch { /* the size error is the useful failure */ }
+        await reader.cancel().catch(() => {});
         throw new BunWasmAssetError(`Guest byte count exceeds the declared size of ${limit} bytes`);
       }
       chunks.push(new Uint8Array(result.value));

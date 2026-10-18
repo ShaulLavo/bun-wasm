@@ -138,6 +138,16 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
   // A non-matching line stays ignored until newline; arbitrarily long source
   // excerpts therefore cannot grow this state or reset into a mid-line marker.
   const partialLines = new Map<number, string | null>();
+  function recordCharacter(line: string | null, character: string): string | null {
+    if (character === "\n") {
+      const cell = markers.find(([marker]) => marker === line)?.[1];
+      if (cell !== undefined) controlAdd(probe, cell, 1);
+      return "";
+    }
+    if (line === null) return null;
+    const next = line + character;
+    return markers.some(([marker]) => marker.startsWith(next)) ? next : null;
+  }
   wasi.fd_write = (fd: number, vectors: number, count: number, written: number) => {
     // Observe attempts BEFORE the real import rejects a revoked guest. Otherwise the
     // supervisor's closed pipe could conceal an incorrectly executed catch/finally.
@@ -155,16 +165,7 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
       controlAdd(probe, probeCell.writes, 1);
       const previousLine = partialLines.get(fd);
       let line: string | null = previousLine === undefined ? "" : previousLine;
-      for (const character of text) {
-        if (character === "\n") {
-          const cell = markers.find(([marker]) => marker === line)?.[1];
-          if (cell !== undefined) controlAdd(probe, cell, 1);
-          line = "";
-        } else if (line !== null) {
-          const next: string = line + character;
-          line = markers.some(([marker]) => marker.startsWith(next)) ? next : null;
-        }
-      }
+      for (const character of text) line = recordCharacter(line, character);
       partialLines.set(fd, line);
     }
     return write(fd, vectors, count, written);

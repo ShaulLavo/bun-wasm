@@ -6,7 +6,7 @@ extern crate bunwasm_lint_native;
 use std::io::Write;
 use std::path::Path;
 
-use bun_lint_driver::{bunfig, cli, fmt, git, js_plugin, Environment, Outcome, Script, Stream};
+use bun_lint_driver::{Environment, Outcome, Script, Stream, bunfig, cli, fmt, git, js_plugin};
 
 #[path = "../../../vendor/bun/src/runtime/cli/typescript_libs.rs"]
 mod typescript_libs;
@@ -233,7 +233,7 @@ impl BunfigSearch<'_> {
     }
 
     fn read(&mut self, path: &Path, label: &str) -> Result<(), CommandError> {
-        let text = match std::fs::read(&path) {
+        let text = match std::fs::read(path) {
             Ok(text) => text,
             Err(error) if !self.named && error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(());

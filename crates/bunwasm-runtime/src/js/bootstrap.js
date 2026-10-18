@@ -732,7 +732,7 @@
     let text;
     try {
       text = internal.require("inspect").formatError(err);
-    } catch (formatErr) {
+    } catch (_formatErr) {
       text = fallbackErrorText(err);
     }
     native.writeStderr(text.endsWith("\n") ? text : text + "\n");

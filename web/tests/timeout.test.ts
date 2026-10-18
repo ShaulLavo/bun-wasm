@@ -73,10 +73,15 @@ for (const mode of ["normal", "deadline", "interruption"]) {
       wrapper.kill("SIGKILL");
       // Also own teardown when testing a broken wrapper, rather than leak its tree.
       const group = /command (\d+)/.exec(output)?.[1];
-      if (group) {
-        try { process.kill(-Number(group), "SIGKILL"); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-      }
+      if (group) killGroup(Number(group));
     }
   }, 10000);
+
+}
+
+function killGroup(group: number): void {
+  try { process.kill(-group, "SIGKILL"); }
+  catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
+  }
 }

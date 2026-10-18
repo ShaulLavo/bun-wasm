@@ -1,6 +1,7 @@
+import { browserType } from "./browser-type.ts";
 import assert from "node:assert/strict";
 import type { Browser } from "playwright";
-import { playwright, session, ready, writeFile, run } from "./playground.mjs";
+import { session, ready, writeFile, run } from "./playground.mjs";
 
 const program = `
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -29,7 +30,7 @@ const deadline = setTimeout(() => { void s.cleanup().finally(() => process.exit(
 try {
   const url = await s.serve();
   for (const name of process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "webkit"]) {
-    const browser: Browser = await s.launch(playwright[name]);
+    const browser: Browser = await s.launch(browserType(name));
     const page = await browser.newPage();
     const httpErrors: string[] = [];
     page.on("response", response => { if (response.status() >= 400 && response.url().includes("/__bunwasm/m/")) httpErrors.push(`${response.status()} sw=${response.fromServiceWorker()} ${response.url()}`); });

@@ -3,7 +3,6 @@ import { startRun } from "../src/runner";
 
 const runtime = createRuntime({ filesystem: { workerURL: new URL("./fs-worker.js", location.href) } });
 const fs = runtime.filesystem;
-const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 function equal(actual: unknown, expected: unknown, label: string) {
   if (actual !== expected) throw new Error(`${label}: ${actual} !== ${expected}`);
@@ -55,12 +54,16 @@ try {
     const flushed = await failed!.filesystem.flush().then(() => undefined, error => error);
     if (!(flushed instanceof Error) || !flushed.message.includes("Filesystem worker failed")) throw new Error("worker load failure not surfaced");
   } finally {
-    const disposal = await failed!.dispose().then(() => undefined, error => error);
-    if (!(disposal instanceof Error) || !disposal.message.includes("Filesystem worker failed")) {
-      throw new Error("failed filesystem teardown did not retain the worker startup error", { cause: disposal });
-    }
+    await assertFailedDisposal(failed!);
   }
   Object.assign(globalThis, { filesystemResult: { ok: true, checks: 9 } });
 } catch (error) {
   Object.assign(globalThis, { filesystemResult: { error: error instanceof Error ? error.stack : String(error) } });
 } finally { await runtime.dispose(); }
+
+async function assertFailedDisposal(failed: Runtime): Promise<void> {
+  const disposal: unknown = await failed.dispose().then(() => undefined, error => error);
+  if (!(disposal instanceof Error) || !disposal.message.includes("Filesystem worker failed")) {
+    throw new Error("failed filesystem teardown did not retain the worker startup error", { cause: disposal });
+  }
+}

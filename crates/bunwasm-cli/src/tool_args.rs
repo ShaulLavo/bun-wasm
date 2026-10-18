@@ -4,13 +4,7 @@ pub struct ToolGlobals {
     pub bunfig: Option<String>,
 }
 
-pub struct ToolCommand {
-    pub command: String,
-    pub args: Vec<String>,
-    pub globals: ToolGlobals,
-}
-
-pub fn before_command(args: &[String]) -> Option<ToolCommand> {
+pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGlobals)> {
     let mut forwarded = Vec::new();
     let mut globals = ToolGlobals::default();
     let mut at = 0;
@@ -18,11 +12,7 @@ pub fn before_command(args: &[String]) -> Option<ToolCommand> {
         match arg.as_str() {
             "lint" | "fmt" => {
                 forwarded.extend_from_slice(&args[at + 1..]);
-                return Some(ToolCommand {
-                    command: arg.clone(),
-                    args: forwarded,
-                    globals,
-                });
+                return Some((arg.clone(), forwarded, globals));
             }
             "--cwd" => {
                 at += 1;
@@ -71,5 +61,26 @@ mod tests {
                 before_command(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_none()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod forwarding_tests {
+    #[test]
+    fn preserves_tool_operands_and_global_options() {
+        let args = [
+            "--cwd",
+            "project",
+            "--config=bunfig.toml",
+            "--unknown",
+            "lint",
+            "--help",
+        ]
+        .map(String::from);
+        let (command, forwarded, globals) = super::before_command(&args).unwrap();
+        assert_eq!(command, "lint");
+        assert_eq!(forwarded, ["--unknown", "--help"]);
+        assert_eq!(globals.cwd_before.as_deref(), Some("project"));
+        assert_eq!(globals.bunfig.as_deref(), Some("bunfig.toml"));
     }
 }

@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { WASI } from "node:wasi";
 import { Worker } from "node:worker_threads";
 import { OpenDescription } from "waffle/core/descriptors";
-import { createWorkerProcessTransport, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
+import { createWorkerProcessTransport, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import type { SpawnRequest } from "waffle/proc/types";
 import { WorkerPipeBroker } from "waffle/proc/worker-pipes";
 import { createNodeProcess, type NodeWasiImports } from "../../scripts/node-process.ts";

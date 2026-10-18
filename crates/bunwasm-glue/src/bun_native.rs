@@ -860,11 +860,20 @@ const B64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxy
 /// simdutf: standard base64 is padded, base64url is not.
 #[unsafe(no_mangle)]
 extern "C" fn simdutf__base64_length_from_binary(len: usize, url: c_int) -> usize {
-    if url != 0 { (len * 4).div_ceil(3) } else { len.div_ceil(3) * 4 }
+    if url != 0 {
+        (len * 4).div_ceil(3)
+    } else {
+        len.div_ceil(3) * 4
+    }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn simdutf__base64_encode(p: *const u8, len: usize, out: *mut u8, url: c_int) -> usize {
+unsafe extern "C" fn simdutf__base64_encode(
+    p: *const u8,
+    len: usize,
+    out: *mut u8,
+    url: c_int,
+) -> usize {
     // SAFETY: caller passes a slice and room for `base64_length_from_binary` bytes.
     let input = unsafe { bytes(p, len) };
     let table = if url != 0 { B64_URL } else { B64_STD };
@@ -875,7 +884,9 @@ unsafe extern "C" fn simdutf__base64_encode(p: *const u8, len: usize, out: *mut 
         n += 1;
     };
     for chunk in input.chunks(3) {
-        let v = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        let v = (chunk[0] as u32) << 16
+            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
+            | *chunk.get(2).unwrap_or(&0) as u32;
         put(table[(v >> 18) as usize & 63]);
         put(table[(v >> 12) as usize & 63]);
         if chunk.len() > 1 {
@@ -918,20 +929,29 @@ fn b64_decode(input: &[u8], out: &mut [u8], url: Option<bool>) -> SimdutfResult 
             if lenient || c.is_ascii_whitespace() {
                 continue;
             }
-            return SimdutfResult { status: 7, count: at };
+            return SimdutfResult {
+                status: 7,
+                count: at,
+            };
         };
         acc = acc << 6 | v;
         bits += 6;
         if bits >= 8 {
             bits -= 8;
             if n == out.len() {
-                return SimdutfResult { status: 11, count: n }; // OUTPUT_BUFFER_TOO_SMALL
+                return SimdutfResult {
+                    status: 11,
+                    count: n,
+                }; // OUTPUT_BUFFER_TOO_SMALL
             }
             out[n] = (acc >> bits) as u8;
             n += 1;
         }
     }
-    SimdutfResult { status: 0, count: n }
+    SimdutfResult {
+        status: 0,
+        count: n,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1071,7 +1091,13 @@ extern "C" fn is_executable_file(_path: *const c_char) -> bool {
 }
 /// zlib's `compress2`: a complete zlib stream of `s` into `d`.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn compress2(d: *mut u8, dl: *mut usize, s: *const u8, sl: usize, level: c_int) -> c_int {
+unsafe extern "C" fn compress2(
+    d: *mut u8,
+    dl: *mut usize,
+    s: *const u8,
+    sl: usize,
+    level: c_int,
+) -> c_int {
     // SAFETY: caller passes a source slice and a destination of `*dl` bytes.
     let source = unsafe { bytes(s, sl) };
     let level = if level < 0 { 6 } else { level.min(10) as u8 };

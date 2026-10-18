@@ -139,11 +139,10 @@ test("immutable unsafe species and frozen inherited constructors report zero get
 
 test("a constructor proxy whose traps throw cannot escape reaction attachment", async () => {
   const promise = Promise.resolve(1);
-  let traps = 0;
   const hostile = new Proxy(function () {}, {
-    getOwnPropertyDescriptor() { traps++; throw new Error("descriptor trap"); },
-    getPrototypeOf() { traps++; throw new Error("prototype trap"); },
-    get() { traps++; throw new Error("get trap"); },
+    getOwnPropertyDescriptor() { throw new Error("descriptor trap"); },
+    getPrototypeOf() { throw new Error("prototype trap"); },
+    get() { throw new Error("get trap"); },
   });
   Object.defineProperty(promise, "constructor", { value: hostile, configurable: true, writable: true });
   const observed = observePromise(promise, value => assert.equal(value, 1));

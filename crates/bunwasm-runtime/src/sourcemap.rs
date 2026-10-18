@@ -41,7 +41,11 @@ fn decode_segment(text: &str) -> Vec<i64> {
         }
         // The lowest bit is the sign.
         let magnitude = value >> 1;
-        values.push(if value & 1 == 1 { -magnitude } else { magnitude });
+        values.push(if value & 1 == 1 {
+            -magnitude
+        } else {
+            magnitude
+        });
         value = 0;
         shift = 0;
     }
@@ -85,7 +89,11 @@ impl SourceMap {
         let col0 = col.saturating_sub(1);
         // Last segment starting at or before the column; else the first one.
         let index = segments.partition_point(|s| s.gen_col <= col0);
-        let segment = if index == 0 { segments.first()? } else { &segments[index - 1] };
+        let segment = if index == 0 {
+            segments.first()?
+        } else {
+            &segments[index - 1]
+        };
         // Keep the offset within the segment so carets land on the right token.
         let delta = col0.saturating_sub(segment.gen_col);
         let delta = if index == 0 { 0 } else { delta };

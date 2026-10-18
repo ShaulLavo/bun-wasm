@@ -30,10 +30,8 @@ use bun_options_types::schema::api;
 use bun_paths::resolve_path;
 use bun_sys::Fd;
 
-#[cfg(target_os = "wasi")]
 mod stubs;
 
-#[cfg(target_os = "wasi")]
 extern crate bunwasm_glue;
 #[cfg(target_os = "wasi")]
 extern crate bunwasm_posix;
@@ -209,7 +207,11 @@ impl BuildOutput {
         if self.stdout.is_some() {
             return out;
         }
-        let (green, reset) = if ansi { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
+        let (green, reset) = if ansi {
+            ("\x1b[32m", "\x1b[0m")
+        } else {
+            ("", "")
+        };
         if self.transform_only {
             let _ = writeln!(out, "{green}Transpiled file in {elapsed_ms}ms{reset}");
         } else {
@@ -225,7 +227,8 @@ impl BuildOutput {
         let mut size_padding = 0usize;
         let sizes: Vec<String> = self.files.iter().map(|f| format_size(f.size)).collect();
         for (f, size) in self.files.iter().zip(&sizes) {
-            max_path_len = max_path_len.max(from_path.len().max(f.path.len()) + 2 - from_path.len());
+            max_path_len =
+                max_path_len.max(from_path.len().max(f.path.len()) + 2 - from_path.len());
             size_padding = size_padding.max(size.len());
         }
         for (f, size) in self.files.iter().zip(&sizes) {
@@ -248,7 +251,11 @@ impl BuildOutput {
                     OutputKind::Asset => 16 * 1024 * 1024,
                     _ => usize::MAX,
                 };
-                out.push_str(if f.size > warn_threshold { "\x1b[33m" } else { "\x1b[0m" });
+                out.push_str(if f.size > warn_threshold {
+                    "\x1b[33m"
+                } else {
+                    "\x1b[0m"
+                });
             }
             push_spaces(&mut out, padding_count);
             out.push_str(size);
@@ -303,11 +310,9 @@ fn absolute(cwd: &[u8], path: &str) -> Box<[u8]> {
         return boxed(path);
     }
     let mut spill = Vec::new();
-    Box::from(resolve_path::join_abs_string_spill::<resolve_path::platform::Auto>(
-        cwd,
-        &mut spill,
-        &[path.as_bytes()],
-    ))
+    Box::from(resolve_path::join_abs_string_spill::<
+        resolve_path::platform::Auto,
+    >(cwd, &mut spill, &[path.as_bytes()]))
 }
 
 /// The CLI's view of the options: `ctx.args` and `ctx.bundler_options`
@@ -324,14 +329,22 @@ fn parse(a: &BuildArgs) -> Result<Parsed, String> {
             let mut buf = bun_paths::path_buffer_pool::get();
             match bun_core::getcwd(&mut buf) {
                 Ok(p) => Box::from(p.as_bytes()),
-                Err(e) => return Err(format!("error: could not read the working directory: {e:?}")),
+                Err(e) => {
+                    return Err(format!(
+                        "error: could not read the working directory: {e:?}"
+                    ));
+                }
             }
         }
     };
     // Paths Bun opens relative to the process cwd are made absolute when the
     // caller picked another directory.
     let path = |p: &str| -> Box<[u8]> {
-        if a.cwd.is_some() { absolute(&cwd, p) } else { boxed(p) }
+        if a.cwd.is_some() {
+            absolute(&cwd, p)
+        } else {
+            boxed(p)
+        }
     };
 
     let mut opts = api::TransformOptions::default();
@@ -383,7 +396,11 @@ fn parse(a: &BuildArgs) -> Result<Parsed, String> {
         b.outfile = path(o);
     }
     if let Some(m) = &a.metafile {
-        b.metafile = if m.is_empty() { path("meta.json") } else { path(m) };
+        b.metafile = if m.is_empty() {
+            path("meta.json")
+        } else {
+            path(m)
+        };
     }
     if let Some(r) = a.root.as_deref().filter(|s| !s.is_empty()) {
         b.root_dir = path(r);
@@ -419,30 +436,41 @@ fn parse(a: &BuildArgs) -> Result<Parsed, String> {
     }
     b.production = a.production;
     b.react_fast_refresh = a.react_fast_refresh;
-    Ok(Parsed { args: opts, bundler: b })
+    Ok(Parsed {
+        args: opts,
+        bundler: b,
+    })
 }
 
 /// Bundle like `bun build`. Writes the outputs when `args.write` is set and
 /// returns what native Bun would print.
 pub fn build(args: &BuildArgs) -> Result<BuildOutput, String> {
-    let Parsed { args: ctx_args, bundler: mut bo } = parse(args)?;
+    let Parsed {
+        args: ctx_args,
+        bundler: mut bo,
+    } = parse(args)?;
 
     // Per-build arena, like `BundleThread::generate_in_new_thread`: the
     // transpiler lives in it and is dropped in place before the arena goes.
     let arena: &'static Arena = Box::leak(Box::new(Arena::new()));
     let log: *mut bun_ast::Log = Box::into_raw(Box::new(bun_ast::Log::init()));
 
-    let transpiler: &'static mut Transpiler<'static> = match Transpiler::init(arena, log, ctx_args.clone(), None) {
-        Ok(t) => arena.alloc(t),
-        Err(e) => {
-            // SAFETY: `log` came from `Box::into_raw` above; nothing else holds it.
-            let log = unsafe { Box::from_raw(log) };
-            // SAFETY: `arena` came from `Box::leak` above and nothing borrows it.
-            drop(unsafe { Box::from_raw(std::ptr::from_ref(arena).cast_mut()) });
-            let msg = format_log(&log);
-            return Err(if msg.is_empty() { format!("error: {}", e.name()) } else { msg });
-        }
-    };
+    let transpiler: &'static mut Transpiler<'static> =
+        match Transpiler::init(arena, log, ctx_args.clone(), None) {
+            Ok(t) => arena.alloc(t),
+            Err(e) => {
+                // SAFETY: `log` came from `Box::into_raw` above; nothing else holds it.
+                let log = unsafe { Box::from_raw(log) };
+                // SAFETY: `arena` came from `Box::leak` above and nothing borrows it.
+                drop(unsafe { Box::from_raw(std::ptr::from_ref(arena).cast_mut()) });
+                let msg = format_log(&log);
+                return Err(if msg.is_empty() {
+                    format!("error: {}", e.name())
+                } else {
+                    msg
+                });
+            }
+        };
     let transpiler_ptr: *mut Transpiler<'static> = transpiler;
 
     let result = exec(transpiler, arena, log, &ctx_args, &mut bo, args.write);
@@ -482,7 +510,9 @@ fn exec(
     this_transpiler.options.source_map = options::SourceMapOption::from_api(ctx_args.source_map);
     this_transpiler.options.compile_mode = options::CompileMode::None;
 
-    if this_transpiler.options.source_map == options::SourceMapOption::External && bo.outdir.is_empty() {
+    if this_transpiler.options.source_map == options::SourceMapOption::External
+        && bo.outdir.is_empty()
+    {
         return Err("error: cannot use an external source map without --outdir".into());
     }
 
@@ -496,16 +526,34 @@ fn exec(
         && bo.outdir.is_empty()
         && (this_transpiler.options.entry_points.len() > 1
             || bo.code_splitting
-            || this_transpiler.options.entry_points.iter().any(|entry| strings::has_suffix_comptime(entry, b".html")));
-    this_transpiler.options.supports_multiple_outputs = !(output_to_stdout || !outfile.is_empty()) || in_memory;
-    this_transpiler.options.public_path.clone_from(&bo.public_path);
-    this_transpiler.options.entry_naming.clone_from(&bo.entry_naming);
-    this_transpiler.options.chunk_naming.clone_from(&bo.chunk_naming);
-    this_transpiler.options.asset_naming.clone_from(&bo.asset_naming);
+            || this_transpiler
+                .options
+                .entry_points
+                .iter()
+                .any(|entry| strings::has_suffix_comptime(entry, b".html")));
+    this_transpiler.options.supports_multiple_outputs =
+        !(output_to_stdout || !outfile.is_empty()) || in_memory;
+    this_transpiler
+        .options
+        .public_path
+        .clone_from(&bo.public_path);
+    this_transpiler
+        .options
+        .entry_naming
+        .clone_from(&bo.entry_naming);
+    this_transpiler
+        .options
+        .chunk_naming
+        .clone_from(&bo.chunk_naming);
+    this_transpiler
+        .options
+        .asset_naming
+        .clone_from(&bo.asset_naming);
     this_transpiler.options.server_components = false;
     this_transpiler.options.react_fast_refresh = bo.react_fast_refresh;
     this_transpiler.options.react_compiler = bun_ast::runtime::ReactCompilerMode::Disabled;
-    this_transpiler.options.inline_entrypoint_import_meta_main = bo.inline_entrypoint_import_meta_main;
+    this_transpiler.options.inline_entrypoint_import_meta_main =
+        bo.inline_entrypoint_import_meta_main;
     this_transpiler.options.code_splitting = bo.code_splitting;
     this_transpiler.options.split_require = bo.split_require;
     this_transpiler.options.minify_syntax = bo.minify_syntax;
@@ -513,14 +561,16 @@ fn exec(
     this_transpiler.options.minify_identifiers = bo.minify_identifiers;
     this_transpiler.options.keep_names = bo.keep_names;
     this_transpiler.options.emit_dce_annotations = bo.emit_dce_annotations;
-    this_transpiler.options.deprecated_namespace_object_setters = bo.deprecated_namespace_object_setters;
+    this_transpiler.options.deprecated_namespace_object_setters =
+        bo.deprecated_namespace_object_setters;
     this_transpiler.options.ignore_dce_annotations = bo.ignore_dce_annotations;
     this_transpiler.options.banner = std::borrow::Cow::Owned(bo.banner.clone().into_vec());
     this_transpiler.options.footer = std::borrow::Cow::Owned(bo.footer.clone().into_vec());
     this_transpiler.options.drop = ctx_args.drop.clone().into();
     {
         let flags: Vec<&[u8]> = ctx_args.feature_flags.iter().map(|s| &**s).collect();
-        this_transpiler.options.bundler_feature_flags = Runtime::Features::init_bundler_feature_flags(&flags);
+        this_transpiler.options.bundler_feature_flags =
+            Runtime::Features::init_bundler_feature_flags(&flags);
     }
     this_transpiler.options.allow_unresolved = options::AllowUnresolved::All;
     this_transpiler.options.css_chunking = bo.css_chunking;
@@ -540,7 +590,9 @@ fn exec(
 
     if bo.outdir.is_empty() && !in_memory {
         if this_transpiler.options.entry_points.len() > 1 {
-            return Err("error: Must use --outdir when specifying more than one entry point.".into());
+            return Err(
+                "error: Must use --outdir when specifying more than one entry point.".into(),
+            );
         }
         if this_transpiler.options.code_splitting {
             return Err("error: Must use --outdir when code splitting is enabled".into());
@@ -554,19 +606,32 @@ fn exec(
         } else if this_transpiler.options.entry_points.len() == 1 {
             bun_core::dirname(&this_transpiler.options.entry_points[0]).unwrap_or(b".")
         } else {
-            let entries: Vec<&[u8]> = this_transpiler.options.entry_points.iter().map(|s| &**s).collect();
+            let entries: Vec<&[u8]> = this_transpiler
+                .options
+                .entry_points
+                .iter()
+                .map(|s| &**s)
+                .collect();
             resolve_path::get_if_exists_longest_common_path(&entries).unwrap_or(b".")
         };
         let dir = match bun_sys::open_dir_at(Fd::cwd(), path) {
             Ok(d) => bun_sys::Dir { fd: d },
             Err(err) => {
-                return Err(format!("{} opening root directory {}", lossy(err.name()), bun_core::fmt::quote(path)));
+                return Err(format!(
+                    "{} opening root directory {}",
+                    lossy(err.name()),
+                    bun_core::fmt::quote(path)
+                ));
             }
         };
         match bun_sys::get_fd_path(dir.fd, &mut src_root_dir_buf) {
             Ok(p) => Box::from(&*p),
             Err(err) => {
-                return Err(format!("{} resolving root directory {}", lossy(err.name()), bun_core::fmt::quote(path)));
+                return Err(format!(
+                    "{} resolving root directory {}",
+                    lossy(err.name()),
+                    bun_core::fmt::quote(path)
+                ));
             }
         }
     };
@@ -575,14 +640,21 @@ fn exec(
     this_transpiler.options.code_splitting = bo.code_splitting;
     this_transpiler.options.transform_only = bo.transform_only;
     this_transpiler.options.env.behavior = bo.env_behavior;
-    this_transpiler.options.env.prefix.clone_from(&bo.env_prefix);
+    this_transpiler
+        .options
+        .env
+        .prefix
+        .clone_from(&bo.env_prefix);
 
     if bo.production {
         // SAFETY: `env` is a process-lifetime singleton set in `Transpiler::init`.
-        unsafe { (*this_transpiler.env).map.put(b"NODE_ENV", b"production") }.map_err(|_| "error: out of memory".to_string())?;
+        unsafe { (*this_transpiler.env).map.put(b"NODE_ENV", b"production") }
+            .map_err(|_| "error: out of memory".to_string())?;
     }
 
-    this_transpiler.configure_defines().map_err(|e| format!("error: {}", e.name()))?;
+    this_transpiler
+        .configure_defines()
+        .map_err(|e| format!("error: {}", e.name()))?;
     this_transpiler.configure_linker();
     this_transpiler.options.compile_target_builtins = options::CompileTargetBuiltins::Host;
 
@@ -614,7 +686,9 @@ fn exec(
         this_transpiler.options.allow_runtime = false;
         this_transpiler.resolver.opts.allow_runtime = false;
 
-        let result = this_transpiler.transform(log, ctx_args.clone()).map_err(|e| format!("error: {}", e.name()))?;
+        let result = this_transpiler
+            .transform(log, ctx_args.clone())
+            .map_err(|e| format!("error: {}", e.name()))?;
         if log_ref.has_errors() && (!result.errors.is_empty() || result.output_files.is_empty()) {
             return Err(String::new());
         }
@@ -646,17 +720,27 @@ fn exec(
             Err(err) => return Err(format!("error: {}", err.name())),
         };
 
-        if let Some(metafile_json) = build_result.metafile.as_deref() {
-            if !bo.metafile.is_empty() && write {
-                let file = bun_sys::File::make_open(
-                    &bo.metafile,
-                    bun_sys::O::WRONLY | bun_sys::O::CREAT | bun_sys::O::TRUNC,
-                    0o664,
+        if let Some(metafile_json) = build_result.metafile.as_deref()
+            && !bo.metafile.is_empty()
+            && write
+        {
+            let file = bun_sys::File::make_open(
+                &bo.metafile,
+                bun_sys::O::WRONLY | bun_sys::O::CREAT | bun_sys::O::TRUNC,
+                0o664,
+            )
+            .map_err(|err| {
+                format!(
+                    "{err}: could not open metafile {}",
+                    bun_core::fmt::quote(&bo.metafile)
                 )
-                .map_err(|err| format!("{err}: could not open metafile {}", bun_core::fmt::quote(&bo.metafile)))?;
-                file.write_all(metafile_json)
-                    .map_err(|err| format!("{err}: could not write metafile {}", bun_core::fmt::quote(&bo.metafile)))?;
-            }
+            })?;
+            file.write_all(metafile_json).map_err(|err| {
+                format!(
+                    "{err}: could not write metafile {}",
+                    bun_core::fmt::quote(&bo.metafile)
+                )
+            })?;
         }
         build_result.output_files
     };
@@ -669,8 +753,11 @@ fn exec(
 
     let output_files: &mut [options::OutputFile] = &mut output_files;
     let mut output_dir: &[u8] = &opt_output_dir;
-    let will_be_one_file =
-        output_files.len() == 1 && matches!(output_files[0].value, options::OutputFileValue::Buffer { .. });
+    let will_be_one_file = output_files.len() == 1
+        && matches!(
+            output_files[0].value,
+            options::OutputFileValue::Buffer { .. }
+        );
 
     if output_dir.is_empty() && !outfile.is_empty() && will_be_one_file {
         output_dir = bun_core::dirname(outfile).unwrap_or(b".");
@@ -700,18 +787,23 @@ fn exec(
         match bun_sys::Dir::cwd().make_open_path(root_path, Default::default()) {
             Ok(d) => Some(d),
             Err(err) => {
-                return Err(format!("{err}: could not open output directory {}", bun_core::fmt::quote(root_path)));
+                return Err(format!(
+                    "{err}: could not open output directory {}",
+                    bun_core::fmt::quote(root_path)
+                ));
             }
         }
     };
 
     for f in output_files.iter() {
-        if let Some(root_dir) = &root_dir {
-            if let Err(err) = f.write_to_disk(root_dir.fd) {
-                out.write_errors
-                    .push(format!("{err}: failed to write file {}", bun_core::fmt::quote(&f.dest_path)));
-                continue;
-            }
+        if let Some(root_dir) = &root_dir
+            && let Err(err) = f.write_to_disk(root_dir.fd)
+        {
+            out.write_errors.push(format!(
+                "{err}: failed to write file {}",
+                bun_core::fmt::quote(&f.dest_path)
+            ));
+            continue;
         }
         let kind = match f.output_kind {
             options::OutputKind::EntryPoint => OutputKind::EntryPoint,
@@ -725,7 +817,12 @@ fn exec(
             options::OutputFileValue::Buffer { bytes } => bytes.to_vec(),
             _ => Vec::new(),
         };
-        out.files.push(OutputFile { path: lossy(&f.dest_path), kind, size: f.size, contents });
+        out.files.push(OutputFile {
+            path: lossy(&f.dest_path),
+            kind,
+            size: f.size,
+            contents,
+        });
     }
     let _ = minify_duration;
     let _ = input_code_length;

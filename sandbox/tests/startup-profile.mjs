@@ -38,9 +38,7 @@ try {
   for (const engine of engines) await profileEngine(engine, base);
 } finally {
   await browser?.close();
-  if (process.platform === "linux" && server.exitCode === null && await readlink(`/proc/${server.pid}/cwd`) !== await realpath(root)) throw new Error(`Profile server PID ${server.pid} changed its working directory; refusing to kill it`);
-  server.kill("SIGTERM");
-  await new Promise((resolveExit) => server.exitCode !== null ? resolveExit() : server.once("exit", resolveExit));
+  await stopProfileServer();
 }
 if (failures.length) throw new Error(failures.join("\n"));
 
@@ -85,4 +83,10 @@ async function profileVisit(page, engine, visit, base) {
   const compile = result.events.find((event) => event.name === "wasm-compile" || event.name === "wasm-compileStreaming");
   const deps = result.events.find((event) => event.name === "bundle-deps");
   console.log(JSON.stringify({ run, navToRender: result.navToRender, compile: compile?.duration, bundleDeps: deps?.duration, engineCacheHit, depsCached, status: result.status, errors: result.errors }));
+}
+
+async function stopProfileServer() {
+  if (process.platform === "linux" && server.exitCode === null && await readlink(`/proc/${server.pid}/cwd`) !== await realpath(root)) throw new Error(`Profile server PID ${server.pid} changed its working directory; refusing to kill it`);
+  server.kill("SIGTERM");
+  await new Promise((resolveExit) => server.exitCode !== null ? resolveExit() : server.once("exit", resolveExit));
 }

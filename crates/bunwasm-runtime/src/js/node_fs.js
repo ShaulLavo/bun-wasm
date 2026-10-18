@@ -23,6 +23,10 @@
     return err;
   }
 
+  function badFd(syscall) {
+    return Object.assign(new Error(`${syscall} EBADF`), { code: "EBADF", errno: -9, syscall });
+  }
+
   // Paths may be strings, Buffers or file: URLs. Relative paths resolve
   // against process.cwd() (WASI has no kernel cwd of its own).
   function toPath(path, name = "path") {
@@ -95,16 +99,16 @@
       return (this.mode & constants.S_IFMT) === constants.S_IFLNK;
     }
     isBlockDevice() {
-      return false;
+      return (this.mode & constants.S_IFMT) === constants.S_IFBLK;
     }
     isCharacterDevice() {
-      return false;
+      return (this.mode & constants.S_IFMT) === constants.S_IFCHR;
     }
     isFIFO() {
-      return false;
+      return (this.mode & constants.S_IFMT) === constants.S_IFIFO;
     }
     isSocket() {
-      return false;
+      return (this.mode & constants.S_IFMT) === constants.S_IFSOCK;
     }
   }
 
@@ -475,17 +479,33 @@
   }
 
   function readOptions(buffer, offsetOrOptions, length, position) {
+    if (!ArrayBuffer.isView(buffer)) throw invalidArg("buffer", "an instance of Buffer, TypedArray, or DataView", buffer);
     let offset = offsetOrOptions;
-    if (offsetOrOptions !== null && typeof offsetOrOptions === "object") {
-      ({ offset = 0, length = buffer.byteLength - offset, position = null } = offsetOrOptions);
+    if (offsetOrOptions == null || typeof offsetOrOptions === "object") {
+      ({ offset = 0, length = buffer.byteLength - offset, position = null } = offsetOrOptions || {});
     }
-    offset = offset || 0;
+    if (typeof offset !== "number") throw invalidArg("offset", "of type number", offset);
+    if (!Number.isSafeInteger(offset) || offset < 0) throw readRange("offset", offset);
     if (length === undefined) length = buffer.byteLength - offset;
+    length = Number(length);
+    if (!Number.isSafeInteger(length) || length < 0) throw readRange("length", length);
+    // Zero-byte reads allow an offset beyond the view. Bun also ignores position in this case.
+    if (length === 0) return { offset, length, position };
+    if (buffer.byteLength === 0) throw Object.assign(new TypeError("The argument 'buffer' is empty and cannot be written"), { code: "ERR_INVALID_ARG_VALUE" });
+    if (offset > buffer.byteLength || length > buffer.byteLength - offset) throw readRange("length", length);
     return { offset, length, position };
   }
 
+  function readRange(name, value) {
+    return Object.assign(new RangeError(`The value of "${name}" is out of range. Received ${value}`), { code: "ERR_OUT_OF_RANGE" });
+  }
+
   function readSync(fd, buffer, offsetOrOptions, length, position) {
+    validateFd(fd);
     const options = readOptions(buffer, offsetOrOptions, length, position);
+    // Public zero-byte reads return without a syscall, even on a closed descriptor.
+    // Direct native callers still validate empty reads for ABI safety.
+    if (options.length === 0) return 0;
     const chunk = native.read(fd, options.length, options.position === null || options.position === undefined ? -1 : Number(options.position));
     internal.toUint8(buffer).set(chunk, options.offset);
     return chunk.length;
@@ -725,6 +745,7 @@
       return appendFileSync(this.fd, data, options);
     }
     async read(buffer, offset, length, position) {
+      if (this.fd < 0) throw badFd("read");
       const target = buffer || Buffer.alloc(16384);
       const bytesRead = readSync(this.fd, target, offset, length, position);
       return { bytesRead, buffer: target };
@@ -745,7 +766,9 @@
     async sync() {}
     async datasync() {}
     async close() {
+      if (this.fd < 0) return;
       native.close(this.fd);
+      this.fd = -1;
     }
     async [Symbol.asyncDispose]() {
       return this.close();
