@@ -356,7 +356,9 @@ token = "YOUR_TOKEN"
 A `username` and `password` pair configures Basic authorization instead. Headers
 apply only to the configured registry's origin and path. A tarball on another
 origin receives no configured authorization. Authentication values never become
-part of `bun.lock` or diagnostics.
+part of `bun.lock` or diagnostics. Metadata responses containing credential-bearing
+URLs or configured authentication values are not cached. Unsafe metadata cache
+entries are discarded before reuse.
 
 Archive verification supports SHA-512, SHA-384, SHA-256 and legacy SHA-1. Migration
 and verification use the same accepted algorithms. The strongest supported digest

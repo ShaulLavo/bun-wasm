@@ -2216,6 +2216,8 @@ normalization for migration and ordinary installation. It drops URL userinfo,
 rejects transport queries, and keeps configured authorization out of URLs and lock
 records. Host error text and optional warnings use the shared URL redactor. The
 lock writer rejects credential-bearing URL metadata before publication. The
+original cache adapter also refuses credential-bearing metadata before persistence
+or reuse. The
 portable verifier implements SHA-512, SHA-384, SHA-256 and SHA-1 and compares decoded
 digests, including Bun's serialized padding for SHA-256 and SHA-384.
 The text format follows Bun's `src/install/lockfile/bun.lock.rs`; selected references

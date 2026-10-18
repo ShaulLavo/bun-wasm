@@ -129,7 +129,7 @@ registry record there would lose the source selection.
 `tests/install/security.ts` captures local request URLs and headers for fresh
 installs, failed and timed-out metadata/tarball responses, and frozen installs from
 migrated locks. It checks stdout, stderr, errors and written locks for synthetic
-secrets. Configured authorization has separate positive and origin-isolation
+secrets, including cached packuments. Configured authorization has separate positive and origin-isolation
 controls. Unsupported secret-bearing dependency metadata rejects before the lock
 writer publishes it.
 
