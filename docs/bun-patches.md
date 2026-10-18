@@ -91,6 +91,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/inspect.js`, host hooks](#inspection-host-hooks) | Host feature | Let the host expose promise, proxy, namespace, and iterator state. |
 | [`vendor/bun/src/node_path/lib.rs`](#node-path) | Port | Run Bun's unmodified POSIX and Windows path algorithms over UTF-16 slices. |
 | [`scripts/generate-node-path.ts`](#node-path) | Port | Extract Bun's relative-path computation with guest-resolved paths supplied by the adapter. |
+| [`vendor/bun/src/runtime/node/path.rs`](#node-path) | Port | Adapt the public path argument traversal and validation order to the JavaScript boundary. |
 | [`crates/bunwasm-runtime/src/js/path.ts`](#node-path) and `src/node_path.rs` | Host feature | Original adapters for JavaScript validation, guest cwd, and lossless UTF-16 transport. |
 | [`crates/bunwasm-runtime/src/js/buffer.js`](#node-buffer-fragments) | Port | Adapt Node Buffer construction and concatenation routines over typed arrays. |
 | [`crates/bunwasm-runtime/src/js/events.js`](#node-event-emitter) | Port | Adapt Node listener bookkeeping without native async hooks. |
@@ -1115,7 +1116,10 @@ function's computation after its resolution preamble from the same upstream
 file. It specializes `T` to `u16` and accepts resolved input slices instead of
 reading cwd. Bun's comparisons, separator scans, UNC rules, and output writes
 remain unchanged. The generator rejects an unexpected source shape or residual
-cwd dependency. `matchesGlob` uses the existing Bun glob native and normalizes
+cwd dependency. Argument traversal and suffix-before-path validation adapt
+`src/runtime/node/path.rs` at the same revision. POSIX resolution stops checking
+arguments at an absolute path; Windows resolution validates every argument.
+`matchesGlob` uses the existing Bun glob native and normalizes
 Windows separators, matching `src/js/node/path.ts` at the same revision.
 
 ### Node Buffer fragments
