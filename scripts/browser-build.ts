@@ -38,8 +38,16 @@ export function resolveRuntimePackage(consumerEntry: string) {
       if (!existsSync(output)) throw new Error(`Missing runtime export: ${output}`);
       const physicalOutput = realpathSync(output);
       if (inside(physical, physicalOutput) === undefined) throw new Error(`Runtime export escapes installed package: ${target}`);
-      // Match the paths Bun uses for relative imports, preserving class identity.
-      return physicalOutput;
+      return output;
+    },
+    relativeSource(specifier: string, importer: string): string | undefined {
+      if (inside(path, importer) === undefined && inside(physical, importer) === undefined) return;
+      const resolved = Bun.resolveSync(specifier, dirname(importer));
+      const input = inside(path, resolved) ?? inside(physical, resolved);
+      if (input === undefined) throw new Error(`Runtime relative import escapes installed package: ${specifier}`);
+      // Keep every module under the same consumer alias: physical cache names may
+      // contain '..', which Bun rejects in file-namespace plugin result paths.
+      return join(path, input);
     },
     relativeInput(input: string, base = process.cwd()): string | undefined {
       const absolute = resolve(base, input);
@@ -72,6 +80,11 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
         build.onResolve({ filter: /^waffle(?:\/|$)/ }, ({ path }) => {
           runtimePackage ??= resolveRuntimePackage(main);
           return { path: runtimePackage.source(path) };
+        });
+        build.onResolve({ filter: /^\.\.?\// }, ({ path, importer }) => {
+          runtimePackage ??= resolveRuntimePackage(main);
+          const resolved = runtimePackage.relativeSource(path, importer);
+          if (resolved) return { path: resolved };
         });
       },
     }],

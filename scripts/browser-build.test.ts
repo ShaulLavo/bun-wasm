@@ -10,7 +10,7 @@ test("browser build uses consumer exports through a dotted Git cache, not siblin
   const scratch = await mkdtemp(join(process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-package-resolver-"));
   try {
     const consumer = join(scratch, "consumer");
-    const cached = join(scratch, "cache", "@bun-wasm.runtime.git.deadbeef");
+    const cached = join(scratch, "cache", "@bun-wasm.runtime.git.dead..beef");
     await mkdir(cached, { recursive: true });
     await mkdir(join(consumer, "node_modules/@bun-wasm"), { recursive: true });
     await writeFile(join(cached, "package.json"), JSON.stringify({ name: "waffle", type: "module", exports: { "./core": { types: "./wrong.d.ts", browser: "./browser.ts", node: "./wrong.js" }, "./errors": "./errors.ts", "./blocked": { browser: null, default: "./browser.ts" } } }));
@@ -21,9 +21,15 @@ test("browser build uses consumer exports through a dotted Git cache, not siblin
     await writeFile(entry, 'export { provenance } from "waffle/core";');
     const installed = resolveRuntimePackage(entry);
     expect(installed.physical).toBe(cached);
-    expect(installed.source("waffle/core")).toBe(join(cached, "browser.ts"));
+    expect(installed.source("waffle/core")).toBe(join(consumer, "node_modules/waffle/browser.ts"));
     expect(() => installed.source("waffle/internal/private")).toThrow("not exported");
     expect(() => installed.source("waffle/blocked")).toThrow("not exported");
+    const errors = join(consumer, "node_modules/waffle/errors.ts");
+    expect(installed.relativeSource("./errors.js", installed.source("waffle/core"))).toBe(errors);
+    expect(installed.relativeSource("./errors.js", join(cached, "browser.ts"))).toBe(errors);
+    expect(installed.relativeSource("./errors.js", entry)).toBeUndefined();
+    await writeFile(join(scratch, "cache/escape.ts"), "export {};");
+    expect(() => installed.relativeSource("../escape.ts", join(cached, "browser.ts"))).toThrow("escapes installed package");
     const { outdir: _outdir, ...config } = browserBuildConfig([entry], join(scratch, "output"));
     const result = await Bun.build(config);
     expect(result.success).toBe(true);
