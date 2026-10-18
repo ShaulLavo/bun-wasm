@@ -1,9 +1,15 @@
 import { execFileSync } from "node:child_process";
 
-const nativeInputs = /^(?:crates\/|vendor\/|third_party\/|patches\/|\.cargo\/|Cargo\.[^/]+$|rust-toolchain(?:\.toml)?$|env\.sh$|package\.json$|bun\.lock$|\.github\/workflows\/ci\.yml$|scripts\/(?:build-|sync-|export-patches|generate-|quality(?:-rust|-wasi|-wasi-probe|-command)?\.ts$|ci-changes\.ts$))/;
+const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/"];
+const nativeFiles = new Set([
+  "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
+  "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts",
+  "scripts/ci-changes.ts", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
+]);
+const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 
 export function needsRust(paths: readonly string[]): boolean {
-  return paths.some(path => nativeInputs.test(path));
+  return paths.some(path => nativeFiles.has(path) || nativeScripts.test(path) || nativeDirectories.some(root => path.startsWith(root)));
 }
 
 export function changedPaths(base: string, head: string, pullRequest: boolean): string[] {
