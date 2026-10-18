@@ -1,0 +1,15 @@
+file worker, globals, options, transfer, events, terminate
+messages drain before natural close
+worker errors, missing entry, open before error
+worker global event listeners and close
+worker preload
+TypeScript blob worker
+nested web worker
+unreferenced worker releases parent
+message event ports survive worker exit
+messages wait for asynchronous preload
+data and blob workers resume messages after preload
+messages wait for worker entry evaluation
+message delivery starts before top-level await settles
+started workers drop messages without a handler
+Web transfer validation is atomic and matches Bun errors
