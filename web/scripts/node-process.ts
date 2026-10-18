@@ -261,10 +261,16 @@ function installDescriptors(imports: NodeWasiImports, memory: () => WebAssembly.
       const entry = descriptors.get(fd! >>> 0);
       if (!entry) return 8;
       if (nativeDescriptor(entry) !== undefined) return call?.(fd!, ptr!) ?? 8;
-      const size = name === "fd_fdstat_get" ? 24 : 64;
-      views().range(ptr!, size).fill(0);
-      const view = views().view(), type = entry.resource.kind === "pipe" ? 6 : 2;
-      view.setUint8(ptr! + (name === "fd_fdstat_get" ? 0 : 16), type);
+      const resource = entry.resource;
+      const nativeFd = "nativeFd" in resource ? resource.nativeFd : undefined;
+      if (typeof nativeFd === "number") {
+        const error = original[name]?.(nativeFd, ptr!) ?? 8;
+        if (error !== 0 || name === "fd_filestat_get") return error;
+      } else {
+        views().range(ptr!, name === "fd_fdstat_get" ? 24 : 64).fill(0);
+        views().view().setUint8(ptr! + (name === "fd_fdstat_get" ? 0 : 16), resource.kind === "pipe" ? 6 : 2);
+      }
+      const view = views().view();
       if (name === "fd_fdstat_get") {
         view.setBigUint64(ptr! + 8, entry.rightsBase, true);
         view.setBigUint64(ptr! + 16, entry.rightsInheriting, true);
