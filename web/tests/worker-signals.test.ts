@@ -55,8 +55,8 @@ test("same-realm Atomics and shared-view replacement cannot intercept worker sig
       // The worker may be scheduled away between publishing entry and waiting.
       // Retry notification, never change the word: success still requires waking
       // one actual native sleeper, not merely observing its intent to wait.
-      if (Atomics.load(evidence, 0) === 1 && Atomics.notify(gate, 0) === 1) { notified = true; return; }
-      wake = setTimeout(notify, 1);
+      notified = Atomics.load(evidence, 0) === 1 && Atomics.notify(gate, 0) === 1;
+      if (!notified) wake = setTimeout(notify, 1);
     };
     worker = new Worker(new URL("./fixtures/worker-signals-intrinsics.ts", import.meta.url).href);
     worker.onerror = event => result.reject(new Error(event.message));
