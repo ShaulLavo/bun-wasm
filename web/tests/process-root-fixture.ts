@@ -44,3 +44,8 @@ export function importingModule(name: string, namespace = "runtime_proc"): WebAs
   const imports = [1].concat(text(namespace), text(name), [0, 0]);
   return new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 0x60, 0, 0, 2, imports.length].concat(imports)));
 }
+
+/** The shell-style status of a finished process: 127 for a missing program, 126 for one that could not start. */
+export function waitStatus(exit: { kind: string; status: number | null; error?: string }): number {
+  return exit.kind === "start-failed" ? exit.error === "ENOENT" ? 127 : 126 : exit.status!;
+}
