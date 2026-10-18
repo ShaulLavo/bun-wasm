@@ -31,7 +31,7 @@ test("converted Glob preserves replacement error classes and their stacks", asyn
     TypeError: ReplacementTypeError, Error: ReplacementError, process: { cwd: () => "/" },
   }, { filename: "bun-wasm:glob" });
   const { Glob } = factory({ native: {}, require: () => ({ resolve: (cwd: string) => cwd }) });
-  const cases: [() => unknown, typeof Error, string][] = [
+  const cases: [() => unknown, new (message?: string) => Error, string][] = [
     [() => new Glob(), ReplacementTypeError, "Glob.constructor: expected 1 arguments, got 0"],
     [() => new Glob(7), ReplacementTypeError, "Glob.constructor: first argument is not a string"],
     [() => new Glob("*").match(), ReplacementTypeError, "Glob.matchString: expected 1 arguments, got 0"],

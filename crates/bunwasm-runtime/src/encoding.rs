@@ -80,7 +80,8 @@ pub fn digest(alg: &str, data: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn mac<M: Mac + hmac::digest::KeyInit>(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut m = <M as hmac::digest::KeyInit>::new_from_slice(key).expect("HMAC takes any key length");
+    let mut m =
+        <M as hmac::digest::KeyInit>::new_from_slice(key).expect("HMAC takes any key length");
     m.update(data);
     m.finalize().into_bytes().to_vec()
 }
@@ -96,10 +97,6 @@ pub fn hmac(alg: &str, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
         _ => return None,
     };
     Some(out)
-}
-
-pub fn crc32(data: &[u8]) -> u32 {
-    crc32_seed(data, 0)
 }
 
 pub fn crc32_seed(data: &[u8], seed: u32) -> u32 {
@@ -139,13 +136,16 @@ mod tests {
 
     #[test]
     fn checksums() {
-        assert_eq!(crc32(b"hello"), 907060870);
+        assert_eq!(crc32_seed(b"hello", 0), 907060870);
         assert_eq!(adler32(b"hello"), 103547413);
     }
 
     #[test]
     fn wyhash_matches_bun() {
         assert_eq!(bun_wyhash::hash_with_seed(0, b"hello"), 1019145960556548909);
-        assert_eq!(bun_wyhash::hash_with_seed(1, b"hello"), 15802777309726279454);
+        assert_eq!(
+            bun_wyhash::hash_with_seed(1, b"hello"),
+            15802777309726279454
+        );
     }
 }

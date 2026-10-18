@@ -10,17 +10,27 @@ fn memmove<T: Copy>(destination: &mut [T], source: &[T]) {
 }
 
 fn to_lower_t(value: u16) -> u16 {
-    if (65..=90).contains(&value) { value + 32 } else { value }
+    if (65..=90).contains(&value) {
+        value + 32
+    } else {
+        value
+    }
 }
 
 fn eql_ignore_case_t(a: &[u16], b: &[u16]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| to_lower_t(*x) == to_lower_t(*y))
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(x, y)| to_lower_t(*x) == to_lower_t(*y))
 }
 
 include!(concat!(env!("OUT_DIR"), "/node_path_relative.rs"));
 
 fn units(bytes: &[u8]) -> Vec<u16> {
-    bytes.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect()
+    bytes
+        .chunks_exact(2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        .collect()
 }
 
 fn bytes(units: &[u16]) -> Val {
@@ -67,25 +77,32 @@ fn lexical(a: Args<'_>) -> NativeResult {
     Ok(bytes(value))
 }
 
+fn path_slices(a: Args<'_>, index: usize) -> Result<Vec<Vec<u16>>, NativeError> {
+    let input = a
+        .array(index)
+        .ok_or_else(|| NativeError::type_error("Expected path array"))?;
+    input
+        .iter()
+        .map(|v| Args(std::slice::from_ref(v)).bytes(0).map(units))
+        .collect()
+}
+
 fn resolve_windows(a: Args<'_>) -> NativeResult {
     let cwd = units(a.bytes(0)?);
-    let input = a.array(1).ok_or_else(|| NativeError::type_error("Expected path array"))?;
-    let paths: Result<Vec<_>, _> = input.iter().map(|v| Args(std::slice::from_ref(v)).bytes(0).map(units)).collect();
-    let paths = paths?;
+    let paths = path_slices(a, 1)?;
     let slices: Vec<_> = paths.iter().map(Vec::as_slice).collect();
     let size = path::resolve_buf_len(true, &slices).max(cwd.len() + 2);
     let mut output = vec![0; size];
     let mut scratch = vec![0; size];
-    let result = windows_resolver::resolve_windows_guest_t(&slices, &cwd, &mut output, &mut scratch)
-        .map_err(|error| NativeError::error(error.to_string()))?;
+    let result =
+        windows_resolver::resolve_windows_guest_t(&slices, &cwd, &mut output, &mut scratch)
+            .map_err(|error| NativeError::error(error.to_string()))?;
     Ok(bytes(result))
 }
 
 fn join(a: Args<'_>) -> NativeResult {
     let windows = a.bool(0);
-    let input = a.array(1).ok_or_else(|| NativeError::type_error("Expected path array"))?;
-    let paths: Result<Vec<_>, _> = input.iter().map(|v| Args(std::slice::from_ref(v)).bytes(0).map(units)).collect();
-    let paths = paths?;
+    let paths = path_slices(a, 1)?;
     let slices: Vec<_> = paths.iter().map(Vec::as_slice).collect();
     let size = path::join_buf_len(windows, &slices);
     let mut output = vec![0; size];

@@ -32,6 +32,7 @@ export async function measureInterruptionOverhead(run: (mode: InterruptionBenchm
   const targetMs = 1_000, calibrationIterations = 1_000_000, measuredPairs = 7;
   const corpora: object[] = [];
   for (const corpus of interruptionCpuCorpora) {
+    const measureInterruption = async () => {
     const source = (iterations: number) => `const started=Date.now(); ${corpus.source(iterations)} console.log('BENCH',Date.now()-started,value);`;
     const calibration = await run("candidate-masked", source(calibrationIterations));
     if (calibration.checksum !== corpus.checksum(calibrationIterations)) throw new Error(`${corpus.name}: calibration checksum mismatch`);
@@ -60,6 +61,9 @@ export async function measureInterruptionOverhead(run: (mode: InterruptionBenchm
     corpora.push({ name: corpus.name, targetMs, iterations, checksum, calibration, warmupPairs: 1, measuredPairs, samples, summaries, pairs,
       hostPollingRatio: medianMs("candidate-hooks") / medianMs("candidate-masked"),
       totalPatchRatio: pristine ? medianMs("candidate-hooks") / medianMs("pristine") : undefined });
+
+    };
+    await measureInterruption();
   }
   return { corpora, method: "two calibrated ~1s CPU corpora; one warmup and seven measured pairs per corpus; alternating mode order; guest Date.now duration; no probe work in timed checkpoint imports; candidate-masked isolates host polling, optional pristine artifact measures total patch overhead; raw samples and paired ratios retained" };
 }

@@ -27,6 +27,10 @@ if (isMainThread) {
     assert.equal(status, 0);
   } finally { clearTimeout(timer!); await broker.dispose(); await root.terminate(); }
 } else {
+  await runWorker();
+}
+
+async function runWorker() {
   const transport = workerData.transport as WorkerProcessTransport;
   const request = workerData.request as SpawnRequest | undefined;
   const signals = createNodeSignalController(workerProcessState(transport).signals);
@@ -36,7 +40,7 @@ if (isMainThread) {
     finish(code, signal): never { const selected = signals.finish(code, signal); process.exit(selected.status); },
   });
   const memory = new WebAssembly.Memory({ initial: 8 });
-  const wasi = { sock_send: () => 52, fd_read: () => 8, fd_write: () => 8, fd_close: () => 8 };
+  const wasi = { sock_send: () => 52, fd_read: (..._args: number[]) => 8, fd_write: (..._args: number[]) => 8, fd_close: () => 8 };
   const { proc } = host.install({ wasi_snapshot_preview1: wasi } as NodeWasiImports, () => ({ exports: { memory } }) as unknown as WebAssembly.Instance);
   const view = () => new DataView(memory.buffer);
   const bytes = () => new Uint8Array(memory.buffer);
@@ -64,6 +68,40 @@ if (isMainThread) {
     view().setUint32(16, writing ? 1 : 0, true); view().setUint32(20, fd, true); view().setBigUint64(24, 42n, true);
     assert.ok(proc.poll!(16, 1, 1000, 32) >= 0);
   };
+  function writeFully(count: number) {
+    let offset = 0;
+    while (offset < count) {
+      const written = proc.write!(12, 1024 + offset, count - offset);
+      if (written === -6) { pollFd(12, true); continue; }
+      assert.ok(written > 0); offset += written;
+    }
+  }
+  function echoInput() {
+    for (;;) {
+      const count = proc.read!(9, 1024, 4096);
+      if (count === 0) break;
+      if (count === -6) { pollFd(9, false); continue; }
+      assert.ok(count > 0);
+      writeFully(count);
+    }
+  }
+  function exchangeBytes(write: number, read: number) {
+    const length = 200000;
+    bytes().fill(42, 4096, 4096 + length);
+    let sent = 0, received = 0, closed = false;
+    while (received < length) {
+      if (sent < length) {
+        const count = proc.write!(write, 4096 + sent, length - sent);
+        if (count > 0) sent += count; else assert.equal(count, -6);
+      } else if (!closed) { assert.equal(proc.close!(write), 0); closed = true; }
+      const count = proc.read!(read, 300000, Math.min(65536, length - received));
+      if (count > 0) {
+        assert.ok(bytes().subarray(300000, 300000 + count).every(value => value === 42)); received += count;
+      } else { assert.equal(count, -6); proc.poll!(0, 0, 1, 0); }
+    }
+    if (!closed) assert.equal(proc.close!(write), 0);
+    return received;
+  }
   if (request?.env.action === "throw-before-entry") throw new Error("node-before-entry");
   if (!markStarted(host.client.signals.outcome)) finish(0);
   if (request?.env.action === "throw-after-entry") throw new Error("node-after-entry");
@@ -79,18 +117,7 @@ if (isMainThread) {
     if (request?.env.action === "echo") {
       const grandchild = spawn("/bin/bun", [], "omitted");
       assert.deepEqual(wait(grandchild), [0, 0]);
-      for (;;) {
-        const count = proc.read!(9, 1024, 4096);
-        if (count === 0) break;
-        if (count === -6) { pollFd(9, false); continue; }
-        assert.ok(count > 0);
-        let offset = 0;
-        while (offset < count) {
-          const written = proc.write!(12, 1024 + offset, count - offset);
-          if (written === -6) { pollFd(12, true); continue; }
-          assert.ok(written > 0); offset += written;
-        }
-      }
+      echoInput();
       finish(7);
     }
     let stdinBytes = 0;
@@ -106,20 +133,7 @@ if (isMainThread) {
     const pid = spawn("/bin/bun", [{ child: 9, parent: input }, { child: 12, parent: output }], "echo");
     const job = proc.job_of!(pid); assert.ok(job > 1);
     assert.equal(proc.close!(input), 0); assert.equal(proc.close!(output), 0);
-    const length = 200000;
-    bytes().fill(42, 4096, 4096 + length);
-    let sent = 0, received = 0, closed = false;
-    while (received < length) {
-      if (sent < length) {
-        const count = proc.write!(write, 4096 + sent, length - sent);
-        if (count > 0) sent += count; else assert.equal(count, -6);
-      } else if (!closed) { assert.equal(proc.close!(write), 0); closed = true; }
-      const count = proc.read!(read, 300000, Math.min(65536, length - received));
-      if (count > 0) {
-        assert.ok(bytes().subarray(300000, 300000 + count).every(value => value === 42)); received += count;
-      } else { assert.equal(count, -6); proc.poll!(0, 0, 1, 0); }
-    }
-    if (!closed) assert.equal(proc.close!(write), 0);
+    const received = exchangeBytes(write, read);
     assert.deepEqual(wait(pid), [0, 7]);
     assert.equal(proc.wait_job!(job, 0, 0), 0); assert.deepEqual([view().getInt32(0, true), view().getInt32(4, true)], [0, 7]);
     assert.equal(proc.read!(read, 1024, 1), 0); assert.equal(proc.close!(read), 0);

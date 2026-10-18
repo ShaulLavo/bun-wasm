@@ -7,7 +7,7 @@ import { createNodeSignalController } from "../scripts/node-signals";
 
 test("Node executor readiness ignores stale hints and expires a WASI clock normally", () => {
   const controller = createNodeSignalController();
-  const interrupt = new Int32Array(controller.buffers.interrupt);
+  const interrupt = controller.buffers.interrupt instanceof SharedArrayBuffer ? new Int32Array(controller.buffers.interrupt) : controller.buffers.interrupt;
   controlStore(interrupt, 0, 15);
   expect(controller.pending()).toBe(false);
   const memory = new WebAssembly.Memory({ initial: 1 });
@@ -30,7 +30,7 @@ test("Node executor readiness ignores stale hints and expires a WASI clock norma
 test("Node readiness observes handled and fatal delivery without consuming it", () => {
   const controller = createNodeSignalController();
   const state = createSignalState(controller.buffers.signalState);
-  const interrupt = new Int32Array(controller.buffers.interrupt);
+  const interrupt = controller.buffers.interrupt instanceof SharedArrayBuffer ? new Int32Array(controller.buffers.interrupt) : controller.buffers.interrupt;
   setSignalDisposition(state, 2, 2);
   controller.request(2);
   expect(controller.pending()).toBe(true);

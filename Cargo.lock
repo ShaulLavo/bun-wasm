@@ -1335,7 +1335,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-build"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "bitflags",
  "bstr",
@@ -1364,14 +1364,14 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-bun-jsc"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "bunwasm-bun-jsc-macros",
 ]
 
 [[package]]
 name = "bunwasm-bun-jsc-macros"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -1379,25 +1379,24 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-cli"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "bunwasm-build",
  "bunwasm-glue",
  "bunwasm-runtime",
  "bunwasm-transpiler",
- "serde_json",
 ]
 
 [[package]]
 name = "bunwasm-crypto-sys"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "bunwasm-glue"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "bstr",
  "bun_ast",
@@ -1413,7 +1412,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-host"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1434,11 +1433,11 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-jsc"
-version = "0.0.29"
+version = "0.0.30"
 
 [[package]]
 name = "bunwasm-lint-native"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "serde_json",
  "zstd-sys",
@@ -1446,14 +1445,14 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-posix"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "bunwasm-runtime"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "aes",
  "aes-kw",
@@ -1507,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-semver"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "bstr",
  "bun_core",
@@ -1517,7 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-tools"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "bun_alloc",
  "bun_ast",
@@ -1536,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-transpiler"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "bun_alloc",
  "bun_ast",

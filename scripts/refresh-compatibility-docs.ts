@@ -9,7 +9,7 @@ type Stage = { app: string; engine: string; host: string; stage: string; status:
 const root = fileURLToPath(new URL("../", import.meta.url));
 const check = process.argv.includes("--check");
 const args = process.argv.slice(2);
-const suiteDirectory = args[0] === "--suite-partial-results" && args.length === 2 ? resolve(args[1]) : undefined;
+const suiteDirectory = args[0] === "--suite-partial-results" && args.length === 2 && args[1] ? resolve(args[1]) : undefined;
 if (args.length && !suiteDirectory && !(args.length === 1 && check)) throw new Error("Use --check, --suite-partial-results <directory>, or no arguments");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -99,10 +99,10 @@ function importSuite(directory: string) {
   for (const selection of selections) {
     if (new Set(selection).size !== selection.length || JSON.stringify(selection) !== JSON.stringify(selections[0])) throw new Error("Suite engine selections differ");
   }
-  for (let i = 0; i < runs.length; i++) {
-    if (string(record(runs[i].provenance).engine) !== engines[i] || number(runs[i].selected_files) !== selections[i].length) throw new Error("Incomplete suite run");
+  for (const [i, run] of runs.entries()) {
+    if (string(record(run.provenance).engine) !== engines[i] || number(run.selected_files) !== array(run.results).length) throw new Error("Incomplete suite run");
     for (const key of ["suite_commit", "runner_sha256", "network", "timeout_seconds", "test_timeout_ms", "dependencies", "test_dependencies"]) {
-      if (JSON.stringify(record(runs[i].provenance)[key]) !== JSON.stringify(record(runs[0].provenance)[key])) throw new Error(`Suite input differs across engines: ${key}`);
+      if (JSON.stringify(record(run.provenance)[key]) !== JSON.stringify(record(runs.at(0)?.provenance)[key])) throw new Error(`Suite input differs across engines: ${key}`);
     }
   }
   const commit = readFileSync(join(directory, "runtime-commit.txt"), "utf8").trim();

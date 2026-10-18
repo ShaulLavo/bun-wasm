@@ -3,9 +3,9 @@ use std::fs::{self, ReadDir};
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::State;
 use crate::engine::{NativeError, NativeResult, Val};
 use crate::natives::{Table, io_error};
-use crate::State;
 
 struct Cursor {
     current: Option<ReadDir>,

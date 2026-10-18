@@ -71,7 +71,6 @@ const deadline = setTimeout(() => { console.error("Bun runtime_proc gate deadlin
 let ownedPort: number | undefined;
 async function runScenario(browser: Browser, name: string, scenario: string) {
   let failed = false;
-  let knownFlakyFailures = 0;
   const page: Page = await browser.newPage();
   const errors: string[] = [];
   const guestRequests: string[] = [];
@@ -91,25 +90,7 @@ async function runScenario(browser: Browser, name: string, scenario: string) {
       assert.deepEqual(guestRequests, expectedRequests, "public default loads only for guest entry, exactly once without a local artifact fallback");
     }
     const expected = bunRuntimeProcScenarios.find(item => item.name === scenario)?.expectedFailure;
-    // Pre-existing Waffle consuming-job claim/retirement race; never retry or mask other failures.
-    // Remove this exact-signature allowance when the dedicated Waffle wait_job fix is pinned.
-    const knownWaitJobRace = !publishedDefault && name === "firefox" && scenario === "nested"
-      && result.ok === false
-      && result.error?.includes("external generic root exit") && result.error.includes(": 205 !== 0")
-      && result.stderr === "nested-err\nruntime-proc wait_job errno=0000000071 result-kind=0000000000 result-value=0000000000\n";
-    if (knownWaitJobRace) {
-      assert.equal(result.stdout, "nested-node\nnested-ok\n");
-      assert.deepEqual(result.confirmedExits.toSorted((a: { pid: number }, b: { pid: number }) => a.pid - b.pid), [
-        { pid: 1, parentPid: 0, job: 1, status: 205, kind: "exited" },
-        { pid: 2, parentPid: 1, job: 2, status: 0, kind: "exited" },
-        { pid: 3, parentPid: 2, job: 2, status: 0, kind: "exited" },
-        { pid: 4, parentPid: 3, job: 2, status: 0, kind: "exited" },
-      ], "all three Bun generations exit successfully before the generic root's exact wait_job failure");
-      assert.deepEqual(result.errors, []);
-      assert.equal(result.teardownError, undefined);
-      knownFlakyFailures++;
-      console.log(JSON.stringify({ browser: name, scenario, knownFlakyExpectedFailure: "Waffle wait_job ESRCH race after a successful pending claim; fix in progress, deterministic regression on Waffle main", observed: result.stderr, retries: 0 }));
-    } else if (expected) {
+    if (expected) {
       // Keep executing the real failure: a fix is an unexpected pass, not a silent skip.
       assert.equal(result.ok, false, "remove expected-failure marker after patched libc lands");
       assert.ok(result.error?.includes("external generic root exit"), JSON.stringify(result));
@@ -127,7 +108,7 @@ async function runScenario(browser: Browser, name: string, scenario: string) {
     const diagnostics = await page.evaluate(() => Reflect.get(globalThis, "bunRuntimeProcDiagnostics")?.()).catch(error => ({ diagnosticsError: String(error) }));
     console.error(JSON.stringify({ browser: name, scenario, artifact: artifactReceipt, error: String(error), diagnostics, pageErrors: errors }));
   } finally { await page.close(); }
-  return { failed, knownFlakyFailures };
+  return failed;
 }
 
 async function runSiteSmoke(browser: Browser, name: string) {
@@ -172,13 +153,10 @@ try {
   for (const name of names) {
     launching = types[name as keyof typeof types].launch({ headless: true, downloadsPath: join(scratch, "downloads"), tracesDir: join(scratch, "traces") });
     browser = await launching;
-    let knownFlakyFailures = 0;
     for (const scenario of scenarios) {
-      const observed = await runScenario(browser, name, scenario);
-      failed ||= observed.failed;
-      knownFlakyFailures += observed.knownFlakyFailures;
+      failed = await runScenario(browser, name, scenario) || failed;
     }
-    console.log(JSON.stringify({ browser: name, executedScenarios: scenarios.length, knownFlakyFailures, retries: 0 }));
+    console.log(JSON.stringify({ browser: name, executedScenarios: scenarios.length, retries: 0 }));
     failed = await runSiteSmoke(browser, name) || failed;
     await browser.close(); browser = undefined; launching = undefined;
   }

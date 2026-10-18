@@ -111,11 +111,16 @@ pub fn install(table: &mut Table) {
         };
         let mut output = Vec::new();
         let size = a.u32(3)? as usize;
-        output.try_reserve_exact(size).map_err(|_| crate::compression::out_of_memory())?;
+        output
+            .try_reserve_exact(size)
+            .map_err(|_| crate::compression::out_of_memory())?;
         output.resize(size, 0);
         let (available_in, available_out) = handle.write(a.bytes(1)?, a.i32(2)?, &mut output)?;
         output.truncate(size - available_out);
-        Ok(Record::new().set("bytes", Val::Bytes(output)).set("availIn", available_in as f64).into())
+        Ok(Record::new()
+            .set("bytes", Val::Bytes(output))
+            .set("availIn", available_in as f64)
+            .into())
     });
     let r = resources.clone();
     table.add("streams.params", move |a| {
@@ -129,7 +134,8 @@ pub fn install(table: &mut Table) {
     // Bun's CompressionStreamCoder: (format, decompress, highWaterMark, level).
     let r = resources.clone();
     table.add("streams.webCodec", move |a| {
-        let format = WebFormat::parse(a.str(0)?).ok_or_else(|| NativeError::type_error("Unsupported compression format"))?;
+        let format = WebFormat::parse(a.str(0)?)
+            .ok_or_else(|| NativeError::type_error("Unsupported compression format"))?;
         let high_water_mark = a.opt_num(2).unwrap_or(65536.0) as usize;
         let level = a.opt_num(3).map(|n| n as i32);
         let coder = WebCoder::new(format, a.bool(1), high_water_mark, level)?;
@@ -142,7 +148,10 @@ pub fn install(table: &mut Table) {
             return Err(NativeError::type_error("Compression stream is closed"));
         };
         let (bytes, more) = coder.step(a.bytes(1)?, a.bool(2))?;
-        Ok(Record::new().set("bytes", Val::Bytes(bytes)).set("more", more).into())
+        Ok(Record::new()
+            .set("bytes", Val::Bytes(bytes))
+            .set("more", more)
+            .into())
     });
     table.add("streams.release", move |a| {
         resources.borrow_mut().values.remove(&a.u32(0)?);

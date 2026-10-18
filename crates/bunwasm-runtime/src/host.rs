@@ -36,8 +36,20 @@ pub enum Slot {
 }
 
 pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
-    "poll", "fetch", "fetch_head", "read", "write", "close", "listen", "local_port", "accept", "connect",
-    "error", "peer_addr", "shutdown", "local_addr",
+    "poll",
+    "fetch",
+    "fetch_head",
+    "read",
+    "write",
+    "close",
+    "listen",
+    "local_port",
+    "accept",
+    "connect",
+    "error",
+    "peer_addr",
+    "shutdown",
+    "local_addr",
 ];
 
 #[repr(C)]
@@ -47,7 +59,11 @@ pub struct HostSlots {
     slots: [u32; SLOT_COUNT],
 }
 
-static mut HOST_SLOTS: HostSlots = HostSlots { version: ABI_VERSION, count: SLOT_COUNT as u32, slots: [0; SLOT_COUNT] };
+static mut HOST_SLOTS: HostSlots = HostSlots {
+    version: ABI_VERSION,
+    count: SLOT_COUNT as u32,
+    slots: [0; SLOT_COUNT],
+};
 
 /// Exported (see crates/bunwasm-cli/build.rs) for hosts to fill in.
 #[unsafe(no_mangle)]
@@ -80,7 +96,13 @@ unsafe extern "C" {
     /// borrowed as a host call: `si_data` points at `[slot, a, b, c, d]`,
     /// `si_data_len` is 5, and the result goes to `so_datalen`.
     #[link_name = "sock_send"]
-    fn wasi_sock_send(fd: i32, si_data: i32, si_data_len: i32, si_flags: i32, so_datalen: i32) -> i32;
+    fn wasi_sock_send(
+        fd: i32,
+        si_data: i32,
+        si_data_len: i32,
+        si_flags: i32,
+        so_datalen: i32,
+    ) -> i32;
 }
 
 /// Calls slot `id` with `args` (unused ones 0), or None when not provided.
@@ -98,7 +120,15 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
             let packet = [id as i32, args[0], args[1], args[2], args[3]];
             let mut result: i32 = UNSUPPORTED;
             // SAFETY: both pointers are valid for the call; the host reads 5 i32s and writes one.
-            let errno = unsafe { wasi_sock_send(HOST_CALL_FD, packet.as_ptr() as i32, 5, 0, addr_of_mut!(result) as i32) };
+            let errno = unsafe {
+                wasi_sock_send(
+                    HOST_CALL_FD,
+                    packet.as_ptr() as i32,
+                    5,
+                    0,
+                    addr_of_mut!(result) as i32,
+                )
+            };
             return Some(if errno == 0 { result } else { UNSUPPORTED });
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -110,9 +140,22 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
     // (docs/host-abi.md); a mismatch traps in call_indirect.
     Some(unsafe {
         match id {
-            Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept | Slot::Shutdown => std::mem::transmute::<usize, F1>(index as usize)(args[0]),
-            Slot::Fetch => std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3]),
-            Slot::FetchHead | Slot::Read | Slot::Write | Slot::Listen | Slot::Connect | Slot::Error | Slot::PeerAddr | Slot::LocalAddr => std::mem::transmute::<usize, F3>(index as usize)(args[0], args[1], args[2]),
+            Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept | Slot::Shutdown => {
+                std::mem::transmute::<usize, F1>(index as usize)(args[0])
+            }
+            Slot::Fetch => {
+                std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3])
+            }
+            Slot::FetchHead
+            | Slot::Read
+            | Slot::Write
+            | Slot::Listen
+            | Slot::Connect
+            | Slot::Error
+            | Slot::PeerAddr
+            | Slot::LocalAddr => {
+                std::mem::transmute::<usize, F3>(index as usize)(args[0], args[1], args[2])
+            }
         }
     })
 }
@@ -130,7 +173,11 @@ pub fn poll(timeout_ms: i32) -> i32 {
 }
 
 pub fn fetch(meta: &[u8], body: &[u8]) -> i32 {
-    call(Slot::Fetch, [ptr(meta), meta.len() as i32, ptr(body), body.len() as i32]).unwrap_or(UNSUPPORTED)
+    call(
+        Slot::Fetch,
+        [ptr(meta), meta.len() as i32, ptr(body), body.len() as i32],
+    )
+    .unwrap_or(UNSUPPORTED)
 }
 
 /// Calls a `(handle, buf, cap) -> len` function, growing the buffer when the
@@ -182,7 +229,11 @@ pub fn close(handle: i32) -> i32 {
 }
 
 pub fn listen(host: &str, port: i32) -> i32 {
-    call(Slot::Listen, [ptr(host.as_bytes()), host.len() as i32, port, 0]).unwrap_or(UNSUPPORTED)
+    call(
+        Slot::Listen,
+        [ptr(host.as_bytes()), host.len() as i32, port, 0],
+    )
+    .unwrap_or(UNSUPPORTED)
 }
 
 pub fn local_port(handle: i32) -> i32 {
@@ -202,7 +253,11 @@ pub fn local_addr(handle: i32) -> Result<Vec<u8>, i32> {
 }
 
 pub fn connect(host: &str, port: i32) -> i32 {
-    call(Slot::Connect, [ptr(host.as_bytes()), host.len() as i32, port, 0]).unwrap_or(UNSUPPORTED)
+    call(
+        Slot::Connect,
+        [ptr(host.as_bytes()), host.len() as i32, port, 0],
+    )
+    .unwrap_or(UNSUPPORTED)
 }
 
 /// The `runtime_proc` process ABI (docs/host-abi.md, "Process imports"). These are real wasm
@@ -239,22 +294,54 @@ mod runtime_proc {
 #[cfg(not(target_arch = "wasm32"))]
 mod runtime_proc {
     use super::UNSUPPORTED;
-    pub unsafe fn access_start(_: i32, _: i32, _: i32, _: i32, _: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn access_take(_: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn access_cancel(_: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn spawn(_: i32, _: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn job_of(_: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn start_status(_: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn pipe(_: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn read(_: i32, _: i32, _: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn write(_: i32, _: i32, _: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn wait(_: i32, _: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn wait_job(_: i32, _: i32, _: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn kill(_: i32, _: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn kill_job(_: i32, _: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn poll(_: i32, _: i32, _: i32, _: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn signal(_: i32, _: i32) -> i32 { UNSUPPORTED }
-    pub unsafe fn fd_close(_: i32) -> i32 { -UNSUPPORTED }
+    pub unsafe fn access_start(_: i32, _: i32, _: i32, _: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn access_take(_: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn access_cancel(_: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn spawn(_: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn job_of(_: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn start_status(_: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn pipe(_: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn read(_: i32, _: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn write(_: i32, _: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn wait(_: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn wait_job(_: i32, _: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn kill(_: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn kill_job(_: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn poll(_: i32, _: i32, _: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn signal(_: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn fd_close(_: i32) -> i32 {
+        -UNSUPPORTED
+    }
 }
 
 /// Whether this build imports the `runtime_proc` namespace (every wasm32 build does).
@@ -271,12 +358,21 @@ macro_rules! proc_call {
 /// Resolve live executable metadata through the host's asynchronous access query ABI.
 /// Taking a completed result consumes it. Interrupted waits cancel their outstanding query.
 pub fn proc_access(path: &str, cwd: &str) -> i32 {
-    let request = proc_call!(runtime_proc::access_start(ptr(path.as_bytes()), path.len() as i32,
-        ptr(cwd.as_bytes()), cwd.len() as i32, 1));
-    if request < 0 { return request; }
+    let request = proc_call!(runtime_proc::access_start(
+        ptr(path.as_bytes()),
+        path.len() as i32,
+        ptr(cwd.as_bytes()),
+        cwd.len() as i32,
+        1
+    ));
+    if request < 0 {
+        return request;
+    }
     loop {
         let result = proc_call!(runtime_proc::access_take(request));
-        if result != -6 { return result; }
+        if result != -6 {
+            return result;
+        }
         if let Err(error) = proc_poll(&[], 25) {
             proc_call!(runtime_proc::access_cancel(request));
             return error;
@@ -296,7 +392,11 @@ pub fn proc_job_of(pid: i32) -> i32 {
 pub fn proc_pipe() -> Result<(u32, u32), i32> {
     let mut ends = [0u32; 2];
     let result = proc_call!(runtime_proc::pipe(ptr_mut(&mut ends)));
-    if result < 0 { Err(result) } else { Ok((ends[0], ends[1])) }
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok((ends[0], ends[1]))
+    }
 }
 
 pub fn proc_close(fd: i32) -> i32 {
@@ -323,7 +423,11 @@ pub fn proc_write(fd: i32, data: &[u8]) -> i32 {
 pub fn proc_wait(pid: i32) -> Result<(u32, i32), i32> {
     let mut status = [0i32; 2];
     let result = proc_call!(runtime_proc::wait(pid, ptr_mut(&mut status)));
-    if result < 0 { Err(result) } else { Ok((status[0] as u32, status[1])) }
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok((status[0] as u32, status[1]))
+    }
 }
 
 /// Non-consuming entry observation: 0 entered, -6 pending, positive startup errno,
@@ -335,7 +439,11 @@ pub fn proc_start_status(pid: i32) -> i32 {
 pub fn proc_wait_job(job: i32, flags: i32) -> Result<(u32, i32), i32> {
     let mut status = [0i32; 2];
     let result = proc_call!(runtime_proc::wait_job(job, flags, ptr_mut(&mut status)));
-    if result < 0 { Err(result) } else { Ok((status[0] as u32, status[1])) }
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok((status[0] as u32, status[1]))
+    }
 }
 
 pub fn proc_kill(pid: i32, signal: i32) -> i32 {
@@ -350,7 +458,12 @@ pub fn proc_kill_job(job: i32, signal: i32) -> i32 {
 pub fn proc_poll(subscriptions: &[u8], timeout_ms: i32) -> Result<Vec<u8>, i32> {
     let count = subscriptions.len() / 16;
     let mut events = vec![0u8; subscriptions.len()];
-    let ready = proc_call!(runtime_proc::poll(ptr(subscriptions), count as i32, timeout_ms, ptr_mut(&mut events)));
+    let ready = proc_call!(runtime_proc::poll(
+        ptr(subscriptions),
+        count as i32,
+        timeout_ms,
+        ptr_mut(&mut events)
+    ));
     if ready < 0 {
         return Err(ready);
     }
@@ -463,9 +576,13 @@ mod signal_tests {
         assert_eq!(Slot::LocalAddr as usize, 13);
         assert_eq!(SLOT_NAMES[13], "local_addr");
         assert_eq!(SLOT_COUNT, 14);
-        assert!(SLOT_NAMES.iter().all(|name| !name.starts_with("child_") && *name != "spawn" && *name != "signal"));
+        assert!(
+            SLOT_NAMES
+                .iter()
+                .all(|name| !name.starts_with("child_") && *name != "spawn" && *name != "signal")
+        );
         // Off wasm32 the imports do not exist, so every call reports UNSUPPORTED.
-        assert!(!PROCESS_ABI);
+        const { assert!(!PROCESS_ABI) };
         assert_eq!(proc_spawn(b"{}"), UNSUPPORTED);
         assert_eq!(proc_pipe(), Err(UNSUPPORTED));
         assert_eq!(proc_poll(&[], 0), Err(UNSUPPORTED));
@@ -489,7 +606,10 @@ mod signal_tests {
         sleep_with(
             std::time::Duration::from_millis(60),
             &mut deferred,
-            || { dequeues += 1; if queue.is_empty() { 0 } else { queue.remove(0) } },
+            || {
+                dequeues += 1;
+                if queue.is_empty() { 0 } else { queue.remove(0) }
+            },
             |ms| {
                 idles += 1;
                 assert!((1..=25).contains(&ms));
@@ -513,14 +633,24 @@ mod signal_tests {
         deferred.defer(10);
         // The service saw SIGUSR1 again plus SIGTERM while the first copy was parked.
         let mut service = vec![10, 15];
-        let mut next = || next_signal(&mut deferred, || if service.is_empty() { 0 } else { service.remove(0) });
+        let mut next = || {
+            next_signal(&mut deferred, || {
+                if service.is_empty() {
+                    0
+                } else {
+                    service.remove(0)
+                }
+            })
+        };
         assert_eq!(next(), 10);
         assert_eq!(next(), 15);
         assert_eq!(next(), 0);
         // A parked callback must not run before a selected fatal outcome unwinds.
         let mut deferred = DeferredSignals::default();
         deferred.defer(10);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| next_signal(&mut deferred, || panic!("signal death"))));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            next_signal(&mut deferred, || panic!("signal death"))
+        }));
         assert!(result.is_err());
     }
 
@@ -529,12 +659,23 @@ mod signal_tests {
         let mut deferred = DeferredSignals::default();
         let mut calls = 0;
         // Every dequeue succeeds and the service immediately holds another one.
-        let signal = next_signal(&mut deferred, || { calls += 1; 10 });
+        let signal = next_signal(&mut deferred, || {
+            calls += 1;
+            10
+        });
         assert_eq!(signal, 10);
         assert_eq!(calls, 64);
         let mut calls = 0;
         let started = std::time::Instant::now();
-        sleep_with(std::time::Duration::from_millis(40), &mut deferred, || { calls += 1; 12 }, |ms| std::thread::sleep(std::time::Duration::from_millis(ms as u64)));
+        sleep_with(
+            std::time::Duration::from_millis(40),
+            &mut deferred,
+            || {
+                calls += 1;
+                12
+            },
+            |ms| std::thread::sleep(std::time::Duration::from_millis(ms as u64)),
+        );
         assert!(started.elapsed() >= std::time::Duration::from_millis(40));
         assert!(started.elapsed() < std::time::Duration::from_millis(400));
         assert!(calls % 64 == 0 && calls >= 64);
@@ -545,7 +686,12 @@ mod signal_tests {
     fn a_selected_default_action_unwinds_out_of_sleep() {
         let mut deferred = DeferredSignals::default();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            sleep_with(std::time::Duration::from_secs(10), &mut deferred, || panic!("signal death"), |_| unreachable!());
+            sleep_with(
+                std::time::Duration::from_secs(10),
+                &mut deferred,
+                || panic!("signal death"),
+                |_| unreachable!(),
+            );
         }));
         assert!(result.is_err());
     }

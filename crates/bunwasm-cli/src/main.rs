@@ -50,16 +50,21 @@ mod bun_transpiler {
     /// without AsyncContext: `await`s get hooks that carry AsyncLocalStorage.
     const AWAIT_HOOKS: bool = cfg!(feature = "engine-host");
 
-    fn runtime_imports(imports: Vec<bunwasm_transpiler::ModuleImport>) -> Vec<bunwasm_runtime::transpiler::ModuleImport> {
+    fn runtime_imports(
+        imports: Vec<bunwasm_transpiler::ModuleImport>,
+    ) -> Vec<bunwasm_runtime::transpiler::ModuleImport> {
         use bunwasm_runtime::transpiler::{ModuleImport, ModuleImportKind};
-        imports.into_iter().map(|import| ModuleImport {
-            start: import.start,
-            end: import.end,
-            kind: match import.specifier {
-                Some(specifier) => ModuleImportKind::Static(specifier),
-                None => ModuleImportKind::Dynamic,
-            },
-        }).collect()
+        imports
+            .into_iter()
+            .map(|import| ModuleImport {
+                start: import.start,
+                end: import.end,
+                kind: match import.specifier {
+                    Some(specifier) => ModuleImportKind::Static(specifier),
+                    None => ModuleImportKind::Dynamic,
+                },
+            })
+            .collect()
     }
 
     /// Bun's real parser and printer (crates/bunwasm-transpiler).
@@ -69,7 +74,13 @@ mod bun_transpiler {
     pub struct BunTranspiler;
 
     impl Transpiler for BunTranspiler {
-        fn public_transpile(&self, source: &[u8], options: &str, action: &str, loader: &str) -> Result<String, String> {
+        fn public_transpile(
+            &self,
+            source: &[u8],
+            options: &str,
+            action: &str,
+            loader: &str,
+        ) -> Result<String, String> {
             bunwasm_transpiler::public_transpile(source, options, action, loader)
         }
 
@@ -77,7 +88,11 @@ mod bun_transpiler {
             bunwasm_transpiler::function_imports(args, kind)
         }
 
-        fn parse_data(&self, source: &[u8], format: &str) -> Result<String, bunwasm_runtime::engine::NativeError> {
+        fn parse_data(
+            &self,
+            source: &[u8],
+            format: &str,
+        ) -> Result<String, bunwasm_runtime::engine::NativeError> {
             use bunwasm_runtime::engine::NativeError;
             use bunwasm_transpiler::data::Error;
             bunwasm_transpiler::data::parse(source, format).map_err(|e| match e {
@@ -87,10 +102,16 @@ mod bun_transpiler {
         }
 
         fn transpile(&self, source: &str, path: &str, loader: Loader) -> Result<String, String> {
-            self.transpile_with_map(source, path, loader).map(|out| out.code)
+            self.transpile_with_map(source, path, loader)
+                .map(|out| out.code)
         }
 
-        fn transpile_with_map(&self, source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
+        fn transpile_with_map(
+            &self,
+            source: &str,
+            path: &str,
+            loader: Loader,
+        ) -> Result<Transpiled, String> {
             let loader = match loader {
                 // The browser engine needs every `await` printed with its
                 // AsyncLocalStorage hooks, plain JavaScript included.
@@ -105,7 +126,8 @@ mod bun_transpiler {
                 Loader::Jsonc => BunLoader::Jsonc,
                 Loader::Text => BunLoader::Text,
             };
-            let preserve_source = loader == BunLoader::Js && !(AWAIT_HOOKS && source.contains("await"));
+            let preserve_source =
+                loader == BunLoader::Js && !(AWAIT_HOOKS && source.contains("await"));
             // These extensions decide the format before parser classification in
             // State::detect_format, so unchanged JS only needs semantic imports.
             if preserve_source && (path.ends_with(".mjs") || path.ends_with(".cjs")) {
@@ -113,8 +135,16 @@ mod bun_transpiler {
                 return Ok(Transpiled {
                     code: source.to_owned(),
                     mappings: None,
-                    imports: if AWAIT_HOOKS { self.module_imports(source, path)? } else { Vec::new() },
-                    module_kind: Some(if path.ends_with(".mjs") { ModuleKind::Esm } else { ModuleKind::CommonJs }),
+                    imports: if AWAIT_HOOKS {
+                        self.module_imports(source, path)?
+                    } else {
+                        Vec::new()
+                    },
+                    module_kind: Some(if path.ends_with(".mjs") {
+                        ModuleKind::Esm
+                    } else {
+                        ModuleKind::CommonJs
+                    }),
                 });
             }
             let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
@@ -129,13 +159,21 @@ mod bun_transpiler {
             });
             Ok(Transpiled {
                 code: out.code,
-                mappings: if preserve_source { None } else { Some(out.mappings) },
+                mappings: if preserve_source {
+                    None
+                } else {
+                    Some(out.mappings)
+                },
                 imports: runtime_imports(out.imports),
                 module_kind,
             })
         }
 
-        fn module_imports(&self, source: &str, path: &str) -> Result<Vec<bunwasm_runtime::transpiler::ModuleImport>, String> {
+        fn module_imports(
+            &self,
+            source: &str,
+            path: &str,
+        ) -> Result<Vec<bunwasm_runtime::transpiler::ModuleImport>, String> {
             bunwasm_transpiler::module_imports(source, path).map(runtime_imports)
         }
 
@@ -157,13 +195,18 @@ mod bun_transpiler {
             };
             let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
                 if AWAIT_HOOKS {
-                    bunwasm_transpiler::with_dynamic_import_referrer(path, || bunwasm_build::build(&args))
+                    bunwasm_transpiler::with_dynamic_import_referrer(path, || {
+                        bunwasm_build::build(&args)
+                    })
                 } else {
                     bunwasm_build::build(&args)
                 }
             })
-                .map_err(|log| log.trim_end().to_owned())?;
-            let code = out.stdout.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default();
+            .map_err(|log| log.trim_end().to_owned())?;
+            let code = out
+                .stdout
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default();
             if code.is_empty() {
                 return Err(format!("bun build produced no output for {path}"));
             }
@@ -171,15 +214,25 @@ mod bun_transpiler {
             let (code, mappings) = match code.rfind(MARK) {
                 Some(at) => {
                     let map = base64_decode(code[at + MARK.len()..].trim_end());
-                    (code[..at].to_owned(), map.and_then(|json| json_string_field(&json, "mappings")))
+                    (
+                        code[..at].to_owned(),
+                        map.and_then(|json| json_string_field(&json, "mappings")),
+                    )
                 }
                 None => (code, None),
             };
-            Ok(Transpiled { code, mappings, ..Default::default() })
+            Ok(Transpiled {
+                code,
+                mappings,
+                ..Default::default()
+            })
         }
 
         #[cfg(feature = "bun-build")]
-        fn build(&self, request: &bunwasm_runtime::BuildRequest) -> Result<bunwasm_runtime::BuildResult, String> {
+        fn build(
+            &self,
+            request: &bunwasm_runtime::BuildRequest,
+        ) -> Result<bunwasm_runtime::BuildResult, String> {
             build(request)
         }
 
@@ -189,7 +242,11 @@ mod bun_transpiler {
         }
 
         #[cfg(feature = "bun-build")]
-        fn dev_server_rebuild(&self, id: u32, changed: &[String]) -> Result<bunwasm_runtime::DevServerResult, String> {
+        fn dev_server_rebuild(
+            &self,
+            id: u32,
+            changed: &[String],
+        ) -> Result<bunwasm_runtime::DevServerResult, String> {
             bunwasm_build::dev_server::rebuild(id, changed).map(dev_server_result)
         }
 
@@ -200,14 +257,22 @@ mod bun_transpiler {
     }
 
     #[cfg(feature = "bun-build")]
-    fn dev_server_result(output: bunwasm_build::dev_server::Output) -> bunwasm_runtime::DevServerResult {
+    fn dev_server_result(
+        output: bunwasm_build::dev_server::Output,
+    ) -> bunwasm_runtime::DevServerResult {
         bunwasm_runtime::DevServerResult {
             id: output.id,
             version: output.version,
             html: output.html,
-            files: output.files.into_iter().map(|file| bunwasm_runtime::DevServerFile {
-                path: file.path, contents: file.contents, mime: file.mime,
-            }).collect(),
+            files: output
+                .files
+                .into_iter()
+                .map(|file| bunwasm_runtime::DevServerFile {
+                    path: file.path,
+                    contents: file.contents,
+                    mime: file.mime,
+                })
+                .collect(),
             watch: output.watch,
             update: output.update,
             errors: output.errors,
@@ -219,7 +284,9 @@ mod bun_transpiler {
     /// `outdir` nothing is written: the outputs only come back in memory,
     /// named `./<name>.js` like native Bun's.
     #[cfg(feature = "bun-build")]
-    pub(super) fn build(request: &bunwasm_runtime::BuildRequest) -> Result<bunwasm_runtime::BuildResult, String> {
+    pub(super) fn build(
+        request: &bunwasm_runtime::BuildRequest,
+    ) -> Result<bunwasm_runtime::BuildResult, String> {
         use bunwasm_build::{BuildArgs, Format, OutputKind, Packages, SourceMap, Target};
         use bunwasm_runtime::{BuildArtifact, BuildResult};
         let bad = |what: &str, value: &str| format!("Bun.build: invalid {what} \"{value}\"");
@@ -279,10 +346,18 @@ mod bun_transpiler {
             .map_err(|log| log.trim_end().to_owned())?;
         let mut outputs = Vec::new();
         if let Some(bytes) = out.stdout {
-            let entry = request.entrypoints.first().map(String::as_str).unwrap_or("out");
+            let entry = request
+                .entrypoints
+                .first()
+                .map(String::as_str)
+                .unwrap_or("out");
             let base = entry.rsplit('/').next().unwrap_or(entry);
             let stem = base.rsplit_once('.').map_or(base, |(stem, _)| stem);
-            outputs.push(BuildArtifact { path: format!("./{stem}.js"), kind: "entry-point", contents: bytes });
+            outputs.push(BuildArtifact {
+                path: format!("./{stem}.js"),
+                kind: "entry-point",
+                contents: bytes,
+            });
         }
         for file in out.files {
             let kind = match file.kind {
@@ -298,17 +373,28 @@ mod bun_transpiler {
                 // The bundler wrote the file itself and kept no copy.
                 Some(dir) => {
                     let path = format!("{}/{relative}", dir.trim_end_matches('/'));
-                    let contents = if file.contents.is_empty() { std::fs::read(&path).unwrap_or_default() } else { file.contents };
+                    let contents = if file.contents.is_empty() {
+                        std::fs::read(&path).unwrap_or_default()
+                    } else {
+                        file.contents
+                    };
                     (path, contents)
                 }
                 None => (format!("./{relative}"), file.contents),
             };
-            outputs.push(BuildArtifact { path, kind, contents });
+            outputs.push(BuildArtifact {
+                path,
+                kind,
+                contents,
+            });
         }
         if let Some(err) = out.write_errors.first() {
             return Err(err.clone());
         }
-        Ok(BuildResult { outputs, logs: out.log })
+        Ok(BuildResult {
+            outputs,
+            logs: out.log,
+        })
     }
 
     #[cfg(feature = "bun-build")]
@@ -341,7 +427,11 @@ mod bun_transpiler {
     #[cfg(feature = "bun-build")]
     fn json_string_field(json: &str, key: &str) -> Option<String> {
         let at = json.find(&format!("\"{key}\""))? + key.len() + 2;
-        let rest = json[at..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+        let rest = json[at..]
+            .trim_start()
+            .strip_prefix(':')?
+            .trim_start()
+            .strip_prefix('"')?;
         Some(rest[..rest.find('"')?].to_owned())
     }
 }
@@ -379,7 +469,9 @@ fn usage_error(message: &str) -> Command {
 }
 
 fn parse(args: Vec<String>) -> Command {
-    if tool_args::before_command(&args).is_some() { return Command::Lint; }
+    if tool_args::before_command(&args).is_some() {
+        return Command::Lint;
+    }
     parse_command(args, false)
 }
 
@@ -395,7 +487,8 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
                 return Command::Exit(0);
             }
             "--revision" => {
-                let short = &bunwasm_runtime::BUN_REVISION[..bunwasm_runtime::BUN_REVISION.len().min(9)];
+                let short =
+                    &bunwasm_runtime::BUN_REVISION[..bunwasm_runtime::BUN_REVISION.len().min(9)];
                 println!("{}+{short}", bunwasm_runtime::BUN_VERSION);
                 return Command::Exit(0);
             }
@@ -404,29 +497,35 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
                 return Command::Exit(0);
             }
             "-e" | "--eval" => {
-                let Some(code) = rest.next() else { return usage_error("--eval requires code") };
+                let Some(code) = rest.next() else {
+                    return usage_error("--eval requires code");
+                };
                 return Command::Run(Entry::Eval(code), rest.collect());
             }
             "-p" | "--print" => {
-                let Some(code) = rest.next() else { return usage_error("--print requires code") };
+                let Some(code) = rest.next() else {
+                    return usage_error("--print requires code");
+                };
                 return Command::Print(code);
             }
             "lint" | "fmt" => return Command::Lint,
             "test" => return Command::Run(Entry::Test(rest.collect()), Vec::new()),
             "build" | "bun" => return Command::Build(rest.collect()),
-            "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm" | "update" | "up" =>
-                return Command::Install(arg, rest.collect()),
+            "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm"
+            | "update" | "up" => return Command::Install(arg, rest.collect()),
             "x" | "bunx" => return Command::X(rest.collect()),
-            "create" | "c" | "init" | "upgrade" | "link" | "unlink"
-            | "outdated" | "publish" | "patch" | "patch-commit" | "repl" | "info" | "why"
-            | "audit" | "completions" | "getcompletes" | "discord" | "exec" | "dedupe" | "prune" | "check"
-            | "deploy" | "cloud" | "config" | "use" | "auth" | "login" | "logout" => {
+            "create" | "c" | "init" | "upgrade" | "link" | "unlink" | "outdated" | "publish"
+            | "patch" | "patch-commit" | "repl" | "info" | "why" | "audit" | "completions"
+            | "getcompletes" | "discord" | "exec" | "dedupe" | "prune" | "check" | "deploy"
+            | "cloud" | "config" | "use" | "auth" | "login" | "logout" => {
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
             }
             "run" => return parse_command(rest.collect(), true),
             "--" => {
-                let Some(file) = rest.next() else { return usage_error("bun run needs a file to run") };
+                let Some(file) = rest.next() else {
+                    return usage_error("bun run needs a file to run");
+                };
                 return Command::Run(Entry::File(file), rest.collect());
             }
             // Flags native Bun accepts that change nothing here.
@@ -435,7 +534,9 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
             file => return Command::Run(Entry::File(file.to_owned()), rest.collect()),
         }
     }
-    if run_file { return usage_error("bun run needs a file to run"); }
+    if run_file {
+        return usage_error("bun run needs a file to run");
+    }
     print!("{HELP}");
     Command::Exit(0)
 }
@@ -443,11 +544,18 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
 // Referenced so the linker keeps the host-engine exports (docs/engine-browser.md).
 #[cfg(feature = "engine-host")]
 #[used]
-static KEEP_HOST_ENGINE: [extern "C" fn() -> i32; 2] =
-    [bunwasm_runtime::engine_host::bunwasm_ready, bunwasm_runtime::engine_host::bunwasm_describe];
+static KEEP_HOST_ENGINE: [extern "C" fn() -> i32; 2] = [
+    bunwasm_runtime::engine_host::bunwasm_ready,
+    bunwasm_runtime::engine_host::bunwasm_describe,
+];
 #[cfg(feature = "engine-host")]
 #[used]
-static KEEP_HOST_CALL: (extern "C" fn(u32) -> *mut u8, unsafe extern "C" fn(u32, *mut u8, u32) -> i32, extern "C" fn() -> *const u8, extern "C" fn() -> u32) = (
+static KEEP_HOST_CALL: (
+    extern "C" fn(u32) -> *mut u8,
+    unsafe extern "C" fn(u32, *mut u8, u32) -> i32,
+    extern "C" fn() -> *const u8,
+    extern "C" fn() -> u32,
+) = (
     bunwasm_runtime::engine_host::bunwasm_alloc,
     bunwasm_runtime::engine_host::bunwasm_call,
     bunwasm_runtime::engine_host::bunwasm_result_ptr,
@@ -456,11 +564,15 @@ static KEEP_HOST_CALL: (extern "C" fn(u32) -> *mut u8, unsafe extern "C" fn(u32,
 
 // Referenced so the linker keeps the exported slot table (docs/host-abi.md).
 #[used]
-static KEEP_HOST_SLOTS: extern "C" fn() -> *mut bunwasm_runtime::host::HostSlots = bunwasm_runtime::host::bun_wasm_host_slots;
+static KEEP_HOST_SLOTS: extern "C" fn() -> *mut bunwasm_runtime::host::HostSlots =
+    bunwasm_runtime::host::bun_wasm_host_slots;
 
 fn main() {
     // Sets the parser's stack limit and keeps Bun's C/POSIX shims linked.
-    #[cfg(all(any(feature = "bun-transpiler", feature = "bun-build"), target_os = "wasi"))]
+    #[cfg(all(
+        any(feature = "bun-transpiler", feature = "bun-build"),
+        target_os = "wasi"
+    ))]
     bunwasm_glue::init();
 
     // WASI has no working directory of its own; hosts pass the intended one
@@ -471,9 +583,17 @@ fn main() {
 
     let mut argv = std::env::args();
     let executable = argv.next().unwrap_or_default();
-    let args = if executable.rsplit('/').next().unwrap_or("").trim_end_matches(".wasm") == "bunx" {
+    let args = if executable
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(".wasm")
+        == "bunx"
+    {
         std::iter::once("x".to_owned()).chain(argv).collect()
-    } else { argv.collect() };
+    } else {
+        argv.collect()
+    };
     let command = parse(args);
     let (entry, args) = match command {
         Command::Exit(code) => std::process::exit(code),
@@ -482,13 +602,20 @@ fn main() {
             std::process::exit(1);
         }
         Command::Build(args) => std::process::exit(build(args)),
-        Command::Install(command, args) => std::process::exit(
-            bunwasm_runtime::install::run(&command, args, transpiler().as_ref())
-        ),
-        Command::X(args) => match bunwasm_runtime::install::prepare_x(args, transpiler().as_ref()) {
-            Ok((file, args)) => (Entry::File(file), args),
-            Err(error) => { eprintln!("error: {error}"); std::process::exit(1); }
-        },
+        Command::Install(command, args) => std::process::exit(bunwasm_runtime::install::run(
+            &command,
+            args,
+            transpiler().as_ref(),
+        )),
+        Command::X(args) => {
+            match bunwasm_runtime::install::prepare_x(args, transpiler().as_ref()) {
+                Ok((file, args)) => (Entry::File(file), args),
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Command::Run(entry, args) => (entry, args),
         // `-p`: evaluate an expression and print it like Bun.
         Command::Print(code) => {
@@ -499,7 +626,11 @@ fn main() {
             (Entry::Eval(wrapped), Vec::new())
         }
     };
-    let code = bunwasm_runtime::run(Options { entry, args, transpiler: transpiler() });
+    let code = bunwasm_runtime::run(Options {
+        entry,
+        args,
+        transpiler: transpiler(),
+    });
     // The host engine runs the program after `_start` returns.
     if code == 0 && bunwasm_runtime::host_engine_ready() {
         return;

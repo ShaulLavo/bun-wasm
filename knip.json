@@ -1,0 +1,100 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/app-matrix/run.mjs",
+        "scripts/app-matrix/reclassify.mjs",
+        "scripts/app-matrix/*.test.{ts,mjs}",
+        "tests/package/*.test.ts",
+        "tests/check-worker-regressions.ts",
+        "scripts/app-matrix/isolate.mjs",
+        "scripts/bench/error-construction.js",
+        "tests/package/fixtures/vite-main.ts",
+        "scripts/*.test.ts",
+        "scripts/bench-module-preparation.ts",
+        "scripts/bun-suite-small-causes.ts",
+        "scripts/check-await-observer.ts",
+        "scripts/crypto-review-vectors.mjs",
+        "scripts/generate-*.{ts,mjs}",
+        "scripts/measure-suite-dependencies.ts",
+        "scripts/refresh-compatibility-docs.ts",
+        "scripts/group-suite-category-d.ts",
+        "scripts/run-with-timeout.mts",
+        "scripts/runtime-size.ts",
+        "scripts/test-*.mjs",
+        "scripts/transpile-runtime.ts",
+        "scripts/vendor-node-streams.mjs",
+        "scripts/wasm-size-breakdown.ts",
+        "scripts/stream-polyfill-node-hooks.mjs"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "scripts/**/*.{ts,mts,mjs,js}",
+        "tests/package/**/*.ts"
+      ]
+    },
+    "web": {
+      "entry": [
+        "src/main.ts",
+        "src/worker.ts",
+        "src/net/helper.ts",
+        "tests/*.test.{ts,js}",
+        "tests/browser-*.{ts,mjs}",
+        "scripts/*.{ts,mjs}",
+        "src/fs-worker.ts",
+        "src/sw.ts",
+        "src/preview-websocket-client.ts",
+        "tests/bench-*.{ts,mjs}",
+        "tests/compare-memory.mjs",
+        "tests/crypto-aes192-gap.mjs",
+        "tests/crypto-no-provider.mjs",
+        "tests/node-root-signals.ts",
+        "tests/engine-interruption-{main,worker}.ts",
+        "tests/filesystem-{bench-main,bench-worker,browser-failure,browser-guest,browser-main}.ts",
+        "tests/persistence-browser-{main,worker}.ts",
+        "tests/process-{bench-baseline,browser-main}.ts",
+        "tests/runtime-proc-browser-main.ts",
+        "tests/fixtures/{filesystem-lifecycle,safari-driver-listener,startup-filesystem}.ts",
+        "tests/bun-runtime-proc-main.ts",
+        "tests/worker-bootstrap-browser.ts",
+        "tests/worker-bootstrap-browser-main.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,js}",
+        "scripts/**/*.{ts,mjs}",
+        "tests/**/*.{ts,mjs,js}"
+      ],
+      "ignoreDependencies": [
+        "benchmark"
+      ],
+      "ignoreUnresolved": [
+        "../src/subprocess.js"
+      ]
+    },
+    "sandbox": {
+      "entry": [
+        "src/main.ts",
+        "tests/*.{test.ts,mjs,js}"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "tests/**/*.{ts,mjs,js}"
+      ]
+    },
+    "site": {
+      "entry": [],
+      "project": [
+        "*.ts"
+      ]
+    }
+  },
+  "ignoreBinaries": [
+    "unshare",
+    "ss",
+    "build.mjs"
+  ],
+  "ignoreUnresolved": [
+    "./space # \u00fc.mjs"
+  ]
+}

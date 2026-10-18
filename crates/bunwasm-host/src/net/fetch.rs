@@ -104,47 +104,98 @@ fn invalid(message: impl Into<String>, code: &str) -> ErrorInfo {
 impl Fetch {
     /// Validates the request and starts it on a background thread. Errors
     /// known up front (bad JSON, URL, method, header) are returned directly.
-    pub fn start(clients: &Arc<Clients>, meta: &[u8], body: &[u8], notify: Arc<Notify>) -> Result<Fetch, ErrorInfo> {
-        let meta: Meta =
-            serde_json::from_slice(meta).map_err(|e| invalid(format!("invalid fetch request: {e}"), "ERR_INVALID_ARG_TYPE"))?;
+    pub fn start(
+        clients: &Arc<Clients>,
+        meta: &[u8],
+        body: &[u8],
+        notify: Arc<Notify>,
+    ) -> Result<Fetch, ErrorInfo> {
+        let meta: Meta = serde_json::from_slice(meta).map_err(|e| {
+            invalid(
+                format!("invalid fetch request: {e}"),
+                "ERR_INVALID_ARG_TYPE",
+            )
+        })?;
         let redirect = match meta.redirect.as_deref() {
             None | Some("follow") => Redirect::Follow,
             Some("manual") => Redirect::Manual,
             Some("error") => Redirect::Error,
-            Some(other) => return Err(invalid(format!("invalid redirect mode: {other}"), "ERR_INVALID_ARG_VALUE")),
+            Some(other) => {
+                return Err(invalid(
+                    format!("invalid redirect mode: {other}"),
+                    "ERR_INVALID_ARG_VALUE",
+                ));
+            }
         };
-        let url = Url::parse(&meta.url).map_err(|_| invalid("fetch() URL is invalid", "ERR_INVALID_URL"))?;
+        let url = Url::parse(&meta.url)
+            .map_err(|_| invalid("fetch() URL is invalid", "ERR_INVALID_URL"))?;
         match url.scheme() {
             "http" | "https" => {}
-            _ => return Err(invalid("protocol must be http:, https: or s3:", "ERR_INVALID_ARG_VALUE")),
+            _ => {
+                return Err(invalid(
+                    "protocol must be http:, https: or s3:",
+                    "ERR_INVALID_ARG_VALUE",
+                ));
+            }
         }
         if url.host_str().is_none() {
             return Err(invalid("fetch() URL is invalid", "ERR_INVALID_URL"));
         }
-        let method = Method::from_bytes(meta.method.to_ascii_uppercase().as_bytes())
-            .map_err(|_| invalid(format!("'{}' is not a valid HTTP method.", meta.method), "ERR_INVALID_ARG_VALUE"))?;
+        let method =
+            Method::from_bytes(meta.method.to_ascii_uppercase().as_bytes()).map_err(|_| {
+                invalid(
+                    format!("'{}' is not a valid HTTP method.", meta.method),
+                    "ERR_INVALID_ARG_VALUE",
+                )
+            })?;
 
         let mut headers = HeaderMap::new();
         for (name, value) in &meta.headers {
-            let name = HeaderName::from_bytes(name.as_bytes())
-                .map_err(|_| invalid(format!("Invalid header name: '{name}'"), "ERR_INVALID_HTTP_TOKEN"))?;
+            let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+                invalid(
+                    format!("Invalid header name: '{name}'"),
+                    "ERR_INVALID_HTTP_TOKEN",
+                )
+            })?;
             // The client frames the body itself.
             if name == http_header::CONTENT_LENGTH || name == http_header::TRANSFER_ENCODING {
                 continue;
             }
-            let value = HeaderValue::from_str(value)
-                .map_err(|_| invalid(format!("Invalid header value for '{name}'"), "ERR_INVALID_CHAR"))?;
+            let value = HeaderValue::from_str(value).map_err(|_| {
+                invalid(
+                    format!("Invalid header value for '{name}'"),
+                    "ERR_INVALID_CHAR",
+                )
+            })?;
             headers.append(name, value);
         }
         if !headers.contains_key(http_header::ACCEPT_ENCODING) {
-            headers.insert(http_header::ACCEPT_ENCODING, HeaderValue::from_static(ACCEPT_ENCODING));
+            headers.insert(
+                http_header::ACCEPT_ENCODING,
+                HeaderValue::from_static(ACCEPT_ENCODING),
+            );
         }
-        let body = (!body.is_empty() && method != Method::GET && method != Method::HEAD).then(|| body.to_vec());
-        let request = Request { method, url, headers, body };
+        let body = (!body.is_empty() && method != Method::GET && method != Method::HEAD)
+            .then(|| body.to_vec());
+        let request = Request {
+            method,
+            url,
+            headers,
+            body,
+        };
 
-        let shared = Arc::new(Shared { state: Mutex::new(State::default()), drained: Condvar::new() });
+        let shared = Arc::new(Shared {
+            state: Mutex::new(State::default()),
+            drained: Condvar::new(),
+        });
         let package = meta.credential_policy.as_deref() == Some("package");
-        let job = Job { clients: clients.clone(), shared: shared.clone(), notify, redirect, package };
+        let job = Job {
+            clients: clients.clone(),
+            shared: shared.clone(),
+            notify,
+            redirect,
+            package,
+        };
         thread::Builder::new()
             .name("bun-wasm-fetch".into())
             .spawn(move || job.run(request))
@@ -216,7 +267,12 @@ impl Job {
         let url = request.url.to_string();
         let host = request.url.host_str().unwrap_or_default().to_string();
         let is_head = request.method == Method::HEAD;
-        let result = self.send(request.method, request.url.clone(), request.headers, request.body);
+        let result = self.send(
+            request.method,
+            request.url.clone(),
+            request.headers,
+            request.body,
+        );
         let response = match result {
             Ok(response) => response,
             Err(error) => {
@@ -229,7 +285,9 @@ impl Job {
         };
 
         let status = response.status();
-        if self.redirect == Redirect::Error && status.is_redirection() && response.headers().contains_key(http_header::LOCATION)
+        if self.redirect == Redirect::Error
+            && status.is_redirection()
+            && response.headers().contains_key(http_header::LOCATION)
         {
             let message = format!(
                 "UnexpectedRedirect fetching \"{url}\". For more information, pass `verbose: true` in the second argument to fetch()"
@@ -254,7 +312,12 @@ impl Job {
             headers: response
                 .headers()
                 .iter()
-                .map(|(name, value)| (name.as_str().to_string(), String::from_utf8_lossy(value.as_bytes()).into_owned()))
+                .map(|(name, value)| {
+                    (
+                        name.as_str().to_string(),
+                        String::from_utf8_lossy(value.as_bytes()).into_owned(),
+                    )
+                })
                 .collect(),
         };
         let encoding = response
@@ -262,7 +325,8 @@ impl Job {
             .get(http_header::CONTENT_ENCODING)
             .and_then(|v| v.to_str().ok())
             .map(|v| v.trim().to_ascii_lowercase());
-        let no_body = is_head || status == StatusCode::NO_CONTENT || status == StatusCode::NOT_MODIFIED;
+        let no_body =
+            is_head || status == StatusCode::NO_CONTENT || status == StatusCode::NOT_MODIFIED;
         if !self.finish_head(Ok(serde_json::to_vec(&head).expect("head serializes"))) {
             return;
         }
@@ -275,29 +339,56 @@ impl Job {
         }
     }
 
-    fn send(&self, mut method: Method, mut url: Url, mut headers: HeaderMap, mut body: Option<Vec<u8>>) -> Result<reqwest::blocking::Response, SendError> {
+    fn send(
+        &self,
+        mut method: Method,
+        mut url: Url,
+        mut headers: HeaderMap,
+        mut body: Option<Vec<u8>>,
+    ) -> Result<reqwest::blocking::Response, SendError> {
         let client = self.clients.get().map_err(SendError::Network)?;
         for redirects in 0..=MAX_REDIRECTS {
-            let mut builder = client.request(method.clone(), url.clone()).headers(headers.clone());
+            let mut builder = client
+                .request(method.clone(), url.clone())
+                .headers(headers.clone());
             if let Some(body) = &body {
                 builder = builder.body(body.clone());
             }
             let response = builder.send().map_err(SendError::Network)?;
             let status = response.status();
-            let Some(location) = response.headers().get(http_header::LOCATION) else { return Ok(response); };
-            if self.redirect != Redirect::Follow || !matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
+            let Some(location) = response.headers().get(http_header::LOCATION) else {
+                return Ok(response);
+            };
+            if self.redirect != Redirect::Follow
+                || !matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
+            {
                 return Ok(response);
             }
             if redirects == MAX_REDIRECTS {
-                return Err(SendError::Policy(invalid("The response redirected too many times", "TooManyRedirects")));
+                return Err(SendError::Policy(invalid(
+                    "The response redirected too many times",
+                    "TooManyRedirects",
+                )));
             }
-            let next = location.to_str().ok().and_then(|location| url.join(location).ok())
-                .ok_or_else(|| SendError::Policy(invalid("Invalid redirect URL", "ERR_INVALID_URL")))?;
-            if !matches!(next.scheme(), "http" | "https") || self.package && unsafe_package_redirect(&next) {
-                return Err(SendError::Policy(invalid("Credential-bearing or unsupported package redirect URL", "ERR_INVALID_URL")));
+            let next = location
+                .to_str()
+                .ok()
+                .and_then(|location| url.join(location).ok())
+                .ok_or_else(|| {
+                    SendError::Policy(invalid("Invalid redirect URL", "ERR_INVALID_URL"))
+                })?;
+            if !matches!(next.scheme(), "http" | "https")
+                || self.package && unsafe_package_redirect(&next)
+            {
+                return Err(SendError::Policy(invalid(
+                    "Credential-bearing or unsupported package redirect URL",
+                    "ERR_INVALID_URL",
+                )));
             }
             redirect_headers(&mut headers, &url, &next);
-            if status == StatusCode::SEE_OTHER && method != Method::HEAD || matches!(status.as_u16(), 301 | 302) && method == Method::POST {
+            if status == StatusCode::SEE_OTHER && method != Method::HEAD
+                || matches!(status.as_u16(), 301 | 302) && method == Method::POST
+            {
                 method = Method::GET;
                 body = None;
                 headers.remove(http_header::CONTENT_LENGTH);
@@ -361,9 +452,71 @@ fn redirect_headers(headers: &mut HeaderMap, current: &Url, next: &Url) {
     if current.origin() == next.origin() {
         return;
     }
-    for name in ["authorization", "cookie", "cookie2", "proxy-authorization", "www-authenticate"] {
+    for name in [
+        "authorization",
+        "cookie",
+        "cookie2",
+        "proxy-authorization",
+        "www-authenticate",
+    ] {
         headers.remove(name);
     }
+}
+
+fn unsafe_package_redirect(url: &Url) -> bool {
+    let text = url.as_str().to_ascii_lowercase();
+    !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || [
+            ":_authtoken=",
+            ":_auth=",
+            ":username=",
+            ":_username=",
+            ":_password=",
+        ]
+        .iter()
+        .any(|key| text.contains(key))
+}
+
+fn body_error(err: &io::Error) -> ErrorInfo {
+    if err.kind() == io::ErrorKind::InvalidData || err.kind() == io::ErrorKind::InvalidInput {
+        return invalid(format!("Decompression error: {err}"), "ZlibError");
+    }
+    invalid(
+        "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+        "ECONNRESET",
+    )
+}
+
+/// Wraps the raw body in a decoder for its `content-encoding`. Unknown or
+/// stacked encodings pass through undecoded.
+fn decoder(
+    encoding: Option<&str>,
+    raw: impl Read + Send + 'static,
+) -> io::Result<Box<dyn Read + Send>> {
+    Ok(match encoding {
+        Some("gzip" | "x-gzip") => Box::new(flate2::read::MultiGzDecoder::new(raw)),
+        Some("br") => Box::new(brotli_decompressor::Decompressor::new(raw, 64 * 1024)),
+        Some("zstd") => Box::new(zstd::stream::read::Decoder::new(raw)?),
+        Some("deflate") => {
+            // "deflate" is meant to be zlib-wrapped, but some servers send raw
+            // deflate; browsers accept both, so sniff the zlib header.
+            let mut raw = BufReader::new(raw);
+            let zlib = match raw.fill_buf() {
+                Ok([cmf, flg, ..]) => {
+                    cmf & 0x0f == 8 && (u16::from(*cmf) << 8 | u16::from(*flg)) % 31 == 0
+                }
+                _ => true,
+            };
+            if zlib {
+                Box::new(flate2::read::ZlibDecoder::new(raw))
+            } else {
+                Box::new(flate2::read::DeflateDecoder::new(raw))
+            }
+        }
+        _ => Box::new(raw),
+    })
 }
 
 #[cfg(test)]
@@ -380,51 +533,16 @@ mod credential_tests {
             ("https://other.invalid/archive", false),
         ] {
             let mut headers = HeaderMap::new();
-            headers.insert(http_header::AUTHORIZATION, HeaderValue::from_static("Bearer fixture-scheme-secret"));
+            headers.insert(
+                http_header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer fixture-scheme-secret"),
+            );
             redirect_headers(&mut headers, &current, &Url::parse(destination).unwrap());
-            assert_eq!(headers.contains_key(http_header::AUTHORIZATION), retained, "{destination}");
+            assert_eq!(
+                headers.contains_key(http_header::AUTHORIZATION),
+                retained,
+                "{destination}"
+            );
         }
     }
-}
-
-fn unsafe_package_redirect(url: &Url) -> bool {
-    let text = url.as_str().to_ascii_lowercase();
-    !url.username().is_empty() || url.password().is_some() || url.query().is_some()
-        || [":_authtoken=", ":_auth=", ":username=", ":_username=", ":_password="]
-            .iter().any(|key| text.contains(key))
-}
-
-fn body_error(err: &io::Error) -> ErrorInfo {
-    if err.kind() == io::ErrorKind::InvalidData || err.kind() == io::ErrorKind::InvalidInput {
-        return invalid(format!("Decompression error: {err}"), "ZlibError");
-    }
-    invalid(
-        "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
-        "ECONNRESET",
-    )
-}
-
-/// Wraps the raw body in a decoder for its `content-encoding`. Unknown or
-/// stacked encodings pass through undecoded.
-fn decoder(encoding: Option<&str>, raw: impl Read + Send + 'static) -> io::Result<Box<dyn Read + Send>> {
-    Ok(match encoding {
-        Some("gzip" | "x-gzip") => Box::new(flate2::read::MultiGzDecoder::new(raw)),
-        Some("br") => Box::new(brotli_decompressor::Decompressor::new(raw, 64 * 1024)),
-        Some("zstd") => Box::new(zstd::stream::read::Decoder::new(raw)?),
-        Some("deflate") => {
-            // "deflate" is meant to be zlib-wrapped, but some servers send raw
-            // deflate; browsers accept both, so sniff the zlib header.
-            let mut raw = BufReader::new(raw);
-            let zlib = match raw.fill_buf() {
-                Ok([cmf, flg, ..]) => cmf & 0x0f == 8 && (u16::from(*cmf) << 8 | u16::from(*flg)) % 31 == 0,
-                _ => true,
-            };
-            if zlib {
-                Box::new(flate2::read::ZlibDecoder::new(raw))
-            } else {
-                Box::new(flate2::read::DeflateDecoder::new(raw))
-            }
-        }
-        _ => Box::new(raw),
-    })
 }

@@ -6,7 +6,6 @@
 //! set to `ENOSYS`/`EPERM`, never a trap.
 #![cfg(target_os = "wasi")]
 #![allow(clippy::missing_safety_doc)]
-#![feature(c_variadic)]
 
 use core::ffi::{c_int, c_void};
 

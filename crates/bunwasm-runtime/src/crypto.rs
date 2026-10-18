@@ -1,12 +1,12 @@
-use bunwasm_crypto_sys::bunwasm_key_encoding;
-use bunwasm_crypto_sys::{
-    bunwasm_rsa, bunwasm_rsa_der, bunwasm_rsa_field, bunwasm_rsa_free,
-    bunwasm_rsa_from_jwk, bunwasm_rsa_generate, bunwasm_rsa_parse,
-};
 use aes::cipher::{
     BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher, block_padding::Pkcs7,
 };
 use aes::cipher::{BlockEncrypt, KeyInit};
+use bunwasm_crypto_sys::bunwasm_key_encoding;
+use bunwasm_crypto_sys::{
+    bunwasm_rsa, bunwasm_rsa_der, bunwasm_rsa_field, bunwasm_rsa_free, bunwasm_rsa_from_jwk,
+    bunwasm_rsa_generate, bunwasm_rsa_parse,
+};
 use ed25519_dalek::Signer;
 use pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use rand_core::OsRng;
@@ -301,9 +301,9 @@ fn ec_import(a: &J, format: &str, b: &[u8]) -> Result<J> {
                 "jwk" => {
                     let j = ec_material(&data(serde_json::from_slice(b))?);
                     if j["d"].is_string() {
-                        return Ok(data(serde_json::from_str(
+                        return data(serde_json::from_str(
                             &data($c::SecretKey::from_jwk_str(&j.to_string()))?.to_jwk_string(),
-                        ))?);
+                        ));
                     }
                     Ok(data(serde_json::from_str(
                         &data($c::PublicKey::from_jwk_str(&j.to_string()))?.to_jwk_string(),
@@ -866,7 +866,6 @@ fn kw_crypt(key: &[u8], input: &[u8], encrypt: bool) -> Result<Vec<u8>> {
         _ => Err("DataError"),
     }
 }
-
 
 fn key_encoding(q: &J) -> Result<J> {
     let input = bytes(q, "data")?;

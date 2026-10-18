@@ -747,10 +747,8 @@ fn local_file_writes_share_offsets_without_modifying_guest_iovecs() {
             assert!(!self.0.exists());
         }
     }
-    let directory = std::env::temp_dir().join(format!(
-        "bun-wasm-native-file-{}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("bun-wasm-native-file-{}", std::process::id()));
     std::fs::create_dir(&directory).unwrap();
     let scratch = Scratch(directory);
     std::fs::write(scratch.0.join("output"), b"").unwrap();
@@ -946,35 +944,55 @@ fn engine_files_are_visible_to_wasi_metadata_open_and_readdir() {
 
 #[test]
 fn both_wait_imports_encode_startup_failure_as_eight_bytes_without_consuming_on_fault() {
-    for by_job in [false,true] {
-        let mut f=Fixture::new();
+    for by_job in [false, true] {
+        let mut f = Fixture::new();
         let request=serde_json::to_vec(&serde_json::json!({"executable":"/missing","argv":[],"env":{},"cwd":"/","job":0,"fds":[]})).unwrap();
-        f.write(512,&request);
-        let pid=f.call("runtime_proc","spawn",(512,request.len() as i32)); assert!(pid>0);
-        let job=f.call("runtime_proc","job_of",pid);
-        let subscription:Vec<u8>=[6u32,pid as u32,123,0].into_iter().flat_map(u32::to_le_bytes).collect();
-        f.write(256,&subscription);
-        assert_eq!(f.call("runtime_proc","poll",(256,1,5000,80)),1);
-        assert_eq!(f.word(80),123); assert_eq!(f.word(88),6);
-        assert_eq!(f.call("runtime_proc","start_status",pid),44);
-        assert_eq!(f.call("runtime_proc","start_status",pid),44);
+        f.write(512, &request);
+        let pid = f.call("runtime_proc", "spawn", (512, request.len() as i32));
+        assert!(pid > 0);
+        let job = f.call("runtime_proc", "job_of", pid);
+        let subscription: Vec<u8> = [6u32, pid as u32, 123, 0]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        f.write(256, &subscription);
+        assert_eq!(f.call("runtime_proc", "poll", (256, 1, 5000, 80)), 1);
+        assert_eq!(f.word(80), 123);
+        assert_eq!(f.word(88), 6);
+        assert_eq!(f.call("runtime_proc", "start_status", pid), 44);
+        assert_eq!(f.call("runtime_proc", "start_status", pid), 44);
         if by_job {
-            assert_eq!(f.call("runtime_proc","wait_job",(job,1,65532)),process::FAULT);
-            assert_eq!(f.call("runtime_proc","wait_job",(job,0,80)),0);
+            assert_eq!(
+                f.call("runtime_proc", "wait_job", (job, 1, 65532)),
+                process::FAULT
+            );
+            assert_eq!(f.call("runtime_proc", "wait_job", (job, 0, 80)), 0);
         } else {
-            assert_eq!(f.call("runtime_proc","wait",(pid,65532)),process::FAULT);
-            let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
+            assert_eq!(f.call("runtime_proc", "wait", (pid, 65532)), process::FAULT);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             loop {
-                let result=f.call("runtime_proc","wait",(pid,80));
-                if result==0 { break; }
-                assert_eq!(result,process::AGAIN); assert!(std::time::Instant::now()<deadline);
+                let result = f.call("runtime_proc", "wait", (pid, 80));
+                if result == 0 {
+                    break;
+                }
+                assert_eq!(result, process::AGAIN);
+                assert!(std::time::Instant::now() < deadline);
                 std::thread::yield_now();
             }
         }
-        assert_eq!(f.word(80),2); assert_eq!(f.word(84),44);
-        assert_eq!(f.call("runtime_proc","start_status",pid),process::CHILD);
-        assert_eq!(f.call("runtime_proc","poll",(256,1,0,80)),process::CHILD);
-        assert_eq!(f.call("runtime_proc","wait",(pid,80)),process::CHILD);
-        if by_job { assert_eq!(f.call("runtime_proc","wait_job",(job,1,80)),process::CHILD); }
+        assert_eq!(f.word(80), 2);
+        assert_eq!(f.word(84), 44);
+        assert_eq!(f.call("runtime_proc", "start_status", pid), process::CHILD);
+        assert_eq!(
+            f.call("runtime_proc", "poll", (256, 1, 0, 80)),
+            process::CHILD
+        );
+        assert_eq!(f.call("runtime_proc", "wait", (pid, 80)), process::CHILD);
+        if by_job {
+            assert_eq!(
+                f.call("runtime_proc", "wait_job", (job, 1, 80)),
+                process::CHILD
+            );
+        }
     }
 }

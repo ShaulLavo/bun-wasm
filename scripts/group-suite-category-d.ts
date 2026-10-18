@@ -44,7 +44,7 @@ function groups(key: "error" | "cause") {
     items.push(row);
     grouped.set(row[key], items);
   }
-  return Array.from(grouped, ([id, members]) => ({ id, members })).sort((a, b) => b.members.length - a.members.length || a.id.localeCompare(b.id));
+  return Array.from(grouped, ([id, members]) => ({ id, members, example: members.at(0)?.file ?? "" })).sort((a, b) => b.members.length - a.members.length || a.id.localeCompare(b.id));
 }
 
 function table(headers: string[], data: string[][]): string {
@@ -168,12 +168,12 @@ function section(name: string, content: string) {
 
 const errors = groups("error");
 section("first-errors", table(["Recorded first error", "Files", "Example"], errors.map(group => [
-  "`" + group.id.replaceAll("`", "'") + "`", String(group.members.length), "`" + group.members[0].file + "`",
+  "`" + group.id.replaceAll("`", "'") + "`", String(group.members.length), "`" + group.example + "`",
 ])));
 const causes = groups("cause");
 for (const cause of causes) title(cause.id);
 section("causes", table(["Baseline root cause", "Files", "Example"], causes.filter(group => group.members.length > 1).map(group => [
-  title(group.id), String(group.members.length), "`" + group.members[0].file + "`",
+  title(group.id), String(group.members.length), "`" + group.example + "`",
 ])));
 if (existsSync(measurements)) {
   const data = record(JSON.parse(readFileSync(measurements, "utf8")));

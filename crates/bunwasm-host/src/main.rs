@@ -395,6 +395,24 @@ fn select_instance_outcome(
     }
 }
 
+fn main() -> ExitCode {
+    let options = match parse_args(std::env::args().skip(1)) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("bun-wasm: {error:#}\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    match run(options) {
+        // Exit codes outside 0..=255 are truncated by the OS anyway.
+        Ok(code) => ExitCode::from(code as u8),
+        Err(error) => {
+            eprintln!("bun-wasm: {error:#}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -809,23 +827,5 @@ mod tests {
             cancel.select(FinalOutcome::Signal(9)),
             FinalOutcome::Exit(0)
         );
-    }
-}
-
-fn main() -> ExitCode {
-    let options = match parse_args(std::env::args().skip(1)) {
-        Ok(options) => options,
-        Err(error) => {
-            eprintln!("bun-wasm: {error:#}\n\n{USAGE}");
-            return ExitCode::from(2);
-        }
-    };
-    match run(options) {
-        // Exit codes outside 0..=255 are truncated by the OS anyway.
-        Ok(code) => ExitCode::from(code as u8),
-        Err(error) => {
-            eprintln!("bun-wasm: {error:#}");
-            ExitCode::from(1)
-        }
     }
 }

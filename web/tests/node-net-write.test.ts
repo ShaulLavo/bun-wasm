@@ -1,22 +1,26 @@
 import { expect, test } from "bun:test";
-import { EventEmitter } from "node:events";
+import { Socket } from "node:net";
+import * as net from "node:net";
+import * as http from "node:http";
+import * as https from "node:https";
+import * as zlib from "node:zlib";
 import { createNodeNet } from "../scripts/node-net.mjs";
 
-class QueuedSocket extends EventEmitter {
-  connecting = false;
-  writableLength = 0;
+class QueuedSocket extends Socket {
+  queued = 0;
+  constructor() { super(); Object.defineProperty(this, "writableLength", { get: () => this.queued }); }
   writes: Uint8Array[] = [];
   write(bytes: Uint8Array) {
     this.writes.push(bytes);
-    this.writableLength += bytes.length;
+    this.queued += bytes.length;
     return false;
   }
-  end() {}
+  override end() { return this; }
 }
 
 function fixture() {
   const socket = new QueuedSocket();
-  const { natives } = createNodeNet({ net: { connect: () => socket } });
+  const { natives } = createNodeNet({ net: { ...net, connect: () => socket }, http, https, zlib });
   return { socket, natives, handle: natives.hostConnect("127.0.0.1", 1234) };
 }
 
@@ -29,9 +33,9 @@ test("Node host writes stop at available queue capacity", () => {
   expect(natives.hostWrite(handle, bytes)).toBe(-2);
   expect(socket.writes.length).toBe(1);
   expect(natives.hostWrite(handle, new Uint8Array())).toBe(0);
-  socket.writableLength = capacity - 3;
+  socket.queued = capacity - 3;
   expect(natives.hostWrite(handle, bytes)).toBe(3);
   bytes.fill(9);
-  expect(Array.from(socket.writes[1])).toEqual([7, 7, 7]);
+  expect(Array.from(socket.writes[1] ?? [])).toEqual([7, 7, 7]);
   expect(natives.hostClose(handle)).toBe(0);
 });

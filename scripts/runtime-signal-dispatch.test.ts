@@ -231,7 +231,9 @@ test("unsupported stop registrations roll back every guest EventEmitter adder", 
     let error: unknown;
     try { process.kill(process.pid, name); } catch (caught) { error = caught; }
     expect(error).toMatchObject({ code: "ENOTSUP", errno: -95, syscall: "kill" });
-    expect(signals.at(-1)).toEqual([namedSignals[name], 3]);
+    const signal = namedSignals[name];
+    if (signal === undefined) throw new Error(`Missing signal ${name}`);
+    expect(signals.at(-1)).toEqual([signal, 3]);
   }
   process.removeAllListeners();
   expect(process.eventNames()).toEqual([]);

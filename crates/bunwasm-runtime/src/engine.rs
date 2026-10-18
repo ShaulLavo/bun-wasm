@@ -126,7 +126,12 @@ pub struct NativeError {
 
 impl NativeError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> NativeError {
-        NativeError { kind, message: message.into(), name: None, props: Vec::new() }
+        NativeError {
+            kind,
+            message: message.into(),
+            name: None,
+            props: Vec::new(),
+        }
     }
     pub fn error(message: impl Into<String>) -> NativeError {
         NativeError::new(ErrorKind::Error, message)
@@ -166,7 +171,10 @@ impl<'a> Args<'a> {
     pub fn str(&self, i: usize) -> Result<&'a str, NativeError> {
         match self.get(i) {
             Val::Str(s) => Ok(s),
-            other => Err(NativeError::type_error(format!("expected a string argument, got {}", describe(other)))),
+            other => Err(NativeError::type_error(format!(
+                "expected a string argument, got {}",
+                describe(other)
+            ))),
         }
     }
     pub fn string(&self, i: usize) -> Result<String, NativeError> {
@@ -190,7 +198,11 @@ impl<'a> Args<'a> {
         }
     }
     pub fn opt_bytes(&self, i: usize) -> Option<&'a [u8]> {
-        if self.is_missing(i) { None } else { self.bytes(i).ok() }
+        if self.is_missing(i) {
+            None
+        } else {
+            self.bytes(i).ok()
+        }
     }
     pub fn num(&self, i: usize) -> Result<f64, NativeError> {
         match self.get(i) {
@@ -198,7 +210,10 @@ impl<'a> Args<'a> {
             Val::Bool(b) => Ok(f64::from(u8::from(*b))),
             Val::BigInt(n) => Ok(*n as f64),
             Val::BigUint(n) => Ok(*n as f64),
-            other => Err(NativeError::type_error(format!("expected a number argument, got {}", describe(other)))),
+            other => Err(NativeError::type_error(format!(
+                "expected a number argument, got {}",
+                describe(other)
+            ))),
         }
     }
     pub fn opt_num(&self, i: usize) -> Option<f64> {
@@ -251,7 +266,8 @@ pub type DataFn = Rc<dyn Fn(Args<'_>) -> NativeResult>;
 
 /// A native over engine values: gets the engine and the raw arguments;
 /// `Err` is the value to throw.
-pub type ValueFn<E> = Rc<dyn Fn(&E, &[<E as Engine>::Value]) -> Result<<E as Engine>::Value, <E as Engine>::Value>>;
+pub type ValueFn<E> =
+    Rc<dyn Fn(&E, &[<E as Engine>::Value]) -> Result<<E as Engine>::Value, <E as Engine>::Value>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromiseState {
@@ -264,12 +280,16 @@ pub enum PromiseState {
 pub trait ModuleHost<E: Engine> {
     /// Whether the host supplies CPU-bound process-signal checkpoints.
     /// Engines without a signal host do not install an interrupt callback.
-    fn has_interrupt_handler(&self) -> bool { false }
+    fn has_interrupt_handler(&self) -> bool {
+        false
+    }
     /// Poll fatal cancellation without consuming handled signals or calling JS.
     /// Engines may also poll during native operations: arbitrary JS reentry is
     /// unsafe. True requests an engine-native uncatchable interrupt; a browser
     /// host's selected fatal outcome instead unwinds Wasm directly.
-    fn interrupt(&self) -> bool { false }
+    fn interrupt(&self) -> bool {
+        false
+    }
     /// Resolve `specifier` imported from the module `referrer` (a path, a
     /// built-in id, or empty for the entry point) to a module name.
     fn resolve(&self, engine: &E, specifier: &str, referrer: &str) -> Result<String, E::Value>;
@@ -295,7 +315,7 @@ pub trait Engine: Sized + 'static {
     fn undefined(&self) -> Self::Value;
     fn is_undefined(&self, v: &Self::Value) -> bool;
     fn to_val(&self, v: &Self::Value) -> Val;
-    fn from_val(&self, v: Val) -> Self::Value;
+    fn value_from(&self, v: Val) -> Self::Value;
     fn new_object(&self) -> Self::Value;
     fn get(&self, obj: &Self::Value, key: &str) -> Result<Self::Value, Self::Value>;
     fn set(&self, obj: &Self::Value, key: &str, value: Self::Value) -> Result<(), Self::Value>;
@@ -305,12 +325,22 @@ pub trait Engine: Sized + 'static {
 
     // --- functions ---
     fn new_function(&self, name: &str, f: ValueFn<Self>) -> Self::Value;
-    fn call(&self, f: &Self::Value, this: &Self::Value, args: &[Self::Value]) -> Result<Self::Value, Self::Value>;
+    fn call(
+        &self,
+        f: &Self::Value,
+        this: &Self::Value,
+        args: &[Self::Value],
+    ) -> Result<Self::Value, Self::Value>;
 
     // --- evaluation ---
     /// Evaluate a classic script whose first line is line `first_line` (1 is
     /// normal; the CommonJS wrapper uses -1 so the file starts at line 1).
-    fn eval_script(&self, source: &str, filename: &str, first_line: i32) -> Result<Self::Value, Self::Value>;
+    fn eval_script(
+        &self,
+        source: &str,
+        filename: &str,
+        first_line: i32,
+    ) -> Result<Self::Value, Self::Value>;
     /// `import(specifier)` from the top level: a promise of the namespace.
     fn import_module(&self, specifier: &str) -> Result<Self::Value, Self::Value>;
     /// Evaluate `source` as the ES module `name` (bun -e); `init_meta` runs
@@ -323,7 +353,12 @@ pub trait Engine: Sized + 'static {
     fn promise_state(&self, v: &Self::Value) -> Option<PromiseState>;
     fn promise_result(&self, v: &Self::Value) -> Self::Value;
     /// Attach reactions without looking up public then, constructor or species.
-    fn promise_then(&self, promise: &Self::Value, fulfilled: &Self::Value, rejected: &Self::Value) -> Result<Self::Value, Self::Value>;
+    fn promise_then(
+        &self,
+        promise: &Self::Value,
+        fulfilled: &Self::Value,
+        rejected: &Self::Value,
+    ) -> Result<Self::Value, Self::Value>;
     /// Rejections that had no handler when the job queue drained:
     /// (promise, reason) pairs, in order. Drains the list.
     fn take_unhandled_rejections(&self) -> Vec<(Self::Value, Self::Value)>;

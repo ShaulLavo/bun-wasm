@@ -14,7 +14,9 @@ unsafe extern "C" fn highway_index_of_newline_or_non_ascii(p: *const u8, len: us
     }
     // SAFETY: the caller passes a slice, as a pointer and a length.
     let s = unsafe { core::slice::from_raw_parts(p, len) };
-    s.iter().position(|&c| c == b'\n' || c == b'\r' || c > 127).unwrap_or(len)
+    s.iter()
+        .position(|&c| c == b'\n' || c == b'\r' || c > 127)
+        .unwrap_or(len)
 }
 
 /// Index of the first byte that is not `value`, or `len`.
@@ -38,7 +40,9 @@ const P5: u64 = 0x27D4_EB2F_1656_67C5;
 
 #[inline]
 fn round(acc: u64, input: u64) -> u64 {
-    acc.wrapping_add(input.wrapping_mul(P2)).rotate_left(31).wrapping_mul(P1)
+    acc.wrapping_add(input.wrapping_mul(P2))
+        .rotate_left(31)
+        .wrapping_mul(P1)
 }
 
 #[inline]
@@ -158,7 +162,10 @@ impl Xxh64 {
         } else {
             self.seed().wrapping_add(P5)
         };
-        finalize(h.wrapping_add(self.total_len), &self.mem[..self.mem_size as usize])
+        finalize(
+            h.wrapping_add(self.total_len),
+            &self.mem[..self.mem_size as usize],
+        )
     }
 }
 
@@ -196,34 +203,14 @@ unsafe extern "C" fn highway_xxhash64_digest(state: *const u8) -> u64 {
     unsafe { (*state.cast::<Xxh64>()).digest() }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn one_shot(s: &[u8], seed: u64) -> u64 {
-        // SAFETY: slice as pointer and length.
-        unsafe { highway_xxhash64(s.as_ptr(), s.len(), seed) }
-    }
-
-    #[test]
-    fn reference_vectors() {
-        assert_eq!(one_shot(b"", 0), 0xEF46_DB37_51D8_E999);
-        assert_eq!(one_shot(b"a", 0), 0xD24E_C4F1_A98C_6E5B);
-        assert_eq!(one_shot(b"abc", 0), 0x44BC_2CF5_AD77_0999);
-        let long: Vec<u8> = (0..1000u32).map(|i| (i * 7) as u8).collect();
-        let mut h = Xxh64::new(5);
-        for chunk in long.chunks(13) {
-            h.update(chunk);
-        }
-        assert_eq!(h.digest(), one_shot(&long, 5));
-    }
-}
-
 // ── macros: no JS engine, so no macro VM (see `__bun_macro_context_init`) ──
 
 #[unsafe(no_mangle)]
 unsafe fn __bun_macro_context_deinit(data: *mut c_void) {
-    debug_assert!(data.is_null(), "macro contexts are never created in bun-wasm");
+    debug_assert!(
+        data.is_null(),
+        "macro contexts are never created in bun-wasm"
+    );
 }
 
 #[unsafe(no_mangle)]
@@ -254,3 +241,26 @@ extern "C" fn us_wakeup_loop(_loop: *mut c_void) {}
 
 #[unsafe(no_mangle)]
 extern "C" fn us_loop_run_bun_tick(_loop: *mut c_void, _timeout: *const c_void, _now_ns: u64) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn one_shot(s: &[u8], seed: u64) -> u64 {
+        // SAFETY: slice as pointer and length.
+        unsafe { highway_xxhash64(s.as_ptr(), s.len(), seed) }
+    }
+
+    #[test]
+    fn reference_vectors() {
+        assert_eq!(one_shot(b"", 0), 0xEF46_DB37_51D8_E999);
+        assert_eq!(one_shot(b"a", 0), 0xD24E_C4F1_A98C_6E5B);
+        assert_eq!(one_shot(b"abc", 0), 0x44BC_2CF5_AD77_0999);
+        let long: Vec<u8> = (0..1000u32).map(|i| (i * 7) as u8).collect();
+        let mut h = Xxh64::new(5);
+        for chunk in long.chunks(13) {
+            h.update(chunk);
+        }
+        assert_eq!(h.digest(), one_shot(&long, 5));
+    }
+}

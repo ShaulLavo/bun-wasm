@@ -44,10 +44,17 @@ pub fn valid_name(name: &str) -> Result<()> {
     let bare = name.strip_prefix('@').unwrap_or(name);
     let segments: Vec<_> = bare.split('/').collect();
     let count = if name.starts_with('@') { 2 } else { 1 };
-    if segments.len() != count || segments.iter().any(|s| s.is_empty() || *s == "." || *s == "..") {
+    if segments.len() != count
+        || segments
+            .iter()
+            .any(|s| s.is_empty() || *s == "." || *s == "..")
+    {
         return Err(format!("Invalid package name: {name}"));
     }
-    if !bare.bytes().all(|b| b.is_ascii_alphanumeric() || b"/-_.~".contains(&b)) {
+    if !bare
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"/-_.~".contains(&b))
+    {
         return Err(format!("Invalid package name: {name}"));
     }
     Ok(())
@@ -68,7 +75,8 @@ pub fn spec(input: &str) -> Result<(String, String)> {
 pub fn matches(version: &str, range: &str) -> bool {
     let version_bytes = version.as_bytes();
     let range_bytes = range.as_bytes();
-    let Some(version) = Version::parse_exact(SlicedString::init(version_bytes, version_bytes)) else {
+    let Some(version) = Version::parse_exact(SlicedString::init(version_bytes, version_bytes))
+    else {
         return false;
     };
     let Ok(group) = query::parse(range_bytes, SlicedString::init(range_bytes, range_bytes)) else {
@@ -86,12 +94,18 @@ pub fn matches(version: &str, range: &str) -> bool {
 pub(super) fn order(a: &str, b: &str) -> Ordering {
     let parse = |s: &[u8]| Version::parse_exact(SlicedString::init(s, s));
     match (parse(a.as_bytes()), parse(b.as_bytes())) {
-        (Some(a_version), Some(b_version)) => a_version.order_without_build(b_version, a.as_bytes(), b.as_bytes()),
+        (Some(a_version), Some(b_version)) => {
+            a_version.order_without_build(b_version, a.as_bytes(), b.as_bytes())
+        }
         _ => a.cmp(b),
     }
 }
 
-pub fn dependencies(meta: &Value, production: bool, root: bool) -> BTreeMap<String, (String, bool, bool)> {
+pub fn dependencies(
+    meta: &Value,
+    production: bool,
+    root: bool,
+) -> BTreeMap<String, (String, bool, bool)> {
     let mut result = BTreeMap::new();
     add_dependencies(&mut result, meta, "dependencies", false, false);
     if root && !production {
@@ -127,7 +141,8 @@ fn add_dependencies(
             out.insert(name.clone(), (range.into(), true, peer));
             continue;
         }
-        out.entry(name.clone()).or_insert((range.into(), false, peer));
+        out.entry(name.clone())
+            .or_insert((range.into(), false, peer));
     }
 }
 
@@ -137,7 +152,10 @@ pub struct MemberUpdate {
 }
 
 #[derive(Clone, Copy)]
-enum LockLookup { Use, Skip }
+enum LockLookup {
+    Use,
+    Skip,
+}
 
 pub struct Resolver {
     pub packages: BTreeMap<String, Package>,
@@ -189,7 +207,10 @@ impl Resolver {
             parent.local.as_ref().is_some_and(|p| p.workspace),
         ) {
             let range = if let Some(local) = &parent.local {
-                if let Some(path) = range.strip_prefix("link:").or_else(|| range.strip_prefix("file:")) {
+                if let Some(path) = range
+                    .strip_prefix("link:")
+                    .or_else(|| range.strip_prefix("file:"))
+                {
                     format!("link:{}", local.path.join(path).display())
                 } else {
                     range
@@ -197,7 +218,8 @@ impl Resolver {
             } else {
                 range
             };
-            let Some(target) = self.target(parent, &name, &range, optional || parent.optional)? else {
+            let Some(target) = self.target(parent, &name, &range, optional || parent.optional)?
+            else {
                 continue;
             };
             let chain = self.placement(parent, &name, &target, peer, optional || parent.optional);
@@ -209,11 +231,19 @@ impl Resolver {
         Ok(())
     }
 
-    fn target(&mut self, parent: &Package, name: &str, range: &str, optional: bool) -> Result<Option<String>> {
+    fn target(
+        &mut self,
+        parent: &Package,
+        name: &str,
+        range: &str,
+        optional: bool,
+    ) -> Result<Option<String>> {
         if self.local_package(name, range)?.is_some() {
             return Ok(Some(range.into()));
         }
-        if self.member_update.as_ref().is_some_and(|update| update.member == parent.name && update.dependencies.contains(name)) {
+        if self.member_update.as_ref().is_some_and(|update| {
+            update.member == parent.name && update.dependencies.contains(name)
+        }) {
             return self.member_target(name, range, optional);
         }
         if let Some(version) = self.locked_child(parent, name, range) {
@@ -233,7 +263,9 @@ impl Resolver {
         match self.package(name, range, vec![name.into()], optional, LockLookup::Skip) {
             Ok(package) => Ok(Some(if range.starts_with("npm:") {
                 format!("npm:{}@{}", package.name, package.version)
-            } else { package.version })),
+            } else {
+                package.version
+            })),
             Err(_) if optional => Ok(None),
             Err(error) => Err(error),
         }
@@ -242,7 +274,9 @@ impl Resolver {
     fn locked_child(&self, parent: &Package, name: &str, range: &str) -> Option<String> {
         let source_chain = parent.source_chain.as_deref()?;
         let row = &self.locked["packages"][source_chain.join("/")];
-        if row[0] != format!("{}@{}", parent.name, parent.version) || !declared(&row[2], name, range) {
+        if row[0] != format!("{}@{}", parent.name, parent.version)
+            || !declared(&row[2], name, range)
+        {
             return None;
         }
         for level in (0..=source_chain.len()).rev() {
@@ -277,7 +311,10 @@ impl Resolver {
                 continue;
             };
             let satisfies = if let Some(target) = &target {
-                found.local.as_ref().is_some_and(|local| local.path == target.path)
+                found
+                    .local
+                    .as_ref()
+                    .is_some_and(|local| local.path == target.path)
             } else {
                 matches(&found.version, range)
             };
@@ -286,7 +323,10 @@ impl Resolver {
                 return None;
             }
             if peer {
-                eprintln!("warn: incorrect peer dependency \"{}\"", io::redact(&format!("{name}@{range}")));
+                eprintln!(
+                    "warn: incorrect peer dependency \"{}\"",
+                    io::redact(&format!("{name}@{range}"))
+                );
                 return None;
             }
             break;
@@ -322,7 +362,10 @@ impl Resolver {
         let package = match result {
             Ok(package) => package,
             Err(error) if optional => {
-                eprintln!("warn: optional dependency {name}: {}", self.registry.redact(&error));
+                eprintln!(
+                    "warn: optional dependency {name}: {}",
+                    self.registry.redact(&error)
+                );
                 return Ok(());
             }
             Err(error) => return Err(error),
@@ -333,7 +376,14 @@ impl Resolver {
         Ok(())
     }
 
-    fn package(&mut self, name: &str, range: &str, chain: Vec<String>, optional: bool, lookup: LockLookup) -> Result<Package> {
+    fn package(
+        &mut self,
+        name: &str,
+        range: &str,
+        chain: Vec<String>,
+        optional: bool,
+        lookup: LockLookup,
+    ) -> Result<Package> {
         if let Some(alias) = range.strip_prefix("npm:") {
             let (target, version) = spec(alias)?;
             return self.package(&target, &version, chain, optional, lookup);
@@ -351,14 +401,21 @@ impl Resolver {
                 local: Some(local),
             });
         }
-        if matches!(lookup, LockLookup::Use) && let Some(package) = self.from_lock(name, range, &chain, optional) {
+        if matches!(lookup, LockLookup::Use)
+            && let Some(package) = self.resolve_from_lock(name, range, &chain, optional)
+        {
             return Ok(package);
         }
         if !self.packuments.contains_key(name) {
             let encoded = name.replace('/', "%2f");
-            let bytes = io::fetch(&format!("{}/{encoded}", self.registry.url), false, self.refresh, &self.registry)?;
-            let meta =
-                serde_json::from_slice(&bytes).map_err(|e| format!("Invalid registry response for {name}: {e}"))?;
+            let bytes = io::fetch(
+                &format!("{}/{encoded}", self.registry.url),
+                false,
+                self.refresh,
+                &self.registry,
+            )?;
+            let meta = serde_json::from_slice(&bytes)
+                .map_err(|e| format!("Invalid registry response for {name}: {e}"))?;
             self.packuments.insert(name.into(), meta);
         }
         let packument = &self.packuments[name];
@@ -370,7 +427,9 @@ impl Resolver {
             .keys()
             .filter(|v| matches(v, range))
             .max_by(|a, b| order(a, b))
-            .ok_or_else(|| format!("No version matching \"{range}\" found for specifier \"{name}\""))?;
+            .ok_or_else(|| {
+                format!("No version matching \"{range}\" found for specifier \"{name}\"")
+            })?;
         let replacement = platform_package(name, version);
         if replacement != name {
             let version = version.clone();
@@ -378,9 +437,15 @@ impl Resolver {
         }
         let meta = versions[version].clone();
         if !compatible(&meta) {
-            return Err(format!("{name}@{version} is not compatible with wasm32-wasip1"));
+            return Err(format!(
+                "{name}@{version} is not compatible with wasm32-wasip1"
+            ));
         }
-        let tarball = io::source_url(meta["dist"]["tarball"].as_str().ok_or("Missing package tarball URL")?)?;
+        let tarball = io::source_url(
+            meta["dist"]["tarball"]
+                .as_str()
+                .ok_or("Missing package tarball URL")?,
+        )?;
         let integrity = package_integrity(&meta)?;
         Ok(Package {
             name: name.into(),
@@ -401,7 +466,9 @@ impl Resolver {
             if range.starts_with("workspace:") || range == "*" || matches(version, range) {
                 let requested = range.strip_prefix("workspace:").unwrap_or("*");
                 if !["*", "^", "~"].contains(&requested) && !matches(version, requested) {
-                    return Err(format!("Workspace {name}@{version} does not satisfy {range}"));
+                    return Err(format!(
+                        "Workspace {name}@{version} does not satisfy {range}"
+                    ));
                 }
                 return Ok(Some(local.clone()));
             }
@@ -409,17 +476,26 @@ impl Resolver {
         if range.starts_with("workspace:") {
             return Err(format!("Workspace dependency not found: {name}@{range}"));
         }
-        let Some(path) = range.strip_prefix("link:").or_else(|| range.strip_prefix("file:")) else {
+        let Some(path) = range
+            .strip_prefix("link:")
+            .or_else(|| range.strip_prefix("file:"))
+        else {
             return Ok(None);
         };
-        let path = std::env::current_dir().map_err(|e| e.to_string())?.join(path);
+        let path = std::env::current_dir()
+            .map_err(|e| e.to_string())?
+            .join(path);
         let path = PathBuf::from(crate::resolve::normalize(&path.to_string_lossy()));
         if !path.is_dir() {
-            return Err(format!("Local dependency is not a directory: {}", path.display()));
+            return Err(format!(
+                "Local dependency is not a directory: {}",
+                path.display()
+            ));
         }
         let file = path.join("package.json");
         let meta = if file.exists() {
-            serde_json::from_slice(&std::fs::read(file).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?
+            serde_json::from_slice(&std::fs::read(file).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?
         } else {
             json!({"name": name})
         };
@@ -430,24 +506,41 @@ impl Resolver {
         }))
     }
 
-    fn from_lock(&self, name: &str, range: &str, chain: &[String], optional: bool) -> Option<Package> {
+    fn resolve_from_lock(
+        &self,
+        name: &str,
+        range: &str,
+        chain: &[String],
+        optional: bool,
+    ) -> Option<Package> {
         let row = &self.locked["packages"][chain.join("/")];
         if let Some(package) = self.locked_row(row, name, range, chain, optional) {
             return Some(package);
         }
         Version::parse_exact(SlicedString::init(range.as_bytes(), range.as_bytes()))?;
-        self.locked["packages"].as_object()?.iter().find_map(|(key, row)| {
-            let mut package = self.locked_row(row, name, range, chain, optional)?;
-            package.source_chain = Some(super::chain_from_lock(key, row).ok()?);
-            Some(package)
-        })
+        self.locked["packages"]
+            .as_object()?
+            .iter()
+            .find_map(|(key, row)| {
+                let mut package = self.locked_row(row, name, range, chain, optional)?;
+                package.source_chain = Some(super::chain_from_lock(key, row).ok()?);
+                Some(package)
+            })
     }
 
-    fn locked_row(&self, row: &Value, name: &str, range: &str, chain: &[String], optional: bool) -> Option<Package> {
+    fn locked_row(
+        &self,
+        row: &Value,
+        name: &str,
+        range: &str,
+        chain: &[String],
+        optional: bool,
+    ) -> Option<Package> {
         let version = locked_version(row, name)?;
         let resolved_name = platform_package(name, version);
-        let root_tag =
-            chain.len() == 1 && is_tag(range) && declared_root(&self.locked["workspaces"][""], &chain[0], name, range);
+        let root_tag = chain.len() == 1
+            && is_tag(range)
+            && declared_root(&self.locked["workspaces"][""], &chain[0], name, range);
         if !matches(version, range) && !root_tag {
             return None;
         }
@@ -497,8 +590,13 @@ fn locked_version<'a>(row: &'a Value, name: &str) -> Option<&'a str> {
 }
 
 fn is_tag(range: &str) -> bool {
-    range.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
-        && range.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
+    range
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphabetic)
+        && range
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
 }
 
 fn declared(meta: &Value, name: &str, range: &str) -> bool {
@@ -531,14 +629,19 @@ fn declared_root(meta: &Value, logical_name: &str, resolved_name: &str, range: &
 
 fn package_integrity(meta: &Value) -> Result<String> {
     if let Some(sri) = meta["dist"]["integrity"].as_str() {
-        return io::normalized_integrity(sri).ok_or_else(|| "Missing or unsupported package integrity".into());
+        return io::normalized_integrity(sri)
+            .ok_or_else(|| "Missing or unsupported package integrity".into());
     }
     let Some(shasum) = meta["dist"]["shasum"].as_str() else {
         return Ok(String::new());
     };
     let bytes: Option<Vec<u8>> = (0..shasum.len())
         .step_by(2)
-        .map(|i| shasum.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok()))
+        .map(|i| {
+            shasum
+                .get(i..i + 2)
+                .and_then(|s| u8::from_str_radix(s, 16).ok())
+        })
         .collect();
     Ok(format!(
         "sha1-{}",
@@ -554,10 +657,15 @@ fn compatible_field(field: &Value, value: &str) -> bool {
     let Some(values) = field.as_array() else {
         return true;
     };
-    if values.iter().any(|v| v.as_str() == Some(&format!("!{value}"))) {
+    if values
+        .iter()
+        .any(|v| v.as_str() == Some(&format!("!{value}")))
+    {
         return false;
     }
-    !values.iter().any(|v| !v.as_str().unwrap_or("").starts_with('!'))
+    !values
+        .iter()
+        .any(|v| !v.as_str().unwrap_or("").starts_with('!'))
         || values.iter().any(|v| v == value || v == "any")
 }
 

@@ -115,7 +115,10 @@ fn evaluate(
     if kind == 0 && code == 0 {
         Ok(stdout)
     } else if kind == 2 {
-        Err(process_error("Configuration process failed to start", -code))
+        Err(process_error(
+            "Configuration process failed to start",
+            -code,
+        ))
     } else {
         Err(stderr)
     }
@@ -425,7 +428,10 @@ mod tests {
         });
         assert_eq!(
             run("0", "/", HashMap::new()),
-            Err(b"Configuration process failed to start: ENOENT: executable not found (-44)".to_vec())
+            Err(
+                b"Configuration process failed to start: ENOENT: executable not found (-44)"
+                    .to_vec()
+            )
         );
         clean();
     }
@@ -438,9 +444,11 @@ mod tests {
             (-6, "EAGAIN"),
             (-52, "ENOSYS"),
         ] {
-            assert!(String::from_utf8(process_error("configuration", code))
-                .unwrap()
-                .contains(name));
+            assert!(
+                String::from_utf8(process_error("configuration", code))
+                    .unwrap()
+                    .contains(name)
+            );
         }
     }
 }

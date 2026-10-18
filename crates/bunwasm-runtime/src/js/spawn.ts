@@ -9,8 +9,6 @@
   const { Buffer } = internal.require("buffer");
   // WASI errno values from runtime_proc, negated.
   const AGAIN = -6;
-  const CHILD = -12;
-  const SRCH = -71;
   // Subscription kinds of procPoll.
   const READABLE = 0;
   const WRITABLE = 1;
@@ -680,6 +678,12 @@
       return Object.assign({ pid: spec.pid, success: false, exitCode: status!.kind === 0 ? status!.code : null, signalCode,
         stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])) }, extra);
     }
+    function checkTimeout() {
+      if (status || timedOut || !(timeout > 0) || native.now() - started < timeout) return;
+      timedOut = true;
+      const requested = native.procKill(spec.pid, signalNumber(spec.options.killSignal));
+      if (requested < 0 && !(status = waitChild(spec))) throw processError(requested, "kill");
+    }
     try {
       supplyInput(sink, () => { initialInput(spec.input, sink); sink.end(); });
       while (!status || states.some((state) => state.fd >= 0)) {
@@ -690,11 +694,7 @@
           chunks[i].push(chunk);
         }));
         if (!status) status = waitChild(spec);
-        if (!status && !timedOut && timeout > 0 && native.now() - started >= timeout) {
-          timedOut = true;
-          const requested = native.procKill(spec.pid, signalNumber(spec.options.killSignal));
-          if (requested < 0 && !(status = waitChild(spec))) throw processError(requested, "kill");
-        }
+        checkTimeout();
         if (!status || states.some((state) => state.fd >= 0)) wait();
       }
       const error = status.kind === 2 ? processError(-status.code, "spawn", spec.meta.executable) : undefined;
@@ -734,7 +734,7 @@
         token = ""; active = false;
         continue;
       }
-      if (/[|&;<>()$`*?{}\[\]~]/.test(ch)) throw unsupported("Shell operators and expansion");
+      if (/[|&;<>()$`*?{}[\]~]/.test(ch)) throw unsupported("Shell operators and expansion");
       token += ch; active = true;
     }
     if (quote || escaped) throw new TypeError("Unterminated shell quote");

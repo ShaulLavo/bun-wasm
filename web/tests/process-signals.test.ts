@@ -1,3 +1,5 @@
+import { controlLoad } from "waffle/proc/control";
+import { createSignalState } from "waffle/proc/signals";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
@@ -96,7 +98,7 @@ test("unrelated removeAllListeners preserves the initial SIGPIPE ignore", () => 
 
 test("generic Node controllers retain preview1 SIGPIPE default", () => {
   const controller = createNodeSignalController();
-  expect(Atomics.load(new Int32Array(controller.buffers.signalState), 13)).toBe(0);
+  expect(controlLoad(createSignalState(controller.buffers.signalState), 13)).toBe(0);
 });
 
 for (const [name, signal] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]] as const) {

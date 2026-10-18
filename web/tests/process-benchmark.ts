@@ -1,4 +1,4 @@
-export interface ProcessTiming { mode: "cold" | "shared-module"; repetition: number; compileMs: number; firstOutputMs: number; exitMs: number; }
+interface ProcessTiming { mode: "cold" | "shared-module"; repetition: number; compileMs: number; firstOutputMs: number; exitMs: number; }
 export async function measureProcessStarts(execute: (module: WebAssembly.Module, started: number) => Promise<{ firstOutputMs: number; exitMs: number }>) {
   const response = await fetch("/bun.wasm");
   if (!response.ok) throw new Error(`existing bun.wasm: HTTP ${response.status}`);

@@ -187,5 +187,8 @@ function merge(nodeFile: string, bunFile: string) {
   console.log(`merged; Node and Bun disagree on: ${disagreements.join(", ") || "nothing"}`);
 }
 
-if (process.argv[2] === "--merge") merge(process.argv[3], process.argv[4]);
-else writeFileSync(process.argv[2], JSON.stringify(await record()));
+const [output, nodeOracle, bunOracle] = process.argv.slice(2);
+if (!output) throw new Error("Expected output path or --merge <node-oracle> <bun-oracle>");
+if (output === "--merge" && (!nodeOracle || !bunOracle)) throw new Error("Expected both oracle paths");
+if (output === "--merge" && nodeOracle && bunOracle) merge(nodeOracle, bunOracle);
+else writeFileSync(output, JSON.stringify(await record()));

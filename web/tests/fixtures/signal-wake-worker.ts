@@ -9,11 +9,11 @@ const { signals, wake } = workerProcessState((workerData as { transport: WorkerP
 const descriptors = new DescriptorTable();
 const unused = (): never => { throw new Error("unexpected service operation"); };
 const abi = new ProcessABI({ memory: new WebAssembly.Memory({ initial: 1 }), descriptors, fs: new MemFS(), pid: 1, signals, wake,
-  service: { spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused } });
+  service: { waitJob: unused, jobEmpty: unused, childExited: unused, startStatus: unused, spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused } });
 const nativeWait = Atomics.wait;
 let generation = 0;
 let result: string | undefined;
-Atomics.wait = ((word: Int32Array, index: number, expected: number, milliseconds?: number) => {
+Atomics.wait = ((word: Int32Array, index: number, expected: number, _milliseconds?: number) => {
   if (word.buffer !== wake.buffer || word.byteOffset + index * 4 !== wake.byteOffset) {
     throw new Error("production poll selected a different wait word");
   }
