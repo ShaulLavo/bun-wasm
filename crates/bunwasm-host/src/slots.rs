@@ -455,6 +455,49 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
     }
     linker.func_wrap(
         "runtime_proc",
+        "access_start",
+        |mut caller: Caller<'_, Host>,
+         path: i32,
+         path_len: i32,
+         cwd: i32,
+         cwd_len: i32,
+         mode: i32| {
+            if mode != 1 {
+                return Ok(crate::process::INVAL);
+            }
+            with_memory(&mut caller, |memory, host| {
+                let (Some(path), Some(cwd)) = (
+                    proc_range(memory, path, path_len),
+                    proc_range(memory, cwd, cwd_len),
+                ) else {
+                    return Ok(crate::process::FAULT);
+                };
+                let (Ok(path), Ok(cwd)) = (
+                    std::str::from_utf8(&memory[path]),
+                    std::str::from_utf8(&memory[cwd]),
+                ) else {
+                    return Ok(crate::process::INVAL);
+                };
+                Ok(host.processes.access_start(path, cwd, mode))
+            })
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_proc",
+        "access_take",
+        |mut caller: Caller<'_, Host>, request: i32| {
+            caller.data_mut().processes.access_take(request)
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_proc",
+        "access_cancel",
+        |mut caller: Caller<'_, Host>, request: i32| {
+            caller.data_mut().processes.access_cancel(request)
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_proc",
         "signal",
         |caller: Caller<'_, Host>, signal: i32, operation: i32| -> Result<i32> {
             let cancel = &caller.data().cancel;

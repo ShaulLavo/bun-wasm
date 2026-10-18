@@ -1,4 +1,5 @@
 mod descriptors;
+mod executables;
 mod pipe;
 mod stdin;
 mod stdio;
@@ -9,7 +10,7 @@ pub mod wasi;
 pub use stdio::{Cancellation, FinalOutcome, Stdio};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -22,6 +23,7 @@ use descriptors::{Descriptors, Endpoint};
 // Process descriptors are distinct from networking handles. No read/write slot
 // dispatches by this boundary: only the runtime_proc descriptor ABI owns them.
 pub const FIRST_HANDLE: i32 = 0x4000_0000;
+pub const ACCES: i32 = -2;
 pub const AGAIN: i32 = -6;
 pub const BADF: i32 = -8;
 pub const CHILD: i32 = -12;
@@ -29,7 +31,9 @@ pub const FAULT: i32 = -21;
 pub const INTR: i32 = -27;
 pub const INVAL: i32 = -28;
 pub const IO: i32 = -29;
+pub const NOENT: i32 = -44;
 pub const NOSYS: i32 = -52;
+pub const NOTDIR: i32 = -54;
 pub const NOTSUP: i32 = -58;
 const ROOT_JOB: i32 = i32::MAX;
 pub const PERM: i32 = -63;
@@ -37,14 +41,7 @@ pub const PIPE: i32 = -64;
 pub const SRCH: i32 = -71;
 pub const NOTCAPABLE: i32 = -76;
 const MAX_CHILDREN: usize = 4;
-const BUN_EXECUTABLE_ALIASES: [&str; 6] = [
-    "bun",
-    "/bun",
-    "node",
-    "/node",
-    "/usr/local/bin/bun",
-    "/usr/local/bin/node",
-];
+const MAX_ACCESS_REQUESTS: usize = 64;
 
 pub(crate) fn validate_signal(signal: i32, probe: bool) -> Result<(), i32> {
     if (signal == 0 && probe) || ((1..=64).contains(&signal) && signal != 32 && signal != 33) {
@@ -65,6 +62,9 @@ pub struct Runtime {
     tools: std::sync::OnceLock<Result<wasmtime::Module, String>>,
     pub dirs: Vec<(std::path::PathBuf, String)>,
     pub thread_stack: usize,
+    executables: executables::Executables,
+    next_access: AtomicU32,
+    access_threads: Mutex<Vec<JoinHandle<()>>>,
     active: AtomicUsize,
     state: Mutex<Supervisor>,
 }
@@ -98,15 +98,20 @@ impl Runtime {
     pub fn new(
         engine: wasmtime::Engine,
         module: wasmtime::Module,
-        dirs: Vec<(std::path::PathBuf, String)>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+        mut dirs: Vec<(std::path::PathBuf, String)>,
+    ) -> anyhow::Result<Arc<Self>> {
+        let executables = executables::Executables::new(&module)?;
+        dirs.extend(executables.mounts());
+        Ok(Arc::new(Self {
             engine,
             module,
             dirs,
             tools_path: None,
             tools: std::sync::OnceLock::new(),
             thread_stack: crate::THREAD_STACK,
+            executables,
+            next_access: AtomicU32::new(1),
+            access_threads: Mutex::default(),
             active: AtomicUsize::new(0),
             state: Mutex::new(Supervisor {
                 next: 1,
@@ -122,11 +127,20 @@ impl Runtime {
                 .collect(),
                 ..Supervisor::default()
             }),
-        })
+        }))
     }
-    pub fn module_for(&self, argv: &[String]) -> anyhow::Result<&wasmtime::Module> {
+
+    pub fn register_engine(&self, name: &str, module: &wasmtime::Module) -> anyhow::Result<()> {
+        let (_, paths) = executables::ENGINE_PATHS
+            .iter()
+            .find(|(engine, _)| *engine == name)
+            .ok_or_else(|| anyhow::anyhow!("unknown engine {name:?}; expected quickjs or jsc"))?;
+        self.executables.register(paths, module)?;
+        Ok(())
+    }
+    pub fn module_for<'a>(&'a self, argv: &[String], base: &'a wasmtime::Module) -> anyhow::Result<&'a wasmtime::Module> {
         if crate::tool_args::before_command(argv.get(1..).unwrap_or_default()).is_none() {
-            return Ok(&self.module);
+            return Ok(base);
         }
         let tools = self.tools.get_or_init(|| {
             let path = self.tools_path.as_ref().ok_or("tools artifact path is unavailable")?;
@@ -155,6 +169,9 @@ impl Runtime {
             let _ = thread.join();
         }
         self.state.lock().unwrap().processes.clear();
+        for thread in self.access_threads.lock().unwrap().drain(..) {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -214,6 +231,21 @@ pub struct Processes {
     next: u32,
     notify: Arc<Notify>,
     cancel: Arc<Cancellation>,
+    access: HashMap<i32, Arc<Mutex<AccessState>>>,
+}
+
+enum AccessState {
+    Pending,
+    Complete(i32),
+    Cancelled,
+}
+
+impl Drop for Processes {
+    fn drop(&mut self) {
+        for request in self.access.values() {
+            *request.lock().unwrap() = AccessState::Cancelled;
+        }
+    }
 }
 
 impl Processes {
@@ -252,7 +284,84 @@ impl Processes {
             next,
             notify,
             cancel,
+            access: HashMap::new(),
         }
+    }
+
+    /// Native metadata work runs off the import stack, with caller-owned,
+    /// monotonic IDs and result-before-readiness publication.
+    pub fn access_start(&mut self, path: &str, cwd: &str, mode: i32) -> i32 {
+        if mode != 1
+            || path.is_empty()
+            || path.contains('\0')
+            || !cwd.starts_with('/')
+            || cwd.contains('\0')
+        {
+            return INVAL;
+        }
+        if self.access.len() >= MAX_ACCESS_REQUESTS {
+            return AGAIN;
+        }
+        let Ok(id) =
+            self.runtime
+                .next_access
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+                    (id <= i32::MAX as u32).then(|| id + 1)
+                })
+        else {
+            return AGAIN;
+        };
+        let id = id as i32;
+        let request = Arc::new(Mutex::new(AccessState::Pending));
+        let (slot, runtime, notify) = (request.clone(), self.runtime.clone(), self.notify.clone());
+        let (path, cwd) = (path.to_string(), cwd.to_string());
+        let thread = std::thread::Builder::new()
+            .name("bun-wasm-access".into())
+            .spawn(move || {
+                let result = runtime
+                    .executables
+                    .check(&path, &cwd, &runtime.dirs)
+                    .map_or_else(|error| error, |_| 0);
+                let mut state = slot.lock().unwrap();
+                if matches!(*state, AccessState::Pending) {
+                    *state = AccessState::Complete(result);
+                    notify.bump();
+                }
+            });
+        let Ok(thread) = thread else {
+            return AGAIN;
+        };
+        let mut threads = self.runtime.access_threads.lock().unwrap();
+        threads.retain(|thread| !thread.is_finished());
+        threads.push(thread);
+        self.access.insert(id, request);
+        id
+    }
+
+    pub fn access_take(&mut self, id: i32) -> i32 {
+        let Some(request) = self.access.get(&id) else {
+            return BADF;
+        };
+        let result = match *request.lock().unwrap() {
+            AccessState::Pending => return AGAIN,
+            AccessState::Complete(result) => result,
+            AccessState::Cancelled => return BADF,
+        };
+        self.access.remove(&id);
+        result
+    }
+
+    pub fn access_cancel(&mut self, id: i32) -> i32 {
+        let Some(request) = self.access.remove(&id) else {
+            return BADF;
+        };
+        *request.lock().unwrap() = AccessState::Cancelled;
+        0
+    }
+
+    fn access_ready(&self, id: i32) -> Result<bool, i32> {
+        let request = self.access.get(&id).ok_or(BADF)?;
+        Ok(matches!(*request.lock().unwrap(), AccessState::Complete(_)))
     }
 
     fn require_handles(&self, count: usize) -> Result<(), i32> {
@@ -382,9 +491,14 @@ impl Processes {
             })
             .max_by_key(|(length, _)| *length)
             .map(|(_, path)| path);
-        let start_failure = if !BUN_EXECUTABLE_ALIASES.contains(&request.executable.as_str()) {
-            Some(127)
-        } else if !cwd.is_absolute()
+        // Admission observes the file and registration again, independently of
+        // any earlier access query. Missing/unrunnable paths never reserve a pid.
+        let module = self.runtime.executables.check(
+            &request.executable,
+            &request.cwd,
+            &self.runtime.dirs,
+        )?;
+        let start_failure = if !cwd.is_absolute()
             || cwd
                 .components()
                 .any(|component| matches!(component, std::path::Component::ParentDir))
@@ -464,8 +578,9 @@ impl Processes {
                         memory_limit,
                     };
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        crate::run_instance(
+                        crate::run_module_instance(
                             runtime.clone(),
+                            &module,
                             request.argv,
                             request.env.into_iter().collect(),
                             stdio,
@@ -538,22 +653,31 @@ impl Processes {
     /// Readiness observation never collects a child; only a successful wait does.
     fn child_outcome(&self, pid: i32) -> Result<FinalOutcome, i32> {
         let state = self.runtime.state.lock().unwrap();
-        state.processes.get(&pid)
+        state
+            .processes
+            .get(&pid)
             .filter(|child| child.parent == self.pid)
-            .ok_or(CHILD)?.result.ok_or(AGAIN)
+            .ok_or(CHILD)?
+            .result
+            .ok_or(AGAIN)
     }
 
     /// Collect a completed direct child exactly once, retaining its job's leader outcome.
     pub fn wait(&self, pid: i32) -> Result<FinalOutcome, i32> {
         let (outcome, thread) = {
             let mut state = self.runtime.state.lock().unwrap();
-            let child = state.processes.get(&pid)
-                .filter(|child| child.parent == self.pid).ok_or(CHILD)?;
+            let child = state
+                .processes
+                .get(&pid)
+                .filter(|child| child.parent == self.pid)
+                .ok_or(CHILD)?;
             let outcome = child.result.ok_or(AGAIN)?;
             let child = state.processes.remove(&pid).unwrap();
             (outcome, child.thread)
         };
-        if let Some(thread) = thread { let _ = thread.join(); }
+        if let Some(thread) = thread {
+            let _ = thread.join();
+        }
         Ok(outcome)
     }
 
@@ -687,7 +811,7 @@ impl Processes {
         }
         if subscriptions
             .chunks_exact(16)
-            .any(|sub| u32::from_le_bytes(sub[..4].try_into().unwrap()) > 4)
+            .any(|sub| u32::from_le_bytes(sub[..4].try_into().unwrap()) > 5)
         {
             return Err(INVAL);
         }
@@ -711,6 +835,7 @@ impl Processes {
                     },
                     3 => return Err(NOSYS), // native WASI filesystem I/O completes synchronously
                     4 => (self.job_empty(id)?, false),
+                    5 => (self.access_ready(id)?, false),
                     _ => return Err(INVAL),
                 };
                 if ready || hangup {
