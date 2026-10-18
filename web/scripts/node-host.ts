@@ -22,6 +22,7 @@ const STACK_MB = 32, GUEST_STACK_KIB = "6144";
 const nodeProcess = process;
 interface Settings {
   wasmPath: string;
+  engines: Partial<Record<"quickjs" | "jsc", string>>;
   stackMb: number;
   withNet: boolean;
   preopens: Record<string, string>;
@@ -36,12 +37,17 @@ interface GuestData {
 }
 function settings(): Settings {
   const argv = nodeProcess.argv.slice(2);
-  const result: Settings = { wasmPath: resolve(import.meta.dirname, "../../dist/bun-browser.wasm"), stackMb: STACK_MB, withNet: false, preopens: {}, env: {}, args: [] };
+  const result: Settings = { wasmPath: resolve(import.meta.dirname, "../../dist/bun-browser.wasm"), engines: {}, stackMb: STACK_MB, withNet: false, preopens: {}, env: {}, args: [] };
   let i = 0;
   for (; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") { i++; break; }
     if (arg === "--wasm") result.wasmPath = argv[++i]!;
+    else if (arg === "--engine") {
+      const value = argv[++i] ?? "", equal = value.indexOf("="), engine = value.slice(0, equal);
+      if ((engine !== "quickjs" && engine !== "jsc") || equal < 0 || !value.slice(equal + 1)) throw new Error("--engine requires quickjs=PATH or jsc=PATH");
+      result.engines[engine] = resolve(value.slice(equal + 1));
+    }
     else if (arg === "--net") result.withNet = true;
     else if (arg === "--stack-mb") result.stackMb = Number(argv[++i]);
     else if (arg === "--dir") {
@@ -65,30 +71,35 @@ async function main() {
   const config = settings();
   const baseModule = await WebAssembly.compile(readFileSync(config.wasmPath));
   const module = await nodeModule({ args: config.args, baseModule, wasmPath: config.wasmPath });
-  const broker = new NodeProcessBroker({ module,
+  const engines: Partial<Record<"quickjs" | "jsc", WebAssembly.Module>> = {};
+  for (const engine of ["quickjs", "jsc"] as const) if (config.engines[engine]) engines[engine] = await WebAssembly.compile(readFileSync(config.engines[engine]!));
+  const broker = new NodeProcessBroker({ module: baseModule, engines, preopens: config.preopens,
     launch(context, transport) {
       validateNodeCwd(config.preopens, context.request.cwd);
       return launch({ module: context.module, settings: config, transport, request: context.request });
     },
     onError(error) { writeSync(2, `node-host: ${error instanceof Error ? error.stack : error}\n`); },
   });
-  broker.pipeStdin();
-  const signals = createNodeSignalController(workerProcessState(broker.root).signals);
-  const guest = launch({ module, settings: config, transport: broker.root });
-  broker.attach(guest, broker.root);
-  guest.on("exit", code => {
-    const selected = signals.finish(code);
-    broker.dispose();
-    nodeProcess.exit(selected.status);
-  });
-  for (const [name, number] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]] as const) nodeProcess.on(name, () => {
-    const result = signals.request(number);
-    wakeWorkerProcess(broker.root);
-    if (result.action === "default") {
-      broker.supervisor.defaultSignal(1, number);
-      void guest.terminate();
-    }
-  });
+  try {
+    config.preopens = broker.preopens;
+    config.env.PATH ??= "/bin:/usr/bin";
+    broker.pipeStdin();
+    const signals = createNodeSignalController(workerProcessState(broker.root).signals);
+    const guest = launch({ module, settings: config, transport: broker.root });
+    broker.attach(guest, broker.root);
+    guest.on("exit", code => {
+      const selected = signals.finish(code);
+      void broker.dispose().then(() => nodeProcess.exit(selected.status));
+    });
+    for (const [name, number] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]] as const) nodeProcess.on(name, () => {
+      const result = signals.request(number);
+      wakeWorkerProcess(broker.root);
+      if (result.action === "default") {
+        broker.supervisor.defaultSignal(1, number);
+        void guest.terminate();
+      }
+    });
+  } catch (error) { await broker.dispose(); throw error; }
   function launch(data: GuestData): Worker {
     const limits = (data.transport.data as { worker?: { resourceLimits?: ResourceLimits } } | undefined)?.worker?.resourceLimits;
     return new Worker(new URL(import.meta.url), { workerData: data,

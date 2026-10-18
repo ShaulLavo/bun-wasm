@@ -24,7 +24,7 @@ if (isMainThread) {
       root.on("exit", resolve); root.on("error", reject);
     });
     assert.equal(status, 0);
-  } finally { clearTimeout(timer!); broker.dispose(); await root.terminate(); }
+  } finally { clearTimeout(timer!); await broker.dispose(); await root.terminate(); }
 } else {
   const transport = workerData.transport as WorkerProcessTransport;
   const request = workerData.request as SpawnRequest | undefined;
@@ -73,7 +73,7 @@ if (isMainThread) {
       finish(0);
     }
     if (request?.env.action === "echo") {
-      const grandchild = spawn("bun", [], "omitted");
+      const grandchild = spawn("/bin/bun", [], "omitted");
       assert.deepEqual(wait(grandchild), [0, 0]);
       for (;;) {
         const count = proc.read!(9, 1024, 4096);
@@ -99,7 +99,7 @@ if (isMainThread) {
     }
     const [input, write] = pipe(), [read, output] = pipe();
     const duplicate = proc.dup!(write); assert.ok(duplicate > write); assert.equal(proc.close!(duplicate), 0);
-    const pid = spawn("bun", [{ child: 9, parent: input }, { child: 12, parent: output }], "echo");
+    const pid = spawn("/bin/bun", [{ child: 9, parent: input }, { child: 12, parent: output }], "echo");
     const job = proc.job_of!(pid); assert.ok(job > 1);
     assert.equal(proc.close!(input), 0); assert.equal(proc.close!(output), 0);
     const length = 200000;
@@ -120,9 +120,9 @@ if (isMainThread) {
     assert.equal(proc.wait_job!(job, 0, 0), 0); assert.equal(view().getInt32(0, true), 7);
     assert.equal(proc.read!(read, 1024, 1), 0); assert.equal(proc.close!(read), 0);
     assert.deepEqual(wait(spawn("missing", [], "")), [0, 127]);
-    const killed = spawn("bun", [], "spin");
+    const killed = spawn("/bin/bun", [], "spin");
     assert.equal(proc.kill!(killed, 9), 0); assert.deepEqual(wait(killed), [1, 9]);
-    const group = spawn("node", [], "spin"), groupJob = proc.job_of!(group);
+    const group = spawn("/bin/node", [], "spin"), groupJob = proc.job_of!(group);
     assert.equal(proc.kill_job!(groupJob, 15), 0); assert.deepEqual(wait(group), [1, 15]);
     assert.equal(proc.wait_job!(groupJob, 0, 0), 0); assert.equal(view().getInt32(0, true), 143);
     parentPort!.postMessage({ result: { bytes: received, stdinBytes, exit: 7, missing: 127, signal: 9, groupSignal: 15, omitted: true } });

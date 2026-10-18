@@ -1,5 +1,5 @@
 import { isToolCommand } from "../src/tool-command.ts";
-import { readFileSync, statSync, writeSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 import { ExecutableRegistry } from "waffle/proc/registry";
@@ -11,12 +11,75 @@ import type { ProcessContext } from "waffle/proc/types";
 import { PipeController, PipePublicationRegistry } from "waffle/proc/pipes";
 import { nodeStdioCodec } from "./node-process.ts";
 
-export const nodeExecutables = ["bun", "/bun", "/usr/local/bin/bun", "node", "/node", "/usr/local/bin/node"] as const;
+export const nodeExecutables = ["/bin/bun", "/bin/node"] as const;
+export type NodeEngineModules = Partial<Record<"quickjs" | "jsc", WebAssembly.Module>>;
 
-export function createNodeExecutableRegistry(module: WebAssembly.Module): ExecutableRegistry {
-  const registry = new ExecutableRegistry();
+/** Resolve guest path components before normalization: file/.. must remain ENOTDIR.
+ * Symlink targets live in the guest namespace, just as they do in preview1. */
+function nodeExecutableLookup(preopens: Record<string, string>, absolute: string) {
+  const mounts = Object.entries(preopens).sort(([a], [b]) => b.length - a.length);
+  const lookup = (path: string) => {
+    const mount = mounts.find(([guest]) => guest === "/" || path === guest || path.startsWith(`${guest}/`));
+    const native = mount && `${mount[1]}/${path.slice(mount[0] === "/" ? 1 : mount[0].length + 1)}`;
+    try { return native ? { native, stat: lstatSync(native) } : undefined; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" && mounts.some(([guest]) => guest.startsWith(`${path === "/" ? "" : path}/`))) return undefined;
+      throw error;
+    }
+  };
+  let pending = absolute.split("/");
+  const components: string[] = [];
+  let kind: "file" | "dir" = "dir", links = 0;
+  while (pending.length) {
+    const component = pending.shift()!;
+    if (!component) continue;
+    if (kind !== "dir") throw Object.assign(new Error(`not a directory: /${components.join("/")}`), { errno: 54 });
+    if (component === "..") components.pop(); else if (component !== ".") components.push(component);
+    const path = `/${components.join("/")}`, node = lookup(path);
+    if (!node) {
+      if (mounts.some(([guest]) => guest.startsWith(`${path === "/" ? "" : path}/`))) { kind = "dir"; continue; }
+      return undefined;
+    }
+    if (node.stat.isSymbolicLink()) {
+      if (++links > 40) throw Object.assign(new Error("too many symbolic links"), { code: "ELOOP" });
+      const target = readlinkSync(node.native);
+      components.pop();
+      if (target.startsWith("/")) components.length = 0;
+      pending = target.split("/").concat(pending);
+      kind = "dir";
+    } else kind = node.stat.isDirectory() ? "dir" : "file";
+  }
+  if (absolute.endsWith("/") && kind !== "dir") throw Object.assign(new Error("not a directory"), { errno: 54 });
+  return { path: `/${components.join("/")}`, kind };
+}
+
+export function createNodeExecutableRegistry(module: WebAssembly.Module, preopens: Record<string, string>, engines: NodeEngineModules = {}): ExecutableRegistry {
+  const registry = new ExecutableRegistry(path => nodeExecutableLookup(preopens, path));
   for (const name of nodeExecutables) registry.register(name, { module, adapter: "bun" });
+  for (const engine of ["quickjs", "jsc"] as const) {
+    const module = engines[engine];
+    if (module) for (const name of ["bun", "node"]) registry.register(`/opt/bun/${engine}/bin/${name}`, { module, adapter: "bun" });
+  }
   return registry;
+}
+
+/** Private files, not aliases. Mount order is shared with the native host's preview1 ABI. */
+function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngineModules) {
+  for (const guest of Object.keys(preopens)) if (guest === "/bin" || guest.startsWith("/bin/") || guest === "/opt/bun" || guest.startsWith("/opt/bun/")) {
+    throw new Error(`reserved executable mount: ${guest}`);
+  }
+  const root = mkdtempSync("/work/tmp/bun-wasm-node-executables-");
+  try {
+    mkdirSync(join(root, "bin")); mkdirSync(join(root, "opt/bun"), { recursive: true });
+    for (const name of ["bun", "node"]) writeFileSync(join(root, "bin", name), new Uint8Array());
+    for (const engine of ["quickjs", "jsc"] as const) if (engines[engine]) {
+      const bin = join(root, "opt/bun", engine, "bin"); mkdirSync(bin, { recursive: true });
+      for (const name of ["bun", "node"]) writeFileSync(join(bin, name), new Uint8Array());
+    }
+    const mounted: Record<string, string> = { "/": preopens["/"] ?? root, "/bin": join(root, "bin"), "/opt/bun": join(root, "opt/bun") };
+    for (const [guest, host] of Object.entries(preopens)) if (guest !== "/") mounted[guest] = host;
+    return { preopens: mounted, dispose() { rmSync(root, { recursive: true, force: true }); } };
+  } catch (error) { rmSync(root, { recursive: true, force: true }); throw error; }
 }
 
 export function validateNodeCwd(preopens: Record<string, string>, cwd: string): void {
@@ -33,7 +96,11 @@ export function validateNodeCwd(preopens: Record<string, string>, cwd: string): 
 export class NodeProcessBroker {
   readonly root = createWorkerProcessTransport();
   readonly supervisor: ProcessSupervisor;
+  readonly registry: ExecutableRegistry;
   readonly broker: WorkerProcessBroker;
+  readonly preopens: Record<string, string>;
+  private readonly files: ReturnType<typeof nodeExecutableFiles>;
+  private disposal?: Promise<void>;
   private readonly pipes = new WorkerPipeBroker();
   private readonly workers = new Map<number, Worker>();
   private readonly timer: ReturnType<typeof setInterval>;
@@ -44,10 +111,14 @@ export class NodeProcessBroker {
   private inputSource?: NodeJS.ReadStream;
   constructor(options: {
     module: WebAssembly.Module;
+    engines?: NodeEngineModules;
+    preopens?: Record<string, string>;
     launch(context: ProcessContext, transport: WorkerProcessTransport): Worker;
     onError?(error: unknown): void;
   }) {
-    const registry = createNodeExecutableRegistry(options.module);
+    this.files = nodeExecutableFiles(options.preopens ?? {}, options.engines ?? {});
+    this.preopens = this.files.preopens;
+    const registry = this.registry = createNodeExecutableRegistry(options.module, this.preopens, options.engines);
     this.supervisor = new ProcessSupervisor({
       registry,
       launch: context => {
@@ -66,6 +137,7 @@ export class NodeProcessBroker {
     });
     const state = workerProcessState(this.root);
     const publications = new PipePublicationRegistry({ wake: state.wake });
+    publications.registerProcess(state.pid);
     this.root.data = { registry: publications.handle() };
     this.input = new PipeController({ registry: publications, wake: state.wake });
     const inputReader = this.input.retain(state.pid, "read");
@@ -111,7 +183,7 @@ export class NodeProcessBroker {
     const { pid } = workerProcessState(transport);
     this.workers.set(pid, worker);
     worker.on("message", (message: WorkerProcessMessage) => {
-      if (message?.type === "runtime-proc") void this.broker.handle(message);
+      if (message?.type === "runtime-proc") void this.broker.handle(message, pid);
     });
     worker.on("error", error => {
       const bytes = new TextEncoder().encode(`node-host: ${error instanceof Error ? error.stack : error}\n`);
@@ -126,7 +198,8 @@ export class NodeProcessBroker {
       this.broker.pump(); this.pipes.pump();
     });
   }
-  dispose(): void {
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
     clearInterval(this.timer);
     this.inputSource?.off("data", this.onInput);
     this.inputSource?.off("end", this.onInputEnd);
@@ -134,8 +207,10 @@ export class NodeProcessBroker {
     this.inputSource?.pause();
     this.inputQueue.length = 0;
     this.broker.dispose(); this.supervisor.dispose(); this.pipes.dispose(); this.input.dispose();
-    for (const worker of this.workers.values()) void worker.terminate();
+    const stops = Array.from(this.workers.values(), worker => worker.terminate());
     this.workers.clear();
+    this.disposal = Promise.allSettled(stops).then(() => this.files.dispose());
+    return this.disposal;
   }
 }
 
