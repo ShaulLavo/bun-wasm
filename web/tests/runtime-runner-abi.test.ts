@@ -11,7 +11,6 @@ import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { readOutcome } from "waffle/proc/outcome";
 import { suppressBudgetNotifications } from "./engine-interruption-probe";
 import { startRun, type RunOptions } from "../src/runner";
-import { waitStatus } from "./process-root-fixture";
 import type { RunRequest } from "../src/worker";
 import type { SharedFilesystem } from "../src/shared-fs";
 
@@ -343,7 +342,7 @@ for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
     const pid = state.client.spawn(1, { executable: "refused", argv: [], env: {}, cwd: "/", job: 1,
       fds: [{ child: 2, parent: fd }] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
-    expect(waitStatus(await state.broker.wait(pid))).toBe(126);
+    expect(await state.broker.wait(pid)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
     expect(output).toHaveLength(1);
     expect(output[0]!.fd).toBe(2);
     expect(output[0]!.text).toMatch(refusal === "SIMD" ? /Cannot instrument WebAssembly:.*SIMD/ : /require source bytes/);
