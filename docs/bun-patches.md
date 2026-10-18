@@ -2883,6 +2883,11 @@ metadata capability errors. Waffle #34 grants FD_FILESTAT_GET to both pipe endpo
 descriptors keep those exact rights, so the real pipe-fstat controls succeed without bypassing
 metadata capability checks. No upstream implementation or new binding dependency is copied.
 The original `src/js/node_fs.js` Stats predicates test those type bits rather than hard-coding false.
+Its public readSync and callback read return zero before invoking the native for a zero-byte request,
+as native Node and Bun do even on a closed descriptor; direct native empty reads still validate it.
+FileHandle.read checks the handle's closed state first, so closing a handle cannot be hidden by that
+public short-circuit. A parity table distinguishes these reads from empty writes, which still fail
+with EBADF. These are original adapters, not copied Node or Bun implementations.
 The browser process controls create a real filesystem file and inherited pipe, verify shared open-file
 cursors and pipe/device metadata, reject empty writes to closed descriptors, and preserve buffered
 output ordering across direct fd aliases in Chromium, Firefox and WebKit. The package installer uses exclusive marker creation and rolls back only paths
@@ -2891,7 +2896,7 @@ exclusive-create EEXIST, and is disposed after success or failure. The page-side
 primitive makes earlier undrained writes visible without consuming the caller-owned sticky failure.
 A matching concurrent marker is shared; unrelated page failures remain available to the caller's
 explicit drain in either request ordering. The formerly expected-failing libc controls are now
-strict successes: the original 17 scenarios pass
+strict successes: all 18 scenarios pass
 without retries in each of Chromium, Firefox and WebKit for browser, QuickJS and JSC artifacts.
 This supersedes the historical expected-failure notes for earlier pins below and above.
 

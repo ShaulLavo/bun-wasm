@@ -14,6 +14,10 @@ function fixture(results: (Uint8Array | number)[], processAbi = true, networking
   const syncReads: [number, number, number][] = [];
   const polls: Uint8Array[] = [];
   const contexts: string[] = [];
+  const closed = new Set<number>();
+  const checkFd = (fd: number) => {
+    if (closed.has(fd)) throw Object.assign(new Error("read EBADF"), { code: "EBADF" });
+  };
   let networkReads = 0;
   let context = "registration";
   let net: unknown;
@@ -23,6 +27,7 @@ function fixture(results: (Uint8Array | number)[], processAbi = true, networking
       getAsyncContext: () => context,
       procRead(fd: number, capacity: number) {
         reads.push([fd, capacity]);
+        if (closed.has(fd)) return -8;
         const result = results.shift() ?? 0;
         if (typeof result === "number") return result;
         const chunk = result.subarray(0, capacity);
@@ -34,8 +39,12 @@ function fixture(results: (Uint8Array | number)[], processAbi = true, networking
       procPoll(bytes: Uint8Array) { polls.push(bytes); return new Uint8Array(0); },
       read(fd: number, length: number, position: number) {
         syncReads.push([fd, length, position]);
+        checkFd(fd);
         return Buffer.from("sync").subarray(0, length);
       },
+      write(fd: number, bytes: Uint8Array | string) { checkFd(fd); return bytes.length; },
+      writev(fd: number, buffers: Uint8Array[]) { checkFd(fd); return buffers.reduce((n, buffer) => n + buffer.length, 0); },
+      close(fd: number) { checkFd(fd); closed.add(fd); },
       open: () => 0,
     },
     realTimers: { setImmediate: (fn: () => void) => immediate.push(fn) },
@@ -220,12 +229,55 @@ test("non-stdin callback, readSync and FileHandle promise reads retain the synch
   runtime.flush();
   expect(results).toEqual([[null, 4, buffer]]);
   expect(runtime.fs.readSync(0, buffer, 0, 4, null)).toBe(4);
+  expect(runtime.fs.readSync(1000000, Buffer.alloc(0))).toBe(0);
+  expect(runtime.syncReads).toEqual([[5, 4, 2], [0, 4, -1]]);
   const handle = await runtime.fs.promises.open("/stdin", "r");
   const result = await handle.read(buffer, 0, 4, null);
   expect(result).toEqual({ bytesRead: 4, buffer });
   expect(runtime.syncReads).toEqual([[5, 4, 2], [0, 4, -1], [0, 4, -1]]);
   expect(runtime.reads).toEqual([]);
   expect(runtime.networkReads()).toBe(0);
+});
+
+test("public empty-length I/O matches native Node and Bun on closed descriptors", async () => {
+  type Row = { name: string; expected: 0 | "EBADF"; run(fs: any, fd: number): unknown };
+  const readAsync = (fs: any, fd: number, buffer: Buffer, length: number) => new Promise((resolve, reject) => {
+    fs.read(fd, buffer, 0, length, null, (error: unknown, count: number) => error ? reject(error) : resolve(count));
+  });
+  // Node 26.7.0 and Bun 1.4.2 agree on every row. readv/readvSync are a separate API
+  // follow-up: Bun returns 0 for [], whereas Node returns EINVAL for an empty vector.
+  const rows: Row[] = [
+    { name: "readSync empty buffer", expected: 0, run: (fs, fd) => fs.readSync(fd, Buffer.alloc(0)) },
+    { name: "readSync zero length", expected: 0, run: (fs, fd) => fs.readSync(fd, Buffer.alloc(4), 0, 0, null) },
+    { name: "readSync options zero length", expected: 0, run: (fs, fd) => fs.readSync(fd, Buffer.alloc(4), { offset: 2, length: 0 }) },
+    { name: "read callback empty buffer", expected: 0, run: (fs, fd) => readAsync(fs, fd, Buffer.alloc(0), 0) },
+    { name: "read callback zero length", expected: 0, run: (fs, fd) => readAsync(fs, fd, Buffer.alloc(4), 0) },
+    { name: "writeSync empty buffer", expected: "EBADF", run: (fs, fd) => fs.writeSync(fd, Buffer.alloc(0)) },
+    { name: "writeSync empty string", expected: "EBADF", run: (fs, fd) => fs.writeSync(fd, "") },
+    { name: "writeSync zero length", expected: "EBADF", run: (fs, fd) => fs.writeSync(fd, Buffer.alloc(4), 0, 0) },
+    { name: "writevSync empty array", expected: 0, run: (fs, fd) => fs.writevSync(fd, []) },
+    { name: "writevSync empty buffer", expected: "EBADF", run: (fs, fd) => fs.writevSync(fd, [Buffer.alloc(0)]) },
+    { name: "writevSync two empty buffers", expected: "EBADF", run: (fs, fd) => fs.writevSync(fd, [Buffer.alloc(0), Buffer.alloc(0)]) },
+    { name: "closed FileHandle empty read", expected: "EBADF", run: async (fs) => {
+      const handle = await fs.promises.open("/file", "r");
+      await handle.close();
+      return (await handle.read(Buffer.alloc(0), 0, 0, null)).bytesRead;
+    } },
+  ];
+  for (const row of rows) {
+    const runtime = fixture([]);
+    const fd = 37;
+    runtime.fs.closeSync(fd);
+    let result: unknown;
+    try {
+      const pending = row.run(runtime.fs, fd);
+      runtime.flush();
+      result = await pending;
+    } catch (error) {
+      result = (error as NodeJS.ErrnoException).code;
+    }
+    expect(result, row.name).toBe(row.expected);
+  }
 });
 
 test("without the generic process ABI stdin uses the synchronous native, not networking slots", () => {

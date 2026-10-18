@@ -23,6 +23,10 @@
     return err;
   }
 
+  function badFd(syscall) {
+    return Object.assign(new Error(`${syscall} EBADF`), { code: "EBADF", errno: -9, syscall });
+  }
+
   // Paths may be strings, Buffers or file: URLs. Relative paths resolve
   // against process.cwd() (WASI has no kernel cwd of its own).
   function toPath(path, name = "path") {
@@ -485,7 +489,11 @@
   }
 
   function readSync(fd, buffer, offsetOrOptions, length, position) {
+    validateFd(fd);
     const options = readOptions(buffer, offsetOrOptions, length, position);
+    // Public zero-byte reads return without a syscall, even on a closed descriptor.
+    // Direct native callers still validate empty reads for ABI safety.
+    if (options.length === 0) return 0;
     const chunk = native.read(fd, options.length, options.position === null || options.position === undefined ? -1 : Number(options.position));
     internal.toUint8(buffer).set(chunk, options.offset);
     return chunk.length;
@@ -725,6 +733,7 @@
       return appendFileSync(this.fd, data, options);
     }
     async read(buffer, offset, length, position) {
+      if (this.fd < 0) throw badFd("read");
       const target = buffer || Buffer.alloc(16384);
       const bytesRead = readSync(this.fd, target, offset, length, position);
       return { bytesRead, buffer: target };
@@ -745,7 +754,9 @@
     async sync() {}
     async datasync() {}
     async close() {
+      if (this.fd < 0) return;
       native.close(this.fd);
+      this.fd = -1;
     }
     async [Symbol.asyncDispose]() {
       return this.close();
