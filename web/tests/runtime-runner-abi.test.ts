@@ -80,7 +80,9 @@ for (const name of ["signal", "interrupted", "default_signal"]) test(`runner sup
   finally { await await state.dispose(); }
 });
 
-test("preview1 runner choice explicitly trusts its own aliases without changing Bun defaults", async () => {
+test("preview1 roots keep their explicit module and Bun executable paths launch real Bun", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => String(input).endsWith(".gz") ? new Response(null, { status: 404 }) : new Response(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]), { headers: { "content-type": "application/wasm" } }), { preconnect: originalFetch.preconnect });
   const registrations = new Map<string, Parameters<SubprocessBroker["register"]>[1]>();
   const register = SubprocessBroker.prototype.register;
   SubprocessBroker.prototype.register = function(name, entry) {
@@ -100,21 +102,23 @@ test("preview1 runner choice explicitly trusts its own aliases without changing 
         postMessage: message => state!.message(message),
         prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (root.data as { pipeRegistry: unknown }).pipeRegistry } }),
       });
-      for (const alias of ["bun", "/usr/local/bin/node"]) {
+      for (const alias of ["/bin/bun", "/bin/node"]) {
         const pid = client.spawn(1, { executable: alias, argv: [alias], env: {}, cwd: "/", job: 1, fds: [] });
         const deadline = performance.now() + 1000;
         while (!state.requests.some(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
         const child = state.requests.find(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid);
         expect(child).toBeDefined();
-        expect(state.urlFor(child!)).toBe("http://localhost/preview1-worker.js");
+        expect(state.urlFor(child!)).toBe("http://localhost/worker.js");
+        expect(child!.module).not.toBe(state.request().module);
         const record = (await state.runtime.processes().then(service => service.ready())).get(pid)!;
-        expect(registrations.get(record.request!.executable)).toMatchObject({ adapter: "preview1", cooperative: true });
+        expect(registrations.get(record.request!.executable)).toMatchObject({ adapter: "bun", engine: "browser" });
       }
     } finally { descriptors.dispose(); }
     for (const engine of ["quickjs", "jsc", "browser"]) {
-      expect(registrations.get(`bun-${engine}`)).toMatchObject({ adapter: "bun", engine });
+      expect(registrations.get(engine === "browser" ? "/bin/bun" : `/opt/bun/${engine}/bin/bun`)).toMatchObject({ adapter: "bun", engine });
     }
   } finally {
+    globalThis.fetch = originalFetch;
     SubprocessBroker.prototype.register = register;
     await state?.dispose();
   }
@@ -192,7 +196,7 @@ test("job kill freezes unknown reserved child endpoints before its spawn message
   let controller: PipeController | undefined;
   try {
     await state.broker.adoptRuntimeRoot(state.root);
-    const pid = state.client.spawn(1, { executable: "fixture", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
+    const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     expect(state.messages).toHaveLength(1);
     const registry = attachPipePublicationRegistry((state.root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry);
     controller = new PipeController({ registry, relay: "manual", capacity: 16 });
@@ -210,7 +214,7 @@ test("ordinary root completion freezes only its own pipe row, not a reserved ind
   let controller: PipeController | undefined;
   try {
     await state.broker.adoptRuntimeRoot(state.root);
-    const pid = state.client.spawn(1, { executable: "fixture", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
+    const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     const registry = attachPipePublicationRegistry((state.root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry);
     controller = new PipeController({ registry, relay: "manual", capacity: 16 });
     const parent = controller.retain(1, "write"), child = controller.retain(pid, "write"), reader = controller.retain(pid, "read");
@@ -222,7 +226,7 @@ test("ordinary root completion freezes only its own pipe row, not a reserved ind
   } finally { controller?.dispose(); await state.dispose(); }
 });
 
-test("Preview1 root aliases launch Preview1 children instead of installing Bun slots", async () => {
+test("explicit Preview1 children run without installing Bun slots", async () => {
   const state = fixture(imported("spawn"), { adapter: "preview1" });
   const descriptors = new DescriptorTable();
   try {
@@ -233,7 +237,9 @@ test("Preview1 root aliases launch Preview1 children instead of installing Bun s
       postMessage: message => state.message(message),
       prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (root.data as { pipeRegistry: unknown }).pipeRegistry } }),
     });
-    const pid = client.spawn(1, { executable: "bun", argv: ["child"], env: {}, cwd: "/", job: 1, fds: [] });
+    const childBroker = new SubprocessBroker("http://localhost/worker.js", state.runtime);
+    childBroker.register("/usr/libexec/test-guest", { adapter: "preview1", module: state.request().module, cooperative: true });
+    const pid = client.spawn(1, { executable: "/usr/libexec/test-guest", argv: ["child"], env: {}, cwd: "/", job: 1, fds: [] });
     const deadline = performance.now() + 1000;
     while (state.requests.length < 2 && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
     const child = state.requests.find(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid);
@@ -299,9 +305,9 @@ test("generic runtime byte registrations retain injected-check metadata at worke
   } as unknown as typeof Worker;
   const state = registryFixture();
   try {
-    state.broker.register("injected", { adapter: "preview1", bytes: new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]) });
+    state.broker.register("/bin/injected", { adapter: "preview1", bytes: new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]) });
     await state.broker.adoptRuntimeRoot(state.root);
-    const pid = state.client.spawn(1, { executable: "injected", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
+    const pid = state.client.spawn(1, { executable: "/bin/injected", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     const deadline = performance.now() + 1000;
     while (!requests.length && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
@@ -330,16 +336,16 @@ for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
       adapter: "preview1", module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])),
     };
     if (refusal === "compiled") {
-      expect(() => state.broker.register("refused", entry as ExecutableRegistration)).toThrow(/require source bytes/);
+      expect(() => state.broker.register("/bin/refused", entry as ExecutableRegistration)).toThrow(/require source bytes/);
       expect(output).toHaveLength(0);
       expect(state.messages).toHaveLength(0);
       return;
     }
-    state.broker.register("refused", entry as ExecutableRegistration);
+    state.broker.register("/bin/refused", entry as ExecutableRegistration);
     await state.broker.adoptRuntimeRoot(state.root);
     const fd = state.descriptors.open({ kind: "terminal", read: () => 0, write: () => 0,
       readiness: () => ({ readable: false, writable: true, hangup: false }) }, 0xffffn, 0n);
-    const pid = state.client.spawn(1, { executable: "refused", argv: [], env: {}, cwd: "/", job: 1,
+    const pid = state.client.spawn(1, { executable: "/bin/refused", argv: [], env: {}, cwd: "/", job: 1,
       fds: [{ child: 2, parent: fd }] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     expect(await state.broker.wait(pid)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
@@ -362,9 +368,9 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
     const state = registryFixture();
     let mutation: ReturnType<typeof suppressBudgetNotifications> | undefined;
     try {
-      state.broker.register("fixture", { module: imported("signal"), adapter: "bun", engine });
+      state.broker.register("/bin/fixture", { module: imported("signal"), adapter: "bun", engine });
       await state.broker.adoptRuntimeRoot(state.root);
-      const pid = state.client.spawn(1, { executable: "fixture", argv: ["fixture"], env: {}, cwd: "/", job: -1, fds: [] });
+      const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: ["/bin/fixture"], env: {}, cwd: "/", job: -1, fds: [] });
       await state.broker.runtimeMessage(state.messages[0]!, 1);
       const supervisor = await state.broker.ready();
       await supervisor.start(pid);

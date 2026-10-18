@@ -882,6 +882,7 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     }
     // runtime_proc process ABI (docs/host-abi.md, "Process imports"). Results are `>= 0` or a
     // negative WASI errno; byte results come back as Uint8Array.
+    t.add("procAccess", |a| Ok(host::proc_access(a.str(0)?, a.str(1)?).into()));
     t.add("procSpawn", |a| Ok(host::proc_spawn(a.bytes(0)?).into()));
     t.add("procJobOf", |a| Ok(host::proc_job_of(a.i32(0)?).into()));
     t.add("procPipe", |_| {

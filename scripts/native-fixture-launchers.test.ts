@@ -82,7 +82,7 @@ test("Worker regression runner honors the native launcher override", () => {
 
 test("native Bun harnesses do not use the plain wasmtime CLI", () => {
   const migrated = [
-    "scripts/test.sh", "scripts/test-bun-builtins.sh", "scripts/check-crypto-review.sh",
+    "scripts/test.sh", "scripts/test-build.sh", "scripts/test-bun-builtins.sh", "scripts/check-crypto-review.sh",
     "scripts/bench-jsc.sh", "scripts/bun-builtins-node.py", "scripts/measure-bun-builtins.py",
     "scripts/measure-stack.py", "tests/test-empty-stdin.py", "tests/test-writev-partial.py",
   ];

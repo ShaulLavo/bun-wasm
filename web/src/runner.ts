@@ -9,7 +9,9 @@ import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
 import { measureStartup } from "./startup";
 import { SubprocessBroker } from "./subprocess-broker";
+import { ENGINE_BIN, engineEnvironment } from "./executable-paths";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
+import { waitStatus } from "waffle/proc/wait-status";
 import type { Engine, RunRequest, WorkerMessage } from "./bun-executor";
 
 export type { Engine } from "./bun-executor";
@@ -201,8 +203,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     adapter: options.adapter,
     runtimeProcess: options.runtimeProcess,
     module: options.module,
-    args: ["bun", ...options.args],
-    env: options.env,
+    args: [`${ENGINE_BIN[options.engine]}/bun`].concat(options.args),
+    env: engineEnvironment(options.engine, options.env),
     filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
     trace: options.trace ?? false,
     net: ring,
@@ -237,23 +239,24 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const subprocess = new SubprocessBroker(workerUrl, options.runtime, {
     rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged,
     stopRoot: () => finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true),
-    engine: options.engine, aliasExecutable: options.adapter === "preview1" ? `preview1-root-${pid}` : undefined,
     output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data),
   });
-  // Programs are engine-qualified and registered once for this runtime, never rebound by
-  // the next run. Bun's per-root adapter resolves legacy aliases to its immutable selection.
+  // Real engine executables are registered once per runtime. Each root inherits an ordinary
+  // PATH selecting its engine; explicit absolute paths are never rewritten.
   let programs = registeredPrograms.get(options.runtime);
   if (!programs) registeredPrograms.set(options.runtime, programs = new Set());
   for (const engine of ["quickjs", "jsc", "browser"] as const) {
-    const name = `bun-${engine}`;
+    const name = `${ENGINE_BIN[engine]}/bun`;
     if (programs.has(name)) continue;
     let loading: Promise<WebAssembly.Module> | undefined;
     const module = engine === options.engine && options.adapter !== "preview1" ? options.module
       : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
-    subprocess.register(name, { module, adapter: "bun", engine });
-    programs.add(name);
+    for (const command of ["bun", "node"]) {
+      const path = `${ENGINE_BIN[engine]}/${command}`;
+      subprocess.register(path, { module, adapter: "bun", engine });
+      programs.add(path);
+    }
   }
-  if (options.adapter === "preview1") subprocess.register(`preview1-root-${pid}`, { module: options.module, adapter: "preview1", cooperative: true });
   const starting = performance.now();
   const worker = new Worker(workerUrl, { type: "module" });
   let settle: (result: RunResult) => void = () => {};

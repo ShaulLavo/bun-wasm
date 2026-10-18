@@ -11,49 +11,38 @@ const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 test("third-party preview1 programs need source bytes or an explicit cooperative assertion", () => {
   const state = rootFixture();
   try {
-    expect(() => state.broker.register("tool", { module: importingModule("poll"), adapter: "preview1" } as never)).toThrow("explicit cooperative assertion");
-    state.broker.register("bytes", { adapter: "preview1", bytes: wasm });
-    state.broker.register("cooperative", { adapter: "preview1", module: importingModule("poll"), cooperative: true });
-    state.broker.register("bun-module", { adapter: "bun", module: importingModule("poll"), engine: "jsc" });
+    expect(() => state.broker.register("/bin/tool", { module: importingModule("poll"), adapter: "preview1" } as never)).toThrow("explicit cooperative assertion");
+    state.broker.register("/bin/bytes", { adapter: "preview1", bytes: wasm });
+    state.broker.register("/bin/cooperative", { adapter: "preview1", module: importingModule("poll"), cooperative: true });
+    state.broker.register("/bin/bun-module", { adapter: "bun", module: importingModule("poll"), engine: "jsc" });
   } finally { void state.dispose(); }
 });
 
-const aliases = ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"];
-test("executable aliases resolve to the run's engine program and other names pass through", () => {
-  const state = rootFixture({ engine: "jsc" });
-  const named = new SubprocessBroker("http://localhost/worker.js", state.runtime, { engine: "quickjs", aliasExecutable: "preview1-root-9" });
-  const plain = new SubprocessBroker("http://localhost/worker.js", state.runtime);
-  try {
-    for (const alias of aliases) {
-      expect(state.broker.qualifyExecutable(alias)).toBe("bun-jsc");
-      expect(named.qualifyExecutable(alias)).toBe("preview1-root-9");
-      expect(plain.qualifyExecutable(alias)).toBe(alias);
-    }
-    for (const other of ["bunx", "/tools/custom", "bun-quickjs", "fixture.wasm"]) expect(state.broker.qualifyExecutable(other)).toBe(other);
-  } finally { named.dispose(); plain.dispose(); void state.dispose(); }
-});
-
-test("only a spawn message has its executable rewritten before admission", async () => {
+test("spawn requests keep their explicit executable without root-specific rewriting", async () => {
   const previousWorker = globalThis.Worker;
   const requests: RunRequest[] = [];
   globalThis.Worker = class { postMessage(value: RunRequest) { requests.push(value); } terminate() {} } as unknown as typeof Worker;
-  const state = rootFixture({ engine: "browser" });
-  state.broker.register("bun-browser", { adapter: "bun", module: importingModule("poll"), engine: "browser" });
+  const state = rootFixture();
+  state.broker.register("/bin/bun", { adapter: "bun", module: importingModule("poll"), engine: "browser" });
+  state.broker.register("/opt/bun/jsc/bin/bun", { adapter: "bun", module: importingModule("poll"), engine: "jsc" });
   try {
     await state.broker.adoptRuntimeRoot(state.root);
-    const pid = state.client.spawn(state.client.pid, { executable: "/usr/local/bin/node", argv: ["node"], env: {}, cwd: "/", job: -1, fds: [] });
-    await state.broker.runtimeMessage(state.messages[0]!, state.client.pid);
-    const supervisor = await state.broker.ready();
-    expect(supervisor.get(pid)!.request!.executable).toBe("bun-browser");
-    for (let turn = 0; turn < 100 && !requests.length; turn++) await new Promise(resolve => setTimeout(resolve, 0));
-    expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({ engine: "browser", adapter: "bun", net: null, args: ["node"], env: { PWD: "/" } });
-    expect(workerProcessState(requests[0]!.runtimeProcess!).pid).toBe(pid);
+    for (const executable of ["/bin/bun", "/opt/bun/jsc/bin/bun"]) {
+      const pid = state.client.spawn(state.client.pid, { executable, argv: ["bun"], env: { PATH: "/opt/bun/quickjs/bin:/bin" }, cwd: "/", job: -1, fds: [] });
+      await state.broker.runtimeMessage(state.messages.at(-1)!, state.client.pid);
+      const supervisor = await state.broker.ready();
+      expect(supervisor.get(pid)!.request!.executable).toBe(executable);
+      for (let turn = 0; turn < 100 && requests.length < (executable === "/bin/bun" ? 1 : 2); turn++) await new Promise(resolve => setTimeout(resolve, 0));
+      const request = requests.at(-1)!;
+      expect(request).toMatchObject({ engine: executable === "/bin/bun" ? "browser" : "jsc", adapter: "bun", net: null,
+        args: [executable], env: { PWD: "/", PATH: "/opt/bun/quickjs/bin:/bin" } });
+      expect(workerProcessState(request.runtimeProcess!).pid).toBe(pid);
+    }
   } finally { await state.dispose(); globalThis.Worker = previousWorker; }
 });
 
 test("disposing a run twice is harmless and closes it to a new root", async () => {
-  const state = rootFixture({ engine: "browser" });
+  const state = rootFixture();
   try {
     await state.broker.adoptRuntimeRoot(state.root);
     state.broker.dispose();
@@ -115,7 +104,7 @@ test("each runtime gets one set of engine and preview1 adapters however many run
     // A second composition on the same runtime reuses the registered adapters: re-registering throws.
     expect(() => state.runtime.registerAdapter("bun:quickjs", async () => { throw new Error("unused"); })).toThrow("already registered");
     for (const adapter of ["bun:quickjs", "bun:jsc", "bun:browser", "preview1"]) {
-      expect(() => state.runtime.registerProgram(`probe-${adapter}`, { adapter, module: importingModule("poll"), cooperative: true })).not.toThrow();
+      expect(() => state.runtime.registerProgram(`/bin/probe-${adapter}`, { adapter, module: importingModule("poll"), cooperative: true })).not.toThrow();
     }
   } finally { second.dispose(); await state.dispose(); }
 });

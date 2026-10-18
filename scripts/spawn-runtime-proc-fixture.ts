@@ -58,6 +58,7 @@ export function service(options: ServiceOptions = {}) {
       if (path === "/work/file.txt") return { mode: 0o100644 };
       throw Object.assign(new Error(`ENOENT: no such file or directory, stat '${path}'`), { code: "ENOENT", errno: -2, syscall: "stat" });
     },
+    procAccess() { return 0; },
     procPipe() {
       const pipe: FakePipe = { chunks: [], readers: 1, writers: 1 };
       const ends = [next++, next++] as [number, number];
@@ -170,7 +171,7 @@ export function load(fake: ReturnType<typeof service>, options: { timers?: TestT
   const waiters: any[] = [];
   const factory = runInNewContext(source, {
     ReadableStream, Response, URL, TextEncoder, TextDecoder, Promise,
-    process: { env: { HOME: "/home" }, execArgv: [], execPath: "bun", cwd: () => "/work" },
+    process: { env: { HOME: "/home", PATH: "/bin:/usr/bin" }, execArgv: [], execPath: "bun", cwd: () => "/work" },
   });
   const modules: Record<string, unknown> = { buffer: { Buffer }, path: nodePath, net: {}, events: EventEmitter };
   const internal = {

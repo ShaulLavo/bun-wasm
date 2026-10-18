@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { createRuntime } from "waffle";
+import { FilesystemService, MemoryBackend, type FilesystemConnection } from "waffle/fs";
 import { FilesystemSection } from "waffle/fs/protocol";
 import { createWorkerProcessTransport } from "waffle/proc/worker-client";
 import { DescriptorTable } from "waffle/core/descriptors";
@@ -24,10 +25,11 @@ for (const alreadyFinishing of [false, true]) test(`page disposal fences two roo
     request?: RunRequest;
     terminated = 0;
     filesystem: boolean;
+    service = new FilesystemService(new MemoryBackend());
     constructor(url: string | URL) { this.filesystem = String(url).includes("fs-worker"); workers.push(this); }
     addEventListener() {}
-    postMessage(message: RunRequest | { connect: { port: MessagePort } }) {
-      if ("connect" in message) ports.push(message.connect.port); else this.request = message;
+    postMessage(message: RunRequest | { connect: FilesystemConnection }) {
+      if ("connect" in message) { ports.push(message.connect.port); this.service.connect(message.connect); } else this.request = message;
     }
     terminate() { this.terminated++; events.push(this.filesystem ? "filesystem:stop" : "process:stop"); }
   }
@@ -52,7 +54,7 @@ for (const alreadyFinishing of [false, true]) test(`page disposal fences two roo
       postMessage: (message: WorkerProcessMessage) => root.onmessage!({ data: message } as MessageEvent<WorkerMessage>),
       prepareSpawn: () => ({ data: { filesystem: runtime.filesystem.createIdentity(), pipeRegistry: (transport.data as { pipeRegistry: unknown }).pipeRegistry } }),
     });
-    const childPid = client.spawn(client.pid, { executable: "bun", argv: ["bun"], cwd: "/", env: {}, job: -1, fds: [] });
+    const childPid = client.spawn(client.pid, { executable: "/bin/bun", argv: ["bun"], cwd: "/", env: {}, job: -1, fds: [] });
     await until(() => workers.some(worker => pidOf(worker.request) === childPid));
     section = new FilesystemSection(root.request!.filesystem);
     section.enter(); entered = true;

@@ -9,7 +9,7 @@ function service(launches: Launch[]): ProcessService {
   return { launchWorker(_context: unknown, options: Launch) { launches.push(options); return { terminate() {} }; } } as unknown as ProcessService;
 }
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-const context = { module, interruptible: false, request: { argv: ["bun", "-e", "0"], env: { A: "1" }, cwd: "/work" } } as unknown as ProcessContext;
+const context = { module, interruptible: false, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { A: "1" }, cwd: "/work" } } as unknown as ProcessContext;
 
 const location = Object.getOwnPropertyDescriptor(globalThis, "location");
 const caches = Object.getOwnPropertyDescriptor(globalThis, "caches");
@@ -35,7 +35,7 @@ for (const workerUrl of ["./worker.js", "worker.js", "https://cdn.test/assets/wo
   test(`${engine} with ordinary worker URL ${workerUrl} passes it unchanged and caches nothing`, async () => {
     const launched = await launch(engine, workerUrl);
     expect(launched.workerUrl).toBe(workerUrl);
-    expect(launched.request).toMatchObject({ engine, adapter: "bun", net: null, moduleCache: null, args: ["bun", "-e", "0"], env: { A: "1", PWD: "/work" } });
+    expect(launched.request).toMatchObject({ engine, adapter: "bun", net: null, moduleCache: null, args: ["/bin/bun", "-e", "0"], env: { A: "1", PWD: "/work" } });
     launched.cleanup!();
     expect(deleted).toEqual([]);
   });
@@ -72,11 +72,10 @@ for (const [workerUrl, expected] of [
   expect(launches[0]!.request).toMatchObject({ module, args: ["bun", "-e", "0"], env: { A: "1", PWD: "/work" } });
 });
 
-test("executable aliasing is resolved per launch and passed through", async () => {
+test("launchers do not add hidden executable rewriting", async () => {
   const launches: Launch[] = [];
-  const names = (name: string) => `x-${name}`;
-  await bunLauncher("jsc", { workerUrl: "./worker.js", executableName: () => names })(context, service(launches));
   await bunLauncher("jsc", { workerUrl: "./worker.js" })(context, service(launches));
-  expect(launches[0]!.executableName!("bun")).toBe("x-bun");
-  expect(launches[1]!.executableName).toBeUndefined();
+  await preview1Launcher({ workerUrl: "./worker.js" })(context, service(launches));
+  expect(launches.every(launch => launch.executableName === undefined)).toBe(true);
+  expect(launches[0]!.request.args[0]).toBe("/bin/bun");
 });

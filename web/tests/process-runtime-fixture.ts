@@ -1,4 +1,5 @@
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
+import { MemFS } from "waffle/fs/memory";
 import { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessIdentityAllocator } from "waffle/proc/identity";
 import { ProcessTable } from "waffle/proc/table";
@@ -13,7 +14,14 @@ export function processRuntimeFixture(filesystem: RuntimeFilesystem, options: {
   activate?: () => Promise<typeof import("waffle/proc")>;
 } = {}): Runtime {
   const identities = new ProcessIdentityAllocator();
-  const registry = new ExecutableRegistry();
+  const files = new MemFS();
+  filesystem = Object.assign(Object.create(filesystem), {
+    async lookup(path: string) { const node = files.lookup(path); return node && { path, kind: node.kind }; },
+    async writeFile(path: string, bytes: Uint8Array) { files.writeFile(path, bytes); },
+    async mkdirp(path: string) { files.mkdirp(path); },
+    async resolvePath(path: string) { const node = files.lookup(path); return node && { path, kind: node.kind }; },
+  });
+  const registry = new ExecutableRegistry(path => filesystem.resolvePath(path));
   const table = new ProcessTable(identities);
   const adapters = new Map<string, GuestLauncher>();
   let broker: BrowserProcessBroker | undefined;

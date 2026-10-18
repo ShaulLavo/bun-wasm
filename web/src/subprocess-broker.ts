@@ -1,7 +1,7 @@
 // Bun's composition over the page runtime's process service. The service owns admission,
 // supervision, descriptors, signals and worker lifetimes; this adds Bun's engine programs, the
-// run that roots a process tree, and the executable aliases (`bun`, `node`) a spawn resolves to.
-import type { ProcessContext, ProcessExit } from "waffle/proc";
+// run that roots a process tree. Executable resolution belongs to the guest and its PATH.
+import type { ProcessExit } from "waffle/proc";
 import { checkedSignal } from "waffle/proc/types";
 import type { SignalTransport } from "waffle/proc/signals";
 import type { Runtime, ProcessService, RuntimeSupervisor } from "waffle";
@@ -21,9 +21,6 @@ export interface SubprocessBrokerOptions {
   rootFilesystem?: FilesystemIdentity;
   rootAcknowledged?(): boolean;
   stopRoot?(): void | Promise<void>;
-  /** The run's engine: spawns of `bun` and `node` resolve to this engine's program. */
-  engine?: Engine;
-  aliasExecutable?: string;
 }
 
 /** One run's view of the page's process service: its root process and the names it spawns. */
@@ -38,14 +35,27 @@ export class SubprocessBroker {
   register(name: string, entry: ExecutableRegistration): void {
     if (entry.adapter === "preview1" && !("bytes" in entry) && entry.cooperative !== true) throw new TypeError("Third-party preview1 programs require source bytes or an explicit cooperative assertion");
     const adapter = entry.adapter === "bun" ? `bun:${entry.engine ?? "browser"}` : "preview1";
+    if (!name.startsWith("/")) throw new TypeError("Executable registration needs an absolute path");
+    const previous = programFiles.get(this.runtime) ?? Promise.resolve();
+    const created = previous.then(async () => {
+      const existing = await this.runtime.filesystem.lookup(name);
+      if (existing) {
+        if (existing.kind !== "file") throw new TypeError(`Executable path is a directory: ${name}`);
+        return;
+      }
+      await this.runtime.filesystem.mkdirp(name.slice(0, name.lastIndexOf("/")) || "/");
+      await this.runtime.filesystem.writeFile(name, new Uint8Array());
+    });
+    programFiles.set(this.runtime, created);
+    // Registration is synchronous; preparation reports file creation errors to the run.
+    void created.catch(() => {});
     this.runtime.registerProgram(name, "bytes" in entry ? { adapter, source: entry.bytes }
       : { adapter, module: entry.module, cooperative: true });
   }
-  qualifyExecutable(name: string): string {
-    return this.options.engine && ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"].includes(name)
-      ? this.options.aliasExecutable ?? `bun-${this.options.engine}` : name;
+  private async processService(): Promise<ProcessService> {
+    await programFiles.get(this.runtime);
+    return this.service ??= await this.runtime.processes();
   }
-  private async processService(): Promise<ProcessService> { return this.service ??= await this.runtime.processes(); }
   ready(): Promise<RuntimeSupervisor> { return this.processService().then(service => service.ready()); }
   /** Resolves when `pid` has confirmed its exit, as its parent would observe it. */
   async wait(pid: number): Promise<ProcessExit> {
@@ -58,19 +68,15 @@ export class SubprocessBroker {
     if (this.disposed) throw new Error("Process broker is disposed");
     const { workerProcessState } = await import("waffle/proc/worker-client");
     const state = workerProcessState(transport);
-    if (this.root) controllersFor(this.runtime).delete(this.root.pid);
     this.root = { pid: state.pid, job: state.job, ...state.signals };
-    controllersFor(this.runtime).set(state.pid, this);
     const service = await this.processService();
     if (this.disposed) throw new Error("Process broker is disposed");
     await service.adoptRuntimeRoot(transport, {
       filesystem: this.options.rootFilesystem, acknowledged: this.options.rootAcknowledged,
       output: this.options.output, stop: this.options.stopRoot,
-      retired: () => controllersFor(this.runtime).delete(state.pid),
     });
   }
   async runtimeMessage(message: WorkerProcessMessage, senderPid: number): Promise<void> {
-    if (message.operation === "spawn") message = { ...message, request: { ...message.request, executable: this.qualifyExecutable(message.request.executable) } };
     return (await this.processService()).runtimeMessage(message, senderPid);
   }
   rejectRuntimeMessage(message: WorkerProcessMessage, senderPid = this.root?.pid): void {
@@ -100,30 +106,16 @@ export class SubprocessBroker {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    if (this.root) controllersFor(this.runtime).delete(this.root.pid);
   }
   private report(error: unknown): void { console.error("bun-wasm: process controller failed", error); }
 }
 
+const programFiles = new WeakMap<Runtime, Promise<void>>();
 const installedAdapters = new WeakSet<Runtime>();
-const runtimeControllers = new WeakMap<Runtime, Map<number, SubprocessBroker>>();
-function controllersFor(runtime: Runtime): Map<number, SubprocessBroker> {
-  let controllers = runtimeControllers.get(runtime);
-  if (!controllers) runtimeControllers.set(runtime, controllers = new Map());
-  return controllers;
-}
 /** Immutable engine-qualified registrations; concurrent runs never replace a global engine alias. */
 export function installBunAdapters(runtime: Runtime, workerUrl: string): void {
   if (installedAdapters.has(runtime)) return;
   installedAdapters.add(runtime);
-  // Alias selection belongs to the run that rooted this process tree.
-  const executableName = async (context: ProcessContext, service: ProcessService) => {
-    const supervisor = await service.ready();
-    let parent = context.parentPid;
-    let controller: SubprocessBroker | undefined;
-    while (parent && !controller) { controller = controllersFor(runtime).get(parent); parent = supervisor.table.parentOf(parent) ?? 0; }
-    return controller && ((name: string) => controller.qualifyExecutable(name));
-  };
-  runtime.registerAdapter("preview1", preview1Launcher({ workerUrl, executableName }));
-  for (const engine of ["quickjs", "jsc", "browser"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, executableName }));
+  runtime.registerAdapter("preview1", preview1Launcher({ workerUrl }));
+  for (const engine of ["quickjs", "jsc", "browser"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl }));
 }

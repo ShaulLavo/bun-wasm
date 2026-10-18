@@ -91,6 +91,7 @@ class ProvenanceTests(unittest.TestCase):
             "web/scripts/node-stdio.ts", "web/src/net/trampoline.ts", "web/src/engine-host.js",
             "web/src/promise-reactions.ts", "web/src/native-stream-state.ts", "web/src/crypto-inputs.js",
             "web/src/crypto-host.js", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
+            "web/src/net/package-fetch.ts",
         }
         self.assertEqual(set(meta["host_sources"]), expected_host_sources)
         for name in expected_host_sources:

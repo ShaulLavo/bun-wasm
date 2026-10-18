@@ -26,7 +26,7 @@
   };
   const errnoNames: Record<number, string> = {
     1: "E2BIG", 2: "EACCES", 6: "EAGAIN", 8: "EBADF", 12: "ECHILD", 21: "EFAULT", 27: "EINTR", 28: "EINVAL", 29: "EIO",
-    33: "EMFILE", 44: "ENOENT", 48: "ENOMEM", 52: "ENOSYS", 58: "ENOTSUP", 63: "EPERM", 64: "EPIPE", 71: "ESRCH", 76: "ENOTCAPABLE",
+    33: "EMFILE", 44: "ENOENT", 48: "ENOMEM", 52: "ENOSYS", 54: "ENOTDIR", 58: "ENOTSUP", 63: "EPERM", 64: "EPIPE", 71: "ESRCH", 76: "ENOTCAPABLE",
   };
   const nodeErrnos: Record<string, number> = {
     EPERM: -1, ENOENT: -2, ESRCH: -3, EINTR: -4, EIO: -5, E2BIG: -7, EBADF: -9, ECHILD: -10, EAGAIN: -11,
@@ -67,6 +67,8 @@
   interface Started extends Spec {
     pid: number;
     job: number;
+    /** wait consumes the host record; every observer shares this one cached outcome. */
+    outcome: Exit | null;
     /** Parent ends, -1 when absent. Outputs are stdout then stderr. */
     stdinFd: number;
     outputFds: number[];
@@ -203,6 +205,33 @@
     return { meta, options, input };
   }
 
+  /** execvp lookup: slash-containing names bypass PATH; empty PATH entries mean cwd. */
+  function executable(command: string, env: Readonly<Record<string, unknown>>, cwd: string): string | number {
+    if (!command) return -44;
+    if (command.includes("/")) {
+      const result = native.procAccess(command, cwd);
+      return result < 0 ? result : command;
+    }
+    const path = internal.require("path");
+    let denied = false;
+    for (const directory of String(env.PATH ?? "/bin:/usr/bin").split(":")) {
+      const candidate = path.resolve(cwd, directory || ".", command);
+      const result = native.procAccess(candidate, cwd);
+      if (result === 0) return candidate;
+      if (result === -2) denied = true;
+      else if (result !== -44 && result !== -54) return result;
+    }
+    return denied ? -2 : -44;
+  }
+
+  function which(command: string, options: { PATH?: string; cwd?: string } = {}): string | null {
+    if (typeof command !== "string" || command.includes("\0")) throw new TypeError("command must be a string without null bytes");
+    const proc = process as unknown as BunWasm.GuestProcess;
+    const cwd = internal.require("path").resolve(native.cwd(), options.cwd ?? native.cwd());
+    const result = executable(command, { PATH: options.PATH ?? proc.env.PATH }, cwd);
+    return typeof result === "string" ? internal.require("path").resolve(cwd, result) : null;
+  }
+
   // The process service starts children asynchronously, so a bad cwd would only show up as an exit
   // status. Like POSIX spawn, report it as the spawn error, before any descriptor or child exists.
   function checkCwd({ executable, cwd }: SpawnMeta) {
@@ -224,6 +253,9 @@
     if (spec.options.signal && spec.options.signal.aborted) throw spec.options.signal.reason;
     if (spec.options.killSignal !== undefined) signalNumber(spec.options.killSignal);
     checkCwd(spec.meta);
+    const selected = executable(spec.meta.executable, spec.meta.env, spec.meta.cwd);
+    if (typeof selected === "number") throw processError(selected, "spawn", spec.meta.executable);
+    spec.meta.executable = selected;
     const held = new Set<number>();
     const release = (fd: number) => { if (held.delete(fd)) native.procClose(fd); };
     const pipe = (): [number, number] => {
@@ -276,29 +308,31 @@
       let inherited = 0;
       if (!detached) {
         inherited = native.procJobOf(0);
-        if (inherited <= 0) throw processError(inherited < 0 ? inherited : -28, "spawn", executable);
+        if (inherited <= 0) throw processError(inherited < 0 ? inherited : -28, "spawn", argv[0]);
       }
       const request: Record<string, unknown> = { executable, argv, env, cwd, job: inherited, fds: bindings };
       if (spec.meta.worker) request.worker = spec.meta.worker;
       const pid = native.procSpawn(JSON.stringify(request));
-      if (pid < 0) throw processError(pid, "spawn", executable);
+      if (pid < 0) throw processError(pid, "spawn", argv[0]);
       for (const fd of childEnds) release(fd);
       held.clear();
       // Only a job this child owns is ours to reap or kill; an inherited group belongs to its owner.
       const job = detached ? native.procJobOf(pid) : 0;
-      return Object.assign(spec, { pid, job: job > 0 ? job : 0, stdinFd, outputFds, discard, worker });
+      return Object.assign(spec, { pid, job: job > 0 ? job : 0, outcome: null, stdinFd, outputFds, discard, worker });
     } catch (error) {
       for (const fd of Array.from(held)) release(fd);
       throw error;
     }
   }
 
-  // Completion of a direct child, repeatable until its job is reaped; null while it runs.
-  function waitChild(pid: number): Exit | null {
-    const result = native.procWait(pid);
+  // The first successful wait consumes the host child. Kill probes, timeout races and teardown
+  // all retain that winner on the launch record instead of waiting on the same pid again.
+  function waitChild(child: Started): Exit | null {
+    if (child.outcome) return child.outcome;
+    const result = native.procWait(child.pid);
     if (result === AGAIN) return null;
     if (typeof result === "number") throw processError(result, "wait");
-    return { kind: result[0], code: result[1] };
+    return child.outcome = { kind: result[0], code: result[1] };
   }
 
   // Reaps the child's job once every member has quiesced. A job already gone is reaped.
@@ -310,17 +344,17 @@
   // Hands a job this guest owns to a waiter that does not keep the event loop alive and reaps it
   // once every member has quiesced. Descendants may outlive their detached leader; neither
   // spawn nor spawnSync waits for them.
-  function reapLater(job: number, pid = 0) {
-    if (!job && !pid) return;
-    let exited = pid === 0;
+  function reapLater(job: number, child?: Started) {
+    if (!job && !child) return;
+    let exited = !child;
     internal.addIoWaiter({
       ref: false,
       step() {
-        if (!exited) exited = waitChild(pid) !== null;
+        if (!exited) exited = waitChild(child!) !== null;
         return exited && reapJob(job);
       },
       fail() {},
-      subscriptions: () => exited ? subscription(JOB_EMPTY, job) : subscription(CHILD_EXIT, pid),
+      subscriptions: () => exited ? subscription(JOB_EMPTY, job) : subscription(CHILD_EXIT, child!.pid),
     });
   }
 
@@ -455,7 +489,6 @@
     let closed = false;
     let settled = false;
     let reaped = false;
-    let result: Exit | null = null;
     const exited = new Promise<number>((resolve, reject) => { resolveExit = resolve; rejectExit = reject; });
     const child: Child = {
       pid: spec.pid, stdin: spec.stdinFd >= 0 ? sink : null, stdout: outputs[0], stderr: outputs[1],
@@ -464,12 +497,12 @@
       kill(signal) {
         if (settled) return;
         const number = signalNumber(signal);
-        if (waitChild(spec.pid)) return;
+        if (waitChild(spec)) return;
         // Signal 0 only asks whether the child is still alive.
         if (!number) return;
         const status = native.procKill(spec.pid, number);
         if (status < 0) {
-          if (waitChild(spec.pid)) return;
+          if (waitChild(spec)) return;
           throw processError(status, "kill");
         }
         child.killed = true;
@@ -485,7 +518,6 @@
       if (abort) spec.options.signal!.removeEventListener("abort", abort);
     }
     function finish(status: Exit) {
-      result = status;
       const signalCode = status.kind === 1 ? signalName(status.code) : null;
       const code = status.kind === 1 ? 128 + status.code : status.code;
       settled = true;
@@ -503,7 +535,7 @@
     function step() {
       if (closed) return true;
       if (!settled) {
-        const status = waitChild(spec.pid);
+        const status = waitChild(spec);
         if (status) { sink.destroy(); finish(status); }
       }
       if (!settled) {
@@ -538,7 +570,7 @@
       // Public failure is final, but teardown must still observe the selected child outcome.
       const pending = !settled;
       if (pending) terminate(spec.pid, spec.job);
-      if (!reaped) reapLater(spec.job, pending ? spec.pid : 0);
+      if (!reaped) reapLater(spec.job, pending ? spec : undefined);
       settled = true;
       clearExitHooks();
       for (const state of states) {
@@ -553,7 +585,8 @@
     const waiter: BunWasm.IoWaiter = internal.addIoWaiter({ step, fail, subscriptions, ref: true });
     if (spec.worker) Object.defineProperty(child, "_workerChannel", { value: spec.worker });
     Object.defineProperty(child, "_abortWorker", { value() {
-      terminate(spec.pid, spec.job);
+      if (!settled) terminate(spec.pid, spec.job);
+      if (!reaped) reapLater(spec.job, spec);
       for (const state of states) {
         if (state.fd >= 0) native.procClose(state.fd);
         state.fd = -1;
@@ -574,10 +607,7 @@
 
   function spawnSync(cmd: unknown, options?: SpawnOptions): Loose {
     validateCommandLength(cmd);
-    let spec: Started;
-    try { spec = start(cmd, options, true); } catch (error) {
-      return { pid: 0, success: false, exitCode: 1, signalCode: null, stdout: Buffer.alloc(0), stderr: Buffer.from((error as Error).message + "\n"), error };
-    }
+    const spec = start(cmd, options, true);
     const chunks: Uint8Array[][] = [[], []];
     const states = spec.outputFds.map((fd, index): OutputState => ({ fd, size: 0, discard: spec.discard[index], end() {}, error() {}, consume() {} }));
     const sink = writer(spec.stdinFd);
@@ -611,11 +641,11 @@
           if (sizes[i] > maxBuffer) throw Object.assign(new Error("Child process output exceeds maxBuffer"), { code: "ENOBUFS" });
           chunks[i].push(chunk);
         }));
-        if (!status) status = waitChild(spec.pid);
+        if (!status) status = waitChild(spec);
         if (!status && !timedOut && timeout > 0 && native.now() - started >= timeout) {
           timedOut = true;
           const requested = native.procKill(spec.pid, signalNumber(spec.options.killSignal));
-          if (requested < 0 && !(status = waitChild(spec.pid))) throw processError(requested, "kill");
+          if (requested < 0 && !(status = waitChild(spec))) throw processError(requested, "kill");
         }
         if (!status || states.some((state) => state.fd >= 0)) wait();
       }
@@ -623,7 +653,7 @@
     } catch (error) {
       terminate(spec.pid, spec.job);
       // Selection can precede completion publication. Observe the winner before reaping it.
-      while (!(status = waitChild(spec.pid))) wait();
+      while (!(status = waitChild(spec))) wait();
       return outcome({ error });
     } finally {
       for (const fd of [spec.stdinFd].concat(spec.outputFds)) if (fd >= 0) native.procClose(fd);
@@ -740,6 +770,30 @@
       Promise.all(child._drains).then(() => internal.realTimers.setImmediate(() => child.emit("close", child.exitCode, child.signalCode)));
     }
 
+    function nodeSpawnError(error: Loose, command: string, args: string[], sync: boolean) {
+      // Preserve arbitrary AbortSignal reasons, including null; only errors have spawn metadata.
+      if (error !== null && typeof error === "object") Object.assign(error, {
+        syscall: `${sync ? "spawnSync" : "spawn"} ${command}`, path: String(command), spawnargs: args.slice(),
+      });
+      return error;
+    }
+
+    function failedNodeChild(child: Loose, error: Loose, options: Loose) {
+      const piped = (fd: number) => options.stdio[fd] === undefined || options.stdio[fd] === null || options.stdio[fd] === "pipe";
+      child.stdin = piped(0) ? new Writable({ write(_chunk, _encoding, callback) { callback(); }, final(callback) { callback(); } }) : null;
+      child.stdout = piped(1) ? new Readable({ read() {} }) : null;
+      child.stderr = piped(2) ? new Readable({ read() {} }) : null;
+      child.stdio = [child.stdin, child.stdout, child.stderr];
+      internal.nextTick(() => {
+        child.exitCode = error?.errno ?? -2;
+        child.emit("error", error);
+        child.stdin?.destroy();
+        for (const stream of [child.stdout, child.stderr]) if (stream) { stream.resume(); stream.push(null); }
+        internal.realTimers.setImmediate(() => child.emit("close", child.exitCode, null));
+      });
+      return child;
+    }
+
     function nodeSpawn(command: string, args?: Loose, options?: Loose) {
       if (!Array.isArray(args)) { options = args || {}; args = []; }
       options = nodeOptions(options);
@@ -748,8 +802,7 @@
       child.spawnfile = String(command);
       child.spawnargs = argv;
       try { child._child = spawn(argv, options); } catch (error) {
-        internal.nextTick(() => { child.emit("error", error); child.emit("close", -2, null); });
-        return child;
+        return failedNodeChild(child, nodeSpawnError(error, command, args, false), options);
       }
       child.pid = child._child.pid;
       child.stdin = nodeWritable(child._child.stdin);
@@ -773,7 +826,11 @@
       const argv = nodeArgv(command, args, options);
       const config = Object.assign({}, options);
       if (options.input !== undefined) config.stdio = [options.input].concat(options.stdio.slice(1));
-      const result = spawnSync(argv, config);
+      let result: Loose;
+      try { result = spawnSync(argv, config); } catch (error) {
+        return { pid: 0, status: null, signal: null, output: null, stdout: undefined, stderr: undefined,
+          error: nodeSpawnError(error, command, args, true) };
+      }
       const signal = result.signalCode;
       if (result.exitedDueToTimeout) result.error = Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT", errno: -110, syscall: "spawnSync", path: String(command) });
       const encoding = options.encoding;
@@ -862,5 +919,5 @@
     return { ChildProcess, spawn: nodeSpawn, spawnSync: nodeSpawnSync, exec, execSync, execFile, execFileSync, fork };
   }
 
-  return { spawn, spawnSync, nodeChildProcess };
+  return { spawn, spawnSync, nodeChildProcess, which };
 })

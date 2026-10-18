@@ -245,7 +245,7 @@
     argv: native.argv(),
     argv0: "bun",
     execArgv: [],
-    execPath: "/usr/local/bin/bun",
+    execPath: native.argv()[0],
     env,
     pid: 1,
     ppid: 0,

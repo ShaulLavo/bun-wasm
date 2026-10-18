@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { transferArrayBuffers } from "../src/buffer-transfer.ts";
+import { isWasmMemoryBuffer, transferArrayBuffers } from "../src/buffer-transfer.ts";
 import { SLOT_NAMES } from "../src/net/trampoline.ts";
 
 // Exercise the actual host turn without loading a guest or changing the test runner's globals.
 const source = readFileSync(new URL("../src/engine-host.js", import.meta.url), "utf8")
   .replace(/^import .*;\n/gm, "")
   .replace("export function startEngineHost", "function startEngineHost");
-const EngineHost = runInNewContext(source + "\nEngineHost;", { TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, transferArrayBuffers, SLOT_NAMES });
+const EngineHost = runInNewContext(source + "\nEngineHost;", { TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, isWasmMemoryBuffer, transferArrayBuffers, SLOT_NAMES });
 
 function turn(next: number, pendingAsync = 0, io = 0, signal = true) {
   const order: string[] = [];

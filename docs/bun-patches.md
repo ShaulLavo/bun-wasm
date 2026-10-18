@@ -2461,24 +2461,19 @@ hostname match. The BoringSSL source remains unchanged.
 
 ## Missing executable errors
 
-Class **Host feature**, original adapters. [Waffle #5](https://github.com/ShaulLavo/waffle/pull/5)
-owns the typed process startup outcome and shell wait mapping. The Bun adapter consumes
-that outcome, waits for worker startup acknowledgement, and returns ENOENT or EACCES
-before returning a child. Node emits error then close without spawn or exit;
-spawnSync returns a null status with the startup error.
+Class **Host feature**, original adapters. `crates/bunwasm-runtime/src/js/spawn.ts`
+consumes generic negative WASI errno from `runtime_proc` admission. Bun spawn and
+spawnSync throw; Node emits error then close without spawn or exit, preserves requested
+piped streams, and adds syscall/path/spawnargs. Node spawnSync returns null status
+and no output array for failed admission. Arbitrary abort reasons, including null,
+remain unchanged. The synchronous rejection tests use the same generic fake service
+as the rest of the spawn facade tests.
 
-`crates/bunwasm-runtime/src/js/spawn.js`, `web/src/subprocess.ts`,
-`web/src/subprocess-broker.ts`, `web/src/worker.ts`, `web/scripts/node-spawn.ts`,
-`web/scripts/node-child.ts`, `web/scripts/node-child-supervisor.ts`
-and `web/scripts/node-host.mjs` implement the original host adapters. No upstream
-implementation is copied. The existing JavaScript factory stays in place until the
-separate runtime TypeScript conversion.
-
-The Node adapter supervises each execution worker on a separate worker thread so
-bootstrap errors and early exits can publish EACCES while the caller waits for
-startup. Failed Node children keep requested piped streams, report the
-negative errno as exitCode and close code, and return undefined stdout/stderr
-from spawnSync when no output array exists, as Node v26.7 does.
+The former Bun-only `SubprocessHost`, startup supervisor and startup-probe helper
+are removed. Waffle owns process launch and worker lifecycle. Asynchronous missing
+program ENOENT/EACCES event behavior is **pending the Waffle typed start-failure ABI**;
+its explicit skipped tests in `web/tests/spawn-errors.test.ts` are not covered by
+ordinary exit-127/126 tests. No upstream implementation is copied here.
 
 Behavior references at Bun revision `5e0baa66516f3af00b008cdf1521c681317741e8`
 are `src/runtime/api/bun/js_bun_spawn_bindings.rs::throw_command_not_found`,

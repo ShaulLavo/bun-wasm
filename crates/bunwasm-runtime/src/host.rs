@@ -212,6 +212,9 @@ pub fn connect(host: &str, port: i32) -> i32 {
 mod runtime_proc {
     #[link(wasm_import_module = "runtime_proc")]
     unsafe extern "C" {
+        pub fn access_start(path: i32, path_len: i32, cwd: i32, cwd_len: i32, mode: i32) -> i32;
+        pub fn access_take(request: i32) -> i32;
+        pub fn access_cancel(request: i32) -> i32;
         pub fn spawn(desc_ptr: i32, desc_len: i32) -> i32;
         pub fn job_of(pid: i32) -> i32;
         pub fn pipe(out_ptr: i32) -> i32;
@@ -235,6 +238,9 @@ mod runtime_proc {
 #[cfg(not(target_arch = "wasm32"))]
 mod runtime_proc {
     use super::UNSUPPORTED;
+    pub unsafe fn access_start(_: i32, _: i32, _: i32, _: i32, _: i32) -> i32 { UNSUPPORTED }
+    pub unsafe fn access_take(_: i32) -> i32 { UNSUPPORTED }
+    pub unsafe fn access_cancel(_: i32) -> i32 { UNSUPPORTED }
     pub unsafe fn spawn(_: i32, _: i32) -> i32 { UNSUPPORTED }
     pub unsafe fn job_of(_: i32) -> i32 { UNSUPPORTED }
     pub unsafe fn pipe(_: i32) -> i32 { UNSUPPORTED }
@@ -258,6 +264,22 @@ macro_rules! proc_call {
     ($call:expr) => {
         unsafe { $call }
     };
+}
+
+/// Resolve live executable metadata through the host's asynchronous access query ABI.
+/// Taking a completed result consumes it. Interrupted waits cancel their outstanding query.
+pub fn proc_access(path: &str, cwd: &str) -> i32 {
+    let request = proc_call!(runtime_proc::access_start(ptr(path.as_bytes()), path.len() as i32,
+        ptr(cwd.as_bytes()), cwd.len() as i32, 1));
+    if request < 0 { return request; }
+    loop {
+        let result = proc_call!(runtime_proc::access_take(request));
+        if result != -6 { return result; }
+        if let Err(error) = proc_poll(&[], 25) {
+            proc_call!(runtime_proc::access_cancel(request));
+            return error;
+        }
+    }
 }
 
 pub fn proc_spawn(request: &[u8]) -> i32 {

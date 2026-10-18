@@ -17,7 +17,7 @@ test("Node host does not silently execute Bun for a missing registry entry", asy
     const pid = supervisor.spawn(parent, { executable: "/bin/sh", argv: ["/bin/sh", "-c", "true"], env: {}, cwd: "/", job: 0, fds: [] });
     await exited;
     expect(launched).toBe(0);
-    expect(supervisor.wait(parent, pid)).toEqual({ kind: "exited", code: 127, status: 127 });
+    expect(supervisor.wait(parent, pid)).toEqual({ kind: "start-failed", code: 2, error: "ENOENT", status: null });
   } finally { supervisor.dispose(); }
 });
 

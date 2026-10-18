@@ -3,6 +3,7 @@ import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { ENGINES, startRun, type Engine } from "../src/runner";
 import { SubprocessBroker } from "../src/subprocess-broker";
+import { ENGINE_BIN } from "../src/executable-paths";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { RunRequest } from "../src/bun-executor";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
@@ -111,13 +112,26 @@ function rootClient(request: RunRequest, deliver: (message: object) => void) {
     postMessage: message => deliver(message),
     prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (transport.data as { pipeRegistry: unknown }).pipeRegistry } }),
   });
-  return { client, spawn: (executable: string) => client.spawn(client.pid, { executable, argv: [executable], cwd: "/", env: {}, job: -1, fds: [] }), dispose: () => descriptors.dispose() };
+  const which = async (command: string) => {
+    const candidates = command.includes("/") ? [command] : request.env.PATH!.split(":").map(directory => `${directory || "."}/${command}`);
+    for (const candidate of candidates) {
+      const query = client.accessStart(client.pid, candidate, "/");
+      let result = client.accessTake(client.pid, query);
+      while (result === -6) { await new Promise(resolve => setTimeout(resolve, 0)); result = client.accessTake(client.pid, query); }
+      if (result === 0) return candidate;
+    }
+    throw new Error(`No executable: ${command}`);
+  };
+  return { client, which, async spawn(command: string) {
+    const executable = await which(command);
+    return client.spawn(client.pid, { executable, argv: [command], cwd: "/", env: request.env, job: -1, fds: [] });
+  }, dispose: () => descriptors.dispose() };
 }
 
 const engines: Engine[] = ["quickjs", "jsc", "browser"];
 
 for (const engine of engines) {
-  test(`${engine} roots launch bun/node aliases with their selected engine and existing module`, async () => {
+  test(`${engine} roots find bun/node through PATH with their selected engine and existing module`, async () => {
     const fetch = spyOn(globalThis, "fetch").mockRejectedValue(new Error("Root engine aliases must not download another guest"));
     const state = isolatedRoot(false, engine);
     let root: ReturnType<typeof rootClient> | undefined;
@@ -125,8 +139,9 @@ for (const engine of engines) {
       await state.ready;
       root = rootClient(state.request, message => state.worker.onmessage?.({ data: message } as MessageEvent));
       state.release();
-      for (const name of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) {
-        const pid = root.spawn(name);
+      expect(await root.which("bun")).toBe(`${ENGINE_BIN[engine]}/bun`);
+      for (const name of ["bun", "node", `${ENGINE_BIN[engine]}/bun`, `${ENGINE_BIN[engine]}/node`]) {
+        const pid = await root.spawn(name);
         const entry = await state.requestFor(pid);
         expect(entry.engine).toBe(engine);
         expect(entry.adapter).toBe("bun");
@@ -157,7 +172,7 @@ for (const engine of engines) {
       const entries = new Map(register.mock.calls);
       const loaded = new Set<WebAssembly.Module>();
       for (const selected of engines) {
-        const entry = entries.get(`bun-${selected}`);
+        const entry = entries.get(`${ENGINE_BIN[selected]}/bun`);
         if (!entry) throw new Error(`Missing explicit engine registration: ${selected}`);
         if (entry.adapter !== "bun") throw new Error(`Explicit ${selected} program must use the Bun adapter`);
         expect(entry.engine).toBe(selected);
@@ -181,7 +196,7 @@ for (const engine of engines) {
   });
 }
 
-test("concurrent roots on one runtime keep engine-correct aliases without replacing other roots", async () => {
+test("concurrent roots on one runtime inherit independent engine PATHs without replacing other roots", async () => {
   const originalWorker = globalThis.Worker;
   const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
@@ -229,8 +244,9 @@ test("concurrent roots on one runtime keep engine-correct aliases without replac
       const root = worker.request;
       const client = rootClient(root, message => worker.onmessage?.({ data: message } as MessageEvent));
       clients.push(client);
-      for (const alias of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) {
-        const pid = client.spawn(alias);
+      expect(await client.which("bun")).toBe(`${ENGINE_BIN[root.engine]}/bun`);
+      for (const alias of ["bun", "node", `${ENGINE_BIN[root.engine]}/bun`, `${ENGINE_BIN[root.engine]}/node`]) {
+        const pid = await client.spawn(alias);
         const child = await received(pid);
         expect(child.engine).toBe(root.engine);
         expect(child.adapter).toBe("bun");
@@ -248,6 +264,74 @@ test("concurrent roots on one runtime keep engine-correct aliases without replac
       for (const worker of workers) worker.terminate();
       for (const port of ports) port.close();
       fetch.mockRestore();
+      globalThis.Worker = originalWorker;
+      if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation); else Reflect.deleteProperty(globalThis, "location");
+      if (originalIsolation) Object.defineProperty(globalThis, "crossOriginIsolated", originalIsolation); else Reflect.deleteProperty(globalThis, "crossOriginIsolated");
+    }
+  }
+});
+
+test("Preview1 roots keep independent explicit modules and 100 launches register no per-run executables", async () => {
+  const originalWorker = globalThis.Worker;
+  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
+  const ports: MessagePort[] = [];
+  const workers: FakeWorker[] = [];
+  const runs: ReturnType<typeof startRun>[] = [];
+  const registered: string[] = [];
+  function connect(identity = createFilesystemIdentity()) {
+    const channel = new MessageChannel(); channel.port2.close(); ports.push(channel.port1);
+    return { ...identity, port: channel.port1 };
+  }
+  const runtime = processRuntimeFixture({ fork: () => connect(), connect, revoke() {}, reap() {}, async quiesce() {} } as unknown as SharedFilesystem);
+  const register = runtime.registerProgram.bind(runtime);
+  runtime.registerProgram = (name, program) => { registered.push(name); return register(name, program); };
+  class FakeWorker {
+    onmessage: ((event: MessageEvent) => void) | null = null;
+    request?: RunRequest;
+    terminated = false;
+    constructor() { workers.push(this); }
+    postMessage(request: RunRequest) { this.request = request; }
+    terminate() { this.terminated = true; }
+    exit() { this.onmessage?.({ data: { type: "exit", code: 0, sleep: "atomics" } } as MessageEvent); }
+  }
+  const launch = async (module: WebAssembly.Module, engine: Engine = "browser", adapter: "bun" | "preview1" = "preview1") => {
+    const run = startRun({ engine, adapter, module, args: [], env: {}, runtime, moduleScope: false }, { stdout() {}, stderr() {} });
+    runs.push(run);
+    const worker = workers.at(-1)!;
+    const deadline = performance.now() + 1000;
+    while (!worker.request && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+    expect(worker.request?.module).toBe(module);
+    expect(worker.request?.adapter).toBe(adapter);
+    expect(worker.request?.env.PATH?.split(":")[0]).toBe(ENGINE_BIN[engine]);
+    return { run, worker };
+  };
+  try {
+    Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
+    Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
+    globalThis.Worker = FakeWorker as unknown as typeof Worker;
+    const first = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    const second = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, 2, 1, 120]));
+    const a = await launch(first), b = await launch(second);
+    expect(a.worker.request!.module).not.toBe(b.worker.request!.module);
+    a.worker.exit(); b.worker.exit();
+    await Promise.all([a.run.done, b.run.done]);
+    for (let index = 0; index < 100; index++) {
+      const { run, worker } = await launch(index % 2 ? first : second, engines[index % engines.length]!, "bun");
+      worker.exit();
+      expect(await run.done).toEqual({ code: 0 });
+    }
+    expect(registered).toEqual(["/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node", "/bin/bun", "/bin/node"]);
+    for (const path of registered) expect(await runtime.filesystem.lookup(path)).toMatchObject({ kind: "file" });
+    // Page-launched modules never become executable files or retain a per-launch registry key.
+    expect(await runtime.filesystem.lookup("/bin/preview1-root-1")).toBeUndefined();
+    expect(await runtime.filesystem.lookup("/usr/libexec/preview1-root")).toBeUndefined();
+    expect(workers.every(worker => worker.terminated)).toBe(true);
+  } finally {
+    for (const run of runs) run.kill(9);
+    try { await Promise.all(runs.map(run => run.done)); await runtime.dispose(); }
+    finally {
+      for (const port of ports) port.close();
       globalThis.Worker = originalWorker;
       if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation); else Reflect.deleteProperty(globalThis, "location");
       if (originalIsolation) Object.defineProperty(globalThis, "crossOriginIsolated", originalIsolation); else Reflect.deleteProperty(globalThis, "crossOriginIsolated");
@@ -601,7 +685,7 @@ test("typed root startup failures preserve their diagnostic and shell status", a
   const state = isolatedRoot();
   try {
     await state.ready;
-    claimOutcome(outcomeWord(state.request.outcome), { kind: "start-failed", code: 13 });
+    claimOutcome(signalsOf(state.request).outcome, { kind: "start-failed", code: 13 });
     state.worker.onmessage?.(new MessageEvent("message", { data: { type: "error", code: 126, message: "invalid executable", sleep: "atomics" } }));
     state.release();
     expect(await state.run.done).toEqual({ code: 126, error: "bun.wasm crashed: invalid executable" });

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
-import { transferArrayBuffers } from "../src/buffer-transfer.ts";
+import { isWasmMemoryBuffer, transferArrayBuffers } from "../src/buffer-transfer.ts";
 import { SLOT_NAMES } from "../src/net/trampoline.ts";
 
 const source = readFileSync(new URL("../src/engine-host.js", import.meta.url), "utf8")
@@ -9,7 +9,7 @@ const source = readFileSync(new URL("../src/engine-host.js", import.meta.url), "
   .replace("export function startEngineHost", "function startEngineHost");
 
 test("restoring guest Date replaces an armed host wakeup with the earlier real timer", async () => {
-  const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, transferArrayBuffers, SLOT_NAMES });
+  const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, isWasmMemoryBuffer, transferArrayBuffers, SLOT_NAMES });
   const EngineHost = runInContext(source + "\nEngineHost;", context);
   const host = Object.assign(Object.create(EngineHost.prototype), {
     exited: false, timer: null, timerAt: Infinity,
@@ -36,7 +36,7 @@ test("restoring guest Date replaces an armed host wakeup with the earlier real t
 });
 
 test("the browser fake checkpoint drains runtime nextTicks synchronously", () => {
-  const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, transferArrayBuffers, SLOT_NAMES });
+  const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, isWasmMemoryBuffer, transferArrayBuffers, SLOT_NAMES });
   const EngineHost = runInContext(source + "\nEngineHost;", context);
   let drained = false;
   const host = Object.assign(Object.create(EngineHost.prototype), {
