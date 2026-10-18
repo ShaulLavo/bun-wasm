@@ -4,6 +4,7 @@ import { FilesystemClient, createProcessFilesystemIdentity, type FilesystemIdent
 import { ProcessABI } from "waffle/proc/abi";
 import { readOutcome, type OutcomeWord } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from "waffle/proc/worker-client";
+import { attachPipePublicationRegistry, type PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
 import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
 import type { ProcessExit } from "waffle/proc";
@@ -89,11 +90,15 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
       if (fd === 2) active.stderr += decoder.decode(bytes); else active.stdout += decoder.decode(bytes);
     } });
     const pageService = service;
+    const pipeRegistry = attachPipePublicationRegistry(
+      (root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry,
+    );
     const client = new WorkerProcessClient({ transport: root, descriptors, codec,
-      prepareSpawn() {
+      prepareSpawn(pid) {
         const filesystemIdentity = createProcessFilesystemIdentity(identity); identities.push(filesystemIdentity);
-        return { data: { filesystem: filesystemIdentity,
-          pipeRegistry: (root.data as { pipeRegistry: unknown }).pipeRegistry } };
+        pipeRegistry.registerProcess(pid);
+        return { cancel: pipeRegistry.collectProcess.bind(pipeRegistry, pid),
+          data: { filesystem: filesystemIdentity, pipeRegistry: pipeRegistry.handle() } };
       },
       postMessage(message) {
         if (message.operation === "spawn") {

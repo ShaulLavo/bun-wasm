@@ -7,6 +7,7 @@ import type { RunRequest, WorkerMessage } from "../src/bun-executor";
 import { workerProcessState } from "waffle/proc/worker-client";
 import { createRuntimeEngineScope } from "./engine-interruption-scope";
 import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
+import { attachPipePublicationRegistry, type PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 
 /** Keep production page ownership, allocator, filesystem admission and launchRuntime intact.
@@ -94,6 +95,8 @@ test("generic engine scope reaches real launchRuntime with the process transport
     }
     const worker = realm.workers[0]!, request = worker.request!;
     expect(request.runtimeProcess).toBeDefined();
+    const registry = attachPipePublicationRegistry((request.runtimeProcess!.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry);
+    expect(registry.isRevoked(child.pid)).toBe(false);
     expect(request.args).toEqual(["bun", "-e", "fixture-source"]);
     expect(request.env.BUNWASM_EXEC_PATH).toBe("/usr/libexec/engine-probe");
     const state = workerProcessState(request.runtimeProcess!);

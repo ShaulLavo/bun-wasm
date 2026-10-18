@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { WasiExit } from "waffle/core";
+import { DefaultSignal } from "../src/default-signal";
 import { ProcessSignalExit } from "waffle/proc/abi";
 import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
 import { RuntimeWorkerSignal } from "waffle/browser/worker";
-import { assertFatalEngineCompletion, assertNativeEngineCompletion, engineInterruptionFailure, observeEngineImports, observeEventLoopWait, observedEngineStart, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
+import { assertFatalEngineCompletion, assertNativeEngineCompletion, engineInterruptionFailure, observeEngineImports, observePreview1Dequeue, observeEventLoopWait, observedEngineStart, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 
 function fixture() {
   const probe = new Int32Array(new SharedArrayBuffer(probeLength * 4));
@@ -506,4 +507,39 @@ test("notification mutant selects the exact absolute shared address across alias
     expect(target.notify(new Int32Array(new SharedArrayBuffer(64), 20, 1), 0)).toBe(7);
     expect(mutation.count()).toBe(2); expect(calls).toBe(2);
   } finally { mutation.restore(); }
+});
+
+test("Bun executor DefaultSignal is preserved as typed checkpoint and actual start evidence", () => {
+  const f = fixture(), fatal = new DefaultSignal(15);
+  const imports: WebAssembly.Imports = { runtime_proc: { signal() { throw fatal; } }, wasi_snapshot_preview1: { fd_write() { return 0; } } };
+  observeEngineImports(imports, f.probe, () => f.memory, f.pending);
+  const start = observedEngineStart({ _start() { return (imports.runtime_proc!.signal as Function)(0, 4); } }, f.probe, true);
+  expect(() => start()).toThrow(fatal);
+  expect(() => assertFatalEngineCompletion(snapshotProbe(f.probe), 15)).not.toThrow();
+});
+
+test("Preview1 observes real pending preservation and dequeue before process collection", () => {
+  const f = fixture(); let dequeues = 0, polls = 0;
+  Atomics.store(f.pending, 2, 6);
+  const imports: WebAssembly.Imports = { runtime_proc: { interrupted() {
+    dequeues++;
+    if (dequeues > 1) return 0;
+    Atomics.store(f.pending, 2, 2); return 2;
+  } }, wasi_snapshot_preview1: { poll_oneoff() { polls++; return 27; } } };
+  observePreview1Dequeue(imports, f.probe, f.pending);
+  expect((imports.wasi_snapshot_preview1!.poll_oneoff as Function)(0, 128, 1, 200)).toBe(27);
+  expect(snapshotProbe(f.probe).preview1PollPending).toBe(4);
+  expect((imports.runtime_proc!.interrupted as Function)()).toBe(2);
+  expect((imports.runtime_proc!.interrupted as Function)()).toBe(0);
+  expect(polls).toBe(1); expect(dequeues).toBe(2);
+  expect(snapshotProbe(f.probe)).toMatchObject({ preview1Delivered: 2, preview1PendingAfter: 0, preview1EmptyDequeues: 1 });
+});
+
+test("Preview1 observer retains broken dequeue evidence rather than manufacturing a cleared pending bit", () => {
+  const f = fixture(); Atomics.store(f.pending, 2, 6);
+  const imports: WebAssembly.Imports = { runtime_proc: { interrupted() { return 2; } }, wasi_snapshot_preview1: { poll_oneoff() { return 27; } } };
+  observePreview1Dequeue(imports, f.probe, f.pending);
+  (imports.runtime_proc!.interrupted as Function)();
+  expect(snapshotProbe(f.probe).preview1PendingAfter).toBe(4);
+  expect(snapshotProbe(f.probe).preview1EmptyDequeues).toBe(0);
 });
