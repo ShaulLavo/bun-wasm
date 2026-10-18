@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { createServer, request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { createServer } from "node:http";
+import { Upstream } from "./first-visit-upstream.ts";
 
 // A fresh proxy origin keeps both HTTP caches and service worker registrations empty. Delaying
 // activate and resolving register() at "activating" exercises a timing browsers are allowed to use.
 export async function firstVisit(context, base) {
   const upstream = new URL(base);
-  const server = createServer(forwardRequest.bind(null, upstream));
+  const transport = new Upstream(upstream, upstream.protocol === "https:" ? "http2" : "http1");
+  const server = createServer(forwardRequest.bind(null, upstream, transport));
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -34,43 +35,58 @@ export async function firstVisit(context, base) {
     },
     async close() {
       server.closeAllConnections();
+      transport.close();
       await new Promise((resolve) => server.close(resolve));
     },
   };
 }
 
-function forwardRequest(upstream, incoming, outgoing) {
+function forwardRequest(upstream, transport, incoming, outgoing) {
   const target = new URL(incoming.url, upstream.origin);
   // Works against the deployed https site too: the upstream sees its own Host, and asks for
   // uncompressed bodies because sw.js is rewritten as text below.
   const headers = { ...incoming.headers, host: target.host, "accept-encoding": "identity" };
-  const request = target.protocol === "https:" ? httpsRequest : httpRequest;
-  const forwarded = request(target, {
-    method: incoming.method,
-    headers,
-    autoSelectFamilyAttemptTimeout: 2_000,
-    signal: AbortSignal.timeout(180_000),
-  }, (response) => forwardResponse(target, outgoing, response));
-  outgoing.once("close", () => {
-    if (!outgoing.writableFinished) forwarded.destroy();
-  });
-  forwarded.on("error", (error) => {
+  const fail = (error) => {
     if (outgoing.destroyed) return;
-    console.error(`first-visit proxy ${target.href}: ${error.stack ?? error}`);
+    console.error(`first-visit proxy ${target.href}:`, error);
     outgoing.destroy(error);
+  };
+  let forwarded;
+  try {
+    forwarded = transport.request(target, {
+      method: incoming.method,
+      headers,
+      autoSelectFamilyAttemptTimeout: 2_000,
+      signal: AbortSignal.timeout(180_000),
+    });
+  } catch (error) {
+    fail(error);
+    return;
+  }
+  outgoing.once("close", () => {
+    if (!outgoing.writableFinished) forwarded.writable.destroy();
   });
-  incoming.pipe(forwarded);
+  forwarded.writable.on("error", fail);
+  forwarded.response.then(response => forwardResponse(target, outgoing, response, fail)).catch(fail);
+  incoming.pipe(forwarded.writable);
 }
 
-function forwardResponse(target, outgoing, response) {
+function forwardResponse(target, outgoing, response, fail) {
+  const body = response.body;
+  if (outgoing.destroyed) return body.destroy();
+  if (body.destroyed && !body.readableEnded) return fail(body.errored ?? new Error("Upstream response closed early"));
+  body.on("error", fail);
+  body.once("close", () => {
+    if (!body.readableEnded) fail(body.errored ?? new Error("Upstream response closed early"));
+  });
   const headers = { ...response.headers };
   delete headers["content-length"];
   outgoing.writeHead(response.statusCode, headers);
-  if (!target.pathname.endsWith("/sw.js")) return void response.pipe(outgoing);
+  if (!target.pathname.endsWith("/sw.js")) return void body.pipe(outgoing);
   let source = "";
-  response.setEncoding("utf8");
-  response.on("data", (chunk) => (source += chunk));
-  response.on("end", () => outgoing.end(ACTIVATION_DELAY + source));
+  body.setEncoding("utf8");
+  body.on("data", (chunk) => (source += chunk));
+  body.on("end", () => outgoing.end(ACTIVATION_DELAY + source));
 }
 
 const ACTIVATION_DELAY = `self.addEventListener("activate", event => event.waitUntil(new Promise(resolve => setTimeout(resolve, 6000))));\n`;
