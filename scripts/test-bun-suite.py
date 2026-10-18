@@ -206,6 +206,19 @@ class ProvenanceTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def test_bake_alias_resolves_upstream_client_sources(self):
+        with tempfile.TemporaryDirectory(prefix="bun-wasm-bake-alias-", dir="/work/tmp") as directory:
+            source = Path(directory)
+            (source / "test").mkdir()
+            target = source / "src/runtime/bake/client/data-view.ts"
+            target.parent.mkdir(parents=True)
+            target.write_text("export const marker = 'upstream bake client';\n")
+            suite.install_aliases(source)
+            package = source / "test/node_modules/bake/data-view"
+            main = json.loads((package / "package.json").read_text())["main"]
+            self.assertEqual((package / main).read_text(), target.read_text())
+            self.assertEqual((package / main).resolve().parent, target.parent)
+
     @unittest.skipUnless(shutil.which("unshare") and shutil.which("ip"), "Linux network namespaces required")
     def test_loopback_namespace_preserves_host_listener(self):
         with socket.socket() as listener:

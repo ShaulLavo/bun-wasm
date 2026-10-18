@@ -297,7 +297,7 @@ QuickJS and JSC use the native launcher and its networking/subprocess ABI. The b
 
 Every worker owns a source snapshot, restores tracked changes and deletes generated files after each test, verifies clean Git status, then clears its temp directory. Snapshot attributes preserve fixture bytes. Per-file process groups are killed and reaped on timeout/interruption. The runner removes its scratch directory on success, failure and handled signals. After an uncatchable SIGKILL, inspect the named scratch directory and its processes before deleting it.
 
-The current supplemental dependency tree has 2,483 hashed files, compared with 4,248 in the historical baseline. Root upstream dependencies retain the same 537 files and hash. The changed runner, suite revision, and supplemental dependency hash make these runs non-comparable as isolated runtime gains. Native addons and the full upstream framework/app dependency graph are not installed. Missing packages remain setup blockers.
+The last full census used 2,483 hashed supplemental dependency files. The later [dependency setup replay](dependency-replay.md) provisions the missing packages and updates its selected failure rows; native addon bindings remain unavailable in the guest.
 
 `bun:jsc.heapStats()` exposes engine memory totals with unavailable per-type/protected counters left empty or zero. Passing leak assertions against these counters does not establish leak freedom. `isASANEnabled()` is false, and unsupported unsafe operations still throw. Self-spawn runs fresh wasm instances, never native Bun. External programs, child IPC, terminals, real OS process trees and several stdio modes remain unsupported.
 

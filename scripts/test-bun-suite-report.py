@@ -14,6 +14,43 @@ def record(path, error, excerpt=""):
 
 
 class Classification(unittest.TestCase):
+    def test_data_url_is_not_an_uninstalled_package(self):
+        item = record("js/node/string-module.test.js", "error: Cannot find package 'data:text'")
+        self.assertEqual(report.classify(item, "", {})[1], "data URL module loading")
+
+    def test_internal_node_alias_is_not_an_uninstalled_package(self):
+        item = record("js/node/stubs.test.js", "error: Cannot find package '_http_agent'")
+        self.assertEqual(report.classify(item, "", {})[1], "Node builtin aliases and stub modules")
+
+    def test_generated_resolver_fixture_is_not_an_uninstalled_package(self):
+        item = record("js/node/module/module-resolve-filename-paths.test.js", "error: Cannot find package 'test-package'")
+        self.assertEqual(report.classify(item, "Module._resolveFilename", {})[0], "d")
+
+    def test_jsx_fixture_requires_its_own_import_source(self):
+        item = record("bundler/transpiler/jsx-tsconfig-react-jsx.test.ts", "error: Cannot find package 'react' from '/tmp/jsx-tsconfig_example/m.jsx'")
+        self.assertEqual(report.classify(item, "", {})[1], "tsconfig JSX runtime selection and jsxImportSource")
+
+    def test_installed_native_dependency_is_a_platform_limit(self):
+        for error in ["error: Cannot find native binding.", "error: Unsupported OS: wasi, architecture: wasm32", 'error: Could not load the "sharp" module using the linuxnull-wasm32 runtime', "error: No native build was found for platform=wasi arch=wasm32", "error: Unsupported architecture on Linux: wasm32"]:
+            with self.subTest(error=error):
+                self.assertEqual(report.classify(record("example.test.ts", error), "", {})[0], "a")
+
+    def test_live_service_credentials_are_a_replay_limit(self):
+        item = record("example.test.ts", "error: Secret not found: TEST_INFO_AZURE_SERVICE_BUS")
+        self.assertEqual(report.classify(item, "", {})[0], "a")
+
+    def test_docker_fixture_requires_an_external_executable(self):
+        item = record("example.test.ts", "error: A functional `docker` is required in CI for some tests.")
+        self.assertEqual(report.classify(item, "", {})[0], "b")
+
+    def test_inspector_first_blocker_is_its_unix_socket(self):
+        item = record("cli/inspect/BunFrontendDevServer.test.ts", "error: Unix sockets and TLS sockets are not supported in bun-wasm")
+        self.assertEqual(report.classify(item, "", {})[0], "a")
+
+    def test_missing_bare_module_is_a_dependency(self):
+        item = record("example.test.ts", "ResolveMessage: Cannot find module '@nestjs/core' from '/bun/test/example.test.ts'")
+        self.assertEqual(report.classify(item, "", {})[0], "c")
+
     def test_reviewed_large_array_control_requires_external_echo(self):
         item = record("js/bun/spawn/spawn-large-array-length.test.ts", "error: expect(received).toBe(expected)")
         item["failing_tests"] = ["spawn with spoofed array length > Bun.spawnSync still works with normal arrays"]
@@ -39,6 +76,11 @@ class Classification(unittest.TestCase):
         item = record("example.test.ts", '9 | // Cannot find package')
         item["first_errors"].append("TypeError: not a function")
         self.assertEqual(report.error_lines(item), ["TypeError: not a function"])
+
+    def test_dependency_warning_does_not_replace_the_first_failure(self):
+        item = record("example.test.ts", "[fs-extra-WARN0003] Warning: fs.realpath.native is not a function.")
+        item["first_errors"].append("TypeError: cannot read property 'loadSync' of undefined")
+        self.assertEqual(report.error_lines(item), ["TypeError: cannot read property 'loadSync' of undefined"])
 
     def test_public_jsc_regression_is_not_private_instrumentation(self):
         item = record("js/bun/jsc/example.test.ts", "ReferenceError: ShadowRealm is not defined")

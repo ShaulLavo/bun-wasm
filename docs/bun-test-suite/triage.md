@@ -2,12 +2,20 @@
 
 Each row describes the first observed blocker. Subsystem assignments marked 'needs reproduction' are provisional; they do not establish that every test needs the same fix. Full assignments and confidence are in [failures.tsv](failures.tsv).
 
+The groups include the later [dependency setup replay](dependency-replay.md).
+The full-run comparisons, timeout index and ranked investigations below retain the earlier census.
+
+<!-- failure-groups:start -->
 | Category | First blocker / topic | Files | Example file | Test | Error |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
+| a | dependency requires a native addon binding unavailable to the WASI guest | 4 | integration/sharp/sharp.test.ts | <collection/hook/exit; no named failure> | error: Could not load the "sharp" module using the linuxnull-wasm32 runtime |
+| a | inspector fixture requires Unix-domain sockets outside the current host ABI | 1 | cli/inspect/BunFrontendDevServer.test.ts | BunFrontendDevServer inspector protocol > (unnamed) | error: Unix sockets and TLS sockets are not supported in bun-wasm |
+| a | live external service credentials unavailable in the isolated suite replay | 5 | js/third_party/@azure/service-bus/azure-service-bus.test.ts | <collection/hook/exit; no named failure> | error: Secret not found: TEST_INFO_AZURE_SERVICE_BUS |
 | a | native addons or FFI | 62 | js/bun/ffi/cc.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'JSCallback' in module 'bun:ffi' |
 | a | native addons, threads, watching or OS-only facilities | 8 | cli/bun.test.ts | bun > per-stream color detection > piped stdout stays plain when stderr is a tty | error: bun:ffi.dlopen is not supported in bun-wasm: no native libraries in wasm |
-| a | network operations beyond the current host ABI | 14 | js/bun/dns/resolve-dns.test.ts | dns > lookup() [backend: system] > localhost > {"options":{"backend":"system"}} | error: Bun.dns.lookup is not supported in bun-wasm: WASI has no network access |
+| a | network operations beyond the current host ABI | 15 | js/bun/dns/resolve-dns.test.ts | dns > lookup() [backend: system] > localhost > {"options":{"backend":"system"}} | error: Bun.dns.lookup is not supported in bun-wasm: WASI has no network access |
 | b | CLI options, environment, cwd and script launching | 5 | cli/lint/git.test.ts | bun lint > --staged selects the files whose staged version differs from HEAD | error: Executable not found in bun-wasm: git |
+| b | Docker-backed fixture requires an external docker executable | 1 | integration/mysql2/mysql2.test.ts | <collection/hook/exit; no named failure> | error: A functional `docker` is required in CI for some tests. |
 | b | bundling, compiling, generated program output | 6 | bundler/bundler_compile_autoload.test.ts | bundler > compile/AutoloadDotenvDefault | error: Executable not found in bun-wasm: /tmp/bun-build-tests/bun-1UmV34/compile/AutoloadDotenvDefault/out |
 | b | external echo executable in normal-array control | 1 | js/bun/spawn/spawn-large-array-length.test.ts | spawn with spoofed array length > Bun.spawnSync still works with normal arrays | error: expect(received).toBe(expected) |
 | b | network server/client behavior in a child program | 5 | js/bun/http/bun-serve-html.test.ts | serve html | error: Child process IPC is not supported in bun-wasm |
@@ -18,27 +26,31 @@ Each row describes the first observed blocker. Subsystem assignments marked 'nee
 | c | boxed String paths from harness.tempDir | 1 | js/bun/resolve/png/test-png-import.test.js | png import | TypeError: The "paths[0]" property must be of type string, got object |
 | c | test runner boolean or snapshot matchers | 1 | js/node/path/matches-glob.test.ts | path.posix.matchesGlob(path, glob) > path 'foo.js' matches pattern '*.js' | TypeError: not a function |
 | c | test runner helpers or matcher methods | 3 | js/bun/module-graph/module-graph-isolation.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'setSystemTime' in module 'bun:test' |
-| c | uninstalled suite dependency, setup work before API triage | 49 | bundler/bundler_edgecase.test.ts | <collection/hook/exit; no named failure> | error: Cannot find package 'aws-cdk-lib' from '/bun/test/bundler/bundler_edgecase.test.ts' |
 | d | Bun shell parser and execution | 63 | bake/dev/production.test.ts | production > works with sourcemaps - error thrown in React component | error: Bun.$ is not supported in bun-wasm: WASI has no processes |
-| d | CLI option or command implementation | 46 | bundler/bundler_bun.test.ts | bundler > bun/bytecode-depth-cli | error: Bundle Failed |
+| d | CLI option or command implementation | 47 | bundler/bundler_bun.test.ts | bundler > bun/bytecode-depth-cli | error: Bundle Failed |
 | d | ES module mocking and loader invalidation | 7 | js/bun/test/mock/6874/A.test.ts | <collection/hook/exit; no named failure> | error: mock.module() is not supported in bun-wasm yet |
-| d | HTTP/server/fetch/WebSocket semantics | 180 | bake/dev/ecosystem.test.ts |  DEV:ecosystem-1: svelte component islands example | <see JSON excerpt; no error line> |
+| d | HTTP/server/fetch/WebSocket semantics | 189 | bake/dev/ecosystem.test.ts |  DEV:ecosystem-1: svelte component islands example | <see JSON excerpt; no error line> |
+| d | Module._resolveFilename options.paths lookup | 1 | js/node/module/module-resolve-filename-paths.test.js | Module._resolveFilename respects options.paths for package resolution | ResolveMessage: Cannot find package 'test-package' from '/some/other/directory/file.js' |
+| d | Node builtin aliases and stub modules | 1 | js/node/stubs.test.js | stubbed CJS import.meta.require _http_agent | ResolveMessage: Cannot find package '_http_agent' from '/bun/test/js/node/stubs.test.js' |
 | d | Node's test API adapter | 3 | internal/runner-junit.test.ts | parseJunitFileSuites reads the report bun test --parallel --reporter=junit writes | error: expect(received).toContain(expected) |
 | d | Node/Web stream semantics | 29 | cli/install/symlink-path-traversal.test.ts | symlink path traversal protection > rejects symlink targets that climb above the package root before | error: expect(received).toContain(expected) |
 | d | SQLite API compatibility | 4 | js/bun/sqlite/column-types.test.js | SQLite Statement column types > reports correct column types for a variety of data types | TypeError: cannot read property 'columns' of undefined |
-| d | TLS or HTTP/2 | 84 | cli/install/bun-install-stalled-tls.test.ts | each retry after a timeout is announced > package manifest | error: expect(received).toEqual(expected) |
-| d | bundler options, plugins or compiler output | 71 | bake/app-options.test.ts | Bun.serve({ app }) rejects wrong-typed framework options | error: expect(received).toMatchInlineSnapshot(expected) |
+| d | TLS or HTTP/2 | 85 | cli/install/bun-install-stalled-tls.test.ts | each retry after a timeout is announced > package manifest | error: expect(received).toEqual(expected) |
+| d | bundler options, plugins or compiler output | 73 | bake/app-options.test.ts | Bun.serve({ app }) rejects wrong-typed framework options | error: expect(received).toMatchInlineSnapshot(expected) |
 | d | crypto algorithms and WebCrypto | 23 | js/bun/crypto/cipheriv-decipheriv.test.ts | should encrypt & decrypt using update & final interface | error: crypto.createCipheriv is not supported in bun-wasm: this Node crypto operation is not implemented |
+| d | data URL module loading | 1 | js/node/string-module.test.js | should import and execute ES module from string | ResolveMessage: Cannot find module 'data:text/javascript,export default function test(arg) { return arg + arg };' from '/bun/test/js/node/string-module.test.js' |
 | d | data parser/serializer semantics | 14 | cli/format/toml-layout.test.ts | TOML layout > formats every case without errors, and --check passes afterwards | error: expect(received).toEqual(expected) |
-| d | database, Redis or S3 clients | 128 | js/bun/image/image.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'S3Client' in module 'bun' |
+| d | database, Redis or S3 clients | 130 | js/bun/image/image.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'S3Client' in module 'bun' |
 | d | filesystem API semantics | 2 | js/bun/util/filesystem_router.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'FileSystemRouter' in module 'bun' |
-| d | test runner/assertion or runtime semantics | 720 | cli/bunfig-test-options.test.ts | bunfig.toml test options > randomize with seed produces consistent order | error: expect(received).not.toEqual(expected) |
+| d | test runner/assertion or runtime semantics | 727 | cli/bunfig-test-options.test.ts | bunfig.toml test options > randomize with seed produces consistent order | error: expect(received).not.toEqual(expected) |
 | d | timeout, first unblock and rerun without reducing it to an API verdict | 5 | js/node/buffer-indexof-worstcase.test.ts | <collection/hook/exit; no named failure> | <see JSON excerpt; no error line> |
-| d | unresolved runtime/module semantics, inspect the recorded failure first | 72 | bake/hmr-socket-protocol.test.ts | a duplicate testing-batch frame (H) during an in-flight bundle closes the socket instead of aborting |   ^ this test timed out after 2000ms. |
+| d | tsconfig JSX runtime selection and jsxImportSource | 1 | bundler/transpiler/jsx-tsconfig-react-jsx.test.ts | tsconfig compilerOptions.jsx > "react-jsx" selects the matching automatic runtime | error: Cannot find module 'react/jsx-dev-runtime' from '/tmp/jsx-tsconfig_Q3qJ7t/m.jsx' |
+| d | unresolved runtime/module semantics, inspect the recorded failure first | 74 | bake/hmr-socket-protocol.test.ts | a duplicate testing-batch frame (H) during an in-flight bundle closes the socket instead of aborting |   ^ this test timed out after 2000ms. |
 | e | private native-engine/compiler instrumentation has no portable equivalent | 93 | bake/deinitialization.test.ts | dev server deinitializes itself | SyntaxError: Could not find export 'getDevServerDeinitCount' in module 'bun:internal-for-testing' |
-| f | passes on browser | 16 | js/bun/crypto/wpt-webcrypto.generateKey.test.ts | <collection/hook/exit; no named failure> | <see JSON excerpt; no error line> |
+| f | passes on browser | 17 | js/bun/crypto/wpt-webcrypto.generateKey.test.ts | <collection/hook/exit; no named failure> | <see JSON excerpt; no error line> |
 | f | passes on browser, jsc | 3 | js/bun/jsc/webkit-upgrade-ccdcb8a026.test.ts | WebKit ccdcb8a026 upgrade > Atomics.isLockFree uses ToIntegerOrInfinity instead of wrapping to int32 | ReferenceError: Atomics is not defined |
 | f | passes on jsc | 4 | js/bun/jsc/webkit-upgrade-8c4fd56347.test.ts | WebKit 8c4fd56347 upgrade > Promise.try returns a native promise as-is (7f38ebbabf) | error: expect(received).toBe(expected) |
+<!-- failure-groups:end -->
 
 ## Regressions from the previous baseline
 
