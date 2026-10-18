@@ -29,7 +29,7 @@ test("initial download accounting refuses unmeasured static external scripts", (
 });
 
 test("the first-spawn service gate allows reservation primitives but rejects service code", () => {
-  const inputs = ["proc/stub.ts", "proc/identity.ts", "proc/outcome.ts", "proc/signals.ts", "proc/types.ts", "web/src/subprocess.ts"].map(installed);
+  const inputs = ["proc/stub.ts", "proc/identity.ts", "proc/outcome.ts", "proc/wait-status.ts", "proc/signals.ts", "proc/types.ts", "web/src/subprocess.ts"].map(installed);
   expect(() => checkLazyProcessService(inputs, runtime)).not.toThrow();
   expect(processServiceInputs(inputs.concat([installed("proc/table.ts")]), runtime)).toEqual([installed("proc/table.ts")]);
   expect(() => checkLazyProcessService(inputs.concat([installed("proc/supervisor.ts")]), runtime)).toThrow("process service is eager");

@@ -692,6 +692,18 @@ test("run.done confirms after the filesystem fence without awaiting physical wor
   } finally { release(); terminate.mockRestore(); await state.dispose(); }
 });
 
+test("typed root startup failures preserve their diagnostic and shell status", async () => {
+  const state = isolatedRoot();
+  try {
+    await state.ready;
+    claimOutcome(outcomeWord(state.request.outcome), { kind: "start-failed", code: 13 });
+    state.worker.onmessage?.(new MessageEvent("message", { data: { type: "error", code: 126, message: "invalid executable", sleep: "atomics" } }));
+    state.release();
+    expect(await state.run.done).toEqual({ code: 126, error: "bun.wasm crashed: invalid executable" });
+    expect(state.worker.terminated).toBe(1);
+  } finally { await state.dispose(); }
+});
+
 for (const terminal of [{ code: 0 }, { code: 143, signal: 15 }]) test(`worker cleanup fault preserves status ${terminal.code} but requires a root admission fence`, async () => {
   const report = spyOn(console, "error").mockImplementation(() => {});
   const state = isolatedRoot();

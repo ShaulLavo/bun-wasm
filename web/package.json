@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm-web",
-  "version": "0.0.37",
+  "version": "0.0.38",
   "private": true,
   "type": "module",
   "scripts": {
@@ -19,7 +19,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "codemirror": "^6.0.2",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#7525b16bef712a89cf3106a15768e45d06da198a"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#5677fc64dd7443a073747284702e1fba92d6b7c0"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

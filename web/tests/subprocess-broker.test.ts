@@ -5,7 +5,7 @@ import { SubprocessHost, childTransport, type ChildTransport } from "../src/subp
 import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "waffle/fs";
 import { FilesystemSection, waitForFilesystemQuiescence } from "waffle/fs/protocol";
 import type { SharedFilesystem } from "../src/shared-fs";
-import type { SpawnRequest } from "../src/worker";
+import type { SpawnRequest, WorkerMessage } from "../src/worker";
 import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
 import { createSignalState, setSignalDisposition, takeSignal } from "waffle/proc/signals";
 
@@ -37,17 +37,19 @@ test("first activation returns a pid immediately and does not block an unrelated
     expect(ran).toBe(true);
     expect(state.host.wait(state.pid)).toBe(-2);
     release();
-    expect((await state.broker.wait(state.pid)).status).toBe(127);
-    expect(state.host.wait(state.pid)).toBe(127);
+    expect(await state.broker.wait(state.pid)).toEqual({ kind: "start-failed", code: 2, error: "ENOENT", status: null });
+    expect(state.host.wait(state.pid)).toBe(-1);
+    expect(JSON.parse(state.host.lastError!).code).toBe("ENOENT");
   } finally { release(); await state.dispose(); }
 });
 
-test("missing executable is an asynchronous child exit, not a thrown spawn error", async () => {
+test("broker retains an asynchronous typed missing-executable outcome", async () => {
   const state = fixture();
   try {
-    expect((await state.broker.wait(state.pid)).status).toBe(127);
+    expect(await state.broker.wait(state.pid)).toEqual({ kind: "start-failed", code: 2, error: "ENOENT", status: null });
     expect(state.revoked).toHaveLength(1);
-    expect(state.host.wait(state.pid)).toBe(127);
+    expect(state.host.wait(state.pid)).toBe(-1);
+    expect(JSON.parse(state.host.lastError!).code).toBe("ENOENT");
   } finally { await state.dispose(); }
 });
 
@@ -307,7 +309,7 @@ test("postMessage failure also waits for quiescence before terminating its worke
     expect(waiting.confirmed()).toBe(false);
     expect(worker.terminated).toBe(0);
     barrier.release();
-    expect((await waiting.result).status).toBe(126);
+    expect(await waiting.result).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
     await timerTurn();
     expect(worker.terminated).toBe(1);
   } finally { barrier.release(); await state.dispose(); }
@@ -656,7 +658,7 @@ test("unsupported but natively valid modules fail with the instrumentation refus
   expect(WebAssembly.validate(bytes)).toBe(true);
   const state = liveFixture({ executable: { adapter: "preview1", bytes } });
   try {
-    expect((await state.broker.wait(state.pid)).status).toBe(126);
+    expect(await state.broker.wait(state.pid)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
     const data = childTransport(state.transports.get(state.pid)!).stderr.read();
     expect(data).toBeInstanceOf(Uint8Array);
     expect(new TextDecoder().decode(data as Uint8Array)).toMatch(/Cannot instrument WebAssembly:.*SIMD/);
@@ -681,7 +683,10 @@ for (const completion of ["kill", "default-signal", "ordinary-word", "worker-err
         else if (completion === "ordinary-word") {
           claimOutcome(outcomeWord(transport.outcome), { kind: "exited", code: 23 });
           supervisor.exit(pid, 23);
-        } else state.workers.get(pid)!.onerror?.({ preventDefault() {}, message: "worker failed" } as ErrorEvent);
+        } else {
+          state.workers.get(pid)!.onmessage?.({ data: { type: "phase", name: "instantiate", duration: 0 } } as MessageEvent<WorkerMessage>);
+          state.workers.get(pid)!.onerror?.({ preventDefault() {}, message: "worker failed" } as ErrorEvent);
+        }
         const waiting = exitConfirmation(state.broker, pid);
         await Promise.resolve();
         expect(waiting.confirmed()).toBe(false);
@@ -862,7 +867,8 @@ test("failed activation releases the accepted legacy admission lease before root
   try {
     await expect(state.broker.ready()).rejects.toThrow("activation refused");
     await timerTurn();
-    expect(state.host.wait(state.pid)).toBe(126);
+    expect(state.host.wait(state.pid)).toBe(-1);
+    expect(JSON.parse(state.host.lastError!).code).toBe("EACCES");
     await state.broker.rootExit(0);
     const service = await state.runtime.processes();
     expect(() => service.retainRoot(1)).toThrow("Unknown root process 1");

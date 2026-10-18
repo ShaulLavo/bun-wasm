@@ -22,6 +22,7 @@ interface Child {
   request?: RunRequest;
   signal: number;
   acknowledged: boolean;
+  started: boolean;
   confirmed: boolean;
   closed: boolean;
   stopped: boolean;
@@ -137,7 +138,7 @@ export class SubprocessBroker {
     const child = this.children.get(event.pid);
     if (child) {
       child.confirmed = true;
-      childTransport(child.spawn.child).finish(event.result.status, event.result.kind === "signaled" ? event.result.code : undefined);
+      childTransport(child.spawn.child).complete(event.result);
       if (!child.acknowledged) this.filesystem.revoke(child.spawn.filesystem);
       if (!child.worker || child.stopped) this.children.delete(event.pid);
     }
@@ -155,7 +156,7 @@ export class SubprocessBroker {
     if (this.disposed || this.runtime.disposed) { this.cancel(spawn); return; }
     spawn = { ...spawn, executable: this.qualifyExecutable(spawn.executable) };
     this.rootTransport();
-    const child: Child = { spawn, signal: 0, acknowledged: false, confirmed: false, closed: false, stopped: false };
+    const child: Child = { spawn, signal: 0, acknowledged: false, started: false, confirmed: false, closed: false, stopped: false };
     this.children.set(spawn.pid, child);
     // Legacy requests already carry filesystem authority before the lazy process service exists.
     // Keep it in the page owner's fence until the broker accepts this controller synchronously.
@@ -195,7 +196,7 @@ export class SubprocessBroker {
       // The owner synchronously cancelled retained consumers and now owns every cleanup fence.
       if (this.runtime.disposed) return;
       childTransport(spawn.child).stderr.write(new TextEncoder().encode(`bun-wasm: process start failed: ${String(error)}\n`));
-      childTransport(spawn.child).finish(126);
+      childTransport(spawn.child).startFailed("EACCES");
       this.filesystem.revoke(spawn.filesystem);
       if (!controllerAccepted) {
         // Failed service/controller admission never transferred ownership. Retire that lease
@@ -258,6 +259,7 @@ export class SubprocessBroker {
       transport.stdout.close(); transport.stderr.close();
     });
     worker.onmessage = ({ data }: MessageEvent<WorkerMessage>) => {
+      if (data.type === "phase" && data.name === "instantiate") child.started = true;
       const selected = readOutcome(outcomeWord(spawn.child.outcome));
       if (data.type === "cleanup-error") {
         console.error("bun-wasm: child cleanup failed", data.message);
@@ -293,13 +295,15 @@ export class SubprocessBroker {
       this.filesystem.reap(spawn.filesystem);
       if (data.type === "exit" && data.signal) context.defaultSignal(data.signal as Signal);
       else if (data.type === "exit") context.exit(data.code);
+      else if (selected?.kind === "start-failed") context.startFailed({ code: selected.error });
       else context.fail(new Error(data.message));
       this.stopSafely(child);
     };
     worker.onerror = event => {
       event.preventDefault();
       childTransport(spawn.child).stderr.write(new TextEncoder().encode(`bun-wasm: child worker failed: ${event.message}\n`));
-      context.fail(new Error(event.message));
+      if (!child.started) context.startFailed(new Error(event.message));
+      else context.fail(new Error(event.message));
       // Error events are not quiescent acknowledgements. The outcome is already selected,
       // but filesystem work must drain before exit confirmation or physical termination.
       this.stopSafely(child);
@@ -348,7 +352,7 @@ export class SubprocessBroker {
       if (delivery.action !== "ignore") child.signal = Atomics.load(new Int32Array(child.spawn.child.requestedSignal), 0);
       if (delivery.outcome) {
         this.filesystem.revoke(child.spawn.filesystem);
-        childTransport(child.spawn.child).finish(delivery.outcome.status, delivery.outcome.kind === "signaled" ? delivery.outcome.code : undefined);
+        childTransport(child.spawn.child).complete(delivery.outcome);
         if (child.worker) this.stopSafely(child);
       }
     }
@@ -385,7 +389,7 @@ export class SubprocessBroker {
       const result = readOutcome(target.transport.outcome);
       if (!target.child || !result) continue;
       this.filesystem.revoke(target.child.spawn.filesystem);
-      childTransport(target.child.spawn.child).finish(result.status, result.kind === "signaled" ? result.code : undefined);
+      childTransport(target.child.spawn.child).complete(result);
       if (target.child.worker) this.stopSafely(target.child);
     }
     return delivered;
@@ -463,7 +467,7 @@ export class SubprocessBroker {
       Atomics.store(new Int32Array(spawn.child.interrupt), 0, 9);
     }
     if (!this.runtime.disposed) this.filesystem.revoke(spawn.filesystem);
-    childTransport(spawn.child).finish(result.status, result.kind === "signaled" ? result.code : undefined);
+    childTransport(spawn.child).complete(result);
   }
   private watch(): void {
     if (this.timer !== null || this.disposed || this.runtime.disposed) return;
@@ -481,6 +485,7 @@ export class SubprocessBroker {
           const result = readOutcome(record.outcome);
           if (result) {
             if (result.kind === "signaled") supervisor.defaultSignal(pid, result.code);
+            else if (result.kind === "start-failed") supervisor.failStart(pid, { code: result.error });
             else supervisor.exit(pid, result.code);
             continue;
           }

@@ -22,7 +22,7 @@ export interface RunRequest extends RuntimeWorkerRequest {
   budget?: SharedArrayBuffer;
   requestedSignal?: SharedArrayBuffer;
   signalState?: SharedArrayBuffer;
-  outcome?: SharedArrayBuffer;
+  outcome?: SharedArrayBuffer | BigInt64Array;
   trace: boolean;
   /** The networking ring (net/ring.ts); null when the page is not cross-origin isolated. */
   net: SharedArrayBuffer | null;
@@ -161,6 +161,7 @@ function bunExecutor(req: RunRequest): WorkerExecutor<RunRequest> {
           hostPostMessage({ type: "spawn", request } satisfies WorkerMessage);
           const control = new Int32Array(transport.control, 0, 4);
           return {
+            starting: true,
             revoke: () => { revokeFilesystem(filesystem); fs.sweep(); },
             terminate: () => { Atomics.store(control, 3, 1); },
           };
@@ -169,7 +170,7 @@ function bunExecutor(req: RunRequest): WorkerExecutor<RunRequest> {
     },
     instantiated({ instance, wasi, fs }) {
       netHost = req.net ? new NetHost(req.net, sendNet, (path, bytes) => fs.writeFile(path, bytes)) : null;
-      if (slots === "off") return;
+      if (slots === "off") { child?.started(); return; }
       const memory = instance.exports.memory;
       if (!(memory instanceof WebAssembly.Memory)) throw new Error("bun-wasm has no memory");
       netHost?.attach(memory);
@@ -177,6 +178,7 @@ function bunExecutor(req: RunRequest): WorkerExecutor<RunRequest> {
       const impls = subprocess ? subprocess.slots(netHost?.slots()) : netHost?.slots();
       if (impls && slots === "imports") wasi.hostCall = installHostSlotsViaImport(instance, impls);
       else if (impls) installHostSlots(instance, impls);
+      child?.started();
     },
     run({ instance, checkActive, finish }, exited) {
       const ready = instance.exports.bunwasm_ready as (() => number) | undefined;

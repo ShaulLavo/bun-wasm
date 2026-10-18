@@ -30,33 +30,50 @@ for (const [name, fn] of [
   }
 }
 
-const spawnErrors = new Set(["ENOENT", "ERR_NOT_SUPPORTED_IN_WASM"]);
-function unavailable(error: unknown) {
-  return error instanceof Error && "code" in error && typeof error.code === "string" && spawnErrors.has(error.code);
+const processHost = process.env.BUNWASM_TEST_HOST === "node";
+const missingCode = processHost ? "ENOENT" : "ERR_NOT_SUPPORTED_IN_WASM";
+function validError(error, syscall) {
+  if (!(error instanceof Error) || error.code !== missingCode) return false;
+  if (!processHost) return true;
+  return error.errno === -2 && error.path === "ls" && error.syscall === syscall &&
+    JSON.stringify(error.spawnargs) === '["argument"]';
 }
-function unregistered(code: number | null, diagnostic: string) {
-  return code === 127 && diagnostic.includes("executable not found: ls");
-}
-const missingChild = childProcess.spawn("ls");
-let diagnostic = "";
-missingChild.stdout?.on("data", () => {});
-missingChild.stderr?.on("data", chunk => { diagnostic += String(chunk); });
-const failed = await new Promise<boolean>(resolve => {
-  let settled = false;
-  const finish = (value: boolean) => { if (settled) return; settled = true; resolve(value); };
-  missingChild.once("error", error => finish(unavailable(error)));
-  missingChild.once("close", (code, signal) => finish(signal == null && unregistered(code, diagnostic)));
+const missingChild = childProcess.spawn("ls", ["argument"]);
+const failedSpawn = await new Promise((resolve) => {
+  let error;
+  const events = [];
+  const timer = setTimeout(() => { missingChild.kill(); resolve(false); }, 1000);
+  missingChild.on("spawn", () => events.push("spawn"));
+  missingChild.on("exit", () => events.push("exit"));
+  missingChild.on("error", (value) => { error = value; events.push("error"); });
+  missingChild.on("close", (code, signal) => {
+    clearTimeout(timer);
+    events.push("close");
+    resolve(validError(error, "spawn ls") && missingChild.pid === undefined && code === -2 && signal === null &&
+      missingChild.exitCode === -2 && missingChild.stdin?.destroyed === true &&
+      missingChild.stdout?.readableEnded === true && missingChild.stderr?.readableEnded === true &&
+      JSON.stringify(events) === '["error","close"]');
+  });
 });
-console.log("child_process.spawn fails:", failed);
+console.log("child_process.spawn failure:", failedSpawn);
+const nodeSync = childProcess.spawnSync("ls", ["argument"]);
+console.log("child_process.spawnSync failure:", validError(nodeSync.error, "spawnSync ls") && nodeSync.status === null && nodeSync.signal === null);
 console.log("Bun.which:", Bun.which("ls"));
-const spawned = Bun.spawnSync({ cmd: ["ls"] });
-console.log("Bun.spawnSync fails:", !spawned.success && spawned.exitCode !== 0 &&
-  (unavailable(spawned.error) || unregistered(spawned.exitCode, new TextDecoder().decode(spawned.stderr))));
+let syncFailure = false;
 try {
-  const child = Bun.spawn({ cmd: ["ls"], stdout: "pipe", stderr: "pipe" });
-  const [code, text] = await Promise.all([child.exited, child.stderr.text()]);
-  console.log("Bun.spawn fails:", unregistered(code, text));
-} catch (error) { console.log("Bun.spawn fails:", unavailable(error)); }
+  const spawned = Bun.spawnSync({ cmd: ["ls"] });
+  syncFailure = !processHost && !spawned.success && spawned.exitCode !== 0 && spawned.error?.code === missingCode;
+} catch (error) {
+  syncFailure = processHost && error instanceof Error && error.code === "ENOENT" && error.errno === -2 && error.path === "ls";
+}
+console.log("Bun.spawnSync failure:", syncFailure);
+try {
+  const child = Bun.spawn({ cmd: ["ls"] });
+  child.kill();
+  console.log("Bun.spawn throws:", false);
+} catch (error) {
+  console.log("Bun.spawn throws:", error.code === missingCode && (!processHost || error.errno === -2 && error.path === "ls"));
+}
 try {
   const server = Bun.serve({ port: 0, fetch() { return new Response("unexpected"); } });
   server.stop(true);
