@@ -369,7 +369,10 @@ silently replacing or dropping it. Process descriptors support ordinary WASI rea
 close, renumber and `poll_oneoff` operations as well as the direct process imports. Filesystem
 handles are translated through a private descriptor map, so inherited streams cannot expose
 or revive a preopen with the same underlying number. Renumbering replaces files and streams
-in either direction. Mixed filesystem, clock and stream polls preserve guest subscriptions;
+in either direction. Local filesystem-backed descriptors, including replaced stdin/stdout,
+share their offsets across WASI and direct `runtime_proc.read`/`write`; their synchronous I/O
+is immediately ready in process polls. This local interop does not enable filesystem handle
+transfer through spawn. Mixed filesystem, clock and stream polls preserve guest subscriptions;
 handled signals interrupt a blocked poll without consuming the signal.
 
 ## Hosts

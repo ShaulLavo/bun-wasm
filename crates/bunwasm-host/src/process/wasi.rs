@@ -53,7 +53,7 @@ fn original(linker: &Linker<Host>, store: &mut Store<Host>, name: &str) -> Resul
     section(
         &mut wasm,
         2,
-        &[2, 1, b't', 1, b'f', 0, 0, 1, b't', 1, b'm', 2, 0, 1],
+        &[2, 1, b't', 1, b'f', 0, 0, 1, b't', 1, b'm', 2, 0, 0],
     );
     section(&mut wasm, 3, &[1, 0]);
     section(
@@ -320,6 +320,50 @@ fn poll_oneoff(
     }
 }
 
+/// runtime_proc has no iovec parameter. Use private memory for the retained
+/// preview1 file operation, then copy only its accepted bytes to/from the guest.
+/// Stream operations continue using their shared nonblocking open description.
+fn file_io(
+    caller: &mut Caller<'_, Host>,
+    delegate: &Delegated,
+    scratch: wasmtime::Memory,
+    memory: wasmtime::Memory,
+    actual: i32,
+    bytes: std::ops::Range<usize>,
+    write: bool,
+) -> Result<i32> {
+    let pages = (bytes.len() + 32).div_ceil(65536) as u64;
+    let current = scratch.size(&*caller);
+    if pages > current && scratch.grow(&mut *caller, pages - current).is_err() {
+        return Ok(-48);
+    }
+    scratch.data_mut(&mut *caller)[..4].copy_from_slice(&32u32.to_le_bytes());
+    scratch.data_mut(&mut *caller)[4..8].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
+    if write {
+        let source = memory.data(&*caller)[bytes.clone()].to_vec();
+        scratch.data_mut(&mut *caller)[32..32 + source.len()].copy_from_slice(&source);
+    }
+    let result = call_values_in(
+        delegate,
+        caller,
+        &[Val::I32(actual), Val::I32(0), Val::I32(1), Val::I32(16)],
+        Some(scratch),
+    )?;
+    if result != 0 {
+        return Ok(-result);
+    }
+    let count = u32::from_le_bytes(scratch.data(&*caller)[16..20].try_into().unwrap()) as usize;
+    anyhow::ensure!(
+        count <= bytes.len(),
+        "preview1 returned an oversized file operation"
+    );
+    if !write {
+        let read = scratch.data(&*caller)[32..32 + count].to_vec();
+        memory.data_mut(&mut *caller)[bytes.start..bytes.start + count].copy_from_slice(&read);
+    }
+    Ok(count as i32)
+}
+
 /// Files remain in Wasmtime's private table, but its descriptor numbers are
 /// never exposed directly. This map keeps streams and files in one namespace,
 /// including when the underlying table reuses a number occupied by a pipe.
@@ -412,6 +456,10 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
     let open = original(linker, store, "path_open")?;
     let poll = original(linker, store, "poll_oneoff")?;
     let poll_scratch = wasmtime::Memory::new(&mut *store, wasmtime::MemoryType::new(1, None))?;
+    // Separate delegate instances cache the private scratch memory rather than
+    // the guest memory used by ordinary WASI calls.
+    let file_read = original(linker, store, "fd_read")?;
+    let file_write = original(linker, store, "fd_write")?;
     let state = namespace.clone();
     linker.func_wrap(
         "__native_process",
@@ -421,6 +469,76 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
         },
     )?;
     linker.allow_shadowing(true);
+    for (name, write, delegate) in [("read", false, file_read), ("write", true, file_write)] {
+        let state = namespace.clone();
+        linker.func_wrap(
+            "runtime_proc",
+            name,
+            move |mut caller: Caller<'_, Host>, fd: i32, ptr: i32, len: i32| -> Result<i32> {
+                let memory = memory(&mut caller)?;
+                let Some(bytes) = span(memory.data(&caller), ptr, len as u32 as usize) else {
+                    return Ok(FAULT);
+                };
+                let mut state = state.lock().unwrap();
+                state.initialize(&mut caller)?;
+                if let Some(&actual) = state.files.get(&fd) {
+                    caller.data().cancel.check()?;
+                    return file_io(
+                        &mut caller,
+                        &delegate,
+                        poll_scratch,
+                        memory,
+                        actual,
+                        bytes,
+                        write,
+                    );
+                }
+                let (memory, host) = memory.data_and_store_mut(&mut caller);
+                Ok(if write {
+                    host.processes.write(fd, &memory[bytes])
+                } else {
+                    host.processes.read(fd, &mut memory[bytes])
+                })
+            },
+        )?;
+    }
+    let state = namespace.clone();
+    linker.func_wrap(
+        "runtime_proc",
+        "poll",
+        move |mut caller: Caller<'_, Host>,
+              input: i32,
+              count: i32,
+              timeout: i32,
+              output: i32|
+              -> Result<i32> {
+            let memory = memory(&mut caller)?;
+            let Some(length) = (count as u32 as usize).checked_mul(16) else {
+                return Ok(FAULT);
+            };
+            let (Some(input), Some(output)) = (
+                span(memory.data(&caller), input, length),
+                span(memory.data(&caller), output, length),
+            ) else {
+                return Ok(FAULT);
+            };
+            let subscriptions = memory.data(&caller)[input].to_vec();
+            let mut state = state.lock().unwrap();
+            state.initialize(&mut caller)?;
+            match caller
+                .data()
+                .processes
+                .poll_with_files(&subscriptions, timeout, |fd| state.files.contains_key(&fd))
+            {
+                Ok(events) => {
+                    memory.data_mut(&mut caller)[output.start..output.start + events.len()]
+                        .copy_from_slice(&events);
+                    Ok((events.len() / 16) as i32)
+                }
+                Err(error) => Ok(error),
+            }
+        },
+    )?;
     // Every remaining preview1 descriptor operation translates its file handles.
     // Streams have no corresponding private file entry, so they cannot reveal
     // an unrelated directory through path, seek, metadata, or socket operations.
