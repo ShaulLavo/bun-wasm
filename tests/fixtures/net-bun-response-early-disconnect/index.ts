@@ -6,6 +6,13 @@ const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 
 type DisconnectMode = "end" | "destroy";
 
+function connected(socket: net.Socket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    socket.once("error", reject);
+    socket.once("connect", resolve);
+  });
+}
+
 async function probe(mode: DisconnectMode): Promise<void> {
   const started = Promise.withResolvers<void>();
   const proceed = Promise.withResolvers<void>();
@@ -31,13 +38,8 @@ async function probe(mode: DisconnectMode): Promise<void> {
   const socket = net.connect({ host: "127.0.0.1", port: server.port, allowHalfOpen: true });
   socket.on("error", () => {});
   try {
-    await new Promise<void>((resolve, reject) => {
-      socket.once("error", reject);
-      socket.once("connect", () => {
-        socket.write("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
-        resolve();
-      });
-    });
+    await connected(socket);
+    socket.write("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
     await started.promise;
     const disconnect = mode === "end" ? () => socket.end() : () => socket.destroy();
     disconnect();

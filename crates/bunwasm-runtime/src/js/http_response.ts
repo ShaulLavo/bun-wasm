@@ -2,6 +2,7 @@
   type Pair = [string, string];
   type Connection = {
     closed: boolean;
+    readEnded: boolean;
     onClose?: (() => void) | null;
     onEnd?: (() => void) | null;
     write(bytes: Uint8Array, callback?: (error?: unknown) => void): void;
@@ -44,6 +45,11 @@
 
   async function stream(connection: Connection, response: BodyResponse, source: ReadableStream<unknown>, pairs: Pair[], serialize: Serialize, reportError: (error: unknown) => void): Promise<boolean> {
     if (response.bodyUsed || source.locked) throw new TypeError("Body already used");
+    response._bodyUsed = true;
+    if (connection.closed || connection.readEnded) {
+      await source.cancel().catch(reportError);
+      return false;
+    }
     const reader = source.getReader();
     const previousClose = connection.onClose;
     const previousEnd = connection.onEnd;
@@ -57,7 +63,6 @@
     };
     connection.onClose = closed;
     connection.onEnd = ended;
-    response._bodyUsed = true;
     pairs.push(["transfer-encoding", "chunked"]);
     try {
       await write(connection, serialize(response.status, response.statusText, pairs));

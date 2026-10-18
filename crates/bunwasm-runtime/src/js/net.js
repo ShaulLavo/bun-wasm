@@ -286,6 +286,7 @@
       this.queue = [];
       this.closing = false;
       this.closed = false;
+      this.readEnded = false;
       this.onData = null;
       this.onEnd = null;
       this.onError = null;
@@ -302,6 +303,16 @@
         ref: this.referenced !== false,
       });
     }
+    finishRead(chunk) {
+      this.reading = false;
+      if (chunk === 0) {
+        this.readEnded = true;
+        this.onEnd?.();
+        return true;
+      }
+      this.fail(hostError(this.handle, "connection error"));
+      return true;
+    }
     pumpRead() {
       if (this.closed) return true;
       let progressed = false;
@@ -309,12 +320,7 @@
         if (this.canRead && !this.canRead()) return progressed ? "progress" : false;
         const chunk = native.hostRead(this.handle);
         if (chunk === AGAIN) return progressed ? "progress" : false;
-        if (typeof chunk === "number") {
-          this.reading = false;
-          if (chunk === 0) this.onEnd?.();
-          else this.fail(hostError(this.handle, "connection error"));
-          return true;
-        }
+        if (typeof chunk === "number") return this.finishRead(chunk);
         progressed = true;
         if (this.onData) this.onData(chunk);
         if (this.closed) return true;

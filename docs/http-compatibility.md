@@ -626,9 +626,33 @@ The streaming response owns its reader and temporary connection callbacks.
 Peer EOF closes that connection, and the existing close callback cancels only
 the owned reader. Both callbacks are restored when streaming finishes. Native
 Bun passes `undefined` on disconnect. The fixture checks this reason and exactly
-one cancellation for a stream and a custom async iterator. An async generator
-already awaiting an unrelated unresolved promise cannot be preempted by its
+one cancellation for a stream and a custom async iterator. Connections also
+retain peer EOF before the response writer exists. The writer checks EOF and
+closed state before taking reader ownership. It cancels the unused source once
+with `undefined`, without locking it or sending headers. Producer cleanup
+observers therefore see an unlocked source immediately. The
+`net-bun-response-early-disconnect` fixture holds the handler at an explicit
+promise, disconnects with both `end()` and `destroy()`, then releases it. It
+checks producer cleanup before stopping the server. Native Bun 1.4.2 passes;
+the pre-fix QuickJS, JSC and browser guests leave the producer locked and
+uncancelled. This changes only Bun response streaming, not Node's separate
+reply-after-FIN behavior. An async generator already awaiting an unrelated unresolved promise cannot be preempted by its
 `return()` method; native Bun has the same limit.
+
+The remaining review fix passes all eight focused fixtures on each rebuilt
+QuickJS, JSC and browser guest. The six portable HTTP/empty-FIN controls also
+pass on native Bun 1.4.2. Four-case disconnect timing output matches native
+byte-for-byte, including both early disconnect modes: no response data, one
+cancellation with `undefined`, and an unlocked source. The extra same-socket
+framing controls cover short, long and invalid declared lengths; extra body and
+header abort controls include the empty-string reason. All pass on native and
+the three guests. This is a focused replay, not another suite census or web gate.
+Failing-first output at `1e8d1f79`, final logs, commands, artifact hashes and
+cleanup checks are retained in
+`/work/reports/bun-wasm-pr80-review-1e8d1f79/takeover-r2/`, with the initial
+`takeover-baseline.log` and `early-disconnect-before.log` beside it. The
+coordinator owns removal after accepting PR #80. Private build targets and
+fixture copies are removed after each run; shared prebuilds are unchanged.
 
 The fetch adapter uses `signal.aborted` to select the original reason, including
 null and other falsy values. The header-wait path has the same identity contract.
