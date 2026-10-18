@@ -143,7 +143,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, write-side shutdown and bounded native handle allocation over the existing host ABI. |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming, Agent pool and upgrade response adapters shared by all engines. |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
-| [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns and bounded immediate batches. |
+| [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns, pending-signal dispatch before check callbacks, and bounded immediate batches. |
 | [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations, with Node listener identity. |
 | [`src/js/exit_provenance.ts` and lifecycle hooks](#runtime-exit-provenance) | Host feature | Original opt-in exit diagnostics over the existing event loop and error handlers. |
 | [`scripts/generate-ws.sh` and builtin resolution](#portable-ws-builtin) | Host feature | Original module wrapper supplies Bun's builtin ws import and require on every engine. |
@@ -467,8 +467,13 @@ path or revision.
 The scheduler gives I/O a turn between callback turns, even when callbacks keep
 queuing immediates or timers remain due. Immediate callbacks queued during an
 existing batch wait for the next batch, so due timers can run. Microtasks still
-drain between callback turns. This uses the existing I/O waiter interface and adds
-no host ABI slot.
+drain between callback turns. Before entering callbacks, the scheduler also drains
+pending handled signals and yields to the job queue when a handler ran. JSC can
+execute the entry module during the job drain, after Rust's initial signal poll;
+without this checkpoint a signal received during synchronous sleep ran after the
+next immediate. The checkpoint stays outside engine interruption callbacks and
+preserves the existing I/O phase. This uses the existing signal and I/O interfaces
+and adds no host ABI slot.
 
 ## Portable filesystem watcher
 
