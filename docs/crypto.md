@@ -61,9 +61,9 @@ already built archive for that target.
 
 ## Verification
 
-[webcrypto-keys](../tests/fixtures/webcrypto-keys) exercises the algorithm families, key
+[webcrypto-keys](../tests/fixtures/webcrypto-keys/) exercises the algorithm families, key
 formats, usage checks, tamper rejection and key wrapping.
-[crypto-vectors](../tests/fixtures/crypto-vectors) checks 45 native Node vectors, including
+[crypto-vectors](../tests/fixtures/crypto-vectors/) checks 45 native Node vectors, including
 all GCM tag sizes, AES-192, non-96-bit GCM IVs, CTR field wrap and binary OAEP labels.
 `scripts/generate-crypto-vectors.mjs` regenerates those vectors with native Node.
 `scripts/check-crypto-review.sh <report-dir>` replays the SHA-1 JWK, P-384/SHA-1 and

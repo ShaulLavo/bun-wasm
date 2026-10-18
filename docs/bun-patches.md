@@ -134,10 +134,6 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters and `web/src/engine-host.js` provider capture`](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 | [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, write-side shutdown and bounded native handle allocation over the existing host ABI. |
-| [libc README detail](#vendored-readme-detail) | Port | Preserve upstream documentation in docs with a short local index. |
-| [tar README detail](#vendored-readme-detail) | Port | Preserve upstream documentation in docs with a short local index. |
-| [wasmi README detail](#vendored-readme-detail) | Port | Preserve upstream documentation in docs with a short local index. |
-| [rquickjs-sys README detail](#vendored-readme-detail) | Port | Preserve upstream documentation in docs with a short local index. |
 | [Embedded WHATWG Streams](#whatwg-reader-lock-errors) | Port | Pinned portable streams with Bun reader-lock error text. |
 | [Streams AST hooks](#whatwg-reader-lock-errors) | Host feature | Original generator adapter preserves Node completion hooks and error codes. |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming request/response bodies, Agent pool and upgrade response adapters shared by all engines. |
@@ -987,7 +983,7 @@ File `jsc/webkit-wasi.patch`. The following hunks have class **Port**.
 | `Source/cmake/OptionsJSCOnly.cmake` | Disable native API tests for WASI. | The cross-build includes unsupported test targets. |
 | `Source/cmake/WebKitCommon.cmake` | Recognize CMake's WASI system name. | Configure rejects the OS. |
 
-`jsc/wasi-jsc.cmake`, `jsc/configure.sh`, and `jsc/shim/wasi-compat.{h,c}` plus `madvise.c` are our **Port** configuration and glue, not edits to upstream source. They select the C-loop interpreter, system malloc, single-thread GC, and disabled JIT/Wasm tiers; supply temporary-file helpers and inert signal/scheduling declarations; and link the WASI support library. Without them the target cannot configure or link. `jsc/finalize.sh` runs Binaryen's `--spill-pointers`, without which conservative GC misses references in wasm locals. See [the JSC notes](guides/javascriptcore.md).
+`jsc/wasi-jsc.cmake`, `jsc/configure.sh`, and `jsc/shim/wasi-compat.{h,c}` plus `madvise.c` are our **Port** configuration and glue, not edits to upstream source. They select the C-loop interpreter, system malloc, single-thread GC, and disabled JIT/Wasm tiers; supply temporary-file helpers and inert signal/scheduling declarations; and link the WASI support library. Without them the target cannot configure or link. `jsc/finalize.sh` runs Binaryen's `--spill-pointers`, without which conservative GC misses references in wasm locals. See [the JSC notes](../jsc/README.md).
 
 ### WebKit module import slots
 
@@ -1620,20 +1616,6 @@ sequence preserves an unstarted peer's queue until it drains, without polling.
 Local closure suppresses future delivery while selected messages finish, with
 promise continuations between messages. BroadcastChannel receive returns
 `undefined` without consuming its messages, matching native Bun 1.4.2.
-
-## Vendored README detail
-
-Class **Port**, documentation only. The repository's short-README rule moves the
-full upstream text into `docs/guides/upstream/` and leaves original short indexes
-at the old paths. Relative links are rebased. The omitted wasmi logo is linked
-from its upstream revision. No native implementation changes accompany this move.
-
-| Upstream README and revision | Local detail |
-| --- | --- |
-| `rust-lang/libc`, `README.md`, crate 0.2.186 | `docs/guides/upstream/libc.md` |
-| `composefs/tar-rs`, `README.md`, 0.4.46, `fc459c149f83bf4daceaa52e17d351989002e1a9` | `docs/guides/upstream/tar.md` |
-| `wasmi-labs/wasmi`, `crates/wasmi/README.md`, 0.46.0, `50ac76771d631f642e8c4c61bf44c99546024461` | `docs/guides/upstream/wasmi.md` |
-| `DelSkayn/rquickjs`, `sys/README.md`, crate 0.13.0 | `docs/guides/upstream/rquickjs-sys.md` |
 
 ## WHATWG reader lock errors
 

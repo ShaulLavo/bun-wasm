@@ -265,7 +265,7 @@ def main():
         text += "\n" + markdown_table(["Engine", "Compared files", "Fully passing", "Observed passes", "File timeouts", "QuickJS failures passing here", "QuickJS passes failing here"], [[engine, len(records), sum(r["fully_passing"] for r in records.values()), sum(r["counts"]["pass"] for r in records.values()), sum(r["timed_out"] for r in records.values()), summary["comparison"][engine]["quickjs_fail_other_pass"], summary["comparison"][engine]["quickjs_pass_other_fail"]] for engine, records in comparisons.items()]) + "\n"
         for engine, records in comparisons.items():
             text += f"\n### {engine} comparison\n\n" + tables({"results": list(records.values())}) + "\n"
-    readme = opts.output / "results.md"
+    readme = opts.output / "README.md"
     template = readme.read_text() if readme.exists() else "# Bun's upstream suite\n\n<!-- baseline:start -->\n<!-- baseline:end -->\n"
     template = re.sub(r"<!-- progress:start -->.*?<!-- progress:end -->", "", template, flags=re.S).rstrip() + "\n\n<!-- progress:start -->\n" + history + "<!-- progress:end -->\n"
     readme.write_text(re.sub(r"<!-- baseline:start -->.*?<!-- baseline:end -->", lambda match: "<!-- baseline:start -->\n" + text + "<!-- baseline:end -->", template, flags=re.S))
