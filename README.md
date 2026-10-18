@@ -75,6 +75,14 @@ services, terminal streams, shell jobs, or the Runtime lifetime. Registration fa
 all registrations already made by that installation. Unrelated registrations are preserved.
 Callers that register extra programs with Waffle are responsible for their own unregister handles.
 
+### Current networking limitations
+
+Processes launched by this installer do not receive networking slots or share the playground's
+networking ring. QuickJS and JSC processes therefore have no networking support through these
+launchers. The browser engine retains direct host `fetch`, subject to browser restrictions such
+as CORS; it does not gain a shared socket namespace. Sharing networking between processes is
+tracked in [browser runtime plan, row 6](plans/browser-runtime.md#build-plan).
+
 ### Worker bundling
 
 The example above is the tested Vite pattern. Vite must emit ES module workers:
