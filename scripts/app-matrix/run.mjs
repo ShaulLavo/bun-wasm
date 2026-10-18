@@ -233,11 +233,15 @@ try {
   const { browserHost } = await import("./browser.mjs");
   browserSession = await browserHost({ root, scratch, options, launch, stop });
   for (const app of selected) {
+    const checkBuildCase = async () => {
     if (options.reference || options.record) await nativeApp(app, "reference", true);
     if (options.hosts.includes("native")) for (const engine of options.engines) await nativeApp(app, engine);
     if (options.hosts.includes("playground") && browserSubset.includes(app.id)) {
       for (const engine of options.engines) await browserSession.runApp({ app, engine, registry: mirror.base, record });
     }
+
+    };
+    await checkBuildCase();
   }
 } catch (error) {
   infrastructureError = String(error.stack ?? error);

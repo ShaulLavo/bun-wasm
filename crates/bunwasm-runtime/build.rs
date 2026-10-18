@@ -12,10 +12,14 @@ mod polyfills;
 fn build_brotli() {
     let source = Path::new("../../third_party/brotli/c");
     let mut build = cc::Build::new();
-    build.include(source.join("include")).define("BROTLI_BUILD_PORTABLE", None).warnings(false);
+    build
+        .include(source.join("include"))
+        .define("BROTLI_BUILD_PORTABLE", None)
+        .warnings(false);
     for part in ["common", "dec", "enc"] {
         // Sorted: directory order is not a reproducible link-input order.
-        let mut files: Vec<_> = fs::read_dir(source.join(part)).unwrap()
+        let mut files: Vec<_> = fs::read_dir(source.join(part))
+            .unwrap()
             .map(|entry| entry.unwrap().path())
             .filter(|path| path.extension().is_some_and(|s| s == "c"))
             .collect();
@@ -32,19 +36,39 @@ fn build_zlib_ng() {
     let source = Path::new("../../third_party/zlib-ng");
     let include = Path::new(&std::env::var("OUT_DIR").unwrap()).join("zlib-ng");
     fs::create_dir_all(&include).unwrap();
-    let zlib_h = fs::read_to_string(source.join("zlib.h.in")).unwrap().replace("@ZLIB_SYMBOL_PREFIX@", "");
+    let zlib_h = fs::read_to_string(source.join("zlib.h.in"))
+        .unwrap()
+        .replace("@ZLIB_SYMBOL_PREFIX@", "");
     fs::write(include.join("zlib.h"), zlib_h).unwrap();
-    let zconf_h = fs::read_to_string(source.join("zconf.h.in")).unwrap()
+    let zconf_h = fs::read_to_string(source.join("zconf.h.in"))
+        .unwrap()
         .replace("#ifdef HAVE_UNISTD_H ", "#if 1 ")
         .replace("#ifdef NEED_PTRDIFF_T ", "#if 0 ");
     fs::write(include.join("zconf.h"), zconf_h).unwrap();
-    fs::copy(source.join("zlib_name_mangling.h.empty"), include.join("zlib_name_mangling.h")).unwrap();
+    fs::copy(
+        source.join("zlib_name_mangling.h.empty"),
+        include.join("zlib_name_mangling.h"),
+    )
+    .unwrap();
     let mut build = cc::Build::new();
-    build.include(&include).include(source).include(source.join("arch/generic")).warnings(false).std("c11");
+    build
+        .include(&include)
+        .include(source)
+        .include(source.join("arch/generic"))
+        .warnings(false)
+        .std("c11");
     for define in [
-        "ZLIB_COMPAT", "WITH_ALL_FALLBACKS", "INFLATE_STRICT", "HAVE_ATTRIBUTE_ALIGNED",
-        "HAVE_BUILTIN_ASSUME_ALIGNED", "HAVE_BUILTIN_CTZ", "HAVE_BUILTIN_CTZLL", "HAVE_VISIBILITY_HIDDEN",
-        "HAVE_VISIBILITY_INTERNAL", "HAVE_POSIX_MEMALIGN", "__USE_LARGEFILE64",
+        "ZLIB_COMPAT",
+        "WITH_ALL_FALLBACKS",
+        "INFLATE_STRICT",
+        "HAVE_ATTRIBUTE_ALIGNED",
+        "HAVE_BUILTIN_ASSUME_ALIGNED",
+        "HAVE_BUILTIN_CTZ",
+        "HAVE_BUILTIN_CTZLL",
+        "HAVE_VISIBILITY_HIDDEN",
+        "HAVE_VISIBILITY_INTERNAL",
+        "HAVE_POSIX_MEMALIGN",
+        "__USE_LARGEFILE64",
     ] {
         build.define(define, None);
     }
@@ -52,16 +76,38 @@ fn build_zlib_ng() {
     for name in [
         // compress.c and uncompr.c are omitted: bunwasm-glue already exports a
         // `compress2` for Bun's crates and nothing here calls the one-shot API.
-        "adler32", "cpu_features", "crc32", "crc32_braid_comb", "deflate", "deflate_fast",
-        "deflate_huff", "deflate_medium", "deflate_quick", "deflate_rle", "deflate_slow", "deflate_stored",
-        "functable", "infback", "inflate", "inftrees", "insert_string", "insert_string_roll", "trees",
+        "adler32",
+        "cpu_features",
+        "crc32",
+        "crc32_braid_comb",
+        "deflate",
+        "deflate_fast",
+        "deflate_huff",
+        "deflate_medium",
+        "deflate_quick",
+        "deflate_rle",
+        "deflate_slow",
+        "deflate_stored",
+        "functable",
+        "infback",
+        "inflate",
+        "inftrees",
+        "insert_string",
+        "insert_string_roll",
+        "trees",
         "zutil",
     ] {
         build.file(source.join(format!("{name}.c")));
     }
     for name in [
-        "adler32_c", "adler32_fold_c", "chunkset_c", "compare256_c", "crc32_braid_c", "crc32_chorba_c",
-        "crc32_fold_c", "slide_hash_c",
+        "adler32_c",
+        "adler32_fold_c",
+        "chunkset_c",
+        "compare256_c",
+        "crc32_braid_c",
+        "crc32_chorba_c",
+        "crc32_fold_c",
+        "slide_hash_c",
     ] {
         build.file(source.join(format!("arch/generic/{name}.c")));
     }
@@ -77,7 +123,11 @@ fn main() {
     polyfills::embed(Path::new(&manifest), Path::new(&out));
 
     let bun_dir = Path::new(&manifest).join("../../vendor/bun");
-    for path in [bun_dir.join(".git/HEAD"), bun_dir.join(".git/refs/heads"), bun_dir.join(".git/packed-refs")] {
+    for path in [
+        bun_dir.join(".git/HEAD"),
+        bun_dir.join(".git/refs/heads"),
+        bun_dir.join(".git/packed-refs"),
+    ] {
         if path.exists() {
             println!("cargo:rerun-if-changed={}", path.display());
         }

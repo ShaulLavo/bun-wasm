@@ -453,6 +453,7 @@
   }
 
   function processCallback(this: Handle) {
+    // oxlint-disable-next-line no-this-alias -- Retain the owner for callbacks whose receiver differs.
     const handle = this;
     const self = this.owner;
     const state = self._writeState;

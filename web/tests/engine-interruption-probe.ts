@@ -109,15 +109,18 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
       return status;
     } catch (error) {
       if (checkpoint) {
-        Atomics.add(probe, probeCell.checkpointThrew, 1);
-        // The fatal decision precedes wake publication: this word can still be
-        // zero or the previous handled signal even after the real callback throws.
-        // Only a production terminal exception identifies this fatal checkpoint.
-        if (error instanceof DefaultSignal || error instanceof ProcessSignalExit) {
-          if (!signalBefore) Atomics.add(probe, probeCell.checkpointAfterSignal, 1);
-          Atomics.store(probe, probeCell.checkpointSignal, error.signal);
-          Atomics.store(probe, probeCell.checkpointFatalSignal, error.signal);
-        }
+        const recordFatalCheckpoint = () => {
+          Atomics.add(probe, probeCell.checkpointThrew, 1);
+          // The fatal decision precedes wake publication: this word can still be
+          // zero or the previous handled signal even after the real callback throws.
+          // Only a production terminal exception identifies this fatal checkpoint.
+          if (error instanceof DefaultSignal || error instanceof ProcessSignalExit) {
+            if (!signalBefore) Atomics.add(probe, probeCell.checkpointAfterSignal, 1);
+            Atomics.store(probe, probeCell.checkpointSignal, error.signal);
+            Atomics.store(probe, probeCell.checkpointFatalSignal, error.signal);
+          }
+        };
+        recordFatalCheckpoint();
       }
       throw error;
     }
@@ -150,14 +153,17 @@ export function observeEngineImports(imports: WebAssembly.Imports, probe: Int32A
       const previousLine = partialLines.get(fd);
       let line: string | null = previousLine === undefined ? "" : previousLine;
       for (const character of text) {
-        if (character === "\n") {
-          const cell = markers.find(([marker]) => marker === line)?.[1];
-          if (cell !== undefined) Atomics.add(probe, cell, 1);
-          line = "";
-        } else if (line !== null) {
-          const next: string = line + character;
-          line = markers.some(([marker]) => marker.startsWith(next)) ? next : null;
-        }
+        const recordOutputCharacter = () => {
+          if (character === "\n") {
+            const cell = markers.find(([marker]) => marker === line)?.[1];
+            if (cell !== undefined) Atomics.add(probe, cell, 1);
+            line = "";
+          } else if (line !== null) {
+            const next: string = line + character;
+            line = markers.some(([marker]) => marker.startsWith(next)) ? next : null;
+          }
+        };
+        recordOutputCharacter();
       }
       partialLines.set(fd, line);
     }

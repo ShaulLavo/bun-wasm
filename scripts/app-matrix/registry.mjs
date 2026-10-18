@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from "node:path";
 
 export const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
-export const recorderErrorHeader = "x-bun-wasm-recorder-error";
+const recorderErrorHeader = "x-bun-wasm-recorder-error";
 
 export async function registry(options) {
   const { directory, record } = options;

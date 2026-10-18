@@ -11,10 +11,13 @@ pub(crate) use serialized_failure::SerializedFailure;
 mod facade;
 
 #[path = "../../../../vendor/bun/src/runtime/bake/dev_server/incremental_graph.rs"]
+#[allow(dead_code, clippy::all)] // Unchanged pinned Bun module; upstream owns its lint policy.
 pub(crate) mod incremental_graph;
 #[path = "../../../../vendor/bun/src/runtime/bake/dev_server/packed_map.rs"]
+#[allow(dead_code, clippy::all)] // Unchanged pinned Bun module; upstream owns its lint policy.
 pub(crate) mod packed_map;
 #[path = "../../../../vendor/bun/src/runtime/bake/dev_server/serialized_failure.rs"]
+#[allow(dead_code, clippy::all)] // Unchanged pinned Bun module; upstream owns its lint policy.
 pub(crate) mod serialized_failure;
 
 pub(crate) mod dev_server_body {
@@ -25,6 +28,7 @@ pub(crate) const CLIENT_PREFIX: &str = "/_bun/client";
 
 pub(crate) struct HmrRuntime {
     pub(crate) code: &'static bun_core::ZStr,
+    #[allow(dead_code)] // Required shape of Bun's shared graph context.
     pub(crate) line_count: u32,
 }
 
@@ -51,6 +55,7 @@ pub(crate) mod route_bundle {
     pub(crate) type Index = bun_core::GenericIndex<u32, Marker>;
 }
 
+#[allow(dead_code)] // Shape required by Bun's included graph, including its unused server half.
 pub(crate) mod source_map_store {
     use super::packed_map;
 
@@ -76,6 +81,7 @@ pub(crate) mod source_map_store {
 }
 
 #[derive(Copy, Clone)]
+#[allow(dead_code)] // Route payload shape required by Bun's included incremental graph.
 pub(crate) struct RouteIndexAndRecurseFlag(pub(crate) u32);
 
 /// Graph execution is synchronous on the guest's single thread.
@@ -118,6 +124,7 @@ pub(crate) struct DevServer {
     pub(crate) route_lookup:
         ArrayHashMap<incremental_graph::ServerFileIndex, RouteIndexAndRecurseFlag>,
     pub(crate) barrel_files_with_deferrals: StringArrayHashMap<()>,
+    #[allow(dead_code)] // Required shape of Bun's shared graph context.
     pub(crate) barrel_needed_exports: StringArrayHashMap<bun_collections::StringHashMap<()>>,
 }
 
@@ -160,6 +167,7 @@ impl DevServer {
         Ok(entries)
     }
 
+    #[cfg_attr(not(target_os = "wasi"), allow(dead_code))]
     pub(crate) fn cached(&self, path: &[u8], side: Graph) -> Option<CacheEntry> {
         if self.barrel_files_with_deferrals.contains_key(path) {
             return None;

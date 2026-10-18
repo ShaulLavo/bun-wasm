@@ -13,12 +13,12 @@ const unused = (): never => { throw new Error("unexpected service operation"); }
 const host = new SubprocessHost({ budget, signalState: signals.signalState, interrupt: signals.interrupt,
   outcome: signals.outcome, output() {}, launch: unused });
 const abi = new ProcessABI({ memory: new WebAssembly.Memory({ initial: 1 }), descriptors, fs: new MemFS(), pid: 1, signals, wake,
-  service: { spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused } });
+  service: { spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, waitJob: unused, jobEmpty: unused, defaultSignal: unused } });
 const selected = mode === "generic-poll" ? wake : new Int32Array(budget, 4, 1);
 const nativeWait = Atomics.wait;
 let generation = 0;
 let result: string | undefined;
-Atomics.wait = ((word: Int32Array, index: number, expected: number, milliseconds?: number) => {
+Atomics.wait = ((word: Int32Array, index: number, expected: number, _milliseconds?: number) => {
   if (word.buffer !== selected.buffer || word.byteOffset + index * 4 !== selected.byteOffset) {
     throw new Error("production poll selected a different wait word");
   }

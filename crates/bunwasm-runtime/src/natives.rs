@@ -16,10 +16,10 @@ use std::os::fd::AsRawFd;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::engine::{Args, DataFn, NativeError, NativeResult, Record, Val};
-use crate::resolve::{self, Kind, Resolved};
-use crate::modules;
 use crate::State;
+use crate::engine::{Args, DataFn, NativeError, NativeResult, Record, Val};
+use crate::modules;
+use crate::resolve::{self, Kind, Resolved};
 
 /// Natives by name, plus constant properties of the `native` object.
 #[derive(Default)]
@@ -29,7 +29,11 @@ pub struct Table {
 }
 
 impl Table {
-    pub(crate) fn add(&mut self, name: &'static str, f: impl Fn(Args<'_>) -> NativeResult + 'static) {
+    pub(crate) fn add(
+        &mut self,
+        name: &'static str,
+        f: impl Fn(Args<'_>) -> NativeResult + 'static,
+    ) {
         self.functions.push((name, Rc::new(f)));
     }
 }
@@ -66,7 +70,9 @@ pub fn io_error(err: io::Error, syscall: &str, path: Option<&str>) -> NativeErro
     if let Some(p) = path {
         e = e.prop("path", p);
     }
-    e.prop("syscall", syscall).prop("errno", errno).prop("code", code)
+    e.prop("syscall", syscall)
+        .prop("errno", errno)
+        .prop("code", code)
 }
 
 fn bad_fd(syscall: &str) -> NativeError {
@@ -178,7 +184,8 @@ pub fn table(state: &Rc<State>) -> Table {
     install_modules(&mut t, state);
     let st = state.clone();
     t.add("parseData", move |a| {
-        st.transpiler.parse_data(a.bytes(0)?, a.str(1)?)
+        st.transpiler
+            .parse_data(a.bytes(0)?, a.str(1)?)
             .map(Val::Str)
     });
     crate::glob::install(&mut t);
@@ -202,7 +209,8 @@ fn ok() -> NativeResult {
 fn install_process(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("writeStdout", move |a| {
-        st.write_stdout(a.bytes(0)?).map_err(|e| io_error(e, "write", None))?;
+        st.write_stdout(a.bytes(0)?)
+            .map_err(|e| io_error(e, "write", None))?;
         if a.bool(1) {
             st.flush_stdout().map_err(|e| io_error(e, "write", None))?;
         }
@@ -210,13 +218,18 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
     });
     let st = state.clone();
     t.add("writeStderr", move |a| {
-        st.write_stderr(a.bytes(0)?).map_err(|e| io_error(e, "write", None))?;
+        st.write_stderr(a.bytes(0)?)
+            .map_err(|e| io_error(e, "write", None))?;
         ok()
     });
     let st = state.clone();
     t.add("exit", move |a| st.exit(a.opt_num(0).unwrap_or(0.0) as i32));
     let st = state.clone();
-    t.add("argv", move |_| Ok(Val::Array(st.argv.iter().map(|s| Val::from(s.as_str())).collect())));
+    t.add("argv", move |_| {
+        Ok(Val::Array(
+            st.argv.iter().map(|s| Val::from(s.as_str())).collect(),
+        ))
+    });
     let st = state.clone();
     t.add("mainPath", move |_| Ok(st.main.borrow().clone().into()));
     let st = state.clone();
@@ -228,7 +241,12 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
     t.add("mainArg", move |_| Ok(st.main_arg.borrow().clone().into()));
     t.add("env", |_| {
         let fields = std::env::vars_os()
-            .map(|(k, v)| (k.to_string_lossy().into_owned(), Val::Str(v.to_string_lossy().into_owned())))
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    Val::Str(v.to_string_lossy().into_owned()),
+                )
+            })
             .collect();
         Ok(Val::Object(fields))
     });
@@ -240,10 +258,16 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
         ok()
     });
     let st = state.clone();
-    t.add("now", move |_| Ok(Val::Num(st.start.elapsed().as_secs_f64() * 1000.0)));
+    t.add("now", move |_| {
+        Ok(Val::Num(st.start.elapsed().as_secs_f64() * 1000.0))
+    });
     let st = state.clone();
-    t.add("nanoseconds", move |_| Ok(Val::Num(st.start.elapsed().as_nanos() as f64)));
-    t.add("timeOrigin", |_| Ok(Val::Num(millis(Ok(SystemTime::now())))));
+    t.add("nanoseconds", move |_| {
+        Ok(Val::Num(st.start.elapsed().as_nanos() as f64))
+    });
+    t.add("timeOrigin", |_| {
+        Ok(Val::Num(millis(Ok(SystemTime::now()))))
+    });
     let st = state.clone();
     t.add("sleep", move |a| {
         st.flush();
@@ -268,7 +292,9 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
         // Make buffered readiness output visible before waiting for parent input.
         st.flush();
         let mut buf = Vec::new();
-        io::stdin().read_to_end(&mut buf).map_err(|e| io_error(e, "read", None))?;
+        io::stdin()
+            .read_to_end(&mut buf)
+            .map_err(|e| io_error(e, "read", None))?;
         Ok(Val::Bytes(buf))
     });
     let st = state.clone();
@@ -281,27 +307,41 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
 fn install_fs(t: &mut Table) {
     t.add("readFile", |a| {
         let path = a.str(0)?;
-        Ok(Val::Bytes(fs::read(path).map_err(|e| io_error(e, "open", Some(path)))?))
+        Ok(Val::Bytes(
+            fs::read(path).map_err(|e| io_error(e, "open", Some(path)))?,
+        ))
     });
     t.add("readFileUtf8", |a| {
         let path = a.str(0)?;
         let bytes = fs::read(path).map_err(|e| io_error(e, "open", Some(path)))?;
-        Ok(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()).into())
+        Ok(String::from_utf8(bytes)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+            .into())
     });
     t.add("writeFile", |a| {
         let path = a.str(0)?;
         let bytes = a.bytes(1)?;
         let opts = open_options(if a.bool(2) { "a" } else { "w" });
-        let mut file = opts.open(path).map_err(|e| io_error(e, "open", Some(path)))?;
-        file.write_all(bytes).map_err(|e| io_error(e, "write", Some(path)))?;
+        let mut file = opts
+            .open(path)
+            .map_err(|e| io_error(e, "open", Some(path)))?;
+        file.write_all(bytes)
+            .map_err(|e| io_error(e, "write", Some(path)))?;
         Ok(Val::Num(bytes.len() as f64))
     });
-    t.add("exists", |a| Ok(fs::symlink_metadata(a.str(0)?).is_ok().into()));
+    t.add("exists", |a| {
+        Ok(fs::symlink_metadata(a.str(0)?).is_ok().into())
+    });
     t.add("stat", |a| {
         let path = a.str(0)?;
         let lstat = a.bool(1);
-        let meta = if lstat { fs::symlink_metadata(path) } else { fs::metadata(path) };
-        let meta = meta.map_err(|e| io_error(e, if lstat { "lstat" } else { "stat" }, Some(path)))?;
+        let meta = if lstat {
+            fs::symlink_metadata(path)
+        } else {
+            fs::metadata(path)
+        };
+        let meta =
+            meta.map_err(|e| io_error(e, if lstat { "lstat" } else { "stat" }, Some(path)))?;
         Ok(stat_record(&meta))
     });
     t.add("mkdir", |a| {
@@ -358,7 +398,11 @@ fn install_fs(t: &mut Table) {
     });
     t.add("rmdir", |a| {
         let path = a.str(0)?;
-        let result = if a.bool(1) { fs::remove_dir_all(path) } else { fs::remove_dir(path) };
+        let result = if a.bool(1) {
+            fs::remove_dir_all(path)
+        } else {
+            fs::remove_dir(path)
+        };
         result.map_err(|e| io_error(e, "rmdir", Some(path)))?;
         ok()
     });
@@ -411,8 +455,12 @@ fn install_fs(t: &mut Table) {
     });
     t.add("truncate", |a| {
         let path = a.str(0)?;
-        let file = OpenOptions::new().write(true).open(path).map_err(|e| io_error(e, "open", Some(path)))?;
-        file.set_len(a.opt_num(1).unwrap_or(0.0) as u64).map_err(|e| io_error(e, "ftruncate", Some(path)))?;
+        let file = OpenOptions::new()
+            .write(true)
+            .open(path)
+            .map_err(|e| io_error(e, "open", Some(path)))?;
+        file.set_len(a.opt_num(1).unwrap_or(0.0) as u64)
+            .map_err(|e| io_error(e, "ftruncate", Some(path)))?;
         ok()
     });
 }
@@ -433,7 +481,9 @@ pub(crate) fn symlink(_: &str, _: &str) -> io::Result<()> {
 }
 
 fn write_file_at(file: &mut File, bytes: &[u8], position: Option<u64>) -> io::Result<()> {
-    let Some(position) = position else { return file.write_all(bytes) };
+    let Some(position) = position else {
+        return file.write_all(bytes);
+    };
     let cursor = file.stream_position()?;
     file.seek(SeekFrom::Start(position))?;
     let result = file.write_all(bytes);
@@ -444,44 +494,83 @@ fn write_file_at(file: &mut File, bytes: &[u8], position: Option<u64>) -> io::Re
 fn writev(state: &State, args: Args<'_>) -> NativeResult {
     let fd = match args.get(0) {
         Val::Num(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(i32::MAX) => *n as i32,
-        Val::Num(_) => return Err(NativeError::range_error("fd must be an integer between 0 and 2147483647").prop("code", "ERR_OUT_OF_RANGE")),
-        _ => return Err(NativeError::type_error("fd must be a number").prop("code", "ERR_INVALID_ARG_TYPE")),
+        Val::Num(_) => {
+            return Err(
+                NativeError::range_error("fd must be an integer between 0 and 2147483647")
+                    .prop("code", "ERR_OUT_OF_RANGE"),
+            );
+        }
+        _ => {
+            return Err(
+                NativeError::type_error("fd must be a number").prop("code", "ERR_INVALID_ARG_TYPE")
+            );
+        }
     };
-    let buffers = args.array(1).ok_or_else(|| NativeError::type_error("expected an array of byte buffers"))?;
-    let buffers = buffers.iter().map(|value| match value {
-        Val::Bytes(bytes) => Ok(bytes.as_slice()),
-        _ => Err(NativeError::type_error("expected a byte buffer")),
-    }).collect::<Result<Vec<_>, _>>()?;
+    let buffers = args
+        .array(1)
+        .ok_or_else(|| NativeError::type_error("expected an array of byte buffers"))?;
+    let buffers = buffers
+        .iter()
+        .map(|value| match value {
+            Val::Bytes(bytes) => Ok(bytes.as_slice()),
+            _ => Err(NativeError::type_error("expected a byte buffer")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let files = state.fds.borrow();
     let descriptor = match fd {
-        1 | 2 => { state.flush(); fd }
-        _ => libc::c_int::try_from(files.files.get(&fd).ok_or_else(|| bad_fd("writev"))?.as_raw_fd())
-            .map_err(|_| bad_fd("writev"))?,
+        1 | 2 => {
+            state.flush();
+            fd
+        }
+        _ => libc::c_int::try_from(
+            files
+                .files
+                .get(&fd)
+                .ok_or_else(|| bad_fd("writev"))?
+                .as_raw_fd(),
+        )
+        .map_err(|_| bad_fd("writev"))?,
     };
-    let position = args.opt_num(2).filter(|&n| n >= 0.0).map(|n| n as libc::off_t);
+    let position = args
+        .opt_num(2)
+        .filter(|&n| n >= 0.0)
+        .map(|n| n as libc::off_t);
     let mut written = 0usize;
     for bytes in buffers {
-        if bytes.is_empty() { continue; }
-        let offset = position.map(|base| base.checked_add(written as libc::off_t).ok_or(io::ErrorKind::InvalidInput))
-            .transpose().map_err(io::Error::from);
+        if bytes.is_empty() {
+            continue;
+        }
+        let offset = position
+            .map(|base| {
+                base.checked_add(written as libc::off_t)
+                    .ok_or(io::ErrorKind::InvalidInput)
+            })
+            .transpose()
+            .map_err(io::Error::from);
         let count = match offset.and_then(|offset| write_chunk(descriptor, bytes, offset)) {
             Ok(count) => count,
             Err(_) if written > 0 => break,
             Err(error) => return Err(io_error(error, "writev", None)),
         };
         written += count;
-        if count < bytes.len() { break; }
+        if count < bytes.len() {
+            break;
+        }
     }
     Ok(Val::Num(written as f64))
 }
 
 fn write_chunk(fd: libc::c_int, bytes: &[u8], position: Option<libc::off_t>) -> io::Result<usize> {
     // The argument frame owns these bytes until the synchronous call returns.
-    let written = unsafe { match position {
-        Some(position) => libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position),
-        None => libc::write(fd, bytes.as_ptr().cast(), bytes.len()),
-    } };
-    if written < 0 { return Err(io::Error::last_os_error()); }
+    let written = unsafe {
+        match position {
+            Some(position) => libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position),
+            None => libc::write(fd, bytes.as_ptr().cast(), bytes.len()),
+        }
+    };
+    if written < 0 {
+        return Err(io::Error::last_os_error());
+    }
     Ok(written as usize)
 }
 
@@ -490,7 +579,9 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     t.add("open", move |a| {
         let path = a.str(0)?;
         let flags = a.opt_str(1).unwrap_or("r");
-        let file = open_options(flags).open(path).map_err(|e| io_error(e, "open", Some(path)))?;
+        let file = open_options(flags)
+            .open(path)
+            .map_err(|e| io_error(e, "open", Some(path)))?;
         let mut fds = st.fds.borrow_mut();
         let fd = fds.next.max(3);
         fds.next = fd + 1;
@@ -517,12 +608,17 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         }
         let n = if fd == 0 {
             let count = unsafe { libc::read(0, buf.as_mut_ptr().cast(), buf.len()) };
-            if count < 0 { Err(io::Error::last_os_error()) } else { Ok(count as usize) }
+            if count < 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(count as usize)
+            }
         } else {
             let mut fds = st.fds.borrow_mut();
             let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("read"))?;
             if let Some(p) = a.opt_num(2).filter(|p| *p >= 0.0) {
-                file.seek(SeekFrom::Start(p as u64)).map_err(|e| io_error(e, "read", None))?;
+                file.seek(SeekFrom::Start(p as u64))
+                    .map_err(|e| io_error(e, "read", None))?;
             }
             file.read(&mut buf)
         };
@@ -535,8 +631,12 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         let fd = a.i32(0)?;
         let bytes = a.bytes(1)?;
         match fd {
-            1 => st.write_stdout(bytes).map_err(|e| io_error(e, "write", None))?,
-            2 => st.write_stderr(bytes).map_err(|e| io_error(e, "write", None))?,
+            1 => st
+                .write_stdout(bytes)
+                .map_err(|e| io_error(e, "write", None))?,
+            2 => st
+                .write_stderr(bytes)
+                .map_err(|e| io_error(e, "write", None))?,
             _ => {
                 let mut fds = st.fds.borrow_mut();
                 let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("write"))?;
@@ -558,8 +658,12 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("ftruncate", move |a| {
         let fds = st.fds.borrow();
-        let file = fds.files.get(&a.i32(0)?).ok_or_else(|| bad_fd("ftruncate"))?;
-        file.set_len(a.opt_num(1).unwrap_or(0.0) as u64).map_err(|e| io_error(e, "ftruncate", None))?;
+        let file = fds
+            .files
+            .get(&a.i32(0)?)
+            .ok_or_else(|| bad_fd("ftruncate"))?;
+        file.set_len(a.opt_num(1).unwrap_or(0.0) as u64)
+            .map_err(|e| io_error(e, "ftruncate", None))?;
         ok()
     });
 }
@@ -573,31 +677,66 @@ fn builtin_index(args: Args<'_>) -> Result<usize, NativeError> {
 
 fn install_modules(t: &mut Table, state: &Rc<State>) {
     t.add("bunBuiltinNames", |_| {
-        Ok(Val::Array(modules::BUN_BUILTIN_NAMES.iter().map(|name| Val::from(*name)).collect()))
+        Ok(Val::Array(
+            modules::BUN_BUILTIN_NAMES
+                .iter()
+                .map(|name| Val::from(*name))
+                .collect(),
+        ))
     });
-    t.add("bunBuiltinSource", |a| Ok(modules::bun_builtin_source(builtin_index(a)?).map(Val::from).into()));
+    t.add("bunBuiltinSource", |a| {
+        Ok(modules::bun_builtin_source(builtin_index(a)?)
+            .map(Val::from)
+            .into())
+    });
     t.add("bunBuiltinHookName", |a| {
-        Ok(modules::BUN_BUILTIN_HOOK_NAMES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
+        Ok(modules::BUN_BUILTIN_HOOK_NAMES
+            .get(builtin_index(a)?)
+            .copied()
+            .unwrap_or("unknown")
+            .into())
     });
     t.add("bunBuiltinErrorCode", |a| {
-        Ok(modules::BUN_BUILTIN_ERROR_CODES.get(builtin_index(a)?).copied().unwrap_or("unknown").into())
+        Ok(modules::BUN_BUILTIN_ERROR_CODES
+            .get(builtin_index(a)?)
+            .copied()
+            .unwrap_or("unknown")
+            .into())
     });
     let st = state.clone();
     t.add("transpilePublic", move |a| {
-        st.transpiler.public_transpile(a.bytes(0)?, a.str(1)?, a.str(2)?, a.str(3)?).map(Val::from).map_err(NativeError::syntax_error)
+        st.transpiler
+            .public_transpile(a.bytes(0)?, a.str(1)?, a.str(2)?, a.str(3)?)
+            .map(Val::from)
+            .map_err(NativeError::syntax_error)
     });
     let st = state.clone();
     t.add("functionImports", move |a| {
-        let args = a.array(0).ok_or_else(|| NativeError::type_error("expected function arguments"))?;
-        let strings = args.iter().map(|value| match value {
-            Val::Str(s) => Ok(s.clone()),
-            _ => Err(NativeError::type_error("expected source string")),
-        }).collect::<Result<Vec<_>, _>>()?;
-        let offsets = st.transpiler.function_imports(&strings, a.str(1)?).map_err(NativeError::syntax_error)?;
-        Ok(Val::Array(offsets.into_iter().map(|items| Val::Array(items.into_iter().map(|i| (i as u32).into()).collect())).collect()))
+        let args = a
+            .array(0)
+            .ok_or_else(|| NativeError::type_error("expected function arguments"))?;
+        let strings = args
+            .iter()
+            .map(|value| match value {
+                Val::Str(s) => Ok(s.clone()),
+                _ => Err(NativeError::type_error("expected source string")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let offsets = st
+            .transpiler
+            .function_imports(&strings, a.str(1)?)
+            .map_err(NativeError::syntax_error)?;
+        Ok(Val::Array(
+            offsets
+                .into_iter()
+                .map(|items| Val::Array(items.into_iter().map(|i| (i as u32).into()).collect()))
+                .collect(),
+        ))
     });
     let st = state.clone();
-    t.add("registerObjectModule", move |a| Ok(st.resolver.register_object_module(a.str(0)?).into()));
+    t.add("registerObjectModule", move |a| {
+        Ok(st.resolver.register_object_module(a.str(0)?).into())
+    });
     let st = state.clone();
     t.add("clearObjectModules", move |_| {
         st.resolver.clear_object_modules();
@@ -606,50 +745,86 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("resolve", move |a| {
         let spec = a.str(0)?;
-        let kind = if a.bool(2) { Kind::Require } else { Kind::Import };
+        let kind = if a.bool(2) {
+            Kind::Require
+        } else {
+            Kind::Import
+        };
         match st.resolver.resolve(spec, a.str(1)?, kind) {
             Ok(Resolved::Builtin(name)) => Ok(name.into()),
             Ok(Resolved::File(path)) => Ok(path.into()),
-            Err(msg) => Err(crate::modules::resolve_error(&msg, spec, a.str(1)?, kind, st.resolver.notes())),
+            Err(msg) => Err(crate::modules::resolve_error(
+                &msg,
+                spec,
+                a.str(1)?,
+                kind,
+                st.resolver.notes(),
+            )),
         }
     });
     let st = state.clone();
     t.add("workerSource", move |a| {
         let path = a.str(1)?;
-        st.transpiler.transpile(a.str(0)?, path, crate::transpiler::Loader::from_path(path))
-            .map(Val::from).map_err(NativeError::syntax_error)
+        st.transpiler
+            .transpile(a.str(0)?, path, crate::transpiler::Loader::from_path(path))
+            .map(Val::from)
+            .map_err(NativeError::syntax_error)
     });
     let st = state.clone();
-    t.add("moduleFormat", move |a| Ok(st.load_source(a.str(0)?)?.1.name().into()));
+    t.add("moduleFormat", move |a| {
+        Ok(st.load_source(a.str(0)?)?.1.name().into())
+    });
     let st = state.clone();
     t.add("mapPosition", move |a| {
         let mapped = st.map_position(a.str(0)?, a.u32(1)?, a.u32(2)?);
-        Ok(mapped.map_or(Val::Undefined, |(l, c)| Val::Array(vec![l.into(), c.into()])))
+        Ok(mapped.map_or(Val::Undefined, |(l, c)| {
+            Val::Array(vec![l.into(), c.into()])
+        }))
     });
     let st = state.clone();
-    t.add("getSourceLine", move |a| Ok(st.source_line(a.str(0)?, a.num(1)? as usize).into()));
+    t.add("getSourceLine", move |a| {
+        Ok(st.source_line(a.str(0)?, a.num(1)? as usize).into())
+    });
     // `Bun.build`: the options as JSON (src/js/bun.js normalizes them), the
     // outputs as `{ outputs: [{ path, kind, contents }], logs }`.
     let st = state.clone();
     t.add("build", move |a| {
         let request = build_request(a.str(0)?)?;
-        let result = st.transpiler.build(&request).map_err(|log| NativeError::error(log).prop("code", "BUILD_FAILED"))?;
+        let result = st
+            .transpiler
+            .build(&request)
+            .map_err(|log| NativeError::error(log).prop("code", "BUILD_FAILED"))?;
         let outputs = result
             .outputs
             .into_iter()
-            .map(|o| Record::new().set("path", o.path).set("kind", o.kind).set("contents", Val::Bytes(o.contents)).into())
+            .map(|o| {
+                Record::new()
+                    .set("path", o.path)
+                    .set("kind", o.kind)
+                    .set("contents", Val::Bytes(o.contents))
+                    .into()
+            })
             .collect();
-        Ok(Record::new().set("outputs", Val::Array(outputs)).set("logs", result.logs).into())
+        Ok(Record::new()
+            .set("outputs", Val::Array(outputs))
+            .set("logs", result.logs)
+            .into())
     });
     let st = state.clone();
     t.add("devServerOpen", move |a| {
-        st.transpiler.dev_server_open(a.str(0)?).map(dev_server_record).map_err(NativeError::error)
+        st.transpiler
+            .dev_server_open(a.str(0)?)
+            .map(dev_server_record)
+            .map_err(NativeError::error)
     });
     let st = state.clone();
     t.add("devServerRebuild", move |a| {
         let changed: Vec<String> = serde_json::from_str(a.str(1)?)
             .map_err(|error| NativeError::type_error(error.to_string()))?;
-        st.transpiler.dev_server_rebuild(a.u32(0)?, &changed).map(dev_server_record).map_err(NativeError::error)
+        st.transpiler
+            .dev_server_rebuild(a.u32(0)?, &changed)
+            .map(dev_server_record)
+            .map_err(NativeError::error)
     });
     let st = state.clone();
     t.add("devServerClose", move |a| {
@@ -659,15 +834,26 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
 }
 
 fn dev_server_record(result: crate::DevServerResult) -> Val {
-    let files = result.files.into_iter().map(|file| {
-        Record::new().set("path", file.path).set("contents", Val::Bytes(file.contents)).set("type", file.mime).into()
-    }).collect();
+    let files = result
+        .files
+        .into_iter()
+        .map(|file| {
+            Record::new()
+                .set("path", file.path)
+                .set("contents", Val::Bytes(file.contents))
+                .set("type", file.mime)
+                .into()
+        })
+        .collect();
     Record::new()
         .set("id", result.id)
         .set("version", result.version)
         .set("html", Val::Bytes(result.html))
         .set("files", Val::Array(files))
-        .set("watch", Val::Array(result.watch.into_iter().map(Val::Str).collect()))
+        .set(
+            "watch",
+            Val::Array(result.watch.into_iter().map(Val::Str).collect()),
+        )
         .set("update", Val::Bytes(result.update))
         .set("errors", Val::Bytes(result.errors))
         .set("logs", result.logs)
@@ -676,16 +862,28 @@ fn dev_server_record(result: crate::DevServerResult) -> Val {
 
 fn build_request(json: &str) -> Result<crate::BuildRequest, NativeError> {
     use serde_json::Value as Json;
-    let v: Json = serde_json::from_str(json).map_err(|e| NativeError::type_error(format!("Bun.build: {e}")))?;
+    let v: Json = serde_json::from_str(json)
+        .map_err(|e| NativeError::type_error(format!("Bun.build: {e}")))?;
     let text = |k: &str| v.get(k).and_then(Json::as_str).map(str::to_owned);
     let flag = |k: &str| v.get(k).and_then(Json::as_bool).unwrap_or(false);
     let list = |k: &str| -> Vec<String> {
-        v.get(k).and_then(Json::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+        v.get(k)
+            .and_then(Json::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
     };
     let define = v
         .get("define")
         .and_then(Json::as_object)
-        .map(|m| m.iter().filter_map(|(k, x)| x.as_str().map(|x| (k.clone(), x.to_owned()))).collect())
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, x)| x.as_str().map(|x| (k.clone(), x.to_owned())))
+                .collect()
+        })
         .unwrap_or_default();
     Ok(crate::BuildRequest {
         entrypoints: list("entrypoints"),
@@ -713,22 +911,42 @@ fn build_request(json: &str) -> Result<crate::BuildRequest, NativeError> {
 }
 
 fn install_encoding(t: &mut Table) {
-    t.add("utf8Encode", |a| Ok(Val::Bytes(a.str(0)?.as_bytes().to_vec())));
+    t.add("utf8Encode", |a| {
+        Ok(Val::Bytes(a.str(0)?.as_bytes().to_vec()))
+    });
     t.add("utf8Decode", |a| {
         let bytes = a.bytes(0)?;
         match std::str::from_utf8(bytes) {
             Ok(s) => Ok(s.into()),
-            Err(_) if a.bool(1) => Err(NativeError::type_error("The encoded data was not valid for encoding utf-8")),
+            Err(_) if a.bool(1) => Err(NativeError::type_error(
+                "The encoded data was not valid for encoding utf-8",
+            )),
             Err(_) => Ok(String::from_utf8_lossy(bytes).into_owned().into()),
         }
     });
-    t.add("latin1Decode", |a| Ok(a.bytes(0)?.iter().map(|&b| char::from(b)).collect::<String>().into()));
+    t.add("latin1Decode", |a| {
+        Ok(a.bytes(0)?
+            .iter()
+            .map(|&b| char::from(b))
+            .collect::<String>()
+            .into())
+    });
     t.add("utf16leDecode", |a| {
-        let units: Vec<u16> = a.bytes(0)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let units: Vec<u16> = a
+            .bytes(0)?
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
         Ok(String::from_utf16_lossy(&units).into())
     });
-    t.add("base64Encode", |a| Ok(crate::encoding::base64_encode(a.bytes(0)?, a.bool(1)).into()));
-    t.add("base64Decode", |a| Ok(Val::Bytes(crate::encoding::base64_decode(a.str(0)?))));
+    t.add("base64Encode", |a| {
+        Ok(crate::encoding::base64_encode(a.bytes(0)?, a.bool(1)).into())
+    });
+    t.add("base64Decode", |a| {
+        Ok(Val::Bytes(crate::encoding::base64_decode(a.str(0)?)))
+    });
 }
 
 fn install_crypto(t: &mut Table) {
@@ -744,8 +962,9 @@ fn install_crypto(t: &mut Table) {
     });
     t.add("hash", |a| {
         let alg = a.str(0)?;
-        let digest = crate::encoding::digest(alg, a.bytes(1)?)
-            .ok_or_else(|| NativeError::type_error(format!("Digest method not supported: {alg}")))?;
+        let digest = crate::encoding::digest(alg, a.bytes(1)?).ok_or_else(|| {
+            NativeError::type_error(format!("Digest method not supported: {alg}"))
+        })?;
         Ok(Val::Bytes(digest))
     });
     t.add("hmac", |a| {
@@ -762,7 +981,7 @@ fn install_crypto(t: &mut Table) {
     // functions and Bun.gzipSync/deflateSync: (data, mode, options JSON,
     // dictionary, flush, chunkSize, maxOutputLength).
     t.add("zlibConvert", |a| {
-        use crate::compression::{convert, Mode, Options};
+        use crate::compression::{Mode, Options, convert};
         let mode = Mode::parse(a.str(1)?)?;
         let options = Options::parse(a.opt_str(2), a.opt_bytes(3).unwrap_or(&[]))?;
         let flush = a.opt_num(4).map_or(mode.finish_flush(), |n| n as i32);
@@ -776,26 +995,42 @@ fn install_crypto(t: &mut Table) {
         let input = a.bytes(0)?;
         let bound = bun_zstd::compress_bound(input.len());
         if bun_zstd::is_error(bound) {
-            return Err(NativeError::error("Input is too large to compress").prop("code", "ERR_ZSTD"));
+            return Err(
+                NativeError::error("Input is too large to compress").prop("code", "ERR_ZSTD")
+            );
         }
         let mut output = Vec::new();
-        output.try_reserve_exact(bound).map_err(|_| crate::compression::out_of_memory())?;
-        if let bun_zstd::Result::Err(error) = bun_zstd::compress_append(&mut output, input, Some(a.i32(1)?)) {
+        output
+            .try_reserve_exact(bound)
+            .map_err(|_| crate::compression::out_of_memory())?;
+        if let bun_zstd::Result::Err(error) =
+            bun_zstd::compress_append(&mut output, input, Some(a.i32(1)?))
+        {
             let message = String::from_utf8_lossy(error.as_bytes()).into_owned();
             return Err(NativeError::error(message).prop("code", "ERR_ZSTD"));
         }
         Ok(Val::Bytes(output))
     });
-    t.add("zstdDecompress", |a| match bun_zstd::decompress_alloc(a.bytes(0)?) {
-        Ok(output) => Ok(Val::Bytes(output)),
-        Err(bun_zstd::ZstdError::OutOfMemory) => Err(crate::compression::out_of_memory()),
-        Err(error) => {
-            let name: &'static str = error.into();
-            Err(NativeError::error(format!("Decompression failed: {name}")).prop("code", "ERR_ZSTD"))
+    t.add("zstdDecompress", |a| {
+        match bun_zstd::decompress_alloc(a.bytes(0)?) {
+            Ok(output) => Ok(Val::Bytes(output)),
+            Err(bun_zstd::ZstdError::OutOfMemory) => Err(crate::compression::out_of_memory()),
+            Err(error) => {
+                let name: &'static str = error.into();
+                Err(NativeError::error(format!("Decompression failed: {name}"))
+                    .prop("code", "ERR_ZSTD"))
+            }
         }
     });
-    t.add("crc32", |a| Ok(Val::Num(f64::from(crate::encoding::crc32_seed(a.bytes(0)?, a.opt_num(1).unwrap_or(0.0) as u32)))));
-    t.add("adler32", |a| Ok(Val::Num(f64::from(crate::encoding::adler32(a.bytes(0)?)))));
+    t.add("crc32", |a| {
+        Ok(Val::Num(f64::from(crate::encoding::crc32_seed(
+            a.bytes(0)?,
+            a.opt_num(1).unwrap_or(0.0) as u32,
+        ))))
+    });
+    t.add("adler32", |a| {
+        Ok(Val::Num(f64::from(crate::encoding::adler32(a.bytes(0)?))))
+    });
 }
 
 /// URL components in the order the JS `URL` class expects.
@@ -808,8 +1043,14 @@ fn url_parts(url: &url::Url) -> Val {
         url.host_str().unwrap_or("").to_owned(),
         url.port().map(|p| p.to_string()).unwrap_or_default(),
         url.path().to_owned(),
-        url.query().filter(|q| !q.is_empty()).map(|q| format!("?{q}")).unwrap_or_default(),
-        url.fragment().filter(|f| !f.is_empty()).map(|f| format!("#{f}")).unwrap_or_default(),
+        url.query()
+            .filter(|q| !q.is_empty())
+            .map(|q| format!("?{q}"))
+            .unwrap_or_default(),
+        url.fragment()
+            .filter(|f| !f.is_empty())
+            .map(|f| format!("#{f}"))
+            .unwrap_or_default(),
         url.origin().ascii_serialization(),
     ];
     Val::Array(parts.into_iter().map(Val::Str).collect())
@@ -825,7 +1066,9 @@ fn install_url(t: &mut Table) {
         Ok(parsed.ok().map_or(Val::Undefined, |u| url_parts(&u)))
     });
     t.add("urlSet", |a| {
-        let Ok(mut url) = url::Url::parse(a.str(0)?) else { return ok() };
+        let Ok(mut url) = url::Url::parse(a.str(0)?) else {
+            return ok();
+        };
         let value = a.str(2)?;
         // Setters that fail leave the URL unchanged, like the WHATWG spec says.
         let _ = match a.str(1)? {
@@ -878,21 +1121,38 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
             Err(code) => code.into(),
         })
     }
-    t.add("hostSpawn", |a| Ok(host::spawn(a.str(0)?.as_bytes()).into()));
+    t.add(
+        "hostSpawn",
+        |a| Ok(host::spawn(a.str(0)?.as_bytes()).into()),
+    );
     t.add("hostChildWait", |a| Ok(host::child_wait(a.i32(0)?).into()));
-    t.add("hostChildPipe", |a| Ok(host::child_pipe(a.i32(0)?, a.i32(1)?).into()));
-    t.add("hostChildKill", |a| Ok(host::child_kill(a.i32(0)?, a.i32(1)?).into()));
+    t.add("hostChildPipe", |a| {
+        Ok(host::child_pipe(a.i32(0)?, a.i32(1)?).into())
+    });
+    t.add("hostChildKill", |a| {
+        Ok(host::child_kill(a.i32(0)?, a.i32(1)?).into())
+    });
     let st = state.clone();
-    t.add("hostSignal", move |a| Ok(st.signal(a.i32(0)?, a.i32(1)?).into()));
+    t.add("hostSignal", move |a| {
+        Ok(st.signal(a.i32(0)?, a.i32(1)?).into())
+    });
     t.add("hostPoll", |a| Ok(host::poll(a.i32(0)?).into()));
     t.add("hostFetch", |a| {
-        let body = if a.is_missing(1) { &[][..] } else { a.bytes(1)? };
+        let body = if a.is_missing(1) {
+            &[][..]
+        } else {
+            a.bytes(1)?
+        };
         Ok(host::fetch(a.str(0)?.as_bytes(), body).into())
     });
-    t.add("hostFetchHead", |a| text_or_code(host::fetch_head(a.i32(0)?)));
+    t.add("hostFetchHead", |a| {
+        text_or_code(host::fetch_head(a.i32(0)?))
+    });
     t.add("hostError", |a| text_or_code(host::error(a.i32(0)?)));
     t.add("hostShutdown", |a| Ok(host::shutdown(a.i32(0)?).into()));
-    t.add("hostLocalAddr", |a| text_or_code(host::local_addr(a.i32(0)?)));
+    t.add("hostLocalAddr", |a| {
+        text_or_code(host::local_addr(a.i32(0)?))
+    });
     t.add("hostPeerAddr", |a| text_or_code(host::peer_addr(a.i32(0)?)));
     t.add("hostRead", |a| {
         let cap = a.opt_num(1).unwrap_or(65536.0).max(1.0) as usize;
@@ -902,19 +1162,32 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
             Err(code) => code.into(),
         })
     });
-    t.add("hostWrite", |a| Ok(host::write(a.i32(0)?, a.bytes(1)?).into()));
+    t.add("hostWrite", |a| {
+        Ok(host::write(a.i32(0)?, a.bytes(1)?).into())
+    });
     t.add("hostClose", |a| Ok(host::close(a.i32(0)?).into()));
-    t.add("hostListen", |a| Ok(host::listen(a.str(0)?, a.i32(1)?).into()));
+    t.add("hostListen", |a| {
+        Ok(host::listen(a.str(0)?, a.i32(1)?).into())
+    });
     t.add("hostLocalPort", |a| Ok(host::local_port(a.i32(0)?).into()));
     t.add("hostAccept", |a| Ok(host::accept(a.i32(0)?).into()));
-    t.add("hostConnect", |a| Ok(host::connect(a.str(0)?, a.i32(1)?).into()));
+    t.add("hostConnect", |a| {
+        Ok(host::connect(a.str(0)?, a.i32(1)?).into())
+    });
 }
 
 fn platform_info() -> Val {
     Record::new()
         .set("version", crate::BUN_VERSION)
         .set("revision", crate::BUN_REVISION)
-        .set("arch", if cfg!(target_arch = "wasm32") { "wasm32" } else { std::env::consts::ARCH })
+        .set(
+            "arch",
+            if cfg!(target_arch = "wasm32") {
+                "wasm32"
+            } else {
+                std::env::consts::ARCH
+            },
+        )
         .into()
 }
 
@@ -924,7 +1197,11 @@ mod builtin_tests {
     use crate::transpiler::PassthroughTranspiler;
 
     fn call(table: &Table, name: &str, args: &[Val]) -> NativeResult {
-        let (_, function) = table.functions.iter().find(|(key, _)| *key == name).expect("shared data native");
+        let (_, function) = table
+            .functions
+            .iter()
+            .find(|(key, _)| *key == name)
+            .expect("shared data native");
         function(Args(args))
     }
 
@@ -935,16 +1212,47 @@ mod builtin_tests {
         bunwasm_posix::init();
         let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
         let table = table(&state);
-        let Val::Array(names) = call(&table, "bunBuiltinNames", &[]).unwrap() else { panic!("module names must be data") };
-        let id = names.iter().position(|name| *name == Val::from("internal:freelist")).unwrap();
-        let Val::Str(source) = call(&table, "bunBuiltinSource", &[Val::Num(id as f64)]).unwrap() else { panic!("factory must be source text") };
+        let Val::Array(names) = call(&table, "bunBuiltinNames", &[]).unwrap() else {
+            panic!("module names must be data")
+        };
+        let id = names
+            .iter()
+            .position(|name| *name == Val::from("internal:freelist"))
+            .unwrap();
+        let Val::Str(source) = call(&table, "bunBuiltinSource", &[Val::Num(id as f64)]).unwrap()
+        else {
+            panic!("factory must be source text")
+        };
         assert!(source.contains("class FreeList"));
-        assert_eq!(call(&table, "bunBuiltinSource", &[Val::Num(u32::MAX as f64)]).unwrap(), Val::Undefined);
-        assert!(matches!(call(&table, "bunBuiltinHookName", &[Val::Num(0.0)]).unwrap(), Val::Str(_)));
-        let error_id = modules::BUN_BUILTIN_ERROR_CODES.iter().position(|code| *code == "ERR_INVALID_URI").unwrap();
-        assert_eq!(call(&table, "bunBuiltinErrorCode", &[Val::Num(error_id as f64)]).unwrap(), Val::from("ERR_INVALID_URI"));
-        for invalid in [Val::Num(-1.0), Val::Num(0.5), Val::Num(f64::INFINITY), Val::Bool(true), Val::from("22")] {
-            assert_eq!(call(&table, "bunBuiltinSource", &[invalid]).unwrap_err().kind, crate::engine::ErrorKind::TypeError);
+        assert_eq!(
+            call(&table, "bunBuiltinSource", &[Val::Num(u32::MAX as f64)]).unwrap(),
+            Val::Undefined
+        );
+        assert!(matches!(
+            call(&table, "bunBuiltinHookName", &[Val::Num(0.0)]).unwrap(),
+            Val::Str(_)
+        ));
+        let error_id = modules::BUN_BUILTIN_ERROR_CODES
+            .iter()
+            .position(|code| *code == "ERR_INVALID_URI")
+            .unwrap();
+        assert_eq!(
+            call(&table, "bunBuiltinErrorCode", &[Val::Num(error_id as f64)]).unwrap(),
+            Val::from("ERR_INVALID_URI")
+        );
+        for invalid in [
+            Val::Num(-1.0),
+            Val::Num(0.5),
+            Val::Num(f64::INFINITY),
+            Val::Bool(true),
+            Val::from("22"),
+        ] {
+            assert_eq!(
+                call(&table, "bunBuiltinSource", &[invalid])
+                    .unwrap_err()
+                    .kind,
+                crate::engine::ErrorKind::TypeError
+            );
         }
     }
 }

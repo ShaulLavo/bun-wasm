@@ -7,12 +7,11 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use bun_lint_driver::{Environment, Outcome, Script, Stream, bunfig, cli, fmt, git, js_plugin};
 use crate::host;
+use bun_lint_driver::{Environment, Outcome, Script, Stream, bunfig, cli, fmt, git, js_plugin};
 
 #[path = "../../../vendor/bun/src/runtime/cli/typescript_libs.rs"]
 mod typescript_libs;
-
 
 enum CommandError {
     Usage(Vec<u8>),
@@ -233,7 +232,7 @@ impl BunfigSearch<'_> {
     }
 
     fn read(&mut self, path: &Path, label: &str) -> Result<(), CommandError> {
-        let text = match std::fs::read(&path) {
+        let text = match std::fs::read(path) {
             Ok(text) => text,
             Err(error) if !self.named && error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(());

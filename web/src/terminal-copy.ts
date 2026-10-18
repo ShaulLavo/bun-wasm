@@ -1,7 +1,7 @@
 import type { Terminal } from "@xterm/xterm";
 
 /** Plain text, including scrollback. Soft wraps are display rows, not newlines. */
-export function terminalText(term: Terminal): string {
+function terminalText(term: Terminal): string {
   const buffer = term.buffer.active;
   const lines: string[] = [];
   for (let i = 0; i < buffer.length; i++) {

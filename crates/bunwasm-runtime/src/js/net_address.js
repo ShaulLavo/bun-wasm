@@ -1,5 +1,5 @@
 // IP predicates adapted from Bun src/js/internal/net/isIP.ts. See docs/bun-patches.md.
-(function (internal) {
+(function (_internal) {
   "use strict";
 const v4Seg = "(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])";
 const v4Str = `(?:${v4Seg}\\.){3}${v4Seg}`;

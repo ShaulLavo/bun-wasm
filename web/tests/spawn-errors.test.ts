@@ -147,7 +147,7 @@ test("Node spawn reports EACCES before close for an unrunnable executable", asyn
     const child = api.nodeChildProcess().spawn("broken", ["argument"]);
     let failure;
     child.on("error", (error: Error) => { failure = error; });
-    const closed = await new Promise(resolve => child.once("close", (code, signal) => resolve([code, signal])));
+    const closed = await new Promise(resolve => child.once("close", (code: number | null, signal: string | null) => resolve([code, signal])));
     expect(failure).toMatchObject({ code: "EACCES", errno: -13, syscall: "spawn broken", path: "broken", spawnargs: ["argument"] });
     expect(child.exitCode).toBe(-13);
     expect(closed).toEqual([-13, null]);
@@ -161,8 +161,8 @@ test("a null abort reason reaches Node's asynchronous error path", async () => {
     const controller = new AbortController();
     controller.abort(null);
     const child = api.nodeChildProcess().spawn("bun", [], { signal: controller.signal });
-    let failure = "unset";
-    child.on("error", (error) => { failure = error; });
+    let failure: unknown = "unset";
+    child.on("error", (error: unknown) => { failure = error; });
     await new Promise(resolve => child.once("close", resolve));
     expect(failure).toBeNull();
   } finally { host.dispose(); }

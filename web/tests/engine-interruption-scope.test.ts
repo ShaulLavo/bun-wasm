@@ -167,10 +167,13 @@ for (const stage of ["admission", "running"] as const) {
         if (stage === "running") {
           owned.spawn("fixture-source");
           const deadline = Date.now() + 2_000;
-          while (!realm.workers[0]?.request) {
-            if (Date.now() > deadline) throw new Error("real guest launch was not reached before failure injection");
-            await Bun.sleep(1);
-          }
+          const waitForLaunch = async () => {
+            while (!realm.workers[0]?.request) {
+              if (Date.now() > deadline) throw new Error("real guest launch was not reached before failure injection");
+              await Bun.sleep(1);
+            }
+          };
+          await waitForLaunch();
         }
         throw new Error(`injected ${stage} failure`);
       } finally {
@@ -187,4 +190,5 @@ for (const stage of ["admission", "running"] as const) {
     await replacement.dispose();
     expect(globalThis.Worker).toBe(NativeWorker);
   });
+
 }

@@ -2,7 +2,7 @@
 use super::{RouteIndexAndRecurseFlag, SerializedFailure, Side, incremental_graph, route_bundle};
 use crate::bake;
 use bun_ast::Loader;
-use bun_collections::{ArrayHashMap, StringArrayHashMap, bit_set::DynamicBitSet};
+use bun_collections::bit_set::DynamicBitSet;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -21,6 +21,7 @@ pub(crate) enum ChunkKind {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
+#[allow(clippy::enum_variant_names)] // Names match the pinned Bun graph API.
 pub(crate) enum TraceImportGoal {
     FindCss,
     FindClientModules,
@@ -81,6 +82,7 @@ impl GraphTraceState {
         }
     }
 
+    #[cfg_attr(not(target_os = "wasi"), allow(dead_code))]
     pub(crate) fn clear(&mut self) {
         self.server_bits.unmanaged.set_all(false);
         self.client_bits.unmanaged.set_all(false);
@@ -94,6 +96,7 @@ impl GraphTraceState {
         Ok(())
     }
 
+    #[cfg_attr(not(target_os = "wasi"), allow(dead_code))]
     pub(crate) fn clear_and_free(&mut self) {
         self.client_bits
             .resize(0, false)

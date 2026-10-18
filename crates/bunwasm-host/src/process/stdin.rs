@@ -73,7 +73,11 @@ impl SharedInput {
 }
 
 impl AsyncRead for SharedInput {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buffer: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         if buffer.remaining() == 0 {
             return Poll::Ready(Ok(()));
         }
@@ -113,7 +117,11 @@ mod tests {
         assert_eq!(input.read(1).unwrap(), b"h"[..]);
         let mut bytes = [0; 4];
         let mut buffer = ReadBuf::new(&mut bytes);
-        assert!(Pin::new(&mut input).poll_read(&mut cx, &mut buffer).is_ready());
+        assert!(
+            Pin::new(&mut input)
+                .poll_read(&mut cx, &mut buffer)
+                .is_ready()
+        );
         assert_eq!(buffer.filled(), b"ello");
     }
 
@@ -123,7 +131,11 @@ mod tests {
         let mut cx = Context::from_waker(Waker::noop());
         let mut bytes = [0; 1];
         let mut buffer = ReadBuf::new(&mut bytes);
-        assert!(Pin::new(&mut input).poll_read(&mut cx, &mut buffer).is_ready());
+        assert!(
+            Pin::new(&mut input)
+                .poll_read(&mut cx, &mut buffer)
+                .is_ready()
+        );
         assert_eq!(buffer.filled(), b"h");
         assert_eq!(input.read(4).unwrap(), b"ello"[..]);
         assert!(input.poll_ready(&mut cx).is_ready());

@@ -12,8 +12,14 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
-use wasmtime::{Cache, CacheConfig, Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use wasmtime::{
+    Cache, CacheConfig, Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder,
+    UpdateDeadline,
+};
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::{DirPerms, FilePerms, I32Exit, WasiCtxBuilder};
 
@@ -59,7 +65,9 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options> {
     let mut options = Options::default();
     while let Some(arg) = args.next() {
         let (flag, inline) = match arg.split_once('=') {
-            Some((flag, value)) if flag.starts_with("--") => (flag.to_string(), Some(value.to_string())),
+            Some((flag, value)) if flag.starts_with("--") => {
+                (flag.to_string(), Some(value.to_string()))
+            }
             _ => (arg.clone(), None),
         };
         let mut value = |name: &str| -> Result<String> {
@@ -77,7 +85,9 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options> {
             }
             "--env" => {
                 let spec = value("--env")?;
-                let Some((key, val)) = spec.split_once('=') else { bail!("--env expects K=V, got {spec:?}") };
+                let Some((key, val)) = spec.split_once('=') else {
+                    bail!("--env expects K=V, got {spec:?}")
+                };
                 options.env.push((key.into(), val.into()));
             }
             "--inherit-env" => options.inherit_env = true,
@@ -144,7 +154,11 @@ fn guest_pwd(cwd: &Path, dirs: &[(PathBuf, String)]) -> Option<String> {
     dirs.iter().find_map(|(host, guest)| {
         let host = std::path::absolute(host).ok()?;
         let rest = cwd.strip_prefix(&host).ok()?;
-        let pwd = if rest.as_os_str().is_empty() { PathBuf::from(guest) } else { Path::new(guest).join(rest) };
+        let pwd = if rest.as_os_str().is_empty() {
+            PathBuf::from(guest)
+        } else {
+            Path::new(guest).join(rest)
+        };
         Some(pwd.to_string_lossy().into_owned())
     })
 }
@@ -152,7 +166,8 @@ fn guest_pwd(cwd: &Path, dirs: &[(PathBuf, String)]) -> Option<String> {
 fn run(options: Options) -> Result<i32> {
     let wasm = wasm_path(&options);
     let engine = engine()?;
-    let module = Module::from_file(&engine, &wasm).with_context(|| format!("loading {}", wasm.display()))?;
+    let module =
+        Module::from_file(&engine, &wasm).with_context(|| format!("loading {}", wasm.display()))?;
 
     let cwd = std::env::current_dir().context("reading the current directory")?;
     let dirs = if options.dirs.is_empty() {
@@ -161,9 +176,15 @@ fn run(options: Options) -> Result<i32> {
         options.dirs.clone()
     };
 
-    let mut env = if options.inherit_env { std::env::vars().collect::<Vec<_>>() } else { Vec::new() };
+    let mut env = if options.inherit_env {
+        std::env::vars().collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let explicit_pwd = options.env.iter().any(|(k, _)| k == "PWD");
-    if !explicit_pwd && let Some(pwd) = guest_pwd(&cwd, &dirs) { env.push(("PWD".into(), pwd)); }
+    if !explicit_pwd && let Some(pwd) = guest_pwd(&cwd, &dirs) {
+        env.push(("PWD".into(), pwd));
+    }
     env.extend(options.env);
     let mut runtime = process::Runtime::new(engine.clone(), module, dirs);
     Arc::get_mut(&mut runtime).unwrap().tools_path = Some(wasm.with_file_name("bun-tools.wasm"));
@@ -179,7 +200,15 @@ fn run(options: Options) -> Result<i32> {
     let result = std::thread::Builder::new()
         .name("bun-wasm".into())
         .stack_size(THREAD_STACK)
-        .spawn(move || run_instance(runtime, args, env, process::Stdio::inherited(), Arc::default()))
+        .spawn(move || {
+            run_instance(
+                runtime,
+                args,
+                env,
+                process::Stdio::inherited(),
+                Arc::default(),
+            )
+        })
         .context("starting the guest thread")?
         .join()
         // A guest-thread panic has printed its message; panic here too, so the exit code stays 101.
@@ -189,7 +218,13 @@ fn run(options: Options) -> Result<i32> {
     result.map(process::FinalOutcome::code)
 }
 
-fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<(String, String)>, stdio: process::Stdio, cancel: Arc<process::Cancellation>) -> Result<process::FinalOutcome> {
+fn run_instance(
+    runtime: Arc<process::Runtime>,
+    argv: Vec<String>,
+    mut env: Vec<(String, String)>,
+    stdio: process::Stdio,
+    cancel: Arc<process::Cancellation>,
+) -> Result<process::FinalOutcome> {
     if !env.iter().any(|(k, _)| k == "BUN_WASM_STACK_KIB") {
         env.push(("BUN_WASM_STACK_KIB".into(), GUEST_STACK_KIB.into()));
     }
@@ -209,7 +244,10 @@ fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<
         functions: Vec::new(),
         cancel: cancel.clone(),
         processes,
-        limits: StoreLimitsBuilder::new().memory_size(memory_limit).instances(1).build(),
+        limits: StoreLimitsBuilder::new()
+            .memory_size(memory_limit)
+            .instances(1)
+            .build(),
         memory: None,
         trace: std::env::var("BUN_WASM_TRACE").is_ok_and(|v| !v.is_empty() && v != "0"),
     };
@@ -228,9 +266,11 @@ fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<
     // Normalizing here also keeps negative status values out of child_wait's
     // control-code range; signal provenance comes only from Cancellation.
     linker.allow_shadowing(true);
-    linker.func_wrap("wasi_snapshot_preview1", "proc_exit", |status: i32| -> Result<()> {
-        Err(I32Exit(i32::from(status as u8)).into())
-    })?;
+    linker.func_wrap(
+        "wasi_snapshot_preview1",
+        "proc_exit",
+        |status: i32| -> Result<()> { Err(I32Exit(i32::from(status as u8)).into()) },
+    )?;
     linker.allow_shadowing(false);
     slots::add_import(&mut linker)?;
     let instance = linker.instantiate(&mut store, runtime.module_for(&argv)?)?;
@@ -241,12 +281,18 @@ fn run_instance(runtime: Arc<process::Runtime>, argv: Vec<String>, mut env: Vec<
     let result = start.call(&mut store, ());
     let outcome = select_instance_outcome(result, &cancel);
     if matches!(outcome, process::FinalOutcome::Exit(_)) {
-        store.data_mut().net.flush_closed(std::time::Duration::from_secs(2));
+        store
+            .data_mut()
+            .net
+            .flush_closed(std::time::Duration::from_secs(2));
     }
     Ok(outcome)
 }
 
-fn select_instance_outcome(result: Result<()>, cancel: &process::Cancellation) -> process::FinalOutcome {
+fn select_instance_outcome(
+    result: Result<()>,
+    cancel: &process::Cancellation,
+) -> process::FinalOutcome {
     use process::FinalOutcome;
     match result {
         Ok(()) => cancel.select(FinalOutcome::Exit(0)),
@@ -262,6 +308,24 @@ fn select_instance_outcome(result: Result<()>, cancel: &process::Cancellation) -
                 outcome
             }
         },
+    }
+}
+
+fn main() -> ExitCode {
+    let options = match parse_args(std::env::args().skip(1)) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("bun-wasm: {error:#}\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    match run(options) {
+        // Exit codes outside 0..=255 are truncated by the OS anyway.
+        Ok(code) => ExitCode::from(code as u8),
+        Err(error) => {
+            eprintln!("bun-wasm: {error:#}");
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -299,10 +363,12 @@ mod tests {
         loop {
             let byte = (remaining & 0x7f) as u8;
             remaining >>= 7;
-            let done = (remaining == 0 && byte & 0x40 == 0)
-                || (remaining == -1 && byte & 0x40 != 0);
+            let done =
+                (remaining == 0 && byte & 0x40 == 0) || (remaining == -1 && byte & 0x40 != 0);
             body.push(if done { byte } else { byte | 0x80 });
-            if done { break; }
+            if done {
+                break;
+            }
         }
         body.extend_from_slice(&[0x10, 0, 0x0b]); // call proc_exit; end
         let mut code = vec![1, body.len() as u8];
@@ -316,10 +382,24 @@ mod tests {
         let mut config = Config::new();
         config.epoch_interruption(true);
         let engine = Engine::new(&config).unwrap();
-        for (status, expected) in [(23, 23), (126, 126), (143, 143), (255, 255), (-1, 255), (256, 0)] {
+        for (status, expected) in [
+            (23, 23),
+            (126, 126),
+            (143, 143),
+            (255, 255),
+            (-1, 255),
+            (256, 0),
+        ] {
             let module = Module::new(&engine, proc_exit_guest(status)).unwrap();
             let runtime = process::Runtime::new(engine.clone(), module, Vec::new());
-            let outcome = run_instance(runtime, Vec::new(), Vec::new(), process::Stdio::inherited(), Arc::default()).unwrap();
+            let outcome = run_instance(
+                runtime,
+                Vec::new(),
+                Vec::new(),
+                process::Stdio::inherited(),
+                Arc::default(),
+            )
+            .unwrap();
             assert_eq!(outcome, FinalOutcome::Exit(expected), "proc_exit({status})");
             assert_eq!(outcome.signal(), 0);
         }
@@ -330,7 +410,10 @@ mod tests {
         let cancel = Cancellation::default();
         assert_eq!(cancel.signal(15, 2), 0);
         assert!(cancel.kill(15));
-        assert_eq!(select_instance_outcome(Err(I32Exit(143).into()), &cancel), FinalOutcome::Exit(143));
+        assert_eq!(
+            select_instance_outcome(Err(I32Exit(143).into()), &cancel),
+            FinalOutcome::Exit(143)
+        );
         assert!(!cancel.kill(9));
     }
 
@@ -339,14 +422,20 @@ mod tests {
         let cancel = Cancellation::default();
         assert!(cancel.kill(15));
         assert!(cancel.check().is_err());
-        assert_eq!(select_instance_outcome(Err(I32Exit(1).into()), &cancel), FinalOutcome::Signal(15));
+        assert_eq!(
+            select_instance_outcome(Err(I32Exit(1).into()), &cancel),
+            FinalOutcome::Signal(15)
+        );
     }
 
     #[test]
     fn accepted_kill_wins_before_an_explicit_exit() {
         let cancel = Cancellation::default();
         assert!(cancel.kill(9));
-        assert_eq!(select_instance_outcome(Err(I32Exit(143).into()), &cancel), FinalOutcome::Signal(9));
+        assert_eq!(
+            select_instance_outcome(Err(I32Exit(143).into()), &cancel),
+            FinalOutcome::Signal(9)
+        );
     }
 
     #[test]
@@ -354,7 +443,10 @@ mod tests {
         let cancel = Cancellation::default();
         assert_eq!(cancel.signal(15, 2), 0);
         assert!(cancel.kill(15));
-        assert_eq!(select_instance_outcome(Err(anyhow::anyhow!("unreachable")), &cancel), FinalOutcome::Exit(134));
+        assert_eq!(
+            select_instance_outcome(Err(anyhow::anyhow!("unreachable")), &cancel),
+            FinalOutcome::Exit(134)
+        );
     }
 
     #[test]
@@ -373,32 +465,23 @@ mod tests {
         assert!(cancel.kill(2));
         assert!(cancel.check().is_ok());
         assert_eq!(cancel.signal(0, 0), 2);
-        assert_eq!(select_instance_outcome(Err(I32Exit(0).into()), &cancel), FinalOutcome::Exit(0));
+        assert_eq!(
+            select_instance_outcome(Err(I32Exit(0).into()), &cancel),
+            FinalOutcome::Exit(0)
+        );
     }
 
     #[test]
     fn selected_success_rejects_late_kill() {
         let cancel = Cancellation::default();
-        assert_eq!(select_instance_outcome(Ok(()), &cancel), FinalOutcome::Exit(0));
+        assert_eq!(
+            select_instance_outcome(Ok(()), &cancel),
+            FinalOutcome::Exit(0)
+        );
         assert!(!cancel.kill(9));
-        assert_eq!(cancel.select(FinalOutcome::Signal(9)), FinalOutcome::Exit(0));
-    }
-}
-
-fn main() -> ExitCode {
-    let options = match parse_args(std::env::args().skip(1)) {
-        Ok(options) => options,
-        Err(error) => {
-            eprintln!("bun-wasm: {error:#}\n\n{USAGE}");
-            return ExitCode::from(2);
-        }
-    };
-    match run(options) {
-        // Exit codes outside 0..=255 are truncated by the OS anyway.
-        Ok(code) => ExitCode::from(code as u8),
-        Err(error) => {
-            eprintln!("bun-wasm: {error:#}");
-            ExitCode::from(1)
-        }
+        assert_eq!(
+            cancel.select(FinalOutcome::Signal(9)),
+            FinalOutcome::Exit(0)
+        );
     }
 }

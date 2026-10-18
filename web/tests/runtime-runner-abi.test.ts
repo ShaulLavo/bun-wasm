@@ -34,6 +34,7 @@ function fixture(module: WebAssembly.Module, options: Partial<RunOptions> | ((ru
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
   globalThis.Worker = class {
+    // oxlint-disable-next-line no-this-alias -- Retain the owner for callbacks whose receiver differs.
     constructor(readonly url: string) { rootWorker ??= this; }
     onmessage?: (event: { data: WorkerProcessMessage }) => void;
     postMessage(request: RunRequest) { sent ??= request; requests.push(request); workerUrls.set(request, this.url); posted(); }
@@ -101,14 +102,17 @@ test("preview1 runner choice explicitly trusts its own aliases without changing 
         prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (root.data as { pipeRegistry: unknown }).pipeRegistry } }),
       });
       for (const alias of ["bun", "/usr/local/bin/node"]) {
-        const pid = client.spawn(1, { executable: alias, argv: [alias], env: {}, cwd: "/", job: 1, fds: [] });
-        const deadline = performance.now() + 1000;
-        while (!state.requests.some(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
-        const child = state.requests.find(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid);
-        expect(child).toBeDefined();
-        expect(state.urlFor(child!)).toBe("http://localhost/preview1-worker.js");
-        const record = (await state.runtime.processes().then(service => service.ready())).get(pid)!;
-        expect(registrations.get(record.request!.executable)).toMatchObject({ adapter: "preview1", cooperative: true });
+        const checkPreview1Alias = async () => {
+          const pid = client.spawn(1, { executable: alias, argv: [alias], env: {}, cwd: "/", job: 1, fds: [] });
+          const deadline = performance.now() + 1000;
+          while (!state!.requests.some(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+          const child = state!.requests.find(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid);
+          expect(child).toBeDefined();
+          expect(state!.urlFor(child!)).toBe("http://localhost/preview1-worker.js");
+          const record = (await state!.runtime.processes().then(service => service.ready())).get(pid)!;
+          expect(registrations.get(record.request!.executable)).toMatchObject({ adapter: "preview1", cooperative: true });
+        };
+        await checkPreview1Alias();
       }
     } finally { descriptors.dispose(); }
     for (const engine of ["quickjs", "jsc", "browser"]) {

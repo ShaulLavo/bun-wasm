@@ -523,7 +523,7 @@ function controllersFor(runtime: Runtime): Map<number, SubprocessBroker> {
   return controllers;
 }
 /** Immutable engine-qualified registrations; concurrent runs never replace a global engine alias. */
-export function installBunAdapters(runtime: Runtime, workerUrl: string, tools?: () => Promise<WebAssembly.Module>): void {
+function installBunAdapters(runtime: Runtime, workerUrl: string, tools?: () => Promise<WebAssembly.Module>): void {
   if (installedAdapters.has(runtime)) return;
   installedAdapters.add(runtime);
   const originController = async (context: ProcessContext, service: ProcessService) => {

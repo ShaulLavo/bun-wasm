@@ -8,7 +8,9 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{
+    IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
@@ -27,7 +29,10 @@ const LINGER: Duration = Duration::from_secs(5);
 const READ_TICK: Duration = Duration::from_millis(500);
 
 fn spawn(name: &str, f: impl FnOnce() + Send + 'static) -> io::Result<JoinHandle<()>> {
-    thread::Builder::new().name(name.into()).stack_size(256 * 1024).spawn(f)
+    thread::Builder::new()
+        .name(name.into())
+        .stack_size(256 * 1024)
+        .spawn(f)
 }
 
 /// Addresses to bind for a `listen` host.
@@ -93,20 +98,39 @@ impl Listener {
             }
             return Err(socket_error("listen", &last_error, &target));
         };
-        let local = listener.local_addr().map_err(|e| socket_error("listen", &e, &target))?;
+        let local = listener
+            .local_addr()
+            .map_err(|e| socket_error("listen", &e, &target))?;
         let wake = match local.ip() {
-            IpAddr::V4(ip) if ip.is_unspecified() => SocketAddr::new(Ipv4Addr::LOCALHOST.into(), local.port()),
-            IpAddr::V6(ip) if ip.is_unspecified() => SocketAddr::new(Ipv6Addr::LOCALHOST.into(), local.port()),
+            IpAddr::V4(ip) if ip.is_unspecified() => {
+                SocketAddr::new(Ipv4Addr::LOCALHOST.into(), local.port())
+            }
+            IpAddr::V6(ip) if ip.is_unspecified() => {
+                SocketAddr::new(Ipv6Addr::LOCALHOST.into(), local.port())
+            }
             _ => local,
         };
-        let shared = Arc::new(ListenerShared { pending: Mutex::new(VecDeque::new()), closed: AtomicBool::new(false) });
+        let shared = Arc::new(ListenerShared {
+            pending: Mutex::new(VecDeque::new()),
+            closed: AtomicBool::new(false),
+        });
         let accept_shared = shared.clone();
-        let thread = spawn("bun-wasm-accept", move || accept_loop(listener, accept_shared, notify))
-            .map_err(|e| socket_error("listen", &e, &target))?;
-        Ok(Listener { shared, port: local.port(), local, wake, thread: Some(thread) })
+        let thread = spawn("bun-wasm-accept", move || {
+            accept_loop(listener, accept_shared, notify)
+        })
+        .map_err(|e| socket_error("listen", &e, &target))?;
+        Ok(Listener {
+            shared,
+            port: local.port(),
+            local,
+            wake,
+            thread: Some(thread),
+        })
     }
 
-    pub fn local_addr(&self) -> SocketAddr { self.local }
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local
+    }
 
     pub fn port(&self) -> u16 {
         self.port
@@ -214,7 +238,13 @@ impl Conn {
             done: false,
             error: None,
         };
-        Conn { shared: Arc::new(ConnShared { state: Mutex::new(state), wake: Condvar::new(), notify }) }
+        Conn {
+            shared: Arc::new(ConnShared {
+                state: Mutex::new(state),
+                wake: Condvar::new(),
+                notify,
+            }),
+        }
     }
 
     fn accepted(stream: TcpStream, notify: Arc<Notify>) -> Conn {
@@ -227,7 +257,8 @@ impl Conn {
         }
         let shared = conn.shared.clone();
         if let Err(e) = spawn("bun-wasm-conn", move || run_open(shared, stream)) {
-            conn.shared.update(|s| fail(s, socket_error("accept", &e, "")));
+            conn.shared
+                .update(|s| fail(s, socket_error("accept", &e, "")));
         }
         conn
     }
@@ -236,7 +267,8 @@ impl Conn {
         let conn = Conn::new(Phase::Connecting, notify);
         let shared = conn.shared.clone();
         if let Err(e) = spawn("bun-wasm-conn", move || dial(shared, &host, port)) {
-            conn.shared.update(|s| fail(s, socket_error("connect", &e, "")));
+            conn.shared
+                .update(|s| fail(s, socket_error("connect", &e, "")));
         }
         conn
     }
@@ -278,14 +310,18 @@ impl Conn {
             state.want_writable = true;
             return AGAIN;
         }
-        let n = data.len().min((WRITE_HIGH_WATER - queued).max(MIN_WRITE_ACCEPT));
+        let n = data
+            .len()
+            .min((WRITE_HIGH_WATER - queued).max(MIN_WRITE_ACCEPT));
         state.send.push(&data[..n]);
         drop(state);
         self.shared.wake.notify_all();
         n as i32
     }
 
-    pub fn local_addr(&self) -> Option<SocketAddr> { self.shared.state.lock().unwrap().local }
+    pub fn local_addr(&self) -> Option<SocketAddr> {
+        self.shared.state.lock().unwrap().local
+    }
 
     pub fn shutdown(&self) {
         self.shared.state.lock().unwrap().write_shutdown = true;
@@ -320,7 +356,12 @@ impl Conn {
             if now >= deadline {
                 return;
             }
-            state = self.shared.wake.wait_timeout(state, deadline - now).unwrap().0;
+            state = self
+                .shared
+                .wake
+                .wait_timeout(state, deadline - now)
+                .unwrap()
+                .0;
         }
     }
 }
@@ -334,10 +375,11 @@ fn fail(state: &mut ConnState, error: ErrorInfo) {
 /// Connect thread for `connect`: resolve, dial, then serve the connection.
 fn dial(shared: Arc<ConnShared>, host: &str, port: u16) {
     let target = format!("{host}:{port}");
-    let addrs: Vec<SocketAddr> = match (host.trim_start_matches('[').trim_end_matches(']'), port).to_socket_addrs() {
-        Ok(addrs) => addrs.collect(),
-        Err(e) => return shared.update(|s| fail(s, socket_error("connect", &e, &target))),
-    };
+    let addrs: Vec<SocketAddr> =
+        match (host.trim_start_matches('[').trim_end_matches(']'), port).to_socket_addrs() {
+            Ok(addrs) => addrs.collect(),
+            Err(e) => return shared.update(|s| fail(s, socket_error("connect", &e, &target))),
+        };
     let mut last = None;
     for addr in addrs {
         match TcpStream::connect(addr) {
@@ -347,7 +389,11 @@ fn dial(shared: Arc<ConnShared>, host: &str, port: u16) {
     }
     let error = match last {
         Some((e, addr)) => socket_error("connect", &e, &addr.to_string()),
-        None => socket_error("connect", &io::Error::other("failed to lookup address information"), &target),
+        None => socket_error(
+            "connect",
+            &io::Error::other("failed to lookup address information"),
+            &target,
+        ),
     };
     shared.update(|s| fail(s, error));
 }
@@ -397,10 +443,19 @@ fn read_loop(shared: Arc<ConnShared>, mut stream: TcpStream) {
             Ok(_) if closed => {}
             Ok(n) => shared.update(|s| s.received.push(&buf[..n])),
             // The read timeout (see READ_TICK) lets us notice a close.
-            Err(e) if matches!(e.kind(), io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::Interrupted
+                        | io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                ) => {}
             Err(_) if closed => return,
             Err(e) => {
-                let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+                let peer = stream
+                    .peer_addr()
+                    .map(|a| a.to_string())
+                    .unwrap_or_default();
                 return shared.update(|s| {
                     s.read_failed = true;
                     s.error.get_or_insert(socket_error("read", &e, &peer));
@@ -424,7 +479,10 @@ fn write_loop(shared: &ConnShared, mut stream: TcpStream) {
             state.send.pop_into(&mut chunk)
         };
         if let Err(e) = stream.write_all(&chunk[..n]) {
-            let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+            let peer = stream
+                .peer_addr()
+                .map(|a| a.to_string())
+                .unwrap_or_default();
             shared.update(|s| {
                 fail(s, socket_error("write", &e, &peer));
                 s.send = ByteQueue::default();
@@ -452,7 +510,9 @@ mod close_tests {
     fn accept_during_listener_close_drains_before_fin() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
         client.write_all(b"pending request").unwrap();
         client.shutdown(Shutdown::Write).unwrap();
         let shared = Arc::new(ListenerShared {

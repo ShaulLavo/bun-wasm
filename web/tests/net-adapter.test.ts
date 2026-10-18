@@ -56,7 +56,7 @@ for (const kind of ["resizable", "growable"] as const) {
         return nativeDecode.call(this, input, options);
       });
       try {
-        for (let round = 0; round < 2; round++) {
+        const checkGuestMemoryRound = (round: number) => {
           if (round) memory.grow(1);
           const ptr = round * 65536 + 128;
           const text = operation === "fetch" ? JSON.stringify({ url: "https://network.invalid/", method: "POST" }) : "localhost";
@@ -93,13 +93,15 @@ for (const kind of ["resizable", "growable"] as const) {
           expect(Object.prototype.toString.call(copy)).toBe("[object ArrayBuffer]");
           expect(Reflect.get(copy, "resizable")).toBe(false);
           expect(new Uint8Array(copy)).toEqual(source);
-        }
+        };
+        for (let round = 0; round < 2; round++) checkGuestMemoryRound(round);
       } finally {
         strict.mockRestore();
       }
       expect(TextDecoder.prototype.decode).toBe(nativeDecode);
     });
   }
+
 }
 
 test("Bun sized-result slots return full length without overwriting a small buffer", async () => {
@@ -191,7 +193,7 @@ test("Bun helper keeps installer cache policy outside the generic runtime", asyn
   const host = new RuntimeNetHost(sab, (request) => helper.handle(request));
   try {
     Object.defineProperty(globalThis, "caches", { configurable: true, value: { async open(name: string) { opened.push(name); return cache; } } });
-    globalThis.fetch = (async () => { throw new Error("Installer should use the cached response"); }) as typeof fetch;
+    globalThis.fetch = Object.assign(async () => { throw new Error("Installer should use the cached response"); }, { preconnect: fetch.preconnect });
     const handle = host.fetch(JSON.stringify({ url: "https://network.invalid/pkg.tgz", headers: [["accept", "application/vnd.bun.install-tarball"]] }));
     await until(() => typeof host.fetchHead(handle) !== "number");
     let body: Uint8Array | number = AGAIN;

@@ -290,6 +290,10 @@
     return child;
   }
 
+  function checkTimedOutChild(handle, signal) {
+    if (native.hostChildKill(handle, signal) < 0 && native.hostChildWait(handle) < 0) throw hostError(handle);
+  }
+
   function spawnSync(cmd, options) {
     validateCommandLength(cmd);
     let spec;
@@ -320,7 +324,7 @@
         if (exitCode === AGAIN && !timedOut && spec.options.timeout > 0 && native.now() - started >= spec.options.timeout) {
           timedOut = true;
           const requestedSignal = signalNumber(spec.options.killSignal);
-          if (native.hostChildKill(spec.handle, requestedSignal) < 0 && native.hostChildWait(spec.handle) < 0) throw hostError(spec.handle);
+          checkTimedOutChild(spec.handle, requestedSignal);
         }
         if (exitCode === AGAIN || states.some((state) => state.handle)) native.hostPoll(1);
       }
@@ -363,7 +367,7 @@
         token = ""; active = false;
         continue;
       }
-      if (/[|&;<>()$`*?{}\[\]~]/.test(ch)) throw unsupported("Shell operators and expansion");
+      if (/[|&;<>()$`*?{}[\]~]/.test(ch)) throw unsupported("Shell operators and expansion");
       token += ch; active = true;
     }
     if (quote || escaped) throw new TypeError("Unterminated shell quote");
@@ -485,8 +489,8 @@
       child.spawnfile = String(command);
       child.spawnargs = argv;
       try { child._child = spawn(argv, options); } catch (error) {
-        error = spawnError(error, command, args, false);
-        reportStartFailure(child, options, error);
+        const failure = spawnError(error, command, args, false);
+        reportStartFailure(child, options, failure);
         return child;
       }
       child.pid = child._child.pid;

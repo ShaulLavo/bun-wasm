@@ -210,6 +210,31 @@
       const parts = [];
       const push = (type, value) => parts.push({ type, value: String(value) });
       const lit = (value) => parts.push({ type: "literal", value });
+      const appendTimeParts = () => {
+        if (o.era) {
+          const part = parts.find((p) => p.type === "year");
+          if (part && year <= 0) part.value = String(1 - year);
+          lit(" ");
+          push("era", o.era === "long" ? (year <= 0 ? "Before Christ" : "Anno Domini") : year <= 0 ? "BC" : "AD");
+        }
+        const wantsTime = o.timeStyle || o.hour !== undefined || o.minute !== undefined;
+        if (wantsTime) {
+          if (parts.length) lit(", ");
+          const h12 = o.hour12 !== false && o.hourCycle !== "h23";
+          const h = h12 ? hour % 12 || 12 : hour;
+          push("hour", o.hour === "2-digit" || !h12 ? String(h).padStart(2, "0") : h);
+          lit(":");
+          push("minute", String(minute).padStart(2, "0"));
+          if (o.second !== undefined || o.timeStyle === "medium" || o.timeStyle === "long" || o.timeStyle === "full") {
+            lit(":");
+            push("second", String(second).padStart(2, "0"));
+          }
+          if (h12) {
+            lit(" ");
+            push("dayPeriod", hour < 12 ? "AM" : "PM");
+          }
+        }
+      };
       const style = o.dateStyle;
       if (style === "full" || style === "long" || style === "medium") {
         if (style === "full") {
@@ -236,29 +261,7 @@
         if (o.year && (o.month || o.day)) lit(", ");
         if (o.year) push("year", o.year === "2-digit" ? String(year).slice(-2) : year);
       }
-      if (o.era) {
-        const part = parts.find((p) => p.type === "year");
-        if (part && year <= 0) part.value = String(1 - year);
-        lit(" ");
-        push("era", o.era === "long" ? (year <= 0 ? "Before Christ" : "Anno Domini") : year <= 0 ? "BC" : "AD");
-      }
-      const wantsTime = o.timeStyle || o.hour !== undefined || o.minute !== undefined;
-      if (wantsTime) {
-        if (parts.length) lit(", ");
-        const h12 = o.hour12 !== false && o.hourCycle !== "h23";
-        const h = h12 ? hour % 12 || 12 : hour;
-        push("hour", o.hour === "2-digit" || !h12 ? String(h).padStart(2, "0") : h);
-        lit(":");
-        push("minute", String(minute).padStart(2, "0"));
-        if (o.second !== undefined || o.timeStyle === "medium" || o.timeStyle === "long" || o.timeStyle === "full") {
-          lit(":");
-          push("second", String(second).padStart(2, "0"));
-        }
-        if (h12) {
-          lit(" ");
-          push("dayPeriod", hour < 12 ? "AM" : "PM");
-        }
-      }
+      appendTimeParts();
       return parts;
     }
     formatRange(a, b) {

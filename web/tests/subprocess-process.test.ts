@@ -1,3 +1,4 @@
+import { nativeCall } from "./native-call.ts";
 import { expect, spyOn, test } from "bun:test";
 import { CHILD_FINAL_SIGNAL, SubprocessHost, childTransport, type ChildTransport } from "../src/subprocess.ts";
 import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
@@ -217,7 +218,7 @@ for (const bridge of ["engine", "slots"]) test(`network handle 2 cannot close a 
     const close = (id: number) => { networkClosed.push(id); return 0; };
     if (bridge === "engine") {
       const net = host.engineNet({ natives: { hostClose: close }, caps: {}, onNews() {} });
-      expect(net.natives.hostClose(2)).toBe(0);
+      expect(nativeCall(net.natives, "hostClose", 2)).toBe(0);
     } else expect(host.slots({ close }).close?.(2)).toBe(0);
     expect(networkClosed).toEqual([2]);
     expect(host.wait(pid)).toBe(-2);
@@ -328,7 +329,7 @@ for (const [code, signal] of [[143, undefined], [143, 15], [137, undefined], [13
       expect(host.wait(pid)).toBe(code);
       expect(host.pipe(pid, CHILD_FINAL_SIGNAL)).toBe(signal ?? 0);
       expect(host.slots().child_pipe!(pid, CHILD_FINAL_SIGNAL)).toBe(signal ?? 0);
-      expect(host.engineNet().natives!.hostChildPipe!(pid, CHILD_FINAL_SIGNAL)).toBe(signal ?? 0);
+      expect(nativeCall(host.engineNet().natives, "hostChildPipe", pid, CHILD_FINAL_SIGNAL)).toBe(signal ?? 0);
       expect(host.pipe(pid, 1)).toBe(pipe);
       expect(host.pipe(pid, 4)).toBe(-3);
       expect(host.pipe(pid + 1, CHILD_FINAL_SIGNAL)).toBe(-3);

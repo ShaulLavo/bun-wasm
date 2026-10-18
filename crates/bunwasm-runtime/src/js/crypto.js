@@ -230,18 +230,7 @@
     if (a.name === "Ed25519") return "EdDSA";
     return undefined;
   }
-  function validateJwk(k, a, extractable, usages) {
-    if (!k || typeof k !== "object" || Array.isArray(k))
-      fail("DataError", "Invalid JWK");
-    const secret =
-      ["HMAC", "PBKDF2", "HKDF"].includes(a.name) || a.name.startsWith("AES-");
-    const kty = secret
-      ? "oct"
-      : a.name.startsWith("RSA")
-        ? "RSA"
-        : ["ECDSA", "ECDH"].includes(a.name)
-          ? "EC"
-          : "OKP";
+  function validateJwkOctets(k) {
     for (const field of [
       "k",
       "n",
@@ -263,6 +252,20 @@
       )
         fail("DataError", "Invalid JWK octets");
     }
+  }
+  function validateJwk(k, a, extractable, usages) {
+    if (!k || typeof k !== "object" || Array.isArray(k))
+      fail("DataError", "Invalid JWK");
+    const secret =
+      ["HMAC", "PBKDF2", "HKDF"].includes(a.name) || a.name.startsWith("AES-");
+    const kty = secret
+      ? "oct"
+      : a.name.startsWith("RSA")
+        ? "RSA"
+        : ["ECDSA", "ECDH"].includes(a.name)
+          ? "EC"
+          : "OKP";
+    validateJwkOctets(k);
     const fields =
       kty === "oct"
         ? ["k"]

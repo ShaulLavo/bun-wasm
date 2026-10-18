@@ -14,6 +14,9 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [Quality fixes in adapted source](#quality-fixes-in-adapted-source) | Port | Mechanical formatting and lint fixes in the existing Bun/Node ports, without changing their upstream revision. |
+| [Native-host XML and optional hooks](#native-host-xml-and-optional-hooks) | Host feature | Scalar XML indexing and explicit unsupported trace/macro hooks let the full workspace link on the native host. |
+| [Quality checks and original adapters](#quality-checks-and-original-adapters) | Host feature | Original quality commands and tighter host/test typings, with small control-flow extractions. |
 | [Bun public transpiler adapter](#public-transpiler-adapter) | Port | Adapt the real Rust parse/print and scan paths to the engine-independent native boundary. |
 | [Generated `bun:wrap` helpers](#bun-wrap-helpers) | Host feature | Load Bun's unmodified runtime helpers through the builtin registry. |
 | [Partial strict comparison](#partial-strict-comparison) | Port | Translate Bun's native partial-comparison rules to TypeScript for all engines. |
@@ -2494,3 +2497,57 @@ Waffle is consumed unchanged as a pinned Git peer/development dependency; the pa
 does not embed its implementation or create a second runtime. Existing worker and net
 imports use explicit extensions for strict module resolution. No upstream patch or
 copied implementation was introduced by this packaging work.
+
+## Quality fixes in adapted source
+
+The quality pass keeps Bun at `9510e74152073d850a18758ca41114d8f214ffa6`
+and preserves the revisions already recorded above for Node and other ports.
+It formats authored Rust under `crates/`, including the adapted bundler/dev-server
+facades, compression, X.509 and installer code. Clippy fixes replace needless
+borrows, explicit closures and manual loops with equivalent standard operations.
+The Node zlib port and other mixed runtime factories lose unused bindings and
+get explicit names for intentionally unused ABI arguments. No upstream patch or
+generated bundle changes. These are maintenance changes to the existing ports,
+not newly copied implementations or upstream bug claims.
+
+The unchanged Bun incremental graph, packed map and serialized failure modules
+remain upstream-owned even though authored facades include them by path. Local
+attributes document that boundary instead of silencing all Rust. Host-only
+unused ABI fields are identified separately from WASI callback code.
+
+## Quality checks and original adapters
+
+The quality runner, failure probes, lint/unused/clone configurations, TypeScript
+projects and CI wiring are original bun-wasm tooling. Existing original package,
+filesystem, subprocess, shell, native-stream, crypto and browser test adapters
+get typed test doubles, checked entrypoints and named control-flow helpers.
+The preview WebSocket declaration describes our bundler's export of the existing
+classic-script factory; it does not import another WebSocket implementation.
+The JSC Rust adapter retains its raw engine-value API, with a specific documented
+Clippy exception for those engine-owned handles. The source ledger's prior
+classifications and upstream paths still apply to each mixed file.
+
+Host builds now link the existing native glue and bundler hooks too, so workspace
+examples and tests resolve the same ABI symbols as WASI builds. Machete exceptions
+name dependencies referenced only by unchanged path-included Bun modules. Browser
+fixtures keep consumer-local build inputs but leave Playwright profiles under the
+short host temporary root, avoiding Chromium Unix-socket path limits.
+
+
+## Native-host XML and optional hooks
+
+`crates/bunwasm-glue/src/native_host.rs` is an original scalar adapter for the
+native XML kernel ABI. Its indexing rules follow
+`src/parsers/xml_index.rs` and `src/jsc/bindings/highway_xml.cpp`, and its buffer
+contract follows `src/highway/lib.rs`, all at Bun revision
+`9510e74152073d850a18758ca41114d8f214ffa6`. It retains tag state, encoded
+noncharacters and UTF-16 surrogate state across chunks without linking Highway's
+C++ SIMD implementation. Tests cover both byte and UTF-16 chunk boundaries.
+WASI still selects Bun's existing scalar producer and does not link this module.
+
+The same host-only module returns unsupported from Bun's optional Linux tracing
+hooks. The original macro hook in `crates/bunwasm-glue/src/extra.rs` returns
+`MacroFailed`, matching the declaration in Bun's `src/js_parser/lib.rs` at that
+revision. It does not claim to evaluate JavaScript macros. These hooks make
+workspace examples and test binaries link rather than excluding them from the
+quality gate. They do not add an upstream patch.

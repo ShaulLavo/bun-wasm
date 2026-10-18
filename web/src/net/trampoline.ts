@@ -54,7 +54,7 @@ const ARITY: Record<SlotName, number> = {
   signal: 2,
 };
 
-export type SlotFunction = (...args: number[]) => number;
+type SlotFunction = (...args: number[]) => number;
 export type SlotImpls = Partial<Record<SlotName, SlotFunction>>;
 
 const ABI_VERSION = 1;

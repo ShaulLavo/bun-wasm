@@ -4,6 +4,7 @@ pub struct ToolGlobals {
     pub bunfig: Option<String>,
 }
 
+#[cfg_attr(not(target_os = "wasi"), allow(dead_code))] // Native launchers only inspect whether a tool command exists.
 pub struct ToolCommand {
     pub command: String,
     pub args: Vec<String>,

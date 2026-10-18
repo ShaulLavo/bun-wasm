@@ -1,14 +1,14 @@
 mod pipe;
-mod stdio;
 mod stdin;
+mod stdio;
 
 pub use stdio::{Cancellation, FinalOutcome, Stdio};
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 use std::task::{Context, Waker};
+use std::thread::JoinHandle;
 
 use serde::Deserialize;
 use wasmtime_wasi::cli::StdoutStream;
@@ -62,12 +62,17 @@ impl Runtime {
             return Ok(&self.module);
         }
         let tools = self.tools.get_or_init(|| {
-            let path = self.tools_path.as_ref().ok_or("tools artifact path is unavailable")?;
-            wasmtime::Module::from_file(&self.engine, path).map_err(|error| format!("loading {}: {error}", path.display()))
+            let path = self
+                .tools_path
+                .as_ref()
+                .ok_or("tools artifact path is unavailable")?;
+            wasmtime::Module::from_file(&self.engine, path)
+                .map_err(|error| format!("loading {}: {error}", path.display()))
         });
-        tools.as_ref().map_err(|message| anyhow::anyhow!("{message}"))
+        tools
+            .as_ref()
+            .map_err(|message| anyhow::anyhow!("{message}"))
     }
-
 }
 
 #[derive(Deserialize)]
@@ -86,7 +91,9 @@ pub struct Request {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum ChildPurpose { Configuration }
+enum ChildPurpose {
+    Configuration,
+}
 
 enum Admission {
     Public(Arc<Runtime>),
@@ -96,8 +103,12 @@ enum Admission {
 impl Drop for Admission {
     fn drop(&mut self) {
         match self {
-            Self::Public(runtime) => { runtime.active.fetch_sub(1, Ordering::SeqCst); }
-            Self::Configuration(active) => { active.store(false, Ordering::SeqCst); }
+            Self::Public(runtime) => {
+                runtime.active.fetch_sub(1, Ordering::SeqCst);
+            }
+            Self::Configuration(active) => {
+                active.store(false, Ordering::SeqCst);
+            }
         }
     }
 }
@@ -163,8 +174,16 @@ impl Processes {
         if let Some(pipes) = worker {
             for (index, pipe) in pipes.into_iter().enumerate() {
                 pipe.observe(&processes.notify);
-                let id = processes.next().expect("fresh worker has room for both inherited pipes");
-                processes.pipes.insert(id, PipeHandle { pipe, write: index == 1 });
+                let id = processes
+                    .next()
+                    .expect("fresh worker has room for both inherited pipes");
+                processes.pipes.insert(
+                    id,
+                    PipeHandle {
+                        pipe,
+                        write: index == 1,
+                    },
+                );
                 processes.worker_pipes[index] = id;
             }
         }
@@ -203,7 +222,12 @@ impl Processes {
     fn stdin(&mut self, mode: &str) -> Result<(i32, SharedInput), ErrorInfo> {
         match mode {
             "inherit" => Ok((0, self.stdio.stdin.clone())),
-            "ignore" => Ok((0, SharedInput::new(Arc::new(wasmtime_wasi::p2::pipe::MemoryInputPipe::new(Vec::new()))))),
+            "ignore" => Ok((
+                0,
+                SharedInput::new(Arc::new(wasmtime_wasi::p2::pipe::MemoryInputPipe::new(
+                    Vec::new(),
+                ))),
+            )),
             "pipe" => {
                 let (id, pipe) = self.pipe(true)?;
                 Ok((id, SharedInput::new(Arc::new(pipe))))
@@ -212,7 +236,11 @@ impl Processes {
         }
     }
 
-    fn output(&mut self, mode: &str, fd: usize) -> Result<(i32, Arc<dyn StdoutStream + Sync>), ErrorInfo> {
+    fn output(
+        &mut self,
+        mode: &str,
+        fd: usize,
+    ) -> Result<(i32, Arc<dyn StdoutStream + Sync>), ErrorInfo> {
         match mode {
             "inherit" => Ok((
                 0,
@@ -232,7 +260,8 @@ impl Processes {
     }
 
     pub fn spawn(&mut self, meta: &[u8]) -> Result<i32, ErrorInfo> {
-        let request: Request = serde_json::from_slice(meta).map_err(|e| error(e.to_string(), "EINVAL"))?;
+        let request: Request =
+            serde_json::from_slice(meta).map_err(|e| error(e.to_string(), "EINVAL"))?;
         let command = request.argv.first().map(String::as_str).unwrap_or("");
         if !BUN_EXECUTABLE_ALIASES.contains(&command) {
             return Err(error(
@@ -241,14 +270,25 @@ impl Processes {
             ));
         }
         let cwd = std::path::Path::new(&request.cwd);
-        if !cwd.is_absolute() || cwd.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-            return Err(error("Child cwd must be an absolute normalized guest path", "EINVAL"));
+        if !cwd.is_absolute()
+            || cwd
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(error(
+                "Child cwd must be an absolute normalized guest path",
+                "EINVAL",
+            ));
         }
         let mapped = self
             .runtime
             .dirs
             .iter()
-            .filter_map(|(host, guest)| cwd.strip_prefix(guest).ok().map(|rest| (guest.len(), host.join(rest))))
+            .filter_map(|(host, guest)| {
+                cwd.strip_prefix(guest)
+                    .ok()
+                    .map(|rest| (guest.len(), host.join(rest)))
+            })
             .max_by_key(|(length, _)| *length)
             .map(|(_, path)| path);
         if !mapped.is_some_and(|p| p.is_dir()) {
@@ -266,14 +306,29 @@ impl Processes {
     fn admit(&self, request: &Request) -> Result<Admission, ErrorInfo> {
         if request.purpose.is_some() {
             if self.stdio.configuration {
-                return Err(error("Configuration helpers cannot start another internal evaluation", "EPERM"));
+                return Err(error(
+                    "Configuration helpers cannot start another internal evaluation",
+                    "EPERM",
+                ));
             }
-            if request.argv[0] != "bun" || request.worker.is_some() || request.argv.len() != 4 || request.argv[1..3] != ["--no-install", "-e"]
-                || request.stdin != "ignore" || request.stdout != "pipe" || request.stderr != "pipe" {
+            if request.argv[0] != "bun"
+                || request.worker.is_some()
+                || request.argv.len() != 4
+                || request.argv[1..3] != ["--no-install", "-e"]
+                || request.stdin != "ignore"
+                || request.stdout != "pipe"
+                || request.stderr != "pipe"
+            {
                 return Err(error("Invalid configuration helper command", "EINVAL"));
             }
-            self.configuration_active.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .map_err(|_| error("This process already has a configuration evaluation", "EAGAIN"))?;
+            self.configuration_active
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .map_err(|_| {
+                    error(
+                        "This process already has a configuration evaluation",
+                        "EAGAIN",
+                    )
+                })?;
             return Ok(Admission::Configuration(self.configuration_active.clone()));
         }
         self.runtime
@@ -281,13 +336,20 @@ impl Processes {
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                 (n < MAX_CHILDREN).then_some(n + 1)
             })
-            .map_err(|_| error("bun-wasm child concurrency limit reached (4 active children)", "EAGAIN"))?;
+            .map_err(|_| {
+                error(
+                    "bun-wasm child concurrency limit reached (4 active children)",
+                    "EAGAIN",
+                )
+            })?;
         Ok(Admission::Public(self.runtime.clone()))
     }
 
     fn start(&mut self, mut request: Request, admission: Admission) -> Result<i32, ErrorInfo> {
         let stdio_pipes = [&request.stdin, &request.stdout, &request.stderr]
-            .into_iter().filter(|mode| mode.as_str() == "pipe").count();
+            .into_iter()
+            .filter(|mode| mode.as_str() == "pipe")
+            .count();
         // Reserve capacity before creating any pipe or starting a child thread.
         self.require_handles(1 + stdio_pipes + if request.worker.is_some() { 2 } else { 0 })?;
         request.env.insert("PWD".into(), request.cwd.clone());
@@ -298,9 +360,15 @@ impl Processes {
             let (incoming, input) = self.pipe(true)?;
             let (outgoing, output) = self.pipe(false)?;
             (incoming, outgoing, Some([input, output]))
-        } else { (0, 0, None) };
-        let memory_limit = request.worker.as_ref().and_then(|limits| limits.memory_limit_mb)
-            .map(|mb| mb.saturating_mul(1 << 20)).unwrap_or(512 << 20);
+        } else {
+            (0, 0, None)
+        };
+        let memory_limit = request
+            .worker
+            .as_ref()
+            .and_then(|limits| limits.memory_limit_mb)
+            .map(|mb| mb.saturating_mul(1 << 20))
+            .unwrap_or(512 << 20);
         let pipes = [stdin_id, stdout_id, stderr_id, to_worker, from_worker];
         let inputs: Vec<Pipe> = [stdin_id, to_worker]
             .into_iter()
@@ -327,9 +395,17 @@ impl Processes {
                     runtime.clone(),
                     request.argv,
                     request.env.into_iter().collect(),
-                    Stdio { stdin, stdout, stderr, worker, memory_limit, configuration: request.purpose.is_some() },
+                    Stdio {
+                        stdin,
+                        stdout,
+                        stderr,
+                        worker,
+                        memory_limit,
+                        configuration: request.purpose.is_some(),
+                    },
                     cancellation.clone(),
-                ).unwrap_or_else(|e| {
+                )
+                .unwrap_or_else(|e| {
                     eprintln!("bun-wasm child: {e:#}");
                     cancellation.select(FinalOutcome::Exit(1))
                 });
@@ -428,7 +504,11 @@ impl Processes {
     pub fn error(&self, id: i32) -> crate::net::Output {
         let info = if let Some(pipe) = self.pipes.get(&id) {
             let info = error("Child process pipe is closed", "EPIPE");
-            if pipe.write { info.with_errno(-32).with_syscall("write") } else { info }
+            if pipe.write {
+                info.with_errno(-32).with_syscall("write")
+            } else {
+                info
+            }
         } else if self.children.contains_key(&id) {
             error("Child process is no longer running", "ESRCH")
         } else {
@@ -564,9 +644,16 @@ mod tests {
         let cancel = Arc::new(Cancellation::default());
         let result = Arc::new(Mutex::new(None));
         let id = processes.next().unwrap();
-        processes.children.insert(id, Child {
-            cancel: cancel.clone(), result: result.clone(), reaped: AtomicBool::new(false), thread: None, pipes,
-        });
+        processes.children.insert(
+            id,
+            Child {
+                cancel: cancel.clone(),
+                result: result.clone(),
+                reaped: AtomicBool::new(false),
+                thread: None,
+                pipes,
+            },
+        );
         for (fd, pipe) in pipes[..3].iter().enumerate() {
             assert_eq!(processes.child_pipe(id, fd as i32), *pipe);
         }
@@ -612,9 +699,16 @@ mod tests {
         let cancel = Arc::new(Cancellation::default());
         let result = Arc::new(Mutex::new(None));
         let id = processes.next().unwrap();
-        processes.children.insert(id, Child {
-            cancel: cancel.clone(), result: result.clone(), reaped: AtomicBool::new(false), thread: None, pipes: [0; 5],
-        });
+        processes.children.insert(
+            id,
+            Child {
+                cancel: cancel.clone(),
+                result: result.clone(),
+                reaped: AtomicBool::new(false),
+                thread: None,
+                pipes: [0; 5],
+            },
+        );
         assert_eq!(processes.kill(id, 15), 0);
         assert!(cancel.check().is_err());
         assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
@@ -634,7 +728,11 @@ mod tests {
         let output = Pipe::new(parent.notify.clone());
         let mut stdio = Stdio::inherited();
         stdio.worker = Some([input.clone(), output.clone()]);
-        let mut worker = Processes::new(parent.runtime.clone(), stdio, crate::net::Net::new().notify());
+        let mut worker = Processes::new(
+            parent.runtime.clone(),
+            stdio,
+            crate::net::Net::new().notify(),
+        );
         let read = worker.child_pipe(0, CHILD_WORKER_INPUT);
         let write = worker.child_pipe(0, CHILD_WORKER_OUTPUT);
         assert!(read >= FIRST_HANDLE);
@@ -663,12 +761,30 @@ mod tests {
         let cancel = Arc::new(Cancellation::default());
         let result = Arc::new(Mutex::new(None));
         let id = processes.next().unwrap();
-        processes.children.insert(id, Child {
-            cancel: cancel.clone(), result: result.clone(), reaped: AtomicBool::new(false), thread: None,
-            pipes: [stdin_id, stdout_id, stderr_id, worker_input_id, worker_output_id],
-        });
-        assert_eq!(processes.child_pipe(id, CHILD_WORKER_INPUT), worker_input_id);
-        assert_eq!(processes.child_pipe(id, CHILD_WORKER_OUTPUT), worker_output_id);
+        processes.children.insert(
+            id,
+            Child {
+                cancel: cancel.clone(),
+                result: result.clone(),
+                reaped: AtomicBool::new(false),
+                thread: None,
+                pipes: [
+                    stdin_id,
+                    stdout_id,
+                    stderr_id,
+                    worker_input_id,
+                    worker_output_id,
+                ],
+            },
+        );
+        assert_eq!(
+            processes.child_pipe(id, CHILD_WORKER_INPUT),
+            worker_input_id
+        );
+        assert_eq!(
+            processes.child_pipe(id, CHILD_WORKER_OUTPUT),
+            worker_output_id
+        );
         assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
         assert_eq!(processes.write(stdin_id, b"pending stdin"), 13);
         assert_eq!(processes.write(worker_input_id, b"pending control"), 15);
@@ -679,7 +795,10 @@ mod tests {
         let outcome = cancel.select(FinalOutcome::Exit(0));
         assert_eq!(outcome, FinalOutcome::Signal(2));
         let input_probe = worker_input.clone();
-        close_child_pipes(vec![stdin, worker_input], vec![stdout, stderr, worker_output]);
+        close_child_pipes(
+            vec![stdin, worker_input],
+            vec![stdout, stderr, worker_output],
+        );
         // Teardown is observable before final metadata or wait status. Input
         // readers discard unread bytes and reject writes; output still drains.
         assert_eq!(processes.wait(id), AGAIN);
@@ -689,7 +808,11 @@ mod tests {
         // Closing its writer instead would leave the queued control bytes here.
         assert_eq!(input_probe.read(&mut [0; 15]), AGAIN);
         let mut bytes = [0; 7];
-        for (pipe, expected) in [(stdout_id, &b"out"[..]), (stderr_id, &b"err"[..]), (worker_output_id, &b"message"[..])] {
+        for (pipe, expected) in [
+            (stdout_id, &b"out"[..]),
+            (stderr_id, &b"err"[..]),
+            (worker_output_id, &b"message"[..]),
+        ] {
             assert_eq!(processes.read(pipe, &mut bytes), expected.len() as i32);
             assert_eq!(&bytes[..expected.len()], expected);
             assert_eq!(processes.read(pipe, &mut bytes), 0);
@@ -700,8 +823,14 @@ mod tests {
         assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 2);
         assert_eq!(processes.wait(id), 130);
         assert_eq!(processes.kill(id, 9), BADF);
-        assert_eq!(processes.child_pipe(id, CHILD_WORKER_INPUT), worker_input_id);
-        assert_eq!(processes.child_pipe(id, CHILD_WORKER_OUTPUT), worker_output_id);
+        assert_eq!(
+            processes.child_pipe(id, CHILD_WORKER_INPUT),
+            worker_input_id
+        );
+        assert_eq!(
+            processes.child_pipe(id, CHILD_WORKER_OUTPUT),
+            worker_output_id
+        );
     }
 
     #[test]
@@ -748,7 +877,8 @@ mod tests {
                 "argv": ["bun", "child.js"], "cwd": "/", "env": {},
                 "stdin": "pipe", "stdout": "pipe", "stderr": "pipe",
                 "worker": if worker { serde_json::json!({}) } else { serde_json::Value::Null },
-            })).unwrap();
+            }))
+            .unwrap();
             for _ in 0..3 {
                 let error = processes.spawn(&meta).unwrap_err();
                 assert_eq!(error.code.as_deref(), Some("EAGAIN"));
@@ -829,20 +959,29 @@ mod configuration_tests {
         serde_json::from_value(serde_json::json!({
             "purpose": "configuration", "argv": ["bun", "--no-install", "-e", "0"],
             "cwd": "/", "env": {}, "stdin": "ignore", "stdout": "pipe", "stderr": "pipe"
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     #[test]
     fn helpers_reserve_one_per_owner_without_using_public_capacity() {
         let root = super::tests::processes();
         root.runtime.active.store(MAX_CHILDREN, Ordering::SeqCst);
-        let lease = root.admit(&request()).unwrap_or_else(|error| panic!("{error:?}"));
+        let lease = root
+            .admit(&request())
+            .unwrap_or_else(|error| panic!("{error:?}"));
         assert_eq!(root.runtime.active.load(Ordering::SeqCst), MAX_CHILDREN);
-        assert_eq!(root.admit(&request()).err().unwrap().code.as_deref(), Some("EAGAIN"));
+        assert_eq!(
+            root.admit(&request()).err().unwrap().code.as_deref(),
+            Some("EAGAIN")
+        );
         let mut stdio = Stdio::inherited();
         stdio.configuration = true;
         let helper = Processes::new(root.runtime.clone(), stdio, crate::net::Net::new().notify());
-        assert_eq!(helper.admit(&request()).err().unwrap().code.as_deref(), Some("EPERM"));
+        assert_eq!(
+            helper.admit(&request()).err().unwrap().code.as_deref(),
+            Some("EPERM")
+        );
         drop(lease);
         assert!(!root.configuration_active.load(Ordering::SeqCst));
         root.runtime.active.store(0, Ordering::SeqCst);
@@ -853,13 +992,24 @@ mod configuration_tests {
         let mut root = super::tests::processes();
         root.runtime.active.store(MAX_CHILDREN, Ordering::SeqCst);
         for _ in 0..8 {
-            let child = root.spawn(&serde_json::to_vec(&serde_json::json!({
-                "purpose": "configuration", "argv": ["bun", "--no-install", "-e", "0"],
-                "cwd": "/", "env": {}, "stdin": "ignore", "stdout": "pipe", "stderr": "pipe"
-            })).unwrap()).unwrap();
+            let child = root
+                .spawn(
+                    &serde_json::to_vec(&serde_json::json!({
+                        "purpose": "configuration", "argv": ["bun", "--no-install", "-e", "0"],
+                        "cwd": "/", "env": {}, "stdin": "ignore", "stdout": "pipe", "stderr": "pipe"
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
             let pipes = root.children[&child].pipes;
-            while root.wait(child) == AGAIN { std::thread::yield_now(); }
-            for pipe in pipes { if pipe != 0 { root.close(pipe); } }
+            while root.wait(child) == AGAIN {
+                std::thread::yield_now();
+            }
+            for pipe in pipes {
+                if pipe != 0 {
+                    root.close(pipe);
+                }
+            }
             root.close(child);
             assert!(!root.configuration_active.load(Ordering::SeqCst));
             assert_eq!(root.runtime.active.load(Ordering::SeqCst), MAX_CHILDREN);
@@ -879,12 +1029,19 @@ mod tools_tests {
         let engine = wasmtime::Engine::default();
         let module = wasmtime::Module::new(&engine, b"\0asm\x01\0\0\0").unwrap();
         let runtime = Runtime::new(engine, module, Vec::new());
-        for args in [vec!["bun", "run", "lint"], vec!["bun", "-e", "fmt"], vec!["bun", "build", "lint"]] {
+        for args in [
+            vec!["bun", "run", "lint"],
+            vec!["bun", "-e", "fmt"],
+            vec!["bun", "build", "lint"],
+        ] {
             let args = args.into_iter().map(String::from).collect::<Vec<_>>();
             assert!(runtime.module_for(&args).is_ok());
             assert!(runtime.tools.get().is_none());
         }
-        let args = ["bun", "--cwd", "project", "lint"].into_iter().map(String::from).collect::<Vec<_>>();
+        let args = ["bun", "--cwd", "project", "lint"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
         assert!(runtime.module_for(&args).is_err());
         assert!(runtime.tools.get().is_some());
     }

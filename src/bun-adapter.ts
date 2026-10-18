@@ -61,14 +61,7 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
   // Packaging boundary: the generic process bridge is not implemented here yet.
   // Keep this unconditional typed rejection until that bridge replaces these registrations.
   const fail = async (): Promise<never> => { throw new BunWasmProcessUnavailableError(); };
-  installing.add(runtime);
-  try {
-    for (const name of ["quickjs", "jsc", "browser"] as const) unregisters.push(runtime.registerAdapter(`bun:${name}`, fail));
-    for (const name of names) unregisters.push(runtime.registerProgram(name, {
-      adapter: `bun:${engine}`, cooperative: true,
-      // Program loading precedes launch in Waffle: refuse before any guest download.
-      module: fail,
-    }));
+  async function installMarkers() {
     // Check every path before creating any files, so a conflict cannot leave a partial install.
     for (const name of names) {
       const entry = await runtime.filesystem.lookup(name);
@@ -91,11 +84,8 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
       await runtime.filesystem.writeFile(name, executableMarker);
       created.push(name);
     }
-  } catch (error) {
-    for (const unregister of unregisters.reverse()) unregister();
-    // Waffle also queues mutation errors for drain; consume the already-caught failure
-    // before rollback reads, or their drain would fail without checking the marker.
-    try { await runtime.filesystem.drain(); } catch {}
+  }
+  async function rollbackMarkers() {
     for (const name of created.reverse()) {
       try {
         if (matchesMarker(await runtime.filesystem.readFile(name))) await runtime.filesystem.remove(name);
@@ -104,6 +94,22 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
         try { await runtime.filesystem.drain(); } catch {}
       }
     }
+  }
+  installing.add(runtime);
+  try {
+    for (const name of ["quickjs", "jsc", "browser"] as const) unregisters.push(runtime.registerAdapter(`bun:${name}`, fail));
+    for (const name of names) unregisters.push(runtime.registerProgram(name, {
+      adapter: `bun:${engine}`, cooperative: true,
+      // Program loading precedes launch in Waffle: refuse before any guest download.
+      module: fail,
+    }));
+    await installMarkers();
+  } catch (error) {
+    for (const unregister of unregisters.reverse()) unregister();
+    // Waffle also queues mutation errors for drain; consume the already-caught failure
+    // before rollback reads, or their drain would fail without checking the marker.
+    try { await runtime.filesystem.drain(); } catch {}
+    await rollbackMarkers();
     throw error;
   } finally { installing.delete(runtime); }
   let active = true;

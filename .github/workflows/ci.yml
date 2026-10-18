@@ -13,6 +13,50 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  quality:
+    name: Code quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_HOME: ${{ runner.temp }}/cargo
+      RUSTUP_HOME: ${{ runner.temp }}/rustup
+      CARGO_TARGET_DIR: ${{ runner.temp }}/quality-target
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      TMPDIR: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-09-15
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Install locked JavaScript tools and application dependencies
+        run: |
+          bun install --frozen-lockfile
+          (cd web && bun install --frozen-lockfile)
+          (cd sandbox && bun install --frozen-lockfile)
+          (cd site && bun install --frozen-lockfile)
+      - name: Prepare pinned upstream sources and Rust dependency checker
+        run: |
+          source env.sh
+          bash scripts/sync-bun.sh
+          bash scripts/sync-crypto.sh
+          cargo install cargo-machete --version 0.9.2 --locked --jobs 1
+      - name: Blocking quality gates
+        run: |
+          source env.sh
+          bun run quality
+
   package:
     name: Browser adapter package
     runs-on: ubuntu-latest

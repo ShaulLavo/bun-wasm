@@ -34,11 +34,14 @@ function collect(id) {
   let code;
   do {
     for (const [index, pipe] of pipes.entries()) {
-      for (;;) {
-        const value = host.read(pipe, 65536);
-        if (typeof value === "number") break;
-        outputs[index].push(Buffer.from(value));
-      }
+      const drainPipe = () => {
+        for (;;) {
+          const value = host.read(pipe, 65536);
+          if (typeof value === "number") break;
+          outputs[index].push(Buffer.from(value));
+        }
+      };
+      drainPipe();
     }
     code = host.wait(id);
     if (Date.now() > deadline) throw new Error(`child ${id} timed out`);

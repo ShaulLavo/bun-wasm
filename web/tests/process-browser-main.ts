@@ -298,22 +298,25 @@ try {
       const s = await scope({ bun: { module: compiled, adapter: "bun", engine: "quickjs" } });
       try {
         for (let iteration = 0; iteration < 8; iteration++) {
-          const permit = `/orphan-permit-${iteration}`, marker = `/orphan-done-${iteration}`;
-          const childCode = `const fs=require('node:fs'); while(!fs.existsSync(${JSON.stringify(permit)})) await Bun.sleep(2); fs.writeFileSync(${JSON.stringify(marker)},'done');`;
-          const parentCode = `Bun.spawn(['bun','-e',${JSON.stringify(childCode)}],{stdin:'ignore',stdout:'ignore',stderr:'ignore'}).unref(); console.log('parent');`;
-          const parent = s.spawn("bun", { argv: ["bun", "-e", parentCode] });
-          await exit(parent, 0); equal(parent.stdout, "parent\n", "real guest parent exited without waiting for child");
-          const slots = new Int32Array(parent.transport.budget).subarray(2);
-          truth(slots.some(word => word !== 0), "unawaited child still owns capacity after its parent exits");
-          equal(await s.filesystem.readFile(marker), undefined, "orphan has not been allowed to finish before parent exit");
-          await s.filesystem.writeFile(permit, "go");
-          const end = performance.now() + 10_000;
-          while (decoder.decode(await s.filesystem.readFile(marker)) !== "done") { if (performance.now() > end) throw new Error(`orphan ${iteration} lost filesystem access after parent exit`); await pause(); }
-          await until(() => slots.every(word => word === 0), "orphan completion releases capacity without a living parent waiter");
-          parent.host.close(parent.handle);
-          const supervisor = await s.broker.ready();
-          await until(() => Array.from(supervisor.table.values()).length === 1, "closed parent and completed orphan release process metadata");
-          equal(supervisor.get(parent.transport.pid), undefined, "closed parent record reaped");
+          const checkOrphanCompletion = async () => {
+            const permit = `/orphan-permit-${iteration}`, marker = `/orphan-done-${iteration}`;
+            const childCode = `const fs=require('node:fs'); while(!fs.existsSync(${JSON.stringify(permit)})) await Bun.sleep(2); fs.writeFileSync(${JSON.stringify(marker)},'done');`;
+            const parentCode = `Bun.spawn(['bun','-e',${JSON.stringify(childCode)}],{stdin:'ignore',stdout:'ignore',stderr:'ignore'}).unref(); console.log('parent');`;
+            const parent = s.spawn("bun", { argv: ["bun", "-e", parentCode] });
+            await exit(parent, 0); equal(parent.stdout, "parent\n", "real guest parent exited without waiting for child");
+            const slots = new Int32Array(parent.transport.budget).subarray(2);
+            truth(slots.some(word => word !== 0), "unawaited child still owns capacity after its parent exits");
+            equal(await s.filesystem.readFile(marker), undefined, "orphan has not been allowed to finish before parent exit");
+            await s.filesystem.writeFile(permit, "go");
+            const end = performance.now() + 10_000;
+            while (decoder.decode(await s.filesystem.readFile(marker)) !== "done") { if (performance.now() > end) throw new Error(`orphan ${iteration} lost filesystem access after parent exit`); await pause(); }
+            await until(() => slots.every(word => word === 0), "orphan completion releases capacity without a living parent waiter");
+            parent.host.close(parent.handle);
+            const supervisor = await s.broker.ready();
+            await until(() => Array.from(supervisor.table.values()).length === 1, "closed parent and completed orphan release process metadata");
+            equal(supervisor.get(parent.transport.pid), undefined, "closed parent record reaped");
+          };
+          await checkOrphanCompletion();
         }
       } finally { await s.dispose(); }
     });

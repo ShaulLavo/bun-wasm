@@ -5,11 +5,11 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+use super::stdin::SharedInput;
+use bytes::Bytes;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use wasmtime_wasi::cli::{IsTerminal, StdinStream, StdoutStream};
 use wasmtime_wasi::p2::{InputStream, OutputStream, Pollable, StreamError, StreamResult};
-use bytes::Bytes;
-use super::stdin::SharedInput;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FinalOutcome {
@@ -41,7 +41,11 @@ struct SignalState {
 
 impl Default for SignalState {
     fn default() -> Self {
-        Self { selected: None, dispositions: [0; 65], pending: 0 }
+        Self {
+            selected: None,
+            dispositions: [0; 65],
+            pending: 0,
+        }
     }
 }
 
@@ -110,7 +114,8 @@ impl Cancellation {
             state.pending &= !(1u64 << (signal - 1));
             return signal as i32;
         }
-        if !(1..=64).contains(&signal) || !(0..=3).contains(&operation)
+        if !(1..=64).contains(&signal)
+            || !(0..=3).contains(&operation)
             || (signal == 9 && operation != 3)
         {
             return -22;
@@ -237,7 +242,10 @@ impl IsTerminal for Output {
 }
 impl StdinStream for Input {
     fn p2_stream(&self) -> Box<dyn InputStream> {
-        Box::new(Self { stream: self.stream.clone(), cancel: self.cancel.clone() })
+        Box::new(Self {
+            stream: self.stream.clone(),
+            cancel: self.cancel.clone(),
+        })
     }
     fn async_stream(&self) -> Box<dyn AsyncRead + Send + Sync> {
         Box::new(Reader {
@@ -254,14 +262,17 @@ impl Pollable for Input {
                 return Poll::Ready(());
             }
             self.stream.poll_ready(cx)
-        }).await;
+        })
+        .await;
     }
 }
 
 #[async_trait::async_trait]
 impl InputStream for Input {
     fn read(&mut self, size: usize) -> StreamResult<Bytes> {
-        self.cancel.check().map_err(|error| StreamError::LastOperationFailed(error.into()))?;
+        self.cancel
+            .check()
+            .map_err(|error| StreamError::LastOperationFailed(error.into()))?;
         self.stream.read(size)
     }
 }
@@ -290,22 +301,29 @@ impl Pollable for OutputHandle {
                 return Poll::Ready(());
             }
             ready.as_mut().poll(cx)
-        }).await;
+        })
+        .await;
     }
 }
 
 #[async_trait::async_trait]
 impl OutputStream for OutputHandle {
     fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
-        self.cancel.check().map_err(|error| StreamError::LastOperationFailed(error.into()))?;
+        self.cancel
+            .check()
+            .map_err(|error| StreamError::LastOperationFailed(error.into()))?;
         self.stream.write(bytes)
     }
     fn flush(&mut self) -> StreamResult<()> {
-        self.cancel.check().map_err(|error| StreamError::LastOperationFailed(error.into()))?;
+        self.cancel
+            .check()
+            .map_err(|error| StreamError::LastOperationFailed(error.into()))?;
         self.stream.flush()
     }
     fn check_write(&mut self) -> StreamResult<usize> {
-        self.cancel.check().map_err(|error| StreamError::LastOperationFailed(error.into()))?;
+        self.cancel
+            .check()
+            .map_err(|error| StreamError::LastOperationFailed(error.into()))?;
         self.stream.check_write()
     }
     async fn cancel(&mut self) {
@@ -313,7 +331,11 @@ impl OutputStream for OutputHandle {
     }
 }
 impl AsyncRead for Reader {
-    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         if let Err(error) = self.cancel.poll(cx) {
             return Poll::Ready(Err(error));
         }
@@ -321,7 +343,11 @@ impl AsyncRead for Reader {
     }
 }
 impl AsyncWrite for Writer {
-    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
         if let Err(error) = self.cancel.poll(cx) {
             return Poll::Ready(Err(error));
         }
@@ -356,17 +382,26 @@ mod tests {
         let cancel = Cancellation::default();
         assert_eq!(cancel.signal(15, 2), 0);
         assert!(cancel.kill(15));
-        assert_eq!(cancel.select(FinalOutcome::Exit(143)), FinalOutcome::Exit(143));
+        assert_eq!(
+            cancel.select(FinalOutcome::Exit(143)),
+            FinalOutcome::Exit(143)
+        );
         assert!(!cancel.kill(9));
         assert!(cancel.check().is_ok());
-        assert_eq!(cancel.select(FinalOutcome::Signal(9)), FinalOutcome::Exit(143));
+        assert_eq!(
+            cancel.select(FinalOutcome::Signal(9)),
+            FinalOutcome::Exit(143)
+        );
     }
 
     #[test]
     fn observed_term_keeps_signal_kind_when_guest_returns_an_exit() {
         let cancel = Cancellation::default();
         assert!(cancel.kill(15));
-        assert_eq!(cancel.check().unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert_eq!(
+            cancel.check().unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
         let outcome = cancel.select(FinalOutcome::Exit(1));
         assert_eq!(outcome, FinalOutcome::Signal(15));
         assert_eq!(outcome.code(), 143);
@@ -380,8 +415,14 @@ mod tests {
         assert_eq!(cancel.signal(15, 2), 0);
         assert!(cancel.kill(15));
         assert!(cancel.kill(9));
-        assert_eq!(cancel.select(FinalOutcome::Exit(143)), FinalOutcome::Signal(9));
-        assert_eq!(cancel.check().unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert_eq!(
+            cancel.select(FinalOutcome::Exit(143)),
+            FinalOutcome::Signal(9)
+        );
+        assert_eq!(
+            cancel.check().unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
         assert!(!cancel.kill(15));
     }
 
@@ -402,7 +443,10 @@ mod tests {
         assert_eq!(cancel.signal(2, 2), 0);
         assert_eq!(cancel.signal(2, 0), 0);
         assert!(cancel.kill(2));
-        assert_eq!(cancel.select(FinalOutcome::Exit(0)), FinalOutcome::Signal(2));
+        assert_eq!(
+            cancel.select(FinalOutcome::Exit(0)),
+            FinalOutcome::Signal(2)
+        );
     }
 
     #[test]
@@ -412,7 +456,10 @@ mod tests {
         assert!(cancel.kill(15));
         assert_eq!(cancel.signal(15, 0), 0);
         assert_eq!(cancel.signal(0, 0), 0);
-        assert_eq!(cancel.select(FinalOutcome::Exit(0)), FinalOutcome::Signal(15));
+        assert_eq!(
+            cancel.select(FinalOutcome::Exit(0)),
+            FinalOutcome::Signal(15)
+        );
     }
 
     #[test]
@@ -479,14 +526,22 @@ mod tests {
             assert_eq!(cancel.signal(0, 4), 0);
             assert_eq!(cancel.signal(2, disposition), 0);
             assert_eq!(cancel.signal(0, 0), 0);
-            let expected = if disposition == 0 { FinalOutcome::Signal(2) } else { FinalOutcome::Exit(0) };
+            let expected = if disposition == 0 {
+                FinalOutcome::Signal(2)
+            } else {
+                FinalOutcome::Exit(0)
+            };
             assert_eq!(cancel.select(FinalOutcome::Exit(0)), expected);
         }
     }
 
     #[test]
     fn fatal_checkpoint_preserves_selected_outcomes_like_dequeue_checkpoint() {
-        for outcome in [FinalOutcome::Exit(143), FinalOutcome::Signal(2), FinalOutcome::Signal(9)] {
+        for outcome in [
+            FinalOutcome::Exit(143),
+            FinalOutcome::Signal(2),
+            FinalOutcome::Signal(9),
+        ] {
             let cancel = Cancellation::default();
             assert_eq!(cancel.select(outcome), outcome);
             for operation in [4, 0, 4] {
@@ -516,8 +571,15 @@ mod tests {
                 let cancel = Cancellation::default();
                 assert_eq!(cancel.signal(signal, disposition), 0);
                 assert_eq!(cancel.signal(signal, 3), 0);
-                assert_eq!(cancel.signal(0, 0), if disposition == 2 { signal } else { 0 });
-                let expected = if disposition == 0 { FinalOutcome::Signal(signal) } else { FinalOutcome::Exit(23) };
+                assert_eq!(
+                    cancel.signal(0, 0),
+                    if disposition == 2 { signal } else { 0 }
+                );
+                let expected = if disposition == 0 {
+                    FinalOutcome::Signal(signal)
+                } else {
+                    FinalOutcome::Exit(23)
+                };
                 assert_eq!(cancel.select(FinalOutcome::Exit(23)), expected);
             }
         }
@@ -526,7 +588,10 @@ mod tests {
             assert_eq!(cancel.signal(9, disposition), -22);
         }
         assert_eq!(cancel.signal(9, 3), 0);
-        assert_eq!(cancel.select(FinalOutcome::Exit(0)), FinalOutcome::Signal(9));
+        assert_eq!(
+            cancel.select(FinalOutcome::Exit(0)),
+            FinalOutcome::Signal(9)
+        );
     }
 
     #[test]
@@ -555,7 +620,11 @@ mod tests {
             barrier.wait();
             let delivered = cancel.signal(0, 0);
             assert_eq!(thread.join().unwrap(), 0);
-            let expected = if delivered == 2 { FinalOutcome::Exit(0) } else { FinalOutcome::Signal(2) };
+            let expected = if delivered == 2 {
+                FinalOutcome::Exit(0)
+            } else {
+                FinalOutcome::Signal(2)
+            };
             assert_eq!(cancel.select(FinalOutcome::Exit(0)), expected);
         }
     }
@@ -596,7 +665,11 @@ mod tests {
             barrier.wait();
             assert!(cancel.kill(2));
             assert_eq!(thread.join().unwrap(), 0);
-            let expected = if cancel.signal(0, 0) == 2 { FinalOutcome::Exit(0) } else { FinalOutcome::Signal(2) };
+            let expected = if cancel.signal(0, 0) == 2 {
+                FinalOutcome::Exit(0)
+            } else {
+                FinalOutcome::Signal(2)
+            };
             assert_eq!(cancel.select(FinalOutcome::Exit(0)), expected);
         }
     }
@@ -643,8 +716,14 @@ mod tests {
             assert!(cancel.kill(15));
             assert_eq!(counter.0.load(Ordering::SeqCst), 1);
             if disposition == 0 {
-                assert_eq!(cancel.poll(&cx).unwrap_err().kind(), io::ErrorKind::Interrupted);
-                assert_eq!(cancel.select(FinalOutcome::Exit(1)), FinalOutcome::Signal(15));
+                assert_eq!(
+                    cancel.poll(&cx).unwrap_err().kind(),
+                    io::ErrorKind::Interrupted
+                );
+                assert_eq!(
+                    cancel.select(FinalOutcome::Exit(1)),
+                    FinalOutcome::Signal(15)
+                );
             } else {
                 assert!(cancel.poll(&cx).is_ok());
                 assert_eq!(cancel.signal(0, 0), 15);
@@ -667,7 +746,14 @@ mod tests {
             barrier.wait();
             let outcome = cancel.select(FinalOutcome::Exit(143));
             let killed = thread.join().unwrap();
-            assert_eq!(outcome, if killed { FinalOutcome::Signal(9) } else { FinalOutcome::Exit(143) });
+            assert_eq!(
+                outcome,
+                if killed {
+                    FinalOutcome::Signal(9)
+                } else {
+                    FinalOutcome::Exit(143)
+                }
+            );
             assert!(!cancel.kill(15));
             assert_eq!(cancel.select(FinalOutcome::Exit(0)), outcome);
         }

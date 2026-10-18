@@ -359,10 +359,7 @@ export class SubprocessHost {
   releaseSlot(slot: number, token: number) {
     releaseProcessSlot({ budget: this.budget, slot, token });
   }
-  spawn(text: string) {
-    if (!this.admit()) return -1;
-    let meta: SpawnMeta;
-    try { meta = JSON.parse(text); } catch { return this.fail("spawn: invalid metadata", "EINVAL"); }
+  private validateSpawnMetadata(meta: SpawnMeta): number | undefined {
     if (!meta || typeof meta !== "object") return this.fail("spawn: invalid metadata", "EINVAL");
     if (!Array.isArray(meta.argv) || !meta.argv.length || meta.argv.some((v) => typeof v !== "string")) return this.fail("spawn: invalid argv", "EINVAL");
     const executable = meta.executable === undefined ? meta.argv[0] : meta.executable;
@@ -374,6 +371,9 @@ export class SubprocessHost {
     const modes = [meta.stdin || "pipe", meta.stdout || "pipe", meta.stderr || "pipe"];
     if (modes.some((mode) => !["pipe", "inherit", "ignore"].includes(mode))) return this.fail("spawn: invalid stdio", "EINVAL");
     if (meta.purpose !== undefined && meta.purpose !== "configuration") return this.fail("spawn: invalid purpose", "EINVAL");
+    return undefined;
+  }
+  private validateConfigurationCommand(meta: SpawnMeta, executable: string, modes: string[]): number | undefined {
     const configuration = meta.purpose === "configuration";
     if (configuration && this.options.slot !== undefined && this.options.slot >= MAX_CHILDREN) {
       return this.fail("Configuration helpers cannot start another internal evaluation", "EPERM");
@@ -381,6 +381,19 @@ export class SubprocessHost {
     if (configuration && (executable !== "bun" || meta.worker !== undefined || meta.argv.length !== 4 || meta.argv[1] !== "--no-install" || meta.argv[2] !== "-e" || modes[0] !== "ignore" || modes[1] !== "pipe" || modes[2] !== "pipe")) {
       return this.fail("Invalid configuration helper command", "EINVAL");
     }
+    return undefined;
+  }
+  spawn(text: string) {
+    if (!this.admit()) return -1;
+    let meta: SpawnMeta;
+    try { meta = JSON.parse(text); } catch { return this.fail("spawn: invalid metadata", "EINVAL"); }
+    const invalid = this.validateSpawnMetadata(meta);
+    if (invalid !== undefined) return invalid;
+    const executable = meta.executable!;
+    const modes = [meta.stdin || "pipe", meta.stdout || "pipe", meta.stderr || "pipe"];
+    const configuration = meta.purpose === "configuration";
+    const denied = this.validateConfigurationCommand(meta, executable, modes);
+    if (denied !== undefined) return denied;
     const channels = workerBuffers(meta);
     if (this.nextHandle + modes.filter(mode => mode === "pipe").length + channels.length > HANDLE_LIMIT) return this.fail("spawn: pipe handle space exhausted", "EAGAIN");
     const reservation = this.reserve(configuration);

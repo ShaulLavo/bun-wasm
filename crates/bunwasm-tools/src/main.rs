@@ -1,5 +1,9 @@
+// Register the native lint ABI used by the linked upstream drivers.
+use bunwasm_lint_native as _;
+
 extern crate bunwasm_posix;
 #[path = "../../bunwasm-runtime/src/host.rs"]
+#[allow(dead_code)] // Shared ABI module; this binary uses only tool slots.
 mod host;
 mod lint_command;
 #[path = "../../bunwasm-cli/src/tool_args.rs"]

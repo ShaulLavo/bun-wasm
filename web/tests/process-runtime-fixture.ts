@@ -9,9 +9,16 @@ import type { Runtime, GuestLauncher, ProcessService, RuntimeFilesystem, Runtime
  * Production composition is covered by the runtime facade tests; these inject explicit owners
  * so legacy transport regressions can independently control filesystem and activation barriers.
  */
-export function processRuntimeFixture(filesystem: RuntimeFilesystem, options: {
+export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, options: {
   activate?: () => Promise<typeof import("waffle/proc")>;
 } = {}): Runtime {
+  const unused = (): never => { throw new Error("Unexpected filesystem operation in process-only fixture"); };
+  const filesystem: RuntimeFilesystem = {
+    ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
+    revoke: unused, reap: unused, quiesce: unused, drain: unused, flush: unused,
+    lookup: unused, readFile: unused, listFiles: unused,
+    mkdirp: unused, writeFile: unused, remove: unused, move: unused, ...overrides,
+  };
   const identities = new ProcessIdentityAllocator();
   const registry = new ExecutableRegistry();
   const table = new ProcessTable(identities);

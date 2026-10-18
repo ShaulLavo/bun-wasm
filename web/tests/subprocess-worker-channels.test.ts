@@ -1,3 +1,4 @@
+import { nativeCall } from "./native-call.ts";
 import { expect, test } from "bun:test";
 import { CHILD_FINAL_SIGNAL, SharedPipe, SubprocessHost, childTransport, type ChildTransport, type SpawnMeta } from "../src/subprocess.ts";
 import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
@@ -146,8 +147,8 @@ for (const bridge of ["native", "slots"] as const) test(`inherited worker ${brid
     const expected = { code: "EPIPE", errno: -32, syscall: "write" };
     if (bridge === "native") {
       const child = f.child.engineNet().natives;
-      expect(child.hostWrite!(selfWrite, payload)).toBe(-1);
-      expect(JSON.parse(child.hostError!(selfWrite) as string)).toMatchObject(expected);
+      expect(nativeCall(child, "hostWrite", selfWrite, payload)).toBe(-1);
+      expect(JSON.parse(String(nativeCall(child, "hostError", selfWrite)))).toMatchObject(expected);
     } else {
       const memory = new WebAssembly.Memory({ initial: 1 });
       f.child.attach(memory);

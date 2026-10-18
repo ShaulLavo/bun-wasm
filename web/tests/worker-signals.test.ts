@@ -153,7 +153,7 @@ for (const via of ["raise", "default", "restore"] as const) test(`caught ${via} 
         proc.signal(15, 2);
         proc.signal(15, 3);
       }
-      try { via === "raise" ? proc.signal(15, 3) : via === "restore" ? proc.signal(15, 0) : proc.default_signal(15); }
+      try { void (via === "raise" ? proc.signal(15, 3) : via === "restore" ? proc.signal(15, 0) : proc.default_signal(15)); }
       catch { atCatch = readOutcome(outcomeWord(outcome)); }
       engine.onExit(0);
       return 0;
@@ -236,7 +236,7 @@ for (const checkpoint of ["interrupted", "signal"] as const) for (const signal o
     const result = await run({
       outcome, signalState: state.buffer as SharedArrayBuffer, adapter: "preview1",
       launch(proc) {
-        checkpoint === "interrupted" ? proc.interrupted() : proc.signal(0, 0);
+        void (checkpoint === "interrupted" ? proc.interrupted() : proc.signal(0, 0));
         returned = true;
         return 0;
       },

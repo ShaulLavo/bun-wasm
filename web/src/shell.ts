@@ -38,7 +38,7 @@ interface Token {
 }
 
 /** Split a command line into words and operators. Supports '…', "…", backslash escapes and ~. */
-export function tokenize(line: string): Token[] {
+function tokenize(line: string): Token[] {
   const tokens: Token[] = [];
   let word = "";
   let inWord = false;
@@ -182,6 +182,7 @@ export class Shell {
     let i = 0;
     while (i < data.length) {
       const rest = data.slice(i);
+      // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
       const esc = /^\x1b(?:\[([0-9;]*)([A-Za-z~])|O([A-Za-z]))/.exec(rest);
       if (esc) {
         this.escape(esc[1] ?? "", esc[2] ?? esc[3] ?? "");
@@ -417,6 +418,93 @@ export class Shell {
     return code;
   }
 
+  private async ls(args: string[], io: Output): Promise<number> {
+    const fs = this.host.fs;
+    const fail = (message: string) => { io.err(`ls: ${message}\r\n`); return 1; };
+    const path = (value: string) => normalize(value, this.cwd);
+
+    const all = args.includes("-a") || args.includes("-la") || args.includes("-al");
+    const targets = args.filter((a) => !a.startsWith("-"));
+    if (targets.length === 0) targets.push(".");
+    let code = 0;
+    for (const t of targets) {
+      const node = await fs.lookup(path(t));
+      if (!node) {
+        code = fail(`${t}: no such file or directory`);
+        continue;
+      }
+      if (targets.length > 1) io.out(`${t}:\r\n`);
+      if (node.kind === "file") {
+        io.out(`${t}\r\n`);
+        continue;
+      }
+      const names = Array.from(node.children.keys()).sort().filter((n) => all || !n.startsWith("."));
+      if (all) names.unshift(".", "..");
+      const items = names.map((n) => {
+        const child = n === "." || n === ".." ? node : node.children.get(n)!;
+        return child.kind === "dir" ? `${BLUE}${BOLD}${n}/${RESET}` : n;
+      });
+      if (items.length) io.out(`${items.join("  ")}\r\n`);
+    }
+    return code;
+  }
+
+  private async mkdir(args: string[], io: Output): Promise<number> {
+    const fs = this.host.fs;
+    const fail = (message: string) => { io.err(`mkdir: ${message}\r\n`); return 1; };
+    const path = (value: string) => normalize(value, this.cwd);
+
+    const parents = args.includes("-p");
+    for (const a of args.filter((x) => x !== "-p")) {
+      const p = path(a);
+      if (await fs.lookup(p)) {
+        if (!parents) return fail(`${a}: file exists`);
+        continue;
+      }
+      if (!parents && (await fs.lookup(dirname(p)))?.kind !== "dir") return fail(`${a}: no such file or directory`);
+      await fs.mkdirp(p);
+    }
+    await this.host.changed();
+    return 0;
+  }
+
+  private async rm(args: string[], io: Output): Promise<number> {
+    const fs = this.host.fs;
+    const fail = (message: string) => { io.err(`rm: ${message}\r\n`); return 1; };
+    const path = (value: string) => normalize(value, this.cwd);
+
+    const recursive = args.some((a) => /^-[a-z]*r/.test(a));
+    let code = 0;
+    for (const a of args.filter((x) => !x.startsWith("-"))) {
+      const p = path(a);
+      const node = await fs.lookup(p);
+      if (!node) code = fail(`${a}: no such file or directory`);
+      else if (node.kind === "dir" && !recursive) code = fail(`${a}: is a directory (use rm -r)`);
+      else if (p === "/") code = fail("refusing to remove /");
+      else await fs.remove(p);
+    }
+    await this.host.changed();
+    return code;
+  }
+
+  private async mv(args: string[], io: Output): Promise<number> {
+    const fs = this.host.fs;
+    const fail = (message: string) => { io.err(`mv: ${message}\r\n`); return 1; };
+    const path = (value: string) => normalize(value, this.cwd);
+
+    if (args.length !== 2) return fail("usage: mv <from> <to>");
+    const from = path(args[0]!);
+    let to = path(args[1]!);
+    const node = await fs.lookup(from);
+    if (!node) return fail(`${args[0]}: no such file or directory`);
+    if ((await fs.lookup(to))?.kind === "dir") to = normalize(basename(from), to);
+    const parent = await fs.lookup(dirname(to));
+    if (parent?.kind !== "dir") return fail(`${args[1]}: no such directory`);
+    await fs.move(from, to);
+    await this.host.changed();
+    return 0;
+  }
+
   private async dispatch(name: string, args: string[], io: Output): Promise<number> {
     const fs = this.host.fs;
     const fail = (msg: string) => {
@@ -473,32 +561,8 @@ export class Shell {
         this.cwd = target;
         return 0;
       }
-      case "ls": {
-        const all = args.includes("-a") || args.includes("-la") || args.includes("-al");
-        const targets = args.filter((a) => !a.startsWith("-"));
-        if (targets.length === 0) targets.push(".");
-        let code = 0;
-        for (const t of targets) {
-          const node = await fs.lookup(path(t));
-          if (!node) {
-            code = fail(`${t}: no such file or directory`);
-            continue;
-          }
-          if (targets.length > 1) io.out(`${t}:\r\n`);
-          if (node.kind === "file") {
-            io.out(`${t}\r\n`);
-            continue;
-          }
-          const names = Array.from(node.children.keys()).sort().filter((n) => all || !n.startsWith("."));
-          if (all) names.unshift(".", "..");
-          const items = names.map((n) => {
-            const child = n === "." || n === ".." ? node : node.children.get(n)!;
-            return child.kind === "dir" ? `${BLUE}${BOLD}${n}/${RESET}` : n;
-          });
-          if (items.length) io.out(`${items.join("  ")}\r\n`);
-        }
-        return code;
-      }
+      case "ls": return this.ls(args, io);
+
       case "cat": {
         let code = 0;
         for (const a of args) {
@@ -513,47 +577,12 @@ export class Shell {
         for (const a of args) if (!await fs.lookup(path(a))) await fs.writeFile(path(a), "");
         await this.host.changed();
         return 0;
-      case "mkdir": {
-        const parents = args.includes("-p");
-        for (const a of args.filter((x) => x !== "-p")) {
-          const p = path(a);
-          if (await fs.lookup(p)) {
-            if (!parents) return fail(`${a}: file exists`);
-            continue;
-          }
-          if (!parents && (await fs.lookup(dirname(p)))?.kind !== "dir") return fail(`${a}: no such file or directory`);
-          await fs.mkdirp(p);
-        }
-        await this.host.changed();
-        return 0;
-      }
-      case "rm": {
-        const recursive = args.some((a) => /^-[a-z]*r/.test(a));
-        let code = 0;
-        for (const a of args.filter((x) => !x.startsWith("-"))) {
-          const p = path(a);
-          const node = await fs.lookup(p);
-          if (!node) code = fail(`${a}: no such file or directory`);
-          else if (node.kind === "dir" && !recursive) code = fail(`${a}: is a directory (use rm -r)`);
-          else if (p === "/") code = fail("refusing to remove /");
-          else await fs.remove(p);
-        }
-        await this.host.changed();
-        return code;
-      }
-      case "mv": {
-        if (args.length !== 2) return fail("usage: mv <from> <to>");
-        const from = path(args[0]!);
-        let to = path(args[1]!);
-        const node = await fs.lookup(from);
-        if (!node) return fail(`${args[0]}: no such file or directory`);
-        if ((await fs.lookup(to))?.kind === "dir") to = normalize(basename(from), to);
-        const parent = await fs.lookup(dirname(to));
-        if (parent?.kind !== "dir") return fail(`${args[1]}: no such directory`);
-        await fs.move(from, to);
-        await this.host.changed();
-        return 0;
-      }
+      case "mkdir": return this.mkdir(args, io);
+
+      case "rm": return this.rm(args, io);
+
+      case "mv": return this.mv(args, io);
+
       case "edit": {
         if (!args[0]) return fail("usage: edit <file>");
         const p = path(args[0]);
@@ -572,4 +601,3 @@ export class Shell {
     }
   }
 }
-

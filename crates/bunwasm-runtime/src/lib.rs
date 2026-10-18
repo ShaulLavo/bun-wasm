@@ -15,21 +15,19 @@ use std::io::{self, BufWriter, Write};
 use std::rc::Rc;
 use std::time::Instant;
 
-mod directory;
-mod encoding;
-mod streams;
 mod archive;
 mod compression;
-mod zlib_ffi;
 mod crypto;
-mod glob;
-mod html_rewriter;
+mod directory;
+mod encoding;
 pub mod engine;
 #[cfg(feature = "engine-host")]
 pub mod engine_host;
 #[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 mod engine_natives;
+mod glob;
 pub mod host;
+mod html_rewriter;
 pub mod install;
 mod modules;
 mod natives;
@@ -37,19 +35,30 @@ mod resolve;
 mod semver;
 mod sourcemap;
 mod sqlite;
+mod streams;
+pub mod transpiler;
 mod wasm;
 mod x509;
-pub mod transpiler;
+mod zlib_ffi;
 
-#[cfg(feature = "engine-quickjs")]
-mod engine_quickjs;
 #[cfg(all(feature = "engine-jsc", not(feature = "engine-quickjs")))]
 mod engine_jsc;
-#[cfg(not(any(feature = "engine-quickjs", feature = "engine-jsc", feature = "engine-host")))]
-compile_error!("bunwasm-runtime needs an engine: feature engine-quickjs, engine-jsc or engine-host");
+#[cfg(feature = "engine-quickjs")]
+mod engine_quickjs;
+#[cfg(not(any(
+    feature = "engine-quickjs",
+    feature = "engine-jsc",
+    feature = "engine-host"
+)))]
+compile_error!(
+    "bunwasm-runtime needs an engine: feature engine-quickjs, engine-jsc or engine-host"
+);
 
 pub use engine::{Engine, ModuleHost, NativeError, PromiseState, Val};
-pub use transpiler::{BuildArtifact, BuildRequest, BuildResult, DevServerFile, DevServerResult, Loader, PassthroughTranspiler, Transpiled, Transpiler};
+pub use transpiler::{
+    BuildArtifact, BuildRequest, BuildResult, DevServerFile, DevServerResult, Loader,
+    PassthroughTranspiler, Transpiled, Transpiler,
+};
 
 /// The engine this build uses.
 #[cfg(feature = "engine-quickjs")]
@@ -177,22 +186,33 @@ impl State {
 }
 
 #[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+type ModuleHandoffs<E> = HashMap<String, (<E as Engine>::Value, <E as Engine>::Value)>;
+
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 /// The runtime's engine-facing half: the `internal` object the bootstrap
 /// returned, pending wrapper-module handoffs, and the module host.
 pub(crate) struct Core<E: Engine> {
     pub(crate) state: Rc<State>,
     internal: RefCell<Option<E::Value>>,
     /// Exports objects of wrapper modules, until their `import.meta` is set.
-    handoffs: RefCell<HashMap<String, (E::Value, E::Value)>>,
+    handoffs: RefCell<ModuleHandoffs<E>>,
 }
 
 #[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 impl<E: Engine> Core<E> {
     pub(crate) fn internal(&self, e: &E) -> E::Value {
-        self.internal.borrow().clone().unwrap_or_else(|| e.undefined())
+        self.internal
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| e.undefined())
     }
 
-    pub(crate) fn call_internal(&self, e: &E, name: &str, args: &[E::Value]) -> Result<E::Value, E::Value> {
+    pub(crate) fn call_internal(
+        &self,
+        e: &E,
+        name: &str,
+        args: &[E::Value],
+    ) -> Result<E::Value, E::Value> {
         let internal = self.internal(e);
         let f = e.get(&internal, name)?;
         e.call(&f, &internal, args)
@@ -242,7 +262,9 @@ impl<E: Engine> Core<E> {
                     Val::Str(s) => s,
                     _ => String::from("uncaught error while reporting an error"),
                 };
-                let _ = self.state.write_stderr(format!("error: {text}\n").as_bytes());
+                let _ = self
+                    .state
+                    .write_stderr(format!("error: {text}\n").as_bytes());
             }
         }
         self.state.exit(1)
@@ -277,35 +299,62 @@ impl<E: Engine> ModuleHost<E> for Core<E> {
         } else {
             referrer.to_owned()
         };
-        match self.state.resolver.resolve(specifier, &from, resolve::Kind::Import) {
+        match self
+            .state
+            .resolver
+            .resolve(specifier, &from, resolve::Kind::Import)
+        {
             Ok(resolve::Resolved::Builtin(b)) => Ok(b),
             Ok(resolve::Resolved::File(f)) => Ok(f),
-            Err(msg) => Err(e.error_value(&modules::resolve_error(&msg, specifier, &from, resolve::Kind::Import, self.state.resolver.notes()))),
+            Err(msg) => Err(e.error_value(&modules::resolve_error(
+                &msg,
+                specifier,
+                &from,
+                resolve::Kind::Import,
+                self.state.resolver.notes(),
+            ))),
         }
     }
 
     fn load(&self, e: &E, name: &str) -> Result<String, E::Value> {
         if resolve::builtin_name(name).is_some() {
-            let exports = self.call_internal(e, "builtin", &[e.from_val(name.into())])?;
+            let exports = self.call_internal(e, "builtin", &[e.value_from(name.into())])?;
             let keys = e.keys(&exports);
             // A builtin marked `__esModule` (bun:sqlite) names its own default
             // export; for the rest the default is the exports object.
-            let flagged = e.get(&exports, "__esModule").map(|v| e.to_val(&v) == Val::Bool(true)).unwrap_or(false);
-            let default = if flagged { e.get(&exports, "default")? } else { exports.clone() };
-            self.handoffs.borrow_mut().insert(name.to_owned(), (exports, default));
+            let flagged = e
+                .get(&exports, "__esModule")
+                .map(|v| e.to_val(&v) == Val::Bool(true))
+                .unwrap_or(false);
+            let default = if flagged {
+                e.get(&exports, "default")?
+            } else {
+                exports.clone()
+            };
+            self.handoffs
+                .borrow_mut()
+                .insert(name.to_owned(), (exports, default));
             return Ok(modules::wrapper_source(&keys));
         }
-        let (code, format) = self.state.load_source(name).map_err(|err| e.error_value(&err))?;
+        let (code, format) = self
+            .state
+            .load_source(name)
+            .map_err(|err| e.error_value(&err))?;
         if format == modules::Format::Esm {
             return Ok(modules::esm_source(&self.state, name, &code));
         }
         // The JS side evaluates it (sharing require's cache) and returns
         // [namespaceObject, defaultExport].
-        let args = [e.from_val(name.into()), e.from_val(format.name().into())];
+        let args = [
+            e.value_from(name.into()),
+            e.value_from(format.name().into()),
+        ];
         let pair = self.call_internal(e, "importNonEsm", &args)?;
         let (value, default) = (e.get(&pair, "0")?, e.get(&pair, "1")?);
         let keys = e.keys(&value);
-        self.handoffs.borrow_mut().insert(name.to_owned(), (value, default));
+        self.handoffs
+            .borrow_mut()
+            .insert(name.to_owned(), (value, default));
         Ok(modules::wrapper_source(&keys))
     }
 
@@ -318,7 +367,11 @@ impl<E: Engine> ModuleHost<E> for Core<E> {
             return e.set(meta, "m", m);
         }
         let is_main = *self.state.main.borrow() == name;
-        let args = [meta.clone(), e.from_val(name.into()), e.from_val(is_main.into())];
+        let args = [
+            meta.clone(),
+            e.value_from(name.into()),
+            e.value_from(is_main.into()),
+        ];
         self.call_internal(e, "initImportMeta", &args).map(|_| ())
     }
 }
@@ -331,9 +384,16 @@ pub fn run(options: Options) -> i32 {
     run_with::<ActiveEngine>(options)
 }
 
-#[cfg(all(feature = "engine-host", not(any(feature = "engine-quickjs", feature = "engine-jsc"))))]
+#[cfg(all(
+    feature = "engine-host",
+    not(any(feature = "engine-quickjs", feature = "engine-jsc"))
+))]
 pub fn run(options: Options) -> i32 {
-    let Options { entry, args, transpiler } = options;
+    let Options {
+        entry,
+        args,
+        transpiler,
+    } = options;
     let (state, main_path) = new_state(&entry, &args, transpiler);
     engine_host::init(entry, state, main_path)
 }
@@ -352,7 +412,11 @@ pub fn host_engine_ready() -> bool {
 }
 
 /// The process state for a program, and the entry's absolute path.
-fn new_state(entry: &Entry, args: &[String], transpiler: Box<dyn Transpiler>) -> (Rc<State>, String) {
+fn new_state(
+    entry: &Entry,
+    args: &[String],
+    transpiler: Box<dyn Transpiler>,
+) -> (Rc<State>, String) {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "/".to_owned());
@@ -381,11 +445,23 @@ fn new_state(entry: &Entry, args: &[String], transpiler: Box<dyn Transpiler>) ->
 
 #[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 fn run_with<E: Engine>(options: Options) -> i32 {
-    let Options { entry, args, transpiler } = options;
+    let Options {
+        entry,
+        args,
+        transpiler,
+    } = options;
     let (state, main_path) = new_state(&entry, &args, transpiler);
-    let options = Options { entry, args, transpiler: Box::new(PassthroughTranspiler) };
+    let options = Options {
+        entry,
+        args,
+        transpiler: Box::new(PassthroughTranspiler),
+    };
 
-    let core = Rc::new(Core::<E> { state: state.clone(), internal: RefCell::new(None), handoffs: RefCell::new(HashMap::new()) });
+    let core = Rc::new(Core::<E> {
+        state: state.clone(),
+        internal: RefCell::new(None),
+        handoffs: RefCell::new(HashMap::new()),
+    });
     let engine = E::new(core.clone());
     let code = run_in_engine(&engine, &core, &options.entry, &main_path);
     state.directories.borrow_mut().close_all();
@@ -409,10 +485,10 @@ fn run_in_engine<E: Engine>(e: &E, core: &Rc<Core<E>>, entry: &Entry, main_path:
             let (name, source) = modules::eval_entry(&core.state, code);
             e.eval_module(&name, &source)
         }
-        Entry::File(_) => core.call_internal(e, "runMain", &[e.from_val(main_path.into())]),
+        Entry::File(_) => core.call_internal(e, "runMain", &[e.value_from(main_path.into())]),
         Entry::Test(args) => {
             let list = Val::Array(args.iter().map(|a| Val::from(a.as_str())).collect());
-            core.call_internal(e, "runTests", &[e.from_val(list)])
+            core.call_internal(e, "runTests", &[e.value_from(list)])
         }
     };
     let main_promise = match started {
@@ -479,7 +555,11 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
                 continue;
             }
             core.state.flush();
-            let wait = if next < 0.0 { 25 } else { (next.ceil() as i32).clamp(1, 25) };
+            let wait = if next < 0.0 {
+                25
+            } else {
+                (next.ceil() as i32).clamp(1, 25)
+            };
             if host::poll(wait) == host::UNSUPPORTED {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }

@@ -19,7 +19,10 @@ test('browser memory gate source assets still exist after runtime extraction', a
   const source = readFileSync(script, 'utf8');
   const assets = Array.from(source.matchAll(/readFileSync\(new URL\("([^"]+)", import\.meta\.url\)/g), match => match[1]);
   expect(assets.length).toBeGreaterThan(0);
-  for (const path of assets) expect(existsSync(new URL(path, script))).toBe(true);
+  for (const path of assets) {
+    if (!path) throw new Error("Missing captured source asset");
+    expect(existsSync(new URL(path, script))).toBe(true);
+  }
 });
 
 test('unbundled headless hosts load with their installed runtime package', async () => {

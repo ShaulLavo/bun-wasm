@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import type { RuntimeFilesystem } from "waffle";
 import { createFilesystemIdentity } from "waffle/fs";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { SubprocessHost } from "../src/subprocess";
@@ -17,7 +16,7 @@ for (const admission of ["other-broker", "runtime"] as const) test(`legacy Previ
   const runtime = processRuntimeFixture({
     connect(identity) { const channel = new MessageChannel(); ports.push(channel.port1, channel.port2); return { ...identity, port: channel.port1 }; },
     revoke() {}, reap() {}, async quiesce() {},
-  } as RuntimeFilesystem);
+  });
   const registering = new SubprocessBroker("https://example.test/worker.js", runtime);
   const launching = new SubprocessBroker("https://example.test/worker.js", runtime, { root: { pid: runtime.identities.pid(), job: runtime.identities.job() } });
   const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);

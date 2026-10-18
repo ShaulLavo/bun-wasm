@@ -45,7 +45,7 @@ function spawnFactory(context: Context) {
 
 for (const executable of ["node", "/usr/bin/node", "fixture.wasm", "/tools/custom"]) {
   test(`guest command normalization preserves registry executable ${executable}`, () => {
-    let metadata: { executable: string; argv: string[] } | undefined;
+    let metadata: { executable: string; argv: string[]; cwd: string; env: Record<string, string>; stdin: string; stdout: string; stderr: string } | undefined;
     const factory = spawnFactory( {
       process: { execPath: "/bun", argv0: "bun", env: {} }, URL,
     });
@@ -280,7 +280,7 @@ for (const [status, signal, name] of [[137, 9, "SIGKILL"], [137, 0, null], [143,
 
 for (const executable of ["bunx", "/bunx"]) {
   test(`guest command normalization expands ${executable} into bun x`, () => {
-    let metadata: { executable: string; argv: string[] } | undefined;
+    let metadata: { executable: string; argv: string[]; cwd: string; env: Record<string, string>; stdin: string; stdout: string; stderr: string } | undefined;
     const api = spawnFactory({ process: { env: {} }, URL })({
       require,
       native: { cwd: () => "/", hostCaps: { spawn: true },

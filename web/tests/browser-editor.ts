@@ -71,7 +71,7 @@ async function startupSteal(base: string, app: string, rejectPending: boolean) {
 }
 
 try {
-  scratch = await mkdtemp(join(process.env.EDITOR_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-browser-editor-"));
+  scratch = await mkdtemp(join(process.env.EDITOR_SCRATCH_ROOT ?? tmpdir(), "bw-editor-"));
   process.env.TMPDIR = scratch;
   for (const app of ["sandbox", "web"]) {
     const prefix = app === "web" ? "/playground" : "/sandbox";

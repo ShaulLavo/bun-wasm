@@ -1,3 +1,4 @@
+import { nativeCall } from "./native-call.ts";
 import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { SharedPipe, SubprocessHost, childTransport, createProcessBudget, type ChildTransport } from "../src/subprocess.ts";
@@ -110,9 +111,9 @@ test("host stdin reads wait without blocking and preserve EOF on both bridges", 
   });
   try {
     const native = host.engineNet().natives;
-    expect(native.hostRead(0, 4)).toBe(-2);
+    expect(nativeCall(native, "hostRead", 0, 4)).toBe(-2);
     pipe.write(encoder.encode("ping"));
-    expect(native.hostRead(0, 4)).toEqual(encoder.encode("ping"));
+    expect(nativeCall(native, "hostRead", 0, 4)).toEqual(encoder.encode("ping"));
     const memory = new WebAssembly.Memory({ initial: 1 });
     host.attach(memory);
     const slots = host.slots();
@@ -121,7 +122,7 @@ test("host stdin reads wait without blocking and preserve EOF on both bridges", 
     expect(slots.read?.(0, 32, 4)).toBe(4);
     expect(new Uint8Array(memory.buffer, 32, 4)).toEqual(encoder.encode("pong"));
     pipe.close();
-    expect(native.hostRead(0, 4)).toBe(0);
+    expect(nativeCall(native, "hostRead", 0, 4)).toBe(0);
     expect(slots.read?.(0, 32, 4)).toBe(0);
   } finally { pipe.close(); host.dispose(); }
 });
@@ -135,13 +136,13 @@ test("stdin wakes host-engine waiters without spawning another child", async () 
   });
   try {
     const net = host.engineNet();
-    expect(net.natives.hostRead(0, 4)).toBe(-2);
+    expect(nativeCall(net.natives, "hostRead", 0, 4)).toBe(-2);
     await new Promise<void>((resolve, reject) => {
       const deadline = setTimeout(() => reject(new Error("stdin waiter was not woken")), 250);
       net.onNews(() => { clearTimeout(deadline); resolve(); });
       pipe.write(encoder.encode("ping"));
     });
-    expect(net.natives.hostRead(0, 4)).toEqual(encoder.encode("ping"));
+    expect(nativeCall(net.natives, "hostRead", 0, 4)).toEqual(encoder.encode("ping"));
   } finally { pipe.close(); host.dispose(); }
 });
 
@@ -151,14 +152,14 @@ for (const bridge of ["engine", "slots"]) {
     try {
       const id = state.host.spawn(childCommand);
       const input = state.host.pipe(id, 0);
-      childTransport(state.launched[0]).stdin.close();
+      childTransport(state.launched[0]!).stdin.close();
       const memory = new WebAssembly.Memory({ initial: 1 });
       state.host.attach(memory);
       const natives = state.host.engineNet({ natives: { hostError: () => -3 }, caps: {}, onNews() {} }).natives;
       const slots = state.host.slots({ error: () => -3 });
       if (bridge === "engine") {
-        expect(natives.hostWrite(input, encoder.encode("race"))).toBe(-1);
-        expect(JSON.parse(natives.hostError(input))).toMatchObject({ code: "EPIPE", errno: -32, syscall: "write" });
+        expect(nativeCall(natives, "hostWrite", input, encoder.encode("race"))).toBe(-1);
+        expect(JSON.parse(String(nativeCall(natives, "hostError", input)))).toMatchObject({ code: "EPIPE", errno: -32, syscall: "write" });
       } else {
         new Uint8Array(memory.buffer, 0, 4).set(encoder.encode("race"));
         expect(slots.write?.(input, 0, 4)).toBe(-1);

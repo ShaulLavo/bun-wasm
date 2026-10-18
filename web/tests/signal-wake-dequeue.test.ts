@@ -18,7 +18,7 @@ for (const mode of ["legacy", "generic"] as const) test(`${mode} dequeue preserv
     wait(word, expected, milliseconds) { waits++; Atomics.wait(word, 0, expected, milliseconds); } });
   const unused = (): never => { throw new Error("unexpected service operation"); };
   const abi = new ProcessABI({ memory, descriptors: wasi.descriptors, fs, pid: 1, signals,
-    service: { spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused } });
+    service: { spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, waitJob: unused, jobEmpty: unused, defaultSignal: unused } });
   const signal = mode === "legacy" ? host.signal.bind(host) : abi.imports.signal!;
   const imports = (wasi as unknown as { functions(): Record<string, (...args: number[]) => number> }).functions();
   wasi.start({ exports: { memory, _start() {} } } as unknown as WebAssembly.Instance);

@@ -1,0 +1,28 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src",
+    "scripts",
+    "build.ts",
+    "serve.ts",
+    "tests/**/*.ts"
+  ],
+  "compilerOptions": {
+    "allowJs": true,
+    "lib": [
+      "ES2024",
+      "DOM",
+      "DOM.Iterable",
+      "WebWorker"
+    ],
+    "checkJs": false,
+    "paths": {
+      "benchmark:baseline-core": [
+        "./node_modules/waffle/core/index.ts"
+      ],
+      "benchmark:baseline-fs": [
+        "./node_modules/waffle/fs/memory.ts"
+      ]
+    }
+  }
+}

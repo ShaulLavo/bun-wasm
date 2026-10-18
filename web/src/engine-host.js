@@ -495,6 +495,7 @@ class EngineHost {
   // Indirect eval: global scope, sloppy unless the code says otherwise; the
   // sourceURL names the file in stack traces.
   evalAt(code, filename) {
+    // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
     return (0, eval)(`${code}\n//# sourceURL=${filename}`);
   }
 

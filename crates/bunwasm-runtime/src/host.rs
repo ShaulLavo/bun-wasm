@@ -41,8 +41,25 @@ pub enum Slot {
 }
 
 pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
-    "poll", "fetch", "fetch_head", "read", "write", "close", "listen", "local_port", "accept", "connect",
-    "error", "peer_addr", "spawn", "child_wait", "child_pipe", "child_kill", "shutdown", "local_addr", "signal",
+    "poll",
+    "fetch",
+    "fetch_head",
+    "read",
+    "write",
+    "close",
+    "listen",
+    "local_port",
+    "accept",
+    "connect",
+    "error",
+    "peer_addr",
+    "spawn",
+    "child_wait",
+    "child_pipe",
+    "child_kill",
+    "shutdown",
+    "local_addr",
+    "signal",
 ];
 
 #[repr(C)]
@@ -52,7 +69,11 @@ pub struct HostSlots {
     slots: [u32; SLOT_COUNT],
 }
 
-static mut HOST_SLOTS: HostSlots = HostSlots { version: ABI_VERSION, count: SLOT_COUNT as u32, slots: [0; SLOT_COUNT] };
+static mut HOST_SLOTS: HostSlots = HostSlots {
+    version: ABI_VERSION,
+    count: SLOT_COUNT as u32,
+    slots: [0; SLOT_COUNT],
+};
 
 /// Exported (see crates/bunwasm-cli/build.rs) for hosts to fill in.
 #[unsafe(no_mangle)]
@@ -86,7 +107,13 @@ unsafe extern "C" {
     /// borrowed as a host call: `si_data` points at `[slot, a, b, c, d]`,
     /// `si_data_len` is 5, and the result goes to `so_datalen`.
     #[link_name = "sock_send"]
-    fn wasi_sock_send(fd: i32, si_data: i32, si_data_len: i32, si_flags: i32, so_datalen: i32) -> i32;
+    fn wasi_sock_send(
+        fd: i32,
+        si_data: i32,
+        si_data_len: i32,
+        si_flags: i32,
+        so_datalen: i32,
+    ) -> i32;
 }
 
 /// Calls slot `id` with `args` (unused ones 0), or None when not provided.
@@ -104,7 +131,15 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
             let packet = [id as i32, args[0], args[1], args[2], args[3]];
             let mut result: i32 = UNSUPPORTED;
             // SAFETY: both pointers are valid for the call; the host reads 5 i32s and writes one.
-            let errno = unsafe { wasi_sock_send(HOST_CALL_FD, packet.as_ptr() as i32, 5, 0, addr_of_mut!(result) as i32) };
+            let errno = unsafe {
+                wasi_sock_send(
+                    HOST_CALL_FD,
+                    packet.as_ptr() as i32,
+                    5,
+                    0,
+                    addr_of_mut!(result) as i32,
+                )
+            };
             return Some(if errno == 0 { result } else { UNSUPPORTED });
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -116,10 +151,28 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
     // (docs/host-abi.md); a mismatch traps in call_indirect.
     Some(unsafe {
         match id {
-            Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept | Slot::ChildWait | Slot::Shutdown => std::mem::transmute::<usize, F1>(index as usize)(args[0]),
-            Slot::Spawn | Slot::ChildPipe | Slot::ChildKill | Slot::Signal => std::mem::transmute::<usize, F2>(index as usize)(args[0], args[1]),
-            Slot::Fetch => std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3]),
-            Slot::FetchHead | Slot::Read | Slot::Write | Slot::Listen | Slot::Connect | Slot::Error | Slot::PeerAddr | Slot::LocalAddr => std::mem::transmute::<usize, F3>(index as usize)(args[0], args[1], args[2]),
+            Slot::Poll
+            | Slot::Close
+            | Slot::LocalPort
+            | Slot::Accept
+            | Slot::ChildWait
+            | Slot::Shutdown => std::mem::transmute::<usize, F1>(index as usize)(args[0]),
+            Slot::Spawn | Slot::ChildPipe | Slot::ChildKill | Slot::Signal => {
+                std::mem::transmute::<usize, F2>(index as usize)(args[0], args[1])
+            }
+            Slot::Fetch => {
+                std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3])
+            }
+            Slot::FetchHead
+            | Slot::Read
+            | Slot::Write
+            | Slot::Listen
+            | Slot::Connect
+            | Slot::Error
+            | Slot::PeerAddr
+            | Slot::LocalAddr => {
+                std::mem::transmute::<usize, F3>(index as usize)(args[0], args[1], args[2])
+            }
         }
     })
 }
@@ -133,7 +186,11 @@ pub fn poll(timeout_ms: i32) -> i32 {
 }
 
 pub fn fetch(meta: &[u8], body: &[u8]) -> i32 {
-    call(Slot::Fetch, [ptr(meta), meta.len() as i32, ptr(body), body.len() as i32]).unwrap_or(UNSUPPORTED)
+    call(
+        Slot::Fetch,
+        [ptr(meta), meta.len() as i32, ptr(body), body.len() as i32],
+    )
+    .unwrap_or(UNSUPPORTED)
 }
 
 /// Calls a `(handle, buf, cap) -> len` function, growing the buffer when the
@@ -185,7 +242,11 @@ pub fn close(handle: i32) -> i32 {
 }
 
 pub fn listen(host: &str, port: i32) -> i32 {
-    call(Slot::Listen, [ptr(host.as_bytes()), host.len() as i32, port, 0]).unwrap_or(UNSUPPORTED)
+    call(
+        Slot::Listen,
+        [ptr(host.as_bytes()), host.len() as i32, port, 0],
+    )
+    .unwrap_or(UNSUPPORTED)
 }
 
 pub fn local_port(handle: i32) -> i32 {
@@ -205,7 +266,11 @@ pub fn local_addr(handle: i32) -> Result<Vec<u8>, i32> {
 }
 
 pub fn connect(host: &str, port: i32) -> i32 {
-    call(Slot::Connect, [ptr(host.as_bytes()), host.len() as i32, port, 0]).unwrap_or(UNSUPPORTED)
+    call(
+        Slot::Connect,
+        [ptr(host.as_bytes()), host.len() as i32, port, 0],
+    )
+    .unwrap_or(UNSUPPORTED)
 }
 
 pub fn spawn(meta: &[u8]) -> i32 {
@@ -234,7 +299,10 @@ pub(crate) struct LocalSignals {
 
 impl Default for LocalSignals {
     fn default() -> Self {
-        Self { dispositions: [0; 65], pending: 0 }
+        Self {
+            dispositions: [0; 65],
+            pending: 0,
+        }
     }
 }
 
@@ -259,7 +327,8 @@ impl LocalSignals {
             self.pending &= !(1u64 << (signal - 1));
             return SignalAction::Value(signal as i32);
         }
-        if !(1..=64).contains(&signal) || !(0..=3).contains(&operation)
+        if !(1..=64).contains(&signal)
+            || !(0..=3).contains(&operation)
             || (signal == 9 && operation != 3)
         {
             return SignalAction::Value(-22);
@@ -320,9 +389,16 @@ mod signal_tests {
             for disposition in 0..=2 {
                 let mut signals = LocalSignals::default();
                 assert_eq!(signals.signal(signal, disposition), SignalAction::Value(0));
-                let expected = if disposition == 0 { SignalAction::Default(signal) } else { SignalAction::Value(0) };
+                let expected = if disposition == 0 {
+                    SignalAction::Default(signal)
+                } else {
+                    SignalAction::Value(0)
+                };
                 assert_eq!(signals.signal(signal, 3), expected);
-                assert_eq!(signals.signal(0, 0), SignalAction::Value(if disposition == 2 { signal } else { 0 }));
+                assert_eq!(
+                    signals.signal(0, 0),
+                    SignalAction::Value(if disposition == 2 { signal } else { 0 })
+                );
             }
         }
     }
@@ -333,9 +409,16 @@ mod signal_tests {
             let mut signals = LocalSignals::default();
             assert_eq!(signals.signal(2, 2), SignalAction::Value(0));
             assert_eq!(signals.signal(2, 3), SignalAction::Value(0));
-            let expected = if disposition == 0 { SignalAction::Default(2) } else { SignalAction::Value(0) };
+            let expected = if disposition == 0 {
+                SignalAction::Default(2)
+            } else {
+                SignalAction::Value(0)
+            };
             assert_eq!(signals.signal(2, disposition), expected);
-            assert_eq!(signals.signal(0, 0), SignalAction::Value(if disposition == 2 { 2 } else { 0 }));
+            assert_eq!(
+                signals.signal(0, 0),
+                SignalAction::Value(if disposition == 2 { 2 } else { 0 })
+            );
             // Once removal happens after the pending delivery was consumed.
             assert_eq!(signals.signal(2, 0), SignalAction::Value(0));
         }
@@ -380,7 +463,11 @@ mod signal_tests {
                 assert_eq!(signals.signal(signal, 4), SignalAction::Value(-22));
             }
             assert_eq!(signals.signal(0, 4), SignalAction::Value(0));
-            let expected = if disposition == 0 { SignalAction::Default(2) } else { SignalAction::Value(0) };
+            let expected = if disposition == 0 {
+                SignalAction::Default(2)
+            } else {
+                SignalAction::Value(0)
+            };
             assert_eq!(signals.signal(2, disposition), expected);
             assert_eq!(signals.signal(0, 0), SignalAction::Value(0));
         }
@@ -389,7 +476,16 @@ mod signal_tests {
     #[test]
     fn plain_wasi_kill_cannot_be_reconfigured_and_invalid_calls_are_harmless() {
         let mut signals = LocalSignals::default();
-        for (signal, operation) in [(9, 0), (9, 1), (9, 2), (-1, 0), (65, 0), (2, -1), (2, 4), (0, 3)] {
+        for (signal, operation) in [
+            (9, 0),
+            (9, 1),
+            (9, 2),
+            (-1, 0),
+            (65, 0),
+            (2, -1),
+            (2, 4),
+            (0, 3),
+        ] {
             assert_eq!(signals.signal(signal, operation), SignalAction::Value(-22));
         }
         assert_eq!(signals.signal(0, 0), SignalAction::Value(0));

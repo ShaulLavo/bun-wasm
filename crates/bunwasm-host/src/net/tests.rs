@@ -171,7 +171,10 @@ fn listen_reports_address_in_use() {
     assert_eq!(net.listen("127.0.0.1", port), ERROR);
     let error = json(net.error(0));
     assert_eq!(error["code"], "EADDRINUSE");
-    assert_eq!(error["message"], format!("Failed to start server. Is port {port} in use?"));
+    assert_eq!(
+        error["message"],
+        format!("Failed to start server. Is port {port} in use?")
+    );
 }
 
 #[test]
@@ -225,14 +228,17 @@ fn fetch_reports_reason_phrase_and_decodes_gzip() {
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     gz.write_all(b"hello gzip").unwrap();
     let body = gz.finish().unwrap();
-    let mut response =
-        format!("HTTP/1.1 418 I'm a Teapot\r\ncontent-encoding: gzip\r\ncontent-length: {}\r\n\r\n", body.len())
-            .into_bytes();
+    let mut response = format!(
+        "HTTP/1.1 418 I'm a Teapot\r\ncontent-encoding: gzip\r\ncontent-length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
     response.extend_from_slice(&body);
     let port = http_server(Box::leak(response.into_boxed_slice()));
 
     let mut net = Net::new();
-    let meta = format!(r#"{{"method":"GET","url":"http://127.0.0.1:{port}/x","headers":[["x-a","1"]]}}"#);
+    let meta =
+        format!(r#"{{"method":"GET","url":"http://127.0.0.1:{port}/x","headers":[["x-a","1"]]}}"#);
     let handle = net.fetch(meta.as_bytes(), b"");
     assert!(handle > 0);
     let head = loop {

@@ -93,6 +93,7 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
     onmessage: ((event: MessageEvent) => void) | null = null;
     terminated = 0;
     postMessage(value: RunRequest) {
+      // oxlint-disable-next-line no-this-alias -- Retain the owner for callbacks whose receiver differs.
       request ??= value; worker ??= this; requests.set(value.pid!, value); workers.set(value.pid!, this);
       pending.get(value.pid!)?.(value); posted();
     }
@@ -267,31 +268,34 @@ test("concurrent roots on one runtime keep engine-correct aliases without replac
     }
     const roots = workers.slice();
     for (const worker of roots) {
-      const deadline = performance.now() + 1000;
-      while (!worker.request && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
-      expect(worker.request).toBeDefined();
-      const root = worker.request;
-      const host = new SubprocessHost({ identity: runtime.identities.buffer, pid: root.pid, jobId: root.jobId, output() {},
-        launch(meta, child) {
-          worker.onmessage?.({ data: { type: "spawn", request: {
-            executable: meta.argv[0]!, argv: meta.argv, cwd: "/", env: {}, pid: child.pid, parentPid: child.parentPid,
-            jobId: child.jobId, child, filesystem: createFilesystemIdentity(), trace: false, spawnBroker: true,
-          } } } as MessageEvent);
-          return { terminate() {} };
-        },
-      });
-      hosts.push(host);
-      for (const alias of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) {
-        const pid = host.spawn(JSON.stringify({ argv: [alias] }));
-        const child = await received(pid);
-        expect(child.engine).toBe(root.engine);
-        expect(child.adapter).toBe("bun");
-        workers.find(worker => worker.request?.pid === pid)!.onmessage?.({ data: { type: "exit", code: 0, sleep: "atomics" } } as MessageEvent);
+      const checkInheritedEngineAliases = async () => {
         const deadline = performance.now() + 1000;
-        while (host.wait(pid) === -2 && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
-        expect(host.wait(pid)).toBe(0);
-        host.close(pid);
-      }
+        while (!worker.request && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+        expect(worker.request).toBeDefined();
+        const root = worker.request;
+        const host = new SubprocessHost({ identity: runtime.identities.buffer, pid: root.pid, jobId: root.jobId, output() {},
+          launch(meta, child) {
+            worker.onmessage?.({ data: { type: "spawn", request: {
+              executable: meta.argv[0]!, argv: meta.argv, cwd: "/", env: {}, pid: child.pid, parentPid: child.parentPid,
+              jobId: child.jobId, child, filesystem: createFilesystemIdentity(), trace: false, spawnBroker: true,
+            } } } as MessageEvent);
+            return { terminate() {} };
+          },
+        });
+        hosts.push(host);
+        for (const alias of ["bun", "/bun", "node", "/node", "/usr/local/bin/bun", "/usr/local/bin/node"]) {
+          const pid = host.spawn(JSON.stringify({ argv: [alias] }));
+          const child = await received(pid);
+          expect(child.engine).toBe(root.engine);
+          expect(child.adapter).toBe("bun");
+          workers.find(worker => worker.request?.pid === pid)!.onmessage?.({ data: { type: "exit", code: 0, sleep: "atomics" } } as MessageEvent);
+          const deadline = performance.now() + 1000;
+          while (host.wait(pid) === -2 && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+          expect(host.wait(pid)).toBe(0);
+          host.close(pid);
+        }
+      };
+      await checkInheritedEngineAliases();
     }
     expect(roots.every(worker => !worker.terminated)).toBe(true);
   } finally {
@@ -539,6 +543,7 @@ for (const acknowledged of [false, true]) test(`runner root job completion uses 
   let broker!: SubprocessBroker;
   const original = SubprocessBroker.prototype.register;
   const register = spyOn(SubprocessBroker.prototype, "register").mockImplementation(function(this: SubprocessBroker, name, entry) {
+    // oxlint-disable-next-line no-this-alias -- Retain the owner for callbacks whose receiver differs.
     broker = this;
     original.call(this, name, entry);
   });
@@ -573,6 +578,7 @@ test("run.done waits for deferred root activation and descriptor release", async
   const activation = new Promise<void>(resolve => { activate = resolve; });
   const original = SubprocessBroker.prototype.register;
   const register = spyOn(SubprocessBroker.prototype, "register").mockImplementation(function(this: SubprocessBroker, name, entry) {
+    // oxlint-disable-next-line no-this-alias -- Retain the owner for callbacks whose receiver differs.
     broker = this;
     original.call(this, name, entry);
   });
@@ -639,6 +645,7 @@ for (const partial of [false, true]) test(`run.done safely handles rejected defe
   });
   const original = SubprocessBroker.prototype.register;
   const register = spyOn(SubprocessBroker.prototype, "register").mockImplementation(function(this: SubprocessBroker, name, entry) {
+    // oxlint-disable-next-line no-this-alias -- Retain the owner for callbacks whose receiver differs.
     broker = this;
     original.call(this, name, entry);
   });

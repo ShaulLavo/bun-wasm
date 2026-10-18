@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm-web",
-  "version": "0.0.42",
+  "version": "0.0.43",
   "private": true,
   "type": "module",
   "scripts": {
@@ -24,7 +24,7 @@
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "playwright": "^1.64.1",
-    "typescript": "^7.0.2"
+    "typescript": "7.0.2"
   },
   "trustedDependencies": [
     "waffle"

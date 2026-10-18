@@ -13,6 +13,7 @@ if (!directory) {
   if (engine) assert(engines.has(engine), `unknown engine ${engine}`);
   const scratch = mkdtempSync("/work/tmp/bun-wasm-directory-descriptors-");
   try {
+const checkDirectoryDescriptors = () => {
     mkdirSync(`${scratch}/retained-tree`);
     const failures: string[] = [];
     const cases = Array.from(engines.keys()).flatMap(name => [[name, "natural"], [name, "explicit"], [name, "gc"]])
@@ -42,7 +43,10 @@ if (!directory) {
       nodeProcess.stdout.write(result.stdout);
     }
     assert.deepEqual(failures, []);
-  } finally {
+
+};
+checkDirectoryDescriptors();
+} finally {
     rmSync(scratch, { recursive: true });
   }
 } else {

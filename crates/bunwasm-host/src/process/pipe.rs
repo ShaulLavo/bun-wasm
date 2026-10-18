@@ -36,12 +36,18 @@ impl Pipe {
     }
 
     pub fn observe(&self, notify: &Arc<Notify>) {
-        self.state.lock().unwrap().observers.push(Arc::downgrade(notify));
+        self.state
+            .lock()
+            .unwrap()
+            .observers
+            .push(Arc::downgrade(notify));
     }
 
     fn notify(&self, state: &State) {
         self.notify.bump();
-        for observer in state.observers.iter().filter_map(Weak::upgrade) { observer.bump(); }
+        for observer in state.observers.iter().filter_map(Weak::upgrade) {
+            observer.bump();
+        }
     }
 
     pub fn read(&self, buf: &mut [u8]) -> i32 {
@@ -56,7 +62,9 @@ impl Pipe {
         if let Some(waker) = state.writer.take() {
             waker.wake();
         }
-        if count > 0 { self.notify(&state); }
+        if count > 0 {
+            self.notify(&state);
+        }
         count as i32
     }
 
@@ -114,7 +122,11 @@ impl StdoutStream for Pipe {
 }
 
 impl AsyncRead for Pipe {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         let mut state = self.state.lock().unwrap();
         if state.bytes.is_empty() && !state.eof {
             state.reader = Some(cx.waker().clone());
@@ -127,13 +139,19 @@ impl AsyncRead for Pipe {
         if let Some(waker) = state.writer.take() {
             waker.wake();
         }
-        if count > 0 { self.notify(&state); }
+        if count > 0 {
+            self.notify(&state);
+        }
         Poll::Ready(Ok(()))
     }
 }
 
 impl AsyncWrite for Pipe {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<io::Result<usize>> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<io::Result<usize>> {
         let mut state = self.state.lock().unwrap();
         if state.reader_closed || state.eof {
             return Poll::Ready(Err(io::Error::from_raw_os_error(libc::EPIPE)));
@@ -169,7 +187,8 @@ mod tests {
         let mut pipe = Pipe::new(crate::net::Net::new().notify());
         pipe.close_reader();
         let mut context = Context::from_waker(Waker::noop());
-        let Poll::Ready(Err(error)) = Pin::new(&mut pipe).poll_write(&mut context, b"output") else {
+        let Poll::Ready(Err(error)) = Pin::new(&mut pipe).poll_write(&mut context, b"output")
+        else {
             panic!("closed pipe did not reject a write");
         };
         assert!(matches!(ErrorCode::from(error), ErrorCode::Pipe));

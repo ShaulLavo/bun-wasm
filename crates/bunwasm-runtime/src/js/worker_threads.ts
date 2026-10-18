@@ -249,7 +249,7 @@
       return { id: state.id, peer: state.peer, version, sent: state.sent, received: state.received,
         queue: state.queue.slice(), pending: Array.from(state.pending), closing: state.peerClosing, closed: state.phase === "closed" };
     }
-    #bind() { const { queue, ...snapshot } = this.#snapshot(); root({ kind: "bind", snapshot, owner: route }); }
+    #bind() { const { queue: _queue, ...snapshot } = this.#snapshot(); root({ kind: "bind", snapshot, owner: route }); }
     static #restore(snapshot: Snapshot) { return new MessagePort(token, snapshot); }
     static #activate(value: unknown) { if (!(value instanceof MessagePort)) throw invalidPort(); value.#bind(); value.#accept(); }
     static #prepare(value: unknown): BunWasm.PortTransfer {
@@ -262,7 +262,7 @@
         validate() { if (value.#state !== state || state.phase !== "open") throw cloneError("MessagePort changed during transfer"); },
         commit() {
           value.unref(); localPorts.delete(state.id); value.#state = null;
-          const { queue, ...metadata } = snapshot;
+          const { queue: _queue, ...metadata } = snapshot;
           root({ kind: "moving", snapshot: metadata, origin: route });
         },
       };
@@ -679,7 +679,7 @@
     if (port instanceof BroadcastChannel) return undefined;
     throw invalidPort();
   }
-  function moveMessagePortToContext(port: unknown, context: unknown): never {
+  function moveMessagePortToContext(port: unknown, _context: unknown): never {
     if (!(port instanceof MessagePort)) throw invalidPort();
     if (portOps.isClosed(port)) throw Object.assign(new Error("Cannot send data on closed MessagePort"), { code: "ERR_CLOSED_MESSAGE_PORT" });
     throw Object.assign(new Error("VM contexts are not supported in bun-wasm"), { code: "ERR_NOT_SUPPORTED_IN_WASM" });

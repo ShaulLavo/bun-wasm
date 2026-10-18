@@ -218,7 +218,7 @@ export interface RunResult {
 export interface Run {
   readonly done: Promise<RunResult>;
   /** Signal the foreground job with SIGINT; a second call or explicit 9 force-kills it. */
-  kill(signal?: 2 | 9): void;
+  kill(signal?: 2 | 9 | 15): void;
 }
 
 /** `?slots=table|off` on the page: how the wasm engines get networking (see RunRequest.slots). */
@@ -430,7 +430,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
       const state = workerProcessState(transport);
       // The host endpoint and descriptor reservations use the same filesystem identity.
-      const { port, ...filesystem } = request.filesystem;
+      const { port: _port, ...filesystem } = request.filesystem;
       transport.data = { ...(transport.data as object | undefined), filesystem };
       await subprocess.adoptRuntimeRoot(transport);
       rootOutcome = state.signals.outcome;
@@ -459,7 +459,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   }
   watchOutcome();
   let interrupted = false;
-  const kill = (requestedSignal?: 2 | 9): void => {
+  const kill = (requestedSignal?: 2 | 9 | 15): void => {
     if (finished) return;
     if (!prepared) { void preparation!.then(() => kill(requestedSignal)); return; }
     const signal = requestedSignal ?? (interrupted ? 9 : 2);

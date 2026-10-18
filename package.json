@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": true,
   "type": "module",
   "exports": {
@@ -56,16 +56,27 @@
     "check": "tsc -p tsconfig.package.json",
     "test": "bun test ./tests/package/*.test.ts",
     "generate-guest": "bun scripts/guest-artifact.ts",
-    "publish-guest": "bun scripts/publish-guest.ts"
+    "publish-guest": "bun scripts/publish-guest.ts",
+    "quality": "bun scripts/quality.ts",
+    "quality:lint": "oxlint --deny-warnings",
+    "quality:types": "tsc -p crates/bunwasm-runtime/tsconfig.json && tsc -p tsconfig.package.json && tsc -p tsconfig.scripts.json && tsc -p web/tsconfig.quality.json && tsc -p sandbox/tsconfig.quality.json",
+    "quality:unused": "knip --no-progress",
+    "quality:duplicates": "jscpd --config .jscpd.json --baseline .jscpd-baseline.json --fail-on-new-clones 0 --fail-on-empty",
+    "quality:probes": "bun test scripts/quality-probes.test.ts",
+    "quality:rust": "bun scripts/quality-rust.ts"
   },
   "peerDependencies": {
     "waffle": "git+https://github.com/ShaulLavo/waffle.git#e41f4cdd6eaa376888b4eb24d6557789b98b59f9"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
-    "typescript": "^7.0.2",
+    "jscpd": "5.4.1",
+    "knip": "6.41.0",
+    "oxlint": "1.88.0",
+    "typescript": "7.0.2",
     "vite": "8.3.4",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e41f4cdd6eaa376888b4eb24d6557789b98b59f9"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e41f4cdd6eaa376888b4eb24d6557789b98b59f9",
+    "wrangler": "4.151.0"
   },
   "trustedDependencies": [
     "waffle"
