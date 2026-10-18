@@ -47,12 +47,16 @@ test("same-realm Atomics and shared-view replacement cannot intercept worker sig
   let worker: Worker | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let wake: ReturnType<typeof setTimeout> | undefined;
+  let notified = false;
   try {
     const result = Promise.withResolvers<unknown>();
     deadline = setTimeout(() => result.reject(new Error("intrinsic-capture worker deadline exceeded")), 5_000);
     const notify = () => {
-      if (Atomics.load(evidence, 0) !== 1) return result.reject(new Error("worker did not enter its wait"));
-      if (Atomics.notify(gate, 0) !== 1) result.reject(new Error("worker was not natively blocked"));
+      // The worker may be scheduled away between publishing entry and waiting.
+      // Retry notification, never change the word: success still requires waking
+      // one actual native sleeper, not merely observing its intent to wait.
+      if (Atomics.load(evidence, 0) === 1 && Atomics.notify(gate, 0) === 1) { notified = true; return; }
+      wake = setTimeout(notify, 1);
     };
     worker = new Worker(new URL("./fixtures/worker-signals-intrinsics.ts", import.meta.url).href);
     worker.onerror = event => result.reject(new Error(event.message));
@@ -62,6 +66,7 @@ test("same-realm Atomics and shared-view replacement cannot intercept worker sig
     };
     worker.postMessage({ evidence: evidence.buffer, gate: gate.buffer });
     expect(await result.promise).toEqual({ phase: "done", waited: "ok", action: "handled", delivered: 2, requested: 2, intercepted: 0 });
+    expect(notified).toBe(true);
   } finally {
     clearTimeout(deadline); clearTimeout(wake);
     await worker?.terminate();
