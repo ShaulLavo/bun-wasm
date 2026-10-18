@@ -1,0 +1,1 @@
+Exercise the guest's host-admitted executable paths; native reference output is not a WASI registry contract.

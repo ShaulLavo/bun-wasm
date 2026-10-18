@@ -5,14 +5,14 @@ extern crate bunwasm_lint_native;
 
 use std::io::Write;
 use std::path::Path;
-use std::time::{Duration, Instant};
 
-use bun_lint_driver::{Environment, Outcome, Script, Stream, bunfig, cli, fmt, git, js_plugin};
-use crate::host;
+use bun_lint_driver::{bunfig, cli, fmt, git, js_plugin, Environment, Outcome, Script, Stream};
 
 #[path = "../../../vendor/bun/src/runtime/cli/typescript_libs.rs"]
 mod typescript_libs;
 
+#[path = "configuration_process.rs"]
+mod configuration_process;
 
 enum CommandError {
     Usage(Vec<u8>),
@@ -324,143 +324,8 @@ fn run_script(script: &Script) -> Result<Vec<u8>, Vec<u8>> {
     let variables: std::collections::HashMap<_, _> = std::env::vars()
         .filter(|(name, _)| !Script::NOT_INHERITED.contains(&name.as_bytes()))
         .collect();
-    let meta = serde_json::json!({
-        "purpose": "configuration",
-        "executable": "bun",
-        "argv": ["bun", "--no-install", "-e", source],
-        "cwd": cwd,
-        "env": variables,
-        "stdin": "ignore", "stdout": "pipe", "stderr": "pipe",
-    });
-    let handle = host::spawn(meta.to_string().as_bytes());
-    if handle < 0 {
-        return Err(process_error(
-            "Could not start a configuration process",
-            handle,
-            0,
-        ));
-    }
-    let mut child = Child {
-        handle,
-        pipes: [host::child_pipe(handle, 1), host::child_pipe(handle, 2)],
-    };
-    let mut output = [Vec::new(), Vec::new()];
-    let mut budget = EvaluationBudget {
-        started: Instant::now(),
-        bytes: 0,
-    };
-    let mut status = host::AGAIN;
-    while status == host::AGAIN || child.pipes.iter().any(|pipe| *pipe > 0) {
-        budget.check_time()?;
-        for (pipe, bytes) in child.pipes.iter_mut().zip(output.iter_mut()) {
-            drain(pipe, bytes, &mut budget)?;
-        }
-        status = host::child_wait(handle);
-        if status < 0 && status != host::AGAIN {
-            return Err(process_error(
-                "Configuration process failed",
-                status,
-                handle,
-            ));
-        }
-        if status == host::AGAIN || child.pipes.iter().any(|pipe| *pipe > 0) {
-            host::poll(10);
-        }
-    }
-    let [stdout, stderr] = output;
-    if status == 0 { Ok(stdout) } else { Err(stderr) }
-}
 
-struct EvaluationBudget {
-    started: Instant,
-    bytes: usize,
-}
-
-impl EvaluationBudget {
-    fn check_time(&self) -> Result<(), Vec<u8>> {
-        if self.started.elapsed() >= Duration::from_secs(5) {
-            return Err(b"Configuration evaluation exceeded 5 seconds".to_vec());
-        }
-        Ok(())
-    }
-
-    fn add_output(&mut self, bytes: usize) -> Result<(), Vec<u8>> {
-        self.bytes += bytes;
-        if self.bytes > 8 * 1024 * 1024 {
-            return Err(
-                b"Configuration evaluation exceeded 8 MiB of combined stdout and stderr".to_vec(),
-            );
-        }
-        Ok(())
-    }
-}
-
-fn process_error(context: &str, code: i32, handle: i32) -> Vec<u8> {
-    if code == host::UNSUPPORTED {
-        return format!("{context}: host subprocess support is not provided").into_bytes();
-    }
-    let details = host::error(handle)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
-    let message = details
-        .as_ref()
-        .and_then(|error| error["message"].as_str())
-        .unwrap_or("host process error");
-    let name = details
-        .as_ref()
-        .and_then(|error| error["code"].as_str())
-        .map(str::to_owned)
-        .unwrap_or_else(|| code.to_string());
-    format!("{context}: {name}: {message}").into_bytes()
-}
-
-fn drain(
-    pipe: &mut i32,
-    bytes: &mut Vec<u8>,
-    budget: &mut EvaluationBudget,
-) -> Result<(), Vec<u8>> {
-    if *pipe <= 0 {
-        return Ok(());
-    }
-    match host::read(*pipe, 65536) {
-        Ok(chunk) if !chunk.is_empty() => {
-            budget.add_output(chunk.len())?;
-            bytes.extend_from_slice(&chunk);
-        }
-        Err(host::AGAIN) => {}
-        Ok(_) => {
-            host::close(*pipe);
-            *pipe = 0;
-        }
-        Err(code) => {
-            return Err(process_error(
-                "Cannot read configuration process output",
-                code,
-                *pipe,
-            ));
-        }
-    }
-    Ok(())
-}
-
-struct Child {
-    handle: i32,
-    pipes: [i32; 2],
-}
-
-impl Drop for Child {
-    fn drop(&mut self) {
-        host::child_kill(self.handle, 9);
-        for pipe in self.pipes {
-            if pipe > 0 {
-                host::close(pipe);
-            }
-        }
-        while host::child_wait(self.handle) == host::AGAIN {
-            host::poll(10);
-        }
-        host::close(self.handle);
-    }
+    configuration_process::run(&source, cwd, variables)
 }
 
 struct NativeRules;

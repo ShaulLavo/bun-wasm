@@ -24,6 +24,14 @@
     return err;
   }
 
+  // runtime_proc.signal reports a negated WASI errno: -28 EINVAL (signal number or mode the
+  // process service rejects) and -58 ENOTSUP (unsupported job-control stops). Node reports the
+  // same codes from uv_signal_start and kill, with libuv's errno values.
+  function signalFailure(result, syscall) {
+    const [code, errno] = result === -58 ? ["ENOTSUP", -95] : result === -28 ? ["EINVAL", -22] : ["EIO", -5];
+    return Object.assign(new Error(`${syscall} ${code}`), { code, errno, syscall });
+  }
+
   // Like Node, assigned values become strings (`process.env.N = 1` -> "1").
   const env = new Proxy(native.env(), {
     set(target, key, value) {
@@ -178,17 +186,32 @@
   let stderr;
   let stdin;
 
-  const signals = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGABRT: 6, SIGKILL: 9, SIGUSR1: 10, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15 };
-  const signalNames = new Map(Object.entries(signals).map(([name, number]) => [number, name]));
+  // Linux standard names and the aliases exposed by Node/Bun's os.constants.signals.
+  // Realtime signals have numeric support only; do not invent JS spellings for them.
+  const signals = {
+    SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGIOT: 6,
+    SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12,
+    SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGSTKFLT: 16, SIGCHLD: 17, SIGCONT: 18,
+    SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24,
+    SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 29, SIGPOLL: 29,
+    SIGPWR: 30, SIGSYS: 31,
+  };
+  const signalNames = new Map();
+  for (const [name, number] of Object.entries(signals)) {
+    if (!signalNames.has(number)) signalNames.set(number, []);
+    signalNames.get(number).push(name);
+  }
   const dispositions = new Map();
-  function publishSignalDisposition(name) {
-    const number = signals[name];
+  function publishSignalDisposition(number) {
     if (number === 9) return; // SIGKILL cannot acquire a handler or ignored disposition.
     // SIGPIPE starts ignored, but Node/Bun restore DEFAULT after its last handler is removed.
     // An unrelated removeAllListeners must preserve a signal that was still ignored.
-    const disposition = process.listenerCount(name) > 0 ? 2 : dispositions.get(number) === 1 ? 1 : 0;
+    // Aliases are distinct events but share the host's single numeric disposition.
+    const handled = signalNames.get(number).some((name) => process.listenerCount(name) > 0);
+    const disposition = handled ? 2 : dispositions.get(number) === 1 ? 1 : 0;
     if ((dispositions.get(number) || 0) === disposition) return;
-    if (native.hostSignal(number, disposition) < 0) throw new Error(`Cannot set ${name} disposition`);
+    const result = native.hostSignal(number, disposition);
+    if (result < 0) throw signalFailure(result, "uv_signal_start");
     dispositions.set(number, disposition);
   }
   // EventEmitter invokes this after its actual mutation, before removeListener observers.
@@ -196,11 +219,12 @@
   internal.listenerChanged = function listenerChanged(target, name) {
     if (target !== process) return;
     if (name === undefined) {
-      for (const signal of Object.keys(signals)) publishSignalDisposition(signal);
-    } else if (Object.hasOwn(signals, name)) publishSignalDisposition(name);
+      for (const number of signalNames.keys()) publishSignalDisposition(number);
+    } else if (Object.hasOwn(signals, name)) publishSignalDisposition(signals[name]);
   };
   // Publish the runtime's JS-only startup default before user code can write to stdio.
-  if (native.hostSignal(13, 1) < 0) throw new Error("Cannot set SIGPIPE disposition");
+  const startup = native.hostSignal(13, 1);
+  if (startup < 0) throw signalFailure(startup, "uv_signal_start");
   dispositions.set(13, 1);
   internal.pumpSignals = internal.require("process_signals")(process, signalNames);
 
@@ -219,9 +243,9 @@
     platform: "linux",
     release: { name: "node", sourceUrl: "", headersUrl: "" },
     argv: native.argv(),
-    argv0: "bun",
+    argv0: native.argv()[0],
     execArgv: [],
-    execPath: "/usr/local/bin/bun",
+    execPath: native.execPath(),
     env,
     pid: 1,
     ppid: 0,
@@ -247,7 +271,8 @@
       if (!Number.isInteger(number) || number < 0 || number > 64) throw new TypeError(`Unknown signal: ${signal}`);
       if (pid === process.pid) {
         if (number === 0) return true;
-        if (native.hostSignal(number, 3) < 0) throw new Error(`Cannot send signal ${signal}`);
+        const result = native.hostSignal(number, 3);
+        if (result < 0) throw signalFailure(result, "kill");
         return true;
       }
       throw errnoException("kill");

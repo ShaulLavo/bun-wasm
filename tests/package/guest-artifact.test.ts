@@ -14,7 +14,7 @@ import type { GuestPublisher } from "../../scripts/publish-guest.ts";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const artifact = prepareGuest(wasm);
-const scratchRoot = process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+const scratchRoot = process.env.TMPDIR ?? tmpdir();
 const publicHeaders = {
   "content-type": "application/wasm",
   "content-encoding": "gzip",

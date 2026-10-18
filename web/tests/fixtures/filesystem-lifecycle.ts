@@ -18,6 +18,13 @@ document.body.append(edits);
 const style = document.createElement("style");
 style.textContent = "pre{white-space:pre-wrap;overflow-wrap:anywhere}textarea{max-width:90vw}";
 document.head.append(style);
+const status = document.createElement("pre");
+document.body.append(status);
+fs.onStateChange = state => {
+  status.textContent = state.status === "waiting"
+    ? "Waiting for this workspace to close in another tab. It will open here automatically."
+    : "";
+};
 fs.onOwnershipLost = () => {
   state.ready = false;
   state.error = `${WORKSPACE_TAKEN_OVER} ${UNSAVED_CHANGES_LOST}`;

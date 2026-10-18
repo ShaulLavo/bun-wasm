@@ -1,5 +1,6 @@
 import { createRuntime, type ProcessAdmissionEvent, type Runtime } from "waffle";
 import { startRun, type Run } from "../src/runner";
+import { installBunAdapters } from "../src/subprocess-broker";
 import { createWorkerProcessTransport, workerProcessDirectoryId, workerProcessState } from "waffle/proc/worker-client";
 import { runtimeProcChecks, runtimeProcFixture, runtimeProcStages, runtimeProcJobWaitChecks, runtimeProcJobWaitFixture, runtimeProcJobWaitStages } from "./runtime-proc-fixtures";
 
@@ -206,7 +207,15 @@ try {
   const jobWait = parameters.has("job-wait");
   const checks = jobWait ? runtimeProcJobWaitChecks : runtimeProcChecks;
   const stages = jobWait ? runtimeProcJobWaitStages : runtimeProcStages;
-  const module = new WebAssembly.Module(jobWait ? runtimeProcJobWaitFixture() : runtimeProcFixture());
+  // This original preview1 fixture is not Bun. Give it its own admitted marker and
+  // executable registration rather than accidentally loading the real /bin/bun guest.
+  const executable = "/fixtures/runtime-proc";
+  const module = new WebAssembly.Module(jobWait ? runtimeProcJobWaitFixture(executable) : runtimeProcFixture(executable));
+  await runtime.filesystem.mkdirp("/fixtures");
+  await runtime.filesystem.writeFile(executable, "original byte-encoded preview1 fixture");
+  await runtime.filesystem.flush();
+  installBunAdapters(runtime, new URL("./worker.js", location.href).href);
+  runtime.registerProgram(executable, { adapter: "preview1", module, cooperative: true });
   const explicit = parameters.has("explicit");
   // Omitting runtimeProcess is intentional: a generic root must be recognized from real imports,
   // not only when a privileged caller already knows to manufacture the transport.

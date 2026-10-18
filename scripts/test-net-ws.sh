@@ -20,7 +20,7 @@ for engine in quickjs jsc browser; do
   if [[ "$engine" == browser ]]; then
     timeout 45 node --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --net "${args[@]}" -- run /index.mjs || code=$?
   else
-    timeout 45 "$CARGO_TARGET_DIR/release/bun-wasm" --wasm "$wasm" "${args[@]}" run /index.mjs || code=$?
+    timeout 45 "$CARGO_TARGET_DIR/release/bun-wasm" --wasm "$wasm" --engine "$engine=$wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" "${args[@]}" run /index.mjs || code=$?
   fi
   if [[ $code == 0 ]]; then echo "ok $engine ws"; else echo "FAIL $engine ws ($code)"; failed=1; fi
 done

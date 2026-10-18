@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createNodeSignalController } from "../scripts/node-signals.ts";
 import { setSignalDisposition, takeSignal, createSignalState } from "waffle/proc/signals";
@@ -62,47 +61,38 @@ test("Node distinct handled requests survive a single wake hint", () => {
   expect(controller.selected()).toBeNull();
 });
 
-// Run the actual adapter's terminal functions in real Node Workers. Unlike a VM mock or a
-// throwable browser exit, Node's saved process.exit must be impossible for guest JS to catch.
-const nodeHost = readFileSync(new URL("../scripts/node-host.mjs", import.meta.url), "utf8");
-const terminalStart = nodeHost.indexOf("function checkFatal() {");
-const terminalEnd = nodeHost.indexOf("function installStdio(", terminalStart);
-if (terminalStart < 0 || terminalEnd < 0) throw new Error("Node terminal functions missing");
-const terminalFunctions = nodeHost.slice(terminalStart, terminalEnd);
+// Exercise the real ProcessABI guard in native Node workers, not extracted adapter text.
 for (const mode of ["raise", "pending-removal", "checkpoint"]) test(`Node ${mode} cannot catch default and continue I/O or an endless loop`, () => {
   const controllerUrl = new URL("../scripts/node-signals.ts", import.meta.url).href;
-  const subprocessUrl = new URL("../src/subprocess.ts", import.meta.url).href;
-  const statusUrl = import.meta.resolve("waffle/proc/wait-status");
+  const hostUrl = new URL("../scripts/node-process.ts", import.meta.url).href;
   const workerSource = `
     import { parentPort, workerData } from "node:worker_threads";
-    (async () => {
-      const { createNodeSignalController } = await import(${JSON.stringify(controllerUrl)});
-      const { SubprocessHost } = await import(${JSON.stringify(subprocessUrl)});
-      const { waitStatus } = await import(${JSON.stringify(statusUrl)});
-      const signals = createNodeSignalController(workerData.buffers);
-      new Function("signals", "nodeProcess", "child", "cliFetch", "SubprocessHost", "notify", "waitStatus", ${JSON.stringify(`
-        let subprocess;
-        ${terminalFunctions}
-        subprocess = new SubprocessHost({
-          signalState: signals.buffers.signalState, outcome: signals.buffers.outcome,
-          defaultSignal: signal => finish(128 + signal, signal),
-        });
-        notify("ready");
-        try {
-          ${mode === "raise" ? "subprocess.signal(15, 3);" : mode === "pending-removal"
-            ? "subprocess.signal(15, 2); signals.request(15); subprocess.signal(15, 0);"
-            : "signals.request(15); subprocess.signal(0, 0);"}
-        } catch (error) { notify("caught"); }
-        notify("forbidden I/O");
-        for (;;) {}
-      `)})(signals, process, null, null, SubprocessHost, value => parentPort.postMessage(value), waitStatus);
-    })().catch(error => { console.error(error); process.exit(1); });
+    import { workerProcessState } from "waffle/proc/worker-client";
+    import { createNodeSignalController } from ${JSON.stringify(controllerUrl)};
+    import { createNodeProcess } from ${JSON.stringify(hostUrl)};
+    const signals = createNodeSignalController(workerProcessState(workerData.transport).signals);
+    const host = createNodeProcess({ transport: workerData.transport, postMessage() {},
+      finish(code, signal) { const selected = signals.finish(code, signal); process.exit(selected.status); },
+    });
+    const instance = { exports: { memory: new WebAssembly.Memory({initial:1}) } };
+    const wasi_snapshot_preview1 = { sock_send: () => 0, fd_read: () => 0, fd_write: () => 0, fd_close: () => 0 };
+    const { proc } = host.install({wasi_snapshot_preview1}, () => instance);
+    parentPort.postMessage("ready");
+    try {
+      ${mode === "raise" ? "proc.signal(15, 3);" : mode === "pending-removal"
+        ? "proc.signal(15, 2); signals.request(15); proc.signal(15, 0);"
+        : "signals.request(15); proc.signal(0, 0);"}
+    } catch (error) { parentPort.postMessage("caught"); }
+    parentPort.postMessage("forbidden I/O");
+    for (;;) {}
   `;
   const driver = `
     import { Worker } from "node:worker_threads";
+    import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
     import { createNodeSignalController } from ${JSON.stringify(controllerUrl)};
-    const signals = createNodeSignalController();
-    const worker = new Worker(${JSON.stringify(workerSource)}, { eval: true, workerData: { buffers: signals.buffers } });
+    const transport = createWorkerProcessTransport();
+    const signals = createNodeSignalController(workerProcessState(transport).signals);
+    const worker = new Worker(${JSON.stringify(workerSource)}, { eval: true, workerData: { transport } });
     const messages = [];
     worker.on("message", value => messages.push(value));
     let expired = false;
@@ -112,7 +102,7 @@ for (const mode of ["raise", "pending-removal", "checkpoint"]) test(`Node ${mode
       console.log(JSON.stringify({ status, expired, messages, outcome: signals.selected() }));
     } finally { clearTimeout(timer); await worker.terminate(); }
   `;
-  const result = spawnSync("node", ["--input-type=module", "-e", driver], { encoding: "utf8", timeout: 4000 });
+  const result = spawnSync("node", ["--input-type=module", "-e", driver], { cwd: new URL("..", import.meta.url), encoding: "utf8", timeout: 4000 });
   expect(result.error).toBeUndefined();
   expect(result.stderr).toBe("");
   expect(result.status).toBe(0);

@@ -2,35 +2,29 @@ import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { Worker } from "node:worker_threads";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
-import { outcomeWord } from "waffle/proc/outcome";
-import { createSignalState, setSignalDisposition, SIGNAL_PENDING } from "waffle/proc/signals";
+import { setSignalDisposition, SIGNAL_PENDING } from "waffle/proc/signals";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { SubprocessBroker } from "../src/subprocess-broker";
-import { createProcessBudget } from "../src/subprocess";
 import type { SharedFilesystem } from "../src/shared-fs";
 
-type Mode = "legacy" | "generic-host" | "generic-poll";
-async function proveWake(mode: Mode, operation: "kill" | "killJob", suppressNotify: boolean, deadlineMilliseconds = 2500) {
+async function proveWake(operation: "kill" | "killJob", suppressNotify: boolean, deadlineMilliseconds = 2500) {
   // This run owns one worker, delivery/deadline timers, and its broker. Teardown is installed
   // before spawn; shared words are test-local and have no external owner or persistent backing.
-  const budget = createProcessBudget();
   const filesystem = { revoke: revokeFilesystem, reap() {}, async quiesce(identity: Parameters<typeof revokeFilesystem>[0]) { revokeFilesystem(identity); }, client: { sweep() {} } } as unknown as SharedFilesystem;
   const runtime = processRuntimeFixture(filesystem);
   const transport = createWorkerProcessTransport({ capacity: 2, pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   transport.data = { filesystem: createFilesystemIdentity() };
   const state = workerProcessState(transport);
-  const signals = mode === "legacy" ? { signalState: createSignalState(), interrupt: new Int32Array(new SharedArrayBuffer(4)),
-    requestedSignal: new Int32Array(new SharedArrayBuffer(4)), outcome: outcomeWord() } : state.signals;
-  const broker = new SubprocessBroker("http://localhost/worker.js", runtime, { budget,
-    root: mode === "legacy" ? { pid: 1, job: 1, ...signals } : undefined });
-  const selected = mode === "generic-poll" ? state.wake : new Int32Array(budget, 4, 1);
+  const signals = state.signals;
+  const broker = new SubprocessBroker("http://localhost/worker.js", runtime);
+  const selected = state.wake;
   const before = Atomics.load(selected, 0);
   const nativeNotify = Atomics.notify;
   let worker: Worker | undefined, deliveryTimer: ReturnType<typeof setTimeout> | undefined;
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let sampledGeneration = 0, suppressed = 0;
   try {
-    if (mode !== "legacy") await broker.adoptRuntimeRoot(transport);
+    await broker.adoptRuntimeRoot(transport);
     setSignalDisposition(signals.signalState, 2, 2);
     if (suppressNotify) Atomics.notify = ((word: Int32Array, index: number, count?: number) => {
       if (word.buffer === selected.buffer && word.byteOffset + index * 4 === selected.byteOffset) { suppressed++; return 0; }
@@ -38,7 +32,7 @@ async function proveWake(mode: Mode, operation: "kill" | "killJob", suppressNoti
     }) as typeof Atomics.notify;
     const result = await new Promise<{ generation: number; result: string; pending: number; interrupt: number; sequence: number }>((resolve, reject) => {
       deadlineTimer = setTimeout(() => reject(new Error("signal wait deadline exceeded")), deadlineMilliseconds);
-      worker = new Worker(new URL("./fixtures/signal-wake-worker.ts", import.meta.url), { workerData: { mode, budget, signals, wake: state.wake } });
+      worker = new Worker(new URL("./fixtures/signal-wake-worker.ts", import.meta.url), { workerData: { transport } });
       worker.on("error", reject);
       worker.on("exit", code => { if (code !== 0) reject(new Error(`signal wait worker exited ${code}`)); });
       worker.on("message", message => {
@@ -83,7 +77,7 @@ test("lost signal publication rejects on its owned deadline and tears down the w
   });
   try {
     let error: unknown;
-    try { await proveWake("generic-poll", "kill", false, 500); } catch (caught) { error = caught; }
+    try { await proveWake("kill", false, 500); } catch (caught) { error = caught; }
     expect(kill).toHaveBeenCalledTimes(1);
     expect(terminate).toHaveBeenCalledTimes(1);
     expect(terminated).toBe(true);
@@ -97,9 +91,7 @@ test("lost signal publication rejects on its owned deadline and tears down the w
   }
 });
 
-for (const mode of ["legacy", "generic-host", "generic-poll"] as const) {
-  for (const operation of ["kill", "killJob"] as const) {
-    test(`${mode} page ${operation} wakes the sampled production wait`, () => proveWake(mode, operation, false));
-    test(`${mode} page ${operation} loses causal wake when only its notify is removed`, () => proveWake(mode, operation, true));
-  }
+for (const operation of ["kill", "killJob"] as const) {
+  test(`page ${operation} wakes the sampled production wait`, () => proveWake(operation, false));
+  test(`page ${operation} loses causal wake when only its notify is removed`, () => proveWake(operation, true));
 }

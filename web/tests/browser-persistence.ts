@@ -94,10 +94,12 @@ try {
       if (!pageOnly) {
       const contender = await ready(context);
       if (storage === "opfs") {
-        await assert.rejects(call(contender, "open", prefix, true, storage), /writer|lock|occupied|already|in use/i, "OPFS must refuse an occupied writer");
+        const opening = call(contender, "open", prefix, true, storage);
+        await contender.waitForFunction(() => (globalThis as any).persistenceHarness.storageState() === "waiting");
         await call(page, "destroy");
-        await call(contender, "open", prefix, true, storage);
-        row.checks.push("opfs-second-tab-refused-then-open-after-owner-close");
+        await opening;
+        assert.equal(await call(contender, "storageState"), "ready");
+        row.checks.push("opfs-second-tab-waits-then-opens-without-reload-after-owner-close");
       } else {
         await call(contender, "open", prefix, true, storage);
         await page.waitForFunction(() => (globalThis as any).persistenceHarness.state.ownershipLost);

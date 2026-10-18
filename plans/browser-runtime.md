@@ -322,6 +322,38 @@ work. Order: 1, then 2 and 3a in parallel; 3b after 3a, 3c after 3b; 4a after 2;
 4c and 4d after 4b; 5, 6 and 7b after 4b; 7a any time after 1; 9 any time after 2. The shell
 track can start its `ProcessHost` against the ABI as soon as 4b lands.
 
+### Step 7b follow-up: the artifact-free process gate on the generic client
+
+**Status: Implemented in step 7b; 23 artifact-free and 24 actual-guest checks pass in
+Chromium, Firefox and WebKit.** Step 7b's host side
+(`web/src/bun-executor.ts`, `bun-launcher.ts`, the slim `subprocess-broker.ts`, a runner whose every
+root is generic) removed `web/src/subprocess.ts` and `worker-pipes.ts`.
+`web/tests/process-browser-main.ts`, run by `web/tests/browser-process.ts` and CI,
+now uses a page-side `WorkerProcessClient`, Waffle pipes, real absolute executable
+marker files and enrolled child pipe identities. It remains in `web/tsconfig.json`.
+Nonconsuming host completion observations keep signal cells available for assertions;
+consuming ABI waits are covered by `browser-runtime-proc.ts`. Preserve the check count: CPU default signals 2/15/13/9, EPIPE handled and ignored,
+handled signals keeping their own exit code, ignored PIPE, last-handler removal, explicit default,
+handled INT then an unrelated trap, KILL during an INT handler, mixed-disposition job members, delayed
+first activation, one shared module load for concurrent children, start failures 127 and 126, foreground
+descendants reaped with the background job surviving, pid monotonicity across recycled capacity, and the
+`--artifact` orphan-lifetime check on the real Bun light guest. Scenarios that asserted the old
+four-slot budget or `SubprocessHost` return codes become pid monotonicity and Waffle errnos.
+Physical directory slots can be recycled; the replacement check requires retired tagged
+capabilities to reject access with ESRCH after a subsequent admission, rather than demanding
+never-reused slot numbers. Startup failures assert their typed kind as well as 127/126 projection.
+The Chromium baseline comparison (`--benchmark`) needs a frozen pre-7b revision whose harness still builds.
+The byte-encoded `browser-runtime-proc.ts` fixture registers its own `/fixtures/runtime-proc`
+preview1 executable instead of accidentally requesting the real `/bin/bun` artifact. Both automatic
+and explicit root transports retain all pipe and blocking job-wait controls without guest downloads.
+
+Step 7b also consumes Waffle #21's queued OPFS ownership contract: storage smoke and lifecycle
+checks observe `waiting`, close the owner and require automatic readiness in the same page with
+saved bytes intact. Fixtures await filesystem disposal before replacement or teardown. The
+playground displays waiting and disables startup controls until setup completes. Actual editor
+checks cover this behavior with a disposable persistent profile (WebKit ephemeral profiles do not
+support OPFS); IndexedDB's existing default newest-writer takeover remains unchanged.
+
 ### Step 4c follow-up: reclaim empty nonroot bookkeeping
 
 **Status: Approved; scheduled with step 4c after the Waffle extraction.** The preparation fixes
@@ -508,9 +540,11 @@ stays visible. The complete message says "This workspace was opened in another t
 continue here." It also explains that unsaved changes in that tab weren't kept and can be copied
 before reloading. Saves acknowledged before takeover remain durable.
 
-OPFS keeps `ifAvailable: true`, without stealing. Its writes use native sync access handles and
-cannot be fenced atomically by an IndexedDB transaction. An occupied OPFS workspace explains that
-a tab or browser-history page owns it and asks the user to close those tabs before reopening.
+OPFS queues an occupied workspace lock without stealing, following Waffle #21. Its writes use
+native sync access handles and cannot be fenced atomically by an IndexedDB transaction. A waiting
+page explains that another tab owns the workspace and continues automatically in the same document
+when that owner closes; controls remain disabled until setup completes. Ordinary startup failures
+enable Reload, and the app browser gate clicks it and verifies editor readiness after navigation.
 IndexedDB uses a separate lock namespace so opening that backend cannot steal an OPFS lock.
 The runtime track, bun-wasm-a8, owns review of this persistence boundary.
 
