@@ -3,7 +3,7 @@
 import { memoryViews, type MemoryViews } from "waffle/core";
 import { NetHost as RuntimeNetHost } from "waffle/browser/net/host";
 import { type NetRequest, UNSUPPORTED } from "waffle/browser/net/protocol";
-import { SLOT_NAMES, type SlotImpls } from "./trampoline";
+import { SLOT_NAMES, type SlotImpls } from "./trampoline.js";
 
 /** What engine-host.js takes as `net` (see engine-host.d.ts). */
 export interface EngineNet {
