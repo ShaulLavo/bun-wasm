@@ -79,3 +79,32 @@ test("launchers do not add hidden executable rewriting", async () => {
   expect(launches.every(launch => launch.executableName === undefined)).toBe(true);
   expect(launches[0]!.request.args[0]).toBe("/bin/bun");
 });
+
+for (const engine of ["quickjs", "jsc", "browser"] as const) test(`${engine} lint/fmt selects tools without changing its process context or engine`, async () => {
+  const tools = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  let loads = 0;
+  const launcher = bunLauncher(engine, { workerUrl: "./worker.js", async loadTools() { loads++; return tools; } });
+  for (const args of [["lint", "input.ts"], ["--cwd", "/project", "fmt", "--check", "input.ts"]]) {
+    const launches: Launch[] = [];
+    const toolContext = { ...context, request: { ...context.request, argv: ["bun"].concat(args) } } as ProcessContext;
+    await launcher(toolContext, service(launches));
+    expect(launches).toHaveLength(1);
+    expect(launches[0]!.request).toMatchObject({ module: tools, engine, args: ["/bin/bun"].concat(args), env: { A: "1", PWD: "/work" } });
+  }
+  expect(loads).toBe(2);
+  for (const args of [["run", "lint"], ["-e", "'fmt'"], ["build", "fmt"]]) {
+    const launches: Launch[] = [];
+    await launcher({ ...context, request: { ...context.request, argv: ["bun"].concat(args) } } as ProcessContext, service(launches));
+    expect(launches[0]!.request.module).toBe(module);
+  }
+  expect(loads).toBe(2);
+});
+
+test("a rejected tools module prevents worker launch", async () => {
+  const launches: Launch[] = [];
+  const launcher = bunLauncher("browser", { workerUrl: "./__bunwasm/worker.js", async loadTools() { throw new Error("tools integrity mismatch"); } });
+  const toolContext = { ...context, request: { ...context.request, argv: ["bun", "lint", "input.ts"] } } as ProcessContext;
+  await expect(launcher(toolContext, service(launches))).rejects.toThrow("tools integrity mismatch");
+  expect(launches).toEqual([]);
+  expect(deleted).toEqual([]);
+});

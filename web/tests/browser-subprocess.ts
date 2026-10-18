@@ -10,7 +10,8 @@ const orderedChild = readFileSync(new URL("../../tests/fixtures/pipe-write-order
 const stdinRace = readFileSync(new URL("../../tests/fixtures/pipe-stdin-race/index.ts", import.meta.url), "utf8");
 const configurationChecks = readFileSync(new URL("../../tests/fixtures/lint-fmt-config/index.ts", import.meta.url), "utf8");
 const configurationExpected = readFileSync(new URL("../../tests/fixtures/lint-fmt-config/expected.txt", import.meta.url), "utf8").trim().split("\n");
-const executableAliases = ["bun", "/bun", "/usr/local/bin/bun", "node", "/node", "/usr/local/bin/node"];
+const executableAliases = ["bun", "node", "/bin/bun", "/bin/node",
+  "/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node"];
 const apiProgram = `
 import { spawn, spawnSync, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";

@@ -127,10 +127,14 @@ test("owner-job cancellation reaches configuration helpers and subsequent helper
   try {
     const { child, readers } = f.spawn();
     await f.supervisor.start(child);
+    const owner = f.supervisor.get(f.pid)!, helper = f.supervisor.get(child)!;
     f.supervisor.killJob(f.supervisor.jobOf(f.pid), 9);
-    expect(f.abi.imports.wait!(child, 64)).toBe(0);
-    expect(f.view.getUint32(64, true)).toBe(1);
-    expect(f.view.getInt32(68, true)).toBe(9);
+    expect(owner.result).toEqual({ kind: "signaled", code: 9, status: 137 });
+    expect(helper.result).toEqual({ kind: "signaled", code: 9, status: 137 });
+    expect(owner.jobSafe).toBe(true);
+    expect(helper.jobSafe).toBe(true);
+    // The killed owner has no guest authority left to consume its helper's result.
+    expect(f.abi.imports.wait!(child, 64)).toBe(-12);
     expect(f.terminated).toContain(child);
     // Cancelling the owner revokes its descriptors as well as the helper.
     for (const fd of readers) expect(f.descriptors.get(fd)).toBeUndefined();

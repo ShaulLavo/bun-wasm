@@ -85,7 +85,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-glue/src/bun_native.rs`](#copied-and-generated-bun-source) | Port | Replace standalone parser base64 and zlib stubs with working Rust implementations. |
 | [`crates/bunwasm-build/src/lib.rs`](#build-command) | Port | Extract Bun's build command from its JSC runtime. |
 | [Lint and format command adapters](#lint-and-format-commands) | Port | Compile Bun's native linter, formatter, CLI parsers, and Yarr regex bindings for WASI. |
-| [Lint process environment](#lint-process-environment) | Host feature | Original adapters bound configuration workers and their output, reserve internal capacity, and register object modules. |
+| [Lint process environment](#lint-process-environment) | Host feature | Original `configuration_process.rs` adapter and test host run ordinary runtime_proc children with bounded time/output; runtime adapters register object modules. |
 | [`crates/bunwasm-build/src/dev_server/facade.rs`, `crates/bunwasm-build/src/dev_server/graph.rs`, `crates/bunwasm-build/src/dev_server/finalize.rs`](#bake-graph-adaptations) | Port | Adapt bake's graph owner, context types, and bundle finalization to synchronous WASI. |
 | [`crates/bunwasm-build/generated/bake.client.js`, `crates/bunwasm-build/generated/bake.error.js`](#generated-bake-clients) | Port | Embed Bun's generated browser HMR client and error overlay. |
 | [`crates/bunwasm-transpiler/src/lib.rs`, source-map collector](#transpiler-source-map-collector) | Port | Retain Bun's small printer callback outside its runtime crate. |
@@ -1844,10 +1844,10 @@ small selection rule for browser and Node hosts. Eval source, script arguments,
 and build/test arguments cannot select a tool. The tools process uses the same
 pid, streams, cwd, signal state, filesystem identity and child admission as the
 command it replaces. This is an original host adapter. It adds no forwarding
-child and does not change the public four-child limit.
+child or separate process-capacity limit.
 
 The single tools artifact has no JavaScript engine. Config evaluation self-spawns
-through slot 12 into the selected default engine. Browser hosts download and
+through the generic `runtime_proc` ABI into the selected engine executable. Browser hosts download and
 compile tools on the first tool command, reuse the compiled module within the
 page, and use the fingerprinted engine cache across page loads. The cached
 response header is the single publication state, without a separate localStorage
@@ -1859,24 +1859,28 @@ before compilation and publishes only verified bytes to its startup cache.
 ## Lint process environment
 
 Class **Host feature**, **original adapters** in
-`crates/bunwasm-tools/src/lint_command.rs`, `crates/bunwasm-host/src/process/`,
-and `web/src/subprocess.ts`.
+`crates/bunwasm-tools/src/lint_command.rs`,
+`crates/bunwasm-tools/src/configuration_process.rs` (with the original test host
+`configuration_process_test_host.rs`), and `crates/bunwasm-host/src/process/`.
+These adapters implement Waffle's generic `runtime_proc` contract; no upstream
+process implementation is copied.
 
 The driver supplies Bun's existing config-evaluation programs as source parts.
-The adapter runs them through the host subprocess ABI in a fresh instance of the
-selected default engine artifact, passing the requested cwd and filtered process environment.
-It drains both output pipes while waiting and closes owned handles on every
-return path. It invokes no host executable or model provider.
+The adapter runs them in a fresh instance of the selected engine executable,
+passing the requested cwd and filtered process environment. It uses ordinary
+`runtime_proc` spawn, pipe, read, poll, wait and signal operations. The child's
+job is the caller's `job_of(0)`; a missing job fails instead of choosing a fallback.
+The selected engine's leading PATH entry determines its canonical executable
+path. It drains both output pipes while waiting and closes owned descriptors on
+every return path. It invokes no host executable or model provider.
 
 Bun serializes these evaluations with the guard in its pinned
 `src/runtime/cli/lint_command.rs::run_and_exit` and starts an isolated process
-with `--no-orphans`. The WASI callback is synchronous and also permits one
-evaluation per owner. Its `purpose: "configuration"` spawn metadata reserves
-one internal helper for the root and each of the four public children. Internal
-helpers cannot reserve another helper. The public child limit stays four, and
-there are at most five internal helpers. Ordinary `Bun.spawn` does not forward
-this metadata. Native admission leases and browser/Node shared slots release
-capacity on startup failure, completion, kill, and close.
+with `--no-orphans`. The WASI callback is synchronous, but each evaluation is an
+ordinary child occupying the same process directory as other children. The
+`purpose: "configuration"` metadata is descriptive only: there is no separate
+Bun-only admission pool or helper reservation. Completed children retain their
+process-directory slot until consuming wait, which releases it.
 
 Pinned Bun does not impose a time or output limit here. The wasm adapter adds
 a five-second elapsed-time limit and an eight-MiB combined stdout/stderr budget

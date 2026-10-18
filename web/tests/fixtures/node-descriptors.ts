@@ -76,7 +76,7 @@ function setup(preopenCount = 0, transport = createWorkerProcessTransport(), env
     });
     return { status, events };
   };
-  const value = { host, proc, messages, memory, view, bytes, call, open, pipe, spawn, read, poll };
+  const value = { host, transport, proc, messages, memory, view, bytes, call, open, pipe, spawn, read, poll };
   return value;
 }
 const request = (fds: SpawnRequest["fds"] = [], env = {}): SpawnRequest => ({ executable: "bun", argv: ["bun"], cwd: "/", env, job: 0, fds });
@@ -146,7 +146,7 @@ try {
     assert.equal(child.poll([{ type: 2, fd: controls.output }]).status, 27);
     controlStore(child.host.client.signals.signalState, 15, 0);
     const publisher = new Worker(new URL("./node-descriptor-signal.ts", import.meta.url), {
-      workerData: child.host.client.signals.signalState,
+      workerData: child.transport,
     });
     try {
       await new Promise<void>((resolve, reject) => { publisher.once("message", () => resolve()); publisher.once("error", reject); });

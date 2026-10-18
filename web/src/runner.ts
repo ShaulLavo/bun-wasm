@@ -9,6 +9,7 @@ import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
 import { measureStartup } from "./startup";
 import { SubprocessBroker } from "./subprocess-broker";
+import { isToolCommand } from "./tool-command";
 import { ENGINE_BIN, engineEnvironment } from "../../src/executable-paths.js";
 import { claimOutcome, readOutcome, type OutcomeWord } from "waffle/proc/outcome";
 import { waitStatus } from "waffle/proc/wait-status";
@@ -32,6 +33,13 @@ export function mb(bytes: number): string {
 }
 
 export class WasmMissing extends Error {}
+
+let toolsModule: Promise<WebAssembly.Module> | undefined;
+function loadTools(): Promise<WebAssembly.Module> {
+  return toolsModule ??= loadWasm("bun-tools.wasm", () => {})
+    .then(result => result.module)
+    .catch(error => { toolsModule = undefined; throw error; });
+}
 
 /**
  * Fetches and compiles a wasm module. Sites ship it gzipped (static hosts cap file sizes, and it is
@@ -275,6 +283,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     stop: stopRoot,
   });
   const subprocess = new SubprocessBroker(workerUrl, options.runtime, {
+    loadTools,
     rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged,
     stopRoot: () => finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true),
     output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data),
@@ -398,6 +407,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     const { port, ...filesystem } = request.filesystem;
     transport.data = { ...(transport.data as object | undefined), filesystem };
     await subprocess.adoptRuntimeRoot(transport);
+    if (options.adapter !== "preview1" && isToolCommand(options.args)) request.module = await loadTools();
     rootOutcome = state.signals.outcome;
     rootPid = state.pid;
     rootJob = state.job;

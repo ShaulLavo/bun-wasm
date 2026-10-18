@@ -2,10 +2,13 @@
 // descriptors, signals and filesystem fences; these only describe the worker to start.
 import type { GuestLauncher } from "waffle";
 import type { Engine, RunRequest } from "./bun-executor.js";
+import { isToolCommand } from "./tool-command.js";
 
 export interface BunLauncherOptions {
   /** The module worker URL that runs createBunExecutor (worker.ts). */
   workerUrl: string;
+  /** Optional tools artifact supplied by the embedding application, loaded only for lint/fmt. */
+  loadTools?(): Promise<WebAssembly.Module>;
 }
 
 /** Where a worker URL is resolved from: the page, as `new Worker(url)` does. */
@@ -35,12 +38,14 @@ function scopedWorker(workerUrl: string): boolean {
  */
 export function bunLauncher(engine: Engine, options: BunLauncherOptions): GuestLauncher {
   return async (context, service) => {
+    const module = options.loadTools && isToolCommand(context.request.argv.slice(1))
+      ? await options.loadTools() : context.module;
     // One Cache Storage cache per process holds its modules; deleted when the process is stopped.
     const moduleCache = engine === "browser" && scopedWorker(options.workerUrl) ? `bunwasm-m-${crypto.randomUUID()}` : null;
     return service.launchWorker<RunRequest>(context, {
       workerUrl: options.workerUrl,
       request: {
-        engine, adapter: "bun", module: context.module, interruptible: context.interruptible,
+        engine, adapter: "bun", module, interruptible: context.interruptible,
         args: [context.request.executable].concat(context.request.argv.slice(1)), env: { ...context.request.env, PWD: context.request.cwd },
         trace: false, net: null, moduleCache,
       },
