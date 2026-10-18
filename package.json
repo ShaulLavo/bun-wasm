@@ -1,0 +1,73 @@
+{
+  "name": "bun-wasm",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./web/src/index.ts",
+      "bun": "./web/src/index.ts",
+      "browser": "./web/src/index.ts",
+      "node": "./dist/package/index.js",
+      "default": "./web/src/index.ts"
+    },
+    "./worker": {
+      "types": "./web/src/worker-entry.ts",
+      "bun": "./web/src/worker-entry.ts",
+      "browser": "./web/src/worker-entry.ts",
+      "node": "./dist/package/worker-entry.js",
+      "default": "./web/src/worker-entry.ts"
+    },
+    "./asset": {
+      "types": "./web/src/assets.ts",
+      "bun": "./web/src/assets.ts",
+      "browser": "./web/src/assets.ts",
+      "node": "./dist/package/assets.js",
+      "default": "./web/src/assets.ts"
+    }
+  },
+  "files": [
+    "dist/package",
+    "build.ts",
+    "prepare.ts",
+    "README.md",
+    "web/src/index.ts",
+    "web/src/assets.ts",
+    "web/src/bun-adapter.ts",
+    "web/src/guest-asset.generated.ts",
+    "web/src/worker-entry.ts",
+    "web/src/worker.ts",
+    "web/src/engine-host.js",
+    "web/src/engine-host.d.ts",
+    "web/src/crypto-host.js",
+    "web/src/crypto-inputs.js",
+    "web/src/default-signal.ts",
+    "web/src/promise-reactions.ts",
+    "web/src/buffer-transfer.ts",
+    "web/src/native-stream-state.ts",
+    "web/src/content-modules.ts",
+    "web/src/subprocess.ts",
+    "web/src/worker-pipes.ts",
+    "web/src/net"
+  ],
+  "scripts": {
+    "build": "bun build.ts",
+    "prepare": "bun prepare.ts",
+    "check": "tsc -p tsconfig.package.json",
+    "test": "bun test ./tests/package/*.test.ts",
+    "generate-guest": "bun scripts/guest-artifact.ts",
+    "publish-guest": "bun scripts/publish-guest.ts"
+  },
+  "peerDependencies": {
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e76f7219ede03896cd5e2ebc107192472241228a"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2",
+    "vite": "8.3.4",
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e76f7219ede03896cd5e2ebc107192472241228a"
+  },
+  "trustedDependencies": [
+    "waffle"
+  ]
+}
