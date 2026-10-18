@@ -124,7 +124,7 @@ test("generic host failure confirms after its filesystem fence before physical t
     expect(state.quiescences()).toBe(1);
     expect(confirmedAtTermination).toBe(-1);
     state.release();
-    expect((await waiting).status).toBe(126);
+    expect((await waiting)).toMatchObject({ kind: "start-failed", error: "EACCES", status: null });
     await Promise.resolve();
     expect(Atomics.load(workerProcessState(transport).confirmed, 0)).toBe(1);
     expect(confirmedAtTermination).toBe(1);

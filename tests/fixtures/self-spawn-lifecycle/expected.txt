@@ -10,4 +10,6 @@ children stopped true true
 inherit 0 42
 late kill 0 null
 own exit 23 null
+own exit 126 null
+own exit 127 null
 own exit 143 null

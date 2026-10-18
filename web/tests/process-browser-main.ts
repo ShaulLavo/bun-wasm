@@ -1,3 +1,5 @@
+import { waitStatus } from "waffle/proc/wait-status";
+import { outcomeWord, readOutcome } from "waffle/proc/outcome";
 import { createRuntime, type Runtime, type RuntimeOptions } from "waffle";
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
 import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess-broker";
@@ -84,7 +86,8 @@ async function until(condition: () => boolean, label: string) {
 async function ready(child: Child) { await until(() => { drain(child); return child.stdout.includes("ready\n"); }, `pid ${child.transport.pid} first output (${child.stderr})`); }
 async function exit(child: Child, expected: number) {
   await until(() => { drain(child); return child.host.wait(child.handle) !== -2; }, `pid ${child.transport.pid} exit`);
-  drain(child); equal(child.host.wait(child.handle), expected, `pid ${child.transport.pid} status (${child.stderr})`);
+  drain(child); const result = readOutcome(outcomeWord(child.transport.outcome));
+  equal(result?.kind === "start-failed" ? waitStatus(result) : child.host.wait(child.handle), expected, `pid ${child.transport.pid} status (${child.stderr})`);
 }
 async function test(name: string, run: () => Promise<void>) { await run(); checks.push(name); }
 
@@ -241,8 +244,8 @@ try {
       const missing = s.spawn("missing"); const broken = s.spawn("broken"); const unrunnable = s.spawn("unrunnable");
       await Promise.all([exit(missing, 127), exit(broken, 126), exit(unrunnable, 126)]);
       const missingResult = await s.broker.wait(missing.transport.pid), brokenResult = await s.broker.wait(broken.transport.pid);
-      equal(missingResult.kind, "exited", "missing program is not signaled"); equal(missingResult.code, 127, "missing registry executable"); equal(brokenResult.code, 126, "failed compile/load");
-      equal((await s.broker.wait(unrunnable.transport.pid)).code, 126, "unknown imports refuse registered executable at instantiation");
+      equal(missingResult.kind, "start-failed", "missing program has no ordinary exit"); equal(missingResult.code, 2, "missing registry executable"); equal(brokenResult.kind, "start-failed", "load failure is not an exit"); equal(brokenResult.code, 13, "failed compile/load");
+      equal((await s.broker.wait(unrunnable.transport.pid)).code, 13, "unknown imports refuse registered executable at instantiation");
     } finally { await s.dispose(); }
   });
   await test("foreground-descendants-reaped-background-survives-next-command", async () => {

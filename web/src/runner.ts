@@ -11,6 +11,7 @@ import { measureStartup } from "./startup";
 import { SubprocessBroker } from "./subprocess-broker";
 import { createProcessBudget } from "./subprocess";
 import { createSignalState } from "waffle/proc/signals";
+import { waitStatus } from "waffle/proc/wait-status";
 import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
 import type { Engine, RunRequest, WorkerMessage } from "./worker";
 
@@ -288,8 +289,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (rootOutcome) {
       const winner = claimOutcome(rootOutcome, signal === undefined
         ? { kind: "exited", code: result.code } : { kind: "signaled", code: signal });
-      result = winner.kind === "exited" && winner.code === result.code && result.error
-        ? { code: winner.status, error: result.error } : { code: winner.status };
+      result = (winner.kind === "start-failed" || winner.kind === "exited" && winner.code === result.code) && result.error
+        ? { code: waitStatus(winner), error: result.error } : { code: waitStatus(winner) };
     }
     if (!ownedDisposal) subprocess.revokeRuntimeProcess(rootPid);
     selectedResult = result;
@@ -385,6 +386,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       transport.data = { ...(transport.data as object | undefined), filesystem };
       await subprocess.adoptRuntimeRoot(transport);
       rootOutcome = state.signals.outcome;
+      request.outcome = rootOutcome;
       rootPid = request.pid = state.pid;
       rootJob = request.jobId = state.job;
     } else await subprocess.prepareRoot();
@@ -403,7 +405,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       const result = readOutcome(rootOutcome!);
       // A guest can catch a default-signal unwind and keep running. Its already selected fatal
       // outcome is authority to revoke, not an acknowledgement that filesystem locks are free.
-      if (result?.kind === "signaled") finish({ code: result.status }, false, result.code);
+      if (result?.kind === "signaled") finish({ code: waitStatus(result) }, false, result.code);
       else watchOutcome();
     }, 4);
   }
@@ -420,7 +422,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     // HANDLE/IGNORE stays alive; DEFAULT selects its typed outcome without guest cooperation.
     void subprocess.killJob(rootJob, signal).catch(error => console.error("bun-wasm: job signal failed", error));
     const result = readOutcome(rootOutcome!);
-    if (result) finish({ code: result.status }, false, result.kind === "signaled" ? result.code : undefined);
+    if (result) finish({ code: waitStatus(result) }, false, result.kind === "signaled" ? result.code : undefined);
   };
   return { done, kill };
 }

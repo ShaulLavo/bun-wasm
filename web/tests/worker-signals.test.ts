@@ -1,7 +1,8 @@
+import { waitStatus } from "waffle/proc/wait-status";
 import { expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
+import { claimOutcome, outcomeWord, processOutcome, readOutcome } from "waffle/proc/outcome";
 import { createSignalState, publishSignal, setSignalDisposition } from "waffle/proc/signals";
 import { SharedPipe, SubprocessHost, childTransport, wasiPipe, type ChildTransport } from "../src/subprocess.ts";
 import type { RunRequest, WorkerMessage } from "../src/worker.ts";
@@ -57,7 +58,7 @@ async function run(options: {
     },
     onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
   };
-  const outcome = options.outcome ?? (options.isolated === false ? undefined : new SharedArrayBuffer(8));
+  const outcome = options.child?.outcome ?? options.outcome ?? (options.isolated === false ? undefined : new SharedArrayBuffer(8));
   const request = {
     engine: "browser", adapter: options.adapter, module: {}, args: ["fixture"], env: {},
     filesystem, trace: false, net: null, moduleCache: null, slots: "off", child: options.child,
@@ -88,7 +89,7 @@ async function run(options: {
       }
     },
     childTransport, wasiPipe,
-    claimOutcome, outcomeWord, readOutcome,
+    claimOutcome, outcomeWord, processOutcome, readOutcome, waitStatus,
     HOST_CALL_FD: 3,
     WasiExit: TestWasiExit,
     DefaultSignal,
@@ -429,7 +430,7 @@ test("a previously selected child fatal outcome suppresses later unrelated diagn
 test("worker startup errors report their selected 126 outcome with diagnostics", async () => {
   const result = await run({ instantiateError: true });
   expect(exits(result.messages)).toMatchObject([{ type: "error", code: 126, message: expect.stringContaining("instantiate diagnostic") }]);
-  expect(readOutcome(outcomeWord(result.outcome!))).toMatchObject({ kind: "exited", code: 126 });
+  expect(readOutcome(outcomeWord(result.outcome!))).toMatchObject({ kind: "start-failed", code: 13, error: "EACCES", status: null });
 });
 
 test("caught non-isolated fatal defaults notify logical death before the guest releases its turn", async () => {
