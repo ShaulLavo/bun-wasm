@@ -57,7 +57,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Node startup diagnostic drain](#node-startup-diagnostic-drain) | Host feature | Use Waffle's public cancellable, bounded asynchronous diagnostic drain for the Node process host's immediate stderr writes. |
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
-| [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle 0.0.47's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
+| [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle 0.0.48's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
 | [Vendor source synchronization](#vendor-source-synchronization) | Host feature | Original patch-tree verification updates existing clones and detached worktrees without overwriting local changes. |
@@ -2844,7 +2844,7 @@ service, pipes and interrupt rewriting still cannot load before first use.
 ## Patched sysroot and native descriptor bridge
 
 Class **Port**, with an original local build wrapper and native runtime adapter. The libc input is
-not copied into this repository: Waffle 0.0.47 at `afe9cc1f3f93ea84929903e5a55854dbfd973448`
+not copied into this repository: Waffle 0.0.48 at `7d095e53040484afaf8363af34fc5284e132798c`
 builds wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13` from the installed
 `waffle/scripts/build-wasi-libc.sh`. Its `preopen-scan.patch` skips occupied inherited descriptors
 only when `fd_fdstat_get` succeeds and stops on the first real BADF. `scripts/build-wasi-sysroot.ts`
@@ -2879,7 +2879,9 @@ stdout or stderr. Native inherited fstat preserves the libc mode, including pipe
 On WASI, preview1 has no FIFO tag and both process hosts encode pipes as UNKNOWN.
 The original adapter maps that host pipe representation (which libc preserves with no POSIX
 file-type bits) to FIFO, preserving device, socket and filesystem kinds and propagating
-metadata capability errors. No upstream implementation or new binding dependency is copied.
+metadata capability errors. Waffle #34 grants FD_FILESTAT_GET to both pipe endpoints; inherited
+descriptors keep those exact rights, so the real pipe-fstat controls succeed without bypassing
+metadata capability checks. No upstream implementation or new binding dependency is copied.
 The original `src/js/node_fs.js` Stats predicates test those type bits rather than hard-coding false.
 The browser process controls create a real filesystem file and inherited pipe, verify shared open-file
 cursors and pipe/device metadata, reject empty writes to closed descriptors, and preserve buffered

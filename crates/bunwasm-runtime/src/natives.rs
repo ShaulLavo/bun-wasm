@@ -549,10 +549,14 @@ pub(crate) fn symlink(_: &str, _: &str) -> io::Result<()> {
 
 fn writev(state: &State, args: Args<'_>) -> NativeResult {
     let fd = match args.get(0) {
-        Val::Num(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(i32::MAX) => *n as i32,
+        Val::Num(n)
+            if n.fract() == 0.0 && *n >= f64::from(i32::MIN) && *n <= f64::from(i32::MAX) =>
+        {
+            *n as i32
+        }
         Val::Num(_) => {
             return Err(
-                NativeError::range_error("fd must be an integer between 0 and 2147483647")
+                NativeError::range_error("fd must be a signed 32-bit integer")
                     .prop("code", "ERR_OUT_OF_RANGE"),
             );
         }
@@ -627,11 +631,11 @@ fn retry_interrupted(mut operation: impl FnMut() -> io::Result<usize>) -> io::Re
 fn write_chunk(fd: libc::c_int, bytes: &[u8], position: Option<libc::off_t>) -> io::Result<usize> {
     retry_interrupted(|| {
         // The argument frame owns these bytes until the synchronous call returns.
-        let written = unsafe {
-            match position {
-                Some(position) => libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position),
-                None => libc::write(fd, bytes.as_ptr().cast(), bytes.len()),
-            }
+        let written = match position {
+            Some(position) => unsafe {
+                libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position)
+            },
+            None => unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) },
         };
         if written < 0 {
             return Err(io::Error::last_os_error());
@@ -703,6 +707,43 @@ fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
     .map_err(|e| io_error(e, "write", None))
 }
 
+fn close_descriptor(state: &State, args: Args<'_>) -> NativeResult {
+    let fd = args.i32(0)?;
+    if (0..=2).contains(&fd) {
+        return ok();
+    }
+    if state.fds.borrow_mut().files.remove(&fd).is_some() {
+        return ok();
+    }
+    if unsafe { libc::close(fd) } < 0 {
+        return Err(io_error(io::Error::last_os_error(), "close", None));
+    }
+    ok()
+}
+
+fn read_descriptor(args: Args<'_>) -> NativeResult {
+    let fd = args.i32(0)?;
+    let mut buf = vec![0u8; args.num(1)? as usize];
+    let position = args.opt_num(2).filter(|p| *p >= 0.0);
+    // Positional reads must not advance the shared open-file cursor.
+    let count = match position {
+        Some(position) => unsafe {
+            libc::pread(
+                fd,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                position as libc::off_t,
+            )
+        },
+        None => unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) },
+    };
+    if count < 0 {
+        return Err(io_error(io::Error::last_os_error(), "read", None));
+    }
+    buf.truncate(count as usize);
+    Ok(Val::Bytes(buf))
+}
+
 fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("open", move |a| {
@@ -716,44 +757,8 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         Ok(fd.into())
     });
     let st = state.clone();
-    t.add("close", move |a| {
-        let fd = a.i32(0)?;
-        if (0..=2).contains(&fd) {
-            return ok();
-        }
-        match st.fds.borrow_mut().files.remove(&fd) {
-            Some(_) => ok(),
-            None => {
-                if unsafe { libc::close(fd) } < 0 {
-                    Err(io_error(io::Error::last_os_error(), "close", None))
-                } else {
-                    ok()
-                }
-            }
-        }
-    });
-    t.add("read", |a| {
-        let fd = a.i32(0)?;
-        let mut buf = vec![0u8; a.num(1)? as usize];
-        let position = a.opt_num(2).filter(|p| *p >= 0.0);
-        // Positional reads must not advance the shared open-file cursor.
-        let count = unsafe {
-            match position {
-                Some(position) => libc::pread(
-                    fd,
-                    buf.as_mut_ptr().cast(),
-                    buf.len(),
-                    position as libc::off_t,
-                ),
-                None => libc::read(fd, buf.as_mut_ptr().cast(), buf.len()),
-            }
-        };
-        if count < 0 {
-            return Err(io_error(io::Error::last_os_error(), "read", None));
-        }
-        buf.truncate(count as usize);
-        Ok(Val::Bytes(buf))
-    });
+    t.add("close", move |a| close_descriptor(&st, a));
+    t.add("read", read_descriptor);
     let st = state.clone();
     t.add("write", move |a| write_descriptor(&st, a));
     let st = state.clone();
