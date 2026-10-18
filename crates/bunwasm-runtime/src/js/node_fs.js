@@ -523,31 +523,70 @@
     return views;
   }
 
-  function vectorLength(views) {
-    return views.reduce((length, view) => length + view.byteLength, 0);
-  }
-
   function readvPosition(position) {
     return Number.isSafeInteger(position) && position >= 0 ? position : -1;
+  }
+
+  function readVectorChunk(fd, length, position, progress) {
+    try { return native.read(fd, length, position); } catch (error) {
+      if (progress > 0) return null;
+      throw error;
+    }
+  }
+
+  function isRegularReadFd(fd) {
+    try { return (native.fstat(fd).mode & constants.S_IFMT) === constants.S_IFREG; } catch {
+      // Without metadata rights, conservatively use one bounded read, not a loop.
+      return false;
+    }
+  }
+
+  function boundedVectorLength(views) {
+    let length = 0;
+    for (const view of views) {
+      length += Math.min(view.byteLength, 65536 - length);
+      if (length === 65536) break;
+    }
+    return length;
   }
 
   function scatterRead(views, chunk) {
     let offset = 0;
     for (const view of views) {
+      if (offset === chunk.length) break;
       const count = Math.min(view.byteLength, chunk.length - offset);
-      if (count === 0) continue;
       view.set(chunk.subarray(offset, offset + count));
       offset += count;
     }
     return chunk.length;
   }
 
+  function readRegularVector(fd, views, position) {
+    let count = 0;
+    for (const view of views) {
+      if (view.byteLength === 0) continue;
+      const chunk = readVectorChunk(fd, view.byteLength, position < 0 ? -1 : position + count, count);
+      if (chunk === null) return count;
+      view.set(chunk);
+      count += chunk.length;
+      if (chunk.length < view.byteLength) return count;
+    }
+    return count;
+  }
+
+  function readVectorViews(fd, views, position) {
+    if (views.length === 0) return 0;
+    const length = boundedVectorLength(views);
+    // A nonempty all-empty vector still validates the real fd, without fstat.
+    if (length === 0) return native.read(fd, 0, position).length;
+    if (isRegularReadFd(fd)) return readRegularVector(fd, views, position);
+    // Pipes/ttys/sockets must never issue a second potentially blocking read.
+    return scatterRead(views, native.read(fd, length, position));
+  }
+
   function readvSync(fd, buffers, position) {
     validateFd(fd);
-    const views = readVectors(buffers);
-    // Bun skips the syscall for [], but [empty] must still validate the descriptor.
-    if (views.length === 0) return 0;
-    return scatterRead(views, native.read(fd, vectorLength(views), readvPosition(position)));
+    return readVectorViews(fd, readVectors(buffers), readvPosition(position));
   }
 
   function readvStdin(views, buffers, length, callback) {
@@ -563,11 +602,11 @@
     validateFd(fd);
     const views = readVectors(buffers);
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
-    const length = vectorLength(views);
-    // Share the existing nonblocking stdin waiter instead of blocking the browser worker.
-    if (fd === 0 && native.hostCaps.proc_spawn && length > 0 && readvPosition(position) < 0) return readvStdin(views, buffers, length, callback);
+    const length = boundedVectorLength(views);
+    // One bounded stdin read: after progress, never wait for another vector to fill.
+    if (fd === 0 && native.hostCaps.proc_spawn && length > 0 && readvPosition(position) < 0 && !isRegularReadFd(fd)) return readvStdin(views, buffers, length, callback);
     let count = 0, error = null;
-    try { if (views.length) count = scatterRead(views, native.read(fd, length, readvPosition(position))); } catch (err) { error = err; }
+    try { count = readVectorViews(fd, views, readvPosition(position)); } catch (err) { error = err; }
     later(() => callback(error, count, buffers));
   }
 

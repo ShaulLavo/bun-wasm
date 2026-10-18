@@ -57,7 +57,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Node startup diagnostic drain](#node-startup-diagnostic-drain) | Host feature | Use Waffle's public cancellable, bounded asynchronous diagnostic drain for the Node process host's immediate stderr writes. |
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
-| [Filesystem vectored reads](#filesystem-vectored-reads) | Host feature | Original readv/readvSync and FileHandle.readv adapters perform one native read, scatter into borrowed views, preserve shared cursors and follow Bun's empty-vector contract. |
+| [Filesystem vectored reads](#filesystem-vectored-reads) | Host feature | Original readv/readvSync and FileHandle.readv adapters avoid summed-capacity allocations, use one bounded read for non-regular descriptors, preserve shared cursors and follow Bun's empty-vector contract. |
 | [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle 0.0.48's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
@@ -2847,17 +2847,30 @@ service, pipes and interrupt rewriting still cannot load before first use.
 Class **Host feature**. `crates/bunwasm-runtime/src/js/node_fs.js` adds original
 `readvSync`, callback `readv`, and `FileHandle.readv` adapters over the existing
 Rust `read` native. No Bun or Node implementation is copied or adapted. Public
-behaviour is measured against Bun 1.4.2 (`744846f84`) and Node 26.7.0. One native
-read requests the vector's combined byte capacity, then scatters the returned
-short result in vector order without touching bytes outside each view or after
-EOF. As in the measured native Bun and Node calls, at most 1024 views participate
-in one operation, while every supplied view is validated. Positioned reads retain
-the shared open-file cursor. Only nonnegative safe
-integer positions select a positioned read, matching Bun's observed coercion.
-Callbacks deliver the original array on a later turn; sequential process-stdin
-callbacks reuse the nonblocking `runtime_proc` waiter, including EAGAIN, saved
-async context, EOF and errno handling. Explicitly positioned stdin keeps the
-native positional-read path rather than silently discarding its position.
+behaviour is measured against Bun 1.4.2 (`744846f84`) and Node 26.7.0. Positively
+identified regular files read one view at a time, stopping at the first short
+read or EOF; subsequent explicit positions advance only by committed bytes.
+Errors after progress return the committed prefix. No allocation or native read
+request uses the vector's combined capacity: 1024 aliases of one 4 MiB view over
+an eight-byte file stop after the first view-sized request.
+
+Non-regular descriptors (pipes, terminals and sockets), and descriptors whose
+metadata is unavailable, perform exactly one read capped at 64 KiB, then scatter
+its possibly short result in vector order. This avoids blocking on a second read
+after filling an earlier view. It also bounds the sequential process-stdin
+waiter's staging allocation to 64 KiB; stdin keeps EAGAIN, saved async context,
+EOF and errno handling without waiting for more input after progress. The JSC
+C API explicitly does not guarantee `JSObjectGetTypedArrayBytesPtr` pointers
+across subsequent API calls (`JSTypedArray.h`, WebKit
+`3d3257150c40a1aabdc5f8b48d5b33d0413674cb`), so this adapter does not collect
+unpinned engine pointers for a zero-copy native iovec call.
+
+At most 1024 views participate, while every supplied view is validated. Writes
+stay within each borrowed view and leave bytes after EOF unchanged. Positioned
+reads retain the shared open-file cursor. Only nonnegative safe integer positions
+select a positioned read, matching Bun's observed coercion. Callbacks deliver the
+original array on a later turn. Explicitly positioned stdin keeps the native
+positional-read path rather than silently discarding its position.
 
 Bun returns zero for an empty vector `[]`, including a closed positive fd,
 without issuing a native read. Node returns EINVAL instead; this known difference
@@ -2865,8 +2878,12 @@ is excluded from the shared Bun/Node parity cases. Both validate fd argument
 shape, and a nonempty vector containing only empty views still validates the
 actual descriptor. A closed FileHandle rejects even `readv([])`. Counted native
 fixtures exercise short reads, overlapping and offset DataViews, EOF, argument
-ordering and callback identity; separate native-reference fixtures keep the
-shared behaviour and Bun-only empty-vector contract apart. These fixtures own
+ordering, 1024 large aliases, bounded native requests and callback identity.
+A production-factory subprocess fixture uses real kernel pipes with the writer
+held open: both a short first view and a completely filled first view must return
+without another read. The parent enforces a deadline and owns writer closure,
+child termination and reaping. Separate native-reference fixtures keep the
+shared behaviour and Bun-only empty-vector contract apart; those fixtures own
 and remove their temporary input files.
 
 ## Patched sysroot and native descriptor bridge

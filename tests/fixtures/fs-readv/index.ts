@@ -55,6 +55,21 @@ try {
   assert.equal(fs.readvSync(fd, prefix.concat([Buffer.alloc(0), last]), 0), 0);
   assert.equal(last.toString(), ".");
 
+  const aliased = Buffer.alloc(4 * 1024 * 1024, ".");
+  const aliases = Array.from({ length: 1024 }, () => aliased);
+  assert.equal(readVectorSync(fd, aliases, 0), 8);
+  assert.equal(aliased.subarray(0, 10).toString(), "abcdefgh..");
+  await new Promise<void>((resolve, reject) => {
+    readVector(fd, aliases, 0, (error, count, buffers) => {
+      if (error) return reject(error);
+      assert.equal(count, 8);
+      assert.equal(buffers, aliases);
+      resolve();
+    });
+  });
+  assert.equal(fs.readSync(fd, cursor), 1);
+  assert.equal(cursor.toString(), "c");
+
   fs.closeSync(fd);
   open = false;
   assert.throws(() => fs.readvSync(fd, [Buffer.alloc(0)]), { code: "EBADF" });
