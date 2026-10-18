@@ -228,11 +228,11 @@ fn spawn_retains_pipe_end_before_return_and_closes_it_before_wait() {
     ));
     assert!(pid > 0);
     assert_eq!(processes.close(write), 0);
-    assert_eq!(completed(&processes, pid), FinalOutcome::Exit(0));
-    assert_eq!(processes.read(read, &mut [0]), 0);
     let job = processes.job_of(pid);
     assert!(job > 0);
-    assert_eq!(processes.wait(pid), Ok(FinalOutcome::Exit(0)));
+    assert_eq!(completed(&processes, pid), FinalOutcome::Exit(0));
+    assert_eq!(processes.read(read, &mut [0]), 0);
+    assert_eq!(processes.wait(pid), Err(CHILD));
     assert_eq!(processes.wait_job(job, 1), Ok(0));
     assert_eq!(processes.wait(pid), Err(CHILD));
     assert_eq!(processes.wait_job(job, 1), Err(CHILD));
@@ -244,8 +244,9 @@ fn unsupported_executable_is_an_observable_start_failure() {
     let mut processes = processes();
     let pid = processes.spawn(&request("not-installed", serde_json::json!([])));
     assert!(pid > 0);
+    let job = processes.job_of(pid);
     assert_eq!(completed(&processes, pid), FinalOutcome::Exit(127));
-    assert_eq!(processes.wait_job(processes.job_of(pid), 1), Ok(127));
+    assert_eq!(processes.wait_job(job, 1), Ok(127));
 }
 
 #[test]
@@ -254,8 +255,9 @@ fn registered_aliases_keep_ordinary_exit_outcomes() {
     for command in BUN_EXECUTABLE_ALIASES {
         let pid = processes.spawn(&request(command, serde_json::json!([])));
         assert!(pid > 0, "{command}: {pid}");
+        let job = processes.job_of(pid);
         assert_eq!(completed(&processes, pid), FinalOutcome::Exit(0));
-        assert_eq!(processes.wait_job(processes.job_of(pid), 1), Ok(0));
+        assert_eq!(processes.wait_job(job, 1), Ok(0));
     }
 }
 
@@ -272,11 +274,13 @@ fn job_completion_waits_for_descendants_and_preserves_leader_signal_kind() {
             result: Some(FinalOutcome::Signal(15)),
         },
     );
-    assert_eq!(processes.wait(1), Ok(FinalOutcome::Signal(15)));
-    assert_eq!(processes.wait(2), Err(CHILD));
-    assert_eq!(processes.wait_job(1, 1), Err(AGAIN));
     let exited = processes.poll(&subscription(2, 1, 11), 0).unwrap();
     assert_eq!(&exited[..8], &11u64.to_le_bytes());
+    assert_eq!(processes.poll(&subscription(2, 1, 11), 0).unwrap(), exited);
+    assert_eq!(processes.wait(1), Ok(FinalOutcome::Signal(15)));
+    assert_eq!(processes.wait(1), Err(CHILD));
+    assert_eq!(processes.wait(2), Err(CHILD));
+    assert_eq!(processes.wait_job(1, 1), Err(AGAIN));
     assert!(
         processes
             .poll(&subscription(4, 1, 12), 0)
@@ -391,15 +395,16 @@ fn ordinary_children_join_the_current_job_without_reaping_it() {
         assert!(pid > 0);
         assert_eq!(processes.job_of(pid), job);
         assert_eq!(completed(&processes, pid), FinalOutcome::Exit(0));
-        assert_eq!(processes.wait(pid), Ok(FinalOutcome::Exit(0)));
+        assert_eq!(processes.wait(pid), Err(CHILD));
         assert_eq!(processes.wait_job(job, 1), Err(AGAIN));
         assert!(processes.cancel.check().is_ok());
     }
     let pid = processes.spawn(&request("bun", serde_json::json!([])));
     assert!(pid > 0);
     assert_ne!(processes.job_of(pid), job);
+    let detached_job = processes.job_of(pid);
     completed(&processes, pid);
-    assert_eq!(processes.wait_job(processes.job_of(pid), 0), Ok(0));
+    assert_eq!(processes.wait_job(detached_job, 0), Ok(0));
     assert_eq!(processes.job_of(0), job);
 }
 

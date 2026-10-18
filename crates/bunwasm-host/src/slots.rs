@@ -160,8 +160,8 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
                     trace(
                         host,
                         format_args!(
-                            "fetch({}, {} body bytes) -> {handle}",
-                            text(meta),
+                            "fetch({} metadata bytes, {} body bytes) -> {handle}",
+                            meta.len(),
                             body.len()
                         ),
                     );
@@ -177,7 +177,7 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
                     if let Output::Bytes(bytes) = &output {
                         trace(
                             host,
-                            format_args!("fetch_head({handle}) -> {}", text(bytes)),
+                            format_args!("fetch_head({handle}) -> {} metadata bytes", bytes.len()),
                         );
                     }
                     let n = put(memory, buf, cap, output)?;

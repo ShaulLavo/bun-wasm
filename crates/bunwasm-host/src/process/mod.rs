@@ -535,18 +535,25 @@ impl Processes {
             .map_or(SRCH, |child| child.job)
     }
 
-    /// Non-consuming child observation. The job wait owns the eventual reap.
-    pub fn wait(&self, pid: i32) -> Result<FinalOutcome, i32> {
-        let mut state = self.runtime.state.lock().unwrap();
-        let child = state
-            .processes
-            .get_mut(&pid)
+    /// Readiness observation never collects a child; only a successful wait does.
+    fn child_outcome(&self, pid: i32) -> Result<FinalOutcome, i32> {
+        let state = self.runtime.state.lock().unwrap();
+        state.processes.get(&pid)
             .filter(|child| child.parent == self.pid)
-            .ok_or(CHILD)?;
-        let outcome = child.result.ok_or(AGAIN)?;
-        if let Some(thread) = child.thread.take() {
-            let _ = thread.join();
-        }
+            .ok_or(CHILD)?.result.ok_or(AGAIN)
+    }
+
+    /// Collect a completed direct child exactly once, retaining its job's leader outcome.
+    pub fn wait(&self, pid: i32) -> Result<FinalOutcome, i32> {
+        let (outcome, thread) = {
+            let mut state = self.runtime.state.lock().unwrap();
+            let child = state.processes.get(&pid)
+                .filter(|child| child.parent == self.pid).ok_or(CHILD)?;
+            let outcome = child.result.ok_or(AGAIN)?;
+            let child = state.processes.remove(&pid).unwrap();
+            (outcome, child.thread)
+        };
+        if let Some(thread) = thread { let _ = thread.join(); }
         Ok(outcome)
     }
 
@@ -697,7 +704,7 @@ impl Processes {
                 let (ready, hangup) = match kind {
                     0 | 1 if is_file(id) => (true, false),
                     0 | 1 => descriptors::get(&self.fds, id)?.readiness(kind == 1, &self.notify),
-                    2 => match self.wait(id) {
+                    2 => match self.child_outcome(id) {
                         Ok(_) => (true, false),
                         Err(AGAIN) => (false, false),
                         Err(error) => return Err(error),
