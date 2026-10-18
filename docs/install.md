@@ -44,9 +44,10 @@ including when a dist-tag changes. `--frozen-lockfile` rejects changes.
 Tarballs and packuments are cached in `$BUN_INSTALL_CACHE_DIR`, or
 `$HOME/.bun/install/cache/bun-wasm` (relative to cwd when HOME is absent).
 Packuments expire after five minutes; integrity-checked tarballs do not expire.
-The browser also persists installer downloads in Cache Storage under
-`bun-wasm-install-v1`, across worker runs. It does not cache ordinary guest
-fetches. These caches can be removed to reclaim space.
+The browser also persists unauthenticated tarballs in Cache Storage under
+`bun-wasm-install-v1`, across worker runs. Metadata uses the guest cache, where
+configured credentials can be checked before persistence. These caches can be
+removed to reclaim space.
 `BUN_CONFIG_HTTP_IDLE_TIMEOUT` sets the download idle timeout in seconds, with
 a default of 300. Failed downloads are not retried.
 
@@ -88,8 +89,11 @@ its bin link is absent, then use an isolated cache installation.
 They leave the project's manifest and lockfile unchanged. Concurrent installs
 publish complete cache directories through an atomic rename.
 
-Lockfile migration is split into a follow-up PR based on this command/workspace
-change. Existing foreign lockfiles are not imported by this PR.
+Without `bun.lock`, the installer imports npm, pnpm, Yarn classic or Berry locks
+before resolving dependencies. `bun pm migrate` writes a converted lock without
+extracting packages. Both paths use the same canonical writer and retain workspace
+pins. See [migration behavior and native validation](lockfile-migration.md), including
+unsupported source protocols and the installed native Bun's Berry limitation.
 
 ## Real Bun installer spike
 
@@ -333,3 +337,37 @@ tarballs. It requires warnings for both skipped links, a written lockfile,
 execution through `bun run`, a package script and `bunx --no-install`, and a
 fatal result for a broken `.bin` directory. Chromium and WebKit run the same
 scenario on all three engines. No filesystem-link implementation is changed.
+
+
+## Registry credentials and archive verification
+
+Registry and tarball URLs are normalized before requests, cache lookup, diagnostics
+and lock publication. URL userinfo is discarded and does not create an
+Authorization header. Query-bearing transports and embedded npm authentication
+options reject before a request.
+
+Configure authentication separately in `bunfig.toml`:
+
+```toml
+[install.registry]
+url = "https://registry.example.invalid/"
+token = "YOUR_TOKEN"
+```
+
+A `username` and `password` pair configures Basic authorization instead. Headers
+apply to the configured registry's full origin, including same-origin archives
+outside its metadata path. Scheme, host or port changes drop authentication.
+Package redirects containing userinfo, queries or embedded npm authentication
+reject before the next request. Browser redirects whose destination is opaque
+reject because the destination cannot be checked.
+Authentication values never become part of `bun.lock`, diagnostics or host traces.
+Metadata responses containing credential-bearing
+URLs or configured authentication values are not cached. Unsafe metadata cache
+entries are discarded before reuse. The lock writer checks decoded metadata
+strings and rejects echoed credentials before publication.
+
+Archive verification supports SHA-512, SHA-384, SHA-256 and legacy SHA-1. Migration
+and verification use the same accepted algorithms. The strongest supported digest
+wins. Serialized SRI padding matches native Bun; verification compares decoded
+bytes so the native lock survives a frozen installation. Supplied malformed or
+unsupported integrity rejects instead of becoming an absent checksum.

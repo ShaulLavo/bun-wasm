@@ -83,7 +83,7 @@ pub fn matches(version: &str, range: &str) -> bool {
     }
 }
 
-fn order(a: &str, b: &str) -> Ordering {
+pub(super) fn order(a: &str, b: &str) -> Ordering {
     let parse = |s: &[u8]| Version::parse_exact(SlicedString::init(s, s));
     match (parse(a.as_bytes()), parse(b.as_bytes())) {
         (Some(a_version), Some(b_version)) => a_version.order_without_build(b_version, a.as_bytes(), b.as_bytes()),
@@ -141,7 +141,7 @@ enum LockLookup { Use, Skip }
 
 pub struct Resolver {
     pub packages: BTreeMap<String, Package>,
-    pub registry: String,
+    pub registry: io::Registry,
     pub locked: Value,
     pub refresh: bool,
     packuments: BTreeMap<String, Value>,
@@ -152,7 +152,7 @@ pub struct Resolver {
 }
 
 impl Resolver {
-    pub fn new(registry: String, locked: Value, refresh: bool) -> Self {
+    pub fn new(registry: io::Registry, locked: Value, refresh: bool) -> Self {
         Self {
             packages: BTreeMap::new(),
             registry,
@@ -286,7 +286,7 @@ impl Resolver {
                 return None;
             }
             if peer {
-                eprintln!("warn: incorrect peer dependency \"{name}@{range}\"");
+                eprintln!("warn: incorrect peer dependency \"{}\"", io::redact(&format!("{name}@{range}")));
                 return None;
             }
             break;
@@ -322,7 +322,7 @@ impl Resolver {
         let package = match result {
             Ok(package) => package,
             Err(error) if optional => {
-                eprintln!("warn: optional dependency {name}: {error}");
+                eprintln!("warn: optional dependency {name}: {}", self.registry.redact(&error));
                 return Ok(());
             }
             Err(error) => return Err(error),
@@ -356,7 +356,7 @@ impl Resolver {
         }
         if !self.packuments.contains_key(name) {
             let encoded = name.replace('/', "%2f");
-            let bytes = io::fetch(&format!("{}/{encoded}", self.registry), false, self.refresh)?;
+            let bytes = io::fetch(&format!("{}/{encoded}", self.registry.url), false, self.refresh, &self.registry)?;
             let meta =
                 serde_json::from_slice(&bytes).map_err(|e| format!("Invalid registry response for {name}: {e}"))?;
             self.packuments.insert(name.into(), meta);
@@ -380,10 +380,7 @@ impl Resolver {
         if !compatible(&meta) {
             return Err(format!("{name}@{version} is not compatible with wasm32-wasip1"));
         }
-        let tarball = meta["dist"]["tarball"]
-            .as_str()
-            .ok_or("Missing package tarball URL")?
-            .to_owned();
+        let tarball = io::source_url(meta["dist"]["tarball"].as_str().ok_or("Missing package tarball URL")?)?;
         let integrity = package_integrity(&meta)?;
         Ok(Package {
             name: name.into(),
@@ -458,7 +455,7 @@ impl Resolver {
         let tarball = if source.is_empty() {
             format!(
                 "{}/{resolved_name}/-/{}-{version}.tgz",
-                self.registry,
+                self.registry.url,
                 resolved_name.rsplit('/').next()?
             )
         } else {
@@ -534,7 +531,7 @@ fn declared_root(meta: &Value, logical_name: &str, resolved_name: &str, range: &
 
 fn package_integrity(meta: &Value) -> Result<String> {
     if let Some(sri) = meta["dist"]["integrity"].as_str() {
-        return Ok(sri.into());
+        return io::normalized_integrity(sri).ok_or_else(|| "Missing or unsupported package integrity".into());
     }
     let Some(shasum) = meta["dist"]["shasum"].as_str() else {
         return Ok(String::new());

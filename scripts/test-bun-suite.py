@@ -54,7 +54,7 @@ class ProvenanceTests(unittest.TestCase):
         installed.symlink_to(self.package, target_is_directory=True)
         (self.root / "web/package.json").write_text(json.dumps({"type": "module", "dependencies": {"waffle": self.pin}}))
         (self.root / "web/bun.lock").write_text("consumer lock and exact revision\n")
-        for name in ["web/scripts/node-host.mjs", "web/src/engine-host.js", "web/scripts/node-net.mjs", "web/scripts/node-stdio.ts", "web/scripts/node-spawn.ts", "web/src/subprocess.ts", "web/src/fs.ts"]:
+        for name in ["web/scripts/node-host.mjs", "web/src/engine-host.js", "web/scripts/node-net.mjs", "web/scripts/node-install-net.mjs", "web/src/net/package-fetch.ts", "web/scripts/node-stdio.ts", "web/scripts/node-spawn.ts", "web/src/subprocess.ts", "web/src/fs.ts"]:
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("host fixture\n")
@@ -85,7 +85,7 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(meta["launcher_sha256"], suite.digest(self.root / "web/scripts/node-host.mjs"))
         self.assertEqual(meta["dependencies"], suite.dependency_digest(self.root / "node_modules"))
         self.assertEqual(meta["test_dependencies"], suite.dependency_digest(self.root / "test/node_modules"))
-        for name in ["web/src/engine-host.js", "web/scripts/node-net.mjs", "web/scripts/node-stdio.ts", "web/scripts/node-spawn.ts", "web/src/subprocess.ts", "web/src/fs.ts"]:
+        for name in ["web/src/engine-host.js", "web/scripts/node-net.mjs", "web/scripts/node-install-net.mjs", "web/src/net/package-fetch.ts", "web/scripts/node-stdio.ts", "web/scripts/node-spawn.ts", "web/src/subprocess.ts", "web/src/fs.ts"]:
             self.assertEqual(meta["host_sources"][name], suite.digest(self.root / name))
         self.assertFalse(any(name.startswith("runtime/") for name in meta["host_sources"]))
 

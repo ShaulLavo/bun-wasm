@@ -124,6 +124,11 @@ at once; the request proceeds in the background. Errors that are known
 immediately (malformed URL, unsupported scheme) may be returned as `-1` with
 `error(0, …)` describing them.
 
+Installer requests set `credentialPolicy` to `"package"`. Each redirect destination
+must use HTTP or HTTPS without userinfo, a query or embedded npm auth options.
+Redirects drop sensitive headers whenever the scheme, host or effective port changes.
+Host traces report request, response and error sizes without printing payloads or headers.
+
 ### `fetch_head(handle, buf_ptr, buf_cap) -> len`
 
 `AGAIN` until the response head is available. Then writes JSON:
