@@ -6,7 +6,7 @@ import * as http from "node:http";
 import * as https from "node:https";
 import * as net from "node:net";
 import * as zlib from "node:zlib";
-import { resolve } from "node:path";
+import { posix, resolve } from "node:path";
 import { WASI } from "node:wasi";
 import { Worker, isMainThread, parentPort, workerData, type ResourceLimits } from "node:worker_threads";
 import { workerProcessState, wakeWorkerProcess, type WorkerProcessTransport } from "waffle/proc/worker-client";
@@ -114,7 +114,8 @@ async function run(data: GuestData) {
   const request = data.request;
   const args = request ? request.argv.slice(1) : config.args;
   const env: Record<string, string> = request ? { ...request.env, PWD: request.cwd, BUN_WASM_STACK_KIB: request.env.BUN_WASM_STACK_KIB ?? GUEST_STACK_KIB } : { ...config.env };
-  env.BUNWASM_EXEC_PATH = request?.executable ?? "/bin/bun";
+  // This worker is created only after the registry walked the original executable path.
+  env.BUNWASM_EXEC_PATH = request ? posix.resolve(request.cwd, request.executable) : "/bin/bun";
   const state = workerProcessState(data.transport);
   const signals = createNodeSignalController(state.signals);
   let cliFetch: ReturnType<typeof installCliFetch> | undefined;

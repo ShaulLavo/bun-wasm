@@ -602,7 +602,7 @@ impl Processes {
                         drop(fds);
                         cancellation.select(FinalOutcome::StartFailed(-errno))
                     }
-                    Ok(module) => {
+                    Ok((module, executable)) => {
                     let stdio = Stdio {
                         fds,
                         pid,
@@ -615,7 +615,7 @@ impl Processes {
                             request.argv,
                             {
                                 let mut env = request.env;
-                                env.insert("BUNWASM_EXEC_PATH".into(), request.executable);
+                                env.insert("BUNWASM_EXEC_PATH".into(), executable);
                                 env.into_iter().collect()
                             },
                             stdio,

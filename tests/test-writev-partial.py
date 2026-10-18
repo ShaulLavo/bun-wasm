@@ -19,7 +19,7 @@ def limit_file():
     signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
     resource.setrlimit(resource.RLIMIT_FSIZE, (1024, 1024))
 
-with tempfile.TemporaryDirectory(prefix='bun-wasm-next-review-partial-', dir='/work/tmp') as directory:
+with tempfile.TemporaryDirectory(prefix='bun-wasm-next-review-partial-', dir=os.environ.get('BUN_WASM_SCRATCH_ROOT') or tempfile.gettempdir()) as directory:
     work = Path(directory)
     shutil.copyfile(fixture / 'index.mjs', work / 'index.mjs')
     if args.engine == 'node':

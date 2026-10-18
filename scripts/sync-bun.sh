@@ -92,14 +92,12 @@ if [ ! -f "$bun_dir/vendor/rust-argon2/Cargo.toml" ]; then
   patch -d "$bun_dir/vendor/rust-argon2" -p1 < "$bun_dir/patches/rust-argon2/legacy-low-memory.patch"
 fi
 
-# build_options.rs + byte-class tables. Bun's configure stops at a missing nasm
-# (BoringSSL), after these are written; that is all the toolchain crates need.
-# It also prunes vendor/, so the fetches above run again afterwards.
+# Rust's build options and byte-class tables need only Bun's compiler-free codegen
+# configure, not the full native toolchain, SDK downloads, or host linker configuration.
 if [ ! -f "$bun_dir/build/debug/codegen/build_options.rs" ]; then
-  (cd "$bun_dir" && bun install --silent && BUN_DEBUG_QUIET_LOGS=1 bun scripts/build.ts --profile=debug --configure-only || true)
-  test -f "$bun_dir/build/debug/codegen/build_options.rs"
-  # Configure also writes a host linker config that picks wasi-sdk's clang++ off PATH.
-  rm -f "$bun_dir/.cargo/config.toml"
-  exec "$0" "${sync_args[@]}"
+  (cd "$bun_dir" && bun install --silent && BUN_DEBUG_QUIET_LOGS=1 bun scripts/build.ts --mode=codegen --profile=debug --buildDir=build/debug --configure-only)
+  for generated in build_options.rs json_byte_class.rs xml_byte_class.rs; do
+    test -f "$bun_dir/build/debug/codegen/$generated"
+  done
 fi
 echo "vendor/bun ready at $(git -C "$bun_dir" rev-parse --short HEAD)"

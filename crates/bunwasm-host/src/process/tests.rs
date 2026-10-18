@@ -847,10 +847,10 @@ fn executable_symlinks_resolve_in_guest_namespace_without_erasing_components() {
     Arc::get_mut(&mut p.runtime).unwrap().dirs.push((workspace, "/workspace".into()));
     for path in ["/workspace/absolute", "/workspace/sub/relative", "/workspace/directory/node", "/workspace/chain"] {
         let id = p.access_start(path, "/", 1);
-        assert_eq!(access_result(&mut p, id), 0, "{path}");
+        assert_eq!(access_result(&mut p, id), ACCES, "{path}");
         let pid = p.spawn(&request(path, serde_json::json!([])));
         assert!(pid > 0);
-        assert_eq!(completed(&p, pid), FinalOutcome::Exit(0), "{path}");
+        assert_eq!(completed(&p, pid), FinalOutcome::StartFailed(-ACCES), "{path}");
     }
     for (path, expected) in [
         ("/workspace/absolute/../node", NOTDIR),

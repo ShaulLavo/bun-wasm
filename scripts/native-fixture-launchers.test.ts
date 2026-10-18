@@ -27,6 +27,7 @@ function run(script: string, args: readonly string[], expected?: string) {
     env: {
       ...process.env,
       BUN_WASM_LAUNCHER: launcher,
+      BUN_WASM_SCRATCH_ROOT: scratch,
       BUN_WASM_CACHE_DIR: "",
       BUN_WASM_MEMORY_INIT_COW: "",
       BUN_WASM_HOST_STACK_KIB: "",
@@ -55,7 +56,8 @@ for (const engine of ["quickjs", "jsc"]) {
   test(`partial-write harness launches ${engine} without a compiled-module cache`, () => {
     const result = run("tests/test-writev-partial.py", ["--engine", engine, "--wasm", wasm], join(root, "tests/fixtures/fs-writev-partial/expected.txt"));
     expect(result.args.slice(0, 7)).toEqual(["--wasm", wasm, "--engine", `${engine}=${wasm}`, "--env", `PATH=/opt/bun/${engine}/bin:/bin:/usr/bin`, "--dir"]);
-    expect(result.args[7]).toMatch(/^\/work\/tmp\/bun-wasm-next-review-partial-.*::\/$/);
+    expect(result.args[7]!.startsWith(join(scratch, "bun-wasm-next-review-partial-"))).toBe(true);
+    expect(result.args[7]!.endsWith("::/")).toBe(true);
     expect(result.args.slice(8, 13)).toEqual(["--env", "PWD=/", "--", "run", "/index.mjs"]);
     expect(result.args).toContain("cache=off");
     expect(result.args).toContain("cow=0");

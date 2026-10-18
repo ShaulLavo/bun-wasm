@@ -324,21 +324,25 @@ track can start its `ProcessHost` against the ABI as soon as 4b lands.
 
 ### Step 7b follow-up: the artifact-free process gate on the generic client
 
-**Status: Approved; do next in the 7b worktree, with browsers available.** Step 7b's host side
+**Status: Implemented in step 7b; 23 artifact-free and 24 actual-guest checks pass in
+Chromium, Firefox and WebKit.** Step 7b's host side
 (`web/src/bun-executor.ts`, `bun-launcher.ts`, the slim `subprocess-broker.ts`, a runner whose every
-root is generic) removed `web/src/subprocess.ts` and `worker-pipes.ts`. `web/tests/process-browser-main.ts`,
-run by `web/tests/browser-process.ts` and the CI `browser-process` job, still drives children through
-the deleted `SubprocessHost`, so it is out of `web/tsconfig.json` and the job is red until it is ported.
-Port its scenarios, with the same preview1 fixtures from `process-fixtures.ts`, to a page-side root that
-owns a `WorkerProcessClient` and Waffle pipes (`rootFixture` in `web/tests/process-root-fixture.ts` shows
-the wiring) and keep the check count: CPU default signals 2/15/13/9, EPIPE handled and ignored,
+root is generic) removed `web/src/subprocess.ts` and `worker-pipes.ts`.
+`web/tests/process-browser-main.ts`, run by `web/tests/browser-process.ts` and CI,
+now uses a page-side `WorkerProcessClient`, Waffle pipes, real absolute executable
+marker files and enrolled child pipe identities. It remains in `web/tsconfig.json`.
+Nonconsuming host completion observations keep signal cells available for assertions;
+consuming ABI waits are covered by `browser-runtime-proc.ts`. Preserve the check count: CPU default signals 2/15/13/9, EPIPE handled and ignored,
 handled signals keeping their own exit code, ignored PIPE, last-handler removal, explicit default,
 handled INT then an unrelated trap, KILL during an INT handler, mixed-disposition job members, delayed
 first activation, one shared module load for concurrent children, start failures 127 and 126, foreground
 descendants reaped with the background job surviving, pid monotonicity across recycled capacity, and the
 `--artifact` orphan-lifetime check on the real Bun light guest. Scenarios that asserted the old
-four-slot budget or `SubprocessHost` return codes become pid monotonicity and Waffle errnos. The Chromium
-baseline comparison (`--benchmark`) needs a frozen pre-7b revision whose harness still builds.
+four-slot budget or `SubprocessHost` return codes become pid monotonicity and Waffle errnos.
+Physical directory slots can be recycled; the replacement check requires retired tagged
+capabilities to reject access with ECHILD after a subsequent admission, rather than demanding
+never-reused slot numbers. Startup failures assert their typed kind as well as 127/126 projection.
+The Chromium baseline comparison (`--benchmark`) needs a frozen pre-7b revision whose harness still builds.
 
 ### Step 4c follow-up: reclaim empty nonroot bookkeeping
 

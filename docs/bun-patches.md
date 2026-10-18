@@ -84,7 +84,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Console recursion fixture](#wasm-stack-guards) | Port | Adapt Bun's console-constructor stack exhaustion control to a standalone fixture. |
 | [`jsc/build-icu.sh`, makefile rewrite](#icu) | Port | Select a usable cross-build makefile without native assembly output. |
 | [`jsc/build-icu.sh`, filtered ICU data](#icu) | Port | Reduce the embedded locale data to fit the wasm memory budget. |
-| [`scripts/sync-bun.sh`, generated linker config](#nested-bun-dependencies) | Port | Remove Bun configure's generated host linker override. |
+| [`scripts/sync-bun.sh`, compiler-free codegen](#nested-bun-dependencies) | Port | Generate Rust tables without configuring Bun's native compiler or linker. |
 | [`vendor/bun/vendor/rust-argon2`, inherited patch](#nested-bun-dependencies) | Host feature | Preserve Bun's low-memory Argon2 hash verification behavior. |
 | [`crates/bunwasm-glue/src/bun_native.rs`](#copied-and-generated-bun-source) | Port | Replace standalone parser base64 and zlib stubs with working Rust implementations. |
 | [`crates/bunwasm-build/src/lib.rs`](#build-command) | Port | Extract Bun's build command from its JSC runtime. |
@@ -1043,7 +1043,7 @@ The script also filters the embedded data to root and English locales and remove
 
 It applies Bun's own `patches/rust-argon2/legacy-low-memory.patch` to rust-argon2's `src/common.rs` and `src/context.rs`. Class **Host feature**. This inherited Bun extension accepts nonzero memory costs below `8 * lanes` and pads allocated memory, so hashes produced by Bun's legacy low-memory behavior can still verify. Without it those hashes are rejected by the dependency. This is Bun's existing application policy, not a new wasm fix or a bug in rust-argon2. The patch also updates the dependency's tests.
 
-Bun's configure generates its normal Rust build options and byte-class tables. `sync-bun.sh` removes the configure-generated `.cargo/config.toml` so its host linker selection does not override ours. That removal is **Port** build configuration. No build script rewrites Bun Rust source beyond the exported patch series. `scripts/wasify.py` is an editing helper, not an invoked build transformation. Its exported edits belong to the patch series above.
+Bun's compiler-free `scripts/build.ts --mode=codegen --profile=debug --buildDir=build/debug --configure-only` at revision `9510e74152073d850a18758ca41114d8f214ffa6` generates its normal Rust build options and byte-class tables without selecting a native compiler, downloading SDKs, or writing a host linker override. Selecting this existing upstream mode in `sync-bun.sh` is **Port** build configuration; the upstream codegen implementation is unchanged. No build script rewrites Bun Rust source beyond the exported patch series. `scripts/wasify.py` is an editing helper, not an invoked build transformation. Its exported edits belong to the patch series above.
 
 ### Copied and generated Bun source
 
@@ -2248,7 +2248,10 @@ process directory, including the root and completed children until consuming
 wait; exhaustion returns EAGAIN. Executable aliases resolve component by component in the
 guest namespace: absolute symlink targets begin at guest `/`, relative targets begin at the
 link's parent, and missing/non-directory components before `..` remain errors. Resolution
-is bounded to 40 links and registry lookup uses the resolved guest path, never a host
+is bounded to 40 links. After that original-component walk succeeds, the resolved guest
+path must equal the lexical registration key: aliases that change that key are rejected
+with EACCES, matching pinned Waffle `a0a0f879` and the Node host. Waffle's browser filesystem
+does not implement symlinks. Admission returns the absolute canonical guest path, never a host
 canonical path. Marker directories and access threads are owned and cleaned by the native
 runtime. These traversal rules are an original Rust adapter, not copied filesystem code.
 
@@ -2711,14 +2714,23 @@ Class **Host feature**, original guest, browser, native and Node adapters; no
 upstream implementation is copied. Async spawn observes nonconsuming startup
 status before every consuming wait, including kill probes, and keeps a pending
 startup record alive until entry or startup failure is decided. Regression
-coverage exercises a fast exit followed immediately by Node `kill(0)`.
+coverage exercises a fast exit followed immediately by Node `kill(0)`. A synchronous
+probe caches entry but does not emit Node's `spawn` event; asynchronous polling emits
+it before `exit`, including for listeners attached later in the probe's turn.
 
 Hosts publish the absolute admitted executable through host-owned
 `BUNWASM_EXEC_PATH`, independently of the caller's preview1 argv[0]. The guest
 captures that as `process.execPath`; `process.argv0` retains the caller argument.
 Worker, fork and self-spawn therefore cannot switch engines or fail merely
 because a custom environment removes Bun from PATH. Native, Node and browser
-fixtures exercise missing and opposite-engine PATHs. Node children select the
+fixtures exercise missing and opposite-engine PATHs. Hosts canonicalize relative and
+`..` executable names only after original-component admission succeeds, preserving
+missing/non-directory errors before `..`. Relative-launched children change directory
+and then self-spawn and create Workers using the same admitted engine. The generic
+browser process harness also creates real absolute marker files, enrolls child pipe
+identities, uses nonconsuming signal/job observations, and asserts typed startup
+failures; the generic ABI harness separately tests consuming waits.
+Node children select the
 same tool module as root lint/format commands. A failed browser worker cannot
 be adopted as a running root after asynchronous executable-marker preparation.
 

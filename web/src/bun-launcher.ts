@@ -1,6 +1,7 @@
 // Page-side launchers: one Waffle worker per Bun or preview1 process. The service owns admission,
 // descriptors, signals and filesystem fences; these only describe the worker to start.
 import type { GuestLauncher } from "waffle";
+import { normalize } from "waffle/core/path";
 import type { Engine, RunRequest } from "./bun-executor.js";
 import { isToolCommand } from "./tool-command.js";
 
@@ -46,7 +47,7 @@ export function bunLauncher(engine: Engine, options: BunLauncherOptions): GuestL
       workerUrl: options.workerUrl,
       request: {
         engine, adapter: "bun", module, interruptible: context.interruptible,
-        args: context.request.argv, env: { ...context.request.env, PWD: context.request.cwd, BUNWASM_EXEC_PATH: context.request.executable },
+        args: context.request.argv, env: { ...context.request.env, PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
         trace: false, net: null, moduleCache,
       },
       cleanup: () => { if (moduleCache) void caches.delete(moduleCache); },

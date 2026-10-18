@@ -79,7 +79,7 @@ impl Executables {
         executable: &str,
         cwd: &str,
         dirs: &[(PathBuf, String)],
-    ) -> Result<wasmtime::Module, i32> {
+    ) -> Result<(wasmtime::Module, String), i32> {
         let absolute = if executable.starts_with('/') {
             executable.to_string()
         } else {
@@ -106,11 +106,23 @@ impl Executables {
             }
         }
         if matches!(entry(&path, dirs)?, Entry::Directory) { return Err(ACCES); }
+        // Match the pinned Waffle registry: a resolved alias cannot change its lexical key.
+        // Do this only after walking every original component, so missing/.. still fails.
+        let mut lexical = PathBuf::from("/");
+        for component in absolute.split('/') {
+            match component {
+                ".." => { lexical.pop(); }
+                "" | "." => {}
+                part => lexical.push(part),
+            }
+        }
+        if path != lexical { return Err(ACCES); }
         self.entries
             .lock()
             .unwrap()
             .get(path.to_str().unwrap_or_default())
             .cloned()
+            .map(|module| (module, path.to_string_lossy().into_owned()))
             .ok_or(ACCES)
     }
 }

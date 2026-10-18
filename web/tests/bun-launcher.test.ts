@@ -109,3 +109,11 @@ test("a rejected tools module prevents worker launch", async () => {
   expect(launches).toEqual([]);
   expect(deleted).toEqual([]);
 });
+
+for (const executable of ["./bun", "../bin/bun", "/bin/../bin/bun"]) test(`admitted ${executable} has a canonical executable independent of argv[0]`, async () => {
+  const launches: Launch[] = [];
+  const admitted = { ...context, request: { ...context.request, executable, cwd: "/bin", argv: [executable, "-e", "0"] } };
+  await bunLauncher("browser", { workerUrl: "./worker.js" })(admitted, service(launches));
+  expect(launches[0]!.request.env.BUNWASM_EXEC_PATH).toBe("/bin/bun");
+  expect(launches[0]!.request.args[0]).toBe(executable);
+});
