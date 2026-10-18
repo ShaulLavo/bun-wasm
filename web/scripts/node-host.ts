@@ -103,8 +103,9 @@ async function run(data: GuestData) {
   const signals = createNodeSignalController(workerProcessState(data.transport).signals);
   let cliFetch: ReturnType<typeof installCliFetch> | undefined;
   const processHost = createNodeProcess({
-    transport: data.transport,
+    transport: data.transport, env, preopenCount: Object.keys(config.preopens).length,
     registry: (data.transport.data as { registry?: PipePublicationRegistryHandle } | undefined)?.registry,
+    isSignalPending: () => signals.pending(),
     postMessage: message => parentPort!.postMessage(message), finish,
   });
   function finish(code: number, signal?: number): never {
@@ -115,7 +116,7 @@ async function run(data: GuestData) {
     processHost.dispose();
     return nodeProcess.exit(selected.status) as never;
   }
-  const wasi = new WASI({ version: "preview1", args: ["bun"].concat(args), env, preopens: config.preopens, returnOnExit: true });
+  const wasi = new WASI({ version: "preview1", args: ["bun"].concat(args), env: processHost.env, preopens: config.preopens, returnOnExit: true });
   const imports = wasi.getImportObject() as NodeWasiImports;
   let instance: WebAssembly.Instance;
   if (config.withNet) cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
