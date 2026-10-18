@@ -112,7 +112,7 @@ function importSuite(directory: string) {
   const evidence = {
     runtime_source_commit: commit,
     files: selections[0],
-    engines: runs.map((run, index) => ({ engine: engines[index], provenance: run.provenance, summary: run.summary })),
+    engines: runs.map((run, index) => ({ engine: engines[index], provenance: run.provenance, summary: run.summary, projection: run.projection })),
   };
   writeFileSync(root + "docs/bun-test-suite/partial-summary.json", JSON.stringify(evidence, null, 2) + "\n");
 }

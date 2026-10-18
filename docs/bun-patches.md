@@ -1115,8 +1115,8 @@ filesystem singleton, so calling them directly would use the toolchain's cwd
 instead of the current guest cwd. The adapter does not initialize or change
 that shared state.
 
-`scripts/generate-node-path.ts` extracts Bun's Windows resolver and its six
-private helpers from the same upstream file. Class **Port**. It replaces the
+`scripts/generate-node-path.ts` extracts Bun's Windows resolver, tail normalizer,
+and six private helpers from the same upstream file. Class **Port**. It replaces the
 two cwd reads with a supplied guest cwd slice and specializes the tail normalizer
 to Windows. Bun's device selection, separator handling, tail normalization and
 output writes remain unchanged. The generated upstream functions retain their

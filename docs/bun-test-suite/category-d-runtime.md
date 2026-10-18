@@ -316,9 +316,10 @@ backslashes, and Windows relative paths on every engine. Those lexical rules
 do not require a Windows host or a new process capability.
 
 The fix uses Bun's existing Rust `bun_node_path` crate for lexical operations.
-Original TypeScript adapters provide guest cwd, argument conversion, resolution,
-relative paths, formatting, and namespace conversion. UTF-16 code units remain
-intact across the native boundary. The same module also exposes `matchesGlob`
+Original TypeScript adapters provide guest cwd, argument conversion, POSIX
+resolution, relative paths, formatting, and namespace conversion. The generated
+Windows resolver uses Bun's device selection and tail normalization with the
+guest cwd. UTF-16 code units remain intact across the native boundary. The same module also exposes `matchesGlob`
 through the existing Bun glob native. No upstream tests or snapshots change.
 
 The larger remaining shell and stdin groups need process or shell execution
@@ -382,10 +383,45 @@ The same 11 browser files fail again with the unchanged current artifact,
 with the same five file timeouts. There is no reproduced new file-level
 control failure. The raw baseline and recheck logs preserve exact diagnostics.
 
-Only the 101 measured files are eligible for failure-index updates. The
-refresh preserves every unmeasured row byte-for-byte at the field level.
+The original focused replay selected 101 files. The final failure-index refresh
+uses only the 19 path files and preserves every unmeasured row from PR #77.
 Full-census summaries and tables retain the previous census. The coordinator
 deferred the full scoreboard refresh to a separate census run.
+
+## Review 1 Windows resolver
+
+The reviewer found a real separator bug in the handwritten Windows resolver.
+At cwd `/`, `win32.resolve("bar", "bar")` returned `\\\\bar\\bar\\`
+instead of native Bun's `\\bar\\bar`. Joining cwd and the tail before
+normalization created a false UNC root. Bun normalizes the tail separately,
+then attaches the device and absolute separator.
+
+The generator now extracts Bun's Windows resolver and its normalization helpers.
+Only its cwd reads are replaced with the guest cwd argument. The old Windows
+resolution code is removed. The fixture records 16 expected values from native
+Bun 1.4.2, revision `744846f844374847c902b5e7fd59b4342a51ef99`, at cwd `/`.
+They cover rooted paths, drive roots, drive-relative paths, UNC shares, device
+namespaces and relative tails. The old adapter fails the new relative-tail
+assertion; the replacement passes it on all three engines.
+
+The final replay retains 17 fully passing path files, 123 observed passes,
+one process-layer failure and zero timeouts on every engine. Fixture gates
+pass 237/237 on each. [The review evidence](category-d-review1-results.json)
+records final artifact hashes, outcomes and the native control. The original
+matched before/after data above remains unchanged. PR #77 changed runner and
+dependency inputs before this review replay, so it is a final verification,
+not a new isolated before/after measurement.
+
+This review accidentally repeated the earlier 101-file selection instead of
+only the 19 path files. Its extra controls remain visible in the review evidence.
+JSC passed 82/82 controls. Browser retained the same 11 failing files and five
+timeouts seen in the original controls. QuickJS initially failed the format
+bunfig control with 112 individual test timeouts. The unchanged artifact passes
+all 112 tests in its isolated recheck. No timeout, retry or skip was added to
+the implementation. Web and HMR were not rerun. The failure-index refresh for
+this review changes only the 19 path rows. PR #77's 49-file dependency refresh
+remains intact. The earlier 82-file control outcomes remain in their evidence
+files and do not overwrite newer failure assignments.
 
 ## Reproduction and retained evidence
 
@@ -401,7 +437,7 @@ scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 \
 ```
 
 Repeat with `--engine jsc` and `--engine browser`. To reproduce the controls,
-use the 82 non-path entries in `partial-summary.json` as explicit suite paths,
+use [the 82-file control selection](category-d-control-files.txt) as explicit suite paths,
 with the same options and one separately queued job per engine.
 `category-d-regression-results.json` names the initially failing subset and
 records its frozen-main and same-artifact rechecks. The fixture
