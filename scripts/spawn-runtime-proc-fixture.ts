@@ -15,7 +15,7 @@ const ENOENT = -44;
 
 interface FakePipe { chunks: Uint8Array[]; readers: number; writers: number }
 // Canonical runtime_proc.wait results, not shell-style 128 + signal exit statuses.
-export type ProcessExit = [kind: 0, code: number] | [kind: 1, signal: number];
+export type ProcessExit = [kind: 0, code: number] | [kind: 1, signal: number] | [kind: 2, wasiErrno: number];
 interface FakeChild {
   pid: number; job: number; request: Record<string, any>;
   selected: ProcessExit | null; status: ProcessExit | null;
@@ -117,7 +117,7 @@ export function service(options: ServiceOptions = {}) {
       if (!child.status || child.liveDescendants > 0) return EAGAIN;
       child.reaped = true;
       calls.push("reap");
-      return child.status[0] ? 128 + child.status[1] : child.status[1];
+      return child.status;
     },
     procKill(id: number, signal: number) {
       calls.push(`kill:${signal}`);

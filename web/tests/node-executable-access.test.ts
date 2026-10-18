@@ -128,10 +128,9 @@ test("Node root is enrolled before stdin publication and private executable file
   expect(existsSync(nativeRoot)).toBe(false); await f.broker.dispose();
 });
 
-// Waffle's typed-start-failure lane adds ENOTDIR (code 20) to the shared outcome.
-// Enable these after the lead moves this consumer to that merge; access already preserves it.
+// Process records retain host errno 20; runtime_proc waits encode its positive WASI errno 54.
 for (const path of ["/bin/bun/child", "/bin/bun/../bun", "/bin/bun/"]) {
-  test.skip(`Node spawn ${path} preserves ENOTDIR (pending Waffle typed-start-failure merge)`, async () => {
+  test(`Node spawn ${path} preserves ENOTDIR`, async () => {
     const f = fixture();
     try { expect(await f.spawn(path)).toMatchObject({ kind: "start-failed", code: 20, error: "ENOTDIR", status: null }); }
     finally { await f.close(); }

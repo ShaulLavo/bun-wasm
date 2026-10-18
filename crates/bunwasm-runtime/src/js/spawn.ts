@@ -26,10 +26,10 @@
   };
   const errnoNames: Record<number, string> = {
     1: "E2BIG", 2: "EACCES", 6: "EAGAIN", 8: "EBADF", 12: "ECHILD", 21: "EFAULT", 27: "EINTR", 28: "EINVAL", 29: "EIO",
-    33: "EMFILE", 44: "ENOENT", 48: "ENOMEM", 52: "ENOSYS", 54: "ENOTDIR", 58: "ENOTSUP", 63: "EPERM", 64: "EPIPE", 71: "ESRCH", 76: "ENOTCAPABLE",
+    33: "EMFILE", 44: "ENOENT", 45: "ENOEXEC", 48: "ENOMEM", 52: "ENOSYS", 54: "ENOTDIR", 58: "ENOTSUP", 63: "EPERM", 64: "EPIPE", 71: "ESRCH", 76: "ENOTCAPABLE",
   };
   const nodeErrnos: Record<string, number> = {
-    EPERM: -1, ENOENT: -2, ESRCH: -3, EINTR: -4, EIO: -5, E2BIG: -7, EBADF: -9, ECHILD: -10, EAGAIN: -11,
+    EPERM: -1, ENOENT: -2, ESRCH: -3, EINTR: -4, EIO: -5, E2BIG: -7, ENOEXEC: -8, EBADF: -9, ECHILD: -10, EAGAIN: -11,
     ENOMEM: -12, EACCES: -13, EFAULT: -14, EINVAL: -22, EMFILE: -24, EPIPE: -32, ENOSYS: -38, ENOTDIR: -20, ENOTSUP: -95,
   };
   const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
@@ -518,6 +518,15 @@
       if (abort) spec.options.signal!.removeEventListener("abort", abort);
     }
     function finish(status: Exit) {
+      if (status.kind === 2) {
+        // The wait has already consumed the child. Do not signal or wait it a second time.
+        settled = true;
+        clearExitHooks();
+        const error = processError(-status.code, "spawn", spec.meta.executable);
+        rejectExit(error);
+        if (typeof spec.options.onExit === "function") spec.options.onExit(child, null, null, error);
+        return;
+      }
       const signalCode = status.kind === 1 ? signalName(status.code) : null;
       const code = status.kind === 1 ? 128 + status.code : status.code;
       settled = true;
@@ -617,6 +626,7 @@
     const sizes = [0, 0];
     let status: Exit | null = null;
     let timedOut = false;
+    let result: Loose;
     function wait() {
       const list: Uint8Array[] = [];
       for (const state of states) if (state.fd >= 0) list.push(subscription(READABLE, state.fd));
@@ -627,7 +637,7 @@
     }
     function outcome(extra: Record<string, unknown>) {
       const signalCode = status!.kind === 1 ? signalName(status!.code) : null;
-      return Object.assign({ pid: spec.pid, success: false, exitCode: signalCode === null ? status!.code : null, signalCode,
+      return Object.assign({ pid: spec.pid, success: false, exitCode: status!.kind === 0 ? status!.code : null, signalCode,
         stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])) }, extra);
     }
     try {
@@ -649,16 +659,19 @@
         }
         if (!status || states.some((state) => state.fd >= 0)) wait();
       }
-      return outcome({ success: status.kind === 0 && status.code === 0, exitedDueToTimeout: timedOut });
+      const error = status.kind === 2 ? processError(-status.code, "spawn", spec.meta.executable) : undefined;
+      result = outcome({ success: status.kind === 0 && status.code === 0, exitedDueToTimeout: timedOut, ...(error ? { error } : {}) });
     } catch (error) {
       terminate(spec.pid, spec.job);
       // Selection can precede completion publication. Observe the winner before reaping it.
       while (!(status = waitChild(spec))) wait();
-      return outcome({ error });
+      result = outcome({ error });
     } finally {
       for (const fd of [spec.stdinFd].concat(spec.outputFds)) if (fd >= 0) native.procClose(fd);
       if (!reapJob(spec.job)) reapLater(spec.job);
     }
+    if (status!.kind === 2) throw processError(-status!.code, "spawn", spec.meta.executable);
+    return result;
   }
 
   // A deliberately small shell tokenizer. Shell operators and expansions never
@@ -816,7 +829,14 @@
         options.signal.addEventListener("abort", aborted, { once: true });
         child.once("close", () => options.signal.removeEventListener("abort", aborted));
       }
-      child._child.exited.then((code: number) => reportExit(child, code), (error: unknown) => child.emit("error", error));
+      child._child.exited.then((code: number) => reportExit(child, code), (error: unknown) => {
+        const failure = nodeSpawnError(error, command, args, false);
+        child.exitCode = failure?.errno ?? -2;
+        child.emit("error", failure);
+        child.stdin?.destroy();
+        // Startup errors still drain/close their existing descriptors, just like successful exits.
+        Promise.all(child._drains).then(() => internal.realTimers.setImmediate(() => child.emit("close", child.exitCode, null)));
+      });
       return child;
     }
 
@@ -832,6 +852,7 @@
           error: nodeSpawnError(error, command, args, true) };
       }
       const signal = result.signalCode;
+      if (result.error) nodeSpawnError(result.error, command, args, true);
       if (result.exitedDueToTimeout) result.error = Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT", errno: -110, syscall: "spawnSync", path: String(command) });
       const encoding = options.encoding;
       const stdout = options.stdio[1] === "inherit" || options.stdio[1] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stdout.toString(encoding) : result.stdout;

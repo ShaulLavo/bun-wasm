@@ -114,6 +114,8 @@ fn evaluate(
     let (kind, code) = status.expect("configuration child must have exited");
     if kind == 0 && code == 0 {
         Ok(stdout)
+    } else if kind == 2 {
+        Err(process_error("Configuration process failed to start", -code))
     } else {
         Err(stderr)
     }

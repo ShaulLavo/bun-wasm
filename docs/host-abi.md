@@ -427,11 +427,20 @@ bridge. TLS and Unix sockets are outside this adapter.
 
 The preview1 `runtime_proc` namespace adds `wait_job(job, flags, status_ptr) -> errno`.
 All arguments are i32. Flag `NOHANG = 1` returns `-EAGAIN` (`-6`) while any member is unsafe;
-flag 0 blocks. Other flags return `-EINVAL` (`-28`). Success returns 0, writes **one
-little-endian i32** containing the leader's final status (ordinary exit code, or `128 + signal`
-for selected signal death), and reaps the job plus its remaining member process records.
-The existing `wait(pid, out)` still writes its separate eight-byte kind/code result and can
-only observe a direct child; it does not establish descendant job completion.
+flag 0 blocks. Other flags return `-EINVAL` (`-28`). Success returns 0 and writes the same
+**eight-byte little-endian result** as `wait(pid, out)`: `u32 kind` at offset 0 and `i32 value`
+at offset 4. Kinds are EXITED=0 (ordinary exit code), SIGNALED=1 (signal number), and
+START_FAILED=2 (positive WASI errno). The seven startup errnos are ENOENT=44, EACCES=2,
+ENOTDIR=54, ENOEXEC=45, ENOMEM=48, EAGAIN=6 and EIO=29. Actual guest exits 126 and 127
+remain EXITED; they never imply startup failure. Request validation, capacity and allocation
+failures during admission remain negative returns from `spawn` itself.
+
+A successful job wait reaps the job plus its remaining member process records. `wait(pid,out)`
+can only consume a direct child; it does not establish descendant job completion. Both waits
+validate all eight output bytes before consuming anything. Bun's asynchronous facade rejects
+`exited` on START_FAILED; the synchronous facade throws a spawn error with code and errno.
+Node reports error/close instead of exit. Its precise spawn-event ordering requires the
+non-consuming generic startup-status observation; terminal wait alone cannot provide that.
 
 Poll subscription **kind 4** means job-empty; its id is the job ID. Subscriptions remain
 16 bytes (`u32 kind`, `u32 id`, `u64 userdata`) and events remain 16 bytes (`u64 userdata`,

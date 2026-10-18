@@ -316,17 +316,18 @@ pub fn proc_write(fd: i32, data: &[u8]) -> i32 {
     proc_call!(runtime_proc::write(fd, ptr(data), data.len() as i32))
 }
 
-/// `(kind, code)` of a finished child: kind 0 exited, 1 signaled. `Err(-EAGAIN)` while running.
+/// Eight-byte completion: kind 0 exited, 1 signaled, 2 failed to start (positive WASI errno).
+/// Successful waits consume the result; `Err(-EAGAIN)` means it is not yet safe to collect.
 pub fn proc_wait(pid: i32) -> Result<(u32, i32), i32> {
     let mut status = [0i32; 2];
     let result = proc_call!(runtime_proc::wait(pid, ptr_mut(&mut status)));
     if result < 0 { Err(result) } else { Ok((status[0] as u32, status[1])) }
 }
 
-pub fn proc_wait_job(job: i32, flags: i32) -> Result<i32, i32> {
-    let mut status = [0i32; 1];
+pub fn proc_wait_job(job: i32, flags: i32) -> Result<(u32, i32), i32> {
+    let mut status = [0i32; 2];
     let result = proc_call!(runtime_proc::wait_job(job, flags, ptr_mut(&mut status)));
-    if result < 0 { Err(result) } else { Ok(status[0]) }
+    if result < 0 { Err(result) } else { Ok((status[0] as u32, status[1])) }
 }
 
 pub fn proc_kill(pid: i32, signal: i32) -> i32 {

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { service, load } from "../../scripts/spawn-runtime-proc-fixture.ts";
 
 // Synchronous runtime_proc admission failures. Registry/worker startup failures arrive later;
-// those are separately exercised below once Waffle's typed start-failure wait ABI lands.
+// those are separately exercised below through the typed wait result.
 function fixture(failure: "ENOENT" | "EACCES" = "ENOENT") {
   const fake = service({ failSpawn: failure === "ENOENT" ? -44 : -2 });
   const { module: api } = load(fake);
@@ -129,21 +129,91 @@ test("a null abort reason reaches Node's asynchronous error path", async () => {
   } finally { host.dispose(); }
 });
 
-for (const [code, wasiErrno, errno] of [["ENOENT", -44, -2], ["EACCES", -2, -13]] as const) {
-  test.skip(`asynchronous ${code} startup emits error/close, not spawn/exit (pending Waffle typed start-failure ABI)`, async () => {
-    const fake = service();
-    // The generic wait ABI must distinguish this failure from ordinary 127/126 exits.
-    fake.native.procWait = () => wasiErrno;
-    const { module: api, pump } = load(fake);
-    const events: string[] = [];
-    const child = api.nodeChildProcess().spawn("missing", ["argument"]);
-    let failure: unknown;
-    for (const event of ["spawn", "exit", "error", "close"]) child.on(event, () => events.push(event));
-    child.on("error", (error: unknown) => { failure = error; });
+const startupErrors = [
+  ["ENOENT", 44, -2], ["EACCES", 2, -13], ["ENOTDIR", 54, -20],
+  ["ENOEXEC", 45, -8], ["ENOMEM", 48, -12], ["EAGAIN", 6, -11], ["EIO", 29, -5],
+] as const;
+
+for (const [code, wasiErrno, errno] of startupErrors) {
+  function startupFixture() {
+    const fake = service({ onSpawn(child) { fake.select(child, [2, wasiErrno]); fake.publish(child); } });
+    let waits = 0;
+    const wait = fake.native.procWait;
+    fake.native.procWait = (pid: number) => { waits++; return wait(pid); };
+    return { fake, ...load(fake), waits: () => waits };
+  }
+  test(`Bun asynchronous ${code} startup rejects with typed errno and releases every capability`, async () => {
+    const { fake, module: api, pump, waits } = startupFixture();
+    const exits: unknown[][] = [];
+    const child = api.spawn(["/bin/bun", "argument"], { stdin: "pipe", stderr: "pipe", detached: true,
+      onExit(...args: unknown[]) { exits.push(args); } });
+    const failure = child.exited.catch((error: unknown) => error);
     await pump();
-    await new Promise(resolve => setImmediate(resolve));
-    expect(failure).toMatchObject({ code, errno, path: "missing", syscall: "spawn missing", spawnargs: ["argument"] });
-    expect(events).toEqual(["error", "close"]);
-    expect(child.exitCode).toBe(errno);
+    expect(await failure).toMatchObject({ code, errno, path: "/bin/bun", syscall: "spawn" });
+    expect(exits).toHaveLength(1);
+    expect(exits[0]!.slice(1, 3)).toEqual([null, null]);
+    expect(exits[0]![3]).toMatchObject({ code, errno });
+    expect(child.exitCode).toBeNull(); expect(child.signalCode).toBeNull();
+    expect(await child.stdout.text()).toBe(""); expect(await child.stderr.text()).toBe("");
+    expect(waits()).toBe(1); expect(fake.open()).toBe(0);
+    expect(fake.calls.filter(call => call.startsWith("kill"))).toEqual([]);
+    expect(fake.calls.filter(call => call === "reap")).toHaveLength(1);
+  });
+  test(`Bun synchronous ${code} startup throws after cleanup and Node preserves error metadata`, () => {
+    for (const node of [false, true]) {
+      const { fake, module: api, waits } = startupFixture();
+      if (node) {
+        const result = api.nodeChildProcess().spawnSync("/bin/bun", ["argument"], { detached: true });
+        expect(result.error).toMatchObject({ code, errno, path: "/bin/bun", syscall: "spawnSync /bin/bun", spawnargs: ["argument"] });
+        expect(result.status).toBeNull(); expect(result.signal).toBeNull();
+      } else {
+        let failure: unknown;
+        try { api.spawnSync(["/bin/bun", "argument"], { detached: true }); } catch (error) { failure = error; }
+        expect(failure).toMatchObject({ code, errno, path: "/bin/bun", syscall: "spawn" });
+      }
+      expect(waits()).toBe(1); expect(fake.open()).toBe(0);
+      expect(fake.calls.filter(call => call.startsWith("kill"))).toEqual([]);
+    }
+  });
+  test(`Node asynchronous ${code} startup emits error then close and never exit`, async () => {
+    const { fake, module: api, pump } = startupFixture();
+    const events: string[] = [];
+    const child = api.nodeChildProcess().spawn("/bin/bun", ["argument"]);
+    let failure: unknown;
+    for (const event of ["exit", "error", "close"]) child.on(event, () => events.push(event));
+    child.on("error", (error: unknown) => { failure = error; });
+    const closed = new Promise(resolve => child.once("close", (code: number, signal: string | null) => resolve([code, signal])));
+    await pump();
+    expect(await closed).toEqual([errno, null]);
+    expect(failure).toMatchObject({ code, errno, path: "/bin/bun", syscall: "spawn /bin/bun", spawnargs: ["argument"] });
+    expect(events).toEqual(["error", "close"]); expect(child.exitCode).toBe(errno); expect(fake.open()).toBe(0);
+  });
+  // Exact Node ordering requires the generic non-consuming start_status / CHILD_START ABI.
+  test.skip(`asynchronous ${code} startup emits error/close, not spawn/exit (pending start_status ABI)`, async () => {
+    const { fake, module: api, pump } = startupFixture();
+    const events: string[] = [];
+    const child = api.nodeChildProcess().spawn("/bin/bun", ["argument"]);
+    for (const event of ["spawn", "exit", "error", "close"]) child.on(event, () => events.push(event));
+    const closed = new Promise(resolve => child.once("close", resolve));
+    await pump(); await closed;
+    expect(events).toEqual(["error", "close"]); expect(fake.open()).toBe(0);
   });
 }
+
+for (const code of [126, 127]) test(`real guest exit ${code} stays an ordinary Bun and Node exit`, async () => {
+  for (const node of [false, true]) {
+    const fake = service({ onSpawn(child) { fake.exit(child, code); } });
+    const { module: api, pump } = load(fake);
+    const child = node ? api.nodeChildProcess().spawn("/bin/bun") : api.spawn(["/bin/bun"]);
+    if (node) {
+      const events: string[] = [];
+      child.on("error", () => events.push("error"));
+      const closed = new Promise(resolve => child.once("close", (status: number, signal: string | null) => resolve([status, signal])));
+      await pump(); expect(await closed).toEqual([code, null]); expect(events).toEqual([]);
+    } else { await pump(); expect(await child.exited).toBe(code); expect(child.exitCode).toBe(code); }
+    expect(fake.open()).toBe(0);
+    const sync = node ? api.nodeChildProcess().spawnSync("/bin/bun") : api.spawnSync(["/bin/bun"]);
+    expect(sync.error).toBeUndefined(); expect(node ? sync.status : sync.exitCode).toBe(code);
+    expect(fake.open()).toBe(0);
+  }
+});

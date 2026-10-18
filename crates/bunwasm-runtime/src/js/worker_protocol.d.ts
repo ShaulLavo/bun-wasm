@@ -75,7 +75,8 @@ declare namespace BunWasm {
     procWrite(fd: number, bytes: Uint8Array): number;
     /** [kind, code] of a finished child (kind 0 exited, 1 signaled), or a negative errno. */
     procWait(pid: number): [kind: number, code: number] | number;
-    procWaitJob(job: number, flags: number): number;
+    /** kind 0: exit code; 1: signal; 2: positive WASI startup errno. Both waits consume. */
+    procWaitJob(job: number, flags: number): [kind: number, value: number] | number;
     procKill(pid: number, signal: number): number;
     procKillJob(job: number, signal: number): number;
     /** 16-byte subscriptions in, 16-byte events out. */

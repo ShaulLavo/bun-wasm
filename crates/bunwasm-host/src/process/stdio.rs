@@ -15,19 +15,31 @@ use wasmtime_wasi::p2::{InputStream, OutputStream, Pollable, StreamError, Stream
 pub enum FinalOutcome {
     Exit(i32),
     Signal(i32),
+    /// A positive WASI errno, never an ordinary guest exit code.
+    StartFailed(i32),
 }
 
 impl FinalOutcome {
+    pub fn wire(self) -> (i32, i32) {
+        match self {
+            Self::Exit(code) => (0, code),
+            Self::Signal(signal) => (1, signal),
+            Self::StartFailed(errno) => (2, errno),
+        }
+    }
+
     pub fn code(self) -> i32 {
         match self {
             Self::Exit(code) => code,
             Self::Signal(signal) => 128 + signal,
+            Self::StartFailed(44) => 127,
+            Self::StartFailed(_) => 126,
         }
     }
 
     pub fn signal(self) -> i32 {
         match self {
-            Self::Exit(_) => 0,
+            Self::Exit(_) | Self::StartFailed(_) => 0,
             Self::Signal(signal) => signal,
         }
     }

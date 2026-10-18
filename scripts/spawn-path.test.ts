@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { load, service } from "./spawn-runtime-proc-fixture";
 
 function fixture(entries: Readonly<Record<string, number>>) {
@@ -64,6 +66,19 @@ test("package command normalization precedes the shared PATH lookup", () => {
   const child = Array.from(fake.children.values())[0]!;
   expect(seen).toEqual([[["bunx", "package-name"], "/tmp"]]);
   expect(child.request.argv).toEqual(["bun", "x", "package-name"]);
+  expect(child.request.executable).toBe("/bin/bun");
+  fake.exit(child, 0);
+});
+
+for (const executable of ["bunx", "/bunx"]) test(`real package normalization expands ${executable} before executable admission`, () => {
+  const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/package_scripts.ts", import.meta.url), "utf8");
+  const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.packageFactory = ${source}`));
+  const packages = factory({ native: {}, require() { return {}; } });
+  const fake = service();
+  const { module: api } = load(fake, { spawnArguments: packages.spawnArguments });
+  api.spawn([executable, "package-name", "argument"]);
+  const child = Array.from(fake.children.values())[0]!;
+  expect(child.request.argv).toEqual(["bun", "x", "package-name", "argument"]);
   expect(child.request.executable).toBe("/bin/bun");
   fake.exit(child, 0);
 });

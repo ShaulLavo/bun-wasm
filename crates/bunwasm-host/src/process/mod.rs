@@ -501,23 +501,21 @@ impl Processes {
             })
             .max_by_key(|(length, _)| *length)
             .map(|(_, path)| path);
-        // Admission observes the file and registration again, independently of
-        // any earlier access query. Missing/unrunnable paths never reserve a pid.
-        let module = self.runtime.executables.check(
-            &request.executable,
-            &request.cwd,
-            &self.runtime.dirs,
-        )?;
-        let start_failure = if !cwd.is_absolute()
-            || cwd
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
-            || !mapped.is_some_and(|path| path.is_dir())
+        if !cwd.is_absolute()
+            || cwd.components().any(|component| matches!(component, std::path::Component::ParentDir))
         {
-            Some(126)
-        } else {
-            None
-        };
+            return Err(INVAL);
+        }
+        // Revalidate the executable independently of an earlier access query. Startup failures
+        // own an ordinary child record, with descriptors released before its typed publication.
+        let startup = self.runtime.executables.check(
+            &request.executable, &request.cwd, &self.runtime.dirs,
+        ).and_then(|module| {
+            let path = mapped.ok_or(NOENT)?;
+            let metadata = path.metadata().map_err(|error| -startup_io_errno(&error))?;
+            if !metadata.is_dir() { return Err(NOTDIR); }
+            Ok(module)
+        });
         let cancel = Arc::new(Cancellation::default());
         // Admission and thread-handle publication are one supervisor operation.
         // A very fast child can finish only after this lock is released.
@@ -571,10 +569,12 @@ impl Processes {
             .stack_size(runtime.thread_stack)
             .spawn(move || {
                 // All owned descriptors and the WASI context drop before publication.
-                let outcome = if let Some(code) = start_failure {
-                    drop(fds);
-                    cancellation.select(FinalOutcome::Exit(code))
-                } else {
+                let outcome = match startup {
+                    Err(errno) => {
+                        drop(fds);
+                        cancellation.select(FinalOutcome::StartFailed(-errno))
+                    }
+                    Ok(module) => {
                     let stdio = Stdio {
                         fds,
                         pid,
@@ -593,8 +593,11 @@ impl Processes {
                     .unwrap_or_else(|_| Err(anyhow::anyhow!("child guest panicked")))
                     .unwrap_or_else(|error| {
                         eprintln!("bun-wasm child: {error:#}");
-                        cancellation.select(FinalOutcome::Exit(126))
+                        let errno = error.chain().find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                            .map(startup_io_errno).unwrap_or(45); // ENOEXEC: invalid module/entry point.
+                        cancellation.select(FinalOutcome::StartFailed(errno))
                     })
+                    }
                 };
                 let mut state = runtime.state.lock().unwrap();
                 state
@@ -713,7 +716,7 @@ impl Processes {
                 .all(|child| child.result.is_some()))
     }
 
-    pub fn wait_job(&self, job: i32, flags: i32) -> Result<i32, i32> {
+    pub fn wait_job(&self, job: i32, flags: i32) -> Result<FinalOutcome, i32> {
         if flags != 0 && flags != 1 {
             return Err(INVAL);
         }
@@ -742,7 +745,7 @@ impl Processes {
                 }
                 state.jobs.remove(&job);
                 state.reaped_jobs.insert(job);
-                return Ok(result.code());
+                return Ok(result);
             }
             if flags == 1 {
                 return Err(AGAIN);
@@ -855,5 +858,18 @@ impl Processes {
             });
             std::thread::sleep(left);
         }
+    }
+}
+
+/// Map host I/O failures into the seven portable startup errors in runtime_proc.
+fn startup_io_errno(error: &std::io::Error) -> i32 {
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::NotFound => 44,
+        ErrorKind::PermissionDenied => 2,
+        ErrorKind::NotADirectory => 54,
+        ErrorKind::OutOfMemory => 48,
+        ErrorKind::WouldBlock => 6,
+        _ => 29,
     }
 }

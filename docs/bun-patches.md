@@ -46,7 +46,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Global Web Worker adapter](#web-worker-adapter) | Host feature | Original TypeScript EventTarget and worker-global adapters over the existing thread transport. |
 | [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, browser module loading and stream adapters over separate host guest instances, with dynamically bound control pipes and typed wait outcomes. |
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
-| [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun and Node spawn adapters map Waffle startup failures to ENOENT/EACCES and preserve failed Node streams. |
+| [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun/Node and native adapters consume eight-byte typed process/job completions, map seven portable startup errnos, and preserve failed Node streams. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, process-aware idle waits, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
@@ -2501,10 +2501,21 @@ remain unchanged. The synchronous rejection tests use the same generic fake serv
 as the rest of the spawn facade tests.
 
 The former Bun-only `SubprocessHost`, startup supervisor and startup-probe helper
-are removed. Waffle owns process launch and worker lifecycle. Asynchronous missing
-program ENOENT/EACCES event behavior is **pending the Waffle typed start-failure ABI**;
-its explicit skipped tests in `web/tests/spawn-errors.test.ts` are not covered by
-ordinary exit-127/126 tests. No upstream implementation is copied here.
+are removed. Waffle owns process launch and worker lifecycle. Both `wait` and `wait_job` consume an eight-byte kind/value result from Waffle
+`ac1da7f02eaa73fcd7ca228f8a96f59beb8b3097` (`proc/{types,abi,outcome}.ts`). START_FAILED
+is kind 2 with a positive WASI errno: ENOENT, EACCES, ENOTDIR, ENOEXEC, ENOMEM, EAGAIN
+or EIO. Original Rust guest/native bridges and `spawn.ts` preserve this distinction;
+real exits 126/127 remain ordinary exits. Native setup failures release their descriptor
+snapshot before publishing this result, and invalid output memory never consumes a wait.
+The configuration adapter also surfaces typed setup errors instead of empty diagnostics.
+
+Bun asynchronous startup rejects `exited` and calls `onExit` with the error; Bun synchronous
+startup throws only after descriptor cleanup. Node reports error/close with code, errno,
+path, syscall and spawnargs. Original tests cover all seven failures plus ordinary126/127.
+Exact Node spawn-event ordering remains pending generic `start_status`/CHILD_START:
+terminal completion alone cannot prove a live child entered `_start`. Those explicit
+ordering tests remain skipped until that observation is available. No upstream
+implementation is copied here.
 
 Behavior references at Bun revision `5e0baa66516f3af00b008cdf1521c681317741e8`
 are `src/runtime/api/bun/js_bun_spawn_bindings.rs::throw_command_not_found`,

@@ -374,10 +374,7 @@ fn process_functions(store: &mut Store<Host>) -> Vec<Func> {
                     };
                     match host.processes.wait(pid) {
                         Ok(outcome) => {
-                            let (kind, code): (i32, i32) = match outcome {
-                                crate::process::FinalOutcome::Exit(code) => (0, code),
-                                crate::process::FinalOutcome::Signal(signal) => (1, signal),
-                            };
+                            let (kind, code) = outcome.wire();
                             let bytes = &mut memory[at];
                             bytes[..4].copy_from_slice(&kind.to_le_bytes());
                             bytes[4..].copy_from_slice(&code.to_le_bytes());
@@ -393,12 +390,14 @@ fn process_functions(store: &mut Store<Host>) -> Vec<Func> {
             |mut caller: Caller<'_, Host>, job: i32, flags: i32, out: i32| {
                 with_memory(&mut caller, |memory, host| {
                     // Faults never consume a completed job.
-                    let Some(at) = proc_range(memory, out, 4) else {
+                    let Some(at) = proc_range(memory, out, 8) else {
                         return Ok(crate::process::FAULT);
                     };
                     match host.processes.wait_job(job, flags) {
-                        Ok(status) => {
-                            memory[at].copy_from_slice(&status.to_le_bytes());
+                        Ok(outcome) => {
+                            let (kind, value) = outcome.wire();
+                            memory[at.clone()][..4].copy_from_slice(&kind.to_le_bytes());
+                            memory[at][4..].copy_from_slice(&value.to_le_bytes());
                             Ok(0)
                         }
                         Err(error) => Ok(error),

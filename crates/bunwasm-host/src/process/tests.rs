@@ -241,14 +241,14 @@ fn spawn_retains_pipe_end_before_return_and_closes_it_before_wait() {
     assert_eq!(completed(&processes, pid), FinalOutcome::Exit(0));
     assert_eq!(processes.read(read, &mut [0]), 0);
     assert_eq!(processes.wait(pid), Err(CHILD));
-    assert_eq!(processes.wait_job(job, 1), Ok(0));
+    assert_eq!(processes.wait_job(job, 1), Ok(FinalOutcome::Exit(0)));
     assert_eq!(processes.wait(pid), Err(CHILD));
     assert_eq!(processes.wait_job(job, 1), Err(CHILD));
     assert_eq!(processes.poll(&subscription(4, job, 1), 0), Err(CHILD));
 }
 
 #[test]
-fn unregistered_paths_return_admission_errno_without_a_child() {
+fn unregistered_paths_publish_typed_startup_errno_and_are_consumed_once() {
     let mut processes = processes();
     for (path, errno) in [
         ("bun", NOENT),
@@ -265,11 +265,12 @@ fn unregistered_paths_return_admission_errno_without_a_child() {
         ("/bin/bun/../node", NOTDIR),
         ("/missing/../bin/bun", NOENT),
     ] {
-        assert_eq!(
-            processes.spawn(&request(path, serde_json::json!([]))),
-            errno,
-            "{path}"
-        );
+        let pid = processes.spawn(&request(path, serde_json::json!([])));
+        assert!(pid > 0, "{path}: {pid}");
+        let job = processes.job_of(pid);
+        assert_eq!(completed(&processes, pid), FinalOutcome::StartFailed(-errno), "{path}");
+        assert_eq!(processes.wait(pid), Err(CHILD));
+        assert_eq!(processes.wait_job(job, 1), Ok(FinalOutcome::StartFailed(-errno)));
     }
     assert_eq!(processes.runtime.state.lock().unwrap().processes.len(), 1);
 }
@@ -280,10 +281,11 @@ fn only_supplied_engines_have_spawnable_files() {
     let mut paths = executables::DEFAULT_PATHS.to_vec();
     for (engine, engine_paths) in executables::ENGINE_PATHS {
         for path in engine_paths {
-            assert_eq!(
-                processes.spawn(&request(path, serde_json::json!([]))),
-                NOENT
-            );
+            let pid = processes.spawn(&request(path, serde_json::json!([])));
+            assert!(pid > 0);
+            let job = processes.job_of(pid);
+            assert_eq!(completed(&processes, pid), FinalOutcome::StartFailed(-NOENT));
+            assert_eq!(processes.wait_job(job, 1), Ok(FinalOutcome::StartFailed(-NOENT)));
         }
         processes
             .runtime
@@ -296,7 +298,7 @@ fn only_supplied_engines_have_spawnable_files() {
         assert!(pid > 0, "{command}: {pid}");
         let job = processes.job_of(pid);
         assert_eq!(completed(&processes, pid), FinalOutcome::Exit(0));
-        assert_eq!(processes.wait_job(job, 1), Ok(0));
+        assert_eq!(processes.wait_job(job, 1), Ok(FinalOutcome::Exit(0)));
     }
 }
 
@@ -338,7 +340,7 @@ fn job_completion_waits_for_descendants_and_preserves_leader_signal_kind() {
     let ready = processes.poll(&subscription(4, 1, 12), 0).unwrap();
     assert_eq!(&ready[..8], &12u64.to_le_bytes());
     assert_eq!(processes.poll(&subscription(4, 1, 12), 0).unwrap(), ready);
-    assert_eq!(processes.wait_job(1, 1), Ok(143));
+    assert_eq!(processes.wait_job(1, 1), Ok(FinalOutcome::Signal(15)));
     assert_eq!(processes.runtime.state.lock().unwrap().processes.len(), 1);
 }
 
@@ -377,8 +379,8 @@ fn owner_chain_authority_survives_reaping_intermediate_jobs() {
         Arc::default(),
     );
     assert_eq!(outsider.wait_job(2, 1), Err(PERM));
-    assert_eq!(processes.wait_job(1, 1), Ok(0));
-    assert_eq!(processes.wait_job(2, 1), Ok(143));
+    assert_eq!(processes.wait_job(1, 1), Ok(FinalOutcome::Exit(0)));
+    assert_eq!(processes.wait_job(2, 1), Ok(FinalOutcome::Exit(143)));
     assert_eq!(processes.wait_job(999, 1), Err(SRCH));
 }
 
@@ -443,7 +445,7 @@ fn ordinary_children_join_the_current_job_without_reaping_it() {
     assert_ne!(processes.job_of(pid), job);
     let detached_job = processes.job_of(pid);
     completed(&processes, pid);
-    assert_eq!(processes.wait_job(detached_job, 0), Ok(0));
+    assert_eq!(processes.wait_job(detached_job, 0), Ok(FinalOutcome::Exit(0)));
     assert_eq!(processes.job_of(0), job);
 }
 
@@ -458,7 +460,7 @@ fn a_completed_unreaped_job_rejects_new_members() {
         serde_json::from_slice(&request("/bin/bun", serde_json::json!([]))).unwrap();
     meta["job"] = job.into();
     assert_eq!(p.spawn(&serde_json::to_vec(&meta).unwrap()), CHILD);
-    assert_eq!(p.wait_job(job, 0), Ok(0));
+    assert_eq!(p.wait_job(job, 0), Ok(FinalOutcome::Exit(0)));
 }
 
 #[test]
@@ -649,4 +651,96 @@ fn process_directory_capacity_includes_root_and_unwaited_children() {
     assert!(replacement > 0);
     assert_eq!(processes.spawn(&meta), AGAIN);
     assert_eq!(completed(&processes, replacement), FinalOutcome::Exit(0));
+}
+
+#[test]
+fn pid_exhaustion_returns_again_without_partial_child_job_or_descriptor_retention() {
+    let mut p = processes();
+    p.runtime.state.lock().unwrap().next = i32::MAX;
+    let [read, write] = p.pipe().unwrap();
+    let before = {
+        let state = p.runtime.state.lock().unwrap();
+        (state.processes.len(), state.jobs.len(), state.parents.len())
+    };
+    for _ in 0..3 {
+        assert_eq!(p.spawn(&request("/bin/bun", serde_json::json!([{"child":1,"parent":write}]))), AGAIN);
+        let state = p.runtime.state.lock().unwrap();
+        assert_eq!(state.next, i32::MAX);
+        assert_eq!((state.processes.len(), state.jobs.len(), state.parents.len()), before);
+    }
+    assert_eq!(p.close(write), 0);
+    assert_eq!(p.read(read, &mut [0]), 0, "failed reservations retained no writer");
+}
+
+#[test]
+fn portable_startup_io_errnos_have_no_shell_status_inference() {
+    use std::io::{Error, ErrorKind};
+    for (kind, errno) in [(ErrorKind::NotFound,44), (ErrorKind::PermissionDenied,2),
+        (ErrorKind::NotADirectory,54), (ErrorKind::OutOfMemory,48),
+        (ErrorKind::WouldBlock,6), (ErrorKind::Other,29)] {
+        assert_eq!(startup_io_errno(&Error::from(kind)), errno);
+    }
+    for code in [126,127] { assert_eq!(FinalOutcome::Exit(code).wire(), (0,code)); }
+    for errno in [44,2,54,45,48,6,29] {
+        let cancel = Cancellation::default();
+        assert_eq!(cancel.select(FinalOutcome::StartFailed(errno)).wire(), (2,errno));
+        assert!(!cancel.kill(9));
+        assert_eq!(cancel.select(FinalOutcome::Exit(126)), FinalOutcome::StartFailed(errno));
+    }
+}
+
+#[test]
+fn signaled_child_endpoint_teardown_precedes_safe_wait_and_preserves_queued_outputs() {
+    let mut parent = processes();
+    let [stdin_read, stdin_write] = parent.pipe().unwrap();
+    let [stdout_read, stdout_write] = parent.pipe().unwrap();
+    let [stderr_read, stderr_write] = parent.pipe().unwrap();
+    let [control_read, control_write] = parent.pipe().unwrap();
+    let [message_read, message_write] = parent.pipe().unwrap();
+    let bindings = [(0,stdin_read),(1,stdout_write),(2,stderr_write),(17,control_read),(31,message_write)];
+    let fds: Descriptors = bindings.iter().map(|(child,fd)| (*child,parent.fds[fd].clone())).collect();
+    let input_probe = Arc::downgrade(&fds[&0]);
+    let control_probe = Arc::downgrade(&fds[&17]);
+    fake_child(&parent, 7, parent.pid, ROOT_JOB, None);
+    let cancel = parent.runtime.state.lock().unwrap().processes[&7].cancel.clone();
+    let child = Processes::new(parent.runtime.clone(), Stdio { fds, pid:7, memory_limit:512 << 20 }, parent.notify.clone(), cancel.clone());
+    for (_,fd) in bindings { assert_eq!(parent.close(fd),0); }
+    assert_eq!(parent.write(stdin_write,b"pending stdin"),13);
+    assert_eq!(parent.write(control_write,b"pending control"),15);
+    assert_eq!(child.write(1,b"out"),3); assert_eq!(child.write(2,b"err"),3); assert_eq!(child.write(31,b"message"),7);
+    assert_eq!(parent.kill(7,2),0);
+    let selected = cancel.select(FinalOutcome::Exit(0));
+    assert_eq!(selected,FinalOutcome::Signal(2));
+    assert_eq!(parent.wait(7),Err(AGAIN),"selection alone is not safe publication");
+    // Processes owns the inherited generic descriptors; dropping it is the production teardown.
+    drop(child);
+    assert!(input_probe.upgrade().is_none()); assert!(control_probe.upgrade().is_none());
+    assert_eq!(parent.write(stdin_write,b"late"),PIPE); assert_eq!(parent.write(control_write,b"late"),PIPE);
+    assert_eq!(parent.wait(7),Err(AGAIN),"teardown precedes the publication lock");
+    let mut bytes=[0u8;7];
+    for (fd,expected) in [(stdout_read,&b"out"[..]),(stderr_read,&b"err"[..]),(message_read,&b"message"[..])] {
+        assert_eq!(parent.read(fd,&mut bytes),expected.len() as i32);
+        assert_eq!(&bytes[..expected.len()],expected); assert_eq!(parent.read(fd,&mut bytes),0);
+    }
+    assert_eq!(parent.kill(7,9),0); assert_eq!(cancel.select(FinalOutcome::Signal(9)),selected);
+    parent.runtime.state.lock().unwrap().processes.get_mut(&7).unwrap().result=Some(selected);
+    assert_eq!(parent.wait(7),Ok(FinalOutcome::Signal(2))); assert_eq!(parent.wait(7),Err(CHILD));
+}
+
+#[test]
+fn instance_setup_failure_is_not_an_ordinary_126_or_a_runtime_trap() {
+    let mut p=processes();
+    let invalid=wasmtime::Module::new(&p.runtime.engine,b"\0asm\x01\0\0\0").unwrap();
+    p.runtime.register_engine("quickjs",&invalid).unwrap();
+    let pid=p.spawn(&request("/opt/bun/quickjs/bin/bun",serde_json::json!([]))); assert!(pid>0);
+    let job=p.job_of(pid);
+    assert_eq!(completed(&p,pid),FinalOutcome::StartFailed(45));
+    assert_eq!(p.wait_job(job,1),Ok(FinalOutcome::StartFailed(45)));
+    // Original (module (func (export "_start") unreachable)) enters the guest and traps.
+    let trap=wasmtime::Module::new(&p.runtime.engine,b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\x03\x02\x01\0\x07\x0a\x01\x06_start\0\0\x0a\x05\x01\x03\0\0\x0b").unwrap();
+    p.runtime.register_engine("jsc",&trap).unwrap();
+    let pid=p.spawn(&request("/opt/bun/jsc/bin/bun",serde_json::json!([]))); assert!(pid>0);
+    let job=p.job_of(pid);
+    assert_eq!(completed(&p,pid),FinalOutcome::Exit(134));
+    assert_eq!(p.wait_job(job,1),Ok(FinalOutcome::Exit(134)));
 }
