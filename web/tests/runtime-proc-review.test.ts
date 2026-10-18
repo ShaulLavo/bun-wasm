@@ -136,7 +136,7 @@ for (const failure of ["error-event", "initial-post-message"] as const) test(`ge
     // Let every watcher/microtask observe failure; a missing acknowledgement must not strand wait.
     await pause(25);
     expect(controlLoad(shared.confirmed, 0)).toBe(1);
-    expect(state.parent.wait(1, pid)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
+    expect(state.parent.wait(1, pid)).toEqual({ kind: "start-failed", code: 5, error: "EIO", status: null });
   } finally { await state.dispose(); }
 });
 

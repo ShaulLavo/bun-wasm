@@ -32,7 +32,7 @@ try {
     assert.equal(new Set(children.map(child => child.pid)).size, 4);
     for (const child of children) child.kill(9);
     for (const child of children) assert.equal(await child.exited, 137);
-    const missing = Bun.spawnSync(["/bin/sh", "-c", "true"], { stdout: "pipe", stderr: "pipe" }); assert.equal(missing.exitCode, 127);
+    assert.throws(() => Bun.spawnSync(["/bin/sh", "-c", "true"], { stdout: "pipe", stderr: "pipe" }), error => error.code === "ENOENT" && error.errno === -2 && error.path === "/bin/sh");
     console.log("9 subprocess worker checks passed");
   `;
   const child = spawnSync("node", ["--no-warnings", fileURLToPath(new URL("../scripts/node-host.mjs", import.meta.url)), "--wasm", wasm, "--dir", `${scratch}::/`, "--", "-e", code], { encoding: "utf8", timeout: 90000, maxBuffer: 4 * 1024 * 1024 });

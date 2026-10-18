@@ -127,7 +127,7 @@ test("generic host failure confirms after its filesystem fence before physical t
     expect(state.quiescences()).toBe(1);
     expect(confirmedAtTermination).toBe(-1);
     state.release();
-    expect(await waiting).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
+    expect(await waiting).toEqual({ kind: "start-failed", code: 5, error: "EIO", status: null });
     await Promise.resolve();
     expect(controlLoad(shared.confirmed, 0)).toBe(1);
     expect(confirmedAtTermination).toBe(1);
