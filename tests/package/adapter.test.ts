@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Runtime, GuestLauncher, ProgramDefinition } from "waffle";
-import { installBunAdapters, BunWasmProcessUnavailableError, BunWasmExecutableConflictError } from "../../web/src/bun-adapter.js";
+import { installBunAdapters, BunWasmProcessUnavailableError, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
 function fixture() {

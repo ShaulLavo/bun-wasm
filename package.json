@@ -5,25 +5,25 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./web/src/index.ts",
-      "bun": "./web/src/index.ts",
-      "browser": "./web/src/index.ts",
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "browser": "./src/index.ts",
       "node": "./dist/package/index.js",
-      "default": "./web/src/index.ts"
+      "default": "./src/index.ts"
     },
     "./worker": {
-      "types": "./web/src/worker-entry.ts",
-      "bun": "./web/src/worker-entry.ts",
-      "browser": "./web/src/worker-entry.ts",
+      "types": "./src/worker-entry.ts",
+      "bun": "./src/worker-entry.ts",
+      "browser": "./src/worker-entry.ts",
       "node": "./dist/package/worker-entry.js",
-      "default": "./web/src/worker-entry.ts"
+      "default": "./src/worker-entry.ts"
     },
     "./asset": {
-      "types": "./web/src/assets.ts",
-      "bun": "./web/src/assets.ts",
-      "browser": "./web/src/assets.ts",
+      "types": "./src/assets.ts",
+      "bun": "./src/assets.ts",
+      "browser": "./src/assets.ts",
       "node": "./dist/package/assets.js",
-      "default": "./web/src/assets.ts"
+      "default": "./src/assets.ts"
     }
   },
   "files": [
@@ -31,11 +31,11 @@
     "build.ts",
     "prepare.ts",
     "README.md",
-    "web/src/index.ts",
-    "web/src/assets.ts",
-    "web/src/bun-adapter.ts",
-    "web/src/guest-asset.generated.ts",
-    "web/src/worker-entry.ts",
+    "src/index.ts",
+    "src/assets.ts",
+    "src/bun-adapter.ts",
+    "src/guest-asset.generated.ts",
+    "src/worker-entry.ts",
     "web/src/worker.ts",
     "web/src/engine-host.js",
     "web/src/engine-host.d.ts",

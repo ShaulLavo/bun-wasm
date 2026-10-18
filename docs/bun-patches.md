@@ -2482,7 +2482,7 @@ without contacting a public registry.
 
 ## Caller-owned Bun package adapters
 
-`web/src/{index,bun-adapter,assets,guest-asset.generated,worker-entry}.ts`, `build.ts`,
+`src/{index,bun-adapter,assets,guest-asset.generated,worker-entry}.ts`, `build.ts`,
 `prepare.ts`, and `scripts/{guest-artifact,publish-guest}.ts` are original bun-wasm
 adapters and tooling, not copied or adapted upstream implementations. They register
 Bun names and executable markers on the caller-owned Waffle runtime, export the existing worker without demo

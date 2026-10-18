@@ -16,23 +16,15 @@
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "skipLibCheck": true,
-    "paths": {
-      "waffle": [
-        "./node_modules/waffle/index.ts"
-      ],
-      "waffle/*": [
-        "./node_modules/waffle/*"
-      ]
-    }
+    "skipLibCheck": true
   },
   "include": [
-    "web/src/index.ts",
-    "web/src/assets.ts",
-    "web/src/bun-adapter.ts",
+    "src/index.ts",
+    "src/assets.ts",
+    "src/bun-adapter.ts",
     "build.ts",
     "prepare.ts",
     "tests/package/**/*.ts",
-    "web/src/worker-entry.ts"
+    "src/worker-entry.ts"
   ]
 }

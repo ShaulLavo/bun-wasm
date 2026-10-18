@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BunWasmAssetError, loadBunWasm, type BunWasmAsset } from "../../web/src/assets.js";
+import { BunWasmAssetError, loadBunWasm, type BunWasmAsset } from "../../src/assets.js";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const hash = new Bun.CryptoHasher("sha256").update(wasm).digest("hex");

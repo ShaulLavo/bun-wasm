@@ -5,7 +5,7 @@ import { FilesystemService } from "waffle/fs/service";
 import type { FilesystemConnection } from "waffle/fs/protocol";
 import type { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessSupervisor } from "waffle/proc/supervisor";
-import { installBunAdapters, BunWasmProcessUnavailableError, BunWasmExecutableConflictError } from "../../web/src/bun-adapter.js";
+import { installBunAdapters, BunWasmProcessUnavailableError, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
 
 // Keep Runtime, filesystem transport/backend, executable admission and process supervisor real.
 // Only the browser filesystem worker is hosted in-process; no persistent store is created.

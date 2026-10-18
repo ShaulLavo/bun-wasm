@@ -16,7 +16,7 @@ test("packed package includes a working public worker, no demo or guest binaries
     const archive = (await readdir(scratch)).find(name => name.endsWith(".tgz"))!;
     const { stdout: listing } = await execute("tar", ["-tzf", join(scratch, archive)], { timeout: 10_000 });
     const files = listing.trim().split("\n");
-    expect(files).toContain("package/web/src/worker-entry.ts");
+    expect(files).toContain("package/src/worker-entry.ts");
     expect(files).toContain("package/dist/package/index.js");
     expect(files.some(name => /\.wasm(?:\.gz)?$/.test(name))).toBe(false);
     expect(files).not.toContain("package/web/src/main.ts");
@@ -57,8 +57,8 @@ test("packed package includes a working public worker, no demo or guest binaries
     `], { cwd: scratch, timeout: 10_000 });
     expect(stdout.trim()).toBe("ok");
     const { stdout: bunPaths } = await execute(process.execPath, ["--eval", "console.log(import.meta.resolve('bun-wasm')); console.log(import.meta.resolve('bun-wasm/asset'))"], { cwd: scratch, timeout: 10_000 });
-    expect(bunPaths).toContain("/web/src/index.ts");
-    expect(bunPaths).toContain("/web/src/assets.ts");
+    expect(bunPaths).toContain("/src/index.ts");
+    expect(bunPaths).toContain("/src/assets.ts");
     expect(bunPaths).not.toContain("/dist/");
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }, 45_000);

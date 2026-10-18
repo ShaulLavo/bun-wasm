@@ -65,7 +65,7 @@ cf auth whoami >/dev/null  # Refresh the existing local CF login before using it
 Generate a descriptor without publishing:
 
 ```sh
-bun scripts/guest-artifact.ts /path/to/bun.wasm --output web/src/guest-asset.generated.ts
+bun scripts/guest-artifact.ts /path/to/bun.wasm --output src/guest-asset.generated.ts
 ```
 
 Publish a matching guest and generate its descriptor after verification:
@@ -73,7 +73,7 @@ Publish a matching guest and generate its descriptor after verification:
 ```sh
 CLOUDFLARE_ACCOUNT_ID=<account-id> \
 CLOUDFLARE_API_TOKEN="$(python3 -c "import json; print(json.load(open('$HOME/.config/cloudflare/config/default.json'))['oauth_token'])")" \
-bun scripts/publish-guest.ts /path/to/bun.wasm --output web/src/guest-asset.generated.ts
+bun scripts/publish-guest.ts /path/to/bun.wasm --output src/guest-asset.generated.ts
 ```
 
 The publisher uses the site's lockfile-pinned Wrangler for the upload. It creates only a temporary `bun-wasm-guest-publish-*` directory (under `TMPDIR` when set, otherwise `/work/tmp` when available, otherwise the OS temporary directory). Success, failure, and interruption stop the upload child before removing that directory. It does not create a Worker or permanent upload service.

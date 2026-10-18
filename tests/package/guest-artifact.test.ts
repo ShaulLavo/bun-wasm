@@ -113,7 +113,7 @@ test("descriptor generator writes a typed constant without bundling guest bytes"
     await writeGuestDescriptor(output, artifact.descriptor);
     const source = await readFile(output, "utf8");
     expect(source).toContain("import type { BunWasmAsset }");
-    expect(source).toContain("/web/src/assets.js\"");
+    expect(source).toContain("/src/assets.js\"");
     expect(source).toContain("export const BUN_WASM_ASSET: BunWasmAsset | null =");
     expect(source).toContain(JSON.stringify(artifact.descriptor, null, 2));
     expect(source.length).toBeLessThan(1000);
