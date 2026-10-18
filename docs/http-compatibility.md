@@ -515,6 +515,35 @@ ETags and directory routes differ from header conversion, fetch decompression,
 body conversion, socket ownership and WebSocket framing. Their shared assertion
 text is not a reason to replace those implementations together.
 
+## Final response and EOF measurements, 2026-10-18
+
+The final response-streaming and empty-EOF adapters were measured against the
+same 180 files, suite revision, dependency hashes and deadlines on all three
+engines. The tools guest was absent for both suite replays. The unchanged-main
+guest and launcher are retained under the report directory.
+
+| Engine | Fully passing files | Observed passes | Observed failures | File timeouts |
+| --- | --- | --- | --- | --- |
+| QuickJS | 5 → 6 | 1,425 → 1,494 | 2,602 → 2,540 | 23 → 24 |
+| JSC | 5 → 6 | 1,111 → 1,173 | 2,050 → 1,993 | 23 → 24 |
+| Browser | 5 → 6 | 1,330 → 1,408 | 2,355 → 2,320 | 26 → 25 |
+
+The largest named gain is `fetch-abort-stream-body.test.ts`, from 2 to
+63 passing tests on QuickJS. The response-stream fixture passes its first
+chunk, second chunk, server-stop cancellation, fixed Blob length and abort
+reason checks on every engine. The empty-FIN fixture forces acceptance before a
+peer ends and passes on native Bun and all rebuilt guests. The complete fixture
+suite passes 238/238 on each engine. The web gate and six-run HMR check also
+pass.
+
+The bounded runs report no formerly fully passing file lost. Individual test
+counts vary when a file deadline cuts off a later test. Matched controls retain
+the original QuickJS socket timing and browser lifecycle counts. The direct
+body-memory control reaches the same guest allocation limit on both artifacts.
+
+The exact commands and raw records are under
+`/work/reports/bun-wasm-http-scoreboard-20261018/final-r7/`.
+
 The server's whole-body buffering is a shared cause that the current code and
 runtime controls confirm. `serveHttp` waits for a complete upload before it
 calls a Node request listener. A client waiting for a response before ending
