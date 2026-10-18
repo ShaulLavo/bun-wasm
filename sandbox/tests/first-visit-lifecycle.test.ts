@@ -24,10 +24,8 @@ test("closing the first-visit proxy cancels its pending upstream response", asyn
     body = (await fetch(visit.url, { signal: AbortSignal.timeout(5_000) })).body;
     const socket = await incoming.promise;
     const closed = once(socket, "close", { signal: AbortSignal.timeout(1_000) });
-    closed.catch(() => {});
-    await visit.close();
+    await Promise.all([closed, visit.close()]);
     visit = undefined;
-    await closed;
     assert.equal(socket.destroyed, true);
   } finally {
     try { await Promise.all([body?.cancel().catch(() => {}), visit?.close(), browser?.close()]); }
