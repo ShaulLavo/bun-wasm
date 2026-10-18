@@ -7,6 +7,7 @@
   {"name":"unrecognized extension is not a decoder error","valid":true,"request":{"executable":"bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[],"worker":{"memoryLimitMb":"ignored by generic decoder"}}},
   {"name":"large unknown job decodes before service lookup","valid":true,"request":{"executable":"bun","argv":[],"env":{},"cwd":"/","job":4294967295,"fds":[]}},
   {"name":"duplicate child is a service validation error","valid":true,"request":{"executable":"bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[{"child":1,"parent":1},{"child":1,"parent":2}]}},
+  {"name":"untransferable parent descriptor","valid":true,"request":{"executable":"bun","argv":["bun"],"env":{},"cwd":"/","job":0,"fds":[{"child":9,"parent":91}]}},
   {"name":"null request","valid":false,"request":null},
   {"name":"missing executable","valid":false,"request":{"argv":[],"env":{},"cwd":"/","job":0,"fds":[]}},
   {"name":"empty executable","valid":false,"request":{"executable":"","argv":[],"env":{},"cwd":"/","job":0,"fds":[]}},
