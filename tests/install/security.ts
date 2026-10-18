@@ -100,7 +100,7 @@ function checkSecrets(cwd: string, result: Result, configured = false) {
   const basic = Buffer.from(`fixture-user:${configuredSecret}`).toString("base64");
   assert.equal((result.stdout + result.stderr).includes(basic), false, "Basic authorization appeared in diagnostics");
   assert.equal((result.stdout + result.stderr).includes(`Basic ${basic.slice(0, 12)}`), false, "truncated Basic authorization appeared in diagnostics");
-  const secrets = [secret, configuredSecret, basic];
+  const secrets = [secret, configuredSecret, basic].flatMap(value => [value, JSON.stringify(value).slice(1, -1)]);
   if (existsSync(join(cwd, "bun.lock"))) for (const value of secrets) assert.equal(readFileSync(join(cwd, "bun.lock"), "utf8").includes(value), false, "lock exposed credentials");
   const cache = join(cwd, "cache");
   if (existsSync(cache)) {
@@ -194,7 +194,7 @@ function configuredProject(name: string, registry = base, basic = false) {
 
 function record(name: string, native: Result, guest: Result, nativeRequests: CapturedRequest[], observations: Record<string, unknown> = {}) {
   if (!evidence) return;
-  const values = [secret, configuredSecret, Buffer.from(`fixture-user:${configuredSecret}`).toString("base64")];
+  const values = [secret, configuredSecret, Buffer.from(`fixture-user:${configuredSecret}`).toString("base64")].flatMap(value => [value, JSON.stringify(value).slice(1, -1)]);
   const clean = (value: string) => values.reduce((text, value) => text.replaceAll(value, "[planted-secret]"), value);
   mkdirSync(evidence, { recursive: true });
   writeFileSync(join(evidence, `${name}-comparison.json`), clean(JSON.stringify({ native, guest, nativeRequests, guestRequests: requests, observations }, null, 2)));
@@ -217,9 +217,11 @@ async function traceAuth(basic: boolean) {
 }
 
 async function metadataSecret(mode: string) {
+  if (mode === "echo-escaped") configuredSecret += '"\\';
   if (mode === "embedded-tarball") tarballMode = "embedded";
   if (mode === "embedded-bin") echo = base + `/:_authToken=${secret}/bin`;
   if (mode === "echo-token") echo = `bin/${configuredSecret}`;
+  if (mode === "echo-escaped") echo = `bin/${configuredSecret}`;
   if (mode === "echo-password") echo = `bin/${configuredSecret}`;
   if (mode === "echo-basic") echo = `bin/${Buffer.from(`fixture-user:${configuredSecret}`).toString("base64")}`;
   if (mode === "echo-error") tarballMode = mode;
@@ -334,6 +336,7 @@ const cases: [string, () => Promise<void>][] = [
   ["echo-token", () => metadataSecret("echo-token")],
   ["echo-basic", () => metadataSecret("echo-basic")],
   ["echo-password", () => metadataSecret("echo-password")],
+  ["echo-escaped", () => metadataSecret("echo-escaped")],
   ["echo-error", () => metadataSecret("echo-error")],
   ["redirect-same", () => redirectCase("same")],
   ["redirect-port", () => redirectCase("port")],
