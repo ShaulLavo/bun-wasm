@@ -781,3 +781,85 @@ fn startup_observation_is_nonconsuming_and_arbitrates_entry_against_terminal_sel
     assert_eq!(p.start_status(pid), CHILD);
     assert_eq!(p.poll(&subscription, 0), Err(CHILD));
 }
+
+#[test]
+fn finished_orphans_release_capacity_after_either_completion_order() {
+    let mut p = processes();
+    for late_child in [false, true] {
+        for round in 0..PROCESS_CAPACITY + 1 {
+            let parent = 10_000 + (round * 2) as i32;
+            let child = parent + 1;
+            fake_child(&p, parent, 0, ROOT_JOB, None);
+            fake_child(&p, child, parent, ROOT_JOB, None);
+            {
+                let mut state = p.runtime.state.lock().unwrap();
+                if !late_child { state.complete(child, FinalOutcome::Exit(7)); }
+                state.complete(parent, FinalOutcome::Exit(23));
+                if late_child { state.complete(child, FinalOutcome::Exit(7)); }
+                assert!(!state.processes.contains_key(&child));
+            }
+            assert_eq!(p.wait(parent), Ok(FinalOutcome::Exit(23)));
+            assert_eq!(p.wait(child), Err(CHILD));
+            assert_eq!(p.runtime.state.lock().unwrap().processes.len(), 1);
+        }
+    }
+    let pid = p.spawn(&request("/bin/bun", serde_json::json!([])));
+    assert!(pid > 0);
+    assert_eq!(completed(&p, pid), FinalOutcome::Exit(0));
+}
+
+#[test]
+fn orphan_completion_keeps_job_outcome_and_live_descendant_signal_authority() {
+    let p = processes();
+    fake_child(&p, 10, 0, ROOT_JOB, None);
+    fake_child(&p, 11, 10, 77, None);
+    p.runtime.state.lock().unwrap().jobs.insert(77, Job {
+        owner: 10, leader: 11, result: None,
+    });
+    p.runtime.state.lock().unwrap().complete(10, FinalOutcome::Exit(23));
+    assert_eq!(p.wait(10), Ok(FinalOutcome::Exit(23)));
+    assert_eq!(p.kill(11, 0), 0);
+    assert_eq!(p.wait_job(77, 1), Err(AGAIN));
+    p.runtime.state.lock().unwrap().complete(11, FinalOutcome::Exit(7));
+    assert!(!p.runtime.state.lock().unwrap().processes.contains_key(&11));
+    assert_eq!(p.wait_job(77, 1), Ok(FinalOutcome::Exit(7)));
+    assert_eq!(p.wait_job(77, 1), Err(CHILD));
+}
+
+#[test]
+fn executable_symlinks_resolve_in_guest_namespace_without_erasing_components() {
+    use std::os::unix::fs::symlink;
+    let mut p = processes();
+    // Place fixtures under the runtime's already-owned executable root; its Drop cleans them
+    // on success and panic, after all child execution and executable lookup have stopped.
+    let bin = p.runtime.dirs.iter().find(|(_, guest)| guest == "/bin").unwrap().0.clone();
+    let workspace = bin.parent().unwrap().join("aliases");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    symlink("/bin/bun", workspace.join("absolute")).unwrap();
+    symlink("../../bin/bun", workspace.join("sub/relative")).unwrap();
+    symlink("/bin", workspace.join("directory")).unwrap();
+    symlink("absolute", workspace.join("chain")).unwrap();
+    symlink("/missing/../bin/bun", workspace.join("missing")).unwrap();
+    symlink("/bin/bun/../node", workspace.join("not-directory")).unwrap();
+    symlink("loop-b", workspace.join("loop-a")).unwrap();
+    symlink("loop-a", workspace.join("loop-b")).unwrap();
+    symlink(&bin, workspace.join("host-root")).unwrap();
+    Arc::get_mut(&mut p.runtime).unwrap().dirs.push((workspace, "/workspace".into()));
+    for path in ["/workspace/absolute", "/workspace/sub/relative", "/workspace/directory/node", "/workspace/chain"] {
+        let id = p.access_start(path, "/", 1);
+        assert_eq!(access_result(&mut p, id), 0, "{path}");
+        let pid = p.spawn(&request(path, serde_json::json!([])));
+        assert!(pid > 0);
+        assert_eq!(completed(&p, pid), FinalOutcome::Exit(0), "{path}");
+    }
+    for (path, expected) in [
+        ("/workspace/absolute/../node", NOTDIR),
+        ("/workspace/missing", NOENT),
+        ("/workspace/not-directory", NOTDIR),
+        ("/workspace/loop-a", -32),
+        ("/workspace/host-root/bun", NOENT),
+    ] {
+        let id = p.access_start(path, "/", 1);
+        assert_eq!(access_result(&mut p, id), expected, "{path}");
+    }
+}

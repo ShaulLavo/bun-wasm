@@ -2238,8 +2238,12 @@ rewrite chooses an engine. Access queries observe the live filesystem, retain a
 process-owned request until take/cancel, and spawn independently rechecks
 admission. Native process admission matches Waffle b1f2b7dd's default 1024-slot
 process directory, including the root and completed children until consuming
-wait; exhaustion returns EAGAIN. Marker directories and access threads are
-owned and cleaned by the native runtime.
+wait; exhaustion returns EAGAIN. Executable aliases resolve component by component in the
+guest namespace: absolute symlink targets begin at guest `/`, relative targets begin at the
+link's parent, and missing/non-directory components before `..` remain errors. Resolution
+is bounded to 40 links and registry lookup uses the resolved guest path, never a host
+canonical path. Marker directories and access threads are owned and cleaned by the native
+runtime. These traversal rules are an original Rust adapter, not copied filesystem code.
 
 ## Native process descriptor bridge
 
@@ -2250,7 +2254,12 @@ revision is pinned by the consuming package. The Rust supervisor owns process/jo
 typed outcomes and child threads; shared open descriptions preserve inherited and duplicate
 pipe endpoint lifetimes. Weak Wasmtime stdio wrappers do not retain an endpoint after the
 last process descriptor closes, so EOF/EPIPE is published by descriptor ownership rather
-than by eventual `WasiCtx` destruction.
+than by eventual `WasiCtx` destruction. After guest descriptor/context teardown, the native
+supervisor publishes completion and removes safely finished orphan records whose direct
+parent has already completed or been collected. Running descendants retain their shutdown
+owner and ancestor signal authority; job leader outcomes remain independently consumable.
+This original safe-completion fence matches Waffle's lifecycle contract without copying its
+supervisor implementation.
 
 The preview1 bridge intercepts process-owned `fd_read`, `fd_write`, `fd_close`, `fd_renumber`,
 `fd_fdstat_get` and `fd_filestat_get`. It keeps preview1's blocking I/O and positive errno

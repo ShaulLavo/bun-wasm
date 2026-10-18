@@ -1,5 +1,5 @@
 //! Original native adapter for Waffle's live executable registry contract.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File};
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -86,28 +86,26 @@ impl Executables {
             format!("{cwd}/{executable}")
         };
         let mut path = PathBuf::from("/");
-        for component in absolute.split('/').skip(1) {
-            // Require the current entry to be a directory even before `..` or `.`.
-            if !is_directory(&path, dirs)? {
-                return Err(NOTDIR);
-            }
-            match component {
-                ".." => {
-                    path.pop();
-                }
+        let mut remaining: VecDeque<String> = absolute.split('/').skip(1).map(str::to_owned).collect();
+        let mut links = 0;
+        while let Some(component) = remaining.pop_front() {
+            // Inspect each original component, including those before `..` and trailing `/`.
+            if !matches!(entry(&path, dirs)?, Entry::Directory) { return Err(NOTDIR); }
+            match component.as_str() {
+                ".." => { path.pop(); }
                 "" | "." => {}
                 part => path.push(part),
             }
-            // Each original component must exist, not just the final path.
-            is_directory(&path, dirs)?;
+            if let Entry::Symlink(target) = entry(&path, dirs)? {
+                links += 1;
+                if links > 40 { return Err(-32); } // WASI ELOOP.
+                path.pop();
+                if target.is_absolute() { path = PathBuf::from("/"); }
+                let target = target.to_str().ok_or(IO)?;
+                for part in target.split('/').rev() { remaining.push_front(part.to_owned()); }
+            }
         }
-        let directory = is_directory(&path, dirs)?;
-        if absolute.ends_with('/') && !directory {
-            return Err(NOTDIR);
-        }
-        if directory {
-            return Err(ACCES);
-        }
+        if matches!(entry(&path, dirs)?, Entry::Directory) { return Err(ACCES); }
         self.entries
             .lock()
             .unwrap()
@@ -125,13 +123,15 @@ impl Drop for Executables {
     }
 }
 
-fn is_directory(path: &Path, dirs: &[(PathBuf, String)]) -> Result<bool, i32> {
+enum Entry { Directory, File, Symlink(PathBuf) }
+
+fn entry(path: &Path, dirs: &[(PathBuf, String)]) -> Result<Entry, i32> {
     // A nested mount makes its ancestors directories in the guest namespace.
     if dirs
         .iter()
         .any(|(_, guest)| Path::new(guest) != path && Path::new(guest).starts_with(path))
     {
-        return Ok(true);
+        return Ok(Entry::Directory);
     }
     let mapped = dirs
         .iter()
@@ -144,9 +144,12 @@ fn is_directory(path: &Path, dirs: &[(PathBuf, String)]) -> Result<bool, i32> {
         .max_by_key(|(length, _)| *length)
         .map(|(_, host)| host);
     let host = mapped.ok_or(NOENT)?;
-    fs::metadata(host)
-        .map(|metadata| metadata.is_dir())
-        .map_err(map_io)
+    let metadata = fs::symlink_metadata(&host).map_err(map_io)?;
+    if metadata.is_symlink() {
+        // Interpret targets in the guest namespace, never against the host's root filesystem.
+        Ok(Entry::Symlink(fs::read_link(host).map_err(map_io)?))
+    } else if metadata.is_dir() { Ok(Entry::Directory) }
+    else { Ok(Entry::File) }
 }
 
 fn map_io(error: io::Error) -> i32 {

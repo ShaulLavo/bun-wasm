@@ -82,6 +82,30 @@ struct Supervisor {
     reaped_jobs: HashSet<i32>,
 }
 
+impl Supervisor {
+    /// Publish only after guest descriptor/context teardown. Like Waffle's safe-exit fence,
+    /// collect completed orphans without discarding the job's independent leader outcome.
+    fn complete(&mut self, pid: i32, outcome: FinalOutcome) {
+        let child = self.processes.get_mut(&pid).expect("admitted child record");
+        child.result = Some(outcome);
+        if let Some(job) = self.jobs.get_mut(&child.job)
+            && job.leader == pid
+        {
+            job.result = Some(outcome);
+        }
+        let orphans: Vec<_> = self.processes.iter().filter_map(|(&pid, child)| {
+            (child.result.is_some() && child.parent != 0
+                && self.processes.get(&child.parent).is_none_or(|parent| parent.result.is_some()))
+                .then_some(pid)
+        }).collect();
+        for pid in orphans {
+            // The current thread may own this record; dropping its handle detaches only the
+            // completed epilogue. Running descendants retain their records and shutdown joins.
+            self.processes.remove(&pid);
+        }
+    }
+}
+
 struct Job {
     owner: i32,
     leader: i32,
@@ -604,16 +628,7 @@ impl Processes {
                     }
                 };
                 let mut state = runtime.state.lock().unwrap();
-                state
-                    .processes
-                    .get_mut(&pid)
-                    .expect("admitted child record")
-                    .result = Some(outcome);
-                if let Some(job) = state.jobs.get_mut(&job)
-                    && job.leader == pid
-                {
-                    job.result = Some(outcome);
-                }
+                state.complete(pid, outcome);
                 drop(state);
                 notify.bump();
             });
