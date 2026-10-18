@@ -6,7 +6,6 @@ import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } f
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { startRun } from "../src/runner";
-import { waitStatus } from "./process-root-fixture";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { RunRequest, WorkerMessage } from "../src/worker";
 
@@ -125,7 +124,7 @@ test("generic host failure confirms after its filesystem fence before physical t
     expect(state.quiescences()).toBe(1);
     expect(confirmedAtTermination).toBe(-1);
     state.release();
-    expect(waitStatus(await waiting)).toBe(126);
+    expect(await waiting).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
     await Promise.resolve();
     expect(Atomics.load(workerProcessState(transport).confirmed, 0)).toBe(1);
     expect(confirmedAtTermination).toBe(1);
