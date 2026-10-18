@@ -75,7 +75,8 @@ function result(value: unknown) {
 
 function loadRun(path: string) {
   const data = record(JSON.parse(readFileSync(path, "utf8")));
-  if (!Array.isArray(data.results)) throw new Error("Missing suite results");
+  if (!Array.isArray(data.results) || count(data.selected_files) !== data.results.length) throw new Error("Incomplete suite results");
+  if (data.results.some(value => record(value).interrupted === true)) throw new Error("Interrupted suite result");
   return { provenance: record(data.provenance), results: data.results.map(result) };
 }
 
@@ -91,7 +92,7 @@ function summarize(results: ReturnType<typeof result>[]) {
 
 function measurement(directory: string, engine: string) {
   const before = loadRun(join(directory, `path-before-${engine}.json`));
-  const current = loadRun(join(directory, `full-after-${engine}.json`));
+  const current = loadRun(join(directory, `focused-after-${engine}.json`));
   const files = new Set(before.results.map(row => row.file));
   if (files.size !== 19 || before.results.length !== 19) throw new Error("Expected the 19-file path selection");
   const after = current.results.filter(row => files.has(row.file));
@@ -112,13 +113,45 @@ function measurement(directory: string, engine: string) {
   return { engine, before: { provenance: provenance(before), summary: summarize(before.results), results: before.results }, after: { provenance: provenance(current), summary: summarize(after), results: after } };
 }
 
+function regression(directory: string, engine: string) {
+  const baseline = loadRun(join(directory, "720-before-quickjs.json"));
+  const files = new Set(baseline.results.filter(row => row.fully_passing).map(row => row.file));
+  const current = loadRun(join(directory, `focused-after-${engine}.json`));
+  const rows = current.results.filter(row => files.has(row.file));
+  if (files.size !== 82 || rows.length !== 82 || new Set(rows.map(row => row.file)).size !== 82) throw new Error("Incomplete regression selection");
+  const failures = rows.filter(row => !row.fully_passing);
+  const controlPath = join(directory, `control-before-${engine}.json`);
+  const recheckPath = join(directory, `control-recheck-${engine}.json`);
+  const controls = existsSync(controlPath) ? loadRun(controlPath) : undefined;
+  const rechecks = existsSync(recheckPath) ? loadRun(recheckPath) : undefined;
+  const original = loadRun(join(directory, `path-before-${engine}.json`));
+  if (controls && controls.provenance.wasm_sha256 !== original.provenance.wasm_sha256) throw new Error("Control does not use unchanged-main artifact");
+  if (rechecks && rechecks.provenance.wasm_sha256 !== current.provenance.wasm_sha256) throw new Error("Recheck does not use current artifact");
+  for (const run of [controls, rechecks]) {
+    if (!run) continue;
+    for (const key of ["suite_commit", "runner_sha256", "network", "timeout_seconds", "test_timeout_ms", "dependencies", "test_dependencies", "host_sources", "runtime_package"]) {
+      if (JSON.stringify(run.provenance[key]) !== JSON.stringify(current.provenance[key])) throw new Error(`Control input changed: ${engine} ${key}`);
+    }
+  }
+  const investigations = failures.map(row => {
+    const before = controls?.results.find(control => control.file === row.file);
+    const recheck = rechecks?.results.find(control => control.file === row.file);
+    if (!before || !recheck) throw new Error(`Missing matched control: ${engine} ${row.file}`);
+    if (before.fully_passing && !recheck.fully_passing) throw new Error(`Unresolved regression: ${engine} ${row.file}`);
+    return { initial: row, unchanged_main: before, recheck };
+  });
+  return { engine, initial: summarize(rows), investigated: investigations };
+}
+
 const measurements = new URL("docs/bun-test-suite/category-d-path-results.json", root);
 const resultsOption = process.argv.indexOf("--results");
 if (resultsOption >= 0) {
   const directory = process.argv[resultsOption + 1];
   if (!directory || check) throw new Error("Use --results <report directory> without --check");
   const data = { source_commit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), engines: ["quickjs", "jsc", "browser"].map(engine => measurement(directory, engine)) };
+  const controls = { selection: "Fully passing files in the unchanged-main 720-file QuickJS replay", engines: ["quickjs", "jsc", "browser"].map(engine => regression(directory, engine)) };
   writeFileSync(measurements, JSON.stringify(data, null, 2) + "\n");
+  writeFileSync(new URL("docs/bun-test-suite/category-d-regression-results.json", root), JSON.stringify(controls, null, 2) + "\n");
 }
 
 const document = new URL("docs/bun-test-suite/category-d-runtime.md", root);

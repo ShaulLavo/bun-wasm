@@ -14,6 +14,20 @@ def record(path, error, excerpt=""):
 
 
 class Classification(unittest.TestCase):
+    def test_partial_refresh_preserves_unmeasured_rows(self):
+        previous = [{"file": "unmeasured", "error": "retain"}, {"file": "now-passing"}, {"file": "still-failing", "error": "old"}]
+        latest = [{"file": "still-failing", "error": "new"}, {"file": "new-failure"}]
+        merged = report.merge_measured_failures(previous, latest, ["now-passing", "still-failing", "new-failure"])
+        self.assertEqual(merged, [{"file": "new-failure"}, {"file": "still-failing", "error": "new"}, {"file": "unmeasured", "error": "retain"}])
+
+    def test_partial_refresh_rejects_duplicate_selection(self):
+        with self.assertRaises(ValueError):
+            report.merge_measured_failures([], [], ["duplicate", "duplicate"])
+
+    def test_partial_refresh_rejects_unmeasured_failure(self):
+        with self.assertRaises(ValueError):
+            report.merge_measured_failures([], [{"file": "outside"}], ["inside"])
+
     def test_reviewed_large_array_control_requires_external_echo(self):
         item = record("js/bun/spawn/spawn-large-array-length.test.ts", "error: expect(received).toBe(expected)")
         item["failing_tests"] = ["spawn with spoofed array length > Bun.spawnSync still works with normal arrays"]

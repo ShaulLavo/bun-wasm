@@ -328,18 +328,64 @@ groups already implemented on main are not counted as new opportunities here.
 
 ## Measurements
 
-The fixed selection has 19 path files. The after rows come from the fresh full
-census, filtered to these exact paths. Suite revision, runner, dependencies,
+The fixed selection has 19 path files. The after rows come from a fresh
+101-file focused replay, filtered to these exact paths. Suite revision, runner, dependencies,
 network policy, and deadlines match the before rows. Each engine retains every
-previously passing file and every observed pass. Timing is not compared.
+previously passing path file and every observed path pass. Timing is not compared.
 
 <!-- measurements:start -->
-Measurements are added after the three-engine focused and full gates finish.
+| Engine | Fully passing files before / after | Observed passes before / after | Failures before / after | Timeouts before / after |
+| --- | --- | --- | --- | --- |
+| quickjs | 5 / 17 | 74 / 123 | 50 / 1 | 0 / 0 |
+| jsc | 5 / 17 | 74 / 123 | 50 / 1 | 0 / 0 |
+| browser | 5 / 17 | 74 / 123 | 50 / 1 | 0 / 0 |
 <!-- measurements:end -->
 
 Regenerate the compact evidence and table from the retained raw JSON with
 `node scripts/group-suite-category-d.ts --results /work/reports/bun-wasm-category-d-runtime-semantics`.
 Normal generation and `--check` then use the committed compact evidence.
+
+The remaining failure is `js/node/path/resolve.test.js`, whose Windows
+drive-relative child-process test cannot launch at guest cwd `/`.
+`posix-relative-on-windows.test.js` is skip-only on this platform. Neither is
+counted as fully passing. No path file times out.
+
+### Previously passing controls
+
+The control selection contains the 82 files that fully passed the fresh
+unchanged-main QuickJS replay of the original 720 rows. Each engine's focused
+job includes those exact 82 files plus the 19 path files. The jobs use separate
+heavy-wrapper reservations. These controls test for regressions; gains that
+already shipped on main are not attributed to this path change.
+
+| Engine | Initially fully passing controls | Observed passes | Failures | File timeouts |
+| --- | --- | --- | --- | --- |
+| QuickJS | 82/82 | 1,472 | 0 | 0 |
+| JSC | 81/82 | 1,471 | 1 | 0 |
+| Browser | 71/82 | 1,275 | 14 | 5 |
+
+Matched unchanged-main checks and the same-artifact rechecks for every
+initially failing control are recorded in
+[category-d-regression-results.json](category-d-regression-results.json).
+The initial results remain visible even when a recheck passes.
+JSC's initial failure reported RSS growth of 34.44 MB in the worker-context
+leak assertion. The frozen main artifact and unchanged current artifact both
+pass its isolated recheck. No leak-freedom claim follows from that outcome.
+
+All 11 initial browser losses also fail with the frozen unchanged-main browser
+artifact. Five are file timeouts in `cli/format/{bunfig,glob,oxfmt-cli/oxfmt-cli}`
+and `cli/lint/{glob,hints}`. The other six files are
+`cli/install/test-dev-peer-dependency-priority.test.ts` and regression issues
+11793, 24387, 28170, 36577, and 40561. Their install, child-output, snapshot, and
+individual-test deadline observations remain outside this path fix.
+The same 11 browser files fail again with the unchanged current artifact,
+with the same five file timeouts. There is no reproduced new file-level
+control failure. The raw baseline and recheck logs preserve exact diagnostics.
+
+Only the 101 measured files are eligible for failure-index updates. The
+refresh preserves every unmeasured row byte-for-byte at the field level.
+Full-census summaries and tables retain the previous census. The coordinator
+deferred the full scoreboard refresh to a separate census run.
 
 ## Reproduction and retained evidence
 
@@ -348,13 +394,17 @@ Run the focused selection on each built engine through the heavy wrapper.
 ```sh
 export PATH=$HOME/.local/share/mise/shims:$PATH
 source env.sh
-scripts/bun-suite.sh --engine quickjs --network loopback --jobs 2 --timeout 15 \
+scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 --timeout 15 \
   --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" \
   --output /work/tmp/bun-wasm-path-quickjs.json --log-dir /work/tmp/bun-wasm-path-logs \
   js/node/path
 ```
 
-Repeat with `--engine jsc` and `--engine browser`. The fixture
+Repeat with `--engine jsc` and `--engine browser`. To reproduce the controls,
+use the 82 non-path entries in `partial-summary.json` as explicit suite paths,
+with the same options and one separately queued job per engine.
+`category-d-regression-results.json` names the initially failing subset and
+records its frozen-main and same-artifact rechecks. The fixture
 `scripts/test.sh --no-build --engine <engine> node-path-native` covers Windows
 roots, drives, namespaces, long paths, lone surrogates, and boxed-string
 conversion. The original wasm fails its first basename assertion.
