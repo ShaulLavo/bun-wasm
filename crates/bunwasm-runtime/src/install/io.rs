@@ -65,7 +65,19 @@ impl Registry {
             .as_ref()
             .and_then(|value| value.split_once(' '))
         {
-            Some((_, value)) => message.replace(value, "[redacted]"),
+            Some((scheme, value)) => {
+                let message = message.replace(value, "[redacted]");
+                if scheme != "Basic" {
+                    return message;
+                }
+                let decoded = String::from_utf8(encoding::base64_decode(value)).unwrap_or_default();
+                match decoded.split_once(':') {
+                    Some((_, password)) if !password.is_empty() => {
+                        message.replace(password, "[redacted]")
+                    }
+                    _ => message,
+                }
+            }
             None => message,
         }
     }
@@ -244,13 +256,27 @@ pub fn fetch(url: &str, tarball: bool, refresh: bool, registry: &Registry) -> Re
         && fresh
         && let Ok(bytes) = fs::read(&cache)
     {
-        return Ok(bytes);
+        if cacheable(&bytes, tarball, registry) {
+            return Ok(bytes);
+        }
+        fs::remove_file(&cache).map_err(|_| "Could not discard unsafe registry cache data")?;
     }
     let bytes = request(&url_value, tarball, refresh, registry)?;
-    if fs::create_dir_all(cache_dir()).is_ok() {
+    if cacheable(&bytes, tarball, registry) && fs::create_dir_all(cache_dir()).is_ok() {
         let _ = write(&cache, &bytes);
     }
     Ok(bytes)
+}
+
+fn cacheable(bytes: &[u8], tarball: bool, registry: &Registry) -> bool {
+    if tarball {
+        return true;
+    }
+    let Ok(metadata) = serde_json::from_slice::<Value>(bytes) else {
+        return false;
+    };
+    let text = metadata.to_string();
+    registry.redact(&text) == text
 }
 
 fn request(

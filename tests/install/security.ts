@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { packageFixture } from "./registry.mjs";
 
@@ -83,6 +83,10 @@ function checkSecrets(cwd: string, result: Result) {
   assert.equal(result.stderr.includes(secret), false, "stderr/error exposed URL credentials");
   assert.equal((result.stdout + result.stderr).includes(configuredSecret), false, "configured authorization appeared in diagnostics");
   if (existsSync(join(cwd, "bun.lock"))) assert.equal(readFileSync(join(cwd, "bun.lock"), "utf8").includes(secret), false, "lock exposed URL credentials");
+  const cache = join(cwd, "cache");
+  if (existsSync(cache)) {
+    for (const entry of readdirSync(cache)) assert.equal(readFileSync(join(cache, entry), "utf8").includes(secret), false, "metadata cache exposed URL credentials");
+  }
   for (const request of requests) {
     assert.equal(request.url.includes(secret), false, "request URL exposed credentials");
     assert.equal(request.authorization, null, "URL credentials produced an authorization header");
