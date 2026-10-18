@@ -7,8 +7,9 @@ import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 import { assertCausalIdleWake, assertFatalEngineCompletion, assertNativeEngineCompletion, engineInterruptionFailure, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 import { measureInterruptionOverhead } from "./engine-interruption-benchmark";
 import { defaultSignalGuest, handledSignalGuest, idleSignalGuest } from "./engine-interruption-guests";
+import { assertFatalSleepSync, assertHandledSleepSync, sleepSyncSignalGuest } from "./engine-interruption-sleep";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
-import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignalDelivery } from "./engine-interruption-scope";
+import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignal, type EngineSignalDelivery } from "./engine-interruption-scope";
 import { FunctionalCases, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
 
 interface CaseResources {
@@ -155,7 +156,7 @@ async function scope(module: WebAssembly.Module, engine: Engine, route: EngineIn
   resources?.contexts.push(context);
   let disposed = false;
   const owned = { ...base,
-    kill(child: Child, signal: 2 | 15, delivery: EngineSignalDelivery = route === "legacy" ? "host" : "page-kill") { return base.kill(child, signal, delivery); },
+    kill(child: Child, signal: EngineSignal, delivery: EngineSignalDelivery = route === "legacy" ? "host" : "page-kill") { return base.kill(child, signal, delivery); },
     async ready(child: Child): Promise<ObservedWorker> {
       try { await until(() => { base.drain(child); return child.stderr.includes("ready\n"); }, "guest ready", 15_000, () => guestFinished(guestWorkers.get(child.pid))); }
       catch (error) {
@@ -418,6 +419,50 @@ async function testIdleHandled(module: WebAssembly.Module, engine: Engine, route
     } });
   } finally { idleWaitTimeoutMs = 0; }
 }
+async function testSleepSyncSignals(module: WebAssembly.Module, engine: Engine): Promise<void> {
+  const route: EngineInterruptionRoute = "runtimeProcess";
+  const delivery: EngineSignalDelivery = "page-kill";
+  // No timeout stretching: this proof measures the real synchronous 1 s sleep.
+  equal(idleWaitTimeoutMs, 0, "sleepSync uses unmodified production wait timeouts");
+  await runCase({ engine, route, name: "sleepSync-handled-SIGUSR1", delivery }, async () => {
+    const owned = await scope(module, engine, route);
+    try {
+      const child = owned.spawn(sleepSyncSignalGuest(true));
+      const worker = await owned.ready(child);
+      await until(() => Atomics.load(worker.probe, probeCell.idleWaiting) === 1,
+        "sleepSync handled guest is blocked in its production wait", 15_000, () => guestFinished(worker));
+      equal(Atomics.load(child.signalState, 10) & 3, 2, "SIGUSR1 handler registered before sleep");
+      equal(await owned.kill(child, 10, delivery), 0, "SIGUSR1 accepted during sleepSync");
+      await until(() => child.stderr.includes("after-pump 1\n"), "SIGUSR1 callback delivered after sleepSync", 15_000, () => guestFinished(worker));
+      await owned.exit(child, 0);
+      const result = await owned.outcome(child);
+      equal(result.kind, "exited", "handled sleepSync keeps ordinary process outcome");
+      equal(result.code, 0, "handled sleepSync exits normally");
+      await until(() => Atomics.load(worker.probe, probeCell.runReturned) === 1, "handled sleepSync _start returned");
+      const evidence = snapshotProbe(worker.probe);
+      const elapsed = assertHandledSleepSync(child.stderr, evidence);
+      checks.push({ engine, route, delivery, name: "runtimeProcess-page-sleepSync-SIGUSR1-deferred-handler", evidence: { elapsed, result, stderr: child.stderr, evidence } });
+    } finally { await owned.dispose(); }
+  });
+  await runCase({ engine, route, name: "sleepSync-default-SIGUSR1", delivery }, async () => {
+    const owned = await scope(module, engine, route);
+    try {
+      const child = owned.spawn(sleepSyncSignalGuest(false));
+      const worker = await owned.ready(child);
+      await until(() => Atomics.load(worker.probe, probeCell.idleWaiting) === 1,
+        "sleepSync fatal guest is blocked in its production wait", 15_000, () => guestFinished(worker));
+      equal(await owned.kill(child, 10, delivery), 0, "default SIGUSR1 accepted during sleepSync");
+      await until(() => guestFinished(worker), "default SIGUSR1 unwound sleeping guest", 15_000);
+      await owned.exit(child, 138);
+      const result = await owned.outcome(child);
+      equal(result.kind, "signaled", "default sleepSync signal is terminal");
+      equal(result.code, 10, "default sleepSync signal is SIGUSR1");
+      const evidence = snapshotProbe(worker.probe);
+      assertFatalSleepSync(child.stderr, evidence);
+      checks.push({ engine, route, delivery, name: "runtimeProcess-page-sleepSync-default-SIGUSR1-unwinds", evidence: { result, stderr: child.stderr, evidence } });
+    } finally { await owned.dispose(); }
+  });
+}
 async function testPreview1Clock(root: boolean): Promise<void> {
   const module = new WebAssembly.Module(preview1SignalClockGuest());
   async function runTrial(suppressNotify: boolean) {
@@ -576,6 +621,7 @@ void (async () => {
         await runCase({ engine, route: "runtimeProcess", name: "nested-SIGINT-default-15" }, () => testDefault(loaded, engine, 15, true, "runtimeProcess"));
         await testIdleHandled(loaded, engine, "legacy", true);
         await testIdleHandled(loaded, engine, "runtimeProcess", true);
+        await testSleepSyncSignals(loaded, engine);
       }
     }
     await testPreview1Clock(true); await testPreview1Clock(false);

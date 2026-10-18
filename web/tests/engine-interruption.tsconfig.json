@@ -22,6 +22,8 @@
     "engine-interruption-benchmark.test.ts",
     "engine-interruption-guests.ts",
     "engine-interruption-guests.test.ts",
+    "engine-interruption-sleep.ts",
+    "engine-interruption-sleep.test.ts",
     "engine-interruption-safari.ts",
     "engine-interruption-safari.test.ts",
     "engine-interruption-idle.test.ts",

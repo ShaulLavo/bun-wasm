@@ -11,6 +11,7 @@ import type { Engine } from "../src/bun-executor";
 
 // The case families retain their names/counters; both now use the generic transport.
 export type EngineInterruptionRoute = "legacy" | "runtimeProcess";
+export type EngineSignal = 2 | 10 | 15;
 export type EngineSignalDelivery = "host" | "page-kill" | "page-killJob";
 export interface EngineInterruptionChild {
   pid: number;
@@ -28,7 +29,7 @@ export interface EngineInterruptionScope {
   drain(child: EngineInterruptionChild): void;
   wait(child: EngineInterruptionChild): number;
   outcome(child: EngineInterruptionChild): Promise<ProcessExit>;
-  kill(child: EngineInterruptionChild, signal: 2 | 15, delivery?: EngineSignalDelivery): Promise<number>;
+  kill(child: EngineInterruptionChild, signal: EngineSignal, delivery?: EngineSignalDelivery): Promise<number>;
   dispose(): Promise<void>;
 }
 
@@ -118,7 +119,7 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
       drain(_child: EngineInterruptionChild) { if (failure) throw failure; },
       wait(child: EngineInterruptionChild) { return readOutcome(outcomes.get(child.pid)!)?.status ?? -2; },
       async outcome(child: EngineInterruptionChild) { return (await pageService.ready()).waitForExit(client.pid, child.pid); },
-      async kill(child: EngineInterruptionChild, signal: 2 | 15, delivery: EngineSignalDelivery = "host") {
+      async kill(child: EngineInterruptionChild, signal: EngineSignal, delivery: EngineSignalDelivery = "host") {
         if (delivery === "host") return abi.imports.kill!(child.pid, signal);
         if (delivery === "page-killJob") await pageService.killJob(child.jobId, signal);
         else await pageService.kill(child.pid, signal);
