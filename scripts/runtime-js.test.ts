@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
-const scratch = mkdtempSync("/work/tmp/bun-wasm-runtime-js-");
+const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-runtime-js-"));
 const manifest = join(scratch, "crates/runtime");
 const source = join(manifest, "src/js");
 const out = join(scratch, "out");
