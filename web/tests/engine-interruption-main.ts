@@ -596,7 +596,8 @@ void (async () => {
   let fatalError: unknown;
   let functionalComplete = false;
   try {
-    truth(crossOriginIsolated, "engine interruption requires cross-origin isolation");
+    const runEngineMatrix = async () => {
+      truth(crossOriginIsolated, "engine interruption requires cross-origin isolation");
     for (const [engine, name] of [["quickjs", "bun.wasm"], ["jsc", "bun-jsc.wasm"], ["browser", "bun-browser.wasm"]] as const) {
       let module: WebAssembly.Module | undefined, hash = "";
       await runCase({ engine, route: "artifact", name: "load-candidate" }, async () => {
@@ -651,6 +652,8 @@ void (async () => {
         benchmarks.push({ wasmSha256: hash, pristineSha256, ...await benchmark(module, engine, pristine) });
       }
     }
+      }
+      await runEngineMatrix();
   } catch (error) { fatalError = error; }
   finally {
     await destroy(); clearTimeout(watchdog);
