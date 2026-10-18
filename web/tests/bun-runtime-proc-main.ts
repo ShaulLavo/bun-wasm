@@ -5,6 +5,7 @@ import { runtimeProcFixture } from "./runtime-proc-fixtures";
 import { bunRuntimeProcFixture, bunRuntimeProcPending, bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
 
 const parameters = new URLSearchParams(location.search);
+const publishedDefault = parameters.has("published-default");
 const name = parameters.get("scenario") ?? "nested";
 const scenario = bunRuntimeProcScenarios.find(item => item.name === name);
 const nativeWorker = globalThis.Worker;
@@ -64,9 +65,8 @@ try {
   const supervisor = await service.ready();
   supervisor.onChildExit(event => confirmedExits.push({ pid: event.pid, parentPid: event.parentPid, job: event.job,
     status: event.result.status, kind: event.result.kind }));
-  const module = name === "generic-control" ? new WebAssembly.Module(runtimeProcFixture())
-    : await WebAssembly.compileStreaming(fetch("./bun-browser.wasm"));
-  if (name === "generic-control") {
+  const module = name === "generic-control" ? new WebAssembly.Module(runtimeProcFixture()) : undefined;
+  if (module) {
     runtime.registerAdapter("preview1", (context, processes) => processes.launchWorker(context, {
       workerUrl: new URL("./preview1-worker.js", location.href).href,
       request: { module: context.module, args: context.request.argv, env: context.request.env, interruptible: context.interruptible },
@@ -75,7 +75,11 @@ try {
     await runtime.filesystem.writeFile("/bin/bun", "fixture");
     runtime.registerProgram("/bin/bun", { adapter: "preview1", module, cooperative: true });
   } else {
-    const options = { workerUrl: new URL("./worker.js", location.href).href, engine: "browser" as const, module,
+    const workerUrl = new URL("./worker.js", location.href).href;
+    // Explicit opt-in only: this mode exercises the package's public default descriptor,
+    // with no engine/module/asset/URL override and no local artifact fallback.
+    const options = publishedDefault ? { workerUrl } : { workerUrl, engine: "browser" as const,
+      module: await WebAssembly.compileStreaming(fetch("./bun-browser.wasm")),
       executables: ["/bin/bun", "/bin/node"] };
     // Disposal must unregister aliases and adapters, not merely clear a private installed flag.
     const first = await installBunAdapters(runtime, options);
@@ -92,7 +96,7 @@ try {
       module: () => { throw new Error("bun-runtime-proc-start-failed-control"); },
     });
   }
-  const rootModule = name === "generic-control" ? module : new WebAssembly.Module(bunRuntimeProcFixture(scenario!));
+  const rootModule = module ?? new WebAssembly.Module(bunRuntimeProcFixture(scenario!));
   const pid = runtime.identities.pid(), job = runtime.identities.job();
   const transport = createWorkerProcessTransport({ pid, job, identity: runtime.identities.buffer });
   rootConnection = runtime.filesystem.fork();

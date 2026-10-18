@@ -43,6 +43,10 @@ const load = (pointer: number) => constant(pointer).concat([0x28, 2, 0]);
 const check = (expression: number[], expected: number, stage: number) => expression.concat(constant(expected),
   [0x47, 0x04, 0x40], call(4, constant(stage)), [0x00, 0x0b]);
 const close = (fd: number[]) => check(call(6, fd), 0, 204);
+// Failure-only diagnostics use the existing scratch locals and preserve the ABI return.
+const decimal = (value: number[], end: number) => value.concat(set(2), constant(end), set(3), [0x03, 0x40],
+  get(3), get(2), constant(10), [0x70], constant(48), [0x6a, 0x3a, 0, 0],
+  get(3), constant(1), [0x6b], set(3), get(2), constant(10), [0x6e, 0x22, 2, 0x0d, 0, 0x0b]);
 
 /** All spawns happen before any wait: pipelines must run concurrently, not buffer in the page. */
 export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<ArrayBuffer> {
@@ -96,9 +100,16 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
     body.push(...check(call(9, call(1, get(4)), constant(9)), 0, 210));
   }
   if (scenario.pipe) body.push(...close(get(0)), ...close(get(1)));
+  const waitDiagnostic = "runtime-proc wait_job errno=0000000000 result-kind=0000000000 result-value=0000000000\n";
+  memory.set(encoder.encode(waitDiagnostic), 768);
   for (const [index, command] of scenario.commands.entries()) {
-    body.push(...check(call(2, call(1, get(index + 4)), constant(0), constant(256)), 0, 205),
-      ...check(load(256), command.kind ?? 0, 206), ...check(load(260), command.status ?? 0, 206));
+    body.push(...constant(384).concat(call(2, call(1, get(index + 4)), constant(0), constant(256)), [0x36, 2, 0],
+      load(384), [0x04, 0x40],
+      decimal(constant(0).concat(load(384), [0x6b]), 768 + waitDiagnostic.indexOf(" result-kind") - 1),
+      decimal(load(256), 768 + waitDiagnostic.indexOf(" result-value") - 1),
+      decimal(load(260), 768 + waitDiagnostic.indexOf("\n") - 1),
+      call(3, constant(2), constant(768), constant(waitDiagnostic.length)), [0x1a, 0x0b],
+      check(load(384), 0, 205), check(load(256), command.kind ?? 0, 206), check(load(260), command.status ?? 0, 206)));
   }
   const marker = "external-root-ok\n"; memory.set(encoder.encode(marker), 512);
   body.push(...check(call(3, constant(1), constant(512), constant(marker.length)), marker.length, 207));
