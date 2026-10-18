@@ -14,6 +14,6 @@ const env = { ...process.env };
 // env.sh's WASI warning cap must not mask this host correctness gate.
 delete env.CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS;
 const jobs = process.env.QUALITY_RUST_JOBS ?? "1";
-run(["cargo", "clippy", "--locked", "--workspace", "--all-targets", "-j", jobs, "--", "-D", "warnings"], env);
-run(["cargo", "test", "--locked", "--workspace", "-j", jobs], env);
+run(["cargo", "clippy", "--locked", "--workspace", "--all-targets", "--release", "--no-deps", "-j", jobs, "--", "-D", "warnings"], env);
+run(["cargo", "test", "--locked", "--workspace", "--release", "-j", jobs], env);
 run(["cargo", "machete", "crates"], env);
