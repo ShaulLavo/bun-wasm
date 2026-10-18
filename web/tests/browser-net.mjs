@@ -294,11 +294,15 @@ async function runEngine(browserName, engine, type, options, appUrl, fixtureBase
   const out = await waitFor(page, /FETCH-DONE|error:|crashed/);
   for (const line of expectedFetch(browserName)) check(`${name}: ${line.split(":")[0]}`, out.includes(line), `expected ${JSON.stringify(line)} in\n${out}`);
 
-  for (const fixture of ["net-tcp", "net-bun-tcp", "net-http-upgrade", "net-ws-builtin"]) {
-    const source = readFileSync(join(web, "../tests/fixtures", fixture, "index.js"), "utf8");
+  for (const [fixture, entry] of [
+    ["net-tcp", "index.js"], ["net-bun-tcp", "index.js"],
+    ["net-http-upgrade", "index.js"], ["net-ws-builtin", "index.js"],
+    ["net-http-upload-stream", "index.ts"], ["net-bun-response-stream", "index.ts"],
+  ]) {
+    const source = readFileSync(join(web, "../tests/fixtures", fixture, entry), "utf8");
     const expected = readFileSync(join(web, "../tests/fixtures", fixture, "expected.txt"), "utf8").trim();
-    await page.evaluate(src => globalThis.playground.fs.writeFile("/home/user/tcp.js", src), source);
-    await page.evaluate(() => globalThis.playground.shell.submit("bun run tcp.js"));
+    await page.evaluate(src => globalThis.playground.fs.writeFile("/home/user/tcp.ts", src), source);
+    await page.evaluate(() => globalThis.playground.shell.submit("bun run tcp.ts"));
     const marker = expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const output = await waitFor(page, new RegExp(marker + "|error:|crashed"));
     check(`${name}: ${fixture}`, output.includes(expected), output.slice(-1500));

@@ -1,3 +1,6 @@
 first
 second
 true
+cancelled 1
+fixed 5 known
+abort TimeoutError

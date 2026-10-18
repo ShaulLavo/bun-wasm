@@ -106,44 +106,9 @@
   }
 
   // Readable stream over a host handle's bytes (fetch bodies, sockets).
-  function handleStream(handle, onEnd) {
-    let done = false;
-    return new ReadableStream({
-      type: "bytes",
-      pull(controller) {
-        if (done) {
-          controller.close();
-          return undefined;
-        }
-        return new Promise((resolve, reject) => {
-          addWaiter({
-            step() {
-              if (done) { resolve(); return true; }
-              const chunk = native.hostRead(handle);
-              if (chunk === AGAIN) return false;
-              if (chunk === 0) {
-                done = true;
-                controller.close();
-                if (controller.byobRequest) controller.byobRequest.respond(0);
-                if (onEnd) onEnd();
-              } else if (typeof chunk === "number") {
-                done = true;
-                reject(hostError(handle, "network error while reading the body"));
-                if (onEnd) onEnd();
-              } else {
-                controller.enqueue(chunk);
-              }
-              resolve();
-              return true;
-            },
-            fail: reject,
-          });
-        });
-      },
-      cancel() {
-        done = true;
-        if (onEnd) onEnd();
-      },
+  function handleStream(handle, onEnd, signal) {
+    return internal.require("fetch_body").stream({
+      handle, onEnd, signal, read: native.hostRead, error: hostError, addWaiter, again: AGAIN,
     });
   }
 
@@ -163,23 +128,25 @@
     const handle = native.hostFetch(meta, await requestBody(req));
     if (handle < 0) throw hostError(0, "fetch failed");
     let closed = false;
+    let onAbort;
     const closeHandle = () => {
       if (!closed) native.hostClose(handle);
       closed = true;
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
     };
     // The signal may have fired while the request body was being read.
     const aborted = new Promise((resolve, reject) => {
       if (!signal) return;
-      const onAbort = () => {
+      onAbort = () => {
         closeHandle();
         reject(signal.reason || new DOMException("The operation was aborted.", "AbortError"));
       };
       if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort);
+      else signal.addEventListener("abort", onAbort, { once: true });
     });
     const head = await Promise.race([waitHead(handle), aborted]);
     const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 304;
-    const body = nullBody ? null : internal.require("compression_streams").decode(handleStream(handle, closeHandle), head.bodyEncoding);
+    const body = nullBody ? null : internal.require("compression_streams").decode(handleStream(handle, closeHandle, signal), head.bodyEncoding);
     if (nullBody) closeHandle();
     const res = new Response(body, {
       status: head.status >= 200 && head.status <= 599 ? head.status : 200,
@@ -463,67 +430,10 @@
   const UPGRADED = Symbol("websocket upgrade");
 
   function serveHttp(conn, handleRequest, startRequest) {
-    let pending = null;
-    let buffer = new Uint8Array(0);
-    let busy = false;
-    let ended = false;
-    function next() {
-      if (busy || conn.closed) return;
-      let request;
-      try {
-        if (startRequest && !pending && buffer.length) {
-          const head = parseHead(buffer);
-          if (head && header(head.headers, "expect")?.toLowerCase() === "100-continue") pending = startRequest(head, conn, wantsKeepAlive(head));
-        }
-        request = buffer.length ? parseRequest(buffer) : null;
-      } catch {
-        conn.write(encoder.encode("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
-        conn.end();
-        return;
-      }
-      if (!request) {
-        if (ended) conn.end();
-        return;
-      }
-      buffer = buffer.slice(request.length);
-      busy = true;
-      conn.busy = true;
-      const keepAlive = wantsKeepAlive(request) && !ended;
-      const active = pending;
-      pending = null;
-      if (active) active.receive(request.body, request.trailers);
-      Promise.resolve()
-        .then(() => active ? active.response : handleRequest(request, conn, keepAlive))
-        .catch((err) => {
-          internal.printError(err);
-          conn.write(encoder.encode("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
-          return false;
-        })
-        .then((stillOpen) => {
-          if (stillOpen === UPGRADED) {
-            conn.upgraded.activate(buffer);
-            buffer = new Uint8Array(0);
-            return;
-          }
-          busy = false;
-          conn.busy = false;
-          if (stillOpen === false || !keepAlive || conn.serverClosing) {
-            conn.end();
-            return;
-          }
-          next();
-        });
-    }
-    conn.onData = (chunk) => {
-      buffer = buffer.length ? internal.concatBytes([buffer, chunk]) : chunk;
-      next();
-    };
-    conn.onEnd = () => {
-      ended = true;
-      if (!busy) next();
-    };
-    conn.onError = () => {};
-    conn.startReading();
+    return internal.require("http_serve").serve(conn, {
+      parseHead, parseRequest, handleRequest, startRequest, wantsKeepAlive,
+      body: internal.require("http_body"), upgraded: UPGRADED, reportError: internal.printError, wake: native.wake,
+    });
   }
 
   // --- Bun.serve --------------------------------------------------------------
@@ -564,23 +474,11 @@
     return null;
   }
 
-  async function responseBytes(res) {
-    return new Uint8Array(await res.arrayBuffer());
-  }
-
-  async function writeResponse(conn, res, method, keepAlive) {
+  function writeResponse(conn, res, method, keepAlive) {
     if (!(res instanceof Response)) {
       throw new TypeError(`Expected a Response object, but received '${internal.describe(res)}'`);
     }
-    const body = method === "HEAD" ? new Uint8Array(0) : await responseBytes(res);
-    const pairs = Array.from(res.headers).filter(([k]) => k !== "content-length" && k !== "transfer-encoding");
-    if (!res.headers.has("date")) pairs.push(["date", new Date().toUTCString()]);
-    const bodyless = res.status === 204 || res.status === 304;
-    if (!bodyless) pairs.push(["content-length", String(method === "HEAD" ? Number(res.headers.get("content-length") || 0) : body.length)]);
-    if (!keepAlive) pairs.push(["connection", "close"]);
-    conn.write(serializeHead(res.status, res.statusText, pairs));
-    if (!bodyless && body.length) conn.write(body);
-    return keepAlive;
+    return internal.require("http_response").writeResponse(conn, res, method, keepAlive, serializeHead, internal.printError);
   }
 
   function errorResponse(err) {
@@ -739,7 +637,13 @@
       if (cookies) {
         for (const value of cookies.toSetCookieHeaders()) res.headers.append("Set-Cookie", value);
       }
-      return writeResponse(conn, res, request.method, keepAlive && !stopped);
+      const responseKeepAlive = keepAlive && !stopped;
+      try {
+        return await writeResponse(conn, res, request.method, responseKeepAlive);
+      } catch (error) {
+        const fallback = errorHandler ? await errorHandler.call(server, error) : errorResponse(error);
+        return writeResponse(conn, fallback, request.method, responseKeepAlive);
+      }
     }
 
     const accepting = acceptLoop(listener, (conn) => {
@@ -1176,14 +1080,12 @@
             this.emit("request", req, res);
           }
         });
-        const receive = (body, trailers = []) => {
-          setHeaderPairs({ headers: req.trailers, rawHeaders: req.rawTrailers, headersDistinct: req.trailersDistinct }, trailers);
-          req.complete = true;
-          if (body.length) req.push(Buffer.from(body));
-          req.push(null);
-        };
-        if (deferBody) return { response, receive };
-        receive(request.body, request.trailers);
+        const receiver = internal.require("http_serve").incoming({
+          request: req, socket, response, highWaterMark: this._options.highWaterMark,
+          buffer: Buffer.from, setHeaders: setHeaderPairs,
+        });
+        if (deferBody) return receiver;
+        receiver.receive(request.body, request.trailers || [], true);
         return response;
       }
       address() {
