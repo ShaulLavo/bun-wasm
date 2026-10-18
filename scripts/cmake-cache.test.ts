@@ -1,8 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Real compiler identification can exceed Bun's 5-second unit-test budget on CI.
+// Its independent process-group deadline also tears down compiler descendants.
+setDefaultTimeout(30_000);
+const timeoutWrapper = join(import.meta.dir, "run-with-timeout.mts");
 const guard = join(import.meta.dir, "check-cmake-cache.cmake");
 function preflight(build: string, overrides: Record<string, string> = {}) {
   const inputs = { BUILD_DIR: build, EXPECTED_C: "/usr/bin/cc", EXPECTED_CXX: "/usr/bin/c++", EXPECTED_SYSTEM: "native", EXPECTED_TOOLCHAIN_FILE: "", ...overrides };
@@ -19,7 +23,7 @@ function fixture(run: (build: string) => void, configure: (root: string) => stri
     writeFileSync(join(source, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\nproject(cache_fixture C CXX)\nadd_library(c STATIC fixture.c)\nadd_library(cxx STATIC fixture.cc)\nadd_executable(executable fixture.c)\n");
     writeFileSync(join(source, "fixture.c"), "int c_fixture(void) { return 1; }\nint main(void) { return 0; }\n");
     writeFileSync(join(source, "fixture.cc"), "int cxx_fixture() { return 2; }\n");
-    const configured = Bun.spawnSync(["cmake", "-S", source, "-B", build, "-G", "Ninja", "-DCMAKE_C_COMPILER=/usr/bin/cc", "-DCMAKE_CXX_COMPILER=/usr/bin/c++"].concat(configure(root)), { stdout: "pipe", stderr: "pipe" });
+    const configured = Bun.spawnSync(["node", timeoutWrapper, "15", "cmake", "-S", source, "-B", build, "-G", "Ninja", "-DCMAKE_C_COMPILER=/usr/bin/cc", "-DCMAKE_CXX_COMPILER=/usr/bin/c++"].concat(configure(root)), { stdout: "pipe", stderr: "pipe", timeout: 20_000, killSignal: "SIGTERM" });
     expect(configured.exitCode, configured.stderr.toString()).toBe(0);
     run(build);
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -44,6 +48,17 @@ test("CMake preflight allows fresh directories and matching native caches withou
     const before = readFileSync(join(build, "CMakeCache.txt"));
     expect(preflight(build).exitCode).toBe(0);
     expect(readFileSync(join(build, "CMakeCache.txt"))).toEqual(before);
+  });
+});
+
+test("real CMake configuration may exceed the unit-test deadline while remaining bounded", () => {
+  fixture(build => {
+    expect(preflight(build).exitCode).toBe(0);
+  }, root => {
+    const path = join(root, "source/CMakeLists.txt");
+    const source = readFileSync(path, "utf8");
+    writeFileSync(path, source.replace("project(cache_fixture C CXX)", 'execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 6)\nproject(cache_fixture C CXX)'));
+    return [];
   });
 });
 

@@ -2924,7 +2924,10 @@ adapter `scripts/check-wasi-cmake-cache.sh` covers `jsc/configure.sh`, `jsc/buil
 actual C/C++ Ninja caches, cover matching reuse and compiler/toolchain/target/system/processor/
 sysroot mismatches, deleted toolchain files, incomplete metadata, and byte-for-byte preservation.
 Build-command sentinels verify the real shell entry points refuse mismatches without launching
-compilers, Ninja or services. This is build safety for the wasm port, not a copied CMake implementation.
+compilers, Ninja or services. Real configure probes use the existing descendant-safe command
+wrapper with a 15-second deadline inside a 30-second integration-test budget; a six-second real
+configure regression covers cold or contended compiler discovery without unbounded waits.
+This is build safety for the wasm port, not a copied CMake implementation.
 
 ## Node startup diagnostic drain
 
