@@ -308,6 +308,23 @@ async function schemeRedirect() {
   await tlsServer.stop(true); tlsServers.delete(tlsServer);
 }
 
+async function runtimeRedirect() {
+  redirect = String(outside.url) + "security-dep.tgz";
+  const source = `const response = await fetch(${JSON.stringify(base + "/runtime")}, { headers: { authorization: ${JSON.stringify(`Bearer ${configuredSecret}`)} } }); console.log(response.status);`;
+  const nativeCwd = project("runtime-redirect-native"), guestCwd = project("runtime-redirect-guest");
+  const native = await run(nativeCwd, ["-e", source], null, true);
+  assert.equal(native.code, 0, native.stderr);
+  assert.equal(requests[1]?.authorization, null);
+  const nativeRequests = requests; requests = [];
+  const guest = await run(guestCwd, ["-e", source], null);
+  checkSecrets(guestCwd, guest, true);
+  assert.equal(guest.code, 0, guest.stderr);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0]?.authorization, `Bearer ${configuredSecret}`);
+  assert.equal(requests[1]?.authorization, null);
+  record("runtime-redirect", native, guest, nativeRequests);
+}
+
 const cases: [string, () => Promise<void>][] = [
   ["registry-env", () => credentials("registry-env", "registry")],
   ["registry-cli", () => credentials("registry-cli", "registry-cli")],
@@ -345,6 +362,7 @@ const cases: [string, () => Promise<void>][] = [
   ["redirect-userinfo", () => redirectCase("userinfo")],
   ["redirect-embedded", () => redirectCase("embedded")],
   ["redirect-scheme", schemeRedirect],
+  ["runtime-redirect", runtimeRedirect],
   ["same-origin-archive", archiveAuth],
   ["invalid-integrity", () => invalidIntegrity("sha512-invalid")],
   ["unsupported-integrity", () => invalidIntegrity("md5-invalid")],
