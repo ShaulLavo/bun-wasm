@@ -33,6 +33,7 @@ const { chromium, webkit, devices } = pw.default ?? pw;
 
 const STARTUP_MS = Number(process.env.STARTUP_MS ?? 180_000);
 const STEP_MS = 20_000;
+const NAVIGATION = { navigationTimeout: STARTUP_MS, actionTimeout: STEP_MS };
 
 async function check(browserName, engine) {
   const tag = `${browserName}/${engine}`;
@@ -145,7 +146,7 @@ async function check(browserName, engine) {
       }
     });
     await step("5c vanilla template uses import.meta.hot", async () => {
-      await selectAndNavigate(page, "#template", "vanilla", STEP_MS);
+      await selectAndNavigate(page, "#template", "vanilla", NAVIGATION);
       await app.locator("h1", { hasText: "Hello from vanilla TypeScript" }).waitFor({ timeout: STARTUP_MS });
       for (let i = 0; i < 2; i++) await app.locator("button.counter").click();
       await setFile("src/main.ts", [["Hello from vanilla TypeScript", "Vanilla hot update"]]);
@@ -163,12 +164,12 @@ async function check(browserName, engine) {
       await app.locator("bun-hmr").waitFor({ state: "hidden", timeout: STEP_MS });
       await app.locator("button.counter", { hasText: "count is 2" }).waitFor({ timeout: STEP_MS });
       await shot("5c-vanilla");
-      await selectAndNavigate(page, "#template", "react", STEP_MS);
+      await selectAndNavigate(page, "#template", "react", NAVIGATION);
       await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STARTUP_MS });
     });
     await step("6 engine switch keeps edits", async () => {
       const other = engine === "quickjs" ? "browser" : "quickjs";
-      await selectAndNavigate(page, "#engine", other, STEP_MS);
+      await selectAndNavigate(page, "#engine", other, NAVIGATION);
       if (new URL(page.url()).searchParams.get("engine") !== (other === "browser" ? null : other)) throw new Error(`not switched: ${page.url()}`);
       await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STARTUP_MS });
       await shot("6-switched");

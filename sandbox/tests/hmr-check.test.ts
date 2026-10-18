@@ -37,12 +37,13 @@ test("template navigation waits for the new document even when a subresource sta
     browser = await chromium.launch();
     const page = await browser.newPage();
     await page.goto(server.url.href);
-    await selectAndNavigate(page, "#template", "vanilla", 1_000);
+    await selectAndNavigate(page, "#template", "vanilla", { navigationTimeout: 1_000, actionTimeout: 1_000 });
     await expect(page.locator("h1").textContent()).resolves.toBe("Vanilla ready");
     expect(await page.evaluate(() => document.readyState)).toBe("interactive");
     await page.goto(server.url.href);
-    await expect(selectAndNavigate(page, "#template", "stay", 150)).rejects.toThrow("Navigation after selecting #template=stay");
+    await expect(selectAndNavigate(page, "#template", "stay", { navigationTimeout: 150, actionTimeout: 150 })).rejects.toThrow("Navigation after selecting #template=stay");
     expect(page.url()).toBe(server.url.href);
+    await expect(selectAndNavigate(page, "#template", "missing", { navigationTimeout: 1_000, actionTimeout: 150 })).rejects.toThrow("selectOption");
   } finally {
     try { await browser?.close(); }
     finally { server.stop(true); }
