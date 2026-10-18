@@ -17,18 +17,24 @@ test("closing the first-visit proxy cancels its pending upstream response", asyn
   await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
   const address = upstream.address();
   assert.ok(address && typeof address !== "string");
-  let browser, visit, body;
+  let browser, visit;
   try {
     browser = await chromium.launch();
     visit = await firstVisit(await browser.newContext(), `http://127.0.0.1:${address.port}/`);
-    body = (await fetch(visit.url, { signal: AbortSignal.timeout(5_000) })).body;
+    const fetching = fetch(visit.url, { signal: AbortSignal.timeout(5_000) });
+    fetching.catch(() => {});
     const socket = await incoming.promise;
-    const closed = once(socket, "close", { signal: AbortSignal.timeout(1_000) });
+    const closing = Promise.withResolvers<void>();
+    socket.once("error", () => {});
+    socket.once("close", () => closing.resolve());
+    const timeout = AbortSignal.timeout(1_000);
+    const closed = Promise.race([closing.promise, once(timeout, "abort").then(() => { throw timeout.reason; })]);
     await Promise.all([closed, visit.close()]);
     visit = undefined;
     assert.equal(socket.destroyed, true);
+    await assert.rejects(fetching);
   } finally {
-    try { await Promise.all([body?.cancel().catch(() => {}), visit?.close(), browser?.close()]); }
+    try { await Promise.all([visit?.close(), browser?.close()]); }
     finally {
       upstream.closeAllConnections();
       await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
