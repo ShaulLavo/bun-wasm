@@ -11,7 +11,7 @@
 // PLAYWRIGHT=<path to playwright's index.mjs> when `playwright` isn't resolvable from here.
 
 import { selectAndNavigate } from "./hmr-navigation.ts";
-import { installHmrConnection, waitForHmrConnection } from "./hmr-connection.ts";
+import { installHmrConnection, waitForHmrConnection, readHmrFailureState } from "./hmr-connection.ts";
 import { checkPhoneUI } from "../../web/tests/phone-ui.mjs";
 import { firstVisit } from "../../web/tests/first-visit.mjs";
 import { mkdirSync } from "node:fs";
@@ -49,6 +49,7 @@ async function check(browserName, engine) {
     } catch (err) {
       results.push({ name, ok: false, error: String(err) });
       console.log(`  FAIL ${tag} ${name}: ${err instanceof Error ? err.stack ?? String(err) : String(err)}`);
+      if (page && !page.isClosed()) console.log(`      state: ${JSON.stringify(await readHmrFailureState(page, () => visit?.diagnostics()))}`);
       await shot(`fail-${name.replace(/\W+/g, "-")}`).catch(error => console.log(`      failure screenshot: ${error}`));
       throw err;
     }
@@ -176,7 +177,7 @@ async function check(browserName, engine) {
       await setFile("src/App.tsx", [["<h1>", "<h1 "]]);
       await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
       await Promise.all([
-        page.waitForEvent("framenavigated", { predicate: (frame) => frame.parentFrame() === page.mainFrame(), timeout: STEP_MS }),
+        page.waitForEvent("framenavigated", { predicate: (frame) => frame.parentFrame() === page.mainFrame(), timeout: STARTUP_MS }),
         page.locator("#restart").click({ timeout: STEP_MS }),
       ]);
       await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });

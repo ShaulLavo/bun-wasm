@@ -17,6 +17,7 @@ export async function firstVisit(context, base) {
   const url = new URL(upstream.pathname + upstream.search, origin).href;
   return {
     url,
+    diagnostics: () => transport.snapshot(),
     async check(page, moduleScope = true) {
       const state = await page.evaluate(() => globalThis.__firstVisit);
       if (moduleScope) assert.ok(state.registrations.length, "first visit must register its module service worker");

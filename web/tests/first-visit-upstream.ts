@@ -56,6 +56,14 @@ export class Upstream {
     return { writable, response: response.promise };
   }
 
+  snapshot(): unknown {
+    return {
+      protocol: this.protocol,
+      session: this.session && !this.session.destroyed ? this.session.state : undefined,
+      pending: Array.from(this.active, stream => ({ path: stream.sentHeaders?.[":path"], buffered: stream.readableLength, ended: stream.readableEnded, closed: stream.closed })),
+    };
+  }
+
   close(): void {
     this.session?.destroy();
   }

@@ -29,3 +29,28 @@ export async function waitForHmrConnection(page: HmrPage, selector: string | nul
     throw new Error(`Bun HMR WebSocket did not report connected in ${selector ?? "this page"}`, { cause: error });
   });
 }
+
+interface DiagnosticPage {
+  url(): string;
+  evaluate(read: () => unknown): Promise<unknown>;
+}
+
+export async function readHmrFailureState(page: DiagnosticPage, upstream: () => unknown): Promise<unknown> {
+  const deadline = Promise.withResolvers<unknown>();
+  const timer = setTimeout(deadline.resolve, 2_000, { unavailable: "page did not respond" });
+  try {
+    const network = upstream();
+    const browser = await Promise.race([
+      page.evaluate(() => {
+        const firstVisit: unknown = Reflect.get(globalThis, "__firstVisit");
+        return { readyState: document.readyState, status: document.querySelector("#status")?.textContent, server: document.querySelector("#preview-url")?.textContent, firstVisit };
+      }),
+      deadline.promise,
+    ]);
+    return { url: page.url(), network, browser };
+  } catch (error) {
+    return { url: page.url(), unavailable: String(error) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
