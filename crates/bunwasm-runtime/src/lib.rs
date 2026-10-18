@@ -99,6 +99,8 @@ pub(crate) struct State {
     positions: RefCell<HashMap<String, modules::PositionMap>>,
     stdout: RefCell<BufWriter<io::Stdout>>,
     /// Set when `process.nextTick` queued work.
+    /// Handled signals dequeued by a synchronous sleep, delivered at the next checkpoint.
+    deferred_signals: RefCell<host::DeferredSignals>,
     tick_pending: Cell<bool>,
     fds: RefCell<natives::FdTable>,
     directories: Rc<RefCell<directory::Directories>>,
@@ -120,6 +122,7 @@ impl State {
             cjs_sources: RefCell::new(HashMap::new()),
             positions: RefCell::new(HashMap::new()),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
+            deferred_signals: RefCell::new(host::DeferredSignals::default()),
             tick_pending: Cell::new(false),
             fds: RefCell::new(natives::FdTable::default()),
             directories: Rc::new(RefCell::new(directory::Directories::default())),
@@ -154,9 +157,30 @@ impl State {
         let _ = self.flush_stdout();
     }
 
-    /// Signal dispositions and delivery live in the process service (`runtime_proc.signal`).
+    /// Signal dispositions and delivery live in the process service (`runtime_proc.signal`). Only
+    /// signals a synchronous sleep took from its queue are kept here, and they stay observable
+    /// through the same operations: dequeue returns them first, and ignoring or restoring the
+    /// default disposition withdraws them exactly as it would a pending service signal.
     pub(crate) fn signal(&self, signal: i32, operation: i32) -> i32 {
+        if signal == 0 && operation == 0 {
+            let deferred = self.deferred_signals.borrow_mut().take();
+            if deferred > 0 {
+                return deferred;
+            }
+        } else if (operation == 0 || operation == 1) && self.deferred_signals.borrow_mut().withdraw(signal) {
+            if operation == 1 {
+                return host::signal(signal, 1);
+            }
+            // A pending delivery whose handler was removed takes the default action at once.
+            let result = host::signal(signal, 0);
+            return if result < 0 { result } else { host::signal(signal, 3) };
+        }
         host::signal(signal, operation)
+    }
+
+    /// `Bun.sleepSync` and sleeping timers: cancellable by signals, without spinning.
+    pub(crate) fn sleep(&self, duration: std::time::Duration) {
+        host::sleep_with(duration, &mut self.deferred_signals.borrow_mut(), || host::signal(0, 0), host::idle);
     }
 
     pub(crate) fn exit(&self, code: i32) -> ! {
