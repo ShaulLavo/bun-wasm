@@ -25,7 +25,17 @@ function scopedWorker(workerUrl: string): boolean {
   return new URL(workerUrl, base()).pathname.endsWith("/__bunwasm/worker.js");
 }
 
-/** Launches `bun:<engine>` programs in the Bun worker. */
+/**
+ * Launches `bun:<engine>` programs in the Bun worker.
+ *
+ * Service-launched processes get no networking ring (`net: null`): only the run that roots a
+ * tree (runner.ts `startRun`) owns one, together with the page hooks that listening servers and
+ * the installer cache report to. A private ring per launched process would give each process its
+ * own socket namespace, so children could not reach each other's listeners. One namespace shared
+ * by every process of a runtime is plan step 6 (plans/browser-runtime.md, "Network"); until it
+ * lands, QuickJS and JSC processes started here have no network slots, and the browser engine
+ * keeps its direct worker `fetch` (web/README.md, "Bun subprocess workers").
+ */
 export function bunLauncher(engine: Engine, options: BunLauncherOptions): GuestLauncher {
   return async (context, service) => {
     const executableName = await options.executableName?.(context, service);
