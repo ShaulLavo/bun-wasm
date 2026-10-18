@@ -1096,7 +1096,9 @@ Read promise state/results, proxy targets, namespace brands, ordered keys, and r
 
 ### Node path
 
-`vendor/bun/src/node_path/lib.rs`, Bun revision `5e0baa66516f3af00b008cdf1521c681317741e8`.
+`vendor/bun/src/node_path/lib.rs`, Bun upstream revision
+`9510e74152073d850a18758ca41114d8f214ffa6`. The path sources are unchanged in
+the measured WASI checkout `5e0baa66516f3af00b008cdf1521c681317741e8`.
 Class **Port**. The existing `bun_node_path` crate is a direct dependency, with no
 source changes. Its POSIX and Windows basename,
 dirname, extname, isAbsolute, normalize, join, and parse algorithms run on
