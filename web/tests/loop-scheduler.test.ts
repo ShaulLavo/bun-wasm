@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
@@ -58,6 +59,71 @@ test("a consumed signal neither dispatches twice nor keeps an idle loop alive", 
   expect(f.order.filter(value => value === "sigusr1-handled")).toHaveLength(1);
   expect(f.callbacks()).toBe(1);
 });
+
+test("a signal handler that resends from a microtask cannot starve callbacks or I/O", () => {
+  let pending = true;
+  let handled = 0;
+  let callbacks = 0;
+  let io = 0;
+  const jobs: (() => void)[] = [];
+  const internal = {
+    pumpSignals() {
+      if (!pending) return false;
+      pending = false;
+      handled++;
+      jobs.push(() => { pending = true; });
+      return true;
+    },
+    pumpIo() { io++; return false; },
+    runTimers() { callbacks++; return 0; },
+  };
+  install(internal);
+  for (let turn = 0; turn < 1000; turn++) {
+    // Match Rust: poll signals, drain handler jobs, then run the scheduler.
+    internal.pumpSignals();
+    for (const job of jobs.splice(0)) job();
+    internal.runTimers();
+  }
+  expect(handled).toBeGreaterThan(0);
+  expect(callbacks).toBeGreaterThanOrEqual(500);
+  expect(io).toBeGreaterThanOrEqual(499);
+});
+
+test("an I/O yield does not grant a second signal-driven deferral before callbacks", () => {
+  let pending = false;
+  let callbacks = 0;
+  let signals = 0;
+  const internal = {
+    pumpSignals() { if (!pending) return false; pending = false; signals++; return true; },
+    pumpIo() { return true; },
+    runTimers() { callbacks++; return 0; },
+  };
+  install(internal);
+  internal.runTimers();
+  pending = true;
+  internal.runTimers(); // Signal checkpoint yields for handler jobs.
+  pending = true;
+  internal.runTimers(); // Existing I/O turn yields without resetting the bound.
+  internal.runTimers(); // A callback must run before another checkpoint yield.
+  expect(callbacks).toBe(2);
+  expect(signals).toBe(1);
+  expect(pending).toBe(true);
+});
+
+for (const executable of [process.execPath, "node"]) {
+  test(`native ${executable} reaches an immediate during microtask self-signalling`, () => {
+    const guest = `
+      process.on('SIGUSR1', () => queueMicrotask(() => process.kill(process.pid, 'SIGUSR1')));
+      process.kill(process.pid, 'SIGUSR1');
+      setImmediate(() => { console.log('after-pump'); process.exit(0); });
+    `;
+    // spawnSync owns termination if this control unexpectedly fails to exit.
+    const result = spawnSync(executable, ["-e", guest], { encoding: "utf8", timeout: 4000, killSignal: "SIGKILL" });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("after-pump\n");
+  });
+}
 
 test("signal delivery preserves the pending I/O turn between callback turns", () => {
   const f = scheduler();

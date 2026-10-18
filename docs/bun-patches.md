@@ -468,7 +468,9 @@ The scheduler gives I/O a turn between callback turns, even when callbacks keep
 queuing immediates or timers remain due. Immediate callbacks queued during an
 existing batch wait for the next batch, so due timers can run. Microtasks still
 drain between callback turns. Before entering callbacks, the scheduler also drains
-pending handled signals and yields to the job queue when a handler ran. JSC can
+pending handled signals and yields to the job queue when a handler ran, at most
+once before letting I/O and callbacks progress. This bound prevents a handler
+that resends its signal from a microtask from starving callbacks. JSC can
 execute the entry module during the job drain, after Rust's initial signal poll;
 without this checkpoint a signal received during synchronous sleep ran after the
 next immediate. The checkpoint stays outside engine interruption callbacks and
