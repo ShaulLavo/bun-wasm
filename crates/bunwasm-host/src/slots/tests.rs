@@ -15,22 +15,21 @@ impl Drop for Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::at(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
+    }
+    fn at(directory: &std::path::Path) -> Self {
         let mut config = Config::new();
         config.epoch_interruption(true);
         let engine = Engine::new(&config).unwrap();
         let module = Module::new(&engine,b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\x03\x02\x01\0\x07\x0a\x01\x06_start\0\0\x0a\x04\x01\x02\0\x0b").unwrap();
-        let runtime = Runtime::new(
-            engine.clone(),
-            module,
-            vec![(env!("CARGO_MANIFEST_DIR").into(), "/".into())],
-        );
+        let runtime = Runtime::new(engine.clone(), module, vec![(directory.into(), "/".into())]);
         let net = crate::net::Net::new();
         let cancel = Arc::new(Cancellation::default());
         let stdio = Stdio::inherited();
         let mut wasi = wasmtime_wasi::WasiCtxBuilder::new();
         stdio.install(&mut wasi, cancel.clone());
         wasi.preopened_dir(
-            env!("CARGO_MANIFEST_DIR"),
+            directory,
             "/",
             wasmtime_wasi::DirPerms::all(),
             wasmtime_wasi::FilePerms::all(),
@@ -442,7 +441,7 @@ fn imports_can_find_memory_during_a_wasm_start_section() {
 #[test]
 fn virtual_files_survive_stdio_replacement_high_handles_and_allocator_reuse() {
     let mut f = Fixture::new();
-    for fd in 0..3 {
+    for fd in 0i32..3 {
         let file = f.open_manifest(3);
         assert_eq!(
             f.call("wasi_snapshot_preview1", "fd_renumber", (file, fd)),
@@ -648,4 +647,117 @@ fn preview1_poll_preserves_duplicate_streams_unknown_handles_and_relative_clocks
     assert_eq!(f.word(2048), 61);
     assert_eq!(f.bytes(2056, 2), &[0, 0]);
     assert_eq!(f.bytes(512, 48), clock);
+}
+
+#[test]
+fn local_file_stdio_shares_offsets_between_both_abis_in_both_first_use_orders() {
+    let expected = include_bytes!("../../Cargo.toml");
+    for process_first in [false, true] {
+        let mut f = Fixture::new();
+        for fd in 0i32..3 {
+            let file = f.open_manifest(3);
+            assert_eq!(
+                f.call("wasi_snapshot_preview1", "fd_renumber", (file, fd)),
+                0
+            );
+            f.iovec(2048, 8);
+            let iovec = f.bytes(32, 8).to_vec();
+            for index in 0..3 {
+                if (index % 2 == 0) == process_first {
+                    assert_eq!(f.call("runtime_proc", "read", (fd, 2048, 8)), 8);
+                } else {
+                    assert_eq!(
+                        f.call("wasi_snapshot_preview1", "fd_read", (fd, 32, 1, 48)),
+                        0
+                    );
+                    assert_eq!(f.word(48), 8);
+                }
+                assert_eq!(f.bytes(2048, 8), &expected[index * 8..index * 8 + 8]);
+                assert_eq!(f.bytes(32, 8), iovec);
+            }
+            // Async fs.read(0) waits with this ABI if a filesystem returns AGAIN.
+            // Native files are synchronous, hence immediately ready, even at EOF.
+            let mut subscriptions = [0u8; 32];
+            for index in 0..2 {
+                let at = index * 16;
+                subscriptions[at..at + 4].copy_from_slice(&(index as u32).to_le_bytes());
+                subscriptions[at + 4..at + 8].copy_from_slice(&fd.to_le_bytes());
+                subscriptions[at + 8..at + 16].copy_from_slice(&(index as u64 + 101).to_le_bytes());
+            }
+            f.write(512, &subscriptions);
+            assert_eq!(f.call("runtime_proc", "poll", (512, 2, 0, 2048)), 2);
+            assert_eq!(f.word(2048), 101);
+            assert_eq!(f.word(2064), 102);
+            assert_eq!(f.bytes(512, 32), subscriptions);
+            assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", fd), 0);
+            assert_eq!(f.call("runtime_proc", "read", (fd, 2048, 8)), process::BADF);
+        }
+    }
+}
+
+#[test]
+fn local_file_writes_share_offsets_without_modifying_guest_iovecs() {
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+            assert!(!self.0.exists());
+        }
+    }
+    let directory = std::path::PathBuf::from(format!(
+        "/work/tmp/bun-wasm-native-file-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let scratch = Scratch(directory);
+    std::fs::write(scratch.0.join("output"), b"").unwrap();
+    let mut f = Fixture::at(&scratch.0);
+    f.write(1024, b"output");
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "path_open",
+            (3, 0, 1024, 6, 0, 64i64, 0i64, 0, 1080)
+        ),
+        0
+    );
+    let file = f.word(1080);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_renumber", (file, 1)),
+        0
+    );
+    f.write(256, b"abc");
+    f.iovec(256, 3);
+    let iovec = f.bytes(32, 8).to_vec();
+    assert_eq!(f.call("runtime_proc", "write", (1, 256, 3)), 3);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_write", (1, 32, 1, 48)),
+        0
+    );
+    assert_eq!(f.word(48), 3);
+    assert_eq!(f.call("runtime_proc", "write", (1, 256, 3)), 3);
+    assert_eq!(f.bytes(32, 8), iovec);
+    assert_eq!(
+        f.call("runtime_proc", "write", (1, 65535, 3)),
+        process::FAULT
+    );
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 1), 0);
+    assert_eq!(
+        std::fs::read(scratch.0.join("output")).unwrap(),
+        b"abcabcabc"
+    );
+}
+
+#[test]
+fn zero_page_exported_memory_does_not_prevent_descriptor_initialization() {
+    let mut f = Fixture::new();
+    let module = Module::new(f.store.engine(), b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\x03\x02\x01\0\x05\x03\x01\0\0\x07\x13\x02\x06memory\x02\0\x06_start\0\0\x0a\x04\x01\x02\0\x0b").unwrap();
+    let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+    f.store.data_mut().memory = instance.get_memory(&mut f.store, "memory");
+    process::wasi::initialize(&f.linker, &mut f.store).unwrap();
+    instance
+        .get_typed_func::<(), ()>(&mut f.store, "_start")
+        .unwrap()
+        .call(&mut f.store, ())
+        .unwrap();
 }

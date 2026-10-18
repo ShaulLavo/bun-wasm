@@ -1998,8 +1998,13 @@ Filesystem descriptors remain owned by Wasmtime and are not transferable through
 spawn adapter. A virtual external-to-private descriptor map isolates them from arbitrary
 process bindings, including preopen discovery, all fd-bearing filesystem/path operations,
 and cross-kind renumbering. Closing process stdio never revives a hidden preview1 stream.
-File handles reserve the same monotonic allocation space as process handles. The bridge
-validates guest iovecs before observable I/O and delegates translated filesystem operations
+File handles reserve the same monotonic allocation space as process handles. Direct
+`runtime_proc.read`/`write` share local filesystem handles and offsets with preview1,
+including filesystem-backed stdio; synchronous native files/directories are immediately
+ready in process polls. File I/O uses independently cached private-memory delegates, so
+alternating the two ABIs never overwrites guest iovecs or changes a delegate's memory.
+Adapter imports accept zero-page memories because descriptor initialization needs no bytes.
+The bridge validates guest iovecs before observable I/O and delegates translated filesystem operations
 to the existing Wasmtime functions. Delegation re-enters a small,
 original generated Wasm wrapper that imports the guest's existing memory and the retained
 preview1 function, then exports that memory and a forwarding call. A direct host-to-host
