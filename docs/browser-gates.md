@@ -28,6 +28,11 @@ The CLI comparison shim still supplied only WASI imports. It now shares its
 filesystem and descriptor table with Waffle's existing `ProcessABI` and root
 `ProcessSupervisor`. The comparison shim has no registered child executables.
 
+The same migration changed the Waffle pin from `5677fc64` to `a0a0f879`.
+That brought in the `OutcomeCell` and `TaggedCells` classes added in Waffle
+`b1f2b7dd`. These failures predate the libc, immediate-callback and default-guest
+changes listed in the incident report.
+
 The browser bundle resolver returned logical package symlink paths. Under an
 isolated installation, relative imports resolved through the physical cache path.
 Bun bundled both paths, duplicating `OutcomeCell` and `TaggedCells`. An
