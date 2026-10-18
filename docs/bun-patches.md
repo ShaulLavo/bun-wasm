@@ -53,6 +53,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
+| [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
 | [0003](#0003-transpiler-dependencies) | Port | Supply WASI wakers, CPU features, crash, and resolver implementations. |
@@ -2652,3 +2653,18 @@ Waffle is consumed unchanged as a pinned Git peer/development dependency; the pa
 does not embed its implementation or create a second runtime. Existing worker and net
 imports use explicit extensions for strict module resolution. No upstream patch or
 copied implementation was introduced by this packaging work.
+
+## JSC prebuild inputs
+
+Class **Host feature**, original build adapters in `jsc/common.sh` and
+`scripts/jsc-inputs.test.ts`; no upstream source is copied or changed. WebKit stays
+at `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`. The prebuild stamp fingerprints
+effective compiler, SDK and include/link environment inputs rather than all of
+`env.sh`, whose unrelated workstation scratch settings cannot change the engine.
+Existing script, configuration, shim and tool-version fingerprints remain.
+Staging compares configuration bytes before copying, preserving an unchanged
+injected header's timestamp instead of recompiling every dependent C++ object.
+Regression controls prove scratch-policy edits leave the stamp unchanged,
+compiler/header changes invalidate it, and identical staged files keep their
+timestamps. Stamp refresh still runs the normal incremental build; no check is
+bypassed.
