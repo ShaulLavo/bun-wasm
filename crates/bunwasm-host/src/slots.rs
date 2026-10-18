@@ -104,7 +104,7 @@ fn with_memory<R>(
     caller: &mut Caller<'_, Host>,
     f: impl FnOnce(&mut [u8], &mut Host) -> Result<R>,
 ) -> Result<R> {
-    let memory = caller.data().memory.context("bun.wasm exports no memory")?;
+    let memory = crate::process::wasi::memory(caller)?;
     let (memory, host) = memory.data_and_store_mut(caller);
     f(memory, host)
 }
@@ -503,7 +503,7 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
             if fd != 0x7fff_b0b0 || count != 5 {
                 return Ok(58);
             }
-            let memory = caller.data().memory.context("no memory")?;
+            let memory = crate::process::wasi::memory(&mut caller)?;
             let bytes = &memory.data(&caller)[range(memory.data(&caller), packet, 20)?];
             let words: Vec<i32> = bytes
                 .chunks_exact(4)

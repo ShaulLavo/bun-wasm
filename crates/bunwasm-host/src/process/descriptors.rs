@@ -14,7 +14,34 @@ use super::{AGAIN, BADF, IO, NOTCAPABLE, PIPE, pipe::Pipe, stdin::SharedInput};
 use crate::net::Notify;
 
 pub type Descriptors = HashMap<i32, Arc<Endpoint>>;
-type Writer = Pin<Box<dyn AsyncWrite + Send + Sync>>;
+struct Writer {
+    stream: Pin<Box<dyn AsyncWrite + Send + Sync>>,
+    flushing: bool,
+    error: Option<io::Error>,
+}
+impl Writer {
+    fn flush(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if let Some(error) = self.error.take() {
+            return Poll::Ready(Err(error));
+        }
+        let result = std::task::ready!(self.stream.as_mut().poll_flush(cx));
+        self.flushing = false;
+        Poll::Ready(result)
+    }
+    fn write(&mut self, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<io::Result<usize>> {
+        if self.flushing || self.error.is_some() {
+            std::task::ready!(self.flush(cx))?;
+        }
+        let count = std::task::ready!(self.stream.as_mut().poll_write(cx, bytes))?;
+        self.flushing = true;
+        // Preserve the accepted byte count even if a later flush fails. That
+        // error is returned on the next operation, never by replaying bytes.
+        if let Poll::Ready(Err(error)) = self.flush(cx) {
+            self.error = Some(error);
+        }
+        Poll::Ready(Ok(count))
+    }
+}
 
 enum Stream {
     Input(SharedInput),
@@ -40,7 +67,11 @@ impl Endpoint {
     pub fn output(output: Arc<dyn StdoutStream + Sync>, pipe: Option<Pipe>) -> Arc<Self> {
         Arc::new(Self {
             stream: Stream::Output {
-                writer: Mutex::new(Box::into_pin(output.async_stream())),
+                writer: Mutex::new(Writer {
+                    stream: Box::into_pin(output.async_stream()),
+                    flushing: false,
+                    error: None,
+                }),
                 terminal: output.is_terminal(),
             },
             pipe,
@@ -69,19 +100,12 @@ impl Endpoint {
             return 0;
         }
         let waker = Waker::from(notify.clone());
-        if input
-            .poll_ready(&mut Context::from_waker(&waker))
-            .is_pending()
-        {
-            return AGAIN;
-        }
-        match input.read(buf.len()) {
-            Ok(bytes) => {
-                buf[..bytes.len()].copy_from_slice(&bytes);
-                bytes.len() as i32
-            }
-            Err(wasmtime_wasi::p2::StreamError::Closed) => 0,
-            Err(_) => IO,
+        let mut input = input.clone();
+        let mut buffer = ReadBuf::new(buf);
+        match Pin::new(&mut input).poll_read(&mut Context::from_waker(&waker), &mut buffer) {
+            Poll::Pending => AGAIN,
+            Poll::Ready(Ok(())) => buffer.filled().len() as i32,
+            Poll::Ready(Err(_)) => IO,
         }
     }
 
@@ -96,8 +120,7 @@ impl Endpoint {
         match writer
             .lock()
             .unwrap()
-            .as_mut()
-            .poll_write(&mut Context::from_waker(&waker), bytes)
+            .write(&mut Context::from_waker(&waker), bytes)
         {
             Poll::Pending => AGAIN,
             Poll::Ready(Ok(count)) => count as i32,
@@ -224,7 +247,7 @@ impl AsyncWrite for StdioEndpoint {
         let Stream::Output { writer, .. } = &endpoint.stream else {
             return Poll::Ready(Err(io::Error::from_raw_os_error(libc::EBADF)));
         };
-        writer.lock().unwrap().as_mut().poll_write(cx, bytes)
+        writer.lock().unwrap().write(cx, bytes)
     }
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let Some(endpoint) = self.0.upgrade() else {
@@ -233,7 +256,7 @@ impl AsyncWrite for StdioEndpoint {
         let Stream::Output { writer, .. } = &endpoint.stream else {
             return Poll::Ready(Ok(()));
         };
-        writer.lock().unwrap().as_mut().poll_flush(cx)
+        writer.lock().unwrap().flush(cx)
     }
     fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
         // WASI dropping one stream does not close other descriptor references.
@@ -243,4 +266,110 @@ impl AsyncWrite for StdioEndpoint {
 
 pub fn get(fds: &Descriptors, fd: i32) -> Result<&Arc<Endpoint>, i32> {
     fds.get(&fd).ok_or(BADF)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn concurrent_shared_readers_never_report_eof_while_writer_is_open() {
+        let notify = crate::net::Net::new().notify();
+        let [reader, writer] = Endpoint::pair(notify.clone());
+        const COUNT: usize = 50_000;
+        assert_eq!(writer.write(&vec![b'x'; COUNT], &notify), COUNT as i32);
+        let consumed = AtomicUsize::new(0);
+        let start = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let reader = &reader;
+                let notify = &notify;
+                let consumed = &consumed;
+                let start = &start;
+                scope.spawn(move || {
+                    start.wait();
+                    for _ in 0..COUNT * 4 {
+                        if consumed.load(Ordering::Acquire) == COUNT {
+                            return;
+                        }
+                        let result = reader.read(&mut [0], notify);
+                        assert!(
+                            result == 1 || result == AGAIN,
+                            "false EOF/error with live writer: {result}"
+                        );
+                        if result == 1 {
+                            consumed.fetch_add(1, Ordering::AcqRel);
+                        } else {
+                            std::thread::yield_now();
+                        }
+                    }
+                    assert_eq!(consumed.load(Ordering::Acquire), COUNT);
+                });
+            }
+        });
+        assert_eq!(consumed.load(Ordering::Acquire), COUNT);
+        assert_eq!(reader.read(&mut [0], &notify), AGAIN);
+        drop(writer);
+        assert_eq!(reader.read(&mut [0], &notify), 0);
+    }
+
+    struct Buffered {
+        pending: Vec<u8>,
+        visible: Arc<Mutex<Vec<u8>>>,
+        delay: bool,
+    }
+    impl AsyncWrite for Buffered {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.pending.extend_from_slice(bytes);
+            Poll::Ready(Ok(bytes.len()))
+        }
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            if self.delay {
+                self.delay = false;
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            let bytes = std::mem::take(&mut self.pending);
+            self.visible.lock().unwrap().extend(bytes);
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.poll_flush(cx)
+        }
+    }
+    #[test]
+    fn output_flushes_non_newline_prompts_and_never_replays_accepted_bytes() {
+        for delay in [false, true] {
+            let visible = Arc::new(Mutex::new(Vec::new()));
+            let mut writer = Writer {
+                stream: Box::pin(Buffered {
+                    pending: Vec::new(),
+                    visible: visible.clone(),
+                    delay,
+                }),
+                flushing: false,
+                error: None,
+            };
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(matches!(
+                writer.write(&mut cx, b"prompt>"),
+                Poll::Ready(Ok(7))
+            ));
+            if !delay {
+                assert_eq!(*visible.lock().unwrap(), b"prompt>");
+            }
+            assert!(matches!(
+                writer.write(&mut cx, b"reply"),
+                Poll::Ready(Ok(5))
+            ));
+            assert_eq!(*visible.lock().unwrap(), b"prompt>reply");
+            assert!(matches!(writer.flush(&mut cx), Poll::Ready(Ok(()))));
+            assert_eq!(*visible.lock().unwrap(), b"prompt>reply");
+        }
+    }
 }

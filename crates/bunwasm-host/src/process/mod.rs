@@ -159,8 +159,20 @@ pub struct Request {
 
 #[derive(Debug, Deserialize)]
 pub struct Binding {
+    #[serde(deserialize_with = "descriptor_number")]
     pub child: i32,
+    #[serde(deserialize_with = "descriptor_number")]
     pub parent: i32,
+}
+
+fn descriptor_number<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i32, D::Error> {
+    let value = f64::deserialize(deserializer)?;
+    if value.fract() != 0.0 || !(0.0..=i32::MAX as f64).contains(&value) {
+        return Err(serde::de::Error::custom(
+            "descriptor must be an integer in 0..=i32::MAX",
+        ));
+    }
+    Ok(value as i32)
 }
 
 impl Request {
@@ -258,6 +270,24 @@ impl Processes {
             return error;
         }
         self.insert(endpoint)
+    }
+
+    /// File descriptors share our external namespace. Like process renumber,
+    /// reserving a file handle advances the monotonic allocator past that id.
+    pub fn reserve_file(&mut self, fd: i32) {
+        self.next = self.next.max(fd as u32 + 1);
+    }
+
+    pub fn preopen_count(&self) -> usize {
+        self.runtime.dirs.len()
+    }
+
+    pub fn readiness(&self, fd: i32, write: bool) -> Result<(bool, bool), i32> {
+        let endpoint = descriptors::get(&self.fds, fd)?;
+        if endpoint.fdstat().1 & (1u64 << if write { 6 } else { 1 }) == 0 {
+            return Err(NOTCAPABLE);
+        }
+        Ok(endpoint.readiness(write, &self.notify))
     }
 
     pub fn owns(&self, fd: i32) -> bool {
@@ -366,6 +396,17 @@ impl Processes {
         if request.job > 0.0 && !state.jobs.contains_key(&(request.job as i32)) {
             self.runtime.active.fetch_sub(1, Ordering::SeqCst);
             return Err(SRCH);
+        }
+        if request.job > 0.0
+            && state.jobs[&(request.job as i32)].result.is_some()
+            && state
+                .processes
+                .values()
+                .filter(|child| child.job == request.job as i32)
+                .all(|child| child.result.is_some())
+        {
+            self.runtime.active.fetch_sub(1, Ordering::SeqCst);
+            return Err(CHILD);
         }
         let Some(next) = state.next.checked_add(1) else {
             self.runtime.active.fetch_sub(1, Ordering::SeqCst);
