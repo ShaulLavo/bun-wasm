@@ -85,6 +85,14 @@ impl Pipe {
         count as i32
     }
 
+    pub fn write_readiness(&self) -> (bool, bool) {
+        let state = self.state.lock().unwrap();
+        (
+            state.bytes.len() < CAPACITY,
+            state.reader_closed || state.eof,
+        )
+    }
+
     pub fn close_writer(&self) {
         let mut state = self.state.lock().unwrap();
         state.eof = true;

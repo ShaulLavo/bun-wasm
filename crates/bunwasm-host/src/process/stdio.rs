@@ -15,25 +15,38 @@ use wasmtime_wasi::p2::{InputStream, OutputStream, Pollable, StreamError, Stream
 pub enum FinalOutcome {
     Exit(i32),
     Signal(i32),
+    /// A positive WASI errno, never an ordinary guest exit code.
+    StartFailed(i32),
 }
 
 impl FinalOutcome {
+    pub fn wire(self) -> (i32, i32) {
+        match self {
+            Self::Exit(code) => (0, code),
+            Self::Signal(signal) => (1, signal),
+            Self::StartFailed(errno) => (2, errno),
+        }
+    }
+
     pub fn code(self) -> i32 {
         match self {
             Self::Exit(code) => code,
             Self::Signal(signal) => 128 + signal,
+            Self::StartFailed(44) => 127,
+            Self::StartFailed(_) => 126,
         }
     }
 
     pub fn signal(self) -> i32 {
         match self {
-            Self::Exit(_) => 0,
+            Self::Exit(_) | Self::StartFailed(_) => 0,
             Self::Signal(signal) => signal,
         }
     }
 }
 
 struct SignalState {
+    started: bool,
     selected: Option<FinalOutcome>,
     dispositions: [u8; 65],
     pending: u64,
@@ -42,6 +55,7 @@ struct SignalState {
 impl Default for SignalState {
     fn default() -> Self {
         Self {
+            started: false,
             selected: None,
             dispositions: [0; 65],
             pending: 0,
@@ -58,8 +72,31 @@ pub struct Cancellation {
 }
 
 impl Cancellation {
+    /// Entry and terminal selection share a lock: the losing host never enters guest code.
+    pub fn mark_started(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if state.selected.is_some() {
+            return false;
+        }
+        state.started = true;
+        true
+    }
+
+    pub fn start_status(&self) -> i32 {
+        let state = self.state.lock().unwrap();
+        if state.started {
+            return 0;
+        }
+        match state.selected {
+            Some(FinalOutcome::StartFailed(errno)) => errno,
+            Some(_) => -11, // ECANCELED: terminal selection beat entry.
+            None => super::AGAIN,
+        }
+    }
+
     fn raise(&self, state: &mut SignalState, signal: i32) {
         match state.dispositions[signal as usize] {
+            0 if matches!(signal, 17 | 18 | 23 | 28) => {}
             0 => {
                 state.selected = Some(FinalOutcome::Signal(signal));
                 state.pending = 0;
@@ -80,7 +117,7 @@ impl Cancellation {
     }
 
     pub fn kill(&self, signal: i32) -> bool {
-        if !(0..=64).contains(&signal) {
+        if super::validate_signal(signal, true).is_err() {
             return false;
         }
         {
@@ -97,9 +134,9 @@ impl Cancellation {
         true
     }
 
-    /// Slot 18: publish DEFAULT/IGNORE/HANDLE (0/1/2), raise (3),
+    /// runtime_proc.signal: publish DEFAULT/IGNORE/HANDLE (0/1/2), raise (3),
     /// dequeue one handled signal (0, 0), or check fatal state without
-    /// dequeuing (0, 4). The slot adapter calls check() after every operation.
+    /// dequeuing (0, 4). The import adapter calls check() after every operation.
     /// SIGKILL cannot be reconfigured.
     pub fn signal(&self, signal: i32, operation: i32) -> i32 {
         if signal == 0 && operation == 4 {
@@ -114,11 +151,14 @@ impl Cancellation {
             state.pending &= !(1u64 << (signal - 1));
             return signal as i32;
         }
+        if let Err(error) = super::validate_signal(signal, false) {
+            return error;
+        }
         if !(1..=64).contains(&signal)
             || !(0..=3).contains(&operation)
             || (signal == 9 && operation != 3)
         {
-            return -22;
+            return super::INVAL;
         }
         {
             let mut state = self.state.lock().unwrap();
@@ -151,7 +191,11 @@ impl Cancellation {
         }
     }
 
-    /// Selection precedes pipe teardown; publication to child_wait comes later.
+    pub fn interrupted(&self) -> bool {
+        self.fatal.load(Ordering::SeqCst) != 0 || self.state.lock().unwrap().pending != 0
+    }
+
+    /// Selection precedes descriptor teardown; publication to proc_wait comes later.
     pub fn select(&self, outcome: FinalOutcome) -> FinalOutcome {
         let mut state = self.state.lock().unwrap();
         let selected = *state.selected.get_or_insert(outcome);
@@ -172,45 +216,52 @@ impl Cancellation {
     }
 }
 
-#[derive(Clone)]
 pub struct Stdio {
-    pub stdin: SharedInput,
-    pub stdout: Arc<dyn StdoutStream + Sync>,
-    pub stderr: Arc<dyn StdoutStream + Sync>,
-    pub worker: Option<[super::pipe::Pipe; 2]>,
+    pub fds: super::descriptors::Descriptors,
+    pub pid: i32,
     pub memory_limit: usize,
-    pub configuration: bool,
 }
 
 impl Stdio {
     pub fn inherited() -> Self {
+        use super::descriptors::Endpoint;
         Self {
-            stdin: SharedInput::new(Arc::new(wasmtime_wasi::cli::stdin())),
-            stdout: Arc::new(std::io::stdout()),
-            stderr: Arc::new(std::io::stderr()),
-            worker: None,
+            fds: [
+                (
+                    0,
+                    Endpoint::input(
+                        SharedInput::new(Arc::new(wasmtime_wasi::cli::stdin())),
+                        None,
+                    ),
+                ),
+                (1, Endpoint::output(Arc::new(std::io::stdout()), None)),
+                (2, Endpoint::output(Arc::new(std::io::stderr()), None)),
+            ]
+            .into_iter()
+            .collect(),
+            pid: 0,
             memory_limit: 512 << 20,
-            configuration: false,
         }
     }
     pub fn install(&self, wasi: &mut wasmtime_wasi::WasiCtxBuilder, cancel: Arc<Cancellation>) {
+        use super::descriptors::StdioEndpoint;
         wasi.stdin(Input {
-            stream: self.stdin.clone(),
+            stream: StdioEndpoint::for_fd(&self.fds, 0),
             cancel: cancel.clone(),
         });
         wasi.stdout(Output {
-            stream: self.stdout.clone(),
+            stream: Arc::new(StdioEndpoint::for_fd(&self.fds, 1)),
             cancel: cancel.clone(),
         });
         wasi.stderr(Output {
-            stream: self.stderr.clone(),
+            stream: Arc::new(StdioEndpoint::for_fd(&self.fds, 2)),
             cancel,
         });
     }
 }
 
 struct Input {
-    stream: SharedInput,
+    stream: super::descriptors::StdioEndpoint,
     cancel: Arc<Cancellation>,
 }
 struct Output {
@@ -232,7 +283,7 @@ struct OutputHandle {
 
 impl IsTerminal for Input {
     fn is_terminal(&self) -> bool {
-        self.stream.terminal
+        self.stream.is_terminal()
     }
 }
 impl IsTerminal for Output {
@@ -558,7 +609,7 @@ mod tests {
         assert_eq!(cancel.signal(15, 2), 0);
         assert!(cancel.kill(15));
         for signal in [-1, 1, 9, 15, 64, 65] {
-            assert_eq!(cancel.signal(signal, 4), -22);
+            assert_eq!(cancel.signal(signal, 4), crate::process::INVAL);
         }
         assert_eq!(cancel.signal(0, 0), 15);
         assert!(cancel.check().is_ok());
@@ -585,7 +636,7 @@ mod tests {
         }
         let cancel = Cancellation::default();
         for disposition in 0..=2 {
-            assert_eq!(cancel.signal(9, disposition), -22);
+            assert_eq!(cancel.signal(9, disposition), crate::process::INVAL);
         }
         assert_eq!(cancel.signal(9, 3), 0);
         assert_eq!(
@@ -598,7 +649,7 @@ mod tests {
     fn invalid_signal_operations_do_not_change_state() {
         let cancel = Cancellation::default();
         for (signal, operation) in [(-1, 0), (65, 0), (2, -1), (2, 4), (0, 1), (0, 3)] {
-            assert_eq!(cancel.signal(signal, operation), -22);
+            assert_eq!(cancel.signal(signal, operation), crate::process::INVAL);
         }
         assert!(cancel.check().is_ok());
         assert_eq!(cancel.select(FinalOutcome::Exit(0)), FinalOutcome::Exit(0));

@@ -1,24 +1,26 @@
 # bun-wasm
 
-Bun's Rust toolchain and a Bun-compatible runtime compiled to WebAssembly for browsers and wasmtime.
+Bun's Rust toolchain compiled to WebAssembly, with a Bun-compatible runtime for browsers and a native Wasmtime launcher.
+
+## Build and run
 
 ```sh
-source env.sh
-scripts/sync-bun.sh
+source env.sh && scripts/sync-bun.sh
 scripts/build.sh
-wasmtime run --dir .::/ dist/bun.wasm run /index.ts
+cargo build -j 4 --release -p bunwasm-host
+printf 'console.log("hello from bun-wasm");\n' > index.ts
+"$CARGO_TARGET_DIR/release/bun-wasm" --wasm "$PWD/dist/bun.wasm" \
+  --dir "$PWD::/" --env PWD=/ -- run /index.ts
 ```
 
-Applications can install this repository as the `bun-wasm` Git dependency and share their existing Waffle runtime.
+Use this launcher, not plain `wasmtime run`: it supplies the `runtime_proc` imports.
 
-```ts
-import { installBunAdapters } from "bun-wasm";
-const installation = await installBunAdapters(runtime, { workerUrl });
-installation.dispose();
-```
+## Links
 
-- [Package installation and usage](docs/overview.md)
-- [Code quality checks](docs/code-quality.md)
-- [Browser playground](web/README.md) and [sandbox](sandbox/README.md)
-- [Upstream patches and adapted source](docs/bun-patches.md)
-- [Compatibility evidence](docs/bun-test-suite/README.md)
+- [Project overview and supported tools](docs/overview.md)
+- [Browser package installation, ownership and offline guests](docs/browser-package.md)
+- [Playground](web/README.md) · [React sandbox](sandbox/README.md)
+- [Browser engine](docs/engine-browser.md) · [Host ABI](docs/host-abi.md)
+- [Bun builtins](docs/bun-builtins.md) · [Runtime TypeScript](docs/runtime-typescript.md)
+- [Bun test-suite compatibility](docs/bun-test-suite/README.md)
+- [Dependency patches and provenance](docs/bun-patches.md)

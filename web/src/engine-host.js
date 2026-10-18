@@ -5,6 +5,7 @@ import { installHostCrypto } from "./crypto-host.js";
 import { memoryViews } from "waffle/core/memory-views";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "./buffer-transfer.ts";
 import { ContentModules } from "./content-modules.ts";
+import { SLOT_NAMES } from "./net/trampoline.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -25,6 +26,8 @@ import { ContentModules } from "./content-modules.ts";
 // Plain JS (no TypeScript) so Node can import it directly.
 
 // The host's own versions of what the polyfills replace on globalThis.
+/** Capability flags the host answers for; the wasm owns all the others. */
+const NETWORK_CAPS = new Set(SLOT_NAMES);
 const nativeSubtleCrypto = globalThis.crypto?.subtle;
 const NativeDOMException = globalThis.DOMException;
 const NativeCryptoKey = globalThis.CryptoKey;
@@ -383,7 +386,9 @@ class EngineHost {
     // Networking: the bun_wasm ABI functions net.js calls (native.host*),
     // implemented in JS by the host (o.net), not by wasm slots.
     const net = this.o.net;
-    native.hostCaps = Object.fromEntries(Object.keys(native.hostCaps || {}).map((k) => [k, Boolean(net && net.caps[k])]));
+    // The host decides the network capabilities. Everything else the wasm reports (such as its
+    // runtime_proc process calls, imported directly) is the guest's own and stays as it is.
+    native.hostCaps = Object.fromEntries(Object.entries(native.hostCaps || {}).map(([k, v]) => [k, NETWORK_CAPS.has(k) ? Boolean(net && net.caps[k]) : v]));
     if (net) {
       Object.assign(native, net.natives);
       net.onNews(() => this.schedule(0));

@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createRing } from "waffle/browser/net/ring";
-import { installHostSlots, trampolineModule } from "../src/net/trampoline";
+import { SLOT_NAMES, installHostSlots, trampolineModule } from "../src/net/trampoline";
 import { MemFS } from "../src/fs";
 import { Wasi } from "waffle/core";
 
@@ -33,19 +33,21 @@ test("trampoline module forwards each arity to its import", () => {
 const bunWasm = join(import.meta.dir, "../../dist/bun.wasm");
 test.skipIf(!existsSync(bunWasm))("installHostSlots fills bun.wasm's slot table", () => {
   const module = new WebAssembly.Module(readFileSync(bunWasm));
-  const wasi = new Wasi({ args: ["bun"], env: {}, fs: new MemFS(), preopens: { "/": "/" }, stdout() {}, stderr() {}, sleep() {} });
+  // The guest imports runtime_proc directly; this test only inspects the slot table, so stub it.
+  const runtimeProc = Object.fromEntries(WebAssembly.Module.imports(module).filter(entry => entry.module === "runtime_proc").map(entry => [entry.name, () => 0]));
+  const wasi = new Wasi({ args: ["bun"], env: {}, fs: new MemFS(), preopens: { "/": "/" }, stdout() {}, stderr() {}, sleep() {}, namespaces: { runtime_proc: runtimeProc } });
   const instance = new WebAssembly.Instance(module, wasi.imports(module));
   const installed = installHostSlots(instance, { poll: () => 0, fetch: () => -1, close: () => 0 });
   expect(installed).toEqual(["poll", "fetch", "close"]);
   const ptr = (instance.exports.bun_wasm_host_slots as () => number)();
   const view = new DataView((instance.exports.memory as WebAssembly.Memory).buffer);
   expect(view.getUint32(ptr, true)).toBe(1);
-  expect(view.getUint32(ptr + 4, true)).toBe(19);
+  expect(view.getUint32(ptr + 4, true)).toBe(SLOT_NAMES.length);
+  expect(SLOT_NAMES).toHaveLength(14);
   const table = instance.exports.__indirect_function_table as WebAssembly.Table;
   const slot = (i: number) => view.getUint32(ptr + 8 + 4 * i, true);
   expect(slot(0)).toBeGreaterThan(0);
   expect(slot(2)).toBe(0); // fetch_head not provided
-  expect(slot(18)).toBe(0); // signal is optional and not provided
   expect((table.get(slot(1)) as Function)(0, 0, 0, 0)).toBe(-1);
 });
 

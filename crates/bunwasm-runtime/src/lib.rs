@@ -107,8 +107,9 @@ pub(crate) struct State {
     /// file on disk (transpiled code, injected ESM prologue).
     positions: RefCell<HashMap<String, modules::PositionMap>>,
     stdout: RefCell<BufWriter<io::Stdout>>,
-    signals: RefCell<host::LocalSignals>,
     /// Set when `process.nextTick` queued work.
+    /// Handled signals dequeued by a synchronous sleep, delivered at the next checkpoint.
+    deferred_signals: RefCell<host::DeferredSignals>,
     tick_pending: Cell<bool>,
     fds: RefCell<natives::FdTable>,
     directories: Rc<RefCell<directory::Directories>>,
@@ -130,7 +131,7 @@ impl State {
             cjs_sources: RefCell::new(HashMap::new()),
             positions: RefCell::new(HashMap::new()),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
-            signals: RefCell::new(host::LocalSignals::default()),
+            deferred_signals: RefCell::new(host::DeferredSignals::default()),
             tick_pending: Cell::new(false),
             fds: RefCell::new(natives::FdTable::default()),
             directories: Rc::new(RefCell::new(directory::Directories::default())),
@@ -165,15 +166,40 @@ impl State {
         let _ = self.flush_stdout();
     }
 
+    /// Signal dispositions and delivery live in the process service (`runtime_proc.signal`). Only
+    /// signals a synchronous sleep took from its queue are kept here, and they stay observable
+    /// through the same operations: dequeue returns them first, and ignoring or restoring the
+    /// default disposition withdraws them exactly as it would a pending service signal.
     pub(crate) fn signal(&self, signal: i32, operation: i32) -> i32 {
-        if host::provided(host::Slot::Signal as usize) {
-            return host::signal(signal, operation);
+        if signal == 0 && operation == 0 {
+            return host::next_signal(&mut self.deferred_signals.borrow_mut(), || {
+                host::signal(0, 0)
+            });
+        } else if (operation == 0 || operation == 1)
+            && self.deferred_signals.borrow_mut().withdraw(signal)
+        {
+            if operation == 1 {
+                return host::signal(signal, 1);
+            }
+            // A pending delivery whose handler was removed takes the default action at once.
+            let result = host::signal(signal, 0);
+            return if result < 0 {
+                result
+            } else {
+                host::signal(signal, 3)
+            };
         }
-        let action = self.signals.borrow_mut().signal(signal, operation);
-        match action {
-            host::SignalAction::Value(value) => value,
-            host::SignalAction::Default(signal) => self.exit(128 + signal),
-        }
+        host::signal(signal, operation)
+    }
+
+    /// `Bun.sleepSync` and sleeping timers: cancellable by signals, without spinning.
+    pub(crate) fn sleep(&self, duration: std::time::Duration) {
+        host::sleep_with(
+            duration,
+            &mut self.deferred_signals.borrow_mut(),
+            || host::signal(0, 0),
+            host::idle,
+        );
     }
 
     pub(crate) fn exit(&self, code: i32) -> ! {
@@ -186,7 +212,7 @@ impl State {
 }
 
 #[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
-type ModuleHandoffs<E> = HashMap<String, (<E as Engine>::Value, <E as Engine>::Value)>;
+type ModuleHandoffs<V> = RefCell<HashMap<String, (V, V)>>;
 
 #[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 /// The runtime's engine-facing half: the `internal` object the bootstrap
@@ -195,7 +221,7 @@ pub(crate) struct Core<E: Engine> {
     pub(crate) state: Rc<State>,
     internal: RefCell<Option<E::Value>>,
     /// Exports objects of wrapper modules, until their `import.meta` is set.
-    handoffs: RefCell<ModuleHandoffs<E>>,
+    handoffs: ModuleHandoffs<E::Value>,
 }
 
 #[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
@@ -282,7 +308,7 @@ impl<E: Engine> Core<E> {
 #[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 impl<E: Engine> ModuleHost<E> for Core<E> {
     fn has_interrupt_handler(&self) -> bool {
-        host::provided(host::Slot::Signal as usize)
+        host::PROCESS_ABI
     }
 
     fn interrupt(&self) -> bool {
@@ -431,7 +457,7 @@ fn new_state(
         Entry::Eval(_) => None,
         Entry::Test(_) => Some("test".to_owned()),
     };
-    let argv = std::iter::once(String::from("bun"))
+    let argv = std::iter::once(std::env::args().next().unwrap_or_else(|| "bun".into()))
         .chain(script)
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
@@ -560,7 +586,16 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
             } else {
                 (next.ceil() as i32).clamp(1, 25)
             };
-            if host::poll(wait) == host::UNSUPPORTED {
+            // Waiters that only watch runtime_proc descriptors and children sleep in
+            // proc_poll for exactly what they watch; anything else uses the host poll.
+            let slept = match core.call_internal(e, "ioWait", &[e.value_from(wait.into())]) {
+                Ok(value) => matches!(e.to_val(&value), Val::Bool(true)),
+                Err(err) => {
+                    core.uncaught(e, err);
+                    continue;
+                }
+            };
+            if !slept && host::poll(wait) == host::UNSUPPORTED {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
             if let Err(err) = core.call_internal(e, "pumpIo", &[]) {
@@ -583,11 +618,10 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
             }
         }
         core.state.flush();
-        // Reenter the checkpoint after one bounded poll rather than sleeping
-        // through the whole timer delay with handled signals still pending.
-        if host::poll((next.ceil() as i32).clamp(1, 25)) == host::UNSUPPORTED {
-            std::thread::sleep(std::time::Duration::from_secs_f64(next / 1000.0));
-        }
+        // Reenter the checkpoint after one bounded wait rather than sleeping through the whole
+        // timer delay. With no network handle to watch this is the process poll, which a handled
+        // signal or interrupt wakes; the network host poll only knows about network events.
+        host::idle((next.ceil() as i32).clamp(1, 25));
     }
 }
 

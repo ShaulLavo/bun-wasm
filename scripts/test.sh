@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end fixtures: build dist/bun.wasm, run every tests/fixtures/<name>
-# under wasmtime and diff stdout (and the exit code) against expectations.
+# through the runtime_proc-capable hosts and diff stdout (and the exit code).
 #
 # A fixture directory holds:
 #   index.{js,mjs,cjs,ts,tsx}   entry point (run as `bun run /index.*`)
@@ -10,8 +10,8 @@
 #   cmd                         optional: bun arguments replacing `run /index.*`, one per line
 #   stdin                       optional file piped to stdin
 #   expected_stderr.txt         optional expected stderr (e.g. `bun test` reports)
-#   host                        optional marker: run under the bun-wasm launcher
-#                               (crates/bunwasm-host, networking ABI) instead of wasmtime;
+#   host                        optional marker: start the local networking test server;
+#                               all native-engine fixtures use crates/bunwasm-host.
 #                               TEST_SERVER=http://127.0.0.1:<port> points at
 #                               tests/servers/http.ts, which this script starts
 #   show                        optional list of files (one per line) the run creates; their
@@ -76,8 +76,8 @@ if [[ $build == 1 && $update == 0 ]]; then
   }
 fi
 
-# Networking fixtures need the native launcher and the local test server.
-launcher="$CARGO_TARGET_DIR/release/bun-wasm"
+# Every native-engine guest imports runtime_proc, including non-network fixtures.
+launcher="${BUN_WASM_LAUNCHER:-$CARGO_TARGET_DIR/release/bun-wasm}"
 start_test_server() {
   [[ -n "$server_pid" ]] && return 0
   bun "$root/tests/servers/http.ts" >"$scratch/server.port" 2>"$scratch/server.err" &
@@ -89,7 +89,7 @@ start_test_server() {
   TEST_SERVER="http://127.0.0.1:$(head -1 "$scratch/server.port")"
   export TEST_SERVER
 }
-if [[ $build == 1 && $update == 0 ]] && compgen -G "$root/tests/fixtures/*/host" >/dev/null; then
+if [[ $build == 1 && $update == 0 && $engine != browser ]]; then
   (cd "$root" && cargo build -j "${JOBS:-12}" --release -p bunwasm-host >"$scratch/host-build.log" 2>&1) ||
     { tail -30 "$scratch/host-build.log"; echo "launcher build failed"; exit 1; }
 fi
@@ -216,13 +216,10 @@ for name in "${names[@]}"; do
     (cd "$work" && timeout 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" "${net_flag[@]}" --dir "$work::/" \
       --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
-  elif [[ $is_host == 1 ]]; then
-    (cd "$work" && BUN_WASM="$wasm" timeout 60 "$launcher" --dir "$work::/" --env PWD=/ --env HOME=/ \
-      --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=$TEST_SERVER" \
-      "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   else
-    (cd "$work" && timeout 60 wasmtime run --dir "$work::/" --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 \
-      "$wasm" "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+    (cd "$work" && timeout 60 "$launcher" --wasm "$wasm" --engine "$engine=$wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$work::/" --env PWD=/ --env HOME=/ \
+      --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=${TEST_SERVER:-}" -- \
+      "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   fi
   code=$?
   show_files "$work" "$scratch/out"

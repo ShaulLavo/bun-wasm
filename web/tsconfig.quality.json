@@ -24,5 +24,8 @@
         "./node_modules/waffle/fs/memory.ts"
       ]
     }
-  }
+  },
+  "exclude": [
+    "tests/process-bench-baseline.ts"
+  ]
 }

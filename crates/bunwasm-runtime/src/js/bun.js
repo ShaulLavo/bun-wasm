@@ -493,7 +493,7 @@
     escapeHTML,
     stringWidth,
     stripANSI,
-    which: () => null,
+    which: (command, options) => internal.require("spawn").which(command, options),
     hash,
     CryptoHasher,
     randomUUIDv7,

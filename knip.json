@@ -12,7 +12,7 @@
         "scripts/bench/error-construction.js",
         "tests/package/fixtures/vite-main.ts",
         "scripts/*.test.ts",
-        "scripts/bench-module-preparation.mjs",
+        "scripts/bench-module-preparation.ts",
         "scripts/bun-suite-small-causes.ts",
         "scripts/check-await-observer.ts",
         "scripts/crypto-review-vectors.mjs",
@@ -54,7 +54,10 @@
         "tests/persistence-browser-{main,worker}.ts",
         "tests/process-{bench-baseline,browser-main}.ts",
         "tests/runtime-proc-browser-main.ts",
-        "tests/fixtures/{filesystem-lifecycle,safari-driver-listener,startup-filesystem}.ts"
+        "tests/fixtures/{filesystem-lifecycle,safari-driver-listener,startup-filesystem}.ts",
+        "tests/bun-runtime-proc-main.ts",
+        "tests/worker-bootstrap-browser.ts",
+        "tests/worker-bootstrap-browser-main.ts"
       ],
       "project": [
         "src/**/*.{ts,js}",
@@ -63,6 +66,9 @@
       ],
       "ignoreDependencies": [
         "benchmark"
+      ],
+      "ignoreUnresolved": [
+        "../src/subprocess.js"
       ]
     },
     "sandbox": {

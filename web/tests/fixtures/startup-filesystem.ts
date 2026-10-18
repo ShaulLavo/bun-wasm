@@ -17,6 +17,10 @@ export class SharedFilesystem extends Filesystem {
   }
   override async mkdirp(path: string): Promise<void> {
     await super.mkdirp(path);
+    if (path === "/tmp" && new URLSearchParams(location.search).has("fail-startup") && !sessionStorage.getItem("startup-failed")) {
+      sessionStorage.setItem("startup-failed", "1");
+      throw new Error("injected filesystem startup failure");
+    }
     if (!pause || path !== "/tmp") return;
     sessionStorage.setItem("startup-paused", "1");
     state.paused = true;

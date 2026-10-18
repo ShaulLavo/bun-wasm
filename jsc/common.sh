@@ -31,14 +31,18 @@ JSC_INPUTS_STAMP="$JSC_BUILD_DIR/build/jsc/.bunwasm-inputs"
 
 jsc_inputs_hash() {
   {
-    printf 'format=1\n'
+    printf 'format=2\n'
     printf 'WEBKIT_COMMIT=%s\n' "$WEBKIT_COMMIT"
     printf 'ICU_VERSION=%s\n' "$ICU_VERSION"
     printf 'ICU_SHA256=%s\n' "$ICU_SHA256"
-    for file in scripts/build-jsc.sh env.sh; do
-      printf '%s=' "$file"
-      sha256sum "$REPO/$file" | cut -d' ' -f1
+    # Fingerprint the effective build environment, not unrelated workstation
+    # scratch/cache policy or comments in the shell file that establishes it.
+    for variable in WASI_SDK_PATH CC CXX AR RANLIB CFLAGS CXXFLAGS CPPFLAGS LDFLAGS \
+      CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH; do
+      printf '%s=%s\n' "$variable" "${!variable-}"
     done
+    printf 'scripts/build-jsc.sh='
+    sha256sum "$REPO/scripts/build-jsc.sh" | cut -d' ' -f1
     for file in wasi-jsc.cmake shim/wasi-compat.h shim/wasi-compat.c shim/madvise.c; do
       printf 'embedded/%s=' "$file"
       if [[ -f "$JSC_CONFIG_DIR/$file" ]]; then
@@ -72,9 +76,15 @@ jsc_inputs_hash() {
 
 copy_jsc_config_inputs() {
   mkdir -p "$JSC_CONFIG_SHIM_DIR"
-  cp "$JSC_SRC/wasi-jsc.cmake" "$JSC_TOOLCHAIN_FILE"
+  # Preserve identical input timestamps: the injected header is a dependency of
+  # every WebKit object, so touching it makes a no-op refresh rebuild the engine.
+  if ! cmp -s "$JSC_SRC/wasi-jsc.cmake" "$JSC_TOOLCHAIN_FILE"; then
+    cp "$JSC_SRC/wasi-jsc.cmake" "$JSC_TOOLCHAIN_FILE"
+  fi
   for file in wasi-compat.h wasi-compat.c madvise.c; do
-    cp "$JSC_SRC/shim/$file" "$JSC_CONFIG_SHIM_DIR/$file"
+    if ! cmp -s "$JSC_SRC/shim/$file" "$JSC_CONFIG_SHIM_DIR/$file"; then
+      cp "$JSC_SRC/shim/$file" "$JSC_CONFIG_SHIM_DIR/$file"
+    fi
   done
 }
 

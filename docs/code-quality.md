@@ -31,7 +31,7 @@ and incremental compilation to limit runner disk use; it runs the same checks.
   `tests/build` and `tests/jsc` are not host source. Intentional classic-script
   factory evaluation and ABI-specific operations have local explained exceptions.
 - TypeScript 7.0.2 runs strict runtime-factory, package, scripts/site, web and sandbox projects.
-  Both application quality projects include all authored TS test files and their
+  Both application quality projects include authored TS test files and their
   browser/worker entrypoints. Legacy JS gets correctness lint, not a claim of
   strict JS type coverage. The existing runtime factory type tests remain in CI.
 - Knip 6.41.0 checks unused files, exports, types and dependencies. Package exports
@@ -40,7 +40,10 @@ and incremental compilation to limit runner disk use; it runs the same checks.
   fixtures whose paths are passed to bundlers dynamically. They are not a list of
   every source file. `benchmark:` is a build-time module namespace; `unshare` and
   `ss` are OS commands; `build.mjs` runs in the upstream streams checkout. The
-  single unresolved Unicode/space fixture specifier is intentional guest input.
+  unresolved Unicode/space fixture specifier is intentional guest input.
+  `process-bench-baseline.ts` compiles against a frozen Git snapshot in the benchmark
+  runner. Its retired imports are deliberately unresolved in the current tree; it
+  stays linted and clone-scanned, but is excluded from the current-API type project.
 - jscpd 5.4.1 checks owned TS, JS and Rust together. Exact scans use mild token
   matching, at least 100 tokens and 10 lines. Structural function comparison uses
   `--similarity 0.8` and at least 40 AST nodes. The larger node floor avoids
@@ -72,8 +75,11 @@ covered. See [the source ledger](bun-patches.md) for provenance.
 `quality:duplicates` uses `--baseline`, `--fail-on-new-clones 0` and
 `--fail-on-empty`. Renaming a local variable does not bypass structural Rust
 comparison. Removing one baseline clone does not buy room for a different clone.
-The initial baseline contains 16 clone pairs, including 8 Rust pairs,
-with 434 files scanned. Refresh counts
+The initial baseline contains 21 clone pairs, including 8 Rust pairs,
+with 458 files scanned. Five TS pairs come from test setup added by main while
+this PR was being implemented: two poll-test pairs, two runtime-root fixture pairs, and one
+spawn-outcome test pair. They are recorded in this initial baseline, not admitted by
+a percentage allowance. Refresh counts
 with the current scan when reviewing a baseline edit.
 
 Do not update the baseline to make an unexplained regression pass. If an

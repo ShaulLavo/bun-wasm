@@ -1,5 +1,4 @@
 three parallel config-backed commands
-public child limit remains four
 eight sequential config evaluations
 optional ancestors stop silently and required configs fail
 top-level cwd precedes lint and fmt cwd

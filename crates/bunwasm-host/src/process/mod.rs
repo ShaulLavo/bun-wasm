@@ -1,37 +1,62 @@
+mod descriptors;
+mod executables;
 mod pipe;
 mod stdin;
 mod stdio;
+#[cfg(test)]
+mod tests;
+pub mod wasi;
 
 pub use stdio::{Cancellation, FinalOutcome, Stdio};
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Waker};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
-use wasmtime_wasi::cli::StdoutStream;
 
-use crate::net::{AGAIN, BADF, ErrorInfo, Notify};
-use pipe::Pipe;
-use stdin::SharedInput;
+use crate::net::Notify;
+use descriptors::{Descriptors, Endpoint};
 
+// Process descriptors are distinct from networking handles. No read/write slot
+// dispatches by this boundary: only the runtime_proc descriptor ABI owns them.
 pub const FIRST_HANDLE: i32 = 0x4000_0000;
-/// Metadata selector on the existing child_pipe slot; fd 0..=2 remain pipes.
-pub const CHILD_FINAL_SIGNAL: i32 = 3;
-/// Worker control streams follow metadata rather than occupying selector 3.
-pub const CHILD_WORKER_INPUT: i32 = 4;
-pub const CHILD_WORKER_OUTPUT: i32 = 5;
-const MAX_CHILDREN: usize = 4;
-const BUN_EXECUTABLE_ALIASES: [&str; 6] = [
-    "bun",
-    "/bun",
-    "node",
-    "/node",
-    "/usr/local/bin/bun",
-    "/usr/local/bin/node",
-];
+pub const ACCES: i32 = -2;
+pub const AGAIN: i32 = -6;
+pub const BADF: i32 = -8;
+pub const CHILD: i32 = -12;
+pub const FAULT: i32 = -21;
+pub const INTR: i32 = -27;
+pub const INVAL: i32 = -28;
+pub const IO: i32 = -29;
+pub const NOENT: i32 = -44;
+pub const NOSYS: i32 = -52;
+pub const NOTDIR: i32 = -54;
+pub const NOTSUP: i32 = -58;
+const ROOT_JOB: i32 = i32::MAX;
+pub const PERM: i32 = -63;
+pub const PIPE: i32 = -64;
+pub const SRCH: i32 = -71;
+pub const NOTCAPABLE: i32 = -76;
+// Waffle b1f2b7dd, proc/worker-client.ts:createWorkerProcessTransport defaults
+// to 1024 directory slots and immediately reserves one for the root. Completed
+// children retain a slot until consuming wait, just like the shared directory.
+const PROCESS_CAPACITY: usize = 1024;
+const MAX_ACCESS_REQUESTS: usize = 64;
+
+pub(crate) fn validate_signal(signal: i32, probe: bool) -> Result<(), i32> {
+    if (signal == 0 && probe) || ((1..=64).contains(&signal) && signal != 32 && signal != 33) {
+        if (19..=22).contains(&signal) {
+            Err(NOTSUP)
+        } else {
+            Ok(())
+        }
+    } else {
+        Err(INVAL)
+    }
+}
 
 pub struct Runtime {
     pub engine: wasmtime::Engine,
@@ -39,27 +64,120 @@ pub struct Runtime {
     pub tools_path: Option<std::path::PathBuf>,
     tools: std::sync::OnceLock<Result<wasmtime::Module, String>>,
     pub dirs: Vec<(std::path::PathBuf, String)>,
-    active: AtomicUsize,
+    pub thread_stack: usize,
+    executables: executables::Executables,
+    next_access: AtomicU32,
+    access_threads: Mutex<Vec<JoinHandle<()>>>,
+    state: Mutex<Supervisor>,
+}
+
+#[derive(Default)]
+struct Supervisor {
+    next: i32,
+    stopping: bool,
+    processes: HashMap<i32, Child>,
+    // Retained ancestry is needed after an intermediate process/job is reaped.
+    parents: HashMap<i32, i32>,
+    jobs: HashMap<i32, Job>,
+    reaped_jobs: HashSet<i32>,
+}
+
+impl Supervisor {
+    /// Publish only after guest descriptor/context teardown. Like Waffle's safe-exit fence,
+    /// collect completed orphans without discarding the job's independent leader outcome.
+    fn complete(&mut self, pid: i32, outcome: FinalOutcome) {
+        let child = self.processes.get_mut(&pid).expect("admitted child record");
+        child.result = Some(outcome);
+        if let Some(job) = self.jobs.get_mut(&child.job)
+            && job.leader == pid
+        {
+            job.result = Some(outcome);
+        }
+        let orphans: Vec<_> = self
+            .processes
+            .iter()
+            .filter_map(|(&pid, child)| {
+                (child.result.is_some()
+                    && child.parent != 0
+                    && self
+                        .processes
+                        .get(&child.parent)
+                        .is_none_or(|parent| parent.result.is_some()))
+                .then_some(pid)
+            })
+            .collect();
+        for pid in orphans {
+            // The current thread may own this record; dropping its handle detaches only the
+            // completed epilogue. Running descendants retain their records and shutdown joins.
+            self.processes.remove(&pid);
+        }
+    }
+}
+
+struct Job {
+    owner: i32,
+    leader: i32,
+    result: Option<FinalOutcome>,
+}
+
+struct Child {
+    parent: i32,
+    job: i32,
+    cancel: Arc<Cancellation>,
+    result: Option<FinalOutcome>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl Runtime {
     pub fn new(
         engine: wasmtime::Engine,
         module: wasmtime::Module,
-        dirs: Vec<(std::path::PathBuf, String)>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+        mut dirs: Vec<(std::path::PathBuf, String)>,
+    ) -> anyhow::Result<Arc<Self>> {
+        let executables = executables::Executables::new(&module)?;
+        dirs.extend(executables.mounts());
+        Ok(Arc::new(Self {
             engine,
             module,
             dirs,
             tools_path: None,
             tools: std::sync::OnceLock::new(),
-            active: AtomicUsize::new(0),
-        })
+            thread_stack: crate::THREAD_STACK,
+            executables,
+            next_access: AtomicU32::new(1),
+            access_threads: Mutex::default(),
+            state: Mutex::new(Supervisor {
+                next: 1,
+                jobs: [(
+                    ROOT_JOB,
+                    Job {
+                        owner: 0,
+                        leader: 0,
+                        result: None,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..Supervisor::default()
+            }),
+        }))
     }
-    pub fn module_for(&self, argv: &[String]) -> anyhow::Result<&wasmtime::Module> {
+
+    pub fn register_engine(&self, name: &str, module: &wasmtime::Module) -> anyhow::Result<()> {
+        let (_, paths) = executables::ENGINE_PATHS
+            .iter()
+            .find(|(engine, _)| *engine == name)
+            .ok_or_else(|| anyhow::anyhow!("unknown engine {name:?}; expected quickjs or jsc"))?;
+        self.executables.register(paths, module)?;
+        Ok(())
+    }
+    pub fn module_for<'a>(
+        &'a self,
+        argv: &[String],
+        base: &'a wasmtime::Module,
+    ) -> anyhow::Result<&'a wasmtime::Module> {
         if crate::tool_args::before_command(argv.get(1..).unwrap_or_default()).is_none() {
-            return Ok(&self.module);
+            return Ok(base);
         }
         let tools = self.tools.get_or_init(|| {
             let path = self
@@ -73,213 +191,337 @@ impl Runtime {
             .as_ref()
             .map_err(|message| anyhow::anyhow!("{message}"))
     }
-}
 
-#[derive(Deserialize)]
-pub struct Request {
-    pub argv: Vec<String>,
-    pub cwd: String,
-    pub env: BTreeMap<String, String>,
-    stdin: String,
-    stdout: String,
-    stderr: String,
-    #[serde(default)]
-    worker: Option<WorkerLimits>,
-    #[serde(default)]
-    purpose: Option<ChildPurpose>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum ChildPurpose {
-    Configuration,
-}
-
-enum Admission {
-    Public(Arc<Runtime>),
-    Configuration(Arc<AtomicBool>),
-}
-
-impl Drop for Admission {
-    fn drop(&mut self) {
-        match self {
-            Self::Public(runtime) => {
-                runtime.active.fetch_sub(1, Ordering::SeqCst);
+    /// Root teardown owns every still-running child, even if its direct parent
+    /// has exited. Keep epoch ticking until they have all joined.
+    pub fn shutdown(&self) {
+        let threads = {
+            let mut state = self.state.lock().unwrap();
+            state.stopping = true;
+            for child in state.processes.values() {
+                child.cancel.kill(9);
             }
-            Self::Configuration(active) => {
-                active.store(false, Ordering::SeqCst);
-            }
+            state
+                .processes
+                .values_mut()
+                .filter_map(|child| child.thread.take())
+                .collect::<Vec<_>>()
+        };
+        for thread in threads {
+            let _ = thread.join();
+        }
+        self.state.lock().unwrap().processes.clear();
+        for thread in self.access_threads.lock().unwrap().drain(..) {
+            let _ = thread.join();
         }
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkerLimits {
-    pub memory_limit_mb: Option<usize>,
+// This is Waffle's proc/types.ts SpawnRequest plus the Bun worker extension.
+// Cross-language valid/invalid examples live in runtime-proc-spawn-requests.json.
+#[derive(Debug, Deserialize)]
+pub struct Request {
+    pub executable: String,
+    pub argv: Vec<String>,
+    pub cwd: String,
+    pub env: BTreeMap<String, String>,
+    pub job: f64,
+    pub fds: Vec<Binding>,
+    #[serde(default)]
+    worker: Option<serde_json::Value>,
 }
 
-struct Child {
-    cancel: Arc<Cancellation>,
-    result: Arc<Mutex<Option<FinalOutcome>>>,
-    reaped: AtomicBool,
-    thread: Option<JoinHandle<()>>,
-    pipes: [i32; 5],
+#[derive(Debug, Deserialize)]
+pub struct Binding {
+    #[serde(deserialize_with = "descriptor_number")]
+    pub child: i32,
+    #[serde(deserialize_with = "descriptor_number")]
+    pub parent: i32,
 }
 
-struct PipeHandle {
-    pipe: Pipe,
-    write: bool,
+fn descriptor_number<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i32, D::Error> {
+    let value = f64::deserialize(deserializer)?;
+    if value.fract() != 0.0 || !(0.0..=i32::MAX as f64).contains(&value) {
+        return Err(serde::de::Error::custom(
+            "descriptor must be an integer in 0..=i32::MAX",
+        ));
+    }
+    Ok(value as i32)
+}
+
+impl Request {
+    fn decode(meta: &[u8]) -> Result<Self, i32> {
+        let request: Self = serde_json::from_slice(meta).map_err(|_| INVAL)?;
+        if request.executable.is_empty()
+            || request.cwd.is_empty()
+            || (request.job < -1.0 || request.job.fract() != 0.0)
+            || request
+                .fds
+                .iter()
+                .any(|binding| binding.child < 0 || binding.parent < 0)
+        {
+            return Err(INVAL);
+        }
+        Ok(request)
+    }
 }
 
 pub struct Processes {
     runtime: Arc<Runtime>,
-    stdio: Stdio,
-    stdin: SharedInput,
-    notify: Arc<Notify>,
+    pub pid: i32,
+    fds: Descriptors,
     next: u32,
-    children: HashMap<i32, Child>,
-    pipes: HashMap<i32, PipeHandle>,
-    worker_pipes: [i32; 2],
-    configuration_active: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+    cancel: Arc<Cancellation>,
+    access: HashMap<i32, Arc<Mutex<AccessState>>>,
 }
 
-fn error(message: impl Into<String>, code: &str) -> ErrorInfo {
-    ErrorInfo::new("Error", message, Some(code))
+enum AccessState {
+    Pending,
+    Complete(i32),
+    Cancelled,
 }
 
-fn close_child_pipes(inputs: Vec<Pipe>, outputs: Vec<Pipe>) {
-    for pipe in inputs {
-        pipe.close_reader();
-    }
-    for pipe in outputs {
-        pipe.close_writer();
+impl Drop for Processes {
+    fn drop(&mut self) {
+        for request in self.access.values() {
+            *request.lock().unwrap() = AccessState::Cancelled;
+        }
     }
 }
 
 impl Processes {
-    pub fn new(runtime: Arc<Runtime>, stdio: Stdio, notify: Arc<Notify>) -> Self {
-        let worker = stdio.worker.clone();
-        let mut processes = Self {
-            runtime,
-            stdin: stdio.stdin.clone(),
-            stdio,
-            notify,
-            next: FIRST_HANDLE as u32,
-            children: HashMap::new(),
-            pipes: HashMap::new(),
-            worker_pipes: [0; 2],
-            configuration_active: Arc::new(AtomicBool::new(false)),
-        };
-        if let Some(pipes) = worker {
-            for (index, pipe) in pipes.into_iter().enumerate() {
-                pipe.observe(&processes.notify);
-                let id = processes
-                    .next()
-                    .expect("fresh worker has room for both inherited pipes");
-                processes.pipes.insert(
-                    id,
-                    PipeHandle {
-                        pipe,
-                        write: index == 1,
-                    },
-                );
-                processes.worker_pipes[index] = id;
-            }
+    pub fn new(
+        runtime: Arc<Runtime>,
+        stdio: Stdio,
+        notify: Arc<Notify>,
+        cancel: Arc<Cancellation>,
+    ) -> Self {
+        if stdio.pid == 0 {
+            runtime.state.lock().unwrap().processes.insert(
+                0,
+                Child {
+                    parent: 0,
+                    job: ROOT_JOB,
+                    cancel: cancel.clone(),
+                    result: None,
+                    thread: None,
+                },
+            );
         }
-        processes
+        for endpoint in stdio.fds.values() {
+            endpoint.observe(&notify);
+        }
+        let next = stdio
+            .fds
+            .keys()
+            .map(|fd| *fd as u32 + 1)
+            .max()
+            .unwrap_or(0)
+            .max(FIRST_HANDLE as u32);
+        Self {
+            runtime,
+            pid: stdio.pid,
+            fds: stdio.fds,
+            next,
+            notify,
+            cancel,
+            access: HashMap::new(),
+        }
     }
 
-    fn require_handles(&self, count: usize) -> Result<(), ErrorInfo> {
-        // u32 can retain the exhausted sentinel after allocating i32::MAX.
+    /// Native metadata work runs off the import stack, with caller-owned,
+    /// monotonic IDs and result-before-readiness publication.
+    pub fn access_start(&mut self, path: &str, cwd: &str, mode: i32) -> i32 {
+        if mode != 1
+            || path.is_empty()
+            || path.contains('\0')
+            || !cwd.starts_with('/')
+            || cwd.contains('\0')
+        {
+            return INVAL;
+        }
+        if self.access.len() >= MAX_ACCESS_REQUESTS {
+            return AGAIN;
+        }
+        let Ok(id) =
+            self.runtime
+                .next_access
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+                    (id <= i32::MAX as u32).then(|| id + 1)
+                })
+        else {
+            return AGAIN;
+        };
+        let id = id as i32;
+        let request = Arc::new(Mutex::new(AccessState::Pending));
+        let (slot, runtime, notify) = (request.clone(), self.runtime.clone(), self.notify.clone());
+        let (path, cwd) = (path.to_string(), cwd.to_string());
+        let thread = std::thread::Builder::new()
+            .name("bun-wasm-access".into())
+            .spawn(move || {
+                let result = runtime
+                    .executables
+                    .check(&path, &cwd, &runtime.dirs)
+                    .map_or_else(|error| error, |_| 0);
+                let mut state = slot.lock().unwrap();
+                if matches!(*state, AccessState::Pending) {
+                    *state = AccessState::Complete(result);
+                    notify.bump();
+                }
+            });
+        let Ok(thread) = thread else {
+            return AGAIN;
+        };
+        let mut threads = self.runtime.access_threads.lock().unwrap();
+        threads.retain(|thread| !thread.is_finished());
+        threads.push(thread);
+        self.access.insert(id, request);
+        id
+    }
+
+    pub fn access_take(&mut self, id: i32) -> i32 {
+        let Some(request) = self.access.get(&id) else {
+            return BADF;
+        };
+        let result = match *request.lock().unwrap() {
+            AccessState::Pending => return AGAIN,
+            AccessState::Complete(result) => result,
+            AccessState::Cancelled => return BADF,
+        };
+        self.access.remove(&id);
+        result
+    }
+
+    pub fn access_cancel(&mut self, id: i32) -> i32 {
+        let Some(request) = self.access.remove(&id) else {
+            return BADF;
+        };
+        *request.lock().unwrap() = AccessState::Cancelled;
+        0
+    }
+
+    fn access_ready(&self, id: i32) -> Result<bool, i32> {
+        let request = self.access.get(&id).ok_or(BADF)?;
+        Ok(matches!(*request.lock().unwrap(), AccessState::Complete(_)))
+    }
+
+    fn require_handles(&self, count: usize) -> Result<(), i32> {
         let available = (i32::MAX as u32 + 1).saturating_sub(self.next) as usize;
         if count > available {
-            return Err(error("bun-wasm child handle space exhausted", "EAGAIN"));
+            Err(AGAIN)
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
-    fn next(&mut self) -> Result<i32, ErrorInfo> {
-        self.require_handles(1)?;
-        let id = self.next as i32;
+    fn insert(&mut self, endpoint: Arc<Endpoint>) -> i32 {
+        let fd = self.next as i32;
         self.next += 1;
-        Ok(id)
+        self.fds.insert(fd, endpoint);
+        fd
     }
 
-    fn pipe(&mut self, write: bool) -> Result<(i32, Pipe), ErrorInfo> {
-        let id = self.next()?;
-        let pipe = Pipe::new(self.notify.clone());
-        self.pipes.insert(
-            id,
-            PipeHandle {
-                pipe: pipe.clone(),
-                write,
-            },
-        );
-        Ok((id, pipe))
+    pub fn pipe(&mut self) -> Result<[i32; 2], i32> {
+        self.require_handles(2)?;
+        let [read, write] = Endpoint::pair(self.notify.clone());
+        Ok([self.insert(read), self.insert(write)])
     }
 
-    fn stdin(&mut self, mode: &str) -> Result<(i32, SharedInput), ErrorInfo> {
-        match mode {
-            "inherit" => Ok((0, self.stdio.stdin.clone())),
-            "ignore" => Ok((
-                0,
-                SharedInput::new(Arc::new(wasmtime_wasi::p2::pipe::MemoryInputPipe::new(
-                    Vec::new(),
-                ))),
-            )),
-            "pipe" => {
-                let (id, pipe) = self.pipe(true)?;
-                Ok((id, SharedInput::new(Arc::new(pipe))))
-            }
-            _ => Err(error("Unsupported stdin mode in bun-wasm", "EINVAL")),
+    pub fn dup(&mut self, fd: i32) -> i32 {
+        let Some(endpoint) = self.fds.get(&fd).cloned() else {
+            return BADF;
+        };
+        if let Err(error) = self.require_handles(1) {
+            return error;
+        }
+        self.insert(endpoint)
+    }
+
+    /// File descriptors share our external namespace. Like process renumber,
+    /// reserving a file handle advances the monotonic allocator past that id.
+    pub fn reserve_file(&mut self, fd: i32) {
+        self.next = self.next.max(fd as u32 + 1);
+    }
+
+    pub fn preopen_count(&self) -> usize {
+        self.runtime.dirs.len()
+    }
+
+    pub fn readiness(&self, fd: i32, write: bool) -> Result<(bool, bool), i32> {
+        let endpoint = descriptors::get(&self.fds, fd)?;
+        if endpoint.fdstat().1 & (1u64 << if write { 6 } else { 1 }) == 0 {
+            return Err(NOTCAPABLE);
+        }
+        Ok(endpoint.readiness(write, &self.notify))
+    }
+
+    pub fn owns(&self, fd: i32) -> bool {
+        self.fds.contains_key(&fd)
+    }
+
+    pub fn close(&mut self, fd: i32) -> i32 {
+        if self.fds.remove(&fd).is_some() {
+            0
+        } else {
+            BADF
         }
     }
 
-    fn output(
-        &mut self,
-        mode: &str,
-        fd: usize,
-    ) -> Result<(i32, Arc<dyn StdoutStream + Sync>), ErrorInfo> {
-        match mode {
-            "inherit" => Ok((
-                0,
-                if fd == 1 {
-                    self.stdio.stdout.clone()
-                } else {
-                    self.stdio.stderr.clone()
-                },
-            )),
-            "ignore" => Ok((0, Arc::new(tokio::io::empty()))),
-            "pipe" => {
-                let (id, pipe) = self.pipe(false)?;
-                Ok((id, Arc::new(pipe)))
-            }
-            _ => Err(error("Unsupported output mode in bun-wasm", "EINVAL")),
+    pub fn renumber(&mut self, from: i32, to: i32) -> i32 {
+        if to < 0 {
+            return INVAL;
+        }
+        let Some(endpoint) = self.fds.remove(&from) else {
+            return BADF;
+        };
+        self.fds.insert(to, endpoint);
+        self.next = self.next.max(to as u32 + 1);
+        0
+    }
+
+    pub fn fdstat(&self, fd: i32) -> Option<(bool, u64)> {
+        self.fds.get(&fd).map(|endpoint| endpoint.fdstat())
+    }
+
+    pub fn read(&self, fd: i32, bytes: &mut [u8]) -> i32 {
+        match descriptors::get(&self.fds, fd) {
+            Ok(endpoint) => endpoint.read(bytes, &self.notify),
+            Err(error) => error,
         }
     }
 
-    pub fn spawn(&mut self, meta: &[u8]) -> Result<i32, ErrorInfo> {
-        let request: Request =
-            serde_json::from_slice(meta).map_err(|e| error(e.to_string(), "EINVAL"))?;
-        let command = request.argv.first().map(String::as_str).unwrap_or("");
-        if !BUN_EXECUTABLE_ALIASES.contains(&command) {
-            return Err(error(
-                format!("spawn {command} ENOENT: only bun is supported in bun-wasm"),
-                "ENOENT",
-            ));
+    pub fn write(&self, fd: i32, bytes: &[u8]) -> i32 {
+        match descriptors::get(&self.fds, fd) {
+            Ok(endpoint) => endpoint.write(bytes, &self.notify),
+            Err(error) => error,
+        }
+    }
+
+    pub fn spawn(&mut self, meta: &[u8]) -> i32 {
+        match self.start(meta) {
+            Ok(pid) => pid,
+            Err(error) => error,
+        }
+    }
+
+    fn start(&mut self, meta: &[u8]) -> Result<i32, i32> {
+        let mut request = Request::decode(meta)?;
+        if request.job > i32::MAX as f64 {
+            return Err(SRCH);
+        }
+        let mut fds = Descriptors::new();
+        for binding in &request.fds {
+            if fds.contains_key(&binding.child) {
+                return Err(INVAL);
+            }
+            // Never drop an unhandable filesystem fd or substitute stdio.
+            fds.insert(
+                binding.child,
+                descriptors::get(&self.fds, binding.parent)?.clone(),
+            );
         }
         let cwd = std::path::Path::new(&request.cwd);
-        if !cwd.is_absolute()
-            || cwd
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
-            return Err(error(
-                "Child cwd must be an absolute normalized guest path",
-                "EINVAL",
-            ));
-        }
         let mapped = self
             .runtime
             .dirs
@@ -291,758 +533,403 @@ impl Processes {
             })
             .max_by_key(|(length, _)| *length)
             .map(|(_, path)| path);
-        if !mapped.is_some_and(|p| p.is_dir()) {
-            return Err(error(format!("spawn cwd {} ENOENT", request.cwd), "ENOENT"));
+        if !cwd.is_absolute()
+            || cwd
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(INVAL);
         }
-        for mode in [&request.stdin, &request.stdout, &request.stderr] {
-            if !matches!(mode.as_str(), "pipe" | "inherit" | "ignore") {
-                return Err(error("Unsupported stdio mode in bun-wasm", "EINVAL"));
-            }
-        }
-        let admission = self.admit(&request)?;
-        self.start(request, admission)
-    }
-
-    fn admit(&self, request: &Request) -> Result<Admission, ErrorInfo> {
-        if request.purpose.is_some() {
-            if self.stdio.configuration {
-                return Err(error(
-                    "Configuration helpers cannot start another internal evaluation",
-                    "EPERM",
-                ));
-            }
-            if request.argv[0] != "bun"
-                || request.worker.is_some()
-                || request.argv.len() != 4
-                || request.argv[1..3] != ["--no-install", "-e"]
-                || request.stdin != "ignore"
-                || request.stdout != "pipe"
-                || request.stderr != "pipe"
-            {
-                return Err(error("Invalid configuration helper command", "EINVAL"));
-            }
-            self.configuration_active
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .map_err(|_| {
-                    error(
-                        "This process already has a configuration evaluation",
-                        "EAGAIN",
-                    )
-                })?;
-            return Ok(Admission::Configuration(self.configuration_active.clone()));
-        }
-        self.runtime
-            .active
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                (n < MAX_CHILDREN).then_some(n + 1)
+        // Revalidate the executable independently of an earlier access query. Startup failures
+        // own an ordinary child record, with descriptors released before its typed publication.
+        let startup = self
+            .runtime
+            .executables
+            .check(&request.executable, &request.cwd, &self.runtime.dirs)
+            .map_err(|errno| match errno {
+                NOENT | ACCES | NOTDIR | -45 | -48 | AGAIN | IO => errno,
+                PERM => ACCES,
+                _ => IO,
             })
-            .map_err(|_| {
-                error(
-                    "bun-wasm child concurrency limit reached (4 active children)",
-                    "EAGAIN",
-                )
-            })?;
-        Ok(Admission::Public(self.runtime.clone()))
-    }
-
-    fn start(&mut self, mut request: Request, admission: Admission) -> Result<i32, ErrorInfo> {
-        let stdio_pipes = [&request.stdin, &request.stdout, &request.stderr]
-            .into_iter()
-            .filter(|mode| mode.as_str() == "pipe")
-            .count();
-        // Reserve capacity before creating any pipe or starting a child thread.
-        self.require_handles(1 + stdio_pipes + if request.worker.is_some() { 2 } else { 0 })?;
-        request.env.insert("PWD".into(), request.cwd.clone());
-        let (stdin_id, stdin) = self.stdin(&request.stdin)?;
-        let (stdout_id, stdout) = self.output(&request.stdout, 1)?;
-        let (stderr_id, stderr) = self.output(&request.stderr, 2)?;
-        let (to_worker, from_worker, worker) = if request.worker.is_some() {
-            let (incoming, input) = self.pipe(true)?;
-            let (outgoing, output) = self.pipe(false)?;
-            (incoming, outgoing, Some([input, output]))
+            .and_then(|module| {
+                let path = mapped.ok_or(NOENT)?;
+                let metadata = path.metadata().map_err(|error| -startup_io_errno(&error))?;
+                if !metadata.is_dir() {
+                    return Err(NOTDIR);
+                }
+                Ok(module)
+            });
+        let cancel = Arc::new(Cancellation::default());
+        // Admission and thread-handle publication are one supervisor operation.
+        // A very fast child can finish only after this lock is released.
+        let mut state = self.runtime.state.lock().unwrap();
+        if state.processes.len() >= PROCESS_CAPACITY {
+            return Err(AGAIN);
+        }
+        if state.stopping {
+            return Err(PERM);
+        }
+        if request.job > 0.0 && !state.jobs.contains_key(&(request.job as i32)) {
+            return Err(SRCH);
+        }
+        if request.job > 0.0
+            && state.jobs[&(request.job as i32)].result.is_some()
+            && state
+                .processes
+                .values()
+                .filter(|child| child.job == request.job as i32)
+                .all(|child| child.result.is_some())
+        {
+            return Err(CHILD);
+        }
+        let Some(next) = state.next.checked_add(1) else {
+            return Err(AGAIN);
+        };
+        let pid = state.next;
+        state.next = next;
+        let job = if request.job > 0.0 {
+            request.job as i32
         } else {
-            (0, 0, None)
+            pid
         };
         let memory_limit = request
             .worker
             .as_ref()
-            .and_then(|limits| limits.memory_limit_mb)
-            .map(|mb| mb.saturating_mul(1 << 20))
+            .and_then(|limits| limits.get("memoryLimitMb"))
+            .and_then(serde_json::Value::as_u64)
+            .map(|mb| {
+                usize::try_from(mb)
+                    .unwrap_or(usize::MAX)
+                    .saturating_mul(1 << 20)
+            })
             .unwrap_or(512 << 20);
-        let pipes = [stdin_id, stdout_id, stderr_id, to_worker, from_worker];
-        let inputs: Vec<Pipe> = [stdin_id, to_worker]
-            .into_iter()
-            .filter_map(|id| self.pipes.get(&id).map(|p| p.pipe.clone()))
-            .collect();
-        let outputs: Vec<Pipe> = [stdout_id, stderr_id, from_worker]
-            .into_iter()
-            .filter_map(|id| self.pipes.get(&id).map(|p| p.pipe.clone()))
-            .collect();
-        let result = Arc::new(Mutex::new(None));
-        let cancel = Arc::new(Cancellation::default());
-        let (runtime, notify, completed, cancellation) = (
-            self.runtime.clone(),
-            self.notify.clone(),
-            result.clone(),
-            cancel.clone(),
-        );
-        let id = self.next()?;
+        request.env.insert("PWD".into(), request.cwd.clone());
+        let (runtime, notify, cancellation) =
+            (self.runtime.clone(), self.notify.clone(), cancel.clone());
+        let new_job = request.job <= 0.0;
         let thread = std::thread::Builder::new()
             .name("bun-wasm-child".into())
-            .stack_size(crate::THREAD_STACK)
+            .stack_size(runtime.thread_stack)
             .spawn(move || {
-                let outcome = crate::run_instance(
-                    runtime.clone(),
-                    request.argv,
-                    request.env.into_iter().collect(),
-                    Stdio {
-                        stdin,
-                        stdout,
-                        stderr,
-                        worker,
-                        memory_limit,
-                        configuration: request.purpose.is_some(),
-                    },
-                    cancellation.clone(),
-                )
-                .unwrap_or_else(|e| {
-                    eprintln!("bun-wasm child: {e:#}");
-                    cancellation.select(FinalOutcome::Exit(1))
-                });
-                // Child stdin and worker control input are readers; only its
-                // stdout, stderr and worker control output are writer endpoints.
-                close_child_pipes(inputs, outputs);
-                drop(admission);
-                *completed.lock().unwrap() = Some(outcome);
+                // All owned descriptors and the WASI context drop before publication.
+                let outcome = match startup {
+                    Err(errno) => {
+                        drop(fds);
+                        cancellation.select(FinalOutcome::StartFailed(-errno))
+                    }
+                    Ok((module, executable)) => {
+                        let stdio = Stdio {
+                            fds,
+                            pid,
+                            memory_limit,
+                        };
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            crate::run_module_instance(
+                                runtime.clone(),
+                                &module,
+                                request.argv,
+                                {
+                                    let mut env = request.env;
+                                    env.insert("BUNWASM_EXEC_PATH".into(), executable);
+                                    env.into_iter().collect()
+                                },
+                                stdio,
+                                cancellation.clone(),
+                            )
+                        }))
+                        .unwrap_or_else(|_| {
+                            Err(std::io::Error::other("child guest panicked").into())
+                        })
+                        .unwrap_or_else(|error| {
+                            eprintln!("bun-wasm child: {error:#}");
+                            let errno = error
+                                .chain()
+                                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                                .map(startup_io_errno)
+                                .unwrap_or(45); // ENOEXEC: invalid module/entry point.
+                            cancellation.select(FinalOutcome::StartFailed(errno))
+                        })
+                    }
+                };
+                let mut state = runtime.state.lock().unwrap();
+                state.complete(pid, outcome);
+                drop(state);
                 notify.bump();
             });
         let thread = match thread {
             Ok(thread) => thread,
-            Err(cause) => {
-                self.close_pipes(pipes);
-                return Err(error(cause.to_string(), "EAGAIN"));
+            Err(_) => {
+                return Err(AGAIN);
             }
         };
-        self.children.insert(
-            id,
+        if new_job {
+            state.jobs.insert(
+                job,
+                Job {
+                    owner: self.pid,
+                    leader: pid,
+                    result: None,
+                },
+            );
+        }
+        state.parents.insert(pid, self.pid);
+        state.processes.insert(
+            pid,
             Child {
+                parent: self.pid,
+                job,
                 cancel,
-                result,
-                reaped: AtomicBool::new(false),
+                result: None,
                 thread: Some(thread),
-                pipes,
             },
         );
-        Ok(id)
+        Ok(pid)
     }
 
-    fn close_pipes(&mut self, pipes: [i32; 5]) {
-        for id in pipes {
-            if id != 0 {
-                self.close(id);
-            }
-        }
+    pub fn job_of(&self, pid: i32) -> i32 {
+        let pid = if pid == 0 { self.pid } else { pid };
+        self.runtime
+            .state
+            .lock()
+            .unwrap()
+            .processes
+            .get(&pid)
+            .map_or(SRCH, |child| child.job)
     }
 
-    pub fn wait(&mut self, id: i32) -> i32 {
-        let Some(child) = self.children.get_mut(&id) else {
-            return BADF;
+    /// Non-consuming observation; terminal selection need not be safely published yet.
+    pub fn start_status(&self, pid: i32) -> i32 {
+        let state = self.runtime.state.lock().unwrap();
+        state
+            .processes
+            .get(&pid)
+            .filter(|child| child.parent == self.pid)
+            .map_or(CHILD, |child| child.cancel.start_status())
+    }
+
+    /// Readiness observation never collects a child; only a successful wait does.
+    fn child_outcome(&self, pid: i32) -> Result<FinalOutcome, i32> {
+        let state = self.runtime.state.lock().unwrap();
+        state
+            .processes
+            .get(&pid)
+            .filter(|child| child.parent == self.pid)
+            .ok_or(CHILD)?
+            .result
+            .ok_or(AGAIN)
+    }
+
+    /// Collect a completed direct child exactly once, retaining its job's leader outcome.
+    pub fn wait(&self, pid: i32) -> Result<FinalOutcome, i32> {
+        let (outcome, thread) = {
+            let mut state = self.runtime.state.lock().unwrap();
+            let child = state
+                .processes
+                .get(&pid)
+                .filter(|child| child.parent == self.pid)
+                .ok_or(CHILD)?;
+            let outcome = child.result.ok_or(AGAIN)?;
+            let child = state.processes.remove(&pid).unwrap();
+            (outcome, child.thread)
         };
-        let Some(outcome) = *child.result.lock().unwrap() else {
-            return AGAIN;
-        };
-        if let Some(thread) = child.thread.take() {
+        if let Some(thread) = thread {
             let _ = thread.join();
         }
-        child.reaped.store(true, Ordering::SeqCst);
-        outcome.code()
+        Ok(outcome)
     }
 
-    pub fn child_pipe(&self, id: i32, selector: i32) -> i32 {
-        if id == 0 {
-            return match selector {
-                CHILD_WORKER_INPUT => self.worker_pipes[0],
-                CHILD_WORKER_OUTPUT => self.worker_pipes[1],
-                _ => BADF,
-            };
+    fn authorized_job<'a>(&self, state: &'a Supervisor, job: i32) -> Result<&'a Job, i32> {
+        let job = state.jobs.get(&job).ok_or_else(|| {
+            if state.reaped_jobs.contains(&job) {
+                CHILD
+            } else {
+                SRCH
+            }
+        })?;
+        let mut owner = job.owner;
+        loop {
+            if owner == self.pid {
+                return Ok(job);
+            }
+            if owner == 0 {
+                return Err(PERM);
+            }
+            owner = *state.parents.get(&owner).ok_or(PERM)?;
         }
-        let Some(child) = self.children.get(&id) else {
-            return BADF;
-        };
-        if selector == CHILD_FINAL_SIGNAL {
-            let Some(outcome) = *child.result.lock().unwrap() else {
-                return AGAIN;
-            };
-            child.reaped.store(true, Ordering::SeqCst);
-            return outcome.signal();
-        }
-        let index = match selector {
-            0..=2 => selector,
-            CHILD_WORKER_INPUT | CHILD_WORKER_OUTPUT => selector - 1,
-            _ => return BADF,
-        };
-        child.pipes[index as usize]
     }
 
-    pub fn kill(&mut self, id: i32, signal: i32) -> i32 {
-        if !(0..=64).contains(&signal) {
-            return -1;
+    fn job_empty(&self, job: i32) -> Result<bool, i32> {
+        let state = self.runtime.state.lock().unwrap();
+        let record = self.authorized_job(&state, job)?;
+        Ok(record.result.is_some()
+            && state
+                .processes
+                .values()
+                .filter(|child| child.job == job)
+                .all(|child| child.result.is_some()))
+    }
+
+    pub fn wait_job(&self, job: i32, flags: i32) -> Result<FinalOutcome, i32> {
+        if flags != 0 && flags != 1 {
+            return Err(INVAL);
         }
-        let Some(child) = self.children.get(&id) else {
-            return BADF;
+        loop {
+            if self.job_empty(job)? {
+                let mut state = self.runtime.state.lock().unwrap();
+                // Another ancestor may have reaped while the lock was released.
+                let result = self.authorized_job(&state, job)?.result.ok_or(AGAIN)?;
+                if state
+                    .processes
+                    .values()
+                    .any(|child| child.job == job && child.result.is_none())
+                {
+                    continue;
+                }
+                let pids: Vec<i32> = state
+                    .processes
+                    .iter()
+                    .filter_map(|(&pid, child)| (child.job == job).then_some(pid))
+                    .collect();
+                for pid in pids {
+                    let mut child = state.processes.remove(&pid).unwrap();
+                    if let Some(thread) = child.thread.take() {
+                        let _ = thread.join();
+                    }
+                }
+                state.jobs.remove(&job);
+                state.reaped_jobs.insert(job);
+                return Ok(result);
+            }
+            if flags == 1 {
+                return Err(AGAIN);
+            }
+            if self.cancel.interrupted() {
+                return Err(INTR);
+            }
+            // Signals use their own wake state; rescan them within 10ms without
+            // consuming pending delivery or keeping the supervisor locked.
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    pub fn kill(&self, pid: i32, signal: i32) -> i32 {
+        if let Err(error) = validate_signal(signal, true) {
+            return error;
+        }
+        let state = self.runtime.state.lock().unwrap();
+        let Some(child) = state.processes.get(&pid) else {
+            return SRCH;
         };
-        if child.reaped.load(Ordering::SeqCst) {
-            return BADF;
+        let mut target = pid;
+        while target != self.pid {
+            let Some(&parent) = state.parents.get(&target) else {
+                return PERM;
+            };
+            target = parent;
         }
-        // A selected child is a zombie until its final result is consumed.
-        // A late request succeeds without changing that immutable winner.
         child.cancel.kill(signal);
         self.notify.bump();
         0
     }
 
-    pub fn error(&self, id: i32) -> crate::net::Output {
-        let info = if let Some(pipe) = self.pipes.get(&id) {
-            let info = error("Child process pipe is closed", "EPIPE");
-            if pipe.write {
-                info.with_errno(-32).with_syscall("write")
-            } else {
-                info
-            }
-        } else if self.children.contains_key(&id) {
-            error("Child process is no longer running", "ESRCH")
-        } else {
-            error("Unknown child process handle", "EBADF")
+    pub fn kill_job(&self, job: i32, signal: i32) -> i32 {
+        if let Err(error) = validate_signal(signal, true) {
+            return error;
+        }
+        let state = self.runtime.state.lock().unwrap();
+        let Some(record) = state.jobs.get(&job) else {
+            return SRCH;
         };
-        crate::net::Output::Bytes(info.to_json())
-    }
-
-    pub fn read(&mut self, id: i32, buf: &mut [u8]) -> i32 {
-        if id == 0 {
-            if buf.is_empty() {
-                return 0;
-            }
-            let waker = Waker::from(self.notify.clone());
-            let mut context = Context::from_waker(&waker);
-            if self.stdin.poll_ready(&mut context).is_pending() {
-                return AGAIN;
-            }
-            return match self.stdin.read(buf.len()) {
-                Ok(bytes) => {
-                    buf[..bytes.len()].copy_from_slice(&bytes);
-                    bytes.len() as i32
-                }
-                Err(wasmtime_wasi::p2::StreamError::Closed) => 0,
-                Err(_) => -1,
-            };
+        if record.owner != self.pid {
+            return PERM;
         }
-        match self.pipes.get(&id) {
-            Some(p) if !p.write => p.pipe.read(buf),
-            _ => BADF,
+        for child in state.processes.values().filter(|child| child.job == job) {
+            child.cancel.kill(signal);
         }
-    }
-    pub fn write(&self, id: i32, bytes: &[u8]) -> i32 {
-        match self.pipes.get(&id) {
-            Some(p) if p.write => p.pipe.write(bytes),
-            _ => BADF,
-        }
-    }
-    pub fn close(&mut self, id: i32) -> i32 {
-        if let Some(pipe) = self.pipes.remove(&id) {
-            if pipe.write {
-                pipe.pipe.close_writer();
-            } else {
-                pipe.pipe.close_reader();
-            }
-            return 0;
-        }
-        let Some(mut child) = self.children.remove(&id) else {
-            return BADF;
-        };
-        child.cancel.kill(9);
-        if let Some(thread) = child.thread.take() {
-            let _ = thread.join();
-        }
+        self.notify.bump();
         0
     }
-}
 
-impl Drop for Processes {
-    fn drop(&mut self) {
-        for child in self.children.values() {
-            child.cancel.kill(9);
+    /// Poll is level-triggered and never consumes a child or job result.
+    pub fn poll(&self, subscriptions: &[u8], timeout: i32) -> Result<Vec<u8>, i32> {
+        self.poll_with_files(subscriptions, timeout, |_| false)
+    }
+
+    /// Native filesystem operations are synchronous, so local files and
+    /// directories are immediately ready just like canonical file resources.
+    pub fn poll_with_files(
+        &self,
+        subscriptions: &[u8],
+        timeout: i32,
+        is_file: impl Fn(i32) -> bool,
+    ) -> Result<Vec<u8>, i32> {
+        if timeout < -1 || !subscriptions.len().is_multiple_of(16) {
+            return Err(INVAL);
         }
-        for (_, mut child) in self.children.drain() {
-            if let Some(thread) = child.thread.take() {
-                let _ = thread.join();
+        if subscriptions
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .any(|sub| u32::from_le_bytes(sub[..4].try_into().unwrap()) > 6)
+        {
+            return Err(INVAL);
+        }
+        let deadline =
+            (timeout >= 0).then(|| Instant::now() + Duration::from_millis(timeout as u64));
+        loop {
+            if self.cancel.interrupted() {
+                return Ok(Vec::new());
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    pub(super) fn processes() -> Processes {
-        let mut config = wasmtime::Config::new();
-        config.epoch_interruption(true);
-        let engine = wasmtime::Engine::new(&config).unwrap();
-        // Original no-op guest: (module (func (export "_start"))).
-        let module = wasmtime::Module::new(
-            &engine,
-            b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\x03\x02\x01\0\x07\x0a\x01\x06_start\0\0\x0a\x04\x01\x02\0\x0b",
-        )
-        .unwrap();
-        let runtime = Runtime::new(
-            engine,
-            module,
-            vec![(
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
-                "/".into(),
-            )],
-        );
-        Processes::new(runtime, Stdio::inherited(), crate::net::Net::new().notify())
-    }
-
-    fn request(argv: &[&str]) -> Vec<u8> {
-        serde_json::to_vec(&serde_json::json!({
-            "argv": argv,
-            "cwd": "/",
-            "env": {},
-            "stdin": "ignore",
-            "stdout": "ignore",
-            "stderr": "ignore",
-        }))
-        .unwrap()
-    }
-
-    fn assert_spawn_succeeds(processes: &mut Processes, command: &str) {
-        let child = processes
-            .spawn(&request(&[command, "child.js"]))
-            .unwrap_or_else(|error| panic!("{command}: {error:?}"));
-        processes
-            .children
-            .get_mut(&child)
-            .unwrap()
-            .thread
-            .take()
-            .unwrap()
-            .join()
-            .unwrap();
-        assert_eq!(processes.wait(child), 0, "{command}");
-        assert_eq!(processes.close(child), 0, "{command}");
-        assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn final_signal_selector_waits_for_publication_and_preserves_pipe_selectors() {
-        let mut processes = processes();
-        let (stdin_id, input) = processes.pipe(true).unwrap();
-        let (stdout_id, output) = processes.pipe(false).unwrap();
-        let pipes = [stdin_id, stdout_id, 0, 0, 0];
-        let cancel = Arc::new(Cancellation::default());
-        let result = Arc::new(Mutex::new(None));
-        let id = processes.next().unwrap();
-        processes.children.insert(
-            id,
-            Child {
-                cancel: cancel.clone(),
-                result: result.clone(),
-                reaped: AtomicBool::new(false),
-                thread: None,
-                pipes,
-            },
-        );
-        for (fd, pipe) in pipes[..3].iter().enumerate() {
-            assert_eq!(processes.child_pipe(id, fd as i32), *pipe);
-        }
-        assert_eq!(processes.child_pipe(id, CHILD_WORKER_INPUT), 0);
-        assert_eq!(processes.child_pipe(id, CHILD_WORKER_OUTPUT), 0);
-        assert_eq!(processes.child_pipe(id, -1), BADF);
-        assert_eq!(processes.child_pipe(id, 6), BADF);
-        assert_eq!(processes.child_pipe(id + 1, CHILD_FINAL_SIGNAL), BADF);
-        assert_eq!(processes.kill(id + 1, 15), BADF);
-        assert_eq!(processes.wait(id), AGAIN);
-        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
-
-        assert_eq!(cancel.signal(15, 2), 0);
-        assert!(cancel.kill(15));
-        let outcome = cancel.select(FinalOutcome::Exit(143));
-        for signal in [15, 9] {
-            assert_eq!(processes.kill(id, signal), 0);
-            for _ in 0..3 {
-                assert_eq!(processes.wait(id), AGAIN);
-                assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
-            }
-            assert_eq!(cancel.select(FinalOutcome::Signal(signal)), outcome);
-        }
-        input.close_reader();
-        output.close_writer();
-        *result.lock().unwrap() = Some(outcome);
-        assert_eq!(processes.kill(id, 15), 0);
-        assert_eq!(processes.kill(id, 9), 0);
-        assert_eq!(cancel.select(FinalOutcome::Signal(9)), outcome);
-        assert_eq!(processes.write(stdin_id, b"late"), -1);
-        assert_eq!(processes.read(stdout_id, &mut [0]), 0);
-        assert_eq!(processes.wait(id), 143);
-        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 0);
-        assert_eq!(processes.kill(id, 15), BADF);
-        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 0);
-        assert_eq!(processes.close(id), 0);
-        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), BADF);
-    }
-
-    #[test]
-    fn final_signal_selector_reports_observed_term_not_numeric_exit_status() {
-        let mut processes = processes();
-        let cancel = Arc::new(Cancellation::default());
-        let result = Arc::new(Mutex::new(None));
-        let id = processes.next().unwrap();
-        processes.children.insert(
-            id,
-            Child {
-                cancel: cancel.clone(),
-                result: result.clone(),
-                reaped: AtomicBool::new(false),
-                thread: None,
-                pipes: [0; 5],
-            },
-        );
-        assert_eq!(processes.kill(id, 15), 0);
-        assert!(cancel.check().is_err());
-        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
-        *result.lock().unwrap() = Some(cancel.select(FinalOutcome::Exit(1)));
-        assert_eq!(processes.kill(id, 9), 0);
-        // Reading published final metadata also reaps, without changing the result.
-        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 15);
-        assert_eq!(processes.kill(id, 9), BADF);
-        assert_eq!(processes.wait(id), 143);
-        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 15);
-    }
-
-    #[test]
-    fn worker_stream_selectors_preserve_each_endpoint_direction() {
-        let parent = processes();
-        let input = Pipe::new(parent.notify.clone());
-        let output = Pipe::new(parent.notify.clone());
-        let mut stdio = Stdio::inherited();
-        stdio.worker = Some([input.clone(), output.clone()]);
-        let mut worker = Processes::new(
-            parent.runtime.clone(),
-            stdio,
-            crate::net::Net::new().notify(),
-        );
-        let read = worker.child_pipe(0, CHILD_WORKER_INPUT);
-        let write = worker.child_pipe(0, CHILD_WORKER_OUTPUT);
-        assert!(read >= FIRST_HANDLE);
-        assert!(write > read);
-        assert_eq!(worker.child_pipe(0, CHILD_FINAL_SIGNAL), BADF);
-        assert_eq!(worker.child_pipe(0, 6), BADF);
-        assert_eq!(input.write(b"in"), 2);
-        let mut bytes = [0; 2];
-        assert_eq!(worker.read(read, &mut bytes), 2);
-        assert_eq!(&bytes, b"in");
-        assert_eq!(worker.write(read, b"wrong end"), BADF);
-        assert_eq!(worker.write(write, b"ok"), 2);
-        assert_eq!(worker.read(write, &mut bytes), BADF);
-        assert_eq!(output.read(&mut bytes), 2);
-        assert_eq!(&bytes, b"ok");
-    }
-
-    #[test]
-    fn worker_endpoints_close_before_signaled_completion_is_published() {
-        let mut processes = processes();
-        let (stdin_id, stdin) = processes.pipe(true).unwrap();
-        let (stdout_id, stdout) = processes.pipe(false).unwrap();
-        let (stderr_id, stderr) = processes.pipe(false).unwrap();
-        let (worker_input_id, worker_input) = processes.pipe(true).unwrap();
-        let (worker_output_id, worker_output) = processes.pipe(false).unwrap();
-        let cancel = Arc::new(Cancellation::default());
-        let result = Arc::new(Mutex::new(None));
-        let id = processes.next().unwrap();
-        processes.children.insert(
-            id,
-            Child {
-                cancel: cancel.clone(),
-                result: result.clone(),
-                reaped: AtomicBool::new(false),
-                thread: None,
-                pipes: [
-                    stdin_id,
-                    stdout_id,
-                    stderr_id,
-                    worker_input_id,
-                    worker_output_id,
-                ],
-            },
-        );
-        assert_eq!(
-            processes.child_pipe(id, CHILD_WORKER_INPUT),
-            worker_input_id
-        );
-        assert_eq!(
-            processes.child_pipe(id, CHILD_WORKER_OUTPUT),
-            worker_output_id
-        );
-        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
-        assert_eq!(processes.write(stdin_id, b"pending stdin"), 13);
-        assert_eq!(processes.write(worker_input_id, b"pending control"), 15);
-        assert_eq!(stdout.write(b"out"), 3);
-        assert_eq!(stderr.write(b"err"), 3);
-        assert_eq!(worker_output.write(b"message"), 7);
-        assert_eq!(processes.kill(id, 2), 0);
-        let outcome = cancel.select(FinalOutcome::Exit(0));
-        assert_eq!(outcome, FinalOutcome::Signal(2));
-        let input_probe = worker_input.clone();
-        close_child_pipes(
-            vec![stdin, worker_input],
-            vec![stdout, stderr, worker_output],
-        );
-        // Teardown is observable before final metadata or wait status. Input
-        // readers discard unread bytes and reject writes; output still drains.
-        assert_eq!(processes.wait(id), AGAIN);
-        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), AGAIN);
-        assert_eq!(processes.write(stdin_id, b"late"), -1);
-        assert_eq!(processes.write(worker_input_id, b"late"), -1);
-        // Closing its writer instead would leave the queued control bytes here.
-        assert_eq!(input_probe.read(&mut [0; 15]), AGAIN);
-        let mut bytes = [0; 7];
-        for (pipe, expected) in [
-            (stdout_id, &b"out"[..]),
-            (stderr_id, &b"err"[..]),
-            (worker_output_id, &b"message"[..]),
-        ] {
-            assert_eq!(processes.read(pipe, &mut bytes), expected.len() as i32);
-            assert_eq!(&bytes[..expected.len()], expected);
-            assert_eq!(processes.read(pipe, &mut bytes), 0);
-        }
-        assert_eq!(processes.kill(id, 9), 0);
-        assert_eq!(cancel.select(FinalOutcome::Signal(9)), outcome);
-        *result.lock().unwrap() = Some(outcome);
-        assert_eq!(processes.child_pipe(id, CHILD_FINAL_SIGNAL), 2);
-        assert_eq!(processes.wait(id), 130);
-        assert_eq!(processes.kill(id, 9), BADF);
-        assert_eq!(
-            processes.child_pipe(id, CHILD_WORKER_INPUT),
-            worker_input_id
-        );
-        assert_eq!(
-            processes.child_pipe(id, CHILD_WORKER_OUTPUT),
-            worker_output_id
-        );
-    }
-
-    #[test]
-    fn handle_allocator_stops_after_the_last_positive_handle() {
-        let mut processes = processes();
-        processes.next = i32::MAX as u32 - 1;
-        assert_eq!(processes.next().unwrap(), i32::MAX - 1);
-        assert_eq!(processes.next().unwrap(), i32::MAX);
-        assert_eq!(processes.next, i32::MAX as u32 + 1);
-        for _ in 0..3 {
-            let error = processes.next().unwrap_err();
-            assert_eq!(error.code.as_deref(), Some("EAGAIN"));
-            assert_eq!(processes.next, i32::MAX as u32 + 1);
-        }
-    }
-
-    #[test]
-    fn pipe_exhaustion_does_not_insert_a_negative_or_reused_handle() {
-        let mut processes = processes();
-        processes.next = i32::MAX as u32;
-        let (id, _) = processes.pipe(true).unwrap();
-        assert_eq!(id, i32::MAX);
-        assert_eq!(processes.pipes.len(), 1);
-        let error = match processes.pipe(false) {
-            Err(error) => error,
-            Ok(_) => panic!("exhausted allocator created another pipe"),
-        };
-        assert_eq!(error.code.as_deref(), Some("EAGAIN"));
-        assert_eq!(processes.pipes.len(), 1);
-        assert!(processes.pipes.contains_key(&i32::MAX));
-        assert_eq!(processes.close(id), 0);
-        assert!(processes.pipes.is_empty());
-        assert!(processes.next().is_err());
-    }
-
-    #[test]
-    fn spawn_exhaustion_preflights_stdio_and_worker_handles_without_partial_resources() {
-        for worker in [false, true] {
-            let mut processes = processes();
-            let required = if worker { 6 } else { 4 };
-            processes.next = i32::MAX as u32 - (required - 2);
-            let next = processes.next;
-            let meta = serde_json::to_vec(&serde_json::json!({
-                "argv": ["bun", "child.js"], "cwd": "/", "env": {},
-                "stdin": "pipe", "stdout": "pipe", "stderr": "pipe",
-                "worker": if worker { serde_json::json!({}) } else { serde_json::Value::Null },
-            }))
-            .unwrap();
-            for _ in 0..3 {
-                let error = processes.spawn(&meta).unwrap_err();
-                assert_eq!(error.code.as_deref(), Some("EAGAIN"));
-                assert_eq!(processes.next, next);
-                assert!(processes.pipes.is_empty());
-                assert!(processes.children.is_empty());
-                assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
-            }
-        }
-    }
-
-    #[test]
-    fn last_child_handle_preserves_completion_and_then_reports_exhaustion() {
-        let mut processes = processes();
-        processes.next = i32::MAX as u32;
-        assert_spawn_succeeds(&mut processes, "bun");
-        assert_eq!(processes.next, i32::MAX as u32 + 1);
-        let error = processes.spawn(&request(&["bun", "child.js"])).unwrap_err();
-        assert_eq!(error.code.as_deref(), Some("EAGAIN"));
-        assert!(processes.children.is_empty());
-        assert!(processes.pipes.is_empty());
-        assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn spawn_accepts_registered_bun_and_node_aliases() {
-        let mut processes = processes();
-        for command in [
-            "bun",
-            "/bun",
-            "node",
-            "/node",
-            "/usr/local/bin/bun",
-            "/usr/local/bin/node",
-        ] {
-            assert_spawn_succeeds(&mut processes, command);
-        }
-    }
-
-    #[test]
-    fn spawn_accepts_default_fork_exec_path() {
-        let mut processes = processes();
-        assert_spawn_succeeds(&mut processes, "/usr/local/bin/bun");
-    }
-
-    #[test]
-    fn spawn_rejects_unregistered_commands() {
-        let mut processes = processes();
-        for command in [
-            "",
-            "sh",
-            "bunx",
-            "nodejs",
-            "./bun",
-            "/tmp/bun",
-            "/tmp/node",
-            "/usr/bin/bun",
-            "/usr/bin/node",
-            "/usr/local/bin/bun-other",
-            "/usr/local/bin/node/child",
-        ] {
-            let error = processes.spawn(&request(&[command])).unwrap_err();
-            assert_eq!(error.code.as_deref(), Some("ENOENT"), "{command}");
-        }
-        let error = processes.spawn(&request(&[])).unwrap_err();
-        assert_eq!(error.code.as_deref(), Some("ENOENT"));
-        assert!(processes.children.is_empty());
-        assert!(processes.pipes.is_empty());
-        assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
-    }
-}
-
-#[cfg(test)]
-mod configuration_tests {
-    use super::*;
-
-    fn request() -> Request {
-        serde_json::from_value(serde_json::json!({
-            "purpose": "configuration", "argv": ["bun", "--no-install", "-e", "0"],
-            "cwd": "/", "env": {}, "stdin": "ignore", "stdout": "pipe", "stderr": "pipe"
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn helpers_reserve_one_per_owner_without_using_public_capacity() {
-        let root = super::tests::processes();
-        root.runtime.active.store(MAX_CHILDREN, Ordering::SeqCst);
-        let lease = root
-            .admit(&request())
-            .unwrap_or_else(|error| panic!("{error:?}"));
-        assert_eq!(root.runtime.active.load(Ordering::SeqCst), MAX_CHILDREN);
-        assert_eq!(
-            root.admit(&request()).err().unwrap().code.as_deref(),
-            Some("EAGAIN")
-        );
-        let mut stdio = Stdio::inherited();
-        stdio.configuration = true;
-        let helper = Processes::new(root.runtime.clone(), stdio, crate::net::Net::new().notify());
-        assert_eq!(
-            helper.admit(&request()).err().unwrap().code.as_deref(),
-            Some("EPERM")
-        );
-        drop(lease);
-        assert!(!root.configuration_active.load(Ordering::SeqCst));
-        root.runtime.active.store(0, Ordering::SeqCst);
-    }
-
-    #[test]
-    fn sequential_helpers_are_reaped_with_no_pipe_or_capacity_leak() {
-        let mut root = super::tests::processes();
-        root.runtime.active.store(MAX_CHILDREN, Ordering::SeqCst);
-        for _ in 0..8 {
-            let child = root
-                .spawn(
-                    &serde_json::to_vec(&serde_json::json!({
-                        "purpose": "configuration", "argv": ["bun", "--no-install", "-e", "0"],
-                        "cwd": "/", "env": {}, "stdin": "ignore", "stdout": "pipe", "stderr": "pipe"
-                    }))
-                    .unwrap(),
-                )
-                .unwrap();
-            let pipes = root.children[&child].pipes;
-            while root.wait(child) == AGAIN {
-                std::thread::yield_now();
-            }
-            for pipe in pipes {
-                if pipe != 0 {
-                    root.close(pipe);
+            let mut events = Vec::new();
+            for sub in subscriptions.as_chunks::<16>().0.iter() {
+                let kind = u32::from_le_bytes(sub[..4].try_into().unwrap());
+                let id = i32::from_le_bytes(sub[4..8].try_into().unwrap());
+                let (ready, hangup) = match kind {
+                    0 | 1 if is_file(id) => (true, false),
+                    0 | 1 => descriptors::get(&self.fds, id)?.readiness(kind == 1, &self.notify),
+                    2 => match self.child_outcome(id) {
+                        Ok(_) => (true, false),
+                        Err(AGAIN) => (false, false),
+                        Err(error) => return Err(error),
+                    },
+                    3 => return Err(NOSYS), // native WASI filesystem I/O completes synchronously
+                    4 => (self.job_empty(id)?, false),
+                    5 => (self.access_ready(id)?, false),
+                    6 => match self.start_status(id) {
+                        AGAIN => (false, false),
+                        CHILD => return Err(CHILD),
+                        _ => (true, false),
+                    },
+                    _ => return Err(INVAL),
+                };
+                if ready || hangup {
+                    events.extend_from_slice(&sub[8..16]);
+                    events.extend_from_slice(&kind.to_le_bytes());
+                    events.extend_from_slice(&u32::from(hangup).to_le_bytes());
                 }
             }
-            root.close(child);
-            assert!(!root.configuration_active.load(Ordering::SeqCst));
-            assert_eq!(root.runtime.active.load(Ordering::SeqCst), MAX_CHILDREN);
-            assert!(root.children.is_empty());
-            assert!(root.pipes.is_empty());
+            if !events.is_empty() || deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Ok(events);
+            }
+            let left = deadline.map_or(Duration::from_millis(10), |deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(10))
+            });
+            std::thread::sleep(left);
         }
-        root.runtime.active.store(0, Ordering::SeqCst);
     }
 }
 
-#[cfg(test)]
-mod tools_tests {
-    use super::*;
-
-    #[test]
-    fn ordinary_commands_never_load_tools() {
-        let engine = wasmtime::Engine::default();
-        let module = wasmtime::Module::new(&engine, b"\0asm\x01\0\0\0").unwrap();
-        let runtime = Runtime::new(engine, module, Vec::new());
-        for args in [
-            vec!["bun", "run", "lint"],
-            vec!["bun", "-e", "fmt"],
-            vec!["bun", "build", "lint"],
-        ] {
-            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
-            assert!(runtime.module_for(&args).is_ok());
-            assert!(runtime.tools.get().is_none());
-        }
-        let args = ["bun", "--cwd", "project", "lint"]
-            .into_iter()
-            .map(String::from)
-            .collect::<Vec<_>>();
-        assert!(runtime.module_for(&args).is_err());
-        assert!(runtime.tools.get().is_some());
+/// Map host I/O failures into the seven portable startup errors in runtime_proc.
+fn startup_io_errno(error: &std::io::Error) -> i32 {
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::NotFound => 44,
+        ErrorKind::PermissionDenied => 2,
+        ErrorKind::NotADirectory => 54,
+        ErrorKind::OutOfMemory => 48,
+        ErrorKind::WouldBlock => 6,
+        _ => 29,
     }
 }

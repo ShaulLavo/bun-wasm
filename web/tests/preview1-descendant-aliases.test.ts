@@ -13,7 +13,7 @@ async function until(condition: () => boolean): Promise<void> {
   throw new Error("descendant launch did not settle");
 }
 
-test("recursive Preview1 aliases retain inherited writers across ordinary parent exit before admission", async () => {
+test("explicit recursive Preview1 programs retain inherited writers across ordinary parent exit before admission", async () => {
   const originalWorker = globalThis.Worker;
   const ports: MessagePort[] = [];
   const workers = new Map<number, FakeWorker>();
@@ -36,9 +36,9 @@ test("recursive Preview1 aliases retain inherited writers across ordinary parent
   });
   const root = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   root.data = { filesystem: createFilesystemIdentity() };
-  const broker = new SubprocessBroker("https://example.test/worker.js", runtime, { engine: "browser", aliasExecutable: "preview1-root" });
+  const broker = new SubprocessBroker("https://example.test/worker.js", runtime);
   const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-  broker.register("preview1-root", { module, adapter: "preview1", cooperative: true });
+  broker.register("/usr/libexec/test-guest", { module, adapter: "preview1", cooperative: true });
   try {
     await broker.adoptRuntimeRoot(root);
     const service = await runtime.processes(), supervisor = await service.ready();
@@ -49,7 +49,10 @@ test("recursive Preview1 aliases retain inherited writers across ordinary parent
       const registry = (transport.data as { pipeRegistry: ConstructorParameters<typeof WorkerPipeHost>[0]["registry"] }).pipeRegistry;
       const pipes = new WorkerPipeHost({ transport, registry, postMessage: post });
       const client = new WorkerProcessClient({ transport, descriptors, codec: pipes.codec(), postMessage: post,
-        prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: pipes.registry.handle() } }),
+        prepareSpawn(pid) {
+          pipes.registry.registerProcess(pid);
+          return { data: { filesystem: createFilesystemIdentity(), pipeRegistry: pipes.registry.handle() }, cancel: () => pipes.registry.collectProcess(pid) };
+        },
       });
       client.installBindings();
       return { client, descriptors, pipes };
@@ -57,7 +60,7 @@ test("recursive Preview1 aliases retain inherited writers across ordinary parent
     const parent = makeClient(root);
     const [reader, writer] = parent.pipes.createPipe();
     const fd = parent.descriptors.open(writer, 0xffffn, 0xffffn);
-    const leaderPid = parent.client.spawn(parent.client.pid, { executable: "bun", argv: ["leader"], env: {}, cwd: "/", job: 0, fds: [{ child: 1, parent: fd }] });
+    const leaderPid = parent.client.spawn(parent.client.pid, { executable: "/usr/libexec/test-guest", argv: ["leader"], env: {}, cwd: "/", job: 0, fds: [{ child: 1, parent: fd }] });
     parent.descriptors.close(fd);
     expect(reader.tryRead([new Uint8Array(1)])).toBe(-6);
     for (const message of pending.splice(0)) await broker.runtimeMessage(message, parent.client.pid);
@@ -65,7 +68,7 @@ test("recursive Preview1 aliases retain inherited writers across ordinary parent
     const leaderWorker = workers.get(leaderPid)!;
     expect(leaderWorker.request.interruptible).toBe(false);
     const leader = makeClient(leaderWorker.request.runtimeProcess!);
-    const descendantPid = leader.client.spawn(leaderPid, { executable: "bun", argv: ["descendant"], env: {}, cwd: "/", job: workerProcessState(leaderWorker.request.runtimeProcess!).job, fds: [{ child: 1, parent: 1 }] });
+    const descendantPid = leader.client.spawn(leaderPid, { executable: "/usr/libexec/test-guest", argv: ["descendant"], env: {}, cwd: "/", job: workerProcessState(leaderWorker.request.runtimeProcess!).job, fds: [{ child: 1, parent: 1 }] });
     // The guest retains its child's writer synchronously, before either the spawn notification
     // reaches the page or the parent's ordinary completion closes its own transferred lifetime.
     leader.descriptors.dispose();
@@ -77,7 +80,7 @@ test("recursive Preview1 aliases retain inherited writers across ordinary parent
     const descendantWorker = workers.get(descendantPid);
     expect(descendantWorker).toBeDefined();
     expect(descendantWorker!.url).toBe("https://example.test/preview1-worker.js");
-    expect(supervisor.get(descendantPid)!.request!.executable).toBe("preview1-root");
+    expect(supervisor.get(descendantPid)!.request!.executable).toBe("/usr/libexec/test-guest");
     const descendant = makeClient(descendantWorker!.request.runtimeProcess!);
     const output = descendant.descriptors.get(1)!.resource as PipeEndpoint;
     expect(output.tryWrite([new Uint8Array([68])])).toBe(1);

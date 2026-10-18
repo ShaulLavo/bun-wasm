@@ -97,7 +97,7 @@ test("a closed worker input pipe still drains the final incoming control frame",
   const factory = channelFactory();
   const incoming: (Uint8Array | number)[] = [new TextEncoder().encode('{"kind":"exiting"}\n'), 0];
   const channel = factory({ native: {
-    hostWrite: () => -1, hostRead: () => incoming.shift() ?? 0, hostClose() {},
+    procWrite: () => -64, procRead: () => incoming.shift() ?? 0, procClose() {},
   } }).open(1, 2);
   const frames: unknown[] = [];
   expect(() => channel.send({ kind: "late-message" })).not.toThrow();
@@ -111,7 +111,7 @@ test("truncated worker framing fails once", () => {
   const factory = channelFactory();
   const incoming: (Uint8Array | number)[] = [new TextEncoder().encode('{"kind":'), 0];
   const channel = factory({ native: {
-    hostWrite: () => -2, hostRead: () => incoming.shift() ?? 0, hostClose() {},
+    procWrite: () => -6, procRead: () => incoming.shift() ?? 0, procClose() {},
   } }).open(1, 2);
   expect(() => channel.pump(() => {})).toThrow("Incomplete worker message");
   expect(() => channel.pump(() => {})).not.toThrow();
@@ -121,7 +121,7 @@ test("closing a failed worker channel discards a partial trailing frame", () => 
   const factory = channelFactory();
   const incoming: (Uint8Array | number)[] = [new TextEncoder().encode('{bad}\npartial'), 0];
   const channel = factory({ native: {
-    hostWrite: () => -2, hostRead: () => incoming.shift() ?? 0, hostClose() {},
+    procWrite: () => -6, procRead: () => incoming.shift() ?? 0, procClose() {},
   } }).open(1, 2);
   expect(() => channel.pump(() => {})).toThrow();
   channel.close();

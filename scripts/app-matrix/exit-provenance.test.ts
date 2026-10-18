@@ -18,6 +18,7 @@ function runtimeExitFixture(settings: { writeFails?: boolean; loopFails?: boolea
       platformInfo: {},
       env: () => ({ BUN_WASM_TRACE_EXIT: settings.enabled === false ? "0" : "1" }),
       argv: () => [],
+      execPath: () => "/bin/bun",
       hostSignal: () => 0,
       writeStderr(text: string) {
         if (settings.writeFails) throw Object.assign(new Error("broken pipe"), { code: "EPIPE" });

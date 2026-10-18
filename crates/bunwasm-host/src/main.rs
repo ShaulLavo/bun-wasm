@@ -30,6 +30,7 @@ Runs bun.wasm (from --wasm, $BUN_WASM, or the build tree's dist/bun.wasm)
 with networking. Launcher options must come before the bun arguments:
 
   --wasm PATH         bun.wasm to run
+  --engine NAME=PATH  register quickjs or jsc at /opt/bun/NAME/bin (repeatable)
   --dir HOST[::GUEST] preopen a directory (repeatable); without any --dir
                       the current directory is preopened at its own path
   --env K=V           set a guest environment variable (repeatable)
@@ -39,6 +40,7 @@ with networking. Launcher options must come before the bun arguments:
 Environment: BUN_WASM_TRACE=1 logs every host ABI call to stderr;
 BUN_WASM_CACHE_DIR sets the compiled-module cache directory (default:
 wasmtime's cache, BUN_WASM_CACHE_DIR=off disables it).
+BUN_WASM_HOST_STACK_KIB sets the host wasm stack limit (default 16384 KiB).
 ";
 
 pub struct Host {
@@ -55,6 +57,7 @@ pub struct Host {
 #[derive(Default)]
 struct Options {
     wasm: Option<PathBuf>,
+    engines: Vec<(String, PathBuf)>,
     dirs: Vec<(PathBuf, String)>,
     env: Vec<(String, String)>,
     inherit_env: bool,
@@ -78,6 +81,19 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options> {
         };
         match flag.as_str() {
             "--wasm" => options.wasm = Some(value("--wasm")?.into()),
+            "--engine" => {
+                let spec = value("--engine")?;
+                let Some((name, path)) = spec.split_once('=') else {
+                    bail!("--engine expects quickjs=PATH or jsc=PATH")
+                };
+                if !matches!(name, "quickjs" | "jsc") || path.is_empty() {
+                    bail!("--engine expects quickjs=PATH or jsc=PATH")
+                }
+                if options.engines.iter().any(|(engine, _)| engine == name) {
+                    bail!("--engine {name} was already supplied")
+                }
+                options.engines.push((name.to_string(), path.into()));
+            }
             "--dir" => {
                 let spec = value("--dir")?;
                 let (host, guest) = spec.split_once("::").unwrap_or((&spec, &spec));
@@ -129,10 +145,35 @@ pub(crate) const THREAD_STACK: usize = WASM_STACK + (8 << 20);
 /// `WASM_STACK`: every measured recursion path throws RangeError before it.
 const GUEST_STACK_KIB: &str = "4096";
 
+fn host_stack() -> Result<usize> {
+    let Some(kib) = std::env::var_os("BUN_WASM_HOST_STACK_KIB") else {
+        return Ok(WASM_STACK);
+    };
+    let kib: usize = kib
+        .to_str()
+        .context("BUN_WASM_HOST_STACK_KIB must be a positive integer")?
+        .parse()
+        .context("BUN_WASM_HOST_STACK_KIB must be a positive integer")?;
+    kib.checked_mul(1024)
+        .filter(|&bytes| bytes > 0 && bytes.checked_add(8 << 20).is_some())
+        .context("BUN_WASM_HOST_STACK_KIB is out of range")
+}
+
 fn engine() -> Result<Engine> {
     let mut config = Config::new();
     config.epoch_interruption(true);
-    config.max_wasm_stack(WASM_STACK);
+    config.max_wasm_stack(host_stack()?);
+    if let Some(value) = std::env::var_os("BUN_WASM_MEMORY_INIT_COW") {
+        match value.to_str() {
+            Some("0") => {
+                config.memory_init_cow(false);
+            }
+            Some("1") => {
+                config.memory_init_cow(true);
+            }
+            _ => bail!("BUN_WASM_MEMORY_INIT_COW must be 0 or 1"),
+        }
+    }
     match std::env::var("BUN_WASM_CACHE_DIR").ok().as_deref() {
         Some("off" | "0") => {}
         Some(dir) => {
@@ -186,8 +227,17 @@ fn run(options: Options) -> Result<i32> {
         env.push(("PWD".into(), pwd));
     }
     env.extend(options.env);
-    let mut runtime = process::Runtime::new(engine.clone(), module, dirs);
+    env.retain(|(name, _)| name != "BUNWASM_EXEC_PATH");
+    env.push(("BUNWASM_EXEC_PATH".into(), "/bin/bun".into()));
+    let mut runtime = process::Runtime::new(engine.clone(), module, dirs)?;
     Arc::get_mut(&mut runtime).unwrap().tools_path = Some(wasm.with_file_name("bun-tools.wasm"));
+    for (name, path) in &options.engines {
+        let module = Module::from_file(&engine, path)
+            .with_context(|| format!("loading {name} engine {}", path.display()))?;
+        runtime.register_engine(name, &module)?;
+    }
+    let thread_stack = host_stack()? + (8 << 20);
+    Arc::get_mut(&mut runtime).unwrap().thread_stack = thread_stack;
     let running = Arc::new(AtomicBool::new(true));
     let tick = running.clone();
     let ticker = std::thread::spawn(move || {
@@ -197,9 +247,28 @@ fn run(options: Options) -> Result<i32> {
         }
     });
     let args = std::iter::once("bun".into()).chain(options.args).collect();
+    struct Cleanup {
+        runtime: Arc<process::Runtime>,
+        running: Arc<AtomicBool>,
+        ticker: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            self.runtime.shutdown();
+            self.running.store(false, Ordering::Relaxed);
+            if let Some(ticker) = self.ticker.take() {
+                let _ = ticker.join();
+            }
+        }
+    }
+    let _cleanup = Cleanup {
+        runtime: runtime.clone(),
+        running,
+        ticker: Some(ticker),
+    };
     let result = std::thread::Builder::new()
         .name("bun-wasm".into())
-        .stack_size(THREAD_STACK)
+        .stack_size(thread_stack)
         .spawn(move || {
             run_instance(
                 runtime,
@@ -213,13 +282,23 @@ fn run(options: Options) -> Result<i32> {
         .join()
         // A guest-thread panic has printed its message; panic here too, so the exit code stays 101.
         .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
-    running.store(false, Ordering::Relaxed);
-    let _ = ticker.join();
     result.map(process::FinalOutcome::code)
 }
 
 fn run_instance(
     runtime: Arc<process::Runtime>,
+    argv: Vec<String>,
+    env: Vec<(String, String)>,
+    stdio: process::Stdio,
+    cancel: Arc<process::Cancellation>,
+) -> Result<process::FinalOutcome> {
+    let module = runtime.module.clone();
+    run_module_instance(runtime, &module, argv, env, stdio, cancel)
+}
+
+fn run_module_instance(
+    runtime: Arc<process::Runtime>,
+    module: &Module,
     argv: Vec<String>,
     mut env: Vec<(String, String)>,
     stdio: process::Stdio,
@@ -237,7 +316,7 @@ fn run_instance(
     }
     let net = net::Net::new();
     let memory_limit = stdio.memory_limit;
-    let processes = process::Processes::new(runtime.clone(), stdio, net.notify());
+    let processes = process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
     let host = Host {
         wasi: wasi.build_p1(),
         net,
@@ -246,7 +325,8 @@ fn run_instance(
         processes,
         limits: StoreLimitsBuilder::new()
             .memory_size(memory_limit)
-            .instances(1)
+            // One guest and bounded memory-sharing preview1 delegation adapters.
+            .instances(40)
             .build(),
         memory: None,
         trace: std::env::var("BUN_WASM_TRACE").is_ok_and(|v| !v.is_empty() && v != "0"),
@@ -263,7 +343,7 @@ fn run_instance(
     p1::add_to_linker_sync(&mut linker, |host| &mut host.wasi)?;
     // Wasmtime's preview1 proc_exit rejects statuses >=126. This process host
     // instead uses the native byte-sized status, including ordinary exit143.
-    // Normalizing here also keeps negative status values out of child_wait's
+    // Normalizing here also keeps negative status values out of runtime_proc.wait's
     // control-code range; signal provenance comes only from Cancellation.
     linker.allow_shadowing(true);
     linker.func_wrap(
@@ -272,12 +352,16 @@ fn run_instance(
         |status: i32| -> Result<()> { Err(I32Exit(i32::from(status as u8)).into()) },
     )?;
     linker.allow_shadowing(false);
-    slots::add_import(&mut linker)?;
-    let instance = linker.instantiate(&mut store, runtime.module_for(&argv)?)?;
+    slots::add_import(&mut linker, &mut store)?;
+    let instance = linker.instantiate(&mut store, runtime.module_for(&argv, module)?)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");
     slots::install(&mut store, &instance)?;
+    process::wasi::initialize(&linker, &mut store)?;
 
     let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
+    if !cancel.mark_started() {
+        return Ok(cancel.select(process::FinalOutcome::Exit(0)));
+    }
     let result = start.call(&mut store, ());
     let outcome = select_instance_outcome(result, &cancel);
     if matches!(outcome, process::FinalOutcome::Exit(_)) {
@@ -391,7 +475,7 @@ mod tests {
             (256, 0),
         ] {
             let module = Module::new(&engine, proc_exit_guest(status)).unwrap();
-            let runtime = process::Runtime::new(engine.clone(), module, Vec::new());
+            let runtime = process::Runtime::new(engine.clone(), module, Vec::new()).unwrap();
             let outcome = run_instance(
                 runtime,
                 Vec::new(),
@@ -402,6 +486,266 @@ mod tests {
             .unwrap();
             assert_eq!(outcome, FinalOutcome::Exit(expected), "proc_exit({status})");
             assert_eq!(outcome.signal(), 0);
+        }
+    }
+
+    /// Original standalone guest exercising the actual imports and preview1
+    /// filesystem, rather than calling the host's methods directly.
+    fn executable_access_guest() -> Vec<u8> {
+        fn leb(bytes: &mut Vec<u8>, mut value: i32) {
+            loop {
+                let byte = (value & 0x7f) as u8;
+                value >>= 7;
+                let done = (value == 0 && byte & 0x40 == 0) || (value == -1 && byte & 0x40 != 0);
+                bytes.push(if done { byte } else { byte | 0x80 });
+                if done {
+                    break;
+                }
+            }
+        }
+        fn section(wasm: &mut Vec<u8>, kind: u8, bytes: &[u8]) {
+            wasm.push(kind);
+            let mut length = bytes.len() as u32;
+            loop {
+                let byte = (length & 0x7f) as u8;
+                length >>= 7;
+                wasm.push(if length == 0 { byte } else { byte | 0x80 });
+                if length == 0 {
+                    break;
+                }
+            }
+            wasm.extend_from_slice(bytes);
+        }
+        fn constant(bytes: &mut Vec<u8>, value: i32) {
+            bytes.push(0x41);
+            leb(bytes, value);
+        }
+        let mut wasm = b"\0asm\x01\0\0\0".to_vec();
+        // (i32*5)->i32, i32->i32, ()->().
+        section(
+            &mut wasm,
+            1,
+            &[
+                3, 0x60, 5, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 1, 0x7f, 0x60, 1, 0x7f, 1, 0x7f, 0x60, 0,
+                0,
+            ],
+        );
+        let mut imports = vec![3];
+        for (namespace, name, ty) in [
+            ("runtime_proc", "access_start", 0),
+            ("runtime_proc", "access_take", 1),
+            ("wasi_snapshot_preview1", "path_filestat_get", 0),
+        ] {
+            imports.push(namespace.len() as u8);
+            imports.extend_from_slice(namespace.as_bytes());
+            imports.push(name.len() as u8);
+            imports.extend_from_slice(name.as_bytes());
+            imports.extend_from_slice(&[0, ty]);
+        }
+        section(&mut wasm, 2, &imports);
+        section(&mut wasm, 3, &[1, 2]);
+        section(&mut wasm, 5, &[1, 0, 1]);
+        let mut exports = vec![2, 6];
+        exports.extend_from_slice(b"memory");
+        exports.extend_from_slice(&[2, 0, 6]);
+        exports.extend_from_slice(b"_start");
+        exports.extend_from_slice(&[0, 3]);
+        section(&mut wasm, 7, &exports);
+        let mut body = vec![1, 2, 0x7f]; // two i32 locals: request and result
+        for value in [3, 0, 1056, 3, 2048] {
+            constant(&mut body, value);
+        }
+        body.extend_from_slice(&[0x10, 2, 0x04, 0x40, 0x00, 0x0b]); // stat error traps
+        constant(&mut body, 2064);
+        body.extend_from_slice(&[0x2d, 0, 0]); // load file type
+        constant(&mut body, 4);
+        body.extend_from_slice(&[0x47, 0x04, 0x40, 0x00, 0x0b]);
+        for value in [1024, 8, 1040, 1, 1] {
+            constant(&mut body, value);
+        }
+        body.extend_from_slice(&[0x10, 0, 0x21, 0, 0x20, 0]);
+        constant(&mut body, 0);
+        body.extend_from_slice(&[0x4c, 0x04, 0x40, 0x00, 0x0b]); // request <= 0 traps
+        body.extend_from_slice(&[0x03, 0x40, 0x20, 0, 0x10, 1, 0x22, 1]);
+        constant(&mut body, -6);
+        body.extend_from_slice(&[0x46, 0x0d, 0, 0x0b]); // retry EAGAIN
+        body.extend_from_slice(&[0x20, 1, 0x04, 0x40, 0x00, 0x0b, 0x0b]);
+        let mut code = vec![1];
+        code.push(body.len() as u8);
+        code.extend(body);
+        section(&mut wasm, 10, &code);
+        let mut data = vec![3];
+        for (offset, bytes) in [(1024, b"/bin/bun".as_slice()), (1040, b"/"), (1056, b"bun")] {
+            data.push(0);
+            constant(&mut data, offset);
+            data.push(0x0b);
+            data.push(bytes.len() as u8);
+            data.extend_from_slice(bytes);
+        }
+        section(&mut wasm, 11, &data);
+        wasm
+    }
+
+    #[test]
+    fn guest_observes_a_real_executable_and_takes_an_access_query() {
+        let mut config = Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).unwrap();
+        let module = Module::new(&engine, executable_access_guest()).unwrap();
+        let runtime = process::Runtime::new(engine, module, Vec::new()).unwrap();
+        let outcome = run_instance(
+            runtime.clone(),
+            Vec::new(),
+            Vec::new(),
+            process::Stdio::inherited(),
+            Arc::default(),
+        )
+        .unwrap();
+        runtime.shutdown();
+        assert_eq!(outcome, FinalOutcome::Exit(0));
+    }
+
+    #[test]
+    #[ignore = "requires WASI_SDK_PATH; run explicitly to verify the real wasi-libc scan"]
+    fn real_wasi_libc_discovers_all_engine_preopens_and_stops() {
+        let sdk = PathBuf::from(std::env::var_os("WASI_SDK_PATH").expect("source env.sh first"));
+        let scratch =
+            std::env::temp_dir().join(format!("bun-wasm-preopen-test-{}", std::process::id()));
+        std::fs::create_dir(&scratch).unwrap();
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let _cleanup = Cleanup(scratch.clone());
+        let wasm = scratch.join("preopen-scan.wasm");
+        let output = std::process::Command::new(sdk.join("bin/clang"))
+            .arg("--target=wasm32-wasip1")
+            .arg("-O1")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/preopen-scan.c"))
+            .arg("-o")
+            .arg(&wasm)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut config = Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).unwrap();
+        let module = Module::from_file(&engine, wasm).unwrap();
+        let runtime =
+            process::Runtime::new(engine, module, vec![(scratch.clone(), "/".into())]).unwrap();
+        for name in ["quickjs", "jsc"] {
+            runtime.register_engine(name, &runtime.module).unwrap();
+        }
+        let outcome = run_instance(
+            runtime.clone(),
+            Vec::new(),
+            Vec::new(),
+            process::Stdio::inherited(),
+            Arc::default(),
+        );
+        runtime.shutdown();
+        assert_eq!(outcome.unwrap(), FinalOutcome::Exit(0));
+    }
+
+    #[test]
+    fn engine_options_are_explicit_repeatable_and_strict() {
+        let options = parse_args(
+            [
+                "--wasm=default.wasm",
+                "--engine",
+                "quickjs=qjs.wasm",
+                "--engine=jsc=jsc.wasm",
+                "--",
+                "run",
+                "app.ts",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        assert_eq!(options.wasm, Some("default.wasm".into()));
+        assert_eq!(
+            options.engines,
+            vec![
+                ("quickjs".into(), "qjs.wasm".into()),
+                ("jsc".into(), "jsc.wasm".into())
+            ]
+        );
+        assert_eq!(options.args, ["run", "app.ts"]);
+        for args in [
+            vec!["--engine"],
+            vec!["--engine", "jsc"],
+            vec!["--engine", "jsc="],
+            vec!["--engine", "browser=b.wasm"],
+            vec!["--engine=jsc=a", "--engine=jsc=b"],
+        ] {
+            assert!(parse_args(args.into_iter().map(str::to_string)).is_err());
+        }
+    }
+
+    #[test]
+    fn engine_paths_select_their_own_module_not_the_default() {
+        let mut config = Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).unwrap();
+        let runtime = process::Runtime::new(
+            engine.clone(),
+            Module::new(&engine, proc_exit_guest(11)).unwrap(),
+            Vec::new(),
+        )
+        .unwrap();
+        runtime
+            .register_engine(
+                "quickjs",
+                &Module::new(&engine, proc_exit_guest(22)).unwrap(),
+            )
+            .unwrap();
+        runtime
+            .register_engine("jsc", &Module::new(&engine, proc_exit_guest(33)).unwrap())
+            .unwrap();
+        let mut parent = process::Processes::new(
+            runtime.clone(),
+            process::Stdio::inherited(),
+            net::Net::new().notify(),
+            Arc::default(),
+        );
+        struct Cleanup(Arc<process::Runtime>);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                self.0.shutdown();
+            }
+        }
+        let _cleanup = Cleanup(runtime);
+        for (path, expected) in [
+            ("/bin/bun", 11),
+            ("/bin/node", 11),
+            ("/opt/bun/quickjs/bin/bun", 22),
+            ("/opt/bun/quickjs/bin/node", 22),
+            ("/opt/bun/jsc/bin/bun", 33),
+            ("/opt/bun/jsc/bin/node", 33),
+        ] {
+            let request = serde_json::to_vec(&serde_json::json!({ "executable": path, "argv": [path], "cwd": "/bin", "env": {}, "job": 0, "fds": [] })).unwrap();
+            let pid = parent.spawn(&request);
+            assert!(pid > 0, "{path}: {pid}");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                match parent.wait(pid) {
+                    Err(process::AGAIN) => {
+                        assert!(std::time::Instant::now() < deadline);
+                        std::thread::yield_now();
+                    }
+                    result => {
+                        assert_eq!(result, Ok(FinalOutcome::Exit(expected)), "{path}");
+                        break;
+                    }
+                }
+            }
         }
     }
 

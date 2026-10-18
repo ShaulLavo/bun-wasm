@@ -56,6 +56,10 @@ impl SharedInput {
         Poll::Ready(())
     }
 
+    pub fn closed(&self) -> bool {
+        self.state.lock().unwrap().closed
+    }
+
     pub fn read(&self, size: usize) -> StreamResult<Bytes> {
         if size == 0 {
             return Ok(Bytes::new());

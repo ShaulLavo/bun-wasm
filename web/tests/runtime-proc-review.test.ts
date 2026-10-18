@@ -1,3 +1,4 @@
+import { controlLoad, controlStore } from "waffle/proc/control";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, test } from "bun:test";
 import { DescriptorTable } from "waffle/core/descriptors";
@@ -64,9 +65,9 @@ for (const trigger of ["watcher", "late-kill", "handled-signal-before-exit", "pu
   const output: { fd: number; text: string }[] = [];
   const state = fixture({ output(fd, data) { output.push({ fd, text: new TextDecoder().decode(data) }); } });
   try {
-    state.broker.register("child", { adapter: "preview1", cooperative: true, module: emptyModule() });
+    state.broker.register("/bin/child", { adapter: "preview1", cooperative: true, module: emptyModule() });
     await state.broker.adoptRuntimeRoot(state.root);
-    const pid = state.parent.spawn(1, { executable: "child", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
+    const pid = state.parent.spawn(1, { executable: "/bin/child", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     await until(() => state.workers.length === 1, "child launch");
     const worker = state.workers[0]!, transport = worker.request!.runtimeProcess!;
@@ -80,7 +81,7 @@ for (const trigger of ["watcher", "late-kill", "handled-signal-before-exit", "pu
     }
     if (trigger === "pump-signal-race") {
       setSignalDisposition(shared.signals.signalState, 15, 2);
-      Atomics.store(shared.signals.requestedSignal, 0, 15);
+      controlStore(shared.signals.requestedSignal, 0, 15);
       const originalLoad = Atomics.load;
       let raced = false, reads = 0;
       Atomics.load = ((array: Int32Array | BigInt64Array, index: number) => {
@@ -102,7 +103,7 @@ for (const trigger of ["watcher", "late-kill", "handled-signal-before-exit", "pu
       else if (trigger === "late-kill") await state.broker.kill(pid, 9);
       else await pause(25);
     }
-    expect(Atomics.load(shared.confirmed, 0)).toBe(0);
+    expect(controlLoad(shared.confirmed, 0)).toBe(0);
     expect(worker.terminated).toBe(false);
     expect(state.parent.wait(1, pid)).toBeNull();
     expect(output).toEqual([]);
@@ -111,11 +112,11 @@ for (const trigger of ["watcher", "late-kill", "handled-signal-before-exit", "pu
     expect(output).toEqual([{ fd: 1, text: "queued stdout\n" }, { fd: 2, text: "queued stderr\n" }]);
     // The earlier runtime-proc notification is not the worker's final host acknowledgement.
     await state.broker.runtimeMessage({ type: "runtime-proc", operation: "exit", transport, targets: [pid] }, pid);
-    expect(Atomics.load(shared.confirmed, 0)).toBe(0);
+    expect(controlLoad(shared.confirmed, 0)).toBe(0);
     expect(worker.terminated).toBe(false);
     expect(state.parent.wait(1, pid)).toBeNull();
     worker.onmessage!({ data: { type: "exit", code: 23, sleep: "atomics" } });
-    await until(() => Atomics.load(shared.confirmed, 0) === 1, "ordered child acknowledgement");
+    await until(() => controlLoad(shared.confirmed, 0) === 1, "ordered child acknowledgement");
     expect(state.parent.wait(1, pid)).toEqual({ kind: "exited", code: 23, status: 23 });
     await until(() => worker.terminated, "acknowledged child stops");
   } finally { await state.dispose(); }
@@ -124,9 +125,9 @@ for (const trigger of ["watcher", "late-kill", "handled-signal-before-exit", "pu
 for (const failure of ["error-event", "initial-post-message"] as const) test(`generic child startup failure confirms without a final guest acknowledgement (${failure})`, async () => {
   const state = fixture(undefined, failure === "initial-post-message");
   try {
-    state.broker.register("child", { adapter: "preview1", cooperative: true, module: emptyModule() });
+    state.broker.register("/bin/child", { adapter: "preview1", cooperative: true, module: emptyModule() });
     await state.broker.adoptRuntimeRoot(state.root);
-    const pid = state.parent.spawn(1, { executable: "child", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
+    const pid = state.parent.spawn(1, { executable: "/bin/child", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     await until(() => state.workers.length === 1, "failed child launch");
     const worker = state.workers[0]!, shared = workerProcessState(worker.request!.runtimeProcess!);
@@ -134,8 +135,8 @@ for (const failure of ["error-event", "initial-post-message"] as const) test(`ge
     await until(() => worker.terminated, "failed child physically stopped");
     // Let every watcher/microtask observe failure; a missing acknowledgement must not strand wait.
     await pause(25);
-    expect(Atomics.load(shared.confirmed, 0)).toBe(1);
-    expect(state.parent.wait(1, pid)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
+    expect(controlLoad(shared.confirmed, 0)).toBe(1);
+    expect(state.parent.wait(1, pid)).toEqual({ kind: "start-failed", code: 5, error: "EIO", status: null });
   } finally { await state.dispose(); }
 });
 
@@ -143,22 +144,25 @@ test("explicit disposal confirms a selected ordinary child exit only after its f
   const fence = deferred();
   const state = fixture(undefined, false, () => fence.promise);
   try {
-    state.broker.register("child", { adapter: "preview1", cooperative: true, module: emptyModule() });
+    state.broker.register("/bin/child", { adapter: "preview1", cooperative: true, module: emptyModule() });
     await state.broker.adoptRuntimeRoot(state.root);
-    const pid = state.parent.spawn(1, { executable: "child", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
+    const pid = state.parent.spawn(1, { executable: "/bin/child", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     await until(() => state.workers.length === 1, "child launch");
     const worker = state.workers[0]!, shared = workerProcessState(worker.request!.runtimeProcess!);
+    const record = (await state.broker.ready()).get(pid)!;
     claimOutcome(shared.signals.outcome, { kind: "exited", code: 23 });
     void state.runtime.dispose();
     await pause();
-    expect(Atomics.load(shared.confirmed, 0)).toBe(0);
+    expect(controlLoad(shared.confirmed, 0)).toBe(0);
     expect(state.parent.wait(1, pid)).toBeNull();
     expect(worker.terminated).toBe(false);
     fence.resolve();
     // Physical stop and safe confirmation are independent consumers of the fence.
-    await until(() => Atomics.load(shared.confirmed, 0) === 1, "disposed child safely confirmed");
-    expect(state.parent.wait(1, pid)).toEqual({ kind: "exited", code: 23, status: 23 });
+    await until(() => record.result !== null && record.jobSafe, "disposed child safely confirmed");
+    expect(record.result).toEqual({ kind: "exited", code: 23, status: 23 });
+    // Disposal collects directory slots; an old observer is not a new capability.
+    expect(() => controlLoad(shared.confirmed, 0)).toThrow("collected");
     await until(() => worker.terminated, "unacknowledged child stopped during disposal");
   } finally { fence.resolve(); await state.dispose(); }
 });
@@ -167,9 +171,9 @@ test("generic worker loaded after first watcher tick still confirms a caught def
   const loading = deferred();
   const state = fixture();
   try {
-    state.broker.register("slow", { adapter: "preview1", cooperative: true, module: async () => { await loading.promise; return emptyModule(); } });
+    state.broker.register("/bin/slow", { adapter: "preview1", cooperative: true, module: async () => { await loading.promise; return emptyModule(); } });
     await state.broker.adoptRuntimeRoot(state.root);
-    const pid = state.parent.spawn(1, { executable: "slow", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
+    const pid = state.parent.spawn(1, { executable: "/bin/slow", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     // Let the initial four-millisecond watcher fire while module loading has no worker yet.
     await pause(25);
@@ -181,7 +185,7 @@ test("generic worker loaded after first watcher tick still confirms a caught def
     const child = state.client(transport, message => worker.onmessage!({ data: message }));
     // Equivalent to guest JS catching its typed terminal unwind and spinning without returning.
     child.defaultSignal(pid, 15);
-    await until(() => Atomics.load(workerProcessState(transport).confirmed, 0) === 1, "caught default action confirmation");
+    await until(() => controlLoad(workerProcessState(transport).confirmed, 0) === 1, "caught default action confirmation");
     expect(state.parent.wait(1, pid)).toEqual({ kind: "signaled", code: 15, status: 143 });
     await until(() => worker.terminated, "caught default action worker termination");
   } finally { loading.resolve(); await state.dispose(); }
@@ -191,9 +195,9 @@ test("already-published background spawn survives root exit during lazy supervis
   const activation = deferred(); let activating = false;
   const state = fixture({ activate: async () => { activating = true; await activation.promise; return import("waffle/proc"); } });
   try {
-    state.broker.register("child", { adapter: "preview1", cooperative: true, module: emptyModule() });
+    state.broker.register("/bin/child", { adapter: "preview1", cooperative: true, module: emptyModule() });
     await state.broker.adoptRuntimeRoot(state.root);
-    const pid = state.parent.spawn(1, { executable: "child", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
+    const pid = state.parent.spawn(1, { executable: "/bin/child", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     const admitted = state.broker.runtimeMessage(state.messages[0]!, 1);
     // Attach rejection immediately: the assertion below, not an unhandled rejection, owns it.
     const outcome = admitted.then(() => null, error => error);

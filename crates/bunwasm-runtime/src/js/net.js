@@ -34,6 +34,20 @@
     return n;
   };
 
+  // Sleeps in procPoll when every referenced waiter names what it waits on (runtime_proc
+  // descriptors and children); returns false when the caller should use the host poll instead.
+  internal.ioWait = function ioWait(timeout) {
+    const watched = [];
+    for (const waiter of waiters) {
+      if (!waiter.ref) continue;
+      const subscriptions = waiter.subscriptions && waiter.subscriptions();
+      if (!subscriptions || !subscriptions.length) return false;
+      watched.push(subscriptions);
+    }
+    if (!watched.length) return false;
+    return typeof native.procPoll(internal.concatBytes(watched), timeout) !== "number";
+  };
+
   // Run each waiter once; returns whether anything made progress.
   internal.pumpIo = function pumpIo() {
     let progressed = false;

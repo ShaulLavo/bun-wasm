@@ -8,8 +8,10 @@ import { Wasi } from "waffle/core";
 const wasm = new URL("../../dist/bun.wasm", import.meta.url);
 for (const fallback of [false, true]) {
   test.skipIf(!existsSync(wasm))(`WASI reacquires memory after a growing host callback (fallback=${fallback})`, () => {
-    const wasi = new Wasi({ hostCallFd: HOST_CALL_FD, args: ["bun", "--version"], env: {}, fs: new MemFS(), preopens: {}, stdout() {}, stderr() {}, sleep() {} });
     const module = new WebAssembly.Module(readFileSync(wasm));
+    // The guest imports runtime_proc directly; this test never calls it.
+    const runtimeProc = Object.fromEntries(WebAssembly.Module.imports(module).filter(entry => entry.module === "runtime_proc").map(entry => [entry.name, () => 0]));
+    const wasi = new Wasi({ hostCallFd: HOST_CALL_FD, args: ["bun", "--version"], env: {}, fs: new MemFS(), preopens: {}, stdout() {}, stderr() {}, sleep() {}, namespaces: { runtime_proc: runtimeProc } });
     const imports = wasi.imports(module);
     const instance = new WebAssembly.Instance(module, imports);
     const memory = instance.exports.memory;
