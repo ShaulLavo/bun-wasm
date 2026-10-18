@@ -2124,6 +2124,11 @@ them as `procSpawn`, `procPipe`, `procRead`, `procWrite`, `procWait`, `procWaitJ
 the Bun JSON and pipe metadata surface (`Bun.spawn`, `Bun.spawnSync`, `node:child_process`
 wrappers, readable stream helpers, `maxBuffer`, `timeout`, `killSignal`) and now builds every
 child from descriptor bindings and classifies outcomes only from typed `wait` results.
+Caller-controlled stdin conversion and streaming validation run before descriptors or children
+are allocated. A synchronous child that closes stdin early discards further input on EPIPE,
+while stdout/stderr and the actual typed result continue to drain; Node Writable destruction
+closes the underlying process writer so children observe EOF. These input/lifetime rules and
+their fake-host and real-guest regressions are original adapters, not copied Bun/Node stream code.
 Ordinary children join the caller's job from `job_of(0)`; lookup failure is a spawn error,
 not a fallback to a separate job. Detached children request their own job, which the parent
 can reap with `wait_job` or stop with `kill_job`. Before allocating any descriptor or child,

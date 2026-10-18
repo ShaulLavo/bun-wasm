@@ -64,7 +64,8 @@
     stderr: StdioMode;
     worker?: unknown;
   }
-  interface Spec { meta: SpawnMeta; options: SpawnOptions; input: unknown }
+  type Input = { data: Uint8Array } | { stream: AsyncIterable<unknown> } | null;
+  interface Spec { meta: SpawnMeta; options: SpawnOptions; input: Input }
   interface Started extends Spec {
     pid: number;
     job: number;
@@ -203,7 +204,7 @@
       stdout: stdioMode(output, 1, "pipe"),
       stderr: stdioMode(error, 2, sync ? "pipe" : "inherit") };
     if (options._worker) meta.worker = options._worker;
-    return { meta, options, input };
+    return { meta, options, input: prepareInput(input, sync) };
   }
 
   /** execvp lookup: slash-containing names bypass PATH; empty PATH entries mean cwd. */
@@ -436,14 +437,31 @@
     return sink;
   }
 
-  function initialInput(input: unknown, sink: Sink) {
-    if (input === undefined || input === null || input === "pipe" || input === "inherit" || input === "ignore" || input === 0) return;
-    const stream = input as { getReader?: unknown } & AsyncIterable<unknown>;
-    if (stream && typeof stream.getReader === "function") {
-      (async () => { for await (const chunk of stream) sink.write(chunk); sink.end(); })().catch(() => sink.end());
+  // Conversion can invoke caller code. Complete it before reserving descriptors or launching.
+  function prepareInput(input: unknown, sync: boolean): Input {
+    if (input === undefined || input === null || input === "pipe" || input === "inherit" || input === "ignore" || input === 0) return null;
+    if (typeof (input as { getReader?: unknown }).getReader === "function") {
+      if (sync) throw unsupported("Synchronous streaming stdin");
+      return { stream: input as AsyncIterable<unknown> };
+    }
+    return { data: bytes(input).slice() };
+  }
+
+  function initialInput(input: Input, sink: Sink) {
+    if (!input) return;
+    if ("stream" in input) {
+      (async () => { for await (const chunk of input.stream) sink.write(chunk); sink.end(); })().catch(() => sink.destroy());
       return;
     }
-    sink.end(input);
+    sink.end(input.data);
+  }
+
+  // A child may stop reading stdin and still produce output or exit successfully.
+  function supplyInput(sink: Sink, action: () => void) {
+    try { action(); } catch (error) {
+      if ((error as { code?: string }).code !== "EPIPE") throw error;
+      sink.destroy();
+    }
   }
 
   function spawn(cmd: unknown, options?: SpawnOptions): Child {
@@ -618,7 +636,7 @@
       resolveExit(1);
       close();
     } });
-    initialInput(spec.input, sink);
+    supplyInput(sink, () => initialInput(spec.input, sink));
     if (Number(spec.options.timeout) > 0) timer = internal.realTimers.setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, Number(spec.options.timeout));
     if (spec.options.signal) {
       abort = () => child.kill(spec.options.killSignal);
@@ -654,11 +672,9 @@
         stdout: Buffer.from(internal.concatBytes(chunks[0])), stderr: Buffer.from(internal.concatBytes(chunks[1])) }, extra);
     }
     try {
-      if (spec.input && typeof (spec.input as { getReader?: unknown }).getReader === "function") throw unsupported("Synchronous streaming stdin");
-      initialInput(spec.input, sink);
-      sink.end();
+      supplyInput(sink, () => { initialInput(spec.input, sink); sink.end(); });
       while (!status || states.some((state) => state.fd >= 0)) {
-        sink.flush();
+        supplyInput(sink, () => { sink.flush(); });
         states.forEach((state, i) => readPipe(state, (chunk) => {
           sizes[i] += chunk.length;
           if (sizes[i] > maxBuffer) throw Object.assign(new Error("Child process output exceeds maxBuffer"), { code: "ENOBUFS" });
@@ -759,6 +775,7 @@
           catch (error) { callback(error); }
         },
         final(callback) { sink.end(); callback(); },
+        destroy(error, callback) { sink.destroy(); callback(error); },
       });
     }
 

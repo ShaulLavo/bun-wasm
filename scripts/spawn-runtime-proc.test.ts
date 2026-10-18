@@ -616,3 +616,66 @@ for (const selected of [[0, 23], [0, 143], [1, 9]] as const) {
     expect(fake.open()).toBe(0);
   });
 }
+
+for (const sync of [false, true]) for (const input of [
+  { _bytes() { throw new Error("invalid stdin bytes"); } },
+  { get getReader() { throw new Error("invalid stdin reader"); } },
+]) test(`stdin conversion fails before launch (sync ${sync}, ${"_bytes" in input ? "bytes" : "reader"})`, () => {
+  const fake = service();
+  const { module, waiters } = load(fake);
+  expect(() => (sync ? module.spawnSync : module.spawn)(["bun", "input"], { stdin: input })).toThrow(/invalid stdin/);
+  expect(fake.calls).not.toContain("spawn");
+  expect(fake.children.size).toBe(0);
+  expect(fake.open()).toBe(0);
+  expect(waiters).toHaveLength(0);
+});
+
+test("synchronous streaming stdin is rejected before launch", () => {
+  const fake = service();
+  const { module, waiters } = load(fake);
+  expect(() => module.spawnSync(["bun", "input"], { stdin: new ReadableStream() })).toThrow(/Synchronous streaming stdin/);
+  expect(fake.children.size).toBe(0);
+  expect(fake.open()).toBe(0);
+  expect(waiters).toHaveLength(0);
+});
+
+for (const queued of [false, true]) test(`spawnSync drops ${queued ? "queued" : "initial"} stdin EPIPE and preserves output and exit`, () => {
+  const fake = service({ onSpawn(child) { if (!queued) fake.childClose(child, 0); } });
+  const { module } = load(fake);
+  const write = fake.native.procWrite;
+  let polls = 0;
+  fake.native.procWrite = (fd: number, bytes: Uint8Array) => queued && !polls ? EAGAIN : write(fd, bytes);
+  fake.native.procPoll = () => {
+    const child = Array.from(fake.children.values())[0];
+    if (++polls === 1) {
+      if (queued) fake.childClose(child, 0);
+      fake.childWrite(child, 1, "still running");
+      fake.childWrite(child, 2, "diagnostic");
+    } else fake.exit(child, 23);
+    return new Uint8Array(0);
+  };
+  const result = module.spawnSync(["bun", "closes-stdin"], { stdin: "input", detached: true });
+  expect(result.error).toBeUndefined();
+  expect(result.exitCode).toBe(23);
+  expect(result.signalCode).toBeNull();
+  expect(result.stdout.toString()).toBe("still running");
+  expect(result.stderr.toString()).toBe("diagnostic");
+  expect(fake.calls.filter(call => call.startsWith("kill"))).toEqual([]);
+  expect(fake.calls).toContain("reap");
+  expect(fake.open()).toBe(0);
+});
+
+test("Node stdin destroy closes its runtime_proc writer and delivers EOF", async () => {
+  const fake = service();
+  const { module, pump } = load(fake);
+  const node = module.nodeChildProcess();
+  const child = node.spawn("bun", ["wait-for-eof"]);
+  const record = fake.children.get(child.pid)!;
+  expect(fake.childRead(record, 0)).toBe("");
+  child.stdin.destroy();
+  expect(fake.childRead(record, 0)).toBeNull();
+  fake.exit(record, 0);
+  await pump();
+  expect(fake.open()).toBe(0);
+  expect(fake.calls.filter(call => call.startsWith("kill"))).toEqual([]);
+});
