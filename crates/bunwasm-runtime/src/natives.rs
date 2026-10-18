@@ -84,13 +84,6 @@ pub fn io_error(err: io::Error, syscall: &str, path: Option<&str>) -> NativeErro
         .prop("code", code)
 }
 
-fn bad_fd(syscall: &str) -> NativeError {
-    NativeError::error(format!("EBADF: bad file descriptor, {syscall}"))
-        .prop("syscall", syscall)
-        .prop("errno", -9)
-        .prop("code", "EBADF")
-}
-
 fn millis(time: io::Result<SystemTime>) -> f64 {
     time.ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -98,7 +91,7 @@ fn millis(time: io::Result<SystemTime>) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn stat_record(meta: &fs::Metadata, descriptor_mode: Option<u32>) -> Val {
+fn stat_record(meta: &fs::Metadata, descriptor_mode: Option<libc::mode_t>) -> Val {
     let ft = meta.file_type();
     let (kind_bits, perm) = if ft.is_dir() {
         (0o040000, 0o755)
@@ -112,7 +105,12 @@ fn stat_record(meta: &fs::Metadata, descriptor_mode: Option<u32>) -> Val {
     Record::new()
         .set("dev", dev)
         .set("ino", ino)
-        .set("mode", descriptor_mode.unwrap_or(kind_bits | perm) as f64)
+        .set(
+            "mode",
+            descriptor_mode
+                .map(f64::from)
+                .unwrap_or(f64::from(kind_bits | perm)),
+        )
         .set("nlink", nlink)
         .set("uid", 0)
         .set("gid", 0)
@@ -192,7 +190,7 @@ pub struct FdTable {
     files: HashMap<i32, File>,
 }
 
-fn descriptor_metadata(fd: i32) -> io::Result<(fs::Metadata, u32)> {
+fn descriptor_metadata(fd: i32) -> io::Result<(fs::Metadata, libc::mode_t)> {
     let mut stat = MaybeUninit::<libc::stat>::uninit();
     // Validate the descriptor before borrowing it. Guest native calls are synchronous;
     // no JS can close or reuse it between this check and metadata().
@@ -203,7 +201,7 @@ fn descriptor_metadata(fd: i32) -> io::Result<(fs::Metadata, u32)> {
     // return (including errors). Owned opens remain in FdTable; inherited fds remain
     // owned by their host until an explicit close or process exit.
     let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd as _) });
-    let mode = unsafe { stat.assume_init() }.st_mode as u32;
+    let mode = unsafe { stat.assume_init() }.st_mode;
     // Preview1 has no FIFO tag: both process hosts encode pipe endpoints as
     // UNKNOWN, which libc preserves with no POSIX type bits. Adapt that host
     // representation without bypassing fd_filestat_get capability checks.
@@ -713,7 +711,7 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         let file = open_options(flags)
             .open(path)
             .map_err(|e| io_error(e, "open", Some(path)))?;
-        let fd = i32::try_from(file.as_raw_fd()).map_err(|_| bad_fd("open"))?;
+        let fd = file.as_raw_fd();
         st.fds.borrow_mut().files.insert(fd, file);
         Ok(fd.into())
     });
@@ -1415,7 +1413,7 @@ mod builtin_tests {
         )
         .unwrap();
         assert_eq!(inherited.stream_position().unwrap(), 8);
-        assert!(call(&natives, "fstat", &[fd.clone()]).is_ok());
+        assert!(call(&natives, "fstat", std::slice::from_ref(&fd)).is_ok());
         call(&natives, "ftruncate", &[fd.clone(), Val::Num(10.0)]).unwrap();
         assert_eq!(inherited.metadata().unwrap().len(), 10);
         call(

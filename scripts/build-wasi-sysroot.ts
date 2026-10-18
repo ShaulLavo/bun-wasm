@@ -13,23 +13,41 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
+async function toolInput(command: string) {
+  const path = await realpath(command);
+  const result = Bun.spawnSync([command, "--version"], { stdin: "ignore" });
+  if (result.exitCode !== 0) throw new Error(`Sysroot tool probe failed: ${command}`);
+  return { path, sha256: await hash(path), version: result.stdout.toString() + result.stderr.toString() };
+}
+
 export interface SysrootOptions {
   readonly waffle: string;
-  readonly revision: string;
   readonly sdk: string;
   readonly output: string;
 }
 
 export async function buildWasiSysroot(options: SysrootOptions): Promise<void> {
-  const { waffle, revision, sdk, output } = options;
+  const { waffle, sdk, output } = options;
   const overlays = ["include/c++", "include/wasm32-wasip1/noeh", "lib/wasm32-wasip1/noeh"];
   const stock = join(sdk, "share/wasi-sysroot");
   const builder = join(waffle, "scripts/build-wasi-libc.sh");
+  // Package revisions are provenance, not build inputs: proc-only Waffle changes
+  // must not invalidate libc or its ICU/JSC consumers. The installed builder pins
+  // the libc source revision and archive hash in its own content.
+  const tools = await Promise.all(["clang", "llvm-ar", "llvm-nm", "llvm-ranlib"].map(name => toolInput(join(sdk, "bin", name)))
+    .concat(["cmake", "ninja"].map(name => {
+      const path = Bun.which(name);
+      if (!path) throw new Error(`Missing sysroot build tool: ${name}`);
+      return toolInput(path);
+    })));
+  const sdkOverlays = await Promise.all(overlays.map(async path => ({ path, target: await realpath(join(stock, path)) })));
+  const environment = Object.fromEntries(["CFLAGS", "CXXFLAGS", "ASMFLAGS", "CPPFLAGS", "LDFLAGS", "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIBRARY_PATH", "SDKROOT"]
+    .map(name => [name, process.env[name] ?? ""]));
   const inputs = {
-    waffleRevision: revision,
     sdkVersion: await readFile(join(sdk, "VERSION"), "utf8"),
     builderSha256: await hash(builder),
     patchSha256: await hash(join(waffle, "patches/wasi-libc/preopen-scan.patch")),
+    tools, sdkOverlays, environment,
   };
   const receiptPath = join(output, "bun-wasm-sysroot.json");
   if (await Bun.file(receiptPath).exists()) {
@@ -100,5 +118,5 @@ if (import.meta.main) {
   const revision = manifest.devDependencies.waffle.split("#")[1];
   if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("Waffle must be pinned to an exact merged commit");
   const waffle = dirname(Bun.resolveSync("waffle/package.json", root));
-  await buildWasiSysroot({ waffle, revision, sdk, output });
+  await buildWasiSysroot({ waffle, sdk, output });
 }

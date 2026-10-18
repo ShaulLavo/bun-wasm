@@ -5,7 +5,7 @@ export WASM_TOOLS=${WASM_TOOLS:-/work/cache/wasm-tools}
 export WASI_SDK_PATH=${WASI_SDK_PATH:-$WASM_TOOLS/wasi-sdk}
 # One consumer-owned libc, built by the exact installed Waffle builder. Never use
 # the SDK/Rust libc as a fallback. The receipt rejects changed build inputs.
-export BUN_WASM_SYSROOT=${BUN_WASM_SYSROOT:-$WASM_TOOLS/bun-wasm-sysroot-waffle-afe9cc1f3f93}
+export BUN_WASM_SYSROOT=${BUN_WASM_SYSROOT:-$WASM_TOOLS/bun-wasm-sysroot-patched}
 export PATH=$WASM_TOOLS/cmake/bin:$WASM_TOOLS/ninja:$CARGO_HOME/bin:$WASM_TOOLS/wasmtime:$WASM_TOOLS/binaryen/bin:$WASM_TOOLS/wasm-tools-bin:$WASI_SDK_PATH/bin:$PATH
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-/work/tmp/bun-wasm-target}
 # This workstation's scratch policy belongs in its environment, not in consumers.

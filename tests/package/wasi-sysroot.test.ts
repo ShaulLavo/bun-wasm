@@ -8,7 +8,7 @@ import { buildWasiSysroot, type SysrootOptions } from "../../scripts/build-wasi-
 async function fixture(run: (options: SysrootOptions) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), "bun-wasm-sysroot-test-"));
   const options = {
-    waffle: join(directory, "waffle"), revision: "0".repeat(40),
+    waffle: join(directory, "waffle"),
     sdk: join(directory, "sdk"), output: join(directory, "output"),
   };
   try {
@@ -16,6 +16,10 @@ async function fixture(run: (options: SysrootOptions) => Promise<void>) {
     await mkdir(join(options.waffle, "patches/wasi-libc"), { recursive: true });
     for (const path of ["include/c++", "include/wasm32-wasip1/noeh", "lib/wasm32-wasip1/noeh"]) {
       await mkdir(join(options.sdk, "share/wasi-sysroot", path), { recursive: true });
+    }
+    await mkdir(join(options.sdk, "bin"), { recursive: true });
+    for (const name of ["clang", "llvm-ar", "llvm-nm", "llvm-ranlib"]) {
+      await writeFile(join(options.sdk, "bin", name), "#!/usr/bin/env bash\necho 'fixture SDK tool version 1'\n", { mode: 0o755 });
     }
     await writeFile(join(options.sdk, "VERSION"), "fake SDK for bootstrap tests\n");
     await writeFile(join(options.waffle, "patches/wasi-libc/preopen-scan.patch"), "fixture patch\n");
@@ -43,7 +47,9 @@ test("sysroot setup publishes patched libc and only SDK C++ overlays, then verif
     const libc = join(options.output, "lib/wasm32-wasip1/libc.a");
     expect(await Bun.file(libc).text()).toBe("fixture patched libc");
     const receipt = await Bun.file(join(options.output, "bun-wasm-sysroot.json")).json();
-    expect(receipt.waffleRevision).toBe(options.revision);
+    expect(receipt.waffleRevision).toBeUndefined();
+    expect(receipt.tools).toHaveLength(6);
+    expect(receipt.sdkOverlays).toHaveLength(3);
     expect(receipt.libcSha256).toBe(new Bun.CryptoHasher("sha256").update("fixture patched libc").digest("hex"));
     for (const path of ["include/c++", "include/wasm32-wasip1/noeh", "lib/wasm32-wasip1/noeh"]) {
       expect(await readlink(join(options.output, path))).toBe(join(options.sdk, "share/wasi-sysroot", path));
@@ -59,11 +65,61 @@ test("sysroot setup publishes patched libc and only SDK C++ overlays, then verif
 test("sysroot setup refuses changed pinned inputs and corrupted libc without replacing output", async () => {
   await fixture(async options => {
     await buildWasiSysroot(options);
-    await expect(buildWasiSysroot({ ...options, revision: "1".repeat(40) })).rejects.toThrow("Sysroot inputs changed");
+    const patch = join(options.waffle, "patches/wasi-libc/preopen-scan.patch");
+    await writeFile(patch, "changed patch\n");
+    await expect(buildWasiSysroot(options)).rejects.toThrow("Sysroot inputs changed");
+    await writeFile(patch, "fixture patch\n");
     const libc = join(options.output, "lib/wasm32-wasip1/libc.a");
     await writeFile(libc, "caller changed libc");
     await expect(buildWasiSysroot(options)).rejects.toThrow("Sysroot inputs changed");
     expect(await Bun.file(libc).text()).toBe("caller changed libc");
+    await cleanScratch(options);
+  });
+});
+
+test("unrelated Waffle revisions reuse byte-identical libc inputs without changing the receipt", async () => {
+  await fixture(async options => {
+    await buildWasiSysroot(options);
+    const receipt = await Bun.file(join(options.output, "bun-wasm-sysroot.json")).text();
+    const waffle = `${options.waffle}-new-revision`;
+    await cp(options.waffle, waffle, { recursive: true });
+    await writeFile(join(waffle, "package.json"), JSON.stringify({ version: "0.0.999", gitHead: "1".repeat(40) }));
+    await mkdir(join(waffle, "proc"));
+    await writeFile(join(waffle, "proc/abi.ts"), "// unrelated process capability fix\n");
+    // Reuse cannot accidentally invoke even the original fixture's builder.
+    await writeFile(join(options.waffle, "scripts/builder.ts"), "process.exit(99);\n");
+    await buildWasiSysroot({ ...options, waffle });
+    expect(await Bun.file(join(options.output, "bun-wasm-sysroot.json")).text()).toBe(receipt);
+    await cleanScratch(options);
+  });
+});
+
+test("sysroot reuse rejects changed builder, SDK, compiler or environment inputs without rewriting receipts", async () => {
+  await fixture(async options => {
+    await buildWasiSysroot(options);
+    const receipt = await Bun.file(join(options.output, "bun-wasm-sysroot.json")).text();
+    for (const path of [join(options.waffle, "scripts/build-wasi-libc.sh"), join(options.sdk, "VERSION"), join(options.sdk, "bin/clang")]) {
+      const original = await Bun.file(path).text();
+      try {
+        await writeFile(path, original + "\n# changed real input\n");
+        await expect(buildWasiSysroot(options)).rejects.toThrow("Sysroot inputs changed");
+      } finally { await writeFile(path, original); }
+    }
+    const compiler = join(options.sdk, "bin/clang");
+    const originalCompiler = await Bun.file(compiler).text();
+    try {
+      await writeFile(compiler, "#!/usr/bin/env bash\nexit 72\n");
+      await expect(buildWasiSysroot(options)).rejects.toThrow("Sysroot tool probe failed");
+    } finally { await writeFile(compiler, originalCompiler); }
+    const cpath = process.env.CPATH;
+    try {
+      process.env.CPATH = "/changed/include";
+      await expect(buildWasiSysroot(options)).rejects.toThrow("Sysroot inputs changed");
+    } finally {
+      if (cpath === undefined) delete process.env.CPATH; else process.env.CPATH = cpath;
+    }
+    expect(await Bun.file(join(options.output, "bun-wasm-sysroot.json")).text()).toBe(receipt);
+    await buildWasiSysroot(options);
     await cleanScratch(options);
   });
 });
@@ -133,9 +189,9 @@ test("same-version SDK switches refuse old overlay targets, including dangling l
     await buildWasiSysroot(options);
     const sdk = `${options.sdk}-other`;
     await cp(options.sdk, sdk, { recursive: true });
-    await expect(buildWasiSysroot({ ...options, sdk })).rejects.toThrow("Sysroot SDK overlay changed");
+    await expect(buildWasiSysroot({ ...options, sdk })).rejects.toThrow("Sysroot inputs changed");
     await rm(options.sdk, { recursive: true });
-    await expect(buildWasiSysroot({ ...options, sdk })).rejects.toThrow("Sysroot SDK overlay changed");
+    await expect(buildWasiSysroot({ ...options, sdk })).rejects.toThrow("Sysroot inputs changed");
     expect(await Bun.file(join(options.output, "lib/wasm32-wasip1/libc.a")).text()).toBe("fixture patched libc");
     await cleanScratch(options);
   });

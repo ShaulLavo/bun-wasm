@@ -2848,9 +2848,13 @@ not copied into this repository: Waffle 0.0.47 at `afe9cc1f3f93ea84929903e5a5585
 builds wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13` from the installed
 `waffle/scripts/build-wasi-libc.sh`. Its `preopen-scan.patch` skips occupied inherited descriptors
 only when `fd_fdstat_get` succeeds and stops on the first real BADF. `scripts/build-wasi-sysroot.ts`
-records the exact Waffle revision, SDK VERSION, builder hash, patch hash and libc hash, claims an
-atomic output lock, stages next to the destination for same-filesystem atomic publication, and refuses
-stale or caller-owned outputs. Reuse verifies the SDK overlay targets against the selected SDK, even
+keys reuse on the actual builder and patch content, SDK VERSION, compiler/archive-tool binaries and
+versions, host build tools, effective compiler environment and SDK overlay targets, with an integrity
+hash of the built libc. Waffle package revisions remain provenance rather than cache inputs: an
+unrelated process-only revision reuses the identical receipt, as the package regression proves. A
+nonmatching receipt is rejected outright, without upgrades or compatibility handling. The wrapper
+claims an atomic output lock, stages next to the destination for same-filesystem atomic publication,
+and refuses stale or caller-owned outputs. Reuse verifies the SDK overlay targets against the selected SDK, even
 when two SDK directories have identical VERSION files. It symlinks only
 unchanged SDK C++ headers and noeh libraries; CRT, libc and emulation archives come from the
 patched sysroot. Every guest and native C/C++ consumer receives that sysroot explicitly, while
