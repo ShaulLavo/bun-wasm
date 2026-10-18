@@ -133,22 +133,22 @@ def runtime_package_provenance():
     consumer = ROOT / "web"
     # Resolve as an ESM import from the consumer, not a require condition or a
     # guessed cache pathname. package.json need not be a public package export.
-    resolver = "import { fileURLToPath } from 'node:url'; console.log(fileURLToPath(import.meta.resolve('@bun-wasm/runtime/core')));"
+    resolver = "import { fileURLToPath } from 'node:url'; console.log(fileURLToPath(import.meta.resolve('waffle/core')));"
     try:
         entry = Path(subprocess.check_output(["node", "--input-type=module", "--eval", resolver], cwd=consumer, text=True, stderr=subprocess.PIPE).strip()).resolve()
     except (OSError, subprocess.CalledProcessError) as error:
-        raise RuntimeError("Cannot resolve installed @bun-wasm/runtime from the Node host consumer") from error
+        raise RuntimeError("Cannot resolve installed waffle from the Node host consumer") from error
     for package in entry.parents:
         metadata = package / "package.json"
         if metadata.is_file():
             data = json.loads(metadata.read_text())
-            if data.get("name") == "@bun-wasm/runtime":
+            if data.get("name") == "waffle":
                 break
     else:
-        raise RuntimeError("Cannot locate installed @bun-wasm/runtime metadata")
+        raise RuntimeError("Cannot locate installed waffle metadata")
     node_entry = entry.relative_to(package).as_posix()
     if not entry.is_file() or not node_entry.startswith("dist/") or entry.suffix not in {".js", ".mjs", ".cjs"}:
-        raise RuntimeError("Installed @bun-wasm/runtime must export generated dist JavaScript for Node")
+        raise RuntimeError("Installed waffle must export generated dist JavaScript for Node")
 
     sources = {}
     generated = {}
@@ -163,11 +163,11 @@ def runtime_package_provenance():
             elif path.suffix in {".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}:
                 sources[relative.as_posix()] = digest(path)
     if not sources:
-        raise RuntimeError("Installed @bun-wasm/runtime implementation source is missing")
+        raise RuntimeError("Installed waffle implementation source is missing")
     manifest = consumer / "package.json"
-    pin = json.loads(manifest.read_text()).get("dependencies", {}).get("@bun-wasm/runtime")
+    pin = json.loads(manifest.read_text()).get("dependencies", {}).get("waffle")
     if not isinstance(pin, str) or not pin:
-        raise RuntimeError("The Node host consumer must pin @bun-wasm/runtime")
+        raise RuntimeError("The Node host consumer must pin waffle")
     return {"name": data["name"], "version": data["version"], "node_entry": node_entry,
             "package_sha256": digest(metadata), "sources": sources, "generated": generated,
             "consumer": {"pin": pin, "package_sha256": digest(manifest), "lock_sha256": digest(consumer / "bun.lock")}}
@@ -179,7 +179,7 @@ def provenance(opts, wasm):
             "tools_sha256": digest(wasm.with_name("bun-tools.wasm")) if wasm.with_name("bun-tools.wasm").is_file() else None,
             "runner_sha256": digest(Path(__file__)),
             "launcher_sha256": digest(opts.launcher) if opts.engine != "browser" else digest(ROOT / "web/scripts/node-host.mjs"),
-            "host_sources": {path: digest(ROOT / path) for path in ["web/src/engine-host.js", "web/scripts/node-net.mjs", "web/scripts/node-stdio.ts", "web/scripts/node-spawn.ts", "web/src/subprocess.ts", "web/src/fs.ts"]} if opts.engine == "browser" else {},
+            "host_sources": {path: digest(ROOT / path) for path in ["web/src/engine-host.js", "web/scripts/node-net.mjs", "web/scripts/node-install-net.mjs", "web/src/net/package-fetch.ts", "web/scripts/node-stdio.ts", "web/scripts/node-spawn.ts", "web/src/subprocess.ts", "web/src/fs.ts"]} if opts.engine == "browser" else {},
             "runtime_package": runtime_package_provenance() if opts.engine == "browser" else {},
             "dependencies": dependency_digest(opts.suite / "node_modules"),
             "test_dependencies": dependency_digest(opts.dependencies or opts.suite / "test/node_modules"),

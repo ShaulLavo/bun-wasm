@@ -2,14 +2,14 @@ import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess-broker";
 import { SubprocessHost, childTransport, type ChildTransport } from "../src/subprocess.ts";
-import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "../../runtime/fs";
-import { FilesystemSection, waitForFilesystemQuiescence } from "../../runtime/fs/protocol";
+import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "waffle/fs";
+import { FilesystemSection, waitForFilesystemQuiescence } from "waffle/fs/protocol";
 import type { SharedFilesystem } from "../src/shared-fs";
-import type { SpawnRequest } from "../src/worker";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
-import { createSignalState, setSignalDisposition, takeSignal } from "../../runtime/proc/signals";
+import type { SpawnRequest, WorkerMessage } from "../src/worker";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
+import { createSignalState, setSignalDisposition, takeSignal } from "waffle/proc/signals";
 
-function fixture(activate?: () => Promise<typeof import("../../runtime/proc")>) {
+function fixture(activate?: () => Promise<typeof import("waffle/proc")>) {
   const revoked: number[] = [];
   const filesystem = { revoke(identity: { owner: number }) { revoked.push(identity.owner); }, reap() {}, async quiesce() {} } as unknown as SharedFilesystem;
   const runtime = processRuntimeFixture(filesystem, { activate });
@@ -28,7 +28,7 @@ function fixture(activate?: () => Promise<typeof import("../../runtime/proc")>) 
 test("first activation returns a pid immediately and does not block an unrelated task", async () => {
   let release!: () => void;
   const barrier = new Promise<void>(resolve => { release = resolve; });
-  const state = fixture(async () => { await barrier; return import("../../runtime/proc"); });
+  const state = fixture(async () => { await barrier; return import("waffle/proc"); });
   try {
     expect(state.pid).toBeGreaterThan(1);
     expect(state.host.wait(state.pid)).toBe(-2);
@@ -37,24 +37,26 @@ test("first activation returns a pid immediately and does not block an unrelated
     expect(ran).toBe(true);
     expect(state.host.wait(state.pid)).toBe(-2);
     release();
-    expect((await state.broker.wait(state.pid)).status).toBe(127);
-    expect(state.host.wait(state.pid)).toBe(127);
+    expect(await state.broker.wait(state.pid)).toEqual({ kind: "start-failed", code: 2, error: "ENOENT", status: null });
+    expect(state.host.wait(state.pid)).toBe(-1);
+    expect(JSON.parse(state.host.lastError!).code).toBe("ENOENT");
   } finally { release(); await state.dispose(); }
 });
 
-test("missing executable is an asynchronous child exit, not a thrown spawn error", async () => {
+test("broker retains an asynchronous typed missing-executable outcome", async () => {
   const state = fixture();
   try {
-    expect((await state.broker.wait(state.pid)).status).toBe(127);
+    expect(await state.broker.wait(state.pid)).toEqual({ kind: "start-failed", code: 2, error: "ENOENT", status: null });
     expect(state.revoked).toHaveLength(1);
-    expect(state.host.wait(state.pid)).toBe(127);
+    expect(state.host.wait(state.pid)).toBe(-1);
+    expect(JSON.parse(state.host.lastError!).code).toBe("ENOENT");
   } finally { await state.dispose(); }
 });
 
 test("disposing during delayed activation revokes pending children without starting them", async () => {
   let release!: () => void;
   const barrier = new Promise<void>(resolve => { release = resolve; });
-  const state = fixture(async () => { await barrier; return import("../../runtime/proc"); });
+  const state = fixture(async () => { await barrier; return import("waffle/proc"); });
   try {
     state.broker.dispose();
     expect(state.revoked).toHaveLength(1);
@@ -66,7 +68,7 @@ test("disposing during delayed activation revokes pending children without start
 });
 
 const fixtureModule = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-function liveFixture(options: { executable?: ExecutableRegistration; quiesce?: (identity: FilesystemIdentity) => Promise<void>; slowModule?: () => Promise<WebAssembly.Module>; postFailure?: boolean; activate?: () => Promise<typeof import("../../runtime/proc")>; root?: import("../../runtime/proc").RootProcessOptions } = {}) {
+function liveFixture(options: { executable?: ExecutableRegistration; quiesce?: (identity: FilesystemIdentity) => Promise<void>; slowModule?: () => Promise<WebAssembly.Module>; postFailure?: boolean; activate?: () => Promise<typeof import("waffle/proc")>; root?: import("waffle/proc").RootProcessOptions } = {}) {
   const originalWorker = globalThis.Worker;
   const workers = new Map<number, FakeWorker>();
   class FakeWorker {
@@ -307,7 +309,7 @@ test("postMessage failure also waits for quiescence before terminating its worke
     expect(waiting.confirmed()).toBe(false);
     expect(worker.terminated).toBe(0);
     barrier.release();
-    expect((await waiting.result).status).toBe(126);
+    expect(await waiting.result).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
     await timerTurn();
     expect(worker.terminated).toBe(1);
   } finally { barrier.release(); await state.dispose(); }
@@ -329,7 +331,7 @@ test("an acknowledged ordinary exit may stop immediately without a quiescence wa
 test("closing a handle before activation completes cannot retain a reserved process", async () => {
   let release!: () => void;
   const barrier = new Promise<void>(resolve => { release = resolve; });
-  const state = fixture(async () => { await barrier; return import("../../runtime/proc"); });
+  const state = fixture(async () => { await barrier; return import("waffle/proc"); });
   try {
     state.host.close(state.pid);
     state.broker.close(1, state.pid);
@@ -455,7 +457,7 @@ function rootWords() {
 test("root job signaling is synchronous without activating the lazy process service", async () => {
   const root = rootWords();
   let activated = 0;
-  const runtime = processRuntimeFixture({} as SharedFilesystem, { activate: async () => { activated++; return import("../../runtime/proc"); } });
+  const runtime = processRuntimeFixture({} as SharedFilesystem, { activate: async () => { activated++; return import("waffle/proc"); } });
   const broker = new SubprocessBroker("http://localhost/worker.js", runtime, { root });
   try {
     const delivered = broker.killJob(1, 2);
@@ -533,7 +535,7 @@ test("previously admitted children survive lazy activation after root default ac
   let release!: () => void;
   const barrier = new Promise<void>(resolve => { release = resolve; });
   const root = rootWords();
-  const state = liveFixture({ root, activate: async () => { await barrier; return import("../../runtime/proc"); } });
+  const state = liveFixture({ root, activate: async () => { await barrier; return import("waffle/proc"); } });
   try {
     const background = state.host.spawn(JSON.stringify({ argv: ["fixture"], job: -1 }));
     const delivered = state.broker.killJob(1, 2);
@@ -656,7 +658,7 @@ test("unsupported but natively valid modules fail with the instrumentation refus
   expect(WebAssembly.validate(bytes)).toBe(true);
   const state = liveFixture({ executable: { adapter: "preview1", bytes } });
   try {
-    expect((await state.broker.wait(state.pid)).status).toBe(126);
+    expect(await state.broker.wait(state.pid)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
     const data = childTransport(state.transports.get(state.pid)!).stderr.read();
     expect(data).toBeInstanceOf(Uint8Array);
     expect(new TextDecoder().decode(data as Uint8Array)).toMatch(/Cannot instrument WebAssembly:.*SIMD/);
@@ -681,7 +683,10 @@ for (const completion of ["kill", "default-signal", "ordinary-word", "worker-err
         else if (completion === "ordinary-word") {
           claimOutcome(outcomeWord(transport.outcome), { kind: "exited", code: 23 });
           supervisor.exit(pid, 23);
-        } else state.workers.get(pid)!.onerror?.({ preventDefault() {}, message: "worker failed" } as ErrorEvent);
+        } else {
+          state.workers.get(pid)!.onmessage?.({ data: { type: "phase", name: "instantiate", duration: 0 } } as MessageEvent<WorkerMessage>);
+          state.workers.get(pid)!.onerror?.({ preventDefault() {}, message: "worker failed" } as ErrorEvent);
+        }
         const waiting = exitConfirmation(state.broker, pid);
         await Promise.resolve();
         expect(waiting.confirmed()).toBe(false);
@@ -862,7 +867,8 @@ test("failed activation releases the accepted legacy admission lease before root
   try {
     await expect(state.broker.ready()).rejects.toThrow("activation refused");
     await timerTurn();
-    expect(state.host.wait(state.pid)).toBe(126);
+    expect(state.host.wait(state.pid)).toBe(-1);
+    expect(JSON.parse(state.host.lastError!).code).toBe("EACCES");
     await state.broker.rootExit(0);
     const service = await state.runtime.processes();
     expect(() => service.retainRoot(1)).toThrow("Unknown root process 1");

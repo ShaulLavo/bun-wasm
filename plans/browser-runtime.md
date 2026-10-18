@@ -176,15 +176,13 @@ sections 7 and 8) maps its `ProcessHost` trait onto this layer. The process laye
 
 ### Where it lives
 
-The generic implementation currently lives in bun-wasm's `runtime/` package while the
-[approved Waffle split](waffle-split.md) is prepared. After the split it lives in the public
-MIT-licensed `ShaulLavo/waffle` repository, package `waffle`, with curated layer and browser
-entry points so a bundler includes only what a page imports. Generic filesystem, process,
-interruption, worker/bootstrap, network and preview services, tests and follow-on plan steps
-move there. Bun's guest engines, executor, native-slot/legacy-pipe adapters and application
-policy remain in `web/` here. The application creates one page-owned runtime and explicitly
-passes it to Bun and `createShell({ runtime })`; runs borrow its filesystem, identities and
-lazy process service. `proc` loads on the first spawn. A guest's `spawn` import can't await an `import()`, so the
+The generic implementation lives in the public MIT-licensed
+[`ShaulLavo/waffle`](https://github.com/ShaulLavo/waffle) repository, package `waffle`, with
+curated layer and browser entry points so a bundler includes only what a page imports. Generic
+filesystem, process, interruption, worker/bootstrap, network and preview services, tests and
+follow-on plan steps live there. Bun's guest engines, executor, native-slot/legacy-pipe adapters
+and application policy remain in `web/` here. The application creates one page-owned Waffle runtime and explicitly passes it to Bun; runs
+borrow its filesystem, identities and lazy process service. `proc` loads on the first spawn. A guest's `spawn` import can't await an `import()`, so the
 guest worker keeps a stub of about 1 KiB gzipped, including identity and atomic terminal-result
 primitives: it reserves a pid, takes the inherited descriptor references and returns at once,
 and the supervisor loads proc and starts the process
@@ -195,8 +193,8 @@ that can't run) and as a child-exit event in `poll`. A synchronous caller such a
 bun-wasm consumes an explicitly trusted Waffle Git dependency pinned to an exact commit;
 bash-web declares a Waffle peer dependency and uses an exact development pin for its own
 tests. Follow the split plan's ownership, installed-package and cross-repository gates before
-removing the in-tree package. Every new file that adapts upstream code gets its classified row
-in the owning repository's provenance ledger, including applicable notices.
+removing the in-tree package. Every new file that adapts upstream code gets its classified row in Waffle's or bun-wasm's
+provenance ledger, including applicable notices.
 
 ### Process ABI (for the shell lane)
 
@@ -304,10 +302,10 @@ the CI gate.
 | # | Step | Estimate |
 |---|---|---:|
 | 1 | **Fix the WASI host bugs in place**, stacked on PR #21: the nine from spike 4, each with a failing test first, reusing spike 4's fixtures. Add the CI gate (GitHub Actions running `web/tests` and an artifact-free headless browser smoke). | 600-900 |
-| 2 | **Package skeleton and core.** Create `runtime/`; move `wasi.ts`, `memory-views.js` and path helpers; one descriptor namespace with file, directory, pipe and terminal kinds and reference-counted open descriptions, so the host no longer holds MemFS nodes; explicit import namespaces instead of ENOSYS stubs; `poll_oneoff` with per-descriptor readiness. Enable code splitting in `web/build.ts` and `sandbox/build.ts`, including chunks under the scoped worker. `web/` consumes it with no behaviour change. CI checks bundle sizes against the budgets and initial downloads. | 1,500-2,200 |
+| 2 | **Package skeleton and core.** Create `waffle/core/` and `waffle/fs/`; use the package's WASI, memory-view and path entrypoints; one descriptor namespace with file, directory, pipe and terminal kinds and reference-counted open descriptions, so the host no longer holds MemFS nodes; explicit import namespaces instead of ENOSYS stubs; `poll_oneoff` with per-descriptor readiness. Enable code splitting in `web/build.ts` and `sandbox/build.ts`, including chunks under the scoped worker. `web/` consumes it with no behaviour change. CI checks bundle sizes against the budgets and initial downloads. | 1,500-2,200 |
 | 3a | **Filesystem worker and protocol.** In-memory tree owned by one worker; non-blocking submit and completion handles over shared memory; blocking preview1 adapter; open-file identity across rename and unlink. Memory-only backend. Replaces copy-at-spawn and merge-at-exit. | 1,500-2,200 |
 | 3b | **Persistence.** Backend interface; IndexedDB backend (default); background batched persistence; `fsync`; checksummed metadata written beside the old copy then swapped; Web Locks for one writer tab; the editor's persisted save. Reload test immediately after a save resolves. | 1,200-1,800 |
-| 3c | **OPFS backend.** One file per immutable revision, lazy loading, bounded total native handles under Safari's 253, per-browser create concurrency, and file-scoped durability. Explicit `storage: "opfs"`; IndexedDB stays default. [Implementation and measured corpus evidence](../runtime/README.md#opfs-corpus-measurements). | 600-1,000 |
+| 3c | **OPFS backend.** One file per immutable revision, lazy loading, bounded total native handles under Safari's 253, per-browser create concurrency, and file-scoped durability. Explicit `storage: "opfs"`; IndexedDB stays default. [Implementation and measured corpus evidence](https://github.com/ShaulLavo/waffle/blob/main/docs/benchmarks/filesystem-persistence-opfs-2026-10-17.json). | 600-1,000 |
 | 4a | **Processes.** Supervisor, process table, generic registry (module plus guest adapter), shared compiled modules, first-spawn stub, spawn/wait/kill/kill_job, jobs, per-signal dispositions and registration, immutable outcomes and revocation. Unhandled signals apply their default action immediately; handled signals retain the guest's own exit. Optional per-browser pool. Tests: delayed first activation while another shell task runs; one Ctrl+C stops an unhandled program with 130; a SIGINT handler exits 0 and keeps 0; removing it restores default; handled EPIPE retains its status. | 1,200-1,800 |
 | 4b | **Pipes.** Per-writer rings built from `SharedPipe`, reader merging, relay mode for multiple reading processes, reference counts, readiness, the `runtime_proc` imports. Tests: inherited concurrent writers, inherited readers, kill between a writer's check and publish, output queued before a kill still drained, a delayed publish after a kill never read, zero-length and partial I/O. | 1,000-1,500 |
 | 4c | **Process gate for the shell.** The own-shell spike's section 8 gate on real workers: external producer and consumer with a builtin filter, bounded flow and early reader close across workers, interrupt while WASM runs, descendant kill with reaping, an inherited nonstandard fd closed by the parent right after spawn, a background job surviving one command and controlled by the next. Runs against a preview1 fixture until the shell lands. | 500-800 |
@@ -335,8 +333,8 @@ A bounded preparation reproduction exited and job-reaped 100 leaf children under
 It left one process record, one job and one live transport, but retained 100 compact child
 identities and 101 parent edges. All children shared the root's single directory. The 101-entry
 used-PID and used-job ledgers intentionally enforce never-reuse and are **not** this finding.
-Suspect `runtime/proc/worker-broker.ts` (`retainIdentity` / `reapTransports`) and
-`runtime/proc/table.ts` (`parents` / `remove`). No worker, channel or filesystem backend is needed.
+Suspect Waffle `proc/worker-broker.ts` (`retainIdentity` / `reapTransports`) and
+`proc/table.ts` (`parents` / `remove`). No worker, channel or filesystem backend is needed.
 
 Reproduce from an exclusive checkout, through the PC light queue (use the matching canonical
 queue on another host). The command creates only in-memory transports and releases them in
@@ -344,14 +342,15 @@ queue on another host). The command creates only in-memory transports and releas
 
 ```sh
 source env.sh
+cd web # Resolve bare waffle imports from the installed consumer.
 bun /work/platform-production/heavy/current/run.js --class light waffle-empty-subtrees -- timeout 7200 bun -e "$(cat <<'TS'
-import { DescriptorTable } from './runtime/core/descriptors.ts';
-import { ProcessIdentityAllocator } from './runtime/proc/identity.ts';
-import { ProcessTable } from './runtime/proc/table.ts';
-import { ExecutableRegistry } from './runtime/proc/registry.ts';
-import { ProcessSupervisor } from './runtime/proc/supervisor.ts';
-import { WorkerProcessBroker } from './runtime/proc/worker-broker.ts';
-import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from './runtime/proc/worker-client.ts';
+import { DescriptorTable } from 'waffle/core/descriptors';
+import { ProcessIdentityAllocator } from 'waffle/proc/identity';
+import { ProcessTable } from 'waffle/proc/table';
+import { ExecutableRegistry } from 'waffle/proc/registry';
+import { ProcessSupervisor } from 'waffle/proc/supervisor';
+import { WorkerProcessBroker } from 'waffle/proc/worker-broker';
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState } from 'waffle/proc/worker-client';
 const ids = new ProcessIdentityAllocator(), table = new ProcessTable(ids), registry = new ExecutableRegistry();
 registry.register('fixture', { module: new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0])), adapter: 'fixture' });
 const supervisor = new ProcessSupervisor({ table, registry, retainJobResults: true, launch: () => ({ terminate() {} }) });
@@ -422,6 +421,70 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
 - brush-web `plans/001-brush-dev-shell.md`, `plans/004-own-shell.md` and `docs/external-commands.md`.
 - Spike reports: `/work/reports/browser-runtime/spikes/`.
 
+
+## Installer filesystem link prerequisite
+
+Status: Approved. Runtime track bun-wasm-a8 owns this after the waffle extraction.
+
+Workspace installs and local package links need symbolic links. The page
+filesystem only models files and directories (`runtime/fs/memory.ts`, `Node`).
+Its preview1 adapter returns `ENOTSUP` from `path_symlink` and rejects readlink
+because the filesystem has no links. Native installer and root-preopen Node-host
+fixtures support them.
+
+Package bin links no longer block page installs. The installer warns per link
+when creation returns ENOTSUP or EPERM, continues installation and writes the
+lockfile. `bun run` and `bunx` read installed package manifests when their bin
+entry is absent. Other link errors stay fatal. This permits the native installer
+gains to land before the runtime track adds page filesystem links.
+
+Run the focused page scenario after building the web app and all wasm artifacts:
+
+```sh
+source env.sh
+PLAYWRIGHT=/home/shaul/.local/share/mise/installs/npm-playwright/1.63.0/node_modules/.mise/playwright@1.63.0/node_modules/playwright/index.mjs \
+  node web/tests/browser-installer-links.ts
+```
+
+Use the heavy wrapper's browser class on this host. The scenario serves only a
+local fixture registry and installs a scoped package with two bin entries. It
+checks per-link warnings, a lockfile, `bun run`, package scripts, `bunx`, and a
+fatal non-link error on Chromium and WebKit with all three engines. Its session owns browser, listener and scratch cleanup.
+
+Implement relative symbolic links through the filesystem model, service protocol,
+shared metadata, persistence and preview1 operations. Preserve the raw link target
+for readlink, follow intermediate links when resolving paths, honor final-component
+follow flags, bound cycles, and keep directory capability boundaries intact. A
+workspace must remain live after source edits; copied package directories are not
+an equivalent fix. Package command entries must select the actual entry file so
+its argv, module directory and main-module identity stay correct.
+
+Keep the existing hardlink, rename/unlink identity, descriptor transfer, worker
+revocation and persistence tests. Add single-root and non-root preopen cases,
+scoped package bins, workspace cycles, dangling links, lstat/readlink versus stat,
+and persistence/reload coverage. Rerun the focused page scenario on Chromium and
+WebKit across all engines, then the complete runtime, web and HMR gates.
+
+The headless browser comparison has a separate native Node WASI limitation. In
+`cli/install/bun-install-link-path.test.ts`, a normal relative workspace link under
+`/tmp` reports `Capabilities insufficient (os error 76)` on Node, while native
+QuickJS/JSC proceed to later diagnostic assertions. Reproduce with
+`scripts/bun-suite.sh --engine browser --jobs 1 --timeout 15 --network loopback
+cli/install/bun-install-link-path.test.ts --output <fresh-json>`. A preview1-only
+control now reproduces that divergence on Node v26.7.0: creating the relative
+link `project/node_modules/dep -> ../packages/dep` returns errno 76 with a `/tmp`
+preopen, while Node's root preopen and wasmtime 49.0.3 with the same `/tmp`
+preopen both succeed. The source and output are retained in
+`/work/reports/upstream-bugs/node-wasi-relative-symlink-2026-10-17/` and the shared
+upstream report index, ready for the owner to file. Nothing was posted upstream.
+Do not broaden the suite runner's capabilities, replace workspace links with
+stale copies, or claim single-root fixtures establish multi-preopen conformance.
+
+The historical pre-fallback Chromium/browser probe was run on 2026-10-17. Plain installation
+exited 0; the guest confirmed `bin["is-odd"] === "index.js"`; the next install
+exited 1 with `error: Not supported (os error 58)`. The failure is at the
+filesystem prerequisite, not at registry resolution or tarball extraction.
+Evidence is retained with the installer lane's measured before/after results.
 ## Safari workspace ownership
 
 Status: Approved. Implemented in PR #62, awaiting independent review.

@@ -1,1 +1,1 @@
-import "@bun-wasm/runtime/browser/fs-worker";
+import "waffle/browser/fs-worker";

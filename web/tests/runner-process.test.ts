@@ -1,14 +1,14 @@
-import type { RootProcessOptions } from "../../runtime/proc";
+import type { RootProcessOptions } from "waffle/proc";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { ENGINES, startRun, type Engine } from "../src/runner";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { RunRequest } from "../src/worker";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome";
-import { createSignalState, setSignalDisposition, takeSignal } from "../../runtime/proc/signals";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
+import { createSignalState, setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { SubprocessHost, type ChildTransport } from "../src/subprocess";
-import { createFilesystemIdentity } from "../../runtime/fs";
+import { createFilesystemIdentity } from "waffle/fs";
 
 function runConfirmation(run: ReturnType<typeof startRun>) {
   let confirmed = false;
@@ -567,7 +567,7 @@ for (const acknowledged of [false, true]) test(`runner root job completion uses 
 });
 
 test("run.done waits for deferred root activation and descriptor release", async () => {
-  const proc = await import("../../runtime/proc");
+  const proc = await import("waffle/proc");
   let broker!: SubprocessBroker;
   let activate!: () => void;
   const activation = new Promise<void>(resolve => { activate = resolve; });
@@ -619,7 +619,7 @@ test("run.done waits for deferred root activation and descriptor release", async
 });
 
 for (const partial of [false, true]) test(`run.done safely handles rejected deferred process activation (partial root ${partial})`, async () => {
-  const proc = await import("../../runtime/proc");
+  const proc = await import("waffle/proc");
   let broker!: SubprocessBroker;
   let failActivation!: () => void;
   const failure = new Error("process module could not initialize");
@@ -690,6 +690,18 @@ test("run.done confirms after the filesystem fence without awaiting physical wor
     expect(terminate).toHaveBeenCalledTimes(1);
     // The returned physical-termination promise is deliberately still unresolved.
   } finally { release(); terminate.mockRestore(); await state.dispose(); }
+});
+
+test("typed root startup failures preserve their diagnostic and shell status", async () => {
+  const state = isolatedRoot();
+  try {
+    await state.ready;
+    claimOutcome(outcomeWord(state.request.outcome), { kind: "start-failed", code: 13 });
+    state.worker.onmessage?.(new MessageEvent("message", { data: { type: "error", code: 126, message: "invalid executable", sleep: "atomics" } }));
+    state.release();
+    expect(await state.run.done).toEqual({ code: 126, error: "bun.wasm crashed: invalid executable" });
+    expect(state.worker.terminated).toBe(1);
+  } finally { await state.dispose(); }
 });
 
 for (const terminal of [{ code: 0 }, { code: 143, signal: 15 }]) test(`worker cleanup fault preserves status ${terminal.code} but requires a root admission fence`, async () => {

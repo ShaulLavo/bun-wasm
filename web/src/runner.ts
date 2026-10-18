@@ -2,7 +2,7 @@
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
 // and the sandbox (../sandbox/).
 
-import type { Runtime } from "@bun-wasm/runtime";
+import type { Runtime } from "waffle";
 import { isToolCommand } from "./tool-command";
 import { NetHelper } from "./net/helper";
 import { createRing } from "./net/ring";
@@ -11,8 +11,9 @@ import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-ca
 import { measureStartup } from "./startup";
 import { SubprocessBroker } from "./subprocess-broker";
 import { createProcessBudget } from "./subprocess";
-import { createSignalState } from "@bun-wasm/runtime/proc/signals";
-import { claimOutcome, outcomeWord, readOutcome } from "@bun-wasm/runtime/proc/outcome";
+import { createSignalState } from "waffle/proc/signals";
+import { waitStatus } from "waffle/proc/wait-status";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
 import type { Engine, RunRequest, WorkerMessage } from "./worker";
 
 export type { Engine } from "./worker";
@@ -125,16 +126,11 @@ async function loadVerifiedTools(url: string, progress: (text: string) => void):
   const cached = await cachedEngine(key, build);
   if (cached) {
     const bytes = new Uint8Array(await cached.arrayBuffer());
-    try {
-      await verifyArtifact("bun-tools.wasm", bytes, build);
-    } catch (error) {
-      await evictEngine(key);
-      throw error;
-    }
+    try { await verifyArtifact("bun-tools.wasm", bytes, build); }
+    catch (error) { await evictEngine(key); throw error; }
     progress(`compiling cached bun-tools.wasm (${mb(bytes.length)})…`);
     return { module: await WebAssembly.compile(bytes), size: bytes.length, build };
   }
-
   progress("downloading bun-tools.wasm…");
   const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
   let response = await fetch(`${gzUrl}?v=${build}`);
@@ -148,9 +144,7 @@ async function loadVerifiedTools(url: string, progress: (text: string) => void):
   await verifyArtifact("bun-tools.wasm", wasm, build);
   progress(`compiling bun-tools.wasm (${mb(wasm.length)})…`);
   const module = await WebAssembly.compile(wasm);
-  if (await cacheEngine(key, build, new Response(wasm, { headers: { "content-type": "application/wasm", "content-length": String(wasm.length) } }))) {
-    performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
-  }
+  await cacheEngine(key, build, new Response(wasm, { headers: { "content-type": "application/wasm", "content-length": String(wasm.length) } }));
   return { module, size: wasm.length, build };
 }
 
@@ -247,7 +241,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const isolated = globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== "undefined";
   const generic = !!options.runtimeProcess || WebAssembly.Module.imports(options.module).some(entry =>
     entry.module === "runtime_proc" && !["signal", "interrupted", "default_signal"].includes(entry.name));
-  const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("@bun-wasm/runtime/fs").FilesystemIdentity } | undefined)?.filesystem;
+  const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("waffle/fs").FilesystemIdentity } | undefined)?.filesystem;
   const pid = options.runtime.identities.pid(), job = options.runtime.identities.job();
   const request: RunRequest = {
     engine: options.engine,
@@ -339,8 +333,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (rootOutcome) {
       const winner = claimOutcome(rootOutcome, signal === undefined
         ? { kind: "exited", code: result.code } : { kind: "signaled", code: signal });
-      result = winner.kind === "exited" && winner.code === result.code && result.error
-        ? { code: winner.status, error: result.error } : { code: winner.status };
+      result = (winner.kind === "start-failed" || winner.kind === "exited" && winner.code === result.code) && result.error
+        ? { code: waitStatus(winner), error: result.error } : { code: waitStatus(winner) };
     }
     if (!ownedDisposal) subprocess.revokeRuntimeProcess(rootPid);
     selectedResult = result;
@@ -430,7 +424,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const preparation = prepared ? undefined : (async () => {
     if (tooling) request.module = await loadTools();
     if (generic) {
-      const { workerProcessState, createWorkerProcessTransport } = await import("@bun-wasm/runtime/proc/worker-client");
+      const { workerProcessState, createWorkerProcessTransport } = await import("waffle/proc/worker-client");
       const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
       const state = workerProcessState(transport);
       // The host endpoint and descriptor reservations use the same filesystem identity.
@@ -438,10 +432,11 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       transport.data = { ...(transport.data as object | undefined), filesystem };
       await subprocess.adoptRuntimeRoot(transport);
       rootOutcome = state.signals.outcome;
+      request.outcome = rootOutcome;
       rootPid = request.pid = state.pid;
       rootJob = request.jobId = state.job;
-    } else if (isolated) await subprocess.prepareRoot();
-    if (generic || isolated) releaseRootConsumer();
+    } else await subprocess.prepareRoot();
+    releaseRootConsumer();
     prepared = true;
     if (!finished) {
       worker.postMessage(request, [request.filesystem.port]);
@@ -456,7 +451,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       const result = readOutcome(rootOutcome!);
       // A guest can catch a default-signal unwind and keep running. Its already selected fatal
       // outcome is authority to revoke, not an acknowledgement that filesystem locks are free.
-      if (result?.kind === "signaled") finish({ code: result.status }, false, result.code);
+      if (result?.kind === "signaled") finish({ code: waitStatus(result) }, false, result.code);
       else watchOutcome();
     }, 4);
   }
@@ -473,7 +468,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     // HANDLE/IGNORE stays alive; DEFAULT selects its typed outcome without guest cooperation.
     void subprocess.killJob(rootJob, signal).catch(error => console.error("bun-wasm: job signal failed", error));
     const result = readOutcome(rootOutcome!);
-    if (result) finish({ code: result.status }, false, result.kind === "signaled" ? result.code : undefined);
+    if (result) finish({ code: waitStatus(result) }, false, result.kind === "signaled" ? result.code : undefined);
   };
   return { done, kill };
 }

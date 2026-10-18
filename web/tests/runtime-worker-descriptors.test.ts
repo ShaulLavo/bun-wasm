@@ -1,3 +1,4 @@
+import { waitStatus } from "waffle/proc/wait-status";
 import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -6,23 +7,24 @@ import { tmpdir } from "node:os";
 import { buildBrowserEntries, resolveRuntimePackage } from "../../scripts/browser-build";
 import { initialJavaScript } from "../../scripts/runtime-size";
 import { runInNewContext } from "node:vm";
-import { DescriptorTable, OpenDescription } from "@bun-wasm/runtime/core/descriptors";
-import { FilesystemClient, FilesystemService, MemoryBackend, connectFilesystemIdentity, createFilesystemConnection, createProcessFilesystemIdentity, revokeFilesystem, sharedRevoked } from "@bun-wasm/runtime/fs";
-import * as protocol from "@bun-wasm/runtime/fs/protocol";
-import * as codec from "@bun-wasm/runtime/proc/filesystem-codec";
-import * as client from "@bun-wasm/runtime/proc/worker-client";
-import * as pipes from "@bun-wasm/runtime/proc/worker-pipes";
-import * as abi from "@bun-wasm/runtime/proc/abi";
-import * as terminals from "@bun-wasm/runtime/browser/runtime-terminals";
-import { claimOutcome, outcomeWord, readOutcome } from "@bun-wasm/runtime/proc/outcome";
+import { DescriptorTable, OpenDescription } from "waffle/core/descriptors";
+import { FilesystemClient, FilesystemService, MemoryBackend, connectFilesystemIdentity, createFilesystemConnection, createProcessFilesystemIdentity, revokeFilesystem, sharedRevoked } from "waffle/fs";
+import * as protocol from "waffle/fs/protocol";
+import * as codec from "waffle/proc/filesystem-codec";
+import * as client from "waffle/proc/worker-client";
+import * as pipes from "waffle/proc/worker-pipes";
+import * as abi from "waffle/proc/abi";
+import * as terminals from "waffle/browser/runtime-terminals";
+import { claimOutcome, outcomeWord, processOutcome, readOutcome } from "waffle/proc/outcome";
 import { SubprocessHost } from "../src/subprocess";
-import { fatalInterrupt } from "@bun-wasm/runtime/interrupt/check";
-import { requestSignal, setSignalDisposition, SIGNAL_PENDING } from "@bun-wasm/runtime/proc/signals";
+import { fatalInterrupt } from "waffle/interrupt/check";
+import { requestSignal, setSignalDisposition, SIGNAL_PENDING } from "waffle/proc/signals";
 import { DefaultSignal } from "../src/default-signal";
 import type { RunRequest, WorkerMessage } from "../src/worker";
 
+const runtimePackage = resolveRuntimePackage(new URL(import.meta.url).pathname);
 const source = new Bun.Transpiler({ loader: "ts", target: "browser" }).transformSync(
-  (readFileSync(new URL(import.meta.resolve("@bun-wasm/runtime/browser/worker")), "utf8") + "\n" +
+  (readFileSync(runtimePackage.source("waffle/browser/worker"), "utf8") + "\n" +
     readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8"))
     .replace(/^import .*;\n/gm, "")
     .replace(/^export /gm, "")
@@ -77,6 +79,8 @@ test("worker installs arbitrary file, dup and directory bindings before launch w
     const context = {
       crossOriginIsolated: true, location: { href: "http://localhost/worker.js" },
       postMessage(message: WorkerMessage) { sent.push(message); },
+      addEventListener() {},
+      removeEventListener() {},
       onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
     };
     const memory = new WebAssembly.Memory({ initial: 1 });
@@ -84,7 +88,7 @@ test("worker installs arbitrary file, dup and directory bindings before launch w
     runInNewContext(source, {
       self: context, performance, Response, TextEncoder, URL, console, Error,
       SharedArrayBuffer, Atomics, Int32Array, BigInt64Array,
-      FilesystemClient, revokeFilesystem, sharedRevoked, SubprocessHost, claimOutcome, outcomeWord, readOutcome,
+      FilesystemClient, revokeFilesystem, sharedRevoked, SubprocessHost, claimOutcome, outcomeWord, processOutcome, readOutcome, waitStatus,
       loadRuntime: async (name: string) => ({ client, codec, protocol, pipes, abi, terminals })[name as "client"],
       HOST_CALL_FD: 3,
       WebAssembly: { Memory: WebAssembly.Memory, Instance: class { exports = { memory, _start() {} }; } },
@@ -159,6 +163,8 @@ for (const failure of ["client", "codec", "protocol", "pipes", "abi", "terminals
   const context = {
     crossOriginIsolated: true, location: { href: "http://localhost/worker.js" },
     postMessage(message: WorkerMessage) { sent.push(message); },
+    addEventListener() {},
+    removeEventListener() {},
     onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
   };
   let descriptors: DescriptorTable | undefined;
@@ -180,7 +186,7 @@ for (const failure of ["client", "codec", "protocol", "pipes", "abi", "terminals
         connection = filesystem;
         dispose() { disposed = true; events.push("dispose fs"); }
       },
-      revokeFilesystem, sharedRevoked, SubprocessHost, claimOutcome, outcomeWord, readOutcome,
+      revokeFilesystem, sharedRevoked, SubprocessHost, claimOutcome, outcomeWord, processOutcome, readOutcome, waitStatus,
       loadRuntime: async (name: string) => {
         if (name === failure) throw new Error(`startup ${failure} rejected`);
         if (name === "codec" && failure === "binding") return {
@@ -207,7 +213,8 @@ for (const failure of ["client", "codec", "protocol", "pipes", "abi", "terminals
     });
     await expect(context.onmessage({ data: {
       engine: "browser", adapter: "preview1", module: {} as WebAssembly.Module, args: [], env: {},
-      filesystem, runtimeProcess: transport, trace: false, net: null, moduleCache: null,
+      filesystem, runtimeProcess: transport, outcome: client.workerProcessState(transport).signals.outcome,
+      trace: false, net: null, moduleCache: null,
     } })).resolves.toBeUndefined();
     expect(launched).toBe(false);
     expect(disposed).toBe(true);
@@ -219,8 +226,8 @@ for (const failure of ["client", "codec", "protocol", "pipes", "abi", "terminals
     if (failure === "binding") {
       expect(events).toEqual(["dispose default", "dispose inherited", "dispose fs"]);
       expect(descriptors!.get(17)).toBeUndefined();
-      expect(readOutcome(client.workerProcessState(transport).signals.outcome)).toMatchObject({ kind: "exited", code: 126 });
     }
+    expect(readOutcome(client.workerProcessState(transport).signals.outcome)).toMatchObject({ kind: "start-failed", code: 13, error: "EACCES", status: null });
   } finally { descriptors?.dispose(); filesystem.port.close(); connection.server.port.close(); }
 });
 
@@ -241,6 +248,7 @@ for (const mode of ["sync", "caught", "error", "rejection"] as const) test(`gene
     fetch: async () => new Response(),
     postMessage(message: WorkerMessage) { sent.push(message); },
     addEventListener(name: string, listener: (event: { error?: unknown; reason?: unknown; preventDefault(): void }) => void) { listeners.set(name, listener); },
+    removeEventListener(name: string) { listeners.delete(name); },
     onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
   };
   try {
@@ -251,7 +259,7 @@ for (const mode of ["sync", "caught", "error", "rejection"] as const) test(`gene
         connection = connection.client;
         dispose() { disposed = true; }
       },
-      revokeFilesystem, sharedRevoked, SubprocessHost, claimOutcome, outcomeWord, readOutcome,
+      revokeFilesystem, sharedRevoked, SubprocessHost, claimOutcome, outcomeWord, processOutcome, readOutcome, waitStatus,
       loadRuntime: async (name: string) => ({ client, codec, protocol, pipes, abi, terminals })[name as "client"],
       HOST_CALL_FD: 3,
       WebAssembly: { Memory: WebAssembly.Memory, Instance: class {
@@ -314,6 +322,8 @@ for (const kind of ["wasi", "abi"] as const) for (const phase of ["before", "aft
   const context = {
     crossOriginIsolated: true, location: { href: "http://localhost/worker.js" },
     postMessage(message: WorkerMessage) { sent.push(message); },
+    addEventListener() {},
+    removeEventListener() {},
     onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
   };
   try {
@@ -321,7 +331,7 @@ for (const kind of ["wasi", "abi"] as const) for (const phase of ["before", "aft
       self: context, performance, Response, TextEncoder, URL, console, Error,
       SharedArrayBuffer, Atomics: atomics, Int32Array, BigInt64Array,
       FilesystemClient: class { connection = connection.client; dispose() {} },
-      revokeFilesystem, sharedRevoked, SubprocessHost, claimOutcome, outcomeWord, readOutcome,
+      revokeFilesystem, sharedRevoked, SubprocessHost, claimOutcome, outcomeWord, processOutcome, readOutcome, waitStatus,
       loadRuntime: async (name: string) => name === "abi" ? {
         ...abi, ProcessABI: class extends abi.ProcessABI {
           constructor(options: abi.ProcessABIOptions) { super(options); abiOptions = options; }
@@ -368,6 +378,8 @@ for (const kind of ["signaled", "exited"] as const) test(`injected runtime worke
   const context = {
     crossOriginIsolated: true, location: { href: "http://localhost/worker.js" },
     postMessage(message: WorkerMessage) { sent.push(message); },
+    addEventListener() {},
+    removeEventListener() {},
     onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
   };
   try {
@@ -377,7 +389,7 @@ for (const kind of ["signaled", "exited"] as const) test(`injected runtime worke
       self: context, performance, Response, TextEncoder, URL, console, Error,
       SharedArrayBuffer, Atomics, Int32Array, BigInt64Array,
       FilesystemClient: class { connection = connection.client; dispose() {} },
-      revokeFilesystem, sharedRevoked, SubprocessHost, claimOutcome, outcomeWord, readOutcome, fatalInterrupt,
+      revokeFilesystem, sharedRevoked, SubprocessHost, claimOutcome, outcomeWord, processOutcome, readOutcome, waitStatus, fatalInterrupt,
       loadRuntime: async (name: string) => ({ client, codec, protocol, pipes, abi, terminals })[name as "client"],
       HOST_CALL_FD: 3,
       WebAssembly: { Memory: WebAssembly.Memory, Instance: class {

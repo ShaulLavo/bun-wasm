@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { createSignalState } from "../../runtime/proc/signals";
-import { createWorkerProcessTransport, workerProcessState } from "../../runtime/proc/worker-client";
+import { createSignalState } from "waffle/proc/signals";
+import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import type { RunRequest } from "../src/worker";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
 

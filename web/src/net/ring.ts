@@ -1,1 +1,1 @@
-export * from "@bun-wasm/runtime/browser/net/ring";
+export * from "waffle/browser/net/ring";

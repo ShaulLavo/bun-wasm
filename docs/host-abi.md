@@ -124,6 +124,11 @@ at once; the request proceeds in the background. Errors that are known
 immediately (malformed URL, unsupported scheme) may be returned as `-1` with
 `error(0, …)` describing them.
 
+Installer requests set `credentialPolicy` to `"package"`. Each redirect destination
+must use HTTP or HTTPS without userinfo, a query or embedded npm auth options.
+Redirects drop sensitive headers whenever the scheme, host or effective port changes.
+Host traces report request, response and error sizes without printing payloads or headers.
+
 ### `fetch_head(handle, buf_ptr, buf_cap) -> len`
 
 `AGAIN` until the response head is available. Then writes JSON:
@@ -284,8 +289,24 @@ The browser registers `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and
 `/usr/local/bin/node` with the page/root command's selected engine and compiled module.
 `bun-quickjs`, `bun-jsc` and `bun-browser` select an engine explicitly. Generic aliases keep
 using the page/root engine even when an explicitly selected child uses another engine.
-A browser start failure appears through `child_wait`: 127 for an
-unregistered executable, 126 for a registered executable that cannot start.
+[Waffle #5](https://github.com/ShaulLavo/waffle/pull/5) supplies typed startup
+failures with ENOENT or EACCES and no exit status. The Bun adapter preserves this
+result separately from ordinary program exits of 127 or 126.
+
+The Bun slot adapter waits for the execution worker's startup acknowledgement
+before returning a child. The transport's control int32 at index 2 is zero while
+startup is pending and one after successful instantiation or confirmed completion;
+publication wakes that cell. Failure completion still follows filesystem quiescence.
+The Node host uses a separate supervisor worker to publish pre-bootstrap failures
+and early exits while the spawning thread waits.
+A failed start returns -1 and a host error containing code, negative errno and path.
+Bun's spawn APIs throw ENOENT or EACCES. Node's spawn emits error then close without
+spawn or exit, and its synchronous API returns the error with null status and signal.
+Node errors also contain syscall and spawnargs. No exit-127 child is returned.
+
+The shell and `runtime_proc` wait adapters map the same typed startup failure to
+an ordinary wait status 127 for ENOENT or 126 for EACCES. Ordinary program exits
+of 127 or 126 retain their own exit kind.
 `env` replaces the child environment; the host sets `PWD` to `cwd` because the
 WASI guest changes directory there at startup. Each stdio mode is `pipe`,
 `inherit`, or `ignore`. Inheritance refers to the immediate parent's stream,

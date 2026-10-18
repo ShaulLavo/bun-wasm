@@ -12,15 +12,41 @@ const configurationChecks = readFileSync(new URL("../../tests/fixtures/lint-fmt-
 const configurationExpected = readFileSync(new URL("../../tests/fixtures/lint-fmt-config/expected.txt", import.meta.url), "utf8").trim().split("\n");
 const executableAliases = ["bun", "/bun", "/usr/local/bin/bun", "node", "/node", "/usr/local/bin/node"];
 const apiProgram = `
-import { spawnSync, execSync } from "node:child_process";
+import { spawn, spawnSync, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 const cmd = code => [process.execPath, "-e", code];
 for (const alias of ${JSON.stringify(executableAliases)}) {
   const child = Bun.spawnSync([alias, "-e", "console.log('alias-ready')"]);
   console.log("api alias", alias, child.exitCode, JSON.stringify(child.signalCode), JSON.stringify(child.error ?? null), child.stdout.toString().trim());
 }
-const missing = Bun.spawnSync(["bun-wasm-command-does-not-exist"]);
-console.log("api unknown", missing.exitCode, JSON.stringify(missing.signalCode), JSON.stringify(missing.error ?? null), missing.success);
+for (const method of ["spawn", "spawnSync"]) {
+  try {
+    Bun[method](["bun-wasm-command-does-not-exist"]);
+    console.log("api unknown", method, false);
+  } catch (error) {
+    console.log("api unknown", method, error.code === "ENOENT" && error.errno === -2 && error.path === "bun-wasm-command-does-not-exist");
+  }
+}
+const missing = spawn("bun-wasm-command-does-not-exist", ["argument"]);
+const events = [];
+const failed = await new Promise(resolve => {
+  let failure;
+  const timer = setTimeout(() => { missing.kill(); resolve(false); }, 1000);
+  missing.on("spawn", () => events.push("spawn"));
+  missing.on("exit", () => events.push("exit"));
+  missing.on("error", error => { failure = error; events.push("error"); });
+  missing.on("close", (code, signal) => {
+    clearTimeout(timer);
+    events.push("close");
+    resolve(failure?.code === "ENOENT" && failure.errno === -2 && failure.path === "bun-wasm-command-does-not-exist" &&
+      failure.syscall === "spawn bun-wasm-command-does-not-exist" && failure.spawnargs.join() === "argument" &&
+      missing.pid === undefined && code === -2 && signal === null && events.join() === "error,close");
+  });
+});
+const missingSync = spawnSync("bun-wasm-command-does-not-exist", ["argument"]);
+console.log("api unknown node", failed, missingSync.error?.code === "ENOENT" && missingSync.error.errno === -2 &&
+  missingSync.error.path === "bun-wasm-command-does-not-exist" && missingSync.error.syscall === "spawnSync bun-wasm-command-does-not-exist" &&
+  missingSync.error.spawnargs.join() === "argument" && missingSync.status === null && missingSync.signal === null);
 const sync = Bun.spawnSync(cmd("console.log(process.env.VALUE); console.error('err')"), { env: { VALUE: "fresh" } });
 console.log("api sync", sync.exitCode, sync.stdout.toString().trim(), sync.stderr.toString().trim());
 const input = Bun.spawn(cmd("console.log((await Bun.stdin.text()).length)"), { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
@@ -103,12 +129,17 @@ for (const [signal, number] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]]
     }
   }
 }
-console.log("api cwd", Bun.spawnSync(cmd("0"), { cwd: "/missing-child-cwd" }).error.code);
+try {
+  Bun.spawnSync(cmd("0"), { cwd: "/missing-child-cwd" });
+  console.log("api cwd", false);
+} catch (error) {
+  console.log("api cwd", error.code);
+}
 `;
 const apiExpected = [
   "api nodefsstdin 0 stdin", "api sync 0 fresh err", "api input 0 1200000", "api files 0 child shared",
   "api nested 0 0 99", "api exec 42", "api cycle 0 ab", "api timeout SIGKILL ETIMEDOUT", "api cwd ENOENT",
-  "api live child", "api ack 0", "api unknown 127 null null false",
+  "api live child", "api ack 0", "api unknown spawn true", "api unknown spawnSync true", "api unknown node true true",
   "api term 23 23 23 null true", "api term 143 143 143 null true",
   'api term timeout default null "SIGTERM" true false null',
 ].concat(executableAliases.map(alias => `api alias ${alias} 0 null null alias-ready`), [["SIGINT", 130], ["SIGTERM", 143], ["SIGPIPE", 141]].flatMap(([signal, status]) => [

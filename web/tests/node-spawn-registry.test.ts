@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { SubprocessHost, type ChildTransport } from "../src/subprocess.ts";
-import { launchNodeExecutable, nodeModule } from "../scripts/node-spawn.ts";
+import { SubprocessHost, childTransport, type ChildTransport } from "../src/subprocess.ts";
+import { launchNodeExecutable } from "../scripts/node-spawn.ts";
 
 for (const executable of ["bun", "/bun", "/usr/local/bin/bun", "node", "/node", "/usr/local/bin/node"]) test(`Node host registry explicitly resolves ${executable}`, () => {
   let launched = 0;
   const host = new SubprocessHost({ output() {}, launch(meta, transport) {
-    return launchNodeExecutable(meta, transport, () => { launched++; return { terminate() {} }; });
+    return launchNodeExecutable(meta, transport, () => { launched++; childTransport(transport).started(); return { terminate() {} }; });
   } });
   try {
     const pid = host.spawn(JSON.stringify({ argv: [executable, "argument"] }));
@@ -20,25 +20,15 @@ test("Node host does not silently execute Bun for a missing registry entry", () 
   let child: ChildTransport | undefined;
   const host = new SubprocessHost({ output() {}, launch(meta, transport) {
     child = transport;
-    return launchNodeExecutable(meta, transport, () => { launched++; return { terminate() {} }; });
+    return launchNodeExecutable(meta, transport, () => { launched++; childTransport(transport).started(); return { terminate() {} }; });
   } });
   try {
     const pid = host.spawn(JSON.stringify({ executable: "missing", argv: ["missing"] }));
-    expect(pid).toBeGreaterThan(1);
+    expect(pid).toBe(-1);
     expect(launched).toBe(0);
-    expect(host.wait(pid)).toBe(127);
-    expect(child?.pid).toBe(pid);
-    expect(new TextDecoder().decode(host.read(host.pipe(pid, 2)) as Uint8Array)).toContain("missing");
+    expect(child?.pid).toBeGreaterThan(1);
+    expect(JSON.parse(host.lastError!)).toMatchObject({ code: "ENOENT", errno: -2, path: "missing" });
+    expect(host.children.size).toBe(0);
+    expect(host.handles.size).toBe(0);
   } finally { host.dispose(); }
-});
-
-test("Node commands only require the tools file for lint and fmt", async () => {
-  const baseModule = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-  const wasmPath = "/missing-bun-wasm-tools-fixture/engine.wasm";
-  for (const args of [["run", "lint"], ["-e", "fmt"], ["build", "fmt"]]) {
-    expect(await nodeModule({ args, baseModule, wasmPath })).toBe(baseModule);
-  }
-  for (const args of [["lint"], ["--cwd", "project", "fmt"]]) {
-    await expect(nodeModule({ args, baseModule, wasmPath })).rejects.toMatchObject({ code: "ENOENT" });
-  }
 });

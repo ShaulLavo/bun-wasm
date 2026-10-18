@@ -2,7 +2,7 @@ import { relative, join, resolve, isAbsolute, dirname } from "node:path";
 import { existsSync, realpathSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
-const runtimeName = "@bun-wasm/runtime";
+const runtimeName = "waffle";
 
 /** Resolve only the consuming installation, without assuming checkout/cache directory names. */
 export function resolveRuntimePackage(consumerEntry: string) {
@@ -55,7 +55,7 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
   let runtimePackage: RuntimePackage | undefined;
   if (options.runtimeWorker) {
     runtimePackage = resolveRuntimePackage(main);
-    entrypoints = entrypoints.concat([runtimePackage.source("@bun-wasm/runtime/browser/preview1-worker")]);
+    entrypoints = entrypoints.concat([runtimePackage.source("waffle/browser/preview1-worker")]);
   }
   return {
     entrypoints, outdir, target: "browser", format: "esm",
@@ -67,7 +67,7 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
       setup(build) {
         // Shared web sources still use the app's installation. Explicit package
         // exports enforce the boundary; dotted Git-cache names are opaque paths.
-        build.onResolve({ filter: /^@bun-wasm\/runtime(?:\/|$)/ }, ({ path }) => {
+        build.onResolve({ filter: /^waffle(?:\/|$)/ }, ({ path }) => {
           runtimePackage ??= resolveRuntimePackage(main);
           return { path: runtimePackage.source(path) };
         });

@@ -1,14 +1,14 @@
 import { processRuntimeFixture } from "./process-runtime-fixture";
-import type { Runtime } from "@bun-wasm/runtime";
+import type { Runtime } from "waffle";
 import { expect, test } from "bun:test";
-import { createFilesystemIdentity, revokeFilesystem } from "../../runtime/fs";
-import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "../../runtime/proc/worker-client";
-import { DescriptorTable } from "../../runtime/core/descriptors";
+import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
+import { DescriptorTable } from "waffle/core/descriptors";
 import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess-broker";
-import { WorkerPipeBroker } from "../../runtime/proc/worker-pipes";
-import { PipeController, attachPipePublicationRegistry, type PipePublicationRegistryHandle } from "../../runtime/proc/pipes";
-import { setSignalDisposition, takeSignal } from "../../runtime/proc/signals";
-import { readOutcome } from "../../runtime/proc/outcome";
+import { WorkerPipeBroker } from "waffle/proc/worker-pipes";
+import { PipeController, attachPipePublicationRegistry, type PipePublicationRegistryHandle } from "waffle/proc/pipes";
+import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
+import { readOutcome } from "waffle/proc/outcome";
 import { suppressBudgetNotifications } from "./engine-interruption-probe";
 import { startRun, type RunOptions } from "../src/runner";
 import type { RunRequest } from "../src/worker";
@@ -142,7 +142,7 @@ test("UI signals freeze canonical root pipe publication only for fatal actions",
   } finally { controller?.dispose(); await await state.dispose(); }
 });
 
-function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("../../runtime/proc")> }) {
+function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("waffle/proc")> }) {
   const ports: MessagePort[] = [];
   const filesystem = {
     connect(identity: object) {
@@ -275,7 +275,7 @@ test("explicit root metadata without a filesystem forks an identity and preserve
 
 test("pipe-only generic work uses the responsive relay without activating the process supervisor", async () => {
   let activations = 0;
-  const state = registryFixture({ activate: async () => { activations++; return import("../../runtime/proc"); } });
+  const state = registryFixture({ activate: async () => { activations++; return import("waffle/proc"); } });
   let controller: PipeController | undefined;
   try {
     await state.broker.adoptRuntimeRoot(state.root);
@@ -342,7 +342,7 @@ for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
     const pid = state.client.spawn(1, { executable: "refused", argv: [], env: {}, cwd: "/", job: 1,
       fds: [{ child: 2, parent: fd }] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
-    expect((await state.broker.wait(pid)).status).toBe(126);
+    expect(await state.broker.wait(pid)).toEqual({ kind: "start-failed", code: 13, error: "EACCES", status: null });
     expect(output).toHaveLength(1);
     expect(output[0]!.fd).toBe(2);
     expect(output[0]!.text).toMatch(refusal === "SIMD" ? /Cannot instrument WebAssembly:.*SIMD/ : /require source bytes/);

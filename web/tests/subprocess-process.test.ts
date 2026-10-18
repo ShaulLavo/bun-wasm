@@ -1,7 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { CHILD_FINAL_SIGNAL, SubprocessHost, childTransport, type ChildTransport } from "../src/subprocess.ts";
-import { claimOutcome, outcomeWord, readOutcome } from "../../runtime/proc/outcome.ts";
-import { createSignalState, setSignalDisposition, SignalDisposition } from "../../runtime/proc/signals.ts";
+import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
+import { createSignalState, setSignalDisposition, SignalDisposition } from "waffle/proc/signals";
 
 function fixture() {
   const launched: ChildTransport[] = [];

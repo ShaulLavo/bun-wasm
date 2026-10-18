@@ -125,9 +125,10 @@ role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `1
 
 ## How it works
 
-- `src/fs.ts`: the in-memory filesystem (plain objects, so it can be structured-cloned).
-- `src/wasi.ts`: a WASI preview1 implementation over it. Any import it does not implement gets an
-  ENOSYS stub that prints `[wasi] unimplemented import …` once.
+- `waffle/fs/memory`: the in-memory filesystem used by the host adapters; `src/fs.ts` re-exports
+  this installed Waffle package entrypoint for standalone consumers.
+- `waffle/core/wasi`: the WASI preview1 implementation over the Waffle filesystem service. Any import
+  it does not implement gets an ENOSYS stub that prints `[wasi] unimplemented import …` once.
 - `src/worker.ts`: each `bun …` command starts a fresh worker, instantiates the precompiled module,
   streams `fd_write` on fds 1/2 back as it happens, and uses the live filesystem service.
   Ctrl-C sends SIGINT: an ordinary program stops immediately with 130; a registered handler may
@@ -144,7 +145,7 @@ bun.wasm must `chdir($PWD)` at startup for relative paths to resolve from `/home
 ## Bun subprocess workers
 
 When the page is cross-origin isolated, the subprocess ABI reserves a pid immediately and the
-page broker lazily loads `runtime/proc` to start one worker per process. A synchronous wasm call
+page broker lazily loads Waffle's `proc/` service to start one worker per process. A synchronous wasm call
 cannot block that startup. The executable registry maps a name to a compiled module and guest
 adapter; modules are shared between fresh workers, never retained guest instances. `bun`, `/bun`,
 `node`, `/node`, `/usr/local/bin/bun` and `/usr/local/bin/node` select Bun light. `bun-quickjs`, `bun-jsc` and `bun-browser` select

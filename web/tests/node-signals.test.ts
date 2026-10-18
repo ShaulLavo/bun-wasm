@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createNodeSignalController } from "../scripts/node-signals.ts";
-import { setSignalDisposition, takeSignal, createSignalState } from "../../runtime/proc/signals.ts";
+import { setSignalDisposition, takeSignal, createSignalState } from "waffle/proc/signals";
 
 for (const signal of [2, 15, 13]) {
   test(`Node root default ${signal} seals typed status before worker teardown`, () => {
@@ -72,13 +72,15 @@ const terminalFunctions = nodeHost.slice(terminalStart, terminalEnd);
 for (const mode of ["raise", "pending-removal", "checkpoint"]) test(`Node ${mode} cannot catch default and continue I/O or an endless loop`, () => {
   const controllerUrl = new URL("../scripts/node-signals.ts", import.meta.url).href;
   const subprocessUrl = new URL("../src/subprocess.ts", import.meta.url).href;
+  const statusUrl = import.meta.resolve("waffle/proc/wait-status");
   const workerSource = `
     import { parentPort, workerData } from "node:worker_threads";
     (async () => {
       const { createNodeSignalController } = await import(${JSON.stringify(controllerUrl)});
       const { SubprocessHost } = await import(${JSON.stringify(subprocessUrl)});
+      const { waitStatus } = await import(${JSON.stringify(statusUrl)});
       const signals = createNodeSignalController(workerData.buffers);
-      new Function("signals", "nodeProcess", "child", "cliFetch", "SubprocessHost", "notify", ${JSON.stringify(`
+      new Function("signals", "nodeProcess", "child", "cliFetch", "SubprocessHost", "notify", "waitStatus", ${JSON.stringify(`
         let subprocess;
         ${terminalFunctions}
         subprocess = new SubprocessHost({
@@ -93,7 +95,7 @@ for (const mode of ["raise", "pending-removal", "checkpoint"]) test(`Node ${mode
         } catch (error) { notify("caught"); }
         notify("forbidden I/O");
         for (;;) {}
-      `)})(signals, process, null, null, SubprocessHost, value => parentPort.postMessage(value));
+      `)})(signals, process, null, null, SubprocessHost, value => parentPort.postMessage(value), waitStatus);
     })().catch(error => { console.error(error); process.exit(1); });
   `;
   const driver = `

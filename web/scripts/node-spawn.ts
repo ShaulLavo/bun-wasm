@@ -8,12 +8,8 @@ const executables = new Set(["bun", "/bun", "/usr/local/bin/bun", "node", "/node
 
 export function launchNodeExecutable(meta: SpawnMeta, transport: ChildTransport, launch: () => ChildWorker): ChildWorker {
   const executable = meta.executable ?? meta.argv[0]!;
-  if (executables.has(executable)) return launch();
-  const child = childTransport(transport);
-  child.stderr.write(new TextEncoder().encode(`bun-wasm: executable not found: ${executable}\n`));
-  // Publish a wait result, not a synchronous spawn error. A microtask cannot run while the
-  // synchronous guest is polling spawnSync, so a known-missing entry completes here.
-  child.finish(127);
+  if (executables.has(executable)) return Object.assign(launch(), { starting: true as const });
+  childTransport(transport).startFailed("ENOENT");
   return { terminate() {} };
 }
 

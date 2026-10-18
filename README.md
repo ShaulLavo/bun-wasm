@@ -8,22 +8,15 @@ fill the gaps. We measure compatibility against [Bun's own test suite](docs/bun-
 [Runtime TypeScript](docs/runtime-typescript.md) describes the factory build and typecheck gate.
 
 - `bun run`, `bun test`, `bun build`, `Bun.build`, `bun:sqlite`, `fetch`, `Bun.serve`
-- Bun's real transpiler, bundler, native lint rules, and formatter
-- npm installs in every engine: `bun install`, `bun add`, `bun remove`, and `bun pm ls` ([details](docs/install.md))
+- Bun's real transpiler and bundler
+- npm installer and command adapters: `bun install`, `bun add`, `bun remove`, `bun update`, `bun x`, and `bun pm ls` ([host requirements and browser bin execution](docs/install.md))
 - In the browser: a playground ([web/](web/README.md)) and a React sandbox with hot reload ([sandbox/](sandbox/README.md))
 - JS engine: QuickJS or Bun's JavaScriptCore compiled to wasm, or the browser's own engine ([docs/engine-browser.md](docs/engine-browser.md))
 
 ```sh
 source env.sh && scripts/sync-bun.sh
-scripts/build-jsc.sh                  # native Yarr/WTF archives for lint and fmt
-scripts/build-bun-tools.sh            # dist/bun-tools.wasm, loaded only by lint/fmt
 scripts/build.sh                      # dist/bun.wasm
 wasmtime run --dir .::/ dist/bun.wasm run /index.ts
 ```
-
-`bun lint` and `bun fmt` use the on-demand `dist/bun-tools.wasm`. Keep it beside
-the default engine artifacts. The native launcher and browser/Node hosts select
-it for those commands. Configuration programs run in the selected default
-engine. Ordinary page loads, scripts, tests and builds do not load the tools.
 
 [Changes to Bun and vendored dependencies](docs/bun-patches.md) lists each patch and distinguishes port work, host features, and upstream bugs.

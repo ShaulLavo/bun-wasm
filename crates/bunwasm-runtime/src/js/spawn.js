@@ -63,7 +63,7 @@
     if (!Array.isArray(cmd) || !cmd.length) throw new TypeError("cmd must be a non-empty array");
     validateCommandLength(cmd);
     if (options.ipc !== undefined) throw unsupported("Child process IPC");
-    const argv = cmd.map(String);
+    const argv = internal.require("package_scripts").spawnArguments(cmd.map(String), options.cwd);
     if (argv.some((arg) => arg.includes("\0"))) throw new TypeError("Command arguments cannot contain null bytes");
     const proc = globalThis.process;
     if (!native.hostCaps.spawn) throw unsupported("Spawning a process without host process support");
@@ -375,6 +375,15 @@
     const EventEmitter = internal.require("events");
     const { Readable, Writable } = internal.builtin("node:stream");
 
+    function spawnError(error, command, args, sync) {
+      if (!error || typeof error !== "object" || (error.code !== "ENOENT" && error.code !== "EACCES")) return error;
+      const path = String(command);
+      const syscall = `${sync ? "spawnSync" : "spawn"} ${path}`;
+      return Object.assign(new Error(`${syscall} ${error.code}`), {
+        code: error.code, errno: error.code === "ENOENT" ? -2 : -13, syscall, path, spawnargs: args.map(String),
+      });
+    }
+
     function nodeOptions(options = {}) {
       const io = options.stdio === undefined ? "pipe" : options.stdio;
       const stdio = Array.isArray(io) ? io : [io, io, io];
@@ -437,6 +446,28 @@
       disconnect() { throw unsupported("Child process IPC"); }
     }
 
+    function reportStartFailure(child, options, error) {
+      const streams = options.stdio.map((mode, fd) => {
+        if (mode !== "pipe") return null;
+        if (fd === 0) return new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+        return new Readable({ read() {} });
+      });
+      child.stdin = streams[0];
+      child.stdout = streams[1];
+      child.stderr = streams[2];
+      child.stdio = streams;
+      const closed = streams.filter(Boolean).map((stream) => new Promise((resolve) => stream.once("close", resolve)));
+      const errno = error && typeof error === "object" && Number.isInteger(error.errno) ? error.errno : -2;
+      internal.nextTick(() => {
+        child.exitCode = errno;
+        if (child.stdin) child.stdin.destroy();
+        if (child.stdout) { child.stdout.push(null); child.stdout.resume(); }
+        if (child.stderr) { child.stderr.push(null); child.stderr.resume(); }
+        child.emit("error", error);
+        Promise.all(closed).then(() => child.emit("close", errno, null));
+      });
+    }
+
     function reportExit(child, code) {
       child.signalCode = child._child.signalCode;
       child.exitCode = child.signalCode === null ? code : null;
@@ -454,7 +485,8 @@
       child.spawnfile = String(command);
       child.spawnargs = argv;
       try { child._child = spawn(argv, options); } catch (error) {
-        internal.nextTick(() => { child.emit("error", error); child.emit("close", -2, null); });
+        error = spawnError(error, command, args, false);
+        reportStartFailure(child, options, error);
         return child;
       }
       child.pid = child._child.pid;
@@ -480,13 +512,15 @@
       const config = Object.assign({}, options);
       if (options.input !== undefined) config.stdio = [options.input].concat(options.stdio.slice(1));
       const result = spawnSync(argv, config);
+      if (result.error) result.error = spawnError(result.error, command, args, true);
+      const missing = result.pid === 0 && result.error && (result.error.code === "ENOENT" || result.error.code === "EACCES");
       const signal = result.signalCode;
       if (result.exitedDueToTimeout) result.error = Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT", errno: -110, syscall: "spawnSync", path: String(command) });
       const encoding = options.encoding;
-      const stdout = options.stdio[1] === "inherit" || options.stdio[1] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stdout.toString(encoding) : result.stdout;
-      const stderr = options.stdio[2] === "inherit" || options.stdio[2] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stderr.toString(encoding) : result.stderr;
+      const stdout = missing ? undefined : options.stdio[1] === "inherit" || options.stdio[1] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stdout.toString(encoding) : result.stdout;
+      const stderr = missing ? undefined : options.stdio[2] === "inherit" || options.stdio[2] === "ignore" ? null : encoding && encoding !== "buffer" ? result.stderr.toString(encoding) : result.stderr;
       return { pid: result.pid, status: result.error || signal ? null : result.exitCode, signal,
-        output: [null, stdout, stderr], stdout, stderr, error: result.error };
+        output: missing ? null : [null, stdout, stderr], stdout, stderr, error: result.error };
     }
 
     function failure(command, result) {
@@ -568,5 +602,9 @@
     return { ChildProcess, spawn: nodeSpawn, spawnSync: nodeSpawnSync, exec, execSync, execFile, execFileSync, fork };
   }
 
-  return { spawn, spawnSync, nodeChildProcess };
+  return { spawn, spawnSync(cmd, options) {
+    const result = spawnSync(cmd, options);
+    if (result.error && (result.error.code === "ENOENT" || result.error.code === "EACCES")) throw result.error;
+    return result;
+  }, nodeChildProcess };
 })

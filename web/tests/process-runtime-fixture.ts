@@ -1,16 +1,16 @@
-import { BrowserProcessBroker } from "@bun-wasm/runtime/browser/process-broker";
-import { ExecutableRegistry } from "@bun-wasm/runtime/proc/registry";
-import { ProcessIdentityAllocator } from "@bun-wasm/runtime/proc/identity";
-import { ProcessTable } from "@bun-wasm/runtime/proc/table";
-import { compileInterruptible } from "@bun-wasm/runtime/interrupt/loader";
-import type { Runtime, GuestLauncher, ProcessService, RuntimeFilesystem, RuntimeConsumer } from "@bun-wasm/runtime";
+import { BrowserProcessBroker } from "waffle/browser/process-broker";
+import { ExecutableRegistry } from "waffle/proc/registry";
+import { ProcessIdentityAllocator } from "waffle/proc/identity";
+import { ProcessTable } from "waffle/proc/table";
+import { compileInterruptible } from "waffle/interrupt/loader";
+import type { Runtime, GuestLauncher, ProcessService, RuntimeFilesystem, RuntimeConsumer } from "waffle";
 
 /** A process-only fixture: no page owner, filesystem worker, browser cache or service locator.
  * Production composition is covered by the runtime facade tests; these inject explicit owners
  * so legacy transport regressions can independently control filesystem and activation barriers.
  */
 export function processRuntimeFixture(filesystem: RuntimeFilesystem, options: {
-  activate?: () => Promise<typeof import("@bun-wasm/runtime/proc")>;
+  activate?: () => Promise<typeof import("waffle/proc")>;
 } = {}): Runtime {
   const identities = new ProcessIdentityAllocator();
   const registry = new ExecutableRegistry();

@@ -20,25 +20,19 @@ use super::{AGAIN, ByteQueue, ERROR, Notify, Output, READ_HIGH_WATER};
 const ACCEPT_ENCODING: &str = "gzip, deflate, br, zstd";
 const MAX_REDIRECTS: usize = 20;
 
-/// One HTTP client per redirect mode (reqwest sets the policy per client),
-/// created on first use so a program that never fetches pays nothing.
 #[derive(Default)]
 pub struct Clients {
-    follow: OnceLock<Client>,
     manual: OnceLock<Client>,
 }
 
 impl Clients {
-    fn get(&self, redirect: Redirect) -> Result<Client, reqwest::Error> {
-        let (cell, policy) = match redirect {
-            Redirect::Follow => (&self.follow, reqwest::redirect::Policy::limited(MAX_REDIRECTS)),
-            Redirect::Manual | Redirect::Error => (&self.manual, reqwest::redirect::Policy::none()),
-        };
+    fn get(&self) -> Result<Client, reqwest::Error> {
+        let cell = &self.manual;
         if let Some(client) = cell.get() {
             return Ok(client.clone());
         }
         let client = Client::builder()
-            .redirect(policy)
+            .redirect(reqwest::redirect::Policy::none())
             // Like Bun: no overall deadline; the guest aborts if it wants one.
             .timeout(None::<std::time::Duration>)
             .user_agent(concat!("bun-wasm/", env!("CARGO_PKG_VERSION")))
@@ -56,6 +50,8 @@ struct Meta {
     headers: Vec<(String, String)>,
     #[serde(default)]
     redirect: Option<String>,
+    #[serde(default, rename = "credentialPolicy")]
+    credential_policy: Option<String>,
 }
 
 fn default_method() -> String {
@@ -147,7 +143,8 @@ impl Fetch {
         let request = Request { method, url, headers, body };
 
         let shared = Arc::new(Shared { state: Mutex::new(State::default()), drained: Condvar::new() });
-        let job = Job { clients: clients.clone(), shared: shared.clone(), notify, redirect };
+        let package = meta.credential_policy.as_deref() == Some("package");
+        let job = Job { clients: clients.clone(), shared: shared.clone(), notify, redirect, package };
         thread::Builder::new()
             .name("bun-wasm-fetch".into())
             .spawn(move || job.run(request))
@@ -211,6 +208,7 @@ struct Job {
     shared: Arc<Shared>,
     notify: Arc<Notify>,
     redirect: Redirect,
+    package: bool,
 }
 
 impl Job {
@@ -218,17 +216,14 @@ impl Job {
         let url = request.url.to_string();
         let host = request.url.host_str().unwrap_or_default().to_string();
         let is_head = request.method == Method::HEAD;
-        let result = self.clients.get(self.redirect).and_then(|client| {
-            let mut builder = client.request(request.method, request.url.clone()).headers(request.headers);
-            if let Some(body) = request.body {
-                builder = builder.body(body);
-            }
-            builder.send()
-        });
+        let result = self.send(request.method, request.url.clone(), request.headers, request.body);
         let response = match result {
             Ok(response) => response,
             Err(error) => {
-                self.finish_head(Err(fetch_error(&error, &url, &host)));
+                self.finish_head(Err(match error {
+                    SendError::Network(error) => fetch_error(&error, &url, &host),
+                    SendError::Policy(error) => error,
+                }));
                 return;
             }
         };
@@ -280,6 +275,40 @@ impl Job {
         }
     }
 
+    fn send(&self, mut method: Method, mut url: Url, mut headers: HeaderMap, mut body: Option<Vec<u8>>) -> Result<reqwest::blocking::Response, SendError> {
+        let client = self.clients.get().map_err(SendError::Network)?;
+        for redirects in 0..=MAX_REDIRECTS {
+            let mut builder = client.request(method.clone(), url.clone()).headers(headers.clone());
+            if let Some(body) = &body {
+                builder = builder.body(body.clone());
+            }
+            let response = builder.send().map_err(SendError::Network)?;
+            let status = response.status();
+            let Some(location) = response.headers().get(http_header::LOCATION) else { return Ok(response); };
+            if self.redirect != Redirect::Follow || !matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
+                return Ok(response);
+            }
+            if redirects == MAX_REDIRECTS {
+                return Err(SendError::Policy(invalid("The response redirected too many times", "TooManyRedirects")));
+            }
+            let next = location.to_str().ok().and_then(|location| url.join(location).ok())
+                .ok_or_else(|| SendError::Policy(invalid("Invalid redirect URL", "ERR_INVALID_URL")))?;
+            if !matches!(next.scheme(), "http" | "https") || self.package && unsafe_package_redirect(&next) {
+                return Err(SendError::Policy(invalid("Credential-bearing or unsupported package redirect URL", "ERR_INVALID_URL")));
+            }
+            redirect_headers(&mut headers, &url, &next);
+            if status == StatusCode::SEE_OTHER && method != Method::HEAD || matches!(status.as_u16(), 301 | 302) && method == Method::POST {
+                method = Method::GET;
+                body = None;
+                headers.remove(http_header::CONTENT_LENGTH);
+                headers.remove(http_header::CONTENT_TYPE);
+                headers.remove(http_header::TRANSFER_ENCODING);
+            }
+            url = next;
+        }
+        unreachable!()
+    }
+
     /// Publishes the head. Returns false if the guest already aborted.
     fn finish_head(&self, head: Result<Vec<u8>, ErrorInfo>) -> bool {
         let mut state = self.shared.state.lock().unwrap();
@@ -321,6 +350,48 @@ impl Job {
             }
         }
     }
+}
+
+enum SendError {
+    Network(reqwest::Error),
+    Policy(ErrorInfo),
+}
+
+fn redirect_headers(headers: &mut HeaderMap, current: &Url, next: &Url) {
+    if current.origin() == next.origin() {
+        return;
+    }
+    for name in ["authorization", "cookie", "cookie2", "proxy-authorization", "www-authenticate"] {
+        headers.remove(name);
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    #[test]
+    fn redirect_authentication_uses_scheme_host_and_port() {
+        let current = Url::parse("https://registry.invalid:443/registry").unwrap();
+        for (destination, retained) in [
+            ("https://registry.invalid/archive", true),
+            ("http://registry.invalid:443/archive", false),
+            ("https://registry.invalid:444/archive", false),
+            ("https://other.invalid/archive", false),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(http_header::AUTHORIZATION, HeaderValue::from_static("Bearer fixture-scheme-secret"));
+            redirect_headers(&mut headers, &current, &Url::parse(destination).unwrap());
+            assert_eq!(headers.contains_key(http_header::AUTHORIZATION), retained, "{destination}");
+        }
+    }
+}
+
+fn unsafe_package_redirect(url: &Url) -> bool {
+    let text = url.as_str().to_ascii_lowercase();
+    !url.username().is_empty() || url.password().is_some() || url.query().is_some()
+        || [":_authtoken=", ":_auth=", ":username=", ":_username=", ":_password="]
+            .iter().any(|key| text.contains(key))
 }
 
 fn body_error(err: &io::Error) -> ErrorInfo {

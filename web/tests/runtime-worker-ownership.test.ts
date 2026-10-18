@@ -1,9 +1,9 @@
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { expect, test } from "bun:test";
-import { claimOutcome } from "../../runtime/proc/outcome";
-import { DescriptorTable } from "../../runtime/core/descriptors";
-import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "../../runtime/fs";
-import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "../../runtime/proc/worker-client";
+import { claimOutcome } from "waffle/proc/outcome";
+import { DescriptorTable } from "waffle/core/descriptors";
+import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "waffle/fs";
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { startRun } from "../src/runner";
 import type { SharedFilesystem } from "../src/shared-fs";
@@ -124,7 +124,7 @@ test("generic host failure confirms after its filesystem fence before physical t
     expect(state.quiescences()).toBe(1);
     expect(confirmedAtTermination).toBe(-1);
     state.release();
-    expect((await waiting).status).toBe(126);
+    expect((await waiting)).toMatchObject({ kind: "start-failed", error: "EACCES", status: null });
     await Promise.resolve();
     expect(Atomics.load(workerProcessState(transport).confirmed, 0)).toBe(1);
     expect(confirmedAtTermination).toBe(1);

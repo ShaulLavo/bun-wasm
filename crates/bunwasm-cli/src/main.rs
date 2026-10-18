@@ -12,11 +12,11 @@ Commands:
   run       ./my-script.ts       Execute a file with Bun
   test      [filters]            Run unit tests with Bun's test runner
   build     ./a.ts --outdir out  Bundle TypeScript & JavaScript into a single file
-  lint      [files]              Lint JavaScript and TypeScript
-  fmt       [files]              Format source files
   install, i                     Install dependencies
   add       <package>           Add dependencies
   remove    <package>           Remove dependencies
+  update    [package]           Update dependencies
+  x         <package>           Execute a package binary
   pm ls                          List installed dependencies
   <file>                         Same as `bun run <file>`
   -e, --eval <code>              Evaluate JavaScript source code
@@ -360,13 +360,11 @@ fn build(_: Vec<String>) -> i32 {
     1
 }
 
-mod tool_args;
-
 enum Command {
     Run(Entry, Vec<String>),
     Build(Vec<String>),
-    Lint,
     Install(String, Vec<String>),
+    X(Vec<String>),
     Print(String),
     Exit(i32),
 }
@@ -378,9 +376,6 @@ fn usage_error(message: &str) -> Command {
 }
 
 fn parse(args: Vec<String>) -> Command {
-    if tool_args::before_command(&args).is_some() {
-        return Command::Lint;
-    }
     parse_command(args, false)
 }
 
@@ -412,14 +407,14 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
                 let Some(code) = rest.next() else { return usage_error("--print requires code") };
                 return Command::Print(code);
             }
-            "lint" | "fmt" => return Command::Lint,
             "test" => return Command::Run(Entry::Test(rest.collect()), Vec::new()),
             "build" | "bun" => return Command::Build(rest.collect()),
-            "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm" =>
+            "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm" | "update" | "up" =>
                 return Command::Install(arg, rest.collect()),
-            "x" | "bunx" | "create" | "c" | "init" | "update" | "upgrade" | "link" | "unlink"
+            "x" | "bunx" => return Command::X(rest.collect()),
+            "create" | "c" | "init" | "upgrade" | "link" | "unlink"
             | "outdated" | "publish" | "patch" | "patch-commit" | "repl" | "info" | "why"
-            | "audit" | "completions" | "getcompletes" | "discord" | "exec" | "up" | "dedupe" | "prune" | "check"
+            | "audit" | "completions" | "getcompletes" | "discord" | "exec" | "dedupe" | "prune" | "check" | "lint" | "fmt"
             | "deploy" | "cloud" | "config" | "use" | "auth" | "login" | "logout" => {
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
@@ -469,17 +464,22 @@ fn main() {
         let _ = std::env::set_current_dir(&pwd);
     }
 
-    let command = parse(std::env::args().skip(1).collect());
+    let mut argv = std::env::args();
+    let executable = argv.next().unwrap_or_default();
+    let args = if executable.rsplit('/').next().unwrap_or("").trim_end_matches(".wasm") == "bunx" {
+        std::iter::once("x".to_owned()).chain(argv).collect()
+    } else { argv.collect() };
+    let command = parse(args);
     let (entry, args) = match command {
         Command::Exit(code) => std::process::exit(code),
-        Command::Lint => {
-            eprintln!("error: bun lint/fmt requires a host that loads dist/bun-tools.wasm");
-            std::process::exit(1);
-        }
         Command::Build(args) => std::process::exit(build(args)),
         Command::Install(command, args) => std::process::exit(
             bunwasm_runtime::install::run(&command, args, transpiler().as_ref())
         ),
+        Command::X(args) => match bunwasm_runtime::install::prepare_x(args, transpiler().as_ref()) {
+            Ok((file, args)) => (Entry::File(file), args),
+            Err(error) => { eprintln!("error: {error}"); std::process::exit(1); }
+        },
         Command::Run(entry, args) => (entry, args),
         // `-p`: evaluate an expression and print it like Bun.
         Command::Print(code) => {

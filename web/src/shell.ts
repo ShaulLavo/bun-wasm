@@ -2,7 +2,7 @@
 
 import type { Terminal } from "@xterm/xterm";
 import { basename, dirname, normalize } from "./fs";
-import type { RuntimeFilesystem } from "@bun-wasm/runtime";
+import type { RuntimeFilesystem } from "waffle";
 import { HOME } from "./examples";
 
 export interface Output {
@@ -30,7 +30,7 @@ const DIM = "\x1b[2m";
 const BOLD = "\x1b[1m";
 const RESET = "\x1b[0m";
 
-const COMMANDS = ["bun", "ls", "cat", "echo", "cd", "pwd", "mkdir", "rm", "mv", "touch", "edit", "clear", "history", "help"];
+const COMMANDS = ["bun", "bunx", "ls", "cat", "echo", "cd", "pwd", "mkdir", "rm", "mv", "touch", "edit", "clear", "history", "help"];
 
 interface Token {
   text: string;
@@ -427,6 +427,8 @@ export class Shell {
     switch (name) {
       case "bun":
         return this.host.runBun(args, this.cwd, io);
+      case "bunx":
+        return this.host.runBun(["x"].concat(args), this.cwd, io);
       case "help":
         io.out(
           [

@@ -2,8 +2,8 @@ import { observePromise } from "./promise-reactions.ts";
 import { installNativeStreamState } from "./native-stream-state.ts";
 import { oversizedCryptoInput } from "./crypto-inputs.js";
 import { installHostCrypto } from "./crypto-host.js";
-import { memoryViews } from "@bun-wasm/runtime/core/memory-views";
-import { transferArrayBuffers } from "./buffer-transfer.ts";
+import { memoryViews } from "waffle/core/memory-views";
+import { isWasmMemoryBuffer, transferArrayBuffers } from "./buffer-transfer.ts";
 import { ContentModules } from "./content-modules.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
@@ -462,7 +462,7 @@ class EngineHost {
       promiseResult: (p) => (host.promiseStates.get(p) || PENDING).value,
       promiseThen: (promise, fulfilled, rejected) => host.promiseThen(promise, fulfilled, rejected),
       isProxy: () => false,
-      transferArrayBuffers,
+      transferArrayBuffers, isWasmMemoryBuffer,
       getProxyTarget: () => undefined,
       isPromise: nativePromiseHasInstance,
       isError: (v) => (typeof Error.isError === "function" ? Error.isError(v) : v instanceof Error),
@@ -611,7 +611,7 @@ class EngineHost {
     const host = this;
     const hidden = (name, value) => Object.defineProperty(globalThis, name, { value, configurable: true, writable: true, enumerable: false });
     hidden("__bunwasm_meta", (meta, path) => {
-      host.internal.initImportMeta(meta, path, path === host.entry.main);
+      host.internal.initImportMeta(meta, path, path === host.internal.mainPath);
     });
     hidden("__bunwasm_dynamicImport", (from) => (spec) =>
       host.track(

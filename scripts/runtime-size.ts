@@ -37,7 +37,7 @@ export function checkCoreBudget(gzipBytes: number): void {
 export function processServiceInputs(inputs: readonly string[], runtime: RuntimePackage): string[] {
   return inputs.filter(path => {
     const match = /^(?:dist\/)?proc\/(.+)\.(?:ts|js)$/.exec(runtime.relativeInput(path) ?? "");
-    return match !== null && !["identity", "stub", "outcome", "signals", "types"].includes(match[1]!);
+    return match !== null && !["identity", "stub", "outcome", "wait-status", "signals", "types"].includes(match[1]!);
   });
 }
 export function checkLazyProcessService(inputs: readonly string[], runtime: RuntimePackage): void {
@@ -71,7 +71,7 @@ async function build(config: Parameters<typeof Bun.build>[0]) {
 async function layer(name: string, entries: readonly string[], guideKiB: number) {
   const outdir = resolve(root, ".runtime-size", name);
   const runtime = resolveRuntimePackage(resolve(root, "web/src/main.ts"));
-  const result = await build(browserBuildConfig(entries.map(path => path.startsWith("@bun-wasm/runtime") ? runtime.source(path) : resolve(root, path)), outdir));
+  const result = await build(browserBuildConfig(entries.map(path => path.startsWith("waffle") ? runtime.source(path) : resolve(root, path)), outdir));
   const files = await Promise.all(result.outputs.filter((output) => output.path.endsWith(".js")).map(async (output) => ({ path: posix.normalize(output.path), ...await bytes(output) })));
   const sizes = totals(files);
   return { name, entries, ...sizes, guideGzip: guideKiB * 1024, files };
@@ -133,11 +133,11 @@ async function application(name: "web" | "sandbox", splitting: boolean, serviceW
 export async function runtimeSizeReport() {
   const previewSocketScript = await previewWebsocketScript();
   const layers = await Promise.all([
-    layer("core", ["@bun-wasm/runtime/core"], CORE_BUDGET_KIB),
-    layer("fs", ["@bun-wasm/runtime/fs"], 6),
-    layer("net", ["@bun-wasm/runtime/browser/net/host", "@bun-wasm/runtime/browser/net/helper", "@bun-wasm/runtime/browser/preview"], 14),
-    layer("proc", ["@bun-wasm/runtime/proc"], 8),
-    layer("proc-stub", ["@bun-wasm/runtime/proc/stub", "@bun-wasm/runtime/proc/outcome"], 1),
+    layer("core", ["waffle/core"], CORE_BUDGET_KIB),
+    layer("fs", ["waffle/fs"], 6),
+    layer("net", ["waffle/browser/net/host", "waffle/browser/net/helper", "waffle/browser/preview"], 14),
+    layer("proc", ["waffle/proc"], 8),
+    layer("proc-stub", ["waffle/proc/stub", "waffle/proc/outcome"], 1),
     layer("bun-process-adapter", ["web/src/subprocess.ts", "web/src/subprocess-broker.ts"], 8),
   ]);
   // This separately linked preview client uses a source-wrapper plugin; measure its real build.

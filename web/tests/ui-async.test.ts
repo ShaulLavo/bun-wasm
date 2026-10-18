@@ -440,7 +440,7 @@ test("shell discards filesystem completion after the line was submitted", async 
 });
 
 async function filesystemFixture() {
-  const source = await Bun.file(new URL(import.meta.resolve("@bun-wasm/runtime/browser/shared-fs"))).text();
+  const source = await Bun.file(new URL(import.meta.resolve("waffle/browser/shared-fs"))).text();
   const code = source.slice(source.indexOf("export class SharedFilesystem")).replace("export class", "class");
   const Filesystem = new Function(`${transpiler.transformSync(code)}; return SharedFilesystem;`)();
   const fs = Object.create(Filesystem.prototype);

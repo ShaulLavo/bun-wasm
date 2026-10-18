@@ -1,7 +1,8 @@
 // Rust CLI commands run synchronously before the host JS engine starts. Keep
 // their fetches on a worker so WASI poll can wait without blocking Node I/O.
-import { memoryViews } from "@bun-wasm/runtime/core/memory-views";
+import { memoryViews } from "waffle/core/memory-views";
 import { MessageChannel, Worker, receiveMessageOnPort, workerData } from "node:worker_threads";
+import { packageFetch } from "../src/net/package-fetch.ts";
 
 const AGAIN = -2;
 const ERROR = -1;
@@ -23,7 +24,8 @@ function serve({ port, wake }) {
     const controller = new AbortController();
     requests.set(message.id, controller);
     try {
-      const response = await fetch(message.meta.url, {
+      const fetcher = message.meta.credentialPolicy === "package" ? packageFetch : fetch;
+      const response = await fetcher(message.meta.url, {
         method: message.meta.method, headers: message.meta.headers,
         redirect: message.meta.redirect, signal: controller.signal,
         body: message.body.length ? message.body : undefined,
@@ -71,6 +73,7 @@ export function installCliFetch(imports, getInstance, wake = new Int32Array(new 
   function start(meta, body) {
     worker ??= new Worker(new URL(import.meta.url), { workerData: { installFetch: true, port: port2, wake }, transferList: [port2] });
     const id = next++;
+    if (process.env.BUN_WASM_TRACE || process.env.WASI_TRACE) process.stderr.write(`[bun_wasm] fetch(${body.length} body bytes) -> ${id}\n`);
     handles.set(id, { offset: 0 });
     port1.postMessage({ id, meta, body });
     return id;

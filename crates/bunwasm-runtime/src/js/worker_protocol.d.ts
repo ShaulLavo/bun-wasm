@@ -65,6 +65,7 @@ declare namespace BunWasm {
     base64Encode(bytes: Uint8Array, url: boolean): string;
     base64Decode(value: string): Uint8Array;
     transferArrayBuffers(buffers: ArrayBuffer[]): void;
+    isWasmMemoryBuffer?(value: unknown): boolean;
     hostPoll(timeout: number): number;
   }
   interface WorkerChannel {
@@ -79,7 +80,7 @@ declare namespace BunWasm {
     require(name: "process"): GuestProcess;
     require(name: "worker_codec"): { create(hooks: WorkerCodecHooks): WorkerCodec };
     require(name: "worker_channel"): { open(input: number, output: number): WorkerChannel };
-    require(name: "worker_threads"): { initialize(): void };
+    require(name: "worker_threads"): { initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
     require(name: "net"): unknown;
     require(name: "node_url"): { fileURLToPath(url: URL): string };
     addIoWaiter(waiter: { ref: boolean; step(): boolean | "progress"; fail(error: unknown): void }): unknown;
@@ -129,3 +130,31 @@ declare namespace BunWasm {
     stderr: { write(chunk: unknown): unknown };
   }
 }
+
+declare namespace BunWasm {
+  interface WebWorkerOptions { name: string; preload: string[]; }
+  interface WebParentPort extends NodeEmitter, EventTarget {
+    start(): void;
+    postMessage(value: unknown, transfer?: unknown): void;
+  }
+  interface ThreadWorker extends NodeEmitter {
+    readonly threadId: number;
+    postMessage(value: unknown, transfer?: unknown): void;
+    ref(): unknown;
+    unref(): unknown;
+    terminate(): Promise<number | undefined>;
+  }
+  interface Native {
+    resolve(specifier: string, from: string, require: boolean): string;
+    workerSource(source: string, path: string): string;
+  }
+  interface Internal {
+    require(name: "web_worker"): { initialize(port: WebParentPort, options: WebWorkerOptions, webMessageEvent: (event: MessageEvent) => MessageEvent): void };
+    randomUUID(): string;
+    initImportMeta(meta: object, path: string, main: boolean): void;
+    runMain(path: string): unknown;
+    importModule(path: string): unknown;
+  }
+  interface GuestProcess { emit(event: string, value: unknown): boolean; }
+}
+interface Blob { _bytes(): Uint8Array; }

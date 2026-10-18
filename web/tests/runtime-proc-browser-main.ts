@@ -1,6 +1,6 @@
-import { createRuntime, type Runtime } from "@bun-wasm/runtime";
+import { createRuntime, type ProcessAdmissionEvent, type Runtime } from "waffle";
 import { startRun, type Run } from "../src/runner";
-import { createWorkerProcessTransport, workerProcessState } from "@bun-wasm/runtime/proc/worker-client";
+import { createWorkerProcessTransport, workerProcessDirectoryId, workerProcessState } from "waffle/proc/worker-client";
 import { runtimeProcChecks, runtimeProcFixture, runtimeProcStages, runtimeProcJobWaitChecks, runtimeProcJobWaitFixture, runtimeProcJobWaitStages } from "./runtime-proc-fixtures";
 
 // Diagnostic only: identify the exact BufferSource representation rejected by an engine.
@@ -116,7 +116,9 @@ const bootstrapURLs = new Set<string>();
 const blockingWaitEntries: number[] = [];
 const ioCalls: { worker: number; operation: "read" | "poll" | "interrupted"; result: number; fd?: number; length?: number; count?: number; timeout?: number; total: number; counts: Record<string, number> }[] = [];
 const launches: { worker: number; args: string[]; interruptible?: boolean; slot?: number }[] = [];
-const spawns: { worker: number; pid: number; parentPid: number; job: number; executable: string; argv: string[] }[] = [];
+const spawns: { worker: number; pid: number; parentPid: number; job: number; directory: string; executable: string; argv: string[] }[] = [];
+const admissions: (ProcessAdmissionEvent & { sequence: number })[] = [];
+let admissionReports = 0;
 let ioReports = 0;
 const NativeWorker = globalThis.Worker;
 const activeWorkers = new Set<Worker>();
@@ -156,7 +158,7 @@ globalThis.Worker = class extends NativeWorker {
       if (data.type === "runtime-proc") {
         if (data.operation === "spawn" && spawns.length < 32) {
           const { pid, parentPid, job } = workerProcessState(data.transport);
-          spawns.push({ worker, pid, parentPid, job, executable: data.request.executable, argv: data.request.argv.slice() });
+          spawns.push({ worker, pid, parentPid, job, directory: workerProcessDirectoryId(data.transport), executable: data.request.executable, argv: data.request.argv.slice() });
         }
         messages.push(data.operation);
         // A wait_job reaps synchronously in the guest before its notification reaches this page.
@@ -183,9 +185,22 @@ let run: Run | undefined;
 let settled = false;
 let result: Record<string, unknown>;
 let stdout = "", stderr = "";
+// Best-effort live evidence if the driver times out before teardown publishes the final result.
+// Preserve an already-selected failure boundary rather than replacing it with teardown time.
+Reflect.set(globalThis, "runtimeProcDiagnostics", () => result ?? {
+  stdout, stderr, messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns,
+  admissions, admissionReportsAtFailure: admissionReports, admissionReports, workerErrors, bufferDecode,
+  cleanup: { activeWorkers: activeWorkers.size, workersCreated },
+});
 try {
   equal(crossOriginIsolated, true, "SharedArrayBuffer isolation");
-  runtime = createRuntime({ filesystem: { workerURL: new URL("./fs-worker.js", location.href) } });
+  runtime = createRuntime({ filesystem: { workerURL: new URL("./fs-worker.js", location.href) },
+    onProcessAdmission(event) {
+      admissionReports++;
+      if (admissions.length === 128) admissions.shift();
+      admissions.push({ ...event, sequence: admissionReports });
+    },
+  });
   await runtime.filesystem.mkdirp("/home/user"); await runtime.filesystem.flush();
   const parameters = new URLSearchParams(location.search);
   const jobWait = parameters.has("job-wait");
@@ -213,6 +228,7 @@ try {
   equal(stderr, jobWait ? "" : "child-stderr\n", "inherited stderr target");
   equal(messages.filter(message => message === "pipe").length, jobWait ? 4 : 2, "all guest pipes published to responsive page broker");
   equal(messages.filter(message => message === "spawn").length, jobWait ? 4 : 1, "all guests launched by actual page broker");
+  for (const spawn of spawns) equal(admissions.some(event => event.pid === spawn.pid && event.directory === spawn.directory && event.stage === "received"), true, "each observed spawn reached the process broker with the same directory");
   if (jobWait) {
     equal(messages.filter(message => message === "signal").length, 1, "one real foreground job signal");
     equal(exits.length, 5, "shell, leader, descendant, grandchild and background all completed");
@@ -232,9 +248,9 @@ try {
   await runtime.dispose(); runtime = undefined;
   await until(() => activeWorkers.size === 0, "all task-created workers terminated");
   result = { ok: true, mode: explicit ? "explicit" : "automatic", scenario: jobWait ? "job-wait" : "pipes", checks, stdout,
-    messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, workerErrors, bufferDecode, cleanup: { activeWorkers: activeWorkers.size, workersCreated } };
+    messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, admissions, admissionReports, workerErrors, bufferDecode, cleanup: { activeWorkers: activeWorkers.size, workersCreated } };
 } catch (error) {
-  result = { ok: false, stdout, stderr, messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, workerErrors, bufferDecode,
+  result = { ok: false, stdout, stderr, messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, admissions, admissionReportsAtFailure: admissionReports, workerErrors, bufferDecode,
     error: error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error) };
 } finally {
   if (run && !settled) {
@@ -251,5 +267,5 @@ try {
   for (const url of bootstrapURLs) URL.revokeObjectURL(url);
   bootstrapURLs.clear();
   globalThis.Worker = NativeWorker;
-  Object.assign(globalThis, { runtimeProcResult: { ...result!, teardown: { forcedWorkers, activeWorkers: activeWorkers.size, error: teardownError } } });
+  Object.assign(globalThis, { runtimeProcResult: { ...result!, admissionReports, teardown: { forcedWorkers, activeWorkers: activeWorkers.size, error: teardownError } } });
 }
