@@ -255,28 +255,30 @@ function installDescriptors(imports: NodeWasiImports, memory: () => WebAssembly.
       return 0;
     });
   }
+  function getDescriptorMetadata(name: "fd_fdstat_get" | "fd_filestat_get",
+    call: NodeWasiImports["wasi_snapshot_preview1"][string] | undefined, fd: number, ptr: number) {
+    const entry = descriptors.get(fd! >>> 0);
+    if (!entry) return 8;
+    if (nativeDescriptor(entry) !== undefined) return call?.(fd!, ptr!) ?? 8;
+    const resource = entry.resource;
+    const nativeFd = "nativeFd" in resource ? resource.nativeFd : undefined;
+    if (typeof nativeFd === "number") {
+      const error = original[name]?.(nativeFd, ptr!) ?? 8;
+      if (error !== 0 || name === "fd_filestat_get") return error;
+    } else {
+      views().range(ptr!, name === "fd_fdstat_get" ? 24 : 64).fill(0);
+      views().view().setUint8(ptr! + (name === "fd_fdstat_get" ? 0 : 16), resource.kind === "pipe" ? 6 : 2);
+    }
+    const view = views().view();
+    if (name === "fd_fdstat_get") {
+      view.setBigUint64(ptr! + 8, entry.rightsBase, true);
+      view.setBigUint64(ptr! + 16, entry.rightsInheriting, true);
+    } else view.setBigUint64(ptr! + 24, 1n, true);
+    return 0;
+  }
   for (const name of ["fd_fdstat_get", "fd_filestat_get"] as const) {
     const call = wasi[name];
-    wasi[name] = guard((fd, ptr) => {
-      const entry = descriptors.get(fd! >>> 0);
-      if (!entry) return 8;
-      if (nativeDescriptor(entry) !== undefined) return call?.(fd!, ptr!) ?? 8;
-      const resource = entry.resource;
-      const nativeFd = "nativeFd" in resource ? resource.nativeFd : undefined;
-      if (typeof nativeFd === "number") {
-        const error = original[name]?.(nativeFd, ptr!) ?? 8;
-        if (error !== 0 || name === "fd_filestat_get") return error;
-      } else {
-        views().range(ptr!, name === "fd_fdstat_get" ? 24 : 64).fill(0);
-        views().view().setUint8(ptr! + (name === "fd_fdstat_get" ? 0 : 16), resource.kind === "pipe" ? 6 : 2);
-      }
-      const view = views().view();
-      if (name === "fd_fdstat_get") {
-        view.setBigUint64(ptr! + 8, entry.rightsBase, true);
-        view.setBigUint64(ptr! + 16, entry.rightsInheriting, true);
-      } else view.setBigUint64(ptr! + 24, 1n, true);
-      return 0;
-    });
+    wasi[name] = guard((fd, ptr) => getDescriptorMetadata(name, call, fd!, ptr!));
   }
   const setRights = wasi.fd_fdstat_set_rights;
   wasi.fd_fdstat_set_rights = guard((fd, base, inheriting) => {
