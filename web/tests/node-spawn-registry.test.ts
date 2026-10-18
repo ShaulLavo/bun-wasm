@@ -1,16 +1,20 @@
 import { expect, test } from "bun:test";
 import { ProcessSupervisor } from "waffle/proc/supervisor";
-import { createNodeExecutableRegistry, nodeExecutables, nodeModule } from "../scripts/node-spawn.ts";
+import { createNodeExecutableRegistry, nodeExecutables, nodeModule, NodeProcessBroker } from "../scripts/node-spawn.ts";
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
 for (const executable of nodeExecutables) test(`Node host registry explicitly resolves ${executable}`, async () => {
-  const registry = createNodeExecutableRegistry(module);
-  expect(await registry.resolve(executable)).toEqual({ module, adapter: "bun", interruptible: false });
+  const broker = new NodeProcessBroker({ module, launch() { throw new Error("unexpected launch"); } });
+  try {
+    const registry = createNodeExecutableRegistry(module, broker.preopens);
+    expect(await registry.resolve(executable)).toEqual({ module, adapter: "bun", interruptible: false });
+  } finally { await broker.dispose(); }
 });
 
 test("Node host does not silently execute Bun for a missing registry entry", async () => {
   let launched = 0;
-  const supervisor = new ProcessSupervisor({ registry: createNodeExecutableRegistry(module), launch() { launched++; return { terminate() {} }; } });
+  const broker = new NodeProcessBroker({ module, launch() { throw new Error("unexpected launch"); } });
+  const supervisor = new ProcessSupervisor({ registry: createNodeExecutableRegistry(module, broker.preopens), launch() { launched++; return { terminate() {} }; } });
   try {
     const parent = supervisor.createRoot();
     const exited = new Promise<void>(resolve => supervisor.onChildExit(() => resolve()));
@@ -18,7 +22,7 @@ test("Node host does not silently execute Bun for a missing registry entry", asy
     await exited;
     expect(launched).toBe(0);
     expect(supervisor.wait(parent, pid)).toEqual({ kind: "start-failed", code: 2, error: "ENOENT", status: null });
-  } finally { supervisor.dispose(); }
+  } finally { supervisor.dispose(); await broker.dispose(); }
 });
 
 
