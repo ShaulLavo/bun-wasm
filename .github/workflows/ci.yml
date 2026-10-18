@@ -136,8 +136,8 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts') }}-${{ hashFiles('crates/**') }}
-          restore-keys: native-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts') }}-
+          key: native-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts') }}-${{ hashFiles('crates/**') }}
+          restore-keys: native-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts') }}-
       - name: Install pinned Rust dependency checker
         run: |
           source env.sh
@@ -148,6 +148,8 @@ jobs:
         run: |
           source env.sh
           time bun scripts/build-wasi-sysroot.ts
+      - name: Preserve unchanged build-script input timestamps
+        run: bun scripts/quality-input-times.ts
       - name: Blocking quality gates
         run: |
           source env.sh

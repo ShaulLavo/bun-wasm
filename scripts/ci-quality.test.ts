@@ -17,7 +17,7 @@ test("native checks share one conditional job and the cached target directory", 
   expect(rust).toContain("CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target");
   expect(rust).toContain("${{ env.CARGO_TARGET_DIR }}");
   expect(rust).toContain("${{ env.CARGO_HOME }}/registry");
-  expect(rust).toContain("restore-keys: native-v2-");
+  expect(rust).toContain("restore-keys: native-v");
   expect(rust).not.toContain("Swatinem/rust-cache");
   expect(rust).toContain("bun run quality --native");
   expect(rust).not.toContain("cargo test");
@@ -46,4 +46,11 @@ test("type projects have one successful CI owner", () => {
   expect(manifest).not.toContain("&& tsc -p tsconfig.package.json &&");
   expect(web).toContain("tsc -p ../crates/bunwasm-runtime/tsconfig.json");
   expect(workflow.split("\n  package:\n")[1]!.split("\n  web:\n")[0]).toContain("bun run check");
+});
+
+test("both WASI feature graphs and the failing lint control stay blocking", () => {
+  const wasi = readFileSync(new URL("./quality-wasi.ts", import.meta.url), "utf8");
+  expect(wasi.match(/run\(command\.concat/g)).toHaveLength(2);
+  expect(wasi).toContain('"--no-default-features", "--features", "bunwasm-cli/engine-host,bunwasm-cli/bun-transpiler,bunwasm-cli/bun-build"');
+  expect(wasi).toContain('await verifyWasiLint(["cargo", "clippy"');
 });
