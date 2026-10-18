@@ -2883,8 +2883,10 @@ metadata capability errors. Waffle #34 grants FD_FILESTAT_GET to both pipe endpo
 descriptors keep those exact rights, so the real pipe-fstat controls succeed without bypassing
 metadata capability checks. No upstream implementation or new binding dependency is copied.
 The original `src/js/node_fs.js` Stats predicates test those type bits rather than hard-coding false.
-Its public readSync and callback read return zero before invoking the native for a zero-byte request,
-as native Node and Bun do even on a closed descriptor; direct native empty reads still validate it.
+Its public readSync and callback read validate buffer/offset/length arguments, then return zero before
+invoking the native for a zero-byte request, as native Node and Bun do even on a closed descriptor.
+A zero-byte request allows an offset beyond the buffer, and follows Bun in ignoring its position.
+Direct native empty reads still validate the descriptor.
 FileHandle.read checks the handle's closed state first, so closing a handle cannot be hidden by that
 public short-circuit. A parity table distinguishes these reads from empty writes, which still fail
 with EBADF. These are original adapters, not copied Node or Bun implementations.

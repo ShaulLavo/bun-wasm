@@ -479,13 +479,25 @@
   }
 
   function readOptions(buffer, offsetOrOptions, length, position) {
+    if (!ArrayBuffer.isView(buffer)) throw invalidArg("buffer", "an instance of Buffer, TypedArray, or DataView", buffer);
     let offset = offsetOrOptions;
-    if (offsetOrOptions !== null && typeof offsetOrOptions === "object") {
-      ({ offset = 0, length = buffer.byteLength - offset, position = null } = offsetOrOptions);
+    if (offsetOrOptions == null || typeof offsetOrOptions === "object") {
+      ({ offset = 0, length = buffer.byteLength - offset, position = null } = offsetOrOptions || {});
     }
-    offset = offset || 0;
+    if (typeof offset !== "number") throw invalidArg("offset", "of type number", offset);
+    if (!Number.isSafeInteger(offset) || offset < 0) throw readRange("offset", offset);
     if (length === undefined) length = buffer.byteLength - offset;
+    length = Number(length);
+    if (!Number.isSafeInteger(length) || length < 0) throw readRange("length", length);
+    // Zero-byte reads allow an offset beyond the view. Bun also ignores position in this case.
+    if (length === 0) return { offset, length, position };
+    if (buffer.byteLength === 0) throw Object.assign(new TypeError("The argument 'buffer' is empty and cannot be written"), { code: "ERR_INVALID_ARG_VALUE" });
+    if (offset > buffer.byteLength || length > buffer.byteLength - offset) throw readRange("length", length);
     return { offset, length, position };
+  }
+
+  function readRange(name, value) {
+    return Object.assign(new RangeError(`The value of "${name}" is out of range. Received ${value}`), { code: "ERR_OUT_OF_RANGE" });
   }
 
   function readSync(fd, buffer, offsetOrOptions, length, position) {

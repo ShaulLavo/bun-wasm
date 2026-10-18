@@ -240,13 +240,13 @@ test("non-stdin callback, readSync and FileHandle promise reads retain the synch
 });
 
 test("public empty-length I/O matches native Node and Bun on closed descriptors", async () => {
-  type Row = { name: string; expected: 0 | "EBADF"; run(fs: any, fd: number): unknown };
+  type Row = { name: string; expected: number | string; run(fs: any, fd: number): unknown };
   const readAsync = (fs: any, fd: number, buffer: Buffer, length: number) => new Promise((resolve, reject) => {
     fs.read(fd, buffer, 0, length, null, (error: unknown, count: number) => error ? reject(error) : resolve(count));
   });
   // Node 26.7.0 and Bun 1.4.2 agree on every row. readv/readvSync are a separate API
   // follow-up: Bun returns 0 for [], whereas Node returns EINVAL for an empty vector.
-  const rows: Row[] = [
+  const baseRows: Row[] = [
     { name: "readSync empty buffer", expected: 0, run: (fs, fd) => fs.readSync(fd, Buffer.alloc(0)) },
     { name: "readSync zero length", expected: 0, run: (fs, fd) => fs.readSync(fd, Buffer.alloc(4), 0, 0, null) },
     { name: "readSync options zero length", expected: 0, run: (fs, fd) => fs.readSync(fd, Buffer.alloc(4), { offset: 2, length: 0 }) },
@@ -264,6 +264,26 @@ test("public empty-length I/O matches native Node and Bun on closed descriptors"
       return (await handle.read(Buffer.alloc(0), 0, 0, null)).bytesRead;
     } },
   ];
+  const argumentCases: [string, unknown[], number | string][] = [
+    ["invalid buffer", [{ byteLength: 0 }, 0, 0, null], "ERR_INVALID_ARG_TYPE"],
+    ["negative offset", [Buffer.alloc(4), -1, 0, null], "ERR_OUT_OF_RANGE"],
+    ["fractional offset", [Buffer.alloc(4), 0.5, 0, null], "ERR_OUT_OF_RANGE"],
+    ["string offset", [Buffer.alloc(4), "0", 0, null], "ERR_INVALID_ARG_TYPE"],
+    ["negative length", [Buffer.alloc(4), 0, -1, null], "ERR_OUT_OF_RANGE"],
+    ["empty buffer positive length", [Buffer.alloc(0), 0, 1, null], "ERR_INVALID_ARG_VALUE"],
+    ["zero length beyond buffer", [Buffer.alloc(4), 5, 0, null], 0],
+    ["zero length beyond empty buffer", [Buffer.alloc(0), 1, 0, null], 0],
+  ];
+  const rows = baseRows.concat(argumentCases.flatMap<Row>(([name, args, expected]) => [
+    { name: `readSync ${name}`, expected, run: (fs, fd) => fs.readSync(fd, ...args) },
+    { name: `read callback ${name}`, expected, run: (fs, fd) => new Promise((resolve, reject) => {
+      fs.read(fd, ...args, (error: unknown, count: number) => error ? reject(error) : resolve(count));
+    }) },
+    { name: `FileHandle.read ${name}`, expected, run: async (fs) => {
+      const handle = await fs.promises.open("/file", "r");
+      return (await handle.read(...args)).bytesRead;
+    } },
+  ]));
   for (const row of rows) {
     const runtime = fixture([]);
     const fd = 37;
