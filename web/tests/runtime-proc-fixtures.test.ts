@@ -41,12 +41,12 @@ test("artifact-free process guest has only generic ABI and preview1 imports", ()
   expect(imports.every(item => item.module === "runtime_proc" || item.module === "wasi_snapshot_preview1")).toBe(true);
 });
 
-test("parent fixture keeps byte checks while retrying nonblocking AGAIN and short reads", () => {
+for (const executable of ["/bin/bun", "/fixtures/runtime-proc"]) test(`parent fixture ${executable} keeps byte checks while retrying nonblocking AGAIN and short reads`, () => {
   let memory: WebAssembly.Memory;
   let pipe = 0, reads = 0, waits = 0, polls = 0;
   const closed: number[] = [], writes: string[] = [];
   let spawned: unknown;
-  const instance = new WebAssembly.Instance(new WebAssembly.Module(runtimeProcFixture()), {
+  const instance = new WebAssembly.Instance(new WebAssembly.Module(runtimeProcFixture(executable)), {
     runtime_proc: {
       read(_fd: number, ptr: number, length: number) {
         reads++;
@@ -80,7 +80,7 @@ test("parent fixture keeps byte checks while retrying nonblocking AGAIN and shor
   });
   memory = instance.exports.memory as WebAssembly.Memory;
   (instance.exports._start as () => void)();
-  expect(spawned).toEqual({ executable: "/bin/bun", argv: ["abi-child"], env: { PWD: "/" }, cwd: "/", job: 1,
+  expect(spawned).toEqual({ executable, argv: ["abi-child"], env: { PWD: "/" }, cwd: "/", job: 1,
     fds: [{ child: 0, parent: 123 }, { child: 1, parent: 126 }, { child: 10, parent: 126 }, { child: 2, parent: 2 }, { child: 11, parent: 1 }] });
   expect(closed).toEqual([124, 125, 123, 126, 1124, 1125]);
   expect(writes).toEqual(["ping", "runtime-proc-ok\n"]);

@@ -390,9 +390,12 @@ handle retry loop for `NotReadableError`/`InvalidStateError` and its `QuotaExcee
 `ENOSPC` mapping are adapted here. The layout, snapshot recovery, Web Lock lifetime, lazy payload
 reads, browser-specific create concurrency and 64-handle cache are original Waffle behavior;
 no SLICC code is copied verbatim.
-The original Web Lock refusal now tells the user to close the owning tab and reload;
-lock acquisition and the adapted SLICC retry and quota behavior stay unchanged. The measured
-OPFS corpus and browser evidence are maintained with Waffle in
+The pinned Waffle ownership contract queues an occupied Web Lock instead of refusing it.
+The original playground UI adapter displays waiting, disables startup controls and continues
+automatically in the same document when the owner closes. Browser fixtures observe waiting,
+await disposal before reopening and retain acknowledged saved bytes without reload. The
+adapted SLICC retry and quota behavior stay unchanged. The measured OPFS corpus and browser
+evidence are maintained with Waffle in
 [`docs/benchmarks/filesystem-persistence-opfs-2026-10-17.json`](https://github.com/ShaulLavo/waffle/blob/main/docs/benchmarks/filesystem-persistence-opfs-2026-10-17.json).
 
 ## Filesystem quiescence
@@ -594,8 +597,8 @@ now send startup failures as plain message and stack fields before revoking pend
 Unprintable rejection reasons and throwing stack getters still produce a diagnostic, and a
 failed diagnostic transfer still dispatches the worker error fallback.
 The playground catches startup rejection, displays the complete diagnostic, and offers Reload.
-OPFS refuses an occupied Web Lock and explains how to release it. IndexedDB uses an original
-takeover adapter. A new holder steals the lock, allocates a persisted epoch, and checks that epoch
+OPFS waits for an occupied Web Lock, reports waiting in the UI and resumes automatically after
+the owner releases it. IndexedDB retains its default original takeover adapter. A new holder steals the lock, allocates a persisted epoch, and checks that epoch
 inside every write transaction. A displaced page stops persistence and preserves visible editor text.
 These changes extend bun-wasm's own adapters at `b14f536f`; no upstream implementation is copied.
 The original persistence browser fixtures in `web/tests/persistence-browser-{main,worker}.ts`

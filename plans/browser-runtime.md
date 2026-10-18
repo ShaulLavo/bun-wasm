@@ -343,6 +343,16 @@ Physical directory slots can be recycled; the replacement check requires retired
 capabilities to reject access with ESRCH after a subsequent admission, rather than demanding
 never-reused slot numbers. Startup failures assert their typed kind as well as 127/126 projection.
 The Chromium baseline comparison (`--benchmark`) needs a frozen pre-7b revision whose harness still builds.
+The byte-encoded `browser-runtime-proc.ts` fixture registers its own `/fixtures/runtime-proc`
+preview1 executable instead of accidentally requesting the real `/bin/bun` artifact. Both automatic
+and explicit root transports retain all pipe and blocking job-wait controls without guest downloads.
+
+Step 7b also consumes Waffle #21's queued OPFS ownership contract: storage smoke and lifecycle
+checks observe `waiting`, close the owner and require automatic readiness in the same page with
+saved bytes intact. Fixtures await filesystem disposal before replacement or teardown. The
+playground displays waiting and disables startup controls until setup completes. Actual editor
+checks cover this behavior with a disposable persistent profile (WebKit ephemeral profiles do not
+support OPFS); IndexedDB's existing default newest-writer takeover remains unchanged.
 
 ### Step 4c follow-up: reclaim empty nonroot bookkeeping
 

@@ -34,6 +34,42 @@ const timeout = setTimeout(() => {
   void cleanup().finally(() => process.exit(1));
 }, 90_000);
 
+async function opfsWaitCheck(base: string) {
+  // WebKit's ephemeral contexts reject OPFS. Match the lifecycle gate's real,
+  // task-owned persistent profile; cleanup removes it after both pages close.
+  const context = await browserType!.launchPersistentContext(join(scratch!, "opfs-editor-profile"), { headless: true });
+  const errors: string[] = [];
+  context.on("page", page => page.on("pageerror", error => errors.push(error.message)));
+  try {
+    const owner = await context.newPage();
+    await owner.goto(`${base}/playground/?storage=opfs`);
+    await owner.waitForFunction(() => !!(globalThis as any).playground?.editor || document.querySelector<HTMLElement>("#status")?.dataset.kind === "error");
+    assert.equal(await owner.evaluate(() => !!(globalThis as any).playground?.editor), true, await owner.locator("#status").innerText());
+    await owner.evaluate(async () => {
+      const fs = (globalThis as any).playground.fs;
+      await fs.writeFile("/home/user/index.ts", "console.log('queued owner save');");
+      await fs.flush();
+    });
+    const waiting = await context.newPage();
+    await waiting.goto(`${base}/playground/?storage=opfs`);
+    await waiting.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("Waiting for this workspace to close in another tab."));
+    for (const selector of ["#run", "#new-file", "#engine", "#file-select"]) {
+      assert.equal(await waiting.locator(selector).isDisabled(), true);
+    }
+    await waiting.evaluate(() => { (globalThis as any).queuedDocument = crypto.randomUUID(); });
+    const documentId = await waiting.evaluate(() => (globalThis as any).queuedDocument);
+    await owner.close();
+    await waiting.waitForFunction(() => !!(globalThis as any).playground?.editor);
+    assert.equal(await waiting.evaluate(() => (globalThis as any).queuedDocument), documentId);
+    assert.equal(await waiting.evaluate(async () => new TextDecoder().decode(await (globalThis as any).playground.fs.readFile("/home/user/index.ts"))), "console.log('queued owner save');");
+    for (const selector of ["#run", "#new-file", "#engine", "#file-select"]) {
+      assert.equal(await waiting.locator(selector).isEnabled(), true);
+    }
+    assert.deepEqual(errors, []);
+    console.log(`ok ${engine} playground: OPFS waiting UI, disabled startup controls, automatic readiness without reload and durable saves`);
+  } finally { await context.close(); }
+}
+
 async function startupStealChecks(base: string) {
   for (const app of ["sandbox", "playground"]) {
     for (const rejectPending of [false, true]) await startupSteal(base, app, rejectPending);
@@ -87,7 +123,7 @@ try {
         setup(build) {
           // Keep the page runtime and real filesystem worker. Pause the filesystem it
           // actually owns, not the old web re-export used only for message constants.
-          build.onResolve({ filter: /^\.\/browser\/shared-fs$/ }, () => {
+          build.onResolve({ filter: /^\.\/browser\/shared-fs\.js$/ }, () => {
             filesystemOwners++;
             return { path: join(root, "web/tests/fixtures/startup-filesystem.ts") };
           });
@@ -139,6 +175,7 @@ try {
   const base = `http://127.0.0.1:${server.port}`;
 
   await startupStealChecks(base);
+  await opfsWaitCheck(base);
   if (process.env.STARTUP_STEAL_ONLY !== "1") {
   await page.goto(`${base}/sandbox/`);
   await page.waitForFunction(() => (globalThis as any).sandbox?.editor.path === "src/App.tsx");

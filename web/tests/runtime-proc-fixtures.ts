@@ -73,9 +73,9 @@ function jsonNumber(local: number, end: number): number[] {
     get(8), c(1), [0x6b], set(8), get(7), c(10), [0x6e, 0x22, 7, 0x0d, 0, 0x0b]);
 }
 
-export function runtimeProcFixture(): Uint8Array<ArrayBuffer> {
+export function runtimeProcFixture(executable = "/bin/bun"): Uint8Array<ArrayBuffer> {
   const slots = { read: "@read@", write: "@write@", alias: "@alias@" };
-  let request = JSON.stringify({ executable: "/bin/bun", argv: ["abi-child"], env: { PWD: "/" }, cwd: "/", job: 1,
+  let request = JSON.stringify({ executable, argv: ["abi-child"], env: { PWD: "/" }, cwd: "/", job: 1,
     fds: [{ child: 0, parent: slots.read }, { child: 1, parent: slots.write }, { child: 10, parent: slots.alias },
       { child: 2, parent: 2 }, { child: 11, parent: 1 }] });
   const positions: number[] = [];
@@ -154,10 +154,10 @@ export const runtimeProcJobWaitStages: Readonly<Record<number, string>> = {
  * argc selects each real recursively launched guest. Job ids and inherited descriptors are filled
  * in guest memory, not injected by the browser. The two descendants hold their writer after the
  * leader exits and handle TERM without exiting until the shell releases their safe-exit gate. */
-export function runtimeProcJobWaitFixture(): Uint8Array<ArrayBuffer> {
+export function runtimeProcJobWaitFixture(executable = "/bin/bun"): Uint8Array<ArrayBuffer> {
   const memory = new Uint8Array(4096), encoder = new TextEncoder();
   function request(pointer: number, argc: number, fds: { child: number; parent: number | string }[], job: number | string = 0) {
-    let json = JSON.stringify({ executable: "/bin/bun", argv: Array.from({ length: argc }, () => "job"), env: { PWD: "/" }, cwd: "/", job, fds });
+    let json = JSON.stringify({ executable, argv: Array.from({ length: argc }, () => "job"), env: { PWD: "/" }, cwd: "/", job, fds });
     const slots: Record<string, number> = {};
     for (;;) {
       const match = /"@([a-z]+)@"/.exec(json);

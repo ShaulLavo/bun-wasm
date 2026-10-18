@@ -149,10 +149,10 @@ async function playwright(): Promise<Driver> {
 try {
   const driver = mode === "safari" ? await safari() : await playwright();
   const base = assets ?? `http://127.0.0.1:${server!.port}/`;
-  async function state() {
-    const value = await driver.evaluate("const end=Date.now()+15000;while(!globalThis.lifecycle?.ready&&!globalThis.lifecycle?.error){if(Date.now()>end)throw Error('filesystem startup timed out');await new Promise(r=>setTimeout(r,25))}return {ready:lifecycle.ready,error:lifecycle.error,id:lifecycle.id,events:JSON.parse(sessionStorage.getItem('lifecycle')??'[]'),locks:await navigator.locks.query()};");
+  async function state(allowWaiting = false) {
+    const value = await driver.evaluate(`const end=Date.now()+15000;while(!globalThis.lifecycle?.ready&&!globalThis.lifecycle?.error&&!(${allowWaiting}&&globalThis.lifecycle?.fs.state.status==='waiting')){if(Date.now()>end)throw Error('filesystem startup timed out');await new Promise(r=>setTimeout(r,25))}return {ready:lifecycle.ready,status:lifecycle.fs.state.status,error:lifecycle.error,id:lifecycle.id,events:JSON.parse(sessionStorage.getItem('lifecycle')??'[]'),locks:await navigator.locks.query()};`);
     assert.ok(record(value) && typeof value.id === "string" && typeof value.ready === "boolean" && typeof value.error === "string" && Array.isArray(value.events));
-    return { id: value.id, ready: value.ready, error: value.error, events: value.events.filter(record), locks: value.locks };
+    return { id: value.id, ready: value.ready, status: value.status, error: value.error, events: value.events.filter(record), locks: value.locks };
   }
   const loss = "This workspace was opened in another tab. Reload to continue here.";
   async function screenshot(name: string) {
@@ -231,7 +231,7 @@ try {
   const clean = await driver.open(); await driver.close(); await driver.select(clean);
   console.log(`ok ${mode} indexeddb: same-tab reopen, Reload, bfcache displacement, Reload after back, newest tab wins, edits retained, acknowledged saves preserved`);
 
-  report.phase = "opfs no-steal refusal and recovery";
+  report.phase = "opfs no-steal waiting and automatic recovery";
   const opfsUrl = new URL(`?storage=opfs&name=lifecycle-${crypto.randomUUID()}`, base).href;
   await driver.navigate(opfsUrl);
   const opfsInitial = await state();
@@ -239,16 +239,20 @@ try {
   await driver.evaluate("await lifecycle.fs.writeFile('/saved','opfs durable');await lifecycle.fs.flush();return true;");
   const opfsOwner = await driver.current(), blocked = await driver.open();
   await driver.select(blocked); await driver.navigate(opfsUrl);
-  const refused = await state();
-  assert.equal(refused.ready, false);
-  assert.match(refused.error, /OPFS filesystem already has a writer.*browser history/);
-  assert.ok(refused.error.includes("Saved files are kept."));
-  report.cases.push({ phase: report.phase, ...refused });
+  const waiting = await state(true);
+  assert.equal(waiting.ready, false);
+  assert.equal(waiting.status, "waiting");
+  assert.equal(waiting.error, "");
+  report.cases.push({ phase: report.phase, ...waiting });
   await screenshot("opfs");
-  await driver.select(opfsOwner); await driver.close(); await driver.select(blocked); await driver.reload();
-  assert.equal((await state()).ready, true);
+  await driver.select(opfsOwner);
+  await driver.evaluate("await lifecycle.fs.dispose();return true;");
+  await driver.close(); await driver.select(blocked);
+  const resumed = await state();
+  assert.equal(resumed.ready, true);
+  assert.equal(resumed.id, waiting.id, "queued page must recover without reload");
   assert.equal(await driver.evaluate("return new TextDecoder().decode(await lifecycle.fs.readFile('/saved'));"), "opfs durable");
-  console.log(`ok ${mode} opfs: no-steal refusal, complete diagnostic, saved files preserved after owner closes`);
+  console.log(`ok ${mode} opfs: no-steal waiting, automatic readiness without reload, saved files preserved after owner closes`);
   report.ok = true;
 } catch (error) {
   report.error = String(error); throw error;
