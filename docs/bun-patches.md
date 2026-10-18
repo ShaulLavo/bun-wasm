@@ -54,6 +54,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
+| [Vendor source synchronization](#vendor-source-synchronization) | Host feature | Original patch-tree verification updates existing clones and detached worktrees without overwriting local changes. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
 | [0003](#0003-transpiler-dependencies) | Port | Supply WASI wakers, CPU features, crash, and resolver implementations. |
@@ -2668,3 +2669,18 @@ Regression controls prove scratch-policy edits leave the stamp unchanged,
 compiler/header changes invalidate it, and identical staged files keep their
 timestamps. Stamp refresh still runs the normal incremental build; no check is
 bypassed.
+
+## Vendor source synchronization
+
+Class **Host feature**, original `scripts/sync-bun.sh` orchestration and
+`scripts/sync-bun.test.ts` fixtures; no upstream implementation is copied. The
+pinned Bun revision and checked-in patch series remain authoritative. Existing
+clones and linked worktrees (whose `.git` is a file) must be clean before sync.
+An isolated Git index derives the desired tree from every checked-in patch;
+matching shared `wasm` history can be reused, while a stale ref is reconstructed
+in an owned disposable worktree without resetting another checkout's branch.
+That temporary worktree and index are removed on both success and failure.
+`--source-only` verifies source without downloading dependencies or running
+codegen, and `--bun-dir` supports an explicit source checkout. Regression tests
+cover an old detached worktree, a stale shared ref, repeat sync, cleanup, and
+refusal to overwrite tracked or untracked work.

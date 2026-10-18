@@ -7,13 +7,76 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/env.sh"
 BUN_COMMIT=9510e74152073d850a18758ca41114d8f214ffa6
 bun_dir=$root/vendor/bun
+source_only=0
+new_checkout=0
+sync_args=("$@")
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --source-only) source_only=1; shift ;;
+    --bun-dir) bun_dir=${2:?--bun-dir requires a path}; shift 2 ;;
+    *) echo "usage: $0 [--source-only] [--bun-dir PATH]" >&2; exit 2 ;;
+  esac
+done
 
-if [ ! -d "$bun_dir/.git" ]; then
+# A linked worktree has a .git file, not a directory. Never replace an existing
+# directory that is not a Git checkout, or discard source changes during sync.
+if [[ ! -e "$bun_dir/.git" ]]; then
+  if [[ -e "$bun_dir" ]]; then
+    echo "error: $bun_dir exists but is not a Git checkout" >&2
+    exit 1
+  fi
   git clone --filter=blob:none https://github.com/oven-sh/bun.git "$bun_dir"
   git -C "$bun_dir" checkout -b wasm "$BUN_COMMIT"
-  if ls "$root"/patches/bun/*.patch >/dev/null 2>&1; then
-    git -C "$bun_dir" am "$root"/patches/bun/*.patch
+  new_checkout=1
+fi
+if [[ -n "$(git -C "$bun_dir" status --porcelain --untracked-files=normal)" ]]; then
+  echo "error: $bun_dir has local changes; refusing to synchronize" >&2
+  exit 1
+fi
+
+# Derive the desired tree from the checked-in patch bytes, not the name of a
+# possibly stale shared branch. Use a private index so this cannot affect the
+# checkout's staged files. Most worktrees can reuse the already-patched wasm ref.
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/bun-wasm-source-sync-XXXXXX")
+cleanup() {
+  if [[ -e "$scratch/patched/.git" ]]; then
+    git -C "$bun_dir" worktree remove --force "$scratch/patched"
   fi
+  rm -rf "$scratch"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+shopt -s nullglob
+patches=("$root"/patches/bun/*.patch)
+if [[ "$new_checkout" == 1 && ${#patches[@]} -gt 0 ]]; then
+  git -C "$bun_dir" am "${patches[@]}"
+fi
+GIT_INDEX_FILE="$scratch/index" git -C "$bun_dir" read-tree "$BUN_COMMIT"
+for patch in "${patches[@]}"; do
+  GIT_INDEX_FILE="$scratch/index" git -C "$bun_dir" apply --cached --whitespace=nowarn "$patch"
+done
+desired=$(GIT_INDEX_FILE="$scratch/index" git -C "$bun_dir" write-tree)
+current=$(git -C "$bun_dir" rev-parse 'HEAD^{tree}')
+if [[ "$current" != "$desired" ]]; then
+  if [[ "$(git -C "$bun_dir" rev-parse --verify 'wasm^{tree}' 2>/dev/null || true)" == "$desired" ]]; then
+    target=$(git -C "$bun_dir" rev-parse wasm)
+  else
+    # Rebuild the imported patch history without resetting a branch another
+    # worktree may own. Only this disposable checkout can be removed on failure.
+    git -C "$bun_dir" worktree add --detach "$scratch/patched" "$BUN_COMMIT"
+    if [[ ${#patches[@]} -gt 0 ]]; then
+      git -C "$scratch/patched" am "${patches[@]}"
+    fi
+    target=$(git -C "$scratch/patched" rev-parse HEAD)
+    git -C "$bun_dir" update-ref refs/bun-wasm/patched "$target"
+  fi
+  git -C "$bun_dir" checkout --detach "$target"
+fi
+cleanup
+trap - EXIT INT TERM
+if [[ "$source_only" == 1 ]]; then
+  echo "vendor/bun source ready at $(git -C "$bun_dir" rev-parse --short HEAD)"
+  exit 0
 fi
 
 fetch() { # <dir> <repo> <commit>
@@ -37,6 +100,6 @@ if [ ! -f "$bun_dir/build/debug/codegen/build_options.rs" ]; then
   test -f "$bun_dir/build/debug/codegen/build_options.rs"
   # Configure also writes a host linker config that picks wasi-sdk's clang++ off PATH.
   rm -f "$bun_dir/.cargo/config.toml"
-  exec "$0"
+  exec "$0" "${sync_args[@]}"
 fi
 echo "vendor/bun ready at $(git -C "$bun_dir" rev-parse --short HEAD)"
