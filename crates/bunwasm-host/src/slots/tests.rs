@@ -803,3 +803,142 @@ fn zero_page_exported_memory_does_not_prevent_descriptor_initialization() {
         .call(&mut f.store, ())
         .unwrap();
 }
+
+#[test]
+fn access_import_validation_never_allocates_a_request_on_invalid_input() {
+    let mut f = Fixture::new();
+    f.write(1024, b"/bin/bun");
+    f.write(2048, b"/");
+    for mode in [0, 2, 3, -1] {
+        assert_eq!(
+            f.call("runtime_proc", "access_start", (1024, 8, 2048, 1, mode)),
+            process::INVAL
+        );
+    }
+    for (path, cwd) in [
+        (b"".as_slice(), b"/".as_slice()),
+        (b"a\0b", b"/"),
+        (b"bun", b""),
+        (b"bun", b"bin"),
+        (b"bun", b"/a\0b"),
+        (&[255], b"/"),
+        (b"bun", &[255]),
+    ] {
+        f.write(1024, path);
+        f.write(2048, cwd);
+        assert_eq!(
+            f.call(
+                "runtime_proc",
+                "access_start",
+                (1024, path.len() as i32, 2048, cwd.len() as i32, 1)
+            ),
+            process::INVAL
+        );
+    }
+    assert_eq!(
+        f.call("runtime_proc", "access_start", (65536, 1, 2048, 1, 1)),
+        process::FAULT
+    );
+    assert_eq!(
+        f.call("runtime_proc", "access_start", (1024, 1, 65536, 1, 1)),
+        process::FAULT
+    );
+    assert_eq!(f.call("runtime_proc", "access_take", 1), process::BADF);
+    assert_eq!(f.call("runtime_proc", "access_cancel", 1), process::BADF);
+    f.write(1024, b"/bin/bun");
+    f.write(2048, b"/");
+    let id = f.call("runtime_proc", "access_start", (1024, 8, 2048, 1, 1));
+    assert_eq!(id, 1);
+    // Mutating the guest strings after submission cannot alter the query.
+    f.write(1024, b"/missing");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let result = f.call("runtime_proc", "access_take", id);
+        if result != process::AGAIN {
+            assert_eq!(result, 0);
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(f.call("runtime_proc", "access_cancel", id), process::BADF);
+    let id = f.call("runtime_proc", "access_start", (1024, 8, 2048, 1, 1));
+    assert_eq!(f.call("runtime_proc", "access_cancel", id), 0);
+    assert_eq!(f.call("runtime_proc", "access_take", id), process::BADF);
+}
+
+#[test]
+fn engine_files_are_visible_to_wasi_metadata_open_and_readdir() {
+    let mut f = Fixture::new();
+    // root is fd 3, /bin fd 4, /opt/bun fd 5.
+    for path in ["bun", "node"] {
+        f.write(1024, path.as_bytes());
+        assert_eq!(
+            f.call(
+                "wasi_snapshot_preview1",
+                "path_filestat_get",
+                (4, 0, 1024, path.len() as i32, 2048)
+            ),
+            0
+        );
+        assert_eq!(f.bytes(2064, 1), &[4]); // regular file
+    }
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "fd_readdir",
+            (4, 2048, 1024, 0i64, 128)
+        ),
+        0
+    );
+    let count = f.word(128) as usize;
+    let directory = f.bytes(2048, count);
+    assert!(directory.windows(3).any(|name| name == b"bun"));
+    assert!(directory.windows(4).any(|name| name == b"node"));
+    for (engine, paths) in [
+        ("quickjs", ["quickjs/bin/bun", "quickjs/bin/node"]),
+        ("jsc", ["jsc/bin/bun", "jsc/bin/node"]),
+    ] {
+        for path in paths {
+            f.write(1024, path.as_bytes());
+            assert_eq!(
+                f.call(
+                    "wasi_snapshot_preview1",
+                    "path_filestat_get",
+                    (5, 0, 1024, path.len() as i32, 2048)
+                ),
+                -process::NOENT
+            );
+        }
+        f.runtime
+            .register_engine(engine, &f.runtime.module)
+            .unwrap();
+        for path in paths {
+            f.write(1024, path.as_bytes());
+            assert_eq!(
+                f.call(
+                    "wasi_snapshot_preview1",
+                    "path_filestat_get",
+                    (5, 0, 1024, path.len() as i32, 2048)
+                ),
+                0
+            );
+            assert_eq!(f.bytes(2064, 1), &[4]);
+            assert_eq!(
+                f.call(
+                    "wasi_snapshot_preview1",
+                    "path_open",
+                    (5, 0, 1024, path.len() as i32, 0, 2i64, 0i64, 0, 1080)
+                ),
+                0
+            );
+            let fd = f.word(1080);
+            assert_eq!(
+                f.call("wasi_snapshot_preview1", "fd_filestat_get", (fd, 2048)),
+                0
+            );
+            assert_eq!(f.bytes(2064, 1), &[4]);
+            assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", fd), 0);
+        }
+    }
+}

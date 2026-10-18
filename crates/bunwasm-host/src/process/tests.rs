@@ -474,3 +474,156 @@ fn oversized_json_job_ids_do_not_saturate_into_the_root_job() {
     }
     assert_eq!(processes.runtime.state.lock().unwrap().processes.len(), 1);
 }
+
+fn access_result(processes: &mut Processes, request: i32) -> i32 {
+    assert!(request > 0, "access_start: {request}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let result = processes.access_take(request);
+        if result != AGAIN {
+            return result;
+        }
+        assert!(Instant::now() < deadline, "access query did not finish");
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn executable_access_is_live_consuming_and_process_owned() {
+    let mut p = processes();
+    for (path, cwd, expected) in [
+        ("/bin/bun", "/missing-cwd", 0),
+        ("node", "/bin", 0),
+        ("../node", "/bin/sub", NOENT),
+        ("/bin/../bin/bun", "/", 0),
+        ("/missing", "/", NOENT),
+        ("/Cargo.toml", "/", ACCES),
+        ("/", "/", ACCES),
+        ("/Cargo.toml/a", "/", NOTDIR),
+        ("/bin/bun/../node", "/", NOTDIR),
+        ("/missing/../bin/bun", "/", NOENT),
+        ("/bin/bun/.", "/", NOTDIR),
+        ("/bin/bun/", "/", NOTDIR),
+        ("/opt/bun/jsc/bin/bun", "/", NOENT),
+    ] {
+        let id = p.access_start(path, cwd, 1);
+        assert_eq!(access_result(&mut p, id), expected, "{path} from {cwd}");
+        assert_eq!(p.access_take(id), BADF);
+        assert_eq!(p.access_cancel(id), BADF);
+        assert_eq!(p.poll(&subscription(5, id, 99), 0), Err(BADF));
+    }
+    let mut outsider = Processes::new(
+        p.runtime.clone(),
+        Stdio {
+            fds: Descriptors::new(),
+            pid: 7,
+            memory_limit: 512 << 20,
+        },
+        crate::net::Net::new().notify(),
+        Arc::default(),
+    );
+    let id = p.access_start("/bin/bun", "/", 1);
+    assert_eq!(outsider.access_take(id), BADF);
+    assert_eq!(outsider.access_cancel(id), BADF);
+    assert_eq!(outsider.poll(&subscription(5, id, 0), 0), Err(BADF));
+    let events = p.poll(&subscription(5, id, 99), 5000).unwrap();
+    assert_eq!(
+        events,
+        [
+            99u64.to_le_bytes().as_slice(),
+            &5u32.to_le_bytes(),
+            &0u32.to_le_bytes()
+        ]
+        .concat()
+    );
+    assert_eq!(p.poll(&subscription(5, id, 99), 0).unwrap(), events);
+    assert_eq!(p.access_take(id), 0);
+
+    // A successful query is not a capability: registry and file changes are
+    // observed by the next query and by spawn itself.
+    p.runtime
+        .executables
+        .entries
+        .lock()
+        .unwrap()
+        .remove("/bin/bun");
+    let id = p.access_start("/bin/bun", "/", 1);
+    assert_eq!(access_result(&mut p, id), ACCES);
+    assert_eq!(p.spawn(&request("/bin/bun", serde_json::json!([]))), ACCES);
+    let bin = p
+        .runtime
+        .dirs
+        .iter()
+        .find(|(_, guest)| guest == "/bin")
+        .unwrap()
+        .0
+        .clone();
+    std::fs::remove_file(bin.join("node")).unwrap();
+    let id = p.access_start("/bin/node", "/", 1);
+    assert_eq!(access_result(&mut p, id), NOENT);
+    assert_eq!(p.spawn(&request("/bin/node", serde_json::json!([]))), NOENT);
+}
+
+#[test]
+fn access_cancellation_bounds_and_pending_readiness() {
+    let mut p = processes();
+    assert_eq!(p.access_take(999), BADF);
+    assert_eq!(p.access_cancel(999), BADF);
+    // Hold the registry so query workers cannot publish until cancellation.
+    let runtime = p.runtime.clone();
+    let held = runtime.executables.entries.lock().unwrap();
+    let id = p.access_start("/bin/bun", "/", 1);
+    let cancelled = p.access.get(&id).unwrap().clone();
+    assert_eq!(p.access_take(id), AGAIN);
+    assert!(p.poll(&subscription(5, id, 7), 0).unwrap().is_empty());
+    assert_eq!(p.access_cancel(id), 0);
+    let ids: Vec<_> = (0..MAX_ACCESS_REQUESTS)
+        .map(|_| p.access_start("/bin/bun", "/", 1))
+        .collect();
+    assert!(ids.iter().all(|id| *id > 0));
+    assert_eq!(p.access_start("/bin/bun", "/", 1), AGAIN);
+    assert_eq!(p.access_cancel(ids[0]), 0);
+    let next = p.access_start("/bin/bun", "/", 1);
+    assert!(next > *ids.last().unwrap());
+    drop(held);
+    assert!(matches!(*cancelled.lock().unwrap(), AccessState::Cancelled));
+    assert_eq!(p.access_take(id), BADF);
+    assert_eq!(p.access_cancel(id), BADF);
+    for id in ids.into_iter().skip(1) {
+        assert_eq!(access_result(&mut p, id), 0);
+    }
+    assert_eq!(access_result(&mut p, next), 0);
+    assert!(p.access.is_empty());
+}
+
+#[test]
+fn process_drop_retires_pending_access_requests_and_teardown_removes_files() {
+    let mut p = processes();
+    let runtime = p.runtime.clone();
+    let mounts = runtime.executables.mounts();
+    let held = runtime.executables.entries.lock().unwrap();
+    let id = p.access_start("/bin/bun", "/", 1);
+    let slot = p.access.get(&id).unwrap().clone();
+    // Fixture's shutdown joins workers, so drop only its Processes first.
+    let processes = std::mem::replace(
+        &mut p.0,
+        Processes::new(
+            runtime.clone(),
+            Stdio {
+                fds: Descriptors::new(),
+                pid: 7,
+                memory_limit: 512 << 20,
+            },
+            crate::net::Net::new().notify(),
+            Arc::default(),
+        ),
+    );
+    drop(processes);
+    assert!(matches!(*slot.lock().unwrap(), AccessState::Cancelled));
+    drop(held);
+    runtime.shutdown();
+    assert!(matches!(*slot.lock().unwrap(), AccessState::Cancelled));
+    drop(p);
+    drop(runtime);
+    assert!(mounts.iter().all(|(path, _)| !path.exists()));
+}

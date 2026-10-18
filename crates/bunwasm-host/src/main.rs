@@ -462,6 +462,170 @@ mod tests {
         }
     }
 
+    /// Original standalone guest exercising the actual imports and preview1
+    /// filesystem, rather than calling the host's methods directly.
+    fn executable_access_guest() -> Vec<u8> {
+        fn leb(bytes: &mut Vec<u8>, mut value: i32) {
+            loop {
+                let byte = (value & 0x7f) as u8;
+                value >>= 7;
+                let done = (value == 0 && byte & 0x40 == 0) || (value == -1 && byte & 0x40 != 0);
+                bytes.push(if done { byte } else { byte | 0x80 });
+                if done {
+                    break;
+                }
+            }
+        }
+        fn section(wasm: &mut Vec<u8>, kind: u8, bytes: &[u8]) {
+            wasm.push(kind);
+            let mut length = bytes.len() as u32;
+            loop {
+                let byte = (length & 0x7f) as u8;
+                length >>= 7;
+                wasm.push(if length == 0 { byte } else { byte | 0x80 });
+                if length == 0 {
+                    break;
+                }
+            }
+            wasm.extend_from_slice(bytes);
+        }
+        fn constant(bytes: &mut Vec<u8>, value: i32) {
+            bytes.push(0x41);
+            leb(bytes, value);
+        }
+        let mut wasm = b"\0asm\x01\0\0\0".to_vec();
+        // (i32*5)->i32, i32->i32, ()->().
+        section(
+            &mut wasm,
+            1,
+            &[
+                3, 0x60, 5, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 1, 0x7f, 0x60, 1, 0x7f, 1, 0x7f, 0x60, 0,
+                0,
+            ],
+        );
+        let mut imports = vec![3];
+        for (namespace, name, ty) in [
+            ("runtime_proc", "access_start", 0),
+            ("runtime_proc", "access_take", 1),
+            ("wasi_snapshot_preview1", "path_filestat_get", 0),
+        ] {
+            imports.push(namespace.len() as u8);
+            imports.extend_from_slice(namespace.as_bytes());
+            imports.push(name.len() as u8);
+            imports.extend_from_slice(name.as_bytes());
+            imports.extend_from_slice(&[0, ty]);
+        }
+        section(&mut wasm, 2, &imports);
+        section(&mut wasm, 3, &[1, 2]);
+        section(&mut wasm, 5, &[1, 0, 1]);
+        let mut exports = vec![2, 6];
+        exports.extend_from_slice(b"memory");
+        exports.extend_from_slice(&[2, 0, 6]);
+        exports.extend_from_slice(b"_start");
+        exports.extend_from_slice(&[0, 3]);
+        section(&mut wasm, 7, &exports);
+        let mut body = vec![1, 2, 0x7f]; // two i32 locals: request and result
+        for value in [3, 0, 1056, 3, 2048] {
+            constant(&mut body, value);
+        }
+        body.extend_from_slice(&[0x10, 2, 0x04, 0x40, 0x00, 0x0b]); // stat error traps
+        constant(&mut body, 2064);
+        body.extend_from_slice(&[0x2d, 0, 0]); // load file type
+        constant(&mut body, 4);
+        body.extend_from_slice(&[0x47, 0x04, 0x40, 0x00, 0x0b]);
+        for value in [1024, 8, 1040, 1, 1] {
+            constant(&mut body, value);
+        }
+        body.extend_from_slice(&[0x10, 0, 0x21, 0, 0x20, 0]);
+        constant(&mut body, 0);
+        body.extend_from_slice(&[0x4c, 0x04, 0x40, 0x00, 0x0b]); // request <= 0 traps
+        body.extend_from_slice(&[0x03, 0x40, 0x20, 0, 0x10, 1, 0x22, 1]);
+        constant(&mut body, -6);
+        body.extend_from_slice(&[0x46, 0x0d, 0, 0x0b]); // retry EAGAIN
+        body.extend_from_slice(&[0x20, 1, 0x04, 0x40, 0x00, 0x0b, 0x0b]);
+        let mut code = vec![1];
+        code.push(body.len() as u8);
+        code.extend(body);
+        section(&mut wasm, 10, &code);
+        let mut data = vec![3];
+        for (offset, bytes) in [(1024, b"/bin/bun".as_slice()), (1040, b"/"), (1056, b"bun")] {
+            data.push(0);
+            constant(&mut data, offset);
+            data.push(0x0b);
+            data.push(bytes.len() as u8);
+            data.extend_from_slice(bytes);
+        }
+        section(&mut wasm, 11, &data);
+        wasm
+    }
+
+    #[test]
+    fn guest_observes_a_real_executable_and_takes_an_access_query() {
+        let mut config = Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).unwrap();
+        let module = Module::new(&engine, executable_access_guest()).unwrap();
+        let runtime = process::Runtime::new(engine, module, Vec::new()).unwrap();
+        let outcome = run_instance(
+            runtime.clone(),
+            Vec::new(),
+            Vec::new(),
+            process::Stdio::inherited(),
+            Arc::default(),
+        )
+        .unwrap();
+        runtime.shutdown();
+        assert_eq!(outcome, FinalOutcome::Exit(0));
+    }
+
+    #[test]
+    #[ignore = "requires WASI_SDK_PATH; run explicitly to verify the real wasi-libc scan"]
+    fn real_wasi_libc_discovers_all_engine_preopens_and_stops() {
+        let sdk = PathBuf::from(std::env::var_os("WASI_SDK_PATH").expect("source env.sh first"));
+        let scratch =
+            std::env::temp_dir().join(format!("bun-wasm-preopen-test-{}", std::process::id()));
+        std::fs::create_dir(&scratch).unwrap();
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let _cleanup = Cleanup(scratch.clone());
+        let wasm = scratch.join("preopen-scan.wasm");
+        let output = std::process::Command::new(sdk.join("bin/clang"))
+            .arg("--target=wasm32-wasip1")
+            .arg("-O1")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/preopen-scan.c"))
+            .arg("-o")
+            .arg(&wasm)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut config = Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).unwrap();
+        let module = Module::from_file(&engine, wasm).unwrap();
+        let runtime =
+            process::Runtime::new(engine, module, vec![(scratch.clone(), "/".into())]).unwrap();
+        for name in ["quickjs", "jsc"] {
+            runtime.register_engine(name, &runtime.module).unwrap();
+        }
+        let outcome = run_instance(
+            runtime.clone(),
+            Vec::new(),
+            Vec::new(),
+            process::Stdio::inherited(),
+            Arc::default(),
+        );
+        runtime.shutdown();
+        assert_eq!(outcome.unwrap(), FinalOutcome::Exit(0));
+    }
+
     #[test]
     fn engine_options_are_explicit_repeatable_and_strict() {
         let options = parse_args(
