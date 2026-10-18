@@ -853,6 +853,20 @@ the second response. Its automatic-drain refinement then reduced the unmodified
 QuickJS gzip file from 62 observed passes to 33 before the file deadline.
 The candidate is excluded from the response-streaming PR.
 
+The two reproducers are retained in that report's `repro/` directory. From an
+owned worktree with its guest and launcher built, run:
+
+```sh
+source env.sh
+repro=/work/reports/bun-wasm-http-scoreboard-20261018/repro
+"$CARGO_TARGET_DIR/release/bun-wasm" --wasm dist/bun.wasm --dir "$repro"::/ run /upload-stream.ts
+"$CARGO_TARGET_DIR/release/bun-wasm" --wasm dist/bun.wasm --dir "$repro"::/ run /ignored-upload.ts
+```
+
+The coordinator retains these two small fixtures until the upload-dispatch
+follow-up is accepted or explicitly retired. The accepted empty-FIN close cycle
+is fixed separately by `net-tcp-empty-fin`; preserve that control.
+
 Start from unchanged Node dispatch. Reproduce both upload cases, preserve
 `req.complete`, explicit socket pauses, response close policy and connection
 reuse, then measure `node-http-req-complete.test.ts`,

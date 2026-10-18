@@ -151,6 +151,363 @@ The raw historical JSON is
 | TypeError: Request with a GET or HEAD method cannot have a body. | 1 | js/web/fetch/fetch.upgrade.test.ts |
 | TypeError: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch() | 1 | js/web/fetch/chunked-trailing.test.js |
 | TypeError: UnexpectedRedirect fetching "http://127.0.0.1:43277/". For more information, pass `verbose: true` in the second argument to fetch() | 1 | js/web/fetch/fetch-redirect.test.ts |
+
+<details>
+<summary>File membership</summary>
+
+
+error: expect(received).toBe(expected)
+
+- `js/bun/http/async-iterator-stream.test.ts`
+- `js/bun/http/bun-serve-args.test.ts`
+- `js/bun/http/bun-serve-file.test.ts`
+- `js/bun/http/bun-serve-headers.test.ts`
+- `js/bun/http/bun-serve-html-manifest.test.ts`
+- `js/bun/http/bun-serve-propagate-errors.test.ts`
+- `js/bun/http/bun-serve-static-stress-access-body.test.ts`
+- `js/bun/http/bun-serve-static-stress-no-body.test.ts`
+- `js/bun/http/bun-serve-static.test.ts`
+- `js/bun/http/bun-server.test.ts`
+- `js/bun/http/fetch-header-count-limit.test.ts`
+- `js/bun/http/serve-directory-routes.test.ts`
+- `js/bun/http/serve-if-none-match.test.ts`
+- `js/bun/http/serve-pending-promise-abort-leak.test.ts`
+- `js/bun/io/fetch/fetch-abort-slow-connect.test.ts`
+- `js/bun/websocket/websocket-server-stop-retained-ws.test.ts`
+- `js/bun/websocket/websocket-server-upgrade-reentrant.test.ts`
+- `js/first_party/ws/ws-upgrade-events.test.ts`
+- `js/node/http/node-http-maxHeaderSize.test.ts`
+- `js/node/http/node-http-ondata-reregister-leak.test.ts`
+- `js/node/http/node-http-server-close-drain.test.ts`
+- `js/node/http/node-http-with-ws.test.ts`
+- `js/node/net/blocklist-gc.test.ts`
+- `js/node/net/node-net.test.ts`
+- `js/web/fetch/blob-array-fast-path.test.ts`
+- `js/web/fetch/blob-file-name-ownership.test.ts`
+- `js/web/fetch/body-async-iterator.test.ts`
+- `js/web/fetch/body-mixin-errors.test.ts`
+- `js/web/fetch/client-fetch.test.ts`
+- `js/web/fetch/fetch-abort-stream-body.test.ts`
+- `js/web/fetch/fetch-chunked-size.test.ts`
+- `js/web/fetch/fetch-compress.test.ts`
+- `js/web/fetch/fetch-keepalive.test.ts`
+- `js/web/fetch/fetch.stream.test.ts`
+- `js/web/workers/performance-observer-leak.test.ts`
+- `regression/issue/22353.test.ts`
+- `regression/issue/test-21049.test.ts`
+
+^ this test timed out after 2000ms.
+
+- `js/bun/http/node-http-pipeline-callbacks.test.ts`
+- `js/bun/http/serve-protocols.test.ts`
+- `js/node/http/node-http-connect.test.ts`
+- `js/node/http/node-http-displaced-response.test.ts`
+- `js/node/http/node-http-incoming-socket.test.ts`
+- `js/node/http/node-http-pinned-write.test.ts`
+- `js/node/http/node-http-req-complete.test.ts`
+- `js/node/http/node-http-req-socket-pause.test.ts`
+- `js/node/http/node-http-server-socket-end-drain.test.ts`
+- `js/node/http/node-http-server-timeouts.test.ts`
+- `js/node/http/node-https-agent-checkserveridentity-reuse.test.ts`
+- `js/node/http/node-https-checkServerIdentity.test.ts`
+- `js/node/net/socket-reconnect-live.test.ts`
+- `js/web/fetch/exiting.test.ts`
+- `js/web/fetch/fetch-stream-cancel-leak.test.ts`
+- `js/web/fetch/server-response-stream-leak.test.ts`
+
+ENOENT: no such file or directory
+
+- `js/third_party/socket.io/socket.io-close.test.ts`
+- `js/third_party/socket.io/socket.io-connection-state-recovery.test.ts`
+- `js/third_party/socket.io/socket.io-handshake.test.ts`
+- `js/third_party/socket.io/socket.io-messaging-many.test.ts`
+- `js/third_party/socket.io/socket.io-middleware.test.ts`
+- `js/third_party/socket.io/socket.io-namespaces.test.ts`
+- `js/third_party/socket.io/socket.io-server-attachment.test.ts`
+- `js/third_party/socket.io/socket.io-socket-middleware.test.ts`
+- `js/third_party/socket.io/socket.io-socket-timeout.test.ts`
+- `js/third_party/socket.io/socket.io-utility-methods.test.ts`
+- `js/third_party/socket.io/socket.io.test.ts`
+- `js/web/fetch/fetch-tcp-keepalive.test.ts`
+- `js/web/fetch/fetch-tcp-stress.test.ts`
+
+error: expect(received).toContain(expected)
+
+- `cli/test/isolation.test.ts`
+- `integration/bun-types/fixture/serve-types.test.ts`
+- `js/bun/http/bun-serve-html-entry.test.ts`
+- `js/bun/http/request-smuggling.test.ts`
+- `js/bun/http/serve.test.ts`
+- `js/bun/websocket/websocket-server-rsv-frames.test.ts`
+- `js/node/http/early-hints-crlf-injection.test.ts`
+- `js/web/websocket/websocket-close-connecting.test.ts`
+- `js/web/websocket/websocket-permessage-deflate-edge-cases.test.ts`
+- `js/web/websocket/websocket-permessage-deflate-simple.test.ts`
+- `js/web/websocket/websocket-permessage-deflate.test.ts`
+- `regression/issue/26142.test.ts`
+- `regression/issue/3613.test.ts`
+
+error: Bun.serve TLS is not supported by this networking host
+
+- `cli/install/migration/pnpm-comprehensive.test.ts`
+- `cli/install/migration/pnpm-lock-migration.test.ts`
+- `cli/install/migration/pnpm-migration-complete.test.ts`
+- `js/bun/http/serve-listen.test.ts`
+- `js/bun/module-graph/module-graph-callbacks.test.ts`
+- `js/web/fetch/abort-signal-leak.test.ts`
+- `js/web/fetch/fetch-http3-adversarial.test.ts`
+- `js/web/websocket/test-ws-bidir-proxy.test.ts`
+- `regression/issue/06443.test.ts`
+- `regression/issue/21792.test.ts`
+- `regression/issue/27358.test.ts`
+
+error: expect(received).toEqual(expected)
+
+- `js/bun/dns/dns-prefetch.test.ts`
+- `js/bun/http/bun-serve-html-405.test.ts`
+- `js/bun/http/bun-serve-routes.test.ts`
+- `js/bun/http/serve-error-handler-stream.test.ts`
+- `js/bun/net/socket-dns-error.test.ts`
+- `js/bun/net/unix-socket-long-path.test.ts`
+- `js/bun/websocket/websocket-server-unmasked-frames.test.ts`
+- `js/deno/fetch/blob.test.ts`
+- `js/deno/fetch/headers.test.ts`
+- `js/node/http/numeric-header.test.ts`
+- `js/web/websocket/websocket-close-code.test.ts`
+
+File timeout without a captured error
+
+- `js/bun/http/bun-serve-html-build-holds-server.test.ts`
+- `js/bun/http/hspec.test.ts`
+- `js/bun/http/serve-async-stream-client-abort.test.ts`
+- `js/bun/http/serve-response-stream-sink-leak.test.ts`
+- `js/bun/http/serve-stream-reject-flush-leak.test.ts`
+- `js/node/net/double-connect.test.ts`
+- `js/web/fetch/fetch-response-finalizer-sweep.test.ts`
+
+TypeError: not a function
+
+- `js/bun/http/listener-getsockname.test.ts`
+- `js/web/fetch/blob.test.ts`
+- `js/web/fetch/body-clone.test.ts`
+- `js/web/fetch/fetch-preconnect.test.ts`
+- `js/web/request/request-subclass.test.ts`
+
+error: expect(received).toThrow(expected)
+
+- `js/web/fetch/fetch.unix.test.ts`
+- `js/web/fetch/fetch_headers.test.js`
+- `js/web/fetch/headers.test.ts`
+- `js/web/fetch/headers.undici.test.ts`
+
+error: expect(received).toMatch(expected)
+
+- `js/bun/http/form-data-set-append.test.js`
+- `regression/issue/18413-deflate-semantics.test.ts`
+- `regression/issue/18413-truncation.test.ts`
+
+SyntaxError: WebSocket requires a ws:// URL without credentials or a fragment
+
+- `js/web/websocket/websocket-unix.test.ts`
+- `js/web/websocket/websocket.test.js`
+- `regression/issue/24388.test.ts`
+
+TypeError: cannot read property 'Server' of undefined
+
+- `js/third_party/grpc-js/test-call-propagation.test.ts`
+- `js/third_party/grpc-js/test-deadline.test.ts`
+- `js/third_party/grpc-js/test-idle-timer.test.ts`
+
+AssertionError: Expected values to be strictly equal:
+
+- `js/node/http/node-http-agent-free-socket.test.ts`
+- `js/node/path/is-absolute.test.js`
+
+error: expect(received).not.toContain(expected)
+
+- `cli/install/bun-update-transitive.test.ts`
+- `js/node/http/node-https-server.test.ts`
+
+error: expect(received).toMatchInlineSnapshot(expected)
+
+- `js/web/fetch/response.test.ts`
+- `js/web/websocket/error-event.test.ts`
+
+error: Expected process to exit with code 0 but got 1
+
+- `js/bun/http/leaks-test.test.ts`
+- `regression/issue/11866.test.ts`
+
+error: No such built-in module: node:quic
+
+- `js/bun/http/serve-http3.test.ts`
+- `js/web/fetch/fetch-http3-client.test.ts`
+
+error: Unix sockets and TLS sockets are not supported in bun-wasm
+
+- `js/bun/http/bun-listen-connect-args.test.ts`
+- `js/bun/net/unix-socket-unlink.test.ts`
+
+error: Unix sockets are not supported in bun-wasm
+
+- `js/node/net/handle-leak.test.ts`
+- `regression/issue/13696.test.ts`
+
+error: zlib.brotliCompressSync is not supported in bun-wasm: brotli is not compiled into bun.wasm
+
+- `js/web/fetch/fetch-gzip.test.ts`
+- `regression/issue/18413-all-compressions.test.ts`
+
+TypeError: parent class must be constructor
+
+- `js/first_party/undici/undici-primordials.test.ts`
+- `js/first_party/undici/undici.test.ts`
+
+AssertionError: path.win32.resolve("c:/blah\\blah","d:/games","c:../a")
+
+- `js/node/path/resolve.test.js`
+
+BuildError: Expected ";" but found "RSA"
+
+- `js/bun/http/bun-serve-ssl.test.ts`
+
+BuildError: Unexpected �
+
+- `js/web/fetch/fetch.brotli.test.ts`
+
+bun-wasm: bun.wasm trapped: error while executing at wasm backtrace:
+
+- `js/node/http/node-http-uaf.test.ts`
+
+EACCES: permission denied
+
+- `bake/dev/ecosystem.test.ts`
+
+error: bun create is not supported in bun-wasm
+
+- `cli/create/create-jsx.test.ts`
+
+error: expect(received).not.toStartWith(expected)
+
+- `js/bun/http/proxy-stress-lifecycle.test.ts`
+
+error: expect(received).toBeDefined()
+
+- `regression/issue/24575.test.ts`
+
+error: expect(received).toBeGreaterThan(expected)
+
+- `regression/issue/40111.test.ts`
+
+error: expect(received).toBeGreaterThanOrEqual(expected)
+
+- `js/bun/http/proxy-stress-concurrent.test.ts`
+
+error: expect(received).toBeObject()
+
+- `js/node/perf_hooks/perf_hooks.test.ts`
+
+error: expect(received).toBeTruthy()
+
+- `js/deno/fetch/response.test.ts`
+
+error: expect(received).toHaveLength(expected)
+
+- `js/web/fetch/utf8-bom.test.ts`
+
+error: expect(received).toInclude(expected)
+
+- `js/web/fetch/headers-case.test.ts`
+
+error: expect(received).toMatchObject(expected)
+
+- `js/node/http/node-http-upgrade-body.test.ts`
+
+error: expect(received).toStrictEqual(expected)
+
+- `js/node/net/node-net-server.test.ts`
+
+error: expect(received).toThrow()
+
+- `js/bun/http/server-url-invalid.test.ts`
+
+error: expect(received).toThrowErrorMatchingInlineSnapshot(expected)
+
+- `js/web/fetch/blob-write.test.ts`
+
+error: No such module: http_parser
+
+- `js/node/http/node-http-parser.test.ts`
+
+error: WebSocket proxy and TLS options are not supported by this networking host
+
+- `js/web/websocket/websocket-buffered-amount.test.ts`
+
+error: WebSocket was closed before the connection was established
+
+- `regression/issue/012040.test.ts`
+
+QuotaExceededError: The ArrayBufferView's byte length (1000000) exceeds the number of bytes of entropy available via this API (65536)
+
+- `js/web/fetch/body.test.ts`
+
+SyntaxError: Could not find export 'estimateShallowMemoryUsageOf' in module 'bun:jsc'
+
+- `js/bun/websocket/websocket-server.test.ts`
+
+SyntaxError: The URL's protocol must be one of "ws:", "wss:", "http:", "https:", or "ws+unix:"
+
+- `cli/inspect/inspect-inline-sourcemap.test.ts`
+
+SyntaxError: Unexpected end of JSON input
+
+- `js/bun/http/serve-stream-body-error.test.ts`
+
+TypeError: Body already used
+
+- `js/bun/http/serve-reused-response.test.ts`
+
+TypeError: cannot read property 'counter' of undefined
+
+- `regression/issue/18595.test.ts`
+
+TypeError: cannot read property 'hash' of undefined
+
+- `packages/s3-server/test/server.test.ts`
+
+TypeError: class constructors must be invoked with 'new'
+
+- `js/node/net/server.spec.ts`
+
+TypeError: formData() is not supported in bun-wasm
+
+- `js/bun/http/fetch-file-upload.test.ts`
+
+TypeError: Invalid URL: "1"
+
+- `js/bun/http/bun-serve-fetch-invalid-args.test.ts`
+
+TypeError: Invalid URL: "http://undefined:undefined/api/hotels"
+
+- `js/third_party/express/express.test.ts`
+
+TypeError: protocol must be http:, https: or s3:
+
+- `js/web/fetch/fetch-args.test.ts`
+
+TypeError: Request with a GET or HEAD method cannot have a body.
+
+- `js/web/fetch/fetch.upgrade.test.ts`
+
+TypeError: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()
+
+- `js/web/fetch/chunked-trailing.test.js`
+
+TypeError: UnexpectedRedirect fetching "http://127.0.0.1:43277/". For more information, pass `verbose: true` in the second argument to fetch()
+
+- `js/web/fetch/fetch-redirect.test.ts`
+
+</details>
 <!-- http-first-errors:end -->
 
 The generic assertions split across independent behavior. Static-route aliases,

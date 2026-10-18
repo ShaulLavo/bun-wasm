@@ -527,7 +527,8 @@ readable EOF before its writable side has finished. Waiting for both sides
 creates a cycle with Duplex's automatic write-side completion. The adapter now
 calls its existing zero-byte read after empty EOF. Buffered data is preserved.
 `net-tcp-empty-fin` forces server acceptance before the client ends, then checks
-readable end, socket close and server close. Native Bun 1.4.2 supplies the control;
+readable end, socket close and server close. Native Bun 1.4.2 and Node 26.7.0
+supply the controls;
 unchanged main and the response-streaming guest both fail before the correction.
 
 The IP regular expressions in `crates/bunwasm-runtime/src/js/net_address.js` come
