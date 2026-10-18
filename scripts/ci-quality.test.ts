@@ -54,3 +54,8 @@ test("both WASI feature graphs and the failing lint control stay blocking", () =
   expect(wasi).toContain('"--no-default-features", "--features", "bunwasm-cli/engine-host,bunwasm-cli/bun-transpiler,bunwasm-cli/bun-build"');
   expect(wasi).toContain('await verifyWasiLint(["cargo", "clippy"');
 });
+
+test("cached build inputs are compared before the native gate", () => {
+  expect(rust.indexOf("bun scripts/quality-input-times.ts")).toBeGreaterThan(0);
+  expect(rust.indexOf("bun scripts/quality-input-times.ts")).toBeLessThan(rust.indexOf("bun run quality --native"));
+});
