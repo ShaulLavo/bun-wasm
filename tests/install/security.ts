@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { packageFixture } from "./registry.mjs";
-import { packageRedirect } from "../../web/src/net/package-fetch.ts";
+import { packageRedirect } from "../../web/src/net/package-fetch";
 
 type CapturedRequest = { url: string; authorization: string | null };
 type Result = { code: number | null; stdout: string; stderr: string };
