@@ -321,13 +321,25 @@ relative paths, formatting, and namespace conversion. UTF-16 code units remain
 intact across the native boundary. The same module also exposes `matchesGlob`
 through the existing Bun glob native. No upstream tests or snapshots change.
 
-The larger remaining shell and stdin groups need process-layer work. That work
-belongs to the active step 7b track and is outside this change. The old leading
+The larger remaining shell and stdin groups need process or shell execution
+work. This change stays out of the process layer that the active step 7b track
+is modifying. The old leading
 groups already implemented on main are not counted as new opportunities here.
 
 ## Measurements
 
+The fixed selection has 19 path files. The after rows come from the fresh full
+census, filtered to these exact paths. Suite revision, runner, dependencies,
+network policy, and deadlines match the before rows. Each engine retains every
+previously passing file and every observed pass. Timing is not compared.
+
+<!-- measurements:start -->
 Measurements are added after the three-engine focused and full gates finish.
+<!-- measurements:end -->
+
+Regenerate the compact evidence and table from the retained raw JSON with
+`node scripts/group-suite-category-d.ts --results /work/reports/bun-wasm-category-d-runtime-semantics`.
+Normal generation and `--check` then use the committed compact evidence.
 
 ## Reproduction and retained evidence
 
