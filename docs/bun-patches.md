@@ -2914,9 +2914,9 @@ or a pre-import fixture observer; no production mutable hook or export was added
 Class **Port**, implemented in the original build boundary. `scripts/check-cmake-cache.cmake` is a
 read-only, fail-closed validator for existing Ninja CMake build directories. Before BoringSSL or
 JavaScriptCore configure/build, it resolves the recorded C and C++ compiler paths, toolchain file,
-CMake system and processor, compiler target flags in `rules.ninja`, and configured sysroot. Native
-builds reject an unexpected toolchain or sysroot; WASI builds require the requested paths to match
-and exist. A missing or malformed cache is rejected with a fresh-directory diagnostic; a fresh
+CMake system and processor, compiler target flags in `rules.ninja`, and effective compile/link
+sysroots, including `CMAKE_SYSROOT_COMPILE` and `CMAKE_SYSROOT_LINK` overrides. Native builds reject
+an unexpected toolchain or sysroot; WASI builds require the requested paths to match and exist. A missing or malformed cache is rejected with a fresh-directory diagnostic; a fresh
 directory is allowed to configure normally. The validator never edits or removes the caller's cache.
 `crates/bunwasm-crypto-sys/build.rs` checks before configure and build; the original shared shell
 adapter `scripts/check-wasi-cmake-cache.sh` covers `jsc/configure.sh`, `jsc/build.sh`, and

@@ -109,3 +109,10 @@ endfunction()
 validate_cached_path(CMAKE_TOOLCHAIN_FILE "${EXPECTED_TOOLCHAIN_FILE}" "toolchain file")
 # An absent/empty expectation means no foreign sysroot is allowed, not no check.
 validate_cached_path(CMAKE_SYSROOT "${EXPECTED_SYSROOT}" "sysroot")
+# Per-phase settings override CMAKE_SYSROOT, including an explicitly empty value.
+foreach(phase COMPILE LINK)
+  string(REGEX MATCH "(^|\n)CMAKE_SYSROOT_${phase}:[^=\r\n]+=([^\r\n]*)" override "${cache}")
+  if(override)
+    validate_cached_path("CMAKE_SYSROOT_${phase}" "${EXPECTED_SYSROOT}" "${phase} sysroot")
+  endif()
+endforeach()

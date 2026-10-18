@@ -16,8 +16,8 @@ function fixture(run: (build: string) => void, configure: (root: string) => stri
   try {
     const source = join(root, "source"), build = join(root, "build");
     mkdirSync(source);
-    writeFileSync(join(source, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\nproject(cache_fixture C CXX)\nadd_library(c STATIC fixture.c)\nadd_library(cxx STATIC fixture.cc)\n");
-    writeFileSync(join(source, "fixture.c"), "int c_fixture(void) { return 1; }\n");
+    writeFileSync(join(source, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\nproject(cache_fixture C CXX)\nadd_library(c STATIC fixture.c)\nadd_library(cxx STATIC fixture.cc)\nadd_executable(executable fixture.c)\n");
+    writeFileSync(join(source, "fixture.c"), "int c_fixture(void) { return 1; }\nint main(void) { return 0; }\n");
     writeFileSync(join(source, "fixture.cc"), "int cxx_fixture() { return 2; }\n");
     const configured = Bun.spawnSync(["cmake", "-S", source, "-B", build, "-G", "Ninja", "-DCMAKE_C_COMPILER=/usr/bin/cc", "-DCMAKE_CXX_COMPILER=/usr/bin/c++"].concat(configure(root)), { stdout: "pipe", stderr: "pipe" });
     expect(configured.exitCode, configured.stderr.toString()).toBe(0);
@@ -161,4 +161,37 @@ test("native CMake caches cannot silently retain a foreign sysroot", () => {
     expect(preflight(build, { EXPECTED_SYSROOT: "/" }).exitCode).toBe(0);
     refuseUnchanged(build, {}, "configured sysroot is /, requested native defaults");
   }, () => ["-DCMAKE_SYSROOT:PATH=/"]);
+});
+
+for (const phase of ["COMPILE", "LINK"]) {
+  test(`native defaults reject a cached ${phase} sysroot override`, () => {
+    fixture(build => {
+      refuseUnchanged(build, {}, `configured ${phase} sysroot is /, requested native defaults`);
+    }, () => [`-DCMAKE_SYSROOT_${phase}:PATH=/`]);
+  });
+
+  test(`a cached ${phase} override cannot bypass the requested patched sysroot`, () => {
+    fixture(build => {
+      const expected = join(build, "../expected-sysroot");
+      expect(readFileSync(join(build, "CMakeFiles/rules.ninja"), "utf8")).toContain("--sysroot=/ ");
+      refuseUnchanged(build, { EXPECTED_SYSROOT: expected }, `${phase} sysroot is /, requested`);
+    }, root => {
+      const expected = join(root, "expected-sysroot");
+      mkdirSync(expected);
+      // A real configure, with static compiler probes, needs no SDK or system headers.
+      return [`-DCMAKE_SYSROOT:PATH=${expected}`, "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY", `-DCMAKE_SYSROOT_${phase}:PATH=/`];
+    });
+  });
+
+  test(`an empty ${phase} override cannot erase an expected sysroot`, () => {
+    fixture(build => {
+      refuseUnchanged(build, { EXPECTED_SYSROOT: "/" }, `missing configured ${phase} sysroot`);
+    }, () => ["-DCMAKE_SYSROOT:PATH=/", `-DCMAKE_SYSROOT_${phase}:PATH=`]);
+  });
+}
+
+test("matching explicit compile and link sysroots remain reusable", () => {
+  fixture(build => {
+    expect(preflight(build, { EXPECTED_SYSROOT: "/" }).exitCode).toBe(0);
+  }, () => ["-DCMAKE_SYSROOT:PATH=/", "-DCMAKE_SYSROOT_COMPILE:PATH=/", "-DCMAKE_SYSROOT_LINK:PATH=/"]);
 });
