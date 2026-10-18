@@ -170,7 +170,9 @@ The typed server driver now dispatches Node request headers first, forwards
 incremental body chunks and trailers, and updates `req.complete` at the body
 terminator. IncomingMessage backpressure pauses host reads. Request reading
 resumes from `_read`. Connection reuse waits for both upload completion and the
-response. Upgrade requests retain the complete-body and buffered-head contract.
+response. A finished response drains an unread body so its high-water mark
+cannot strand the next request. A closing response does not wait for upload EOF.
+Upgrade requests retain the complete-body and buffered-head contract.
 
 Bun Response streams now send headers and chunks before EOF. Socket write
 completion controls further reads. Unknown-length streams use chunked framing;
