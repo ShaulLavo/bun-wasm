@@ -69,7 +69,8 @@ function forwardRequest(upstream, transport, incoming, outgoing) {
   });
   forwarded.writable.on("error", fail);
   forwarded.response.then(response => forwardResponse(target, outgoing, response, fail)).catch(fail);
-  incoming.pipe(forwarded.writable);
+  if (forwarded.writable.writableEnded) incoming.resume();
+  else incoming.pipe(forwarded.writable);
 }
 
 function forwardResponse(target, outgoing, response, fail) {

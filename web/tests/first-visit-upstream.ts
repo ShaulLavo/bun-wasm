@@ -70,7 +70,7 @@ export class Upstream {
 
   private http2(target: URL, options: RequestOptions, response: ResponseSink): ClientHttp2Stream {
     const session = this.session ??= this.open(options.autoSelectFamilyAttemptTimeout);
-    const stream = session.request({ ...endToEnd(options.headers), ":method": options.method ?? "GET", ":path": target.pathname + target.search, ":authority": target.host }, { endStream: false, signal: options.signal });
+    const stream = session.request({ ...endToEnd(options.headers), ":method": options.method ?? "GET", ":path": target.pathname + target.search, ":authority": target.host }, { endStream: options.method === undefined || options.method === "GET" || options.method === "HEAD", signal: options.signal });
     this.active.add(stream);
     stream.once("close", () => this.active.delete(stream));
     stream.once("response", headers => {

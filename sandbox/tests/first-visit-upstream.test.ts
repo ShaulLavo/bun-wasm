@@ -19,7 +19,7 @@ test("HTTP/2 asset requests share a connection and filter hop headers", async ()
   let connections = 0;
   server.on("session", session => { sessions.add(session); connections++; session.once("close", () => sessions.delete(session)); });
   server.on("stream", (stream: ServerHttp2Stream, headers: IncomingHttpHeaders) => {
-    stream.once("end", () => { stream.respond({ ":status": 200 }); stream.end(headers[":path"]); });
+    stream.once("end", () => { if (stream.destroyed) return; stream.respond({ ":status": 200 }); stream.end(headers[":path"]); });
     stream.resume();
   });
   let client;
