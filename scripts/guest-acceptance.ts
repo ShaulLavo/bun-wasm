@@ -6,14 +6,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeGuest, prepareGuest, verifyGuest, type GuestArtifact, type GuestDescriptor } from "./guest-artifact.ts";
+import { verifyGuestBuildReceipt, type GuestBuildReceipt } from "./guest-build-receipt.ts";
 
 const artifacts = ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"] as const;
 const browsers = ["chromium", "firefox", "webkit"] as const;
 interface ArtifactReceipt { name: string; sha256: string; bytes: number }
+interface SnapshotArtifact extends ArtifactReceipt { receipt: GuestBuildReceipt }
 export interface PublicationSnapshot {
   directory: string;
-  artifacts: readonly ArtifactReceipt[];
-  selected: ArtifactReceipt;
+  artifacts: readonly SnapshotArtifact[];
+  selected: SnapshotArtifact;
 }
 
 /** Missing siblings are a hard failure for publication, never a skipped gate. */
@@ -26,11 +28,19 @@ export async function verifyPublicationInputs(dist: string, descriptor: GuestDes
       return undefined;
     });
     if (!metadata?.isFile() || metadata.size === 0) missing.push(path);
+    const receiptPath = `${path}.build.json`;
+    const receiptMetadata = await stat(receiptPath).catch(error => {
+      if (error.code !== "ENOENT") throw error;
+      return undefined;
+    });
+    if (!receiptMetadata?.isFile() || receiptMetadata.size === 0) missing.push(receiptPath);
   }
-  if (missing.length) throw new Error(`Guest publication requires the full interruption matrix; missing: ${missing.join(", ")}`);
+  if (missing.length) throw new Error(`Guest publication requires the full interruption matrix and build receipts; missing: ${missing.join(", ")}`);
   for (const name of artifacts) {
-    const candidate = describeGuest(await readFile(join(dist, name)));
-    if (candidate.sha256 === descriptor.sha256 && candidate.bytes === descriptor.bytes) return;
+    const candidate = await readFile(join(dist, name));
+    verifyGuestBuildReceipt(candidate, JSON.parse(await readFile(`${join(dist, name)}.build.json`, "utf8")));
+    const described = describeGuest(candidate);
+    if (described.sha256 === descriptor.sha256 && described.bytes === descriptor.bytes) return;
   }
   throw new Error("Guest publication integrity mismatch: upload is not one of the tested matrix artifacts");
 }
@@ -39,12 +49,16 @@ export async function verifyPublicationInputs(dist: string, descriptor: GuestDes
 export async function snapshotPublicationInputs(dist: string, descriptor: GuestDescriptor, directory: string): Promise<PublicationSnapshot> {
   await verifyPublicationInputs(dist, descriptor);
   await mkdir(directory, { mode: 0o700 });
-  const receipts: ArtifactReceipt[] = [];
+  const receipts: SnapshotArtifact[] = [];
   for (const name of artifacts) {
-    const bytes = await readFile(join(dist, name));
+    const path = join(dist, name);
+    const bytes = await readFile(path);
+    const receipt = JSON.parse(await readFile(`${path}.build.json`, "utf8"));
+    verifyGuestBuildReceipt(bytes, receipt);
     const candidate = describeGuest(bytes);
     await writeFile(join(directory, name), bytes, { flag: "wx", mode: 0o400 });
-    receipts.push({ name, sha256: candidate.sha256, bytes: candidate.bytes });
+    await writeFile(join(directory, `${name}.build.json`), JSON.stringify(receipt, null, 2) + "\n", { flag: "wx", mode: 0o400 });
+    receipts.push({ name, sha256: candidate.sha256, bytes: candidate.bytes, receipt });
   }
   const selected = receipts.find(candidate => candidate.sha256 === descriptor.sha256 && candidate.bytes === descriptor.bytes);
   if (!selected) throw new Error("Guest publication integrity mismatch: build changed before snapshot");

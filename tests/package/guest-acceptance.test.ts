@@ -10,6 +10,16 @@ const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const descriptor = describeGuest(wasm);
 const names = ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"];
 
+async function writeReceipts(dist: string, bytes = wasm): Promise<void> {
+  const described = describeGuest(bytes);
+  for (const name of names) {
+    await writeFile(join(dist, `${name}.build.json`), JSON.stringify({
+      bunHead: "a".repeat(40), bunTree: "b".repeat(40), sysrootReceiptSha256: "c".repeat(64),
+      artifactSha256: described.sha256, artifactBytes: described.bytes,
+    }) + "\n");
+  }
+}
+
 async function fixture(run: (dist: string) => Promise<void>) {
   const dist = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-publication-inputs-"));
   try { await run(dist); }
@@ -31,14 +41,34 @@ test("publication requires all three nonempty builds and names every missing inp
 test("publication verifies the exact upload against a matrix artifact", async () => {
   await fixture(async dist => {
     for (const name of names) await writeFile(join(dist, name), wasm);
+    await writeReceipts(dist);
     await expect(verifyPublicationInputs(dist, descriptor)).resolves.toBeUndefined();
     await expect(verifyPublicationInputs(dist, { ...descriptor, sha256: "0".repeat(64) })).rejects.toThrow("integrity mismatch");
+  });
+});
+
+test("publication requires a receipt for every full-build artifact", async () => {
+  await fixture(async dist => {
+    for (const name of names) await writeFile(join(dist, name), wasm);
+    await writeReceipts(dist);
+    await rm(join(dist, "bun-jsc.wasm.build.json"));
+    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow(join(dist, "bun-jsc.wasm.build.json"));
+  });
+});
+
+test("publication rejects a receipt that does not match its artifact", async () => {
+  await fixture(async dist => {
+    for (const name of names) await writeFile(join(dist, name), wasm);
+    await writeReceipts(dist);
+    await writeReceipts(dist, new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, 1, 0]));
+    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("does not match artifact bytes");
   });
 });
 
 test("aborted publication cannot launch browser acceptance or upload", async () => {
   await fixture(async dist => {
     for (const name of names) await writeFile(join(dist, name), wasm);
+    await writeReceipts(dist);
     const signal = AbortSignal.abort(new Error("test publication cancelled"));
     await expect(acceptGuestPublication(dist, descriptor, signal)).rejects.toThrow("test publication cancelled");
   });
@@ -79,6 +109,7 @@ function greenReceipts(snapshot: PublicationSnapshot) {
 async function withSnapshot(run: (dist: string, snapshot: PublicationSnapshot) => Promise<void>) {
   await fixture(async dist => {
     for (const name of names) await writeFile(join(dist, name), wasm);
+    await writeReceipts(dist);
     const snapshot = await snapshotPublicationInputs(dist, descriptor, join(dist, "snapshot"));
     try { await run(dist, snapshot); }
     finally { await chmod(snapshot.directory, 0o700); }
@@ -139,7 +170,7 @@ test("real CLI resolves its default dist inside a checkout path containing space
   await fixture(async directory => {
     const root = join(directory, "checkout with spaces # encoded"), dist = join(root, "dist");
     await mkdir(join(root, "scripts"), { recursive: true }); await mkdir(dist);
-    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts"]) {
+    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts", "guest-build-receipt.ts"]) {
       await copyFile(fileURLToPath(new URL(`../../scripts/${name}`, import.meta.url)), join(root, "scripts", name));
     }
     const input = join(dist, "bun.wasm"); await writeFile(input, wasm);
