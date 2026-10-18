@@ -1639,7 +1639,7 @@ upstream MIT license under `third_party/streams/`.
 
 Class **Host feature**, **original adapters** in `src/js/net.js`,
 `src/js/http_common.ts`, `src/js/http_body.ts`, `src/js/http_agent.ts`,
-`src/js/http_serve.ts`, `src/js/http_response.ts`, `src/js/fetch_body.ts`,
+`src/js/http_response.ts`, `src/js/fetch_body.ts`,
 `src/js/body_streams.ts`,
 byte-stream metadata in `src/js/web.js`, socket-close
 completion in `src/js/node_net.js`, and the `node:http` registry
@@ -1684,15 +1684,13 @@ hooks. The original TCP adapter defers socket-destroy completion to the check
 phase so the completed request stream closes before its socket, as in Node.
 `net-http-close-order` compares this order unchanged on Node and all engines.
 
-The 2026-10-18 server refinement uses original typed adapters for incremental
-request delivery and Bun response streaming. Node request listeners run after
-headers arrive. The existing body decoder forwards chunks and trailers into
-IncomingMessage, whose backpressure pauses host reads. Completion waits for
-both the body terminator and response finish before reusing the connection.
-Bun Response streams send headers and body chunks without waiting for EOF.
-Each socket write finishes before another chunk is read. Fixed byte bodies
-retain their existing Content-Length path. These adapters use Bun's unchanged
-tests at `5e0baa66516f3af00b008cdf1521c681317741e8` as behavioral references.
+The 2026-10-18 server refinement uses original typed adapters for Bun response
+streaming and fetch-body abort cleanup. Bun Response streams send headers and
+body chunks without waiting for EOF. Each socket write finishes before another
+chunk is read. Fixed byte bodies retain their existing Content-Length path.
+These adapters use Bun's unchanged tests at
+`5e0baa66516f3af00b008cdf1521c681317741e8` as behavioral references.
+Node request dispatch retains its existing complete-upload behavior.
 
 HTTPS requests continue to use the host's TLS fetch transport. The raw socket
 ABI has no TLS capability, so HTTPS upgrades without a caller-supplied connection

@@ -832,3 +832,32 @@ refuses an unavailable writer lock; `fs/opfs.ts:187` closes its owner. A delayed
 lock release is a candidate, not a confirmed cause. No runtime change or retry
 was added. Evidence is in `/work/reports/bun-wasm-web-worker/waffle-final/`;
 the coordinator removes it after PR acceptance and this observation is triaged.
+
+### Node HTTP upload dispatch, 2026-10-18
+
+Status: Approved follow-up. Keep separate from Bun response streaming.
+
+`serveHttp` in `crates/bunwasm-runtime/src/js/net.js` waits for the complete
+request before calling an ordinary Node HTTP listener. A client that writes
+`first` and waits for a response before calling `end()` stalls. Native Bun
+prints `handler false`, `chunk first false`, and `received` for the retained
+upload reproducer. All three original guest engines stall. Evidence and the
+reproducer are under `/work/reports/bun-wasm-http-scoreboard-20261018/`.
+The coordinator owns that evidence until this follow-up is accepted.
+
+Dispatching headers early also requires handling an ignored body larger than
+IncomingMessage's high-water mark. The retained `ignored-upload.ts` sends a
+128 KiB POST followed by a GET on one socket. Native Bun and unchanged main
+print `/ignored`, `/next`, `two responses`. An early-dispatch candidate stranded
+the second response. Its automatic-drain refinement then reduced the unmodified
+QuickJS gzip file from 62 observed passes to 33 before the file deadline.
+The candidate is excluded from the response-streaming PR.
+
+Start from unchanged Node dispatch. Reproduce both upload cases, preserve
+`req.complete`, explicit socket pauses, response close policy and connection
+reuse, then measure `node-http-req-complete.test.ts`,
+`node-http-req-socket-pause.test.ts`, `node-http-server-close-drain.test.ts` and
+`js/web/fetch/fetch-gzip.test.ts` on every engine. No process-layer changes were
+made. Keep the child larger-than-1-GiB gzip case distinct from protocol behavior;
+its direct original and changed controls both hit the guest memory limit with
+exit 134. Do not skip it or change its upstream assertions.

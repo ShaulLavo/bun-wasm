@@ -166,11 +166,10 @@ before sending Bun Response headers. A stream that waits for a client handshake
 cannot make progress either. The new fixtures reproduce both cycles without
 subprocesses or external network access.
 
-The typed server driver now dispatches Node request headers first, forwards
-incremental body chunks and trailers, and updates `req.complete` at the body
-terminator. IncomingMessage backpressure pauses host reads. Request reading
-resumes from `_read`. Connection reuse waits for both upload completion and the
-response. Upgrade requests retain the complete-body and buffered-head contract.
+The response path is the selected fix. The Node request dispatcher retains its
+existing complete-upload behavior. Its header timing, unread-body draining and
+backpressure need a separate change. The reproduced upload cycle and raw
+controls are recorded in the compatibility follow-up plan.
 
 Bun Response streams now send headers and chunks before EOF. Socket write
 completion controls further reads. Unknown-length streams use chunked framing;

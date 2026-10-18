@@ -430,10 +430,67 @@
   const UPGRADED = Symbol("websocket upgrade");
 
   function serveHttp(conn, handleRequest, startRequest) {
-    return internal.require("http_serve").serve(conn, {
-      parseHead, parseRequest, handleRequest, startRequest, wantsKeepAlive,
-      body: internal.require("http_body"), upgraded: UPGRADED, reportError: internal.printError, wake: native.wake,
-    });
+    let pending = null;
+    let buffer = new Uint8Array(0);
+    let busy = false;
+    let ended = false;
+    function next() {
+      if (busy || conn.closed) return;
+      let request;
+      try {
+        if (startRequest && !pending && buffer.length) {
+          const head = parseHead(buffer);
+          if (head && header(head.headers, "expect")?.toLowerCase() === "100-continue") pending = startRequest(head, conn, wantsKeepAlive(head));
+        }
+        request = buffer.length ? parseRequest(buffer) : null;
+      } catch {
+        conn.write(encoder.encode("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+        conn.end();
+        return;
+      }
+      if (!request) {
+        if (ended) conn.end();
+        return;
+      }
+      buffer = buffer.slice(request.length);
+      busy = true;
+      conn.busy = true;
+      const keepAlive = wantsKeepAlive(request) && !ended;
+      const active = pending;
+      pending = null;
+      if (active) active.receive(request.body, request.trailers);
+      Promise.resolve()
+        .then(() => active ? active.response : handleRequest(request, conn, keepAlive))
+        .catch((err) => {
+          internal.printError(err);
+          conn.write(encoder.encode("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+          return false;
+        })
+        .then((stillOpen) => {
+          if (stillOpen === UPGRADED) {
+            conn.upgraded.activate(buffer);
+            buffer = new Uint8Array(0);
+            return;
+          }
+          busy = false;
+          conn.busy = false;
+          if (stillOpen === false || !keepAlive || conn.serverClosing) {
+            conn.end();
+            return;
+          }
+          next();
+        });
+    }
+    conn.onData = (chunk) => {
+      buffer = buffer.length ? internal.concatBytes([buffer, chunk]) : chunk;
+      next();
+    };
+    conn.onEnd = () => {
+      ended = true;
+      if (!busy) next();
+    };
+    conn.onError = () => {};
+    conn.startReading();
   }
 
   // --- Bun.serve --------------------------------------------------------------
@@ -1080,12 +1137,14 @@
             this.emit("request", req, res);
           }
         });
-        const receiver = internal.require("http_serve").incoming({
-          request: req, socket, response, highWaterMark: this._options.highWaterMark,
-          buffer: Buffer.from, setHeaders: setHeaderPairs,
-        });
-        if (deferBody) return receiver;
-        receiver.receive(request.body, request.trailers || [], true);
+        const receive = (body, trailers = []) => {
+          setHeaderPairs({ headers: req.trailers, rawHeaders: req.rawTrailers, headersDistinct: req.trailersDistinct }, trailers);
+          req.complete = true;
+          if (body.length) req.push(Buffer.from(body));
+          req.push(null);
+        };
+        if (deferBody) return { response, receive };
+        receive(request.body, request.trailers);
         return response;
       }
       address() {
