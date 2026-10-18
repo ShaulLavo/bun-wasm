@@ -291,8 +291,8 @@ fn run_instance(
         processes,
         limits: StoreLimitsBuilder::new()
             .memory_size(memory_limit)
-            // One guest plus six memory-sharing preview1 delegation adapters.
-            .instances(7)
+            // One guest and bounded memory-sharing preview1 delegation adapters.
+            .instances(40)
             .build(),
         memory: None,
         trace: std::env::var("BUN_WASM_TRACE").is_ok_and(|v| !v.is_empty() && v != "0"),
@@ -322,6 +322,7 @@ fn run_instance(
     let instance = linker.instantiate(&mut store, runtime.module_for(&argv)?)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");
     slots::install(&mut store, &instance)?;
+    process::wasi::initialize(&linker, &mut store)?;
 
     let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
     let result = start.call(&mut store, ());

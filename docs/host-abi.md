@@ -366,7 +366,11 @@ bindings support arbitrary nonnegative child descriptors and share their open de
 across spawn and duplication. A private Wasmtime filesystem descriptor cannot currently be
 transferred through `fds`; the launcher rejects that request with `-8` (`EBADF`) rather than
 silently replacing or dropping it. Process descriptors support ordinary WASI read, write,
-close and renumber operations as well as the direct process imports.
+close, renumber and `poll_oneoff` operations as well as the direct process imports. Filesystem
+handles are translated through a private descriptor map, so inherited streams cannot expose
+or revive a preopen with the same underlying number. Renumbering replaces files and streams
+in either direction. Mixed filesystem, clock and stream polls preserve guest subscriptions;
+handled signals interrupt a blocked poll without consuming the signal.
 
 ## Hosts
 

@@ -20,5 +20,7 @@
   {"name":"negative descriptor","valid":false,"request":{"executable":"bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[{"child":0,"parent":-1}]}},
   {"name":"descriptor beyond signed i32","valid":false,"request":{"executable":"bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[{"child":2147483648,"parent":0}]}},
   {"name":"fractional descriptor","valid":false,"request":{"executable":"bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[{"child":1.5,"parent":0}]}},
-  {"name":"null binding","valid":false,"request":{"executable":"bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[null]}}
+  {"name":"null binding","valid":false,"request":{"executable":"bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[null]}},
+  {"name":"integral-number-lexemes","valid":true,"raw":"{\"executable\":\"bun\",\"argv\":[],\"env\":{},\"cwd\":\"/\",\"job\":0,\"fds\":[{\"child\":1.0,\"parent\":1e0},{\"child\":-0,\"parent\":-0}]}"},
+  {"name":"fractional-number-lexeme","valid":false,"raw":"{\"executable\":\"bun\",\"argv\":[],\"env\":{},\"cwd\":\"/\",\"job\":0,\"fds\":[{\"child\":1e-1,\"parent\":0}]}"}
 ]

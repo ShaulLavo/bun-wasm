@@ -91,7 +91,11 @@ fn spawn_request_shared_json_conformance() {
     ))
     .unwrap();
     for case in cases.as_array().unwrap() {
-        let decoded = Request::decode(&serde_json::to_vec(&case["request"]).unwrap());
+        let bytes = case["raw"]
+            .as_str()
+            .map(|raw| raw.as_bytes().to_vec())
+            .unwrap_or_else(|| serde_json::to_vec(&case["request"]).unwrap());
+        let decoded = Request::decode(&bytes);
         assert_eq!(
             decoded.is_ok(),
             case["valid"].as_bool().unwrap(),
@@ -99,7 +103,7 @@ fn spawn_request_shared_json_conformance() {
             case["name"]
         );
         if let Ok(decoded) = decoded {
-            let expected = &case["request"];
+            let expected: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(decoded.executable, expected["executable"].as_str().unwrap());
             assert_eq!(
                 serde_json::to_value(decoded.argv).unwrap(),
@@ -113,7 +117,8 @@ fn spawn_request_shared_json_conformance() {
                 .into_iter()
                 .map(|fd| serde_json::json!({"child":fd.child,"parent":fd.parent}))
                 .collect();
-            assert_eq!(serde_json::Value::Array(fds), expected["fds"]);
+            let expected_fds: Vec<serde_json::Value> = expected["fds"].as_array().unwrap().iter().map(|fd| serde_json::json!({"child": fd["child"].as_f64().unwrap() as i32, "parent": fd["parent"].as_f64().unwrap() as i32})).collect();
+            assert_eq!(fds, expected_fds);
         }
     }
 }
@@ -395,4 +400,18 @@ fn ordinary_children_join_the_current_job_without_reaping_it() {
     completed(&processes, pid);
     assert_eq!(processes.wait_job(processes.job_of(pid), 0), Ok(0));
     assert_eq!(processes.job_of(0), job);
+}
+
+#[test]
+fn a_completed_unreaped_job_rejects_new_members() {
+    let mut p = processes();
+    let pid = p.spawn(&request("bun", serde_json::json!([])));
+    assert!(pid > 0);
+    let job = p.job_of(pid);
+    completed(&p, pid);
+    let mut meta: serde_json::Value =
+        serde_json::from_slice(&request("bun", serde_json::json!([]))).unwrap();
+    meta["job"] = job.into();
+    assert_eq!(p.spawn(&serde_json::to_vec(&meta).unwrap()), CHILD);
+    assert_eq!(p.wait_job(job, 0), Ok(0));
 }
