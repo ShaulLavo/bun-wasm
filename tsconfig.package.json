@@ -16,7 +16,15 @@
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": {
+      "waffle": [
+        "./node_modules/waffle/index.ts"
+      ],
+      "waffle/*": [
+        "./node_modules/waffle/*"
+      ]
+    }
   },
   "include": [
     "web/src/index.ts",

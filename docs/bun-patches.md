@@ -48,6 +48,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
 | [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun and Node spawn adapters map Waffle startup failures to ENOENT/EACCES and preserve failed Node streams. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
+| [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original runtime_proc imports, nonblocking filesystem preparation, preview1 notification waits and lazy browser process integration. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
 | [0002](#0002-filesystem-threading-and-layout) | Port | Add WASI directory iteration, stat, watcher, and single-thread primitives. |
@@ -2478,3 +2479,18 @@ at `5e0baa66516f3af00b008cdf1521c681317741e8`. The archives retain their upstrea
 license files. There are no local changes. Keeping these 6,434 bytes lets the
 workspace conflict regression extract and import all three recorded packages
 without contacting a public registry.
+
+## Caller-owned Bun package adapters
+
+`web/src/{index,bun-adapter,assets,guest-asset.generated,worker-entry}.ts`, `build.ts`,
+`prepare.ts`, and `scripts/{guest-artifact,publish-guest}.ts` are original bun-wasm
+adapters and tooling, not copied or adapted upstream implementations. They register
+Bun names and executable markers on the caller-owned Waffle runtime, export the existing worker without demo
+code, verify decompressed guest size and SHA-256 before compilation, and publish
+content-addressed guest objects without replacing differing content. Process launching
+remains an explicit typed rejection until the generic process bridge is implemented.
+
+Waffle is consumed unchanged as a pinned Git peer/development dependency; the package
+does not embed its implementation or create a second runtime. Existing worker and net
+imports use explicit extensions for strict module resolution. No upstream patch or
+copied implementation was introduced by this packaging work.

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { build } from "vite";
@@ -25,6 +25,21 @@ test("packed package includes a working public worker, no demo or guest binaries
     await mkdir(join(scratch, "node_modules"));
     await symlink(join(scratch, "package"), join(scratch, "node_modules/bun-wasm"));
     await symlink(join(root, "node_modules/waffle"), join(scratch, "node_modules/waffle"));
+    await symlink(join(root, "node_modules/@types"), join(scratch, "node_modules/@types"));
+    await writeFile(join(scratch, "consumer.ts"), `
+      import { installBunAdapters, BunWasmExecutableConflictError } from "bun-wasm";
+      import { loadBunWasm } from "bun-wasm/asset";
+      import "bun-wasm/worker";
+      import type { Runtime } from "waffle";
+      export async function install(runtime: Runtime) { return installBunAdapters(runtime); }
+      export { loadBunWasm, BunWasmExecutableConflictError };
+    `);
+    // Check the actual tarball and its exact peer, including the complete worker import
+    // closure. No path aliases, dependency exclusions or diagnostic filters apply here.
+    await execute("node", [join(root, "node_modules/typescript/bin/tsc"), "--module", "NodeNext",
+      "--moduleResolution", "NodeNext", "--target", "ES2022", "--lib", "ES2022,DOM,DOM.Iterable,WebWorker",
+      "--types", "bun", "--strict", "--noUncheckedIndexedAccess", "--skipLibCheck", "--noEmit",
+      "--allowImportingTsExtensions", join(scratch, "consumer.ts")], { cwd: scratch, timeout: 20_000 });
     await copyFile(join(import.meta.dir, "fixtures/vite-main.ts"), join(scratch, "main.ts"));
     await build({ configFile: false, root: scratch, logLevel: "error", worker: { format: "es" },
       build: { outDir: join(scratch, "output"), minify: false, rolldownOptions: { input: join(scratch, "main.ts") } },

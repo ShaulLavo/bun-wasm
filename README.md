@@ -49,7 +49,7 @@ import { installBunAdapters } from "bun-wasm";
 import bunWorkerUrl from "bun-wasm/worker?worker&url";
 
 // runtime is the same instance already owned by bash-web/the application.
-const installation = installBunAdapters(runtime, {
+const installation = await installBunAdapters(runtime, {
   workerUrl: bunWorkerUrl,
   engine: "browser", // default; quickjs/jsc need their matching guest module or descriptor
   // module: offlineCompiledModule,
@@ -57,8 +57,9 @@ const installation = installBunAdapters(runtime, {
   // asset: { url, sha256, bytes },
 });
 
-// Registers bun:quickjs, bun:jsc, bun:browser and the selected engine's bun + /bin/bun aliases.
-// Optional executables: ["bun-browser"] chooses other names; [] leaves aliases caller-owned.
+// Registers bun:quickjs, bun:jsc, bun:browser and the selected engine at /bin/bun.
+// Optional executables: ["/opt/bun/browser"] chooses other paths; [] leaves programs caller-owned.
+// With the default browser engine, await installBunAdapters(runtime) needs no options.
 // After step 7b, ordinary Waffle spawn requests select these registered executable names.
 
 installation.dispose(); // idempotent; unregisters only this installation's adapters/programs
@@ -69,6 +70,12 @@ installation.dispose(); // idempotent; unregisters only this installation's adap
 The installer makes no process/root reservations and does not own preview1 adapters, filesystem
 services, terminal streams, shell jobs, or the Runtime lifetime. Registration failures roll back
 all registrations already made by that installation. Unrelated registrations are preserved.
+Installation creates parent directories and a small executable marker at each registered absolute
+path. A different existing file or directory rejects with `BunWasmExecutableConflictError`
+(`BUN_WASM_EXECUTABLE_CONFLICT`) and is never deliberately replaced. Matching markers can be
+reused; disposal leaves them in the caller-owned filesystem, so reinstall works without deleting
+files that existing processes might use. File checks and writes are not atomic against concurrent
+external writers because Waffle's host filesystem API does not yet offer exclusive creation.
 Callers that register extra programs with Waffle are responsible for their own unregister handles.
 
 ### Worker bundling
