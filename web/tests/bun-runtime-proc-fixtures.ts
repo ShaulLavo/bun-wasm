@@ -173,6 +173,14 @@ const mainScenarios: BunRuntimeScenario[] = [
     { source: `const input=await Bun.stdin.text();if(input!=='pipeline-out\\npipeline-err\\n')throw Error(JSON.stringify(input));console.log('pipeline-merged-ok');`, fds: [{ child: 0, parent: "reader" }, { child: 1, parent: 1 }, { child: 2, parent: 2 }] },
   ], stdout: "pipeline-merged-ok\nexternal-root-ok\n" },
   { name: "stdin-reader-lifetime", pipe: "input", input: "payload!", commands: [{ source: readerLifetime, fds: [{ child: 0, parent: "reader" }, { child: 1, parent: 1 }, { child: 2, parent: 2 }] }], stdout: "payload\nparent-reader-alive\nexternal-root-ok\n" },
+  { name: "readv-process-stdin", pipe: "input", input: "abc", commands: [{
+    source: `const f=require('node:fs'),first=Buffer.alloc(4,'.'),tail=new Uint8Array(5).fill(46),views=[first,new DataView(tail.buffer,1,3)];let sync=true;const pending=new Promise((resolve,reject)=>f.readv(0,views,(error,count,buffers)=>{if(error)return reject(error);if(sync||count!==3||buffers!==views||first.toString()!=='abc.'||Buffer.from(tail).toString()!=='.....')return reject(Error('pipe readv scatter/timing'));resolve()}));sync=false;await pending;await new Promise((resolve,reject)=>f.readv(0,views,(error,count,buffers)=>error?reject(error):count===0&&buffers===views&&first.toString()==='abc.'?resolve():reject(Error('pipe readv EOF'))));console.log('readv-stdin-ok');`,
+    fds: [{ child: 0, parent: "reader" }, { child: 1, parent: 1 }, { child: 2, parent: 2 }],
+  }], stdout: "readv-stdin-ok\nexternal-root-ok\n" },
+  { name: "readv-inherited-file-cursor", fileCursor: true, commands: [{
+    source: `const f=require('node:fs'),positioned=[Buffer.alloc(2),Buffer.alloc(2)];if(f.readvSync(4,positioned,2)!==4||Buffer.concat(positioned).toString()!=='curs')throw Error('positioned readv');const first=Buffer.alloc(4,'.'),middle=new Uint8Array(4).fill(46),last=Buffer.alloc(2),views=[first.subarray(1,3),new DataView(middle.buffer,1,2),last];await new Promise((resolve,reject)=>f.readv(4,views,(error,count,buffers)=>{if(error)return reject(error);if(count!==6||buffers!==views||first.toString()!=='.cu.'||Buffer.from(middle).toString()!=='.rs.'||last.toString()!=='or')return reject(Error('shared cursor readv'));resolve()}));f.writeSync(3,'readv-file-ok\\n');`,
+    fds: ordinary.concat([{ child: 3, parent: 1 }, { child: 4, parent: "reader" }]),
+  }], stdout: "readv-file-ok\nexternal-root-ok\n" },
   { name: "postleader-job-wait", commands: [{ source: `Bun.spawn(['bun','-e',"await Bun.sleep(100);console.log('postleader-child');"],{stdin:'inherit',stdout:'inherit',stderr:'inherit'});process.exit(0);` }], stdout: "postleader-child\nexternal-root-ok\n" },
   { name: "guest-kill-job-descendants", pipe: "signal", commands: [{ source: readyTree, kind: 1, status: 9,
     fds: [{ child: 0, parent: 0 }, { child: 1, parent: "writer" }, { child: 2, parent: 2 }] }], stdout: "external-root-ok\n" },

@@ -2885,7 +2885,10 @@ held open: both a short first view and a completely filled first view must retur
 without another read. The parent enforces a deadline and owns writer closure,
 child termination and reaping. Separate native-reference fixtures keep the
 shared behaviour and Bun-only empty-vector contract apart; those fixtures own
-and remove their temporary input files.
+and remove their temporary input files. Browser acceptance adds real inherited-file
+positioned/sequential cursor checks and process-stdin short-read/EOF scattering,
+including mixed offset views and callback identity. The external root retains
+its final cursor check and owns all opened descriptors.
 
 ## Patched sysroot and native descriptor bridge
 
