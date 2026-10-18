@@ -23,6 +23,7 @@ function fixture() {
       writeFile: async (path: string, bytes: Uint8Array) => { files.set(path, new Uint8Array(bytes)); },
       mkdirp: async (path: string) => { directories.add(path); },
       remove: async (path: string) => files.delete(path),
+      drain: async () => {},
     },
   } as unknown as Runtime;
   return { runtime, adapters, programs, files, directories, removed };

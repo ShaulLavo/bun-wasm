@@ -93,10 +93,16 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
     }
   } catch (error) {
     for (const unregister of unregisters.reverse()) unregister();
+    // Waffle also queues mutation errors for drain; consume the already-caught failure
+    // before rollback reads, or their drain would fail without checking the marker.
+    try { await runtime.filesystem.drain(); } catch {}
     for (const name of created.reverse()) {
       try {
         if (matchesMarker(await runtime.filesystem.readFile(name))) await runtime.filesystem.remove(name);
-      } catch { /* Preserve the installation failure; the caller still owns its filesystem. */ }
+      } catch {
+        // Clear a failed rollback mutation too, so cleanup of other markers can continue.
+        try { await runtime.filesystem.drain(); } catch {}
+      }
     }
     throw error;
   } finally { installing.delete(runtime); }

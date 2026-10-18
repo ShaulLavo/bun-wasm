@@ -42,19 +42,25 @@ export async function verifyPublicGuest(descriptor: GuestDescriptor, fetch: Gues
 }
 
 export async function publishGuest(artifact: GuestArtifact, publisher: GuestPublisher): Promise<GuestDescriptor> {
+  // Own the verified bytes and metadata before any callback can mutate the caller's artifact.
+  const { key, gzip, descriptor } = artifact;
+  const snapshot: GuestArtifact = {
+    key, gzip: new Uint8Array(gzip),
+    descriptor: { url: descriptor.url, sha256: descriptor.sha256, bytes: descriptor.bytes },
+  };
   // Keys are computed from the exact raw bytes uploaded. Concurrent valid publishers therefore
   // publish the same content; do not use REST If-None-Match, which R2's management API ignores.
-  verifyGuest(artifact.gzip, artifact.descriptor);
-  if (artifact.key !== `${artifact.descriptor.sha256}/bun.wasm.gz`) throw new Error("Guest key does not match its SHA-256");
-  const existing = await publisher.read(artifact.key);
+  verifyGuest(snapshot.gzip, snapshot.descriptor);
+  if (snapshot.key !== `${snapshot.descriptor.sha256}/bun.wasm.gz`) throw new Error("Guest key does not match its SHA-256");
+  const existing = await publisher.read(snapshot.key);
   if (existing !== null) {
     // An existing wrong object is an error, never a reason to replace immutable data.
-    verifyGuest(existing, artifact.descriptor);
+    verifyGuest(existing, snapshot.descriptor);
   } else {
-    await publisher.upload(artifact);
+    await publisher.upload(snapshot);
   }
-  await verifyPublicGuest(artifact.descriptor, publisher.fetch);
-  return artifact.descriptor;
+  await verifyPublicGuest(snapshot.descriptor, publisher.fetch);
+  return snapshot.descriptor;
 }
 
 export function createR2Publisher(options: { accountId: string; token: string; bucket: string; scratch: string; wrangler: string; signal?: AbortSignal }): GuestPublisher {

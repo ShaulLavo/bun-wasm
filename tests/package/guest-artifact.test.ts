@@ -69,6 +69,32 @@ test("first publication uploads, then checks public hash and headers", async () 
   expect(uploads).toEqual([artifact]);
 });
 
+test("publication snapshots caller bytes, key and descriptor before storage callbacks", async () => {
+  for (const exists of [false, true]) {
+    const original = prepareGuest(wasm);
+    const mutable = { key: original.key, gzip: new Uint8Array(original.gzip), descriptor: { ...original.descriptor } };
+    const uploads: GuestArtifact[] = [];
+    const store: GuestPublisher = {
+      async read(key) {
+        expect(key).toBe(original.key);
+        mutable.key = "existing-object/bun.wasm.gz";
+        mutable.gzip.fill(0);
+        mutable.descriptor.url = "https://example.test/changed.wasm.gz";
+        mutable.descriptor.sha256 = "0".repeat(64);
+        mutable.descriptor.bytes++;
+        return exists ? original.gzip : null;
+      },
+      async upload(value) { uploads.push(value); },
+      async fetch(input) {
+        expect(input).toBe(original.descriptor.url);
+        return new Response(wasm, { headers: publicHeaders });
+      },
+    };
+    expect(await publishGuest(mutable, store)).toEqual(original.descriptor);
+    expect(uploads).toEqual(exists ? [] : [original]);
+  }
+});
+
 test("an existing matching object is idempotent, including different gzip representations", async () => {
   const { store, uploads } = publisher(gzipSync(wasm, { level: 0 }));
   await publishGuest(artifact, store);

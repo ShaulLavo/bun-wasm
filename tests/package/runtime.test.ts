@@ -71,6 +71,18 @@ test("fresh pinned Runtime installs without options and spawning /bin/bun reache
   });
 });
 
+test("real Runtime rolls back markers after a later filesystem mutation fails", async () => {
+  await withRuntime(async runtime => {
+    await runtime.filesystem.writeFile("/blocked", "caller-owned parent file");
+    const error = await installBunAdapters(runtime, { executables: ["/bin/bun", "/blocked/bun"] }).catch(error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("filesystem errno");
+    expect(await runtime.filesystem.readFile("/bin/bun")).toBeUndefined();
+    expect(new TextDecoder().decode(await runtime.filesystem.readFile("/blocked"))).toBe("caller-owned parent file");
+    (await installBunAdapters(runtime)).dispose();
+  });
+});
+
 test("real Runtime installation never replaces a different existing executable file", async () => {
   await withRuntime(async runtime => {
     await runtime.filesystem.mkdirp("/bin");
