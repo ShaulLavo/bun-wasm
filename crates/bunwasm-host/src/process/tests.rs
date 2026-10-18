@@ -31,7 +31,8 @@ fn processes() -> Fixture {
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
             "/".into(),
         )],
-    );
+    )
+    .unwrap();
     Fixture(Processes::new(
         runtime,
         Stdio::inherited(),
@@ -208,12 +209,20 @@ fn spawn_rejects_unhandable_filesystem_fd_without_partial_child() {
     let mut processes = processes();
     let cases: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/runtime-proc-spawn-requests.json"
-    )).unwrap();
-    let case = cases.as_array().unwrap().iter()
-        .find(|case| case["name"] == "untransferable parent descriptor").unwrap();
+    ))
+    .unwrap();
+    let case = cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "untransferable parent descriptor")
+        .unwrap();
     // Preview1 owns this filesystem descriptor, not the transferable process table.
     processes.reserve_file(91);
-    assert_eq!(processes.spawn(&serde_json::to_vec(&case["request"]).unwrap()), BADF);
+    assert_eq!(
+        processes.spawn(&serde_json::to_vec(&case["request"]).unwrap()),
+        BADF
+    );
     assert_eq!(processes.runtime.active.load(Ordering::Acquire), 0);
     assert_eq!(processes.runtime.state.lock().unwrap().processes.len(), 1);
 }
@@ -223,7 +232,7 @@ fn spawn_retains_pipe_end_before_return_and_closes_it_before_wait() {
     let mut processes = processes();
     let [read, write] = processes.pipe().unwrap();
     let pid = processes.spawn(&request(
-        "bun",
+        "/bin/bun",
         serde_json::json!([{"child":1,"parent":write}]),
     ));
     assert!(pid > 0);
@@ -240,19 +249,51 @@ fn spawn_retains_pipe_end_before_return_and_closes_it_before_wait() {
 }
 
 #[test]
-fn unsupported_executable_is_an_observable_start_failure() {
+fn unregistered_paths_return_admission_errno_without_a_child() {
     let mut processes = processes();
-    let pid = processes.spawn(&request("not-installed", serde_json::json!([])));
-    assert!(pid > 0);
-    let job = processes.job_of(pid);
-    assert_eq!(completed(&processes, pid), FinalOutcome::Exit(127));
-    assert_eq!(processes.wait_job(job, 1), Ok(127));
+    for (path, errno) in [
+        ("bun", NOENT),
+        ("node", NOENT),
+        ("/bun", NOENT),
+        ("/node", NOENT),
+        ("/usr/local/bin/bun", NOENT),
+        ("/missing", NOENT),
+        ("/Cargo.toml", ACCES),
+        ("/", ACCES),
+        ("/bin", ACCES),
+        ("/Cargo.toml/child", NOTDIR),
+        ("/bin/bun/child", NOTDIR),
+        ("/bin/bun/../node", NOTDIR),
+        ("/missing/../bin/bun", NOENT),
+    ] {
+        assert_eq!(
+            processes.spawn(&request(path, serde_json::json!([]))),
+            errno,
+            "{path}"
+        );
+    }
+    assert_eq!(processes.runtime.state.lock().unwrap().processes.len(), 1);
+    assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);
 }
 
 #[test]
-fn registered_aliases_keep_ordinary_exit_outcomes() {
+fn only_supplied_engines_have_spawnable_files() {
     let mut processes = processes();
-    for command in BUN_EXECUTABLE_ALIASES {
+    let mut paths = executables::DEFAULT_PATHS.to_vec();
+    for (engine, engine_paths) in executables::ENGINE_PATHS {
+        for path in engine_paths {
+            assert_eq!(
+                processes.spawn(&request(path, serde_json::json!([]))),
+                NOENT
+            );
+        }
+        processes
+            .runtime
+            .register_engine(engine, &processes.runtime.module)
+            .unwrap();
+        paths.extend(engine_paths);
+    }
+    for command in paths {
         let pid = processes.spawn(&request(command, serde_json::json!([])));
         assert!(pid > 0, "{command}: {pid}");
         let job = processes.job_of(pid);
@@ -389,7 +430,7 @@ fn ordinary_children_join_the_current_job_without_reaping_it() {
     assert_eq!(job, ROOT_JOB);
     for _ in 0..8 {
         let mut meta: serde_json::Value =
-            serde_json::from_slice(&request("bun", serde_json::json!([]))).unwrap();
+            serde_json::from_slice(&request("/bin/bun", serde_json::json!([]))).unwrap();
         meta["job"] = job.into();
         let pid = processes.spawn(&serde_json::to_vec(&meta).unwrap());
         assert!(pid > 0);
@@ -399,7 +440,7 @@ fn ordinary_children_join_the_current_job_without_reaping_it() {
         assert_eq!(processes.wait_job(job, 1), Err(AGAIN));
         assert!(processes.cancel.check().is_ok());
     }
-    let pid = processes.spawn(&request("bun", serde_json::json!([])));
+    let pid = processes.spawn(&request("/bin/bun", serde_json::json!([])));
     assert!(pid > 0);
     assert_ne!(processes.job_of(pid), job);
     let detached_job = processes.job_of(pid);
@@ -411,12 +452,12 @@ fn ordinary_children_join_the_current_job_without_reaping_it() {
 #[test]
 fn a_completed_unreaped_job_rejects_new_members() {
     let mut p = processes();
-    let pid = p.spawn(&request("bun", serde_json::json!([])));
+    let pid = p.spawn(&request("/bin/bun", serde_json::json!([])));
     assert!(pid > 0);
     let job = p.job_of(pid);
     completed(&p, pid);
     let mut meta: serde_json::Value =
-        serde_json::from_slice(&request("bun", serde_json::json!([]))).unwrap();
+        serde_json::from_slice(&request("/bin/bun", serde_json::json!([]))).unwrap();
     meta["job"] = job.into();
     assert_eq!(p.spawn(&serde_json::to_vec(&meta).unwrap()), CHILD);
     assert_eq!(p.wait_job(job, 0), Ok(0));
@@ -426,7 +467,7 @@ fn a_completed_unreaped_job_rejects_new_members() {
 fn oversized_json_job_ids_do_not_saturate_into_the_root_job() {
     let mut processes = processes();
     for job in [2147483648u64, 4294967295, 9007199254740992] {
-        let bytes = serde_json::to_vec(&serde_json::json!({"executable":"bun","argv":[],"env":{},"cwd":"/","job":job,"fds":[]})).unwrap();
+        let bytes = serde_json::to_vec(&serde_json::json!({"executable":"/bin/bun","argv":[],"env":{},"cwd":"/","job":job,"fds":[]})).unwrap();
         assert!(Request::decode(&bytes).is_ok());
         assert_eq!(processes.spawn(&bytes), SRCH);
         assert_eq!(processes.runtime.active.load(Ordering::SeqCst), 0);

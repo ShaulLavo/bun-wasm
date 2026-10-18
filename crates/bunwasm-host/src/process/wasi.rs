@@ -397,13 +397,10 @@ impl Namespace {
         preopens.sort_unstable();
         for fd in preopens {
             if caller.data().processes.owns(fd) {
-                let to = self
-                    .available(caller.data())
-                    .context("no descriptor for preopen")?;
-                let actual = self.files.remove(&fd).unwrap();
-                self.files.insert(to, actual);
-                self.preopens.remove(&fd);
-                self.preopens.insert(to);
+                // Waffle installs inherited bindings after preopens: the
+                // inherited binding replaces, rather than moves, the preopen.
+                let result = self.close(caller, fd)?;
+                anyhow::ensure!(result == 0, "closing replaced preopen: WASI errno {result}");
             }
         }
         self.initialized = true;
@@ -755,13 +752,10 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
         move |mut caller: Caller<'_, Host>, fd: i32, out: i32| -> Result<i32> {
             let mut state = state.lock().unwrap();
             state.initialize(&mut caller)?;
-            // Keep libc's EBADF-terminated scan moving across non-preopens and
-            // holes below a preopen. No private descriptor is revealed at a hole.
-            if !state.preopens.contains(&fd)
-                && (caller.data().processes.owns(fd)
-                    || state.preopens.iter().any(|preopen| *preopen > fd))
-            {
-                return Ok(-super::NOTSUP);
+            // Like Waffle, every non-preopen (open or closed) returns EBADF.
+            // wasi-libc terminates at EBADF and aborts on every other errno.
+            if !state.preopens.contains(&fd) {
+                return Ok(-BADF);
             }
             match state.files.get(&fd) {
                 Some(&actual) => call(&prestat, &mut caller, &[actual, out]),

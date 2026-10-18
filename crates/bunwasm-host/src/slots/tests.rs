@@ -22,19 +22,22 @@ impl Fixture {
         config.epoch_interruption(true);
         let engine = Engine::new(&config).unwrap();
         let module = Module::new(&engine,b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\x03\x02\x01\0\x07\x0a\x01\x06_start\0\0\x0a\x04\x01\x02\0\x0b").unwrap();
-        let runtime = Runtime::new(engine.clone(), module, vec![(directory.into(), "/".into())]);
+        let runtime =
+            Runtime::new(engine.clone(), module, vec![(directory.into(), "/".into())]).unwrap();
         let net = crate::net::Net::new();
         let cancel = Arc::new(Cancellation::default());
         let stdio = Stdio::inherited();
         let mut wasi = wasmtime_wasi::WasiCtxBuilder::new();
         stdio.install(&mut wasi, cancel.clone());
-        wasi.preopened_dir(
-            directory,
-            "/",
-            wasmtime_wasi::DirPerms::all(),
-            wasmtime_wasi::FilePerms::all(),
-        )
-        .unwrap();
+        for (host, guest) in &runtime.dirs {
+            wasi.preopened_dir(
+                host,
+                guest,
+                wasmtime_wasi::DirPerms::all(),
+                wasmtime_wasi::FilePerms::all(),
+            )
+            .unwrap();
+        }
         let processes =
             process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
         let mut store = Store::new(
@@ -194,7 +197,7 @@ fn process_import_faults_return_errno_before_resource_changes_or_job_reap() {
         process::FAULT
     );
     let request = serde_json::to_vec(
-        &serde_json::json!({"executable":"absent","argv":[],"env":{},"cwd":"/","job":0,"fds":[]}),
+        &serde_json::json!({"executable":"/bin/bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[]}),
     )
     .unwrap();
     f.write(512, &request);
@@ -206,7 +209,7 @@ fn process_import_faults_return_errno_before_resource_changes_or_job_reap() {
         process::FAULT
     );
     assert_eq!(f.call("runtime_proc", "wait_job", (job, 0, 80)), 0);
-    assert_eq!(f.word(80), 127);
+    assert_eq!(f.word(80), 0);
     assert_eq!(f.call("runtime_proc", "wait", (pid, 88)), process::CHILD);
     assert_eq!(
         f.call("runtime_proc", "wait_job", (job, 1, 80)),
@@ -280,38 +283,42 @@ impl Fixture {
 }
 
 #[test]
-fn inherited_fd_three_does_not_shadow_or_revive_the_preopen() {
+fn inherited_fd_three_replaces_the_preopen_without_relocation_or_revival() {
     let mut f = Fixture::new();
     let [read, write] = f.store.data_mut().processes.pipe().unwrap();
     assert_eq!(f.store.data_mut().processes.renumber(read, 3), 0);
+    // Shared limitation, tracked by the Waffle descriptor-collision design
+    // follow-up: inheriting fd3 replaces the root preopen, so libc's scan stops
+    // at fd3. Change both hosts together when Waffle's policy changes.
     assert_eq!(
         f.call("wasi_snapshot_preview1", "fd_prestat_get", (3, 256)),
-        -process::NOTSUP
+        -process::BADF
     );
+    for fd in [4, 5] {
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_prestat_get", (fd, 256)),
+            0
+        );
+    }
     assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_prestat_get", (4, 256)),
-        0
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (6, 256)),
+        -process::BADF
     );
     f.write(1024, b"Cargo.toml");
-    assert_eq!(
-        f.call(
-            "wasi_snapshot_preview1",
-            "path_open",
-            (3, 0, 1024, 10, 0, 2i64, 0i64, 0, 1080)
-        ),
-        -process::BADF
-    );
-    let file = f.open_manifest(4);
-    assert_ne!(file, 3);
-    // File creation must not leave an underlying alias at the pipe number.
-    assert_eq!(
-        f.call(
-            "wasi_snapshot_preview1",
-            "path_filestat_get",
-            (3, 0, 1024, 10, 2048)
-        ),
-        -process::BADF
-    );
+    for fd in [3, 6] {
+        assert_eq!(
+            f.call(
+                "wasi_snapshot_preview1",
+                "path_open",
+                (fd, 0, 1024, 10, 0, 2i64, 0i64, 0, 1080)
+            ),
+            -process::BADF
+        );
+    }
+    assert_eq!(f.store.data_mut().processes.write(write, b"x"), 1);
+    let mut byte = [0];
+    assert_eq!(f.store.data().processes.read(3, &mut byte), 1);
+    assert_eq!(byte, *b"x");
     assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 3), 0);
     assert_eq!(
         f.call("wasi_snapshot_preview1", "fd_fdstat_get", (3, 256)),
@@ -319,16 +326,51 @@ fn inherited_fd_three_does_not_shadow_or_revive_the_preopen() {
     );
     assert_eq!(
         f.call("wasi_snapshot_preview1", "fd_prestat_get", (3, 256)),
-        -process::NOTSUP
+        -process::BADF
     );
     assert_eq!(
         f.store.data_mut().processes.write(write, b"x"),
         process::PIPE
     );
-    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", file), 0);
     assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_prestat_get", (4, 256)),
-        0
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (6, 256)),
+        -process::BADF
+    );
+}
+
+#[test]
+fn engine_preopens_form_a_contiguous_libc_scan_ending_at_ebadf() {
+    let mut f = Fixture::new();
+    for name in ["quickjs", "jsc"] {
+        f.runtime.register_engine(name, &f.runtime.module).unwrap();
+    }
+    // wasi-libc's actual scan accepts success, stops at BADF, and aborts on
+    // every other errno. Check names too, not merely successful descriptors.
+    for (fd, expected) in [(3, "/"), (4, "/bin"), (5, "/opt/bun")] {
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_prestat_get", (fd, 256)),
+            0
+        );
+        let len = f.word(260);
+        assert_eq!(
+            f.call(
+                "wasi_snapshot_preview1",
+                "fd_prestat_dir_name",
+                (fd, 512, len)
+            ),
+            0
+        );
+        assert_eq!(f.bytes(512, len as usize), expected.as_bytes());
+    }
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (6, 256)),
+        -process::BADF
+    );
+    // Open non-preopen descriptors also return BADF, exactly as in Waffle.
+    let file = f.open_manifest(3);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (file, 256)),
+        -process::BADF
     );
 }
 

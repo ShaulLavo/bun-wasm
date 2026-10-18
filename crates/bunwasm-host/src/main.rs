@@ -27,6 +27,7 @@ Runs bun.wasm (from --wasm, $BUN_WASM, or the build tree's dist/bun.wasm)
 with networking. Launcher options must come before the bun arguments:
 
   --wasm PATH         bun.wasm to run
+  --engine NAME=PATH  register quickjs or jsc at /opt/bun/NAME/bin (repeatable)
   --dir HOST[::GUEST] preopen a directory (repeatable); without any --dir
                       the current directory is preopened at its own path
   --env K=V           set a guest environment variable (repeatable)
@@ -53,6 +54,7 @@ pub struct Host {
 #[derive(Default)]
 struct Options {
     wasm: Option<PathBuf>,
+    engines: Vec<(String, PathBuf)>,
     dirs: Vec<(PathBuf, String)>,
     env: Vec<(String, String)>,
     inherit_env: bool,
@@ -76,6 +78,19 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options> {
         };
         match flag.as_str() {
             "--wasm" => options.wasm = Some(value("--wasm")?.into()),
+            "--engine" => {
+                let spec = value("--engine")?;
+                let Some((name, path)) = spec.split_once('=') else {
+                    bail!("--engine expects quickjs=PATH or jsc=PATH")
+                };
+                if !matches!(name, "quickjs" | "jsc") || path.is_empty() {
+                    bail!("--engine expects quickjs=PATH or jsc=PATH")
+                }
+                if options.engines.iter().any(|(engine, _)| engine == name) {
+                    bail!("--engine {name} was already supplied")
+                }
+                options.engines.push((name.to_string(), path.into()));
+            }
             "--dir" => {
                 let spec = value("--dir")?;
                 let (host, guest) = spec.split_once("::").unwrap_or((&spec, &spec));
@@ -209,7 +224,12 @@ fn run(options: Options) -> Result<i32> {
         env.push(("PWD".into(), pwd));
     }
     env.extend(options.env);
-    let mut runtime = process::Runtime::new(engine.clone(), module, dirs);
+    let mut runtime = process::Runtime::new(engine.clone(), module, dirs)?;
+    for (name, path) in &options.engines {
+        let module = Module::from_file(&engine, path)
+            .with_context(|| format!("loading {name} engine {}", path.display()))?;
+        runtime.register_engine(name, &module)?;
+    }
     let thread_stack = host_stack()? + (8 << 20);
     Arc::get_mut(&mut runtime).unwrap().thread_stack = thread_stack;
     let running = Arc::new(AtomicBool::new(true));
@@ -261,6 +281,18 @@ fn run(options: Options) -> Result<i32> {
 
 fn run_instance(
     runtime: Arc<process::Runtime>,
+    argv: Vec<String>,
+    env: Vec<(String, String)>,
+    stdio: process::Stdio,
+    cancel: Arc<process::Cancellation>,
+) -> Result<process::FinalOutcome> {
+    let module = runtime.module.clone();
+    run_module_instance(runtime, &module, argv, env, stdio, cancel)
+}
+
+fn run_module_instance(
+    runtime: Arc<process::Runtime>,
+    module: &Module,
     argv: Vec<String>,
     mut env: Vec<(String, String)>,
     stdio: process::Stdio,
@@ -315,7 +347,7 @@ fn run_instance(
     )?;
     linker.allow_shadowing(false);
     slots::add_import(&mut linker, &mut store)?;
-    let instance = linker.instantiate(&mut store, &runtime.module)?;
+    let instance = linker.instantiate(&mut store, module)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");
     slots::install(&mut store, &instance)?;
     process::wasi::initialize(&linker, &mut store)?;
@@ -416,7 +448,7 @@ mod tests {
             (256, 0),
         ] {
             let module = Module::new(&engine, proc_exit_guest(status)).unwrap();
-            let runtime = process::Runtime::new(engine.clone(), module, Vec::new());
+            let runtime = process::Runtime::new(engine.clone(), module, Vec::new()).unwrap();
             let outcome = run_instance(
                 runtime,
                 Vec::new(),
@@ -427,6 +459,102 @@ mod tests {
             .unwrap();
             assert_eq!(outcome, FinalOutcome::Exit(expected), "proc_exit({status})");
             assert_eq!(outcome.signal(), 0);
+        }
+    }
+
+    #[test]
+    fn engine_options_are_explicit_repeatable_and_strict() {
+        let options = parse_args(
+            [
+                "--wasm=default.wasm",
+                "--engine",
+                "quickjs=qjs.wasm",
+                "--engine=jsc=jsc.wasm",
+                "--",
+                "run",
+                "app.ts",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        assert_eq!(options.wasm, Some("default.wasm".into()));
+        assert_eq!(
+            options.engines,
+            vec![
+                ("quickjs".into(), "qjs.wasm".into()),
+                ("jsc".into(), "jsc.wasm".into())
+            ]
+        );
+        assert_eq!(options.args, ["run", "app.ts"]);
+        for args in [
+            vec!["--engine"],
+            vec!["--engine", "jsc"],
+            vec!["--engine", "jsc="],
+            vec!["--engine", "browser=b.wasm"],
+            vec!["--engine=jsc=a", "--engine=jsc=b"],
+        ] {
+            assert!(parse_args(args.into_iter().map(str::to_string)).is_err());
+        }
+    }
+
+    #[test]
+    fn engine_paths_select_their_own_module_not_the_default() {
+        let mut config = Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).unwrap();
+        let runtime = process::Runtime::new(
+            engine.clone(),
+            Module::new(&engine, proc_exit_guest(11)).unwrap(),
+            Vec::new(),
+        )
+        .unwrap();
+        runtime
+            .register_engine(
+                "quickjs",
+                &Module::new(&engine, proc_exit_guest(22)).unwrap(),
+            )
+            .unwrap();
+        runtime
+            .register_engine("jsc", &Module::new(&engine, proc_exit_guest(33)).unwrap())
+            .unwrap();
+        let mut parent = process::Processes::new(
+            runtime.clone(),
+            process::Stdio::inherited(),
+            net::Net::new().notify(),
+            Arc::default(),
+        );
+        struct Cleanup(Arc<process::Runtime>);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                self.0.shutdown();
+            }
+        }
+        let _cleanup = Cleanup(runtime);
+        for (path, expected) in [
+            ("/bin/bun", 11),
+            ("/bin/node", 11),
+            ("/opt/bun/quickjs/bin/bun", 22),
+            ("/opt/bun/quickjs/bin/node", 22),
+            ("/opt/bun/jsc/bin/bun", 33),
+            ("/opt/bun/jsc/bin/node", 33),
+        ] {
+            let request = serde_json::to_vec(&serde_json::json!({ "executable": path, "argv": [path], "cwd": "/bin", "env": {}, "job": 0, "fds": [] })).unwrap();
+            let pid = parent.spawn(&request);
+            assert!(pid > 0, "{path}: {pid}");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                match parent.wait(pid) {
+                    Err(process::AGAIN) => {
+                        assert!(std::time::Instant::now() < deadline);
+                        std::thread::yield_now();
+                    }
+                    result => {
+                        assert_eq!(result, Ok(FinalOutcome::Exit(expected)), "{path}");
+                        break;
+                    }
+                }
+            }
         }
     }
 
