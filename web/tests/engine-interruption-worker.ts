@@ -3,6 +3,7 @@ import type { RunRequest } from "../src/bun-executor";
 import type { RuntimeWorkerRequest } from "waffle/browser/worker";
 import { observeEngineImports, observeEventLoopWait, observedEngineStart, probeCell, type EngineInterruptionOptions } from "./engine-interruption-probe";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
+import { observeProcessPoll } from "./engine-interruption-sleep";
 
 const context = self as unknown as DedicatedWorkerGlobalScope;
 context.onmessage = async (event: MessageEvent<RuntimeWorkerRequest & Partial<RunRequest> & { engineInterruption: EngineInterruptionOptions }>) => {
@@ -17,7 +18,10 @@ context.onmessage = async (event: MessageEvent<RuntimeWorkerRequest & Partial<Ru
       const imports = args[1];
       if (!imports) throw new Error("interruption probe requires the production imports");
       let instance: WebAssembly.Instance;
-      if (!preview1) observeEngineImports(imports, probe, () => instance.exports.memory as WebAssembly.Memory, transport.signalState, options.observeCheckpoints);
+      if (!preview1) {
+        observeEngineImports(imports, probe, () => instance.exports.memory as WebAssembly.Memory, transport.signalState, options.observeCheckpoints);
+        if (options.observeCheckpoints) observeProcessPoll(imports, probe);
+      }
       instance = new Target(...args);
       const exports = { ...instance.exports, _start: observedEngineStart(instance.exports, probe, options.hooks) };
       // Wasm exports are non-configurable; a proxy of the exports object itself cannot
