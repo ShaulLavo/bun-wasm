@@ -111,7 +111,7 @@ A compiled `module` bypasses network access for tests and offline applications. 
 URL, local checkout path, localStorage, service worker, or demo cache is required by this API.
 
 Immutable guests live outside static-site deployments. Publication and descriptor generation are
-documented in [site/README.md](../site/README.md). A guest must come from the matching host source
+documented in [the publishing guide](guest-publishing.md). A guest must come from the matching host source
 revision; do not substitute an old site's mutable `bun.wasm.gz` URL.
 
 ```sh

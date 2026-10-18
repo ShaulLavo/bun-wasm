@@ -35,7 +35,7 @@ function scopedWorker(workerUrl: string): boolean {
  * own socket namespace, so children could not reach each other's listeners. One namespace shared
  * by every process of a runtime is plan step 6 (plans/browser-runtime.md, "Network"); until it
  * lands, QuickJS and JSC processes started here have no network slots, and the browser engine
- * keeps its direct worker `fetch` (web/README.md, "Bun subprocess workers").
+ * keeps its direct worker `fetch` (docs/playground.md, "Bun subprocess workers").
  */
 export function bunLauncher(engine: Engine, options: BunLauncherOptions): GuestLauncher {
   return async (context, service) => {
