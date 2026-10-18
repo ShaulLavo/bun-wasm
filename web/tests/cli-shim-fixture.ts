@@ -9,7 +9,16 @@ function text(value: string): number[] {
   return uint(bytes.length).concat(bytes);
 }
 function section(id: number, bytes: number[]): number[] { return [id].concat(uint(bytes.length), bytes); }
-const constant = (value: number) => [0x41].concat(uint(value));
+function constant(value: number): number[] {
+  const bytes = [0x41];
+  for (;;) {
+    const byte = value & 127;
+    value >>= 7;
+    const done = (value === 0 && (byte & 64) === 0) || (value === -1 && (byte & 64) !== 0);
+    bytes.push(byte | (done ? 0 : 128));
+    if (done) return bytes;
+  }
+}
 const call = (index: number, ...args: number[][]) => args.flat().concat([0x10], uint(index));
 const check = (instructions: number[], expected: number) => instructions.concat(constant(expected), [0x47, 0x04, 0x40, 0x00, 0x0b]);
 
@@ -22,7 +31,7 @@ export function cliShimFixture(mode: "exit" | "signal" | "wait" = "exit"): Uint8
   const signatures = Array.from({ length: 6 }, (_, arity) => [0x60].concat(uint(arity), Array.from({ length: arity }, () => 0x7f), [1, 0x7f]));
   const marker = new TextEncoder().encode(mode === "wait" ? "runner-ready\n" : "cli-shim-ok\n");
   const body = mode === "signal" ? call(0, constant(2), constant(3)).concat([0x1a]) :
-    check(call(0, constant(10), constant(1)), 0).concat(
+    check(call(0, constant(10), constant(2)), 0).concat(
       check(call(0, constant(10), constant(3)), 0), check(call(0, constant(0), constant(0)), 10),
       check(call(0, constant(0), constant(0)), 0), check(call(0, constant(10), constant(0)), 0),
       check(call(2, constant(1), constant(0), constant(marker.length)), marker.length),

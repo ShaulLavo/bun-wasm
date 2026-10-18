@@ -1,4 +1,5 @@
 import { createRuntime, type ProcessAdmissionEvent, type Runtime } from "waffle";
+import { cliShimFixture } from "./cli-shim-fixture";
 import { startRun, type Run } from "../src/runner";
 import { installBunAdapters } from "../src/subprocess-broker";
 import { createWorkerProcessTransport, workerProcessDirectoryId, workerProcessState } from "waffle/proc/worker-client";
@@ -181,6 +182,26 @@ async function until(condition: () => boolean, label: string) {
   while (!condition()) { if (performance.now() >= deadline) throw new Error(`${label} timed out`); await pause(); }
 }
 
+async function checkForegroundStops(runtime: Runtime): Promise<number[]> {
+  const codes: number[] = [];
+  for (const signal of [2, 9]) {
+    let output = "";
+    const foreground = startRun({ engine: "browser", adapter: "preview1", runtime,
+      module: new WebAssembly.Module(cliShimFixture("wait")), args: ["foreground-stop"], env: {}, moduleScope: false,
+    }, { stdout(bytes) { output += new TextDecoder().decode(bytes); } });
+    try {
+      await until(() => output === "runner-ready\n", "foreground guest reached signal polling");
+      foreground.kill(signal);
+      const outcome = await foreground.done;
+      equal(outcome.error, undefined, "foreground stop did not crash");
+      equal(outcome.code, 128 + signal, "foreground signal exit");
+      codes.push(outcome.code);
+    } finally { foreground.kill(9); }
+    await until(() => activeWorkers.size === 1, "foreground worker released before next run");
+  }
+  return codes;
+}
+
 let runtime: Runtime | undefined;
 let run: Run | undefined;
 let settled = false;
@@ -254,9 +275,10 @@ try {
   if (workersCreated < (jobWait ? 6 : 3)) throw new Error(`expected real filesystem and all guest workers, saw ${workersCreated}`);
   // Completion acknowledges guest descriptor release. The run and broker must stop both guests.
   await until(() => activeWorkers.size === 1, "completed guests terminated before filesystem disposal");
+  const stopCodes = jobWait ? [] : await checkForegroundStops(runtime);
   await runtime.dispose(); runtime = undefined;
   await until(() => activeWorkers.size === 0, "all task-created workers terminated");
-  result = { ok: true, mode: explicit ? "explicit" : "automatic", scenario: jobWait ? "job-wait" : "pipes", checks, stdout,
+  result = { ok: true, mode: explicit ? "explicit" : "automatic", scenario: jobWait ? "job-wait" : "pipes", checks, stdout, stopCodes,
     messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, admissions, admissionReports, workerErrors, bufferDecode, cleanup: { activeWorkers: activeWorkers.size, workersCreated } };
 } catch (error) {
   result = { ok: false, stdout, stderr, messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, admissions, admissionReportsAtFailure: admissionReports, workerErrors, bufferDecode,
