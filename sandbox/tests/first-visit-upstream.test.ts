@@ -6,7 +6,6 @@ import { Upstream } from "../../web/tests/first-visit-upstream.ts";
 
 async function read(client: Upstream, url: URL): Promise<string> {
   const pending = client.request(url, { headers: { connection: "keep-alive", host: url.host }, signal: AbortSignal.timeout(2_000) });
-  pending.writable.end();
   const received = await pending.response;
   assert.equal(received.statusCode, 200);
   let text = "";
@@ -19,7 +18,10 @@ test("HTTP/2 asset requests share a connection and filter hop headers", async ()
   const sessions = new Set<ServerHttp2Session>();
   let connections = 0;
   server.on("session", session => { sessions.add(session); connections++; session.once("close", () => sessions.delete(session)); });
-  server.on("stream", (stream: ServerHttp2Stream, headers: IncomingHttpHeaders) => { stream.respond({ ":status": 200 }); stream.end(headers[":path"]); });
+  server.on("stream", (stream: ServerHttp2Stream, headers: IncomingHttpHeaders) => {
+    stream.once("end", () => { stream.respond({ ":status": 200 }); stream.end(headers[":path"]); });
+    stream.resume();
+  });
   let client;
   try {
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
