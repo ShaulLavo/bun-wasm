@@ -58,6 +58,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle 0.0.48's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
+| [CMake toolchain cache preflight](#cmake-toolchain-cache-preflight) | Port | Reject an existing CMake cache whose recorded compiler, toolchain file, target, system, processor or sysroot does not match the requested native or WASI configure/build. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
 | [Vendor source synchronization](#vendor-source-synchronization) | Host feature | Original patch-tree verification updates existing clones and detached worktrees without overwriting local changes. |
@@ -1006,7 +1007,7 @@ File `jsc/webkit-wasi.patch`. The following hunks have class **Port**.
 | `Source/cmake/OptionsJSCOnly.cmake` | Disable native API tests for WASI. | The cross-build includes unsupported test targets. |
 | `Source/cmake/WebKitCommon.cmake` | Recognize CMake's WASI system name. | Configure rejects the OS. |
 
-`jsc/wasi-jsc.cmake`, `jsc/configure.sh`, and `jsc/shim/wasi-compat.{h,c}` plus `madvise.c` are our **Port** configuration and glue, not edits to upstream source. They select the C-loop interpreter, system malloc, single-thread GC, and disabled JIT/Wasm tiers; supply temporary-file helpers and inert signal/scheduling declarations; and link the WASI support library. Without them the target cannot configure or link. `jsc/finalize.sh` runs Binaryen's `--spill-pointers`, without which conservative GC misses references in wasm locals. See [the JSC notes](../jsc/README.md).
+`jsc/wasi-jsc.cmake`, `jsc/configure.sh`, and `jsc/shim/wasi-compat.{h,c}` plus `madvise.c` are our **Port** configuration and glue, not edits to upstream source. They select the C-loop interpreter, system malloc, single-thread GC, and disabled JIT/Wasm tiers; supply temporary-file helpers and inert signal/scheduling declarations; and link the WASI support library. Without them the target cannot configure or link. `jsc/finalize.sh` runs Binaryen's `--spill-pointers`, without which conservative GC misses references in wasm locals. See [the JSC notes](jsc-build.md).
 
 ### WebKit module import slots
 
@@ -2907,6 +2908,26 @@ core closure is 24,744 B minified / 8,073 B gzip; the core gate is now a tight 8
 The captured-intrinsics module is classified with eager reservation/control primitives, not the
 lazy process supervisor. Test-only wait, notify and outcome instrumentation uses module injection
 or a pre-import fixture observer; no production mutable hook or export was added.
+
+## CMake toolchain cache preflight
+
+Class **Port**, implemented in the original build boundary. `scripts/check-cmake-cache.cmake` is a
+read-only, fail-closed validator for existing Ninja CMake build directories. Before BoringSSL or
+JavaScriptCore configure/build, it resolves the recorded C and C++ compiler paths, toolchain file,
+CMake system and processor, compiler target flags in `rules.ninja`, and effective compile/link
+sysroots, including `CMAKE_SYSROOT_COMPILE` and `CMAKE_SYSROOT_LINK` overrides. Native builds reject
+an unexpected toolchain or sysroot; WASI builds require the requested paths to match and exist. A missing or malformed cache is rejected with a fresh-directory diagnostic; a fresh
+directory is allowed to configure normally. The validator never edits or removes the caller's cache.
+`crates/bunwasm-crypto-sys/build.rs` checks before configure and build; the original shared shell
+adapter `scripts/check-wasi-cmake-cache.sh` covers `jsc/configure.sh`, `jsc/build.sh`, and
+`scripts/real-runtime-network-tls.sh` before shim, configure or Ninja work. Regression fixtures use
+actual C/C++ Ninja caches, cover matching reuse and compiler/toolchain/target/system/processor/
+sysroot mismatches, deleted toolchain files, incomplete metadata, and byte-for-byte preservation.
+Build-command sentinels verify the real shell entry points refuse mismatches without launching
+compilers, Ninja or services. Real configure probes use the existing descendant-safe command
+wrapper with a 15-second deadline inside a 30-second integration-test budget, accommodating
+cold or contended compiler discovery without unbounded waits.
+This is build safety for the wasm port, not a copied CMake implementation.
 
 ## Node startup diagnostic drain
 
