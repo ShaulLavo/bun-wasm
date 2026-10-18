@@ -82,7 +82,7 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
           return { path: runtimePackage.source(path) };
         });
         build.onResolve({ filter: /^\.\.?\// }, ({ path, importer }) => {
-          runtimePackage ??= resolveRuntimePackage(main);
+          if (!runtimePackage) return;
           const resolved = runtimePackage.relativeSource(path, importer);
           if (resolved) return { path: resolved };
         });
