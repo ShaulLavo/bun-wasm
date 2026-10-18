@@ -10,7 +10,7 @@ fill the gaps. We measure compatibility against [Bun's own test suite](bun-test-
 - `bun run`, `bun test`, `bun build`, `Bun.build`, `bun:sqlite`, `fetch`, `Bun.serve`
 - Bun's real transpiler, bundler, native lint rules, and formatter
 - npm installer and command adapters: `bun install`, `bun add`, `bun remove`, `bun update`, `bun x`, and `bun pm ls` ([host requirements and browser bin execution](install.md))
-- In the browser: a playground ([web/](web.md)) and a React sandbox with hot reload ([sandbox/](sandbox.md))
+- In the browser: a playground ([web/](playground.md)) and a React sandbox with hot reload ([sandbox/](sandbox.md))
 - JS engine: QuickJS or Bun's JavaScriptCore compiled to wasm, or the browser's own engine ([docs/engine-browser.md](engine-browser.md))
 
 ```sh
