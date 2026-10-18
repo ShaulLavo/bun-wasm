@@ -747,8 +747,8 @@ fn local_file_writes_share_offsets_without_modifying_guest_iovecs() {
             assert!(!self.0.exists());
         }
     }
-    let directory = std::path::PathBuf::from(format!(
-        "/work/tmp/bun-wasm-native-file-{}",
+    let directory = std::env::temp_dir().join(format!(
+        "bun-wasm-native-file-{}",
         std::process::id()
     ));
     std::fs::create_dir(&directory).unwrap();

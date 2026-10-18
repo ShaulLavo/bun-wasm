@@ -1,9 +1,10 @@
+import { tmpdir } from "node:os";
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
-const scratch = mkdtempSync("/work/tmp/bun-wasm-native-fixture-launchers-");
+const scratch = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-native-fixture-launchers-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const launcher = join(scratch, "bun-wasm");
 const argumentsFile = join(scratch, "arguments");

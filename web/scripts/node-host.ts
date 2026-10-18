@@ -12,6 +12,8 @@ import { Worker, isMainThread, parentPort, workerData, type ResourceLimits } fro
 import { workerProcessState, wakeWorkerProcess, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import type { SpawnRequest } from "waffle/proc/types";
+import { claimOutcome, markStarted } from "waffle/proc/outcome";
+import { ExecutableFormatError, startFailure } from "waffle/proc/start-failure";
 import { installCliFetch } from "./node-install-net.mjs";
 import { nodeModule, NodeProcessBroker, validateNodeCwd } from "./node-spawn.ts";
 import { createNodeSignalController } from "./node-signals.ts";
@@ -89,7 +91,7 @@ async function main() {
     broker.attach(guest, broker.root);
     guest.on("exit", code => {
       const selected = signals.finish(code);
-      void broker.dispose().then(() => nodeProcess.exit(selected.status));
+      void broker.dispose().then(() => nodeProcess.exit(selected.kind === "start-failed" ? selected.error === "ENOENT" ? 127 : 126 : selected.status));
     });
     for (const [name, number] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]] as const) nodeProcess.on(name, () => {
       const result = signals.request(number);
@@ -112,31 +114,43 @@ async function run(data: GuestData) {
   const request = data.request;
   const args = request ? request.argv.slice(1) : config.args;
   const env = request ? { ...request.env, PWD: request.cwd, BUN_WASM_STACK_KIB: request.env.BUN_WASM_STACK_KIB ?? GUEST_STACK_KIB } : config.env;
-  const signals = createNodeSignalController(workerProcessState(data.transport).signals);
+  const state = workerProcessState(data.transport);
+  const signals = createNodeSignalController(state.signals);
   let cliFetch: ReturnType<typeof installCliFetch> | undefined;
-  const processHost = createNodeProcess({
-    transport: data.transport, env, preopenCount: Object.keys(config.preopens).length,
-    registry: (data.transport.data as { registry?: PipePublicationRegistryHandle } | undefined)?.registry,
-    isSignalPending: () => signals.pending(),
-    postMessage: message => parentPort!.postMessage(message), finish,
-  });
+  let processHost: ReturnType<typeof createNodeProcess> | undefined;
   function finish(code: number, signal?: number): never {
     const selected = signals.finish(code, signal);
     cliFetch?.dispose();
-    if (selected.kind === "signaled") processHost.client.defaultSignal(processHost.client.pid, selected.code);
-    else processHost.client.exit(selected.code);
-    processHost.dispose();
-    return nodeProcess.exit(selected.status) as never;
+    if (processHost) {
+      if (selected.kind === "signaled") processHost.client.defaultSignal(processHost.client.pid, selected.code);
+      else processHost.client.exit(selected.code);
+      processHost.dispose();
+    }
+    return nodeProcess.exit(selected.kind === "start-failed" ? selected.error === "ENOENT" ? 127 : 126 : selected.status) as never;
   }
-  const wasi = new WASI({ version: "preview1", args: ["bun"].concat(args), env: processHost.env, preopens: config.preopens, returnOnExit: true });
-  const imports = wasi.getImportObject() as NodeWasiImports;
-  let instance: WebAssembly.Instance;
-  if (config.withNet) cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
-  const host = processHost.install(imports, () => instance, cliFetch?.call);
-  instance = await WebAssembly.instantiate(data.module, imports);
-  cliFetch?.install();
-  host.installSlots();
+  let entered = false;
   try {
+    processHost = createNodeProcess({
+      transport: data.transport, env, preopenCount: Object.keys(config.preopens).length,
+      registry: (data.transport.data as { registry?: PipePublicationRegistryHandle } | undefined)?.registry,
+      isSignalPending: () => signals.pending(),
+      postMessage: message => parentPort!.postMessage(message), finish,
+    });
+    const wasi = new WASI({ version: "preview1", args: ["bun"].concat(args), env: processHost.env, preopens: config.preopens, returnOnExit: true });
+    const imports = wasi.getImportObject() as NodeWasiImports;
+    let instance: WebAssembly.Instance;
+    if (config.withNet) cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
+    const host = processHost.install(imports, () => instance, cliFetch?.call);
+    instance = await WebAssembly.instantiate(data.module, imports);
+    cliFetch?.install();
+    host.installSlots();
+    if (typeof instance.exports._start !== "function" || !(instance.exports.memory instanceof WebAssembly.Memory)) {
+      throw new ExecutableFormatError("preview1 program must export memory and _start");
+    }
+    // Node WASI has no entry callback. Its own memory checks are covered above; all host
+    // setup is complete. Entry and terminal selection arbitrate on the shared outcome word.
+    if (!markStarted(state.signals.outcome)) finish(1);
+    entered = true;
     const code = wasi.start(instance as Parameters<typeof wasi.start>[0]);
     const ready = instance.exports.bunwasm_ready;
     if (typeof ready !== "function" || ready() !== 1) finish(code);
@@ -156,8 +170,9 @@ async function run(data: GuestData) {
       onExit: finish,
     });
   } catch (error) {
+    if (!entered) claimOutcome(state.signals.outcome, startFailure(error));
     const bytes = new TextEncoder().encode(`${error instanceof Error ? error.stack : error}\n`);
-    const stderr = processHost.descriptors.get(2)?.resource;
+    const stderr = processHost?.descriptors.get(2)?.resource;
     if (stderr?.kind === "pipe" || stderr?.kind === "terminal") stderr.write([bytes]);
     else writeSync(2, bytes);
     finish(1);

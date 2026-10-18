@@ -7,7 +7,7 @@ const driver = resolve(import.meta.dir, "bun-runtime-proc-browser.ts");
 
 test("explicit artifact must actually import the complete direct process ABI", () => {
   // Own only this tiny fixture directory; teardown precedes the first file/process setup.
-  const base = process.env.RUNNER_TEMP ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  const base = process.env.RUNNER_TEMP ?? tmpdir();
   const directory = mkdtempSync(join(base, "bun-wasm-bun-runtime-artifact-control-"));
   try {
     const artifact = join(directory, "not-the-bun-guest.wasm");
@@ -29,7 +29,7 @@ for (const missing of ["job_of", "signal"]) test(`explicit artifact must directl
   const imports = leb(names.length).concat(names.flatMap(name => text("runtime_proc").concat(text(name), [0, 0])));
   const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 2].concat(leb(imports.length), imports));
   expect(WebAssembly.validate(bytes)).toBe(true);
-  const base = process.env.RUNNER_TEMP ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  const base = process.env.RUNNER_TEMP ?? tmpdir();
   const directory = mkdtempSync(join(base, "bun-wasm-bun-runtime-artifact-control-"));
   try {
     const artifact = join(directory, `missing-${missing}.wasm`);

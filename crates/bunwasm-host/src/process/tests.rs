@@ -548,7 +548,9 @@ fn executable_access_is_live_consuming_and_process_owned() {
         .remove("/bin/bun");
     let id = p.access_start("/bin/bun", "/", 1);
     assert_eq!(access_result(&mut p, id), ACCES);
-    assert_eq!(p.spawn(&request("/bin/bun", serde_json::json!([]))), ACCES);
+    let pid = p.spawn(&request("/bin/bun", serde_json::json!([])));
+    assert!(pid > 0);
+    assert_eq!(completed(&p, pid), FinalOutcome::StartFailed(-ACCES));
     let bin = p
         .runtime
         .dirs
@@ -560,7 +562,9 @@ fn executable_access_is_live_consuming_and_process_owned() {
     std::fs::remove_file(bin.join("node")).unwrap();
     let id = p.access_start("/bin/node", "/", 1);
     assert_eq!(access_result(&mut p, id), NOENT);
-    assert_eq!(p.spawn(&request("/bin/node", serde_json::json!([]))), NOENT);
+    let pid = p.spawn(&request("/bin/node", serde_json::json!([])));
+    assert!(pid > 0);
+    assert_eq!(completed(&p, pid), FinalOutcome::StartFailed(-NOENT));
 }
 
 #[test]
@@ -743,4 +747,37 @@ fn instance_setup_failure_is_not_an_ordinary_126_or_a_runtime_trap() {
     let job=p.job_of(pid);
     assert_eq!(completed(&p,pid),FinalOutcome::Exit(134));
     assert_eq!(p.wait_job(job,1),Ok(FinalOutcome::Exit(134)));
+}
+
+#[test]
+fn startup_observation_is_nonconsuming_and_arbitrates_entry_against_terminal_selection() {
+    let cancel = Cancellation::default();
+    assert_eq!(cancel.start_status(), AGAIN);
+    assert!(cancel.mark_started());
+    assert_eq!(cancel.start_status(), 0);
+    cancel.kill(9);
+    assert_eq!(cancel.start_status(), 0);
+    let cancel = Cancellation::default();
+    cancel.kill(15);
+    assert!(!cancel.mark_started());
+    assert_eq!(cancel.start_status(), -11);
+    assert_eq!(cancel.select(FinalOutcome::Exit(0)), FinalOutcome::Signal(15));
+    for errno in [44, 2, 54, 45, 48, 6, 29] {
+        let cancel = Cancellation::default();
+        cancel.select(FinalOutcome::StartFailed(errno));
+        assert!(!cancel.mark_started());
+        assert_eq!(cancel.start_status(), errno);
+        assert_eq!(cancel.start_status(), errno);
+    }
+    let mut p = processes();
+    let pid = p.spawn(&request("/missing", serde_json::json!([])));
+    assert!(pid > 0);
+    let subscription = subscription(6, pid, 123);
+    assert_eq!(p.poll(&subscription, 5000).unwrap().len(), 16);
+    assert_eq!(p.start_status(pid), 44);
+    assert_eq!(p.start_status(pid), 44);
+    assert_eq!(p.poll(&subscription, 0).unwrap().len(), 16);
+    assert_eq!(completed(&p, pid), FinalOutcome::StartFailed(44));
+    assert_eq!(p.start_status(pid), CHILD);
+    assert_eq!(p.poll(&subscription, 0), Err(CHILD));
 }

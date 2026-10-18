@@ -66,7 +66,7 @@ try {
   const { buildBrowserEntries } = await import("../../scripts/browser-build");
   const types = { chromium, firefox, webkit };
   for (const name of names) assert.ok(existsSync(types[name as keyof typeof types].executablePath()), `cached ${name} required; this gate never downloads browsers`);
-  const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? originalTmpdir ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? originalTmpdir ?? tmpdir();
   scratch = await (scratchCreation = mkdtemp(join(base, "bun-wasm-bun-runtime-proc-")));
   process.env.TMPDIR = scratch;
   console.log(JSON.stringify({ resources: { existing: { artifact: artifactReceipt, installedPackages: "read only", browserCaches: "read only" },

@@ -29,7 +29,7 @@ test('unbundled headless hosts load with their installed runtime package', async
   const { tmpdir } = await import('node:os');
   const { fileURLToPath } = await import('node:url');
   const { resolveRuntimePackage } = await import('../../scripts/browser-build');
-  const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? process.env.TMPDIR ?? (existsSync('/work/tmp') ? '/work/tmp' : tmpdir());
+  const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? process.env.TMPDIR ?? tmpdir();
   const dir = await mkdtemp(join(base, 'bun-wasm-node-clean-'));
   try {
     for (const path of ['web/package.json',

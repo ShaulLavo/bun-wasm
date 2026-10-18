@@ -217,6 +217,7 @@ mod runtime_proc {
         pub fn access_cancel(request: i32) -> i32;
         pub fn spawn(desc_ptr: i32, desc_len: i32) -> i32;
         pub fn job_of(pid: i32) -> i32;
+        pub fn start_status(pid: i32) -> i32;
         pub fn pipe(out_ptr: i32) -> i32;
         pub fn read(fd: i32, buf: i32, len: i32) -> i32;
         pub fn write(fd: i32, buf: i32, len: i32) -> i32;
@@ -243,6 +244,7 @@ mod runtime_proc {
     pub unsafe fn access_cancel(_: i32) -> i32 { UNSUPPORTED }
     pub unsafe fn spawn(_: i32, _: i32) -> i32 { UNSUPPORTED }
     pub unsafe fn job_of(_: i32) -> i32 { UNSUPPORTED }
+    pub unsafe fn start_status(_: i32) -> i32 { UNSUPPORTED }
     pub unsafe fn pipe(_: i32) -> i32 { UNSUPPORTED }
     pub unsafe fn read(_: i32, _: i32, _: i32) -> i32 { UNSUPPORTED }
     pub unsafe fn write(_: i32, _: i32, _: i32) -> i32 { UNSUPPORTED }
@@ -322,6 +324,12 @@ pub fn proc_wait(pid: i32) -> Result<(u32, i32), i32> {
     let mut status = [0i32; 2];
     let result = proc_call!(runtime_proc::wait(pid, ptr_mut(&mut status)));
     if result < 0 { Err(result) } else { Ok((status[0] as u32, status[1])) }
+}
+
+/// Non-consuming entry observation: 0 entered, -6 pending, positive startup errno,
+/// -11 canceled before entry, -12 unknown/not owned/collected.
+pub fn proc_start_status(pid: i32) -> i32 {
+    proc_call!(runtime_proc::start_status(pid))
 }
 
 pub fn proc_wait_job(job: i32, flags: i32) -> Result<(u32, i32), i32> {

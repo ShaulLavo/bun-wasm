@@ -510,7 +510,11 @@ impl Processes {
         // own an ordinary child record, with descriptors released before its typed publication.
         let startup = self.runtime.executables.check(
             &request.executable, &request.cwd, &self.runtime.dirs,
-        ).and_then(|module| {
+        ).map_err(|errno| match errno {
+            NOENT | ACCES | NOTDIR | -45 | -48 | AGAIN | IO => errno,
+            PERM => ACCES,
+            _ => IO,
+        }).and_then(|module| {
             let path = mapped.ok_or(NOENT)?;
             let metadata = path.metadata().map_err(|error| -startup_io_errno(&error))?;
             if !metadata.is_dir() { return Err(NOTDIR); }
@@ -590,7 +594,7 @@ impl Processes {
                             cancellation.clone(),
                         )
                     }))
-                    .unwrap_or_else(|_| Err(anyhow::anyhow!("child guest panicked")))
+                    .unwrap_or_else(|_| Err(std::io::Error::other("child guest panicked").into()))
                     .unwrap_or_else(|error| {
                         eprintln!("bun-wasm child: {error:#}");
                         let errno = error.chain().find_map(|cause| cause.downcast_ref::<std::io::Error>())
@@ -652,6 +656,13 @@ impl Processes {
             .processes
             .get(&pid)
             .map_or(SRCH, |child| child.job)
+    }
+
+    /// Non-consuming observation; terminal selection need not be safely published yet.
+    pub fn start_status(&self, pid: i32) -> i32 {
+        let state = self.runtime.state.lock().unwrap();
+        state.processes.get(&pid).filter(|child| child.parent == self.pid)
+            .map_or(CHILD, |child| child.cancel.start_status())
     }
 
     /// Readiness observation never collects a child; only a successful wait does.
@@ -815,7 +826,7 @@ impl Processes {
         }
         if subscriptions
             .chunks_exact(16)
-            .any(|sub| u32::from_le_bytes(sub[..4].try_into().unwrap()) > 5)
+            .any(|sub| u32::from_le_bytes(sub[..4].try_into().unwrap()) > 6)
         {
             return Err(INVAL);
         }
@@ -840,6 +851,11 @@ impl Processes {
                     3 => return Err(NOSYS), // native WASI filesystem I/O completes synchronously
                     4 => (self.job_empty(id)?, false),
                     5 => (self.access_ready(id)?, false),
+                    6 => match self.start_status(id) {
+                        AGAIN => (false, false),
+                        CHILD => return Err(CHILD),
+                        _ => (true, false),
+                    },
                     _ => return Err(INVAL),
                 };
                 if ready || hangup {

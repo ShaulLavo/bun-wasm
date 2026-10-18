@@ -290,6 +290,7 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 | `runtime_proc.pipe` | `(out_ptr) -> 0` (two `u32`: read end, write end) |
 | `runtime_proc.read` | `(fd, buf, len) -> n` |
 | `runtime_proc.write` | `(fd, buf, len) -> n` |
+| `runtime_proc.start_status` | `(pid) -> status`, non-consuming entry observation described below |
 | `runtime_proc.wait` | `(pid, out_ptr) -> 0` (`u32 kind`, `i32 code`) |
 | `runtime_proc.wait_job` | `(job, flags, status_ptr) -> errno` |
 | `runtime_proc.kill` | `(pid, sig) -> 0` |
@@ -340,19 +341,31 @@ The guest never chooses descriptor numbers for itself. `spawn` takes UTF-8 JSON:
   variable). These are ordinary bindings: no reserved numbers, and a grandchild inherits them only
   if its own request lists them.
 
-`wait` reports `-6` while the child runs, then `kind` 0 (exited, `code` the byte-sized exit
-status) or 1 (signaled, `code` the signal number) and stays observable until the job is reaped.
-That is the only way a signal death is classified: `process.exit(143)` is `exitCode: 143,
-signalCode: null`, a selected SIGTERM is `exitCode: null, signalCode: "SIGTERM"`, and requests or
-timeout flags never relabel an outcome. Start failures arrive through `wait` as 127 (executable
-not registered) or 126 (registered but unable to start). `kill` examines the target's
-disposition as described under [Signal dispositions](#signal-dispositions); the runtime
-supports SIGINT, SIGTERM, SIGKILL and SIGPIPE, and signal 0 is answered by `wait`. Closing the
-parent's end of an output pipe makes child writes fail with `EPIPE`; closing stdin sends EOF.
+`wait` reports `-6` while the child is not safely complete, then writes `kind` 0 (exited,
+`code` the byte-sized exit status), 1 (signaled, `code` the signal number), or 2 (startup failed,
+`code` a positive WASI errno; see [job completion](#generic-runtime-job-completion)). A successful
+wait consumes the child exactly once. That is the only way a signal death is classified:
+`process.exit(143)` is `exitCode: 143, signalCode: null`, a selected SIGTERM is `exitCode: null,
+signalCode: "SIGTERM"`, and requests or timeout flags never relabel an outcome. Real exits
+126/127 remain ordinary exits. `kill` examines the target's disposition as described under
+[Signal dispositions](#signal-dispositions); the runtime supports SIGINT, SIGTERM, SIGKILL
+and SIGPIPE. Closing the parent's end of an output pipe makes child writes fail with `EPIPE`;
+closing stdin sends EOF.
+
+`start_status(pid)` observes entry without consuming the child or waiting for descriptor
+cleanup: 0 means entry committed, `-6` means pending, a positive value is one of the seven
+startup WASI errnos, `-11` means an exit or signal won before entry, and `-12` means an unknown,
+wrong-parent or collected child. Entry commits only after host setup and before invoking
+`_start`; entry and terminal selection arbitrate atomically. Poll CHILD_START (kind 6) is
+level-triggered after any nonpending observation until collection. Node observes startup
+before consuming an exit, emits spawn only for status 0, and removes kind 6 after that first
+observation. This permits a spawn listener to feed a live child's stdin without waiting for
+child output or exit.
 
 While children are running the event loop sleeps in `poll` on exactly what its waiters watch
-(readable output pipes, a blocked stdin pipe as writable, child exit kind 2, job-empty kind 4)
-instead of the network `poll(timeout)` slot, so child output and exits wake it directly.
+(readable output pipes, a blocked stdin pipe as writable, child exit kind 2, job-empty kind 4,
+and child startup kind 6 while pending) instead of the network `poll(timeout)` slot, so child
+output and lifecycle observations wake it directly.
 `Bun.spawnSync` polls the same way until completion. Pipe capacity, the number of concurrent
 children and per-process memory belong to the process service, not to this guest contract.
 
@@ -439,8 +452,8 @@ A successful job wait reaps the job plus its remaining member process records. `
 can only consume a direct child; it does not establish descendant job completion. Both waits
 validate all eight output bytes before consuming anything. Bun's asynchronous facade rejects
 `exited` on START_FAILED; the synchronous facade throws a spawn error with code and errno.
-Node reports error/close instead of exit. Its precise spawn-event ordering requires the
-non-consuming generic startup-status observation; terminal wait alone cannot provide that.
+Node reports error/close instead of spawn/exit for startup failure. Its spawn event follows
+successful non-consuming `start_status` observation, independently of output or completion.
 
 Poll subscription **kind 4** means job-empty; its id is the job ID. Subscriptions remain
 16 bytes (`u32 kind`, `u32 id`, `u64 userdata`) and events remain 16 bytes (`u64 userdata`,

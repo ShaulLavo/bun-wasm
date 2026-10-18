@@ -1,6 +1,7 @@
+import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { workerReviewCases } from "./fixtures/worker-review/cases.ts";
 
 const args = process.argv.slice(2);
@@ -17,7 +18,7 @@ let scratch: string | undefined;
 process.on("exit", () => { if (scratch) rmSync(scratch, { recursive: true, force: true }); });
 process.on("SIGTERM", () => { active?.kill("SIGKILL"); process.exit(143); });
 process.on("SIGINT", () => { active?.kill("SIGKILL"); process.exit(130); });
-if (host === "node-control") scratch = mkdtempSync("/work/tmp/bun-wasm-worker-review-");
+if (host === "node-control") scratch = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-worker-review-"));
 
 for (const test of selected) {
   const control = scratch ? `${scratch}/${test.name}.cjs` : "";

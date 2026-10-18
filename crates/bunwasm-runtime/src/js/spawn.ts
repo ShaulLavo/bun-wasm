@@ -15,6 +15,7 @@
   const READABLE = 0;
   const WRITABLE = 1;
   const CHILD_EXIT = 2;
+  const CHILD_START = 6;
   const JOB_EMPTY = 4;
   const signals: Record<string, number> = {
     SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGIOT: 6,
@@ -445,6 +446,7 @@
 
   function spawn(cmd: unknown, options?: SpawnOptions): Child {
     const spec = start(cmd, options, false);
+    let observingStart = typeof spec.options._onSpawn === "function";
     internal.require("net");
     const sink = writer(spec.stdinFd);
     const outputs: (Pipe | null)[] = [];
@@ -544,6 +546,14 @@
     function step() {
       if (closed) return true;
       if (!settled) {
+        // Observe before consuming even a very fast exit; never delay entry on child output.
+        if (observingStart) {
+          const startup = native.procStartStatus(spec.pid);
+          if (startup !== AGAIN) {
+            observingStart = false;
+            if (startup === 0) (spec.options._onSpawn as () => void)();
+          }
+        }
         const status = waitChild(spec);
         if (status) { sink.destroy(); finish(status); }
       }
@@ -571,6 +581,7 @@
       for (const state of states) if (state.fd >= 0) list.push(subscription(READABLE, state.fd));
       if (!settled) {
         list.push(subscription(CHILD_EXIT, spec.pid));
+        if (observingStart) list.push(subscription(CHILD_START, spec.pid));
         list.push(sink.watch());
       } else if (!reaped && spec.job) list.push(subscription(JOB_EMPTY, spec.job));
       return watching(list);
@@ -662,7 +673,7 @@
       const error = status.kind === 2 ? processError(-status.code, "spawn", spec.meta.executable) : undefined;
       result = outcome({ success: status.kind === 0 && status.code === 0, exitedDueToTimeout: timedOut, ...(error ? { error } : {}) });
     } catch (error) {
-      terminate(spec.pid, spec.job);
+      if (!status) terminate(spec.pid, spec.job);
       // Selection can precede completion publication. Observe the winner before reaping it.
       while (!(status = waitChild(spec))) wait();
       result = outcome({ error });
@@ -814,7 +825,7 @@
       const argv = nodeArgv(command, args, options);
       child.spawnfile = String(command);
       child.spawnargs = argv;
-      try { child._child = spawn(argv, options); } catch (error) {
+      try { child._child = spawn(argv, Object.assign({}, options, { _onSpawn: () => child.emit("spawn") })); } catch (error) {
         return failedNodeChild(child, nodeSpawnError(error, command, args, false), options);
       }
       child.pid = child._child.pid;
@@ -823,7 +834,6 @@
       child.stderr = nodeReadable(child._child.stderr);
       child.stdio = [child.stdin, child.stdout, child.stderr];
       child._drains = [child.stdout, child.stderr].filter(Boolean).map((stream) => stream._childDrained);
-      internal.nextTick(() => child.emit("spawn"));
       if (options.signal) {
         const aborted = () => child.emit("error", Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR", cause: options.signal.reason }));
         options.signal.addEventListener("abort", aborted, { once: true });

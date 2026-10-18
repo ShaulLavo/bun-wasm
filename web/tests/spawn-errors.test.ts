@@ -188,8 +188,7 @@ for (const [code, wasiErrno, errno] of startupErrors) {
     expect(failure).toMatchObject({ code, errno, path: "/bin/bun", syscall: "spawn /bin/bun", spawnargs: ["argument"] });
     expect(events).toEqual(["error", "close"]); expect(child.exitCode).toBe(errno); expect(fake.open()).toBe(0);
   });
-  // Exact Node ordering requires the generic non-consuming start_status / CHILD_START ABI.
-  test.skip(`asynchronous ${code} startup emits error/close, not spawn/exit (pending start_status ABI)`, async () => {
+  test(`asynchronous ${code} startup emits error/close, not spawn/exit`, async () => {
     const { fake, module: api, pump } = startupFixture();
     const events: string[] = [];
     const child = api.nodeChildProcess().spawn("/bin/bun", ["argument"]);
@@ -216,4 +215,32 @@ for (const code of [126, 127]) test(`real guest exit ${code} stays an ordinary B
     expect(sync.error).toBeUndefined(); expect(node ? sync.status : sync.exitCode).toBe(code);
     expect(fake.open()).toBe(0);
   }
+});
+
+test("Node spawn waits for entry, then allows stdin from its spawn listener without output or completion", async () => {
+  const fake = service({ deferStart: true });
+  const { module: api, waiters, pumpTurn, pump } = load(fake);
+  const events: string[] = [];
+  const child = api.nodeChildProcess().spawn("/bin/bun", ["read-stdin"]);
+  child.on("error", error => { throw error; });
+  child.on("spawn", () => { events.push("spawn"); child.stdin.end("from-spawn"); });
+  child.on("exit", () => events.push("exit"));
+  const closed = new Promise(resolve => child.once("close", () => { events.push("close"); resolve(undefined); }));
+  const admitted = Array.from(fake.children.values())[0]!;
+  pumpTurn(); await Promise.resolve();
+  expect(events).toEqual([]);
+  const subscriptions = new DataView(waiters[0].subscriptions().buffer);
+  const kinds = Array.from({ length: subscriptions.byteLength / 16 }, (_, index) => subscriptions.getUint32(index * 16, true));
+  expect(kinds).toContain(6);
+  admitted.started = true;
+  pumpTurn(); await Promise.resolve();
+  expect(events).toEqual(["spawn"]);
+  expect(fake.childRead(admitted, 0)).toBe("from-spawn");
+  expect(admitted.status).toBeNull();
+  const afterStart = waiters[0].subscriptions();
+  expect(Array.from({ length: afterStart.length / 16 }, (_, index) => new DataView(afterStart.buffer).getUint32(index * 16, true))).not.toContain(6);
+  fake.exit(admitted, 0);
+  await pump(); await closed;
+  expect(events).toEqual(["spawn", "exit", "close"]);
+  expect(fake.open()).toBe(0);
 });

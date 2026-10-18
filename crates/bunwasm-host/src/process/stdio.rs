@@ -46,6 +46,7 @@ impl FinalOutcome {
 }
 
 struct SignalState {
+    started: bool,
     selected: Option<FinalOutcome>,
     dispositions: [u8; 65],
     pending: u64,
@@ -54,6 +55,7 @@ struct SignalState {
 impl Default for SignalState {
     fn default() -> Self {
         Self {
+            started: false,
             selected: None,
             dispositions: [0; 65],
             pending: 0,
@@ -70,6 +72,24 @@ pub struct Cancellation {
 }
 
 impl Cancellation {
+    /// Entry and terminal selection share a lock: the losing host never enters guest code.
+    pub fn mark_started(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if state.selected.is_some() { return false; }
+        state.started = true;
+        true
+    }
+
+    pub fn start_status(&self) -> i32 {
+        let state = self.state.lock().unwrap();
+        if state.started { return 0; }
+        match state.selected {
+            Some(FinalOutcome::StartFailed(errno)) => errno,
+            Some(_) => -11, // ECANCELED: terminal selection beat entry.
+            None => super::AGAIN,
+        }
+    }
+
     fn raise(&self, state: &mut SignalState, signal: i32) {
         match state.dispositions[signal as usize] {
             0 if matches!(signal, 17 | 18 | 23 | 28) => {}

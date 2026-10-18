@@ -18,11 +18,12 @@ interface FakePipe { chunks: Uint8Array[]; readers: number; writers: number }
 export type ProcessExit = [kind: 0, code: number] | [kind: 1, signal: number] | [kind: 2, wasiErrno: number];
 interface FakeChild {
   pid: number; job: number; request: Record<string, any>;
-  selected: ProcessExit | null; status: ProcessExit | null;
+  started: boolean; selected: ProcessExit | null; status: ProcessExit | null;
   held: Map<number, { pipe: FakePipe; write: boolean }>; reaped: boolean; waited?: boolean; liveDescendants: number;
 }
 interface ServiceOptions {
   failSpawn?: number;
+  deferStart?: boolean;
   now?: () => number;
   onSpawn?(child: FakeChild): void;
   onPoll?(turn: number): void;
@@ -77,7 +78,7 @@ export function service(options: ServiceOptions = {}) {
       calls.push("spawn");
       if (options.failSpawn) return options.failSpawn;
       const request = JSON.parse(json);
-      const child: FakeChild = { pid: pid++, job: 7 + children.size, request, selected: null, status: null, held: new Map(), reaped: false, liveDescendants: 0 };
+      const child: FakeChild = { pid: pid++, job: 7 + children.size, request, started: false, selected: null, status: null, held: new Map(), reaped: false, liveDescendants: 0 };
       for (const { child: number, parent } of request.fds) {
         const entry = pipes.get(parent);
         if (!entry) continue; // inherited stdio: not a pipe
@@ -86,6 +87,7 @@ export function service(options: ServiceOptions = {}) {
       }
       children.set(child.pid, child);
       options.onSpawn?.(child);
+      if (!options.deferStart && (!child.selected || child.selected[0] === 0)) child.started = true;
       return child.pid;
     },
     ownJob: 3,
@@ -103,6 +105,12 @@ export function service(options: ServiceOptions = {}) {
       if (entry.pipe.readers === 0) return -64;
       entry.pipe.chunks.push(bytes.slice());
       return bytes.length;
+    },
+    procStartStatus(id: number) {
+      const child = children.get(id);
+      if (!child || child.reaped || child.waited) return -12;
+      if (child.started) return 0;
+      return child.selected ? child.selected[0] === 2 ? child.selected[1] : -11 : EAGAIN;
     },
     procWait(id: number) {
       const child = children.get(id);

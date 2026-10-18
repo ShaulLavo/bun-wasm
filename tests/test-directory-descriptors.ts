@@ -1,6 +1,7 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { WASI } from "node:wasi";
 import { startEngineHost } from "../web/src/engine-host.js";
@@ -13,7 +14,7 @@ const engines = new Map([["quickjs", "bun.wasm"], ["jsc", "bun-jsc.wasm"], ["bro
 const [engine, mode, directory] = nodeProcess.argv.slice(2);
 if (!directory) {
   if (engine) assert(engines.has(engine), `unknown engine ${engine}`);
-  const scratch = mkdtempSync("/work/tmp/bun-wasm-directory-descriptors-");
+  const scratch = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-directory-descriptors-"));
   try {
     mkdirSync(`${scratch}/retained-tree`);
     const failures: string[] = [];

@@ -357,6 +357,9 @@ fn run_module_instance(
     process::wasi::initialize(&linker, &mut store)?;
 
     let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
+    if !cancel.mark_started() {
+        return Ok(cancel.select(process::FinalOutcome::Exit(0)));
+    }
     let result = start.call(&mut store, ());
     let outcome = select_instance_outcome(result, &cancel);
     if matches!(outcome, process::FinalOutcome::Exit(_)) {

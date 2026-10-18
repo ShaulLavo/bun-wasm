@@ -22,7 +22,10 @@ for (const scenario of bunRuntimeProcScenarios) test(`external generic root fixt
       job_of(pid: number) { return pid + 100; },
       wait_job(job: number, flags: number, pointer: number) {
         expect(flags).toBe(0); waited.push(job);
-        new DataView(memory.buffer).setInt32(pointer, scenario.commands[waited.length - 1]!.status ?? 0, true);
+        const command = scenario.commands[waited.length - 1]!;
+        const view = new DataView(memory.buffer);
+        view.setInt32(pointer, command.kind ?? 0, true);
+        view.setInt32(pointer + 4, command.status ?? 0, true);
         return 0;
       },
       write(_fd: number, pointer: number, length: number) {

@@ -181,8 +181,8 @@ export function runtimeProcJobWaitFixture(): Uint8Array<ArrayBuffer> {
     check(get(local).concat(c(0), [0x48]), 0, 102));
   const pipe = (pointer: number, reader: number, writer: number) => check(call(2, c(pointer)), 0, 101)
     .concat(load(pointer), set(reader), load(pointer + 4), set(writer));
-  const result = (code: number) => check(load(640), code, 120).concat(check(load(644), 0x23456789, 119));
-  const jobPending = () => store(640, c(0x12345678)).concat(store(644, c(0x23456789)),
+  const result = (code: number) => check(load(640), 0, 119).concat(check(load(644), code, 120), check(load(648), 0x3456789a, 119));
+  const jobPending = () => store(640, c(0x12345678)).concat(store(644, c(0x23456789)), store(648, c(0x3456789a)),
     check(call(12, get(13), c(1), c(640)), -6, 110), check(load(640), 0x12345678, 111), check(load(644), 0x23456789, 111),
     store(256, c(4)), store(260, get(13)), store(264, c(12345)), store(268, c(0)),
     check(call(7, c(256), c(1), c(0), c(512)), 0, 112));

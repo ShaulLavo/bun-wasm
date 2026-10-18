@@ -2512,10 +2512,14 @@ The configuration adapter also surfaces typed setup errors instead of empty diag
 Bun asynchronous startup rejects `exited` and calls `onExit` with the error; Bun synchronous
 startup throws only after descriptor cleanup. Node reports error/close with code, errno,
 path, syscall and spawnargs. Original tests cover all seven failures plus ordinary126/127.
-Exact Node spawn-event ordering remains pending generic `start_status`/CHILD_START:
-terminal completion alone cannot prove a live child entered `_start`. Those explicit
-ordering tests remain skipped until that observation is available. No upstream
-implementation is copied here.
+Node's spawn event uses non-consuming generic `start_status` and CHILD_START (poll
+kind 6), not child output or terminal completion. A successful observation fires spawn
+once and drops the startup subscription; all seven failure-ordering tests are enabled.
+A live-child test writes stdin in its spawn listener before any output or completion.
+Native entry and terminal selection share one lock, so a canceled launch cannot enter
+`_start`. Node WASI validates exports and completes host setup before marking entry.
+These guest, native and Node bridges are original adapters; no upstream implementation
+is copied here.
 
 Behavior references at Bun revision `5e0baa66516f3af00b008cdf1521c681317741e8`
 are `src/runtime/api/bun/js_bun_spawn_bindings.rs::throw_command_not_found`,

@@ -7,6 +7,7 @@ export interface BunRuntimeCommand {
   source: string;
   fds?: { child: number; parent: number | "reader" | "writer" }[];
   status?: number;
+  kind?: 0 | 1 | 2;
 }
 export interface BunRuntimeScenario {
   name: string;
@@ -96,7 +97,7 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
   if (scenario.pipe) body.push(...close(get(0)), ...close(get(1)));
   for (const [index, command] of scenario.commands.entries()) {
     body.push(...check(call(2, call(1, get(index + 4)), constant(0), constant(256)), 0, 205),
-      ...check(load(256), command.status ?? 0, 206));
+      ...check(load(256), command.kind ?? 0, 206), ...check(load(260), command.status ?? 0, 206));
   }
   const marker = "external-root-ok\n"; memory.set(encoder.encode(marker), 512);
   body.push(...check(call(3, constant(1), constant(512), constant(marker.length)), marker.length, 207));
@@ -142,13 +143,13 @@ const mainScenarios: BunRuntimeScenario[] = [
   ], stdout: "pipeline-merged-ok\nexternal-root-ok\n" },
   { name: "stdin-reader-lifetime", pipe: "input", input: "payload!", commands: [{ source: readerLifetime, fds: [{ child: 0, parent: "reader" }, { child: 1, parent: 1 }, { child: 2, parent: 2 }] }], stdout: "payload\nparent-reader-alive\nexternal-root-ok\n" },
   { name: "postleader-job-wait", commands: [{ source: `Bun.spawn(['bun','-e',"await Bun.sleep(100);console.log('postleader-child');"],{stdin:'inherit',stdout:'inherit',stderr:'inherit'});process.exit(0);` }], stdout: "postleader-child\nexternal-root-ok\n" },
-  { name: "guest-kill-job-descendants", pipe: "signal", commands: [{ source: readyTree, status: 137,
+  { name: "guest-kill-job-descendants", pipe: "signal", commands: [{ source: readyTree, kind: 1, status: 9,
     fds: [{ child: 0, parent: 0 }, { child: 1, parent: "writer" }, { child: 2, parent: 2 }] }], stdout: "external-root-ok\n" },
-  { name: "kill-descendants", commands: [{ source: tree, status: 137 }], action: "kill", stdout: "external-root-ok\n" },
-  { name: "detached-excluded-from-foreground-kill", commands: [{ source: detachedTree, status: 137 }], action: "kill-detached", stdout: "external-root-ok\n" },
+  { name: "kill-descendants", commands: [{ source: tree, kind: 1, status: 9 }], action: "kill", stdout: "external-root-ok\n" },
+  { name: "detached-excluded-from-foreground-kill", commands: [{ source: detachedTree, kind: 1, status: 9 }], action: "kill-detached", stdout: "external-root-ok\n" },
   { name: "dispose-live-descendants", commands: [{ source: tree }], action: "dispose", stdout: "" },
   { name: "worker-control-fd-isolation", commands: [{ source: workerControls }], stdout: "grandchild-no-controls\nworker-high-fds-ok\nexternal-root-ok\n" },
-  { name: "start-failed", commands: [{ executable: "/bin/broken-bun", source: "", status: 126 }], stdout: "external-root-ok\n" },
+  { name: "start-failed", commands: [{ executable: "/bin/broken-bun", source: "", kind: 2, status: 29 }], stdout: "external-root-ok\n" },
   { name: "preopen-root", commands: [{ source: `console.log(await Bun.file('preopen-data').text());` }], stdout: "ROOT_PREOPEN_OK\nexternal-root-ok\n" },
 ];
 export const bunRuntimeProcScenarios: readonly BunRuntimeScenario[] = mainScenarios.concat([[3], [3, 4], [3, 5], [3, 1000000]].map<BunRuntimeScenario>(inherited => ({

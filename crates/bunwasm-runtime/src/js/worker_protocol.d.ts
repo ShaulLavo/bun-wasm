@@ -73,7 +73,9 @@ declare namespace BunWasm {
     /** Bytes, 0 at end of file, or a negative errno. */
     procRead(fd: number, capacity?: number): Uint8Array | number;
     procWrite(fd: number, bytes: Uint8Array): number;
-    /** [kind, code] of a finished child (kind 0 exited, 1 signaled), or a negative errno. */
+    /** 0 entered, -6 pending, positive WASI startup errno, -11 canceled, -12 unknown/collected. Non-consuming. */
+    procStartStatus(pid: number): number;
+    /** [kind, value]: 0 exit, 1 signal, 2 positive WASI startup errno; or a negative errno. */
     procWait(pid: number): [kind: number, code: number] | number;
     /** kind 0: exit code; 1: signal; 2: positive WASI startup errno. Both waits consume. */
     procWaitJob(job: number, flags: number): [kind: number, value: number] | number;

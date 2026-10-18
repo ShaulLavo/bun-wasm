@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { controlStore } from "waffle/proc/control";
 // Exercise the actual Node WASI fd table, not a stub that happens to choose different numbers.
 import assert from "node:assert/strict";
@@ -20,7 +22,7 @@ const encoder = new TextEncoder(), decoder = new TextDecoder();
 const all = (1n << 29n) - 1n;
 const owned: ReturnType<typeof createNodeProcess>[] = [];
 const pipeBroker = new WorkerPipeBroker();
-const scratch = process.argv[2] ?? mkdtempSync("/work/tmp/bun-wasm-node-fds-");
+const scratch = process.argv[2] ?? mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-node-fds-"));
 function setup(preopenCount = 0, transport = createWorkerProcessTransport(), env: Record<string, string> = {}) {
   const messages: WorkerProcessMessage[] = [];
   const host = createNodeProcess({ transport, preopenCount, env,

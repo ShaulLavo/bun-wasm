@@ -907,6 +907,7 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
             Err(code) => code.into(),
         })
     });
+    t.add("procStartStatus", |a| Ok(host::proc_start_status(a.i32(0)?).into()));
     t.add("procWaitJob", |a| {
         Ok(match host::proc_wait_job(a.i32(0)?, a.i32(1)?) {
             Ok((kind, code)) => Val::Array(vec![Val::Num(kind as f64), Val::Num(code as f64)]),

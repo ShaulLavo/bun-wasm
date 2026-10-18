@@ -117,14 +117,14 @@ if (isMainThread) {
     }
     if (!closed) assert.equal(proc.close!(write), 0);
     assert.deepEqual(wait(pid), [0, 7]);
-    assert.equal(proc.wait_job!(job, 0, 0), 0); assert.equal(view().getInt32(0, true), 7);
+    assert.equal(proc.wait_job!(job, 0, 0), 0); assert.deepEqual([view().getInt32(0, true), view().getInt32(4, true)], [0, 7]);
     assert.equal(proc.read!(read, 1024, 1), 0); assert.equal(proc.close!(read), 0);
-    assert.deepEqual(wait(spawn("missing", [], "")), [0, 127]);
+    assert.deepEqual(wait(spawn("missing", [], "")), [2, 44]);
     const killed = spawn("/bin/bun", [], "spin");
     assert.equal(proc.kill!(killed, 9), 0); assert.deepEqual(wait(killed), [1, 9]);
     const group = spawn("/bin/node", [], "spin"), groupJob = proc.job_of!(group);
     assert.equal(proc.kill_job!(groupJob, 15), 0); assert.deepEqual(wait(group), [1, 15]);
-    assert.equal(proc.wait_job!(groupJob, 0, 0), 0); assert.equal(view().getInt32(0, true), 143);
+    assert.equal(proc.wait_job!(groupJob, 0, 0), 0); assert.deepEqual([view().getInt32(0, true), view().getInt32(4, true)], [1, 15]);
     parentPort!.postMessage({ result: { bytes: received, stdinBytes, exit: 7, missing: 127, signal: 9, groupSignal: 15, omitted: true } });
     finish(0);
   } catch (error) { console.error(error); finish(1); }

@@ -1,14 +1,15 @@
+import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { createNodeProcess } from "../scripts/node-process.ts";
 import { createWorkerProcessTransport, type WorkerProcessMessage } from "waffle/proc/worker-client";
 
 test("Node WASI translates descriptors across preopens, controls, renumber, churn and transfer failure", () => {
-  const scratch = mkdtempSync("/work/tmp/bun-wasm-node-fds-");
+  const scratch = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-node-fds-"));
   try {
     const result = spawnSync("node", ["--no-warnings", new URL("./fixtures/node-descriptors.ts", import.meta.url).pathname, scratch], {
       cwd: resolve(import.meta.dirname, "../.."), encoding: "utf8", timeout: 15000,

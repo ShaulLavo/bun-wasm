@@ -7,7 +7,7 @@ import { buildBrowserEntries, resolveRuntimePackage } from "../../scripts/browse
 import { initialJavaScript } from "../../scripts/runtime-size";
 
 test("ordinary Bun worker and page startup do not eagerly load generic ownership adapters", async () => {
-  const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
+  const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? tmpdir();
   const scratch = await mkdtemp(join(base, "bun-wasm-runtime-ownership-"));
   try {
     const entry = new URL("../src/runner.ts", import.meta.url).pathname;

@@ -452,6 +452,10 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
     for (name, function) in PROCESS_NAMES.into_iter().zip(process_functions(store)) {
         linker.define(&mut *store, "runtime_proc", name, function)?;
     }
+    linker.func_wrap("runtime_proc", "start_status", |caller: Caller<'_, Host>, pid: i32| -> Result<i32> {
+        caller.data().cancel.check()?;
+        Ok(caller.data().processes.start_status(pid))
+    })?;
     linker.func_wrap(
         "runtime_proc",
         "access_start",

@@ -1,6 +1,7 @@
 import { isToolCommand } from "../src/tool-command.ts";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
 import { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessSupervisor } from "waffle/proc/supervisor";
@@ -8,6 +9,7 @@ import { WorkerProcessBroker } from "waffle/proc/worker-broker";
 import { createWorkerProcessTransport, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import { WorkerPipeBroker } from "waffle/proc/worker-pipes";
 import type { ProcessContext } from "waffle/proc/types";
+import { startStatus } from "waffle/proc/outcome";
 import { PipeController, PipePublicationRegistry } from "waffle/proc/pipes";
 import { nodeStdioCodec } from "./node-process.ts";
 
@@ -68,7 +70,7 @@ function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngi
   for (const guest of Object.keys(preopens)) if (guest === "/bin" || guest.startsWith("/bin/") || guest === "/opt/bun" || guest.startsWith("/opt/bun/")) {
     throw new Error(`reserved executable mount: ${guest}`);
   }
-  const root = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? process.env.TMPDIR ?? "/work/tmp", "bun-wasm-node-executables-"));
+  const root = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-node-executables-"));
   try {
     mkdirSync(join(root, "bin")); mkdirSync(join(root, "opt/bun"), { recursive: true });
     for (const name of ["bun", "node"]) writeFileSync(join(root, "bin", name), new Uint8Array());
@@ -190,7 +192,9 @@ export class NodeProcessBroker {
       const stderr = this.supervisor.get(pid)?.descriptors.get(2)?.resource;
       if (stderr?.kind === "pipe" || stderr?.kind === "terminal") stderr.write([bytes]);
       else writeSync(2, bytes);
-      this.supervisor.exit(pid, 126);
+      const record = this.supervisor.get(pid);
+      if (record && startStatus(record.outcome) !== 0) this.supervisor.failStart(pid, error);
+      else this.supervisor.exit(pid, 126);
     });
     worker.on("exit", code => {
       this.workers.delete(pid);

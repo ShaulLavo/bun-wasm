@@ -182,7 +182,7 @@ function jobWaitShell(options: { pending?: number; status?: number; eof?: number
       wait_job(job: number, flags: number, ptr: number) {
         waits.push([job, flags]); operations.push(`wait_job:${job}:${flags}`);
         if (flags === 1) return options.pending ?? -6;
-        new DataView(memory.buffer).setInt32(ptr, options.status ?? 0, true); return 0;
+        const view = new DataView(memory.buffer); view.setInt32(ptr, 0, true); view.setInt32(ptr + 4, options.status ?? 0, true); return 0;
       },
       kill_job(job: number, signal: number) { expect(job).toBe(33); expect(signal).toBe(15); operations.push("kill_job"); return 0; },
       signal: () => { throw new Error("shell installed a signal handler"); }, interrupted: () => 0,
