@@ -114,6 +114,8 @@ jobs:
         run: |
           bash scripts/sync-bun.sh
           bash scripts/sync-crypto.sh
+      - name: Test CMake cache toolchain preflight
+        run: bun test scripts/cmake-cache.test.ts
       - name: Test every workspace crate on the host
         # Defaults select QuickJS; JSC's host target links no WASM-only C++ libraries.
         # bunwasm-posix is cfg(wasi), so its WASI-only tests are not host-runnable.
