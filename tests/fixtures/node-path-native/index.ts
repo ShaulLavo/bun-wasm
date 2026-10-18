@@ -12,6 +12,8 @@ assert.equal(w.resolve("C:/base", "//other/share", "C:relative"), "C:\\base\\rel
 assert.equal(w.relative("C:\\A\\B", "c:\\a\\C"), "..\\C");
 assert.equal(w.relative("\\\\server\\share-one", "\\\\server\\share-two"), "..\\share-two");
 assert.equal(path.resolve(undefined, "/absolute"), "/absolute");
+assert.throws(() => w.resolve(undefined, "C:\\absolute"), TypeError);
+assert.throws(() => path.basename(undefined, 7), /"ext"/);
 assert.equal(w.toNamespacedPath("//server/share/file"), "\\\\?\\UNC\\server\\share\\file");
 assert.equal(w._makeLong, w.toNamespacedPath);
 assert.equal(path._makeLong, path.toNamespacedPath);
