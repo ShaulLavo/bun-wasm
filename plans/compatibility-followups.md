@@ -875,3 +875,33 @@ reuse, then measure `node-http-req-complete.test.ts`,
 made. Keep the child larger-than-1-GiB gzip case distinct from protocol behavior;
 its direct original and changed controls both hit the guest memory limit with
 exit 134. Do not skip it or change its upstream assertions.
+
+### Early-response keepalive control, 2026-10-18
+
+Status: Approved follow-up. Pre-existing on main; excluded from the Bun response
+streaming change.
+
+The JSC census showed 32 versus 31 observed passes in
+`js/web/fetch/fetch-keepalive.test.ts`. The difference was the early 200 response
+to a 64 MiB POST. A following GET sometimes reuses that connection and receives
+the test server's sentinel status 299 instead of the expected status 200.
+Five clean runs of the unmodified focused upstream test pass once and fail four
+times on both unchanged main `684da1f0` and the PR guest. They use the same restored
+native launcher, source snapshot, preload, environment and loopback isolation.
+The runtime and native-client sources on that main commit match baseline
+`2ea5c62f`. The guest hashes are recorded in the retained control report.
+
+Run the upstream test with `-t '200 while a 64 MiB byte body'` through a rebuilt
+JSC guest and native launcher. Preserve the upstream preload and the suite's
+private loopback namespace. The exact executable command is retained as
+`early-upload-control/upstream-control.sh` under
+`/work/reports/bun-wasm-http-scoreboard-20261018/`. Each run has its own temporary
+directory, log and exit status. The paired direct diagnostic records bytes
+received and the declared length; both guests reach both connection outcomes.
+
+Changing the native request body from a byte vector to a sized blocking body
+did not fix the focused failure. That experiment is reverted. Inspect native
+`crates/bunwasm-host/src/net/fetch.rs` and reqwest's connection reuse after early
+responses before proposing a fix. Do not change guest response scheduling or
+weaken the upstream assertion to mask the observation. The coordinator owns the
+small reproducer and control evidence until this follow-up is resolved or retired.

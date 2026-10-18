@@ -541,7 +541,16 @@ counts vary when a file deadline cuts off a later test. Matched controls retain
 the original QuickJS socket timing and browser lifecycle counts. The direct
 body-memory control reaches the same guest allocation limit on both artifacts. The
 matched JSC controls keep gzip at 62 passes and the focused body-consumption
-check passes on both artifacts.
+check passes on both artifacts. The remaining one-test keepalive difference is
+timing-sensitive on unchanged main too. Five clean focused upstream JSC runs
+pass once and fail four times on both main `684da1f0` and the PR guest. Failed
+runs reuse one connection and read the test server's sentinel response instead
+of the expected fresh-connection reply. The native client is unchanged.
+A sized request-body experiment produced the same failure and was reverted.
+The exact command, guest hashes, logs and statuses are retained under the report's `early-upload-control/` directory. The interrupted second census control has
+zero completed files and is excluded. The separate direct diagnostic also
+reproduces the sentinel reply on unchanged main. See the
+[keepalive follow-up](../plans/compatibility-followups.md#early-response-keepalive-control-2026-10-18).
 
 The source hashes and before/after summaries are committed in
 [`http-results.json`](bun-test-suite/http-results.json). Eight affected API files
