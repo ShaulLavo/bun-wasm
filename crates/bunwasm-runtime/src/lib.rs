@@ -504,11 +504,10 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
             }
         }
         core.state.flush();
-        // Reenter the checkpoint after one bounded poll rather than sleeping
-        // through the whole timer delay with handled signals still pending.
-        if host::poll((next.ceil() as i32).clamp(1, 25)) == host::UNSUPPORTED {
-            std::thread::sleep(std::time::Duration::from_secs_f64(next / 1000.0));
-        }
+        // Reenter the checkpoint after one bounded wait rather than sleeping through the whole
+        // timer delay. With no network handle to watch this is the process poll, which a handled
+        // signal or interrupt wakes; the network host poll only knows about network events.
+        host::idle((next.ceil() as i32).clamp(1, 25));
     }
 }
 
