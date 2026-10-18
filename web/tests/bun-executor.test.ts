@@ -153,6 +153,7 @@ for (const kind of ["exited", "signaled"] as const) test(`engine host fetch pres
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message: WorkerMessage) { messages.push(message); },
     async fetch(input) {
+      // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
       receiver = this;
       fetched.push(String(input));
       return new Response("ok");
@@ -316,12 +317,12 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
               const view = new DataView((instance.exports.memory as WebAssembly.Memory).buffer);
               if (route === "runtime_proc") { view.setUint32(0, 0, true); view.setUint32(4, fd, true); }
               else { view.setUint8(8, 1); view.setUint32(16, fd, true); }
-              Atomics.wait = ((word: Int32Array, index: number, expected: number) => {
+              Atomics.wait = ((word: Int32Array, index: number, _expected: number) => {
                 expect(word.buffer).toBe(state.wake.buffer);
                 expect(word.byteOffset + index * 4).toBe(state.wake.byteOffset);
                 waits++; select(); return "timed-out";
               }) as typeof Atomics.wait;
-              try { route === "runtime_proc" ? call(0, 1, 1000, 128) : call(0, 128, 1, 256); }
+              try { if (route === "runtime_proc") call(0, 1, 1000, 128); else call(0, 128, 1, 256); }
               catch (error) { failure = error; throw error; }
               finally { Atomics.wait = nativeWait; }
               throw new Error("selected death escaped the production wait guard");

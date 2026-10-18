@@ -23,5 +23,7 @@ fn main() {
         println!("cargo:rustc-link-arg-bin=bun-tools={flag}");
     }
     let sdk = std::env::var("WASI_SDK_PATH").expect("source env.sh");
-    println!("cargo:rustc-link-arg-bin=bun-tools={sdk}/share/wasi-sysroot/lib/wasm32-wasip1/crt1-command.o");
+    println!(
+        "cargo:rustc-link-arg-bin=bun-tools={sdk}/share/wasi-sysroot/lib/wasm32-wasip1/crt1-command.o"
+    );
 }

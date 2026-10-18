@@ -108,7 +108,7 @@ test("the idle loop sleeps on exactly the descriptors and child the waiter watch
   const kinds = () => decode(waiters[0].subscriptions());
   // stdout readable and the child exit; stdin has nothing queued to write.
   expect(kinds().map(([kind]) => kind)).toEqual([0, 2]);
-  expect(kinds()[1][1]).toBe(child.pid);
+  expect(kinds()[1]![1]).toBe(child.pid);
   fake.childWrite(record, 1, "tail");
   fake.exit(record, 0);
   waiters[0].step();
@@ -333,9 +333,9 @@ for (const detached of [false, true]) for (const failure of ["read", "write"]) {
     const controller = new AbortController();
     const removedListeners: string[] = [];
     const removeListener = controller.signal.removeEventListener.bind(controller.signal);
-    controller.signal.removeEventListener = (type, listener, options) => {
-      removedListeners.push(type);
-      removeListener(type, listener, options);
+    controller.signal.removeEventListener = (...args: Parameters<typeof removeListener>) => {
+      removedListeners.push(args[0]);
+      removeListener(...args);
     };
     let onExit = 0;
     const child = module.spawn(["bun", "io-failure"], {
@@ -528,7 +528,7 @@ for (const { outcome, exitCode, signalCode } of maxBufferOutcomes) {
         if (turn === 3) fake.publish(record);
       },
     });
-    let waitSubscriptions = new Uint8Array(0);
+    let waitSubscriptions: Uint8Array = new Uint8Array(0);
     const poll = fake.native.procPoll;
     fake.native.procPoll = (subscriptions: Uint8Array) => {
       waitSubscriptions = subscriptions;
@@ -646,7 +646,7 @@ for (const queued of [false, true]) test(`spawnSync drops ${queued ? "queued" : 
   let polls = 0;
   fake.native.procWrite = (fd: number, bytes: Uint8Array) => queued && !polls ? EAGAIN : write(fd, bytes);
   fake.native.procPoll = () => {
-    const child = Array.from(fake.children.values())[0];
+    const child = Array.from(fake.children.values())[0]!;
     if (++polls === 1) {
       if (queued) fake.childClose(child, 0);
       fake.childWrite(child, 1, "still running");
@@ -680,7 +680,7 @@ test("Node stdin destroy closes its runtime_proc writer and delivers EOF", async
   expect(fake.calls.filter(call => call.startsWith("kill"))).toEqual([]);
 });
 
-for (const outcome of [[0, 0], [2, 44]] as const) {
+for (const outcome of [[0, 0], [2, 44]] satisfies Array<[0, number] | [2, number]>) {
   test(`Node kill(0) observes startup before consuming completion ${outcome[0]}`, async () => {
     const fake = service({ deferStart: true });
     const { module, pump } = load(fake);

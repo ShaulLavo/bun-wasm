@@ -33,7 +33,6 @@ const timeout = setTimeout(() => {
 try {
   // All generated files and the browser profile are task-owned and removed in finally.
   scratch = await mkdtemp(fileURLToPath(new URL("../node_modules/.browser-smoke-", import.meta.url)));
-  process.env.TMPDIR = scratch; // Playwright's temporary profile/artifacts stay inside our cleanup root.
   const bundle = await Bun.build({
     entrypoints: [fileURLToPath(new URL("./browser-smoke-worker.ts", import.meta.url))],
     target: "browser", format: "esm", write: false,

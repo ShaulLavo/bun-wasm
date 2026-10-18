@@ -252,9 +252,12 @@ const commands: Record<string, (args: any) => Promise<unknown>> = {
           const access = await (file as FileSystemFileHandle & { createSyncAccessHandle(): Promise<any> }).createSyncAccessHandle();
           try {
             for (let offset = 0; offset < content.length; ) {
-              const count = access.write(content.subarray(offset), { at: offset });
-              if (!(count > 0)) throw new Error("Raw comparator payload write made no progress");
-              offset += count;
+              const writePayloadChunk = () => {
+                const count = access.write(content.subarray(offset), { at: offset });
+                if (!(count > 0)) throw new Error("Raw comparator payload write made no progress");
+                offset += count;
+              };
+              writePayloadChunk();
             }
           } finally { access.close(); }
         }
@@ -273,9 +276,12 @@ const commands: Record<string, (args: any) => Promise<unknown>> = {
       const access = await (file as FileSystemFileHandle & { createSyncAccessHandle(): Promise<any> }).createSyncAccessHandle();
       try {
         for (let offset = 0; offset < manifest.length; ) {
-          const count = access.write(manifest.subarray(offset), { at: offset });
-          if (!(count > 0)) throw new Error("Raw comparator snapshot write made no progress");
-          offset += count;
+          const writeSnapshotChunk = () => {
+            const count = access.write(manifest.subarray(offset), { at: offset });
+            if (!(count > 0)) throw new Error("Raw comparator snapshot write made no progress");
+            offset += count;
+          };
+          writeSnapshotChunk();
         }
         access.flush();
       } finally { access.close(); }

@@ -59,11 +59,13 @@
 
   const escapes = { "\0": "\\0", "\x07": "\\a", "\b": "\\b", "\t": "\\t", "\n": "\\n", "\v": "\\v", "\f": "\\f", "\r": "\\r", '"': '\\"', "\\": "\\\\", "\x1b": "\\e", "\x85": "\\N", "\xa0": "\\_", "\u2028": "\\L", "\u2029": "\\P" };
   function yamlQuote(s) {
+    // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
     return '"' + s.replace(/[\x00-\x1f"\\\x7f\x85\xa0\u2028\u2029]/g, (c) => escapes[c] || "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0")) + '"';
   }
   function yamlString(s) {
-    if (!s || /^[&*?|\-<>!%@:,\[\]{}#'"` \t\r\n\uFEFF]/.test(s) || /[ \t\r\n:]$/.test(s)) return yamlQuote(s);
-    if (/[{}\[\],#`'"\x00-\x1f\x7f\x85\xa0\u2028\u2029]|:[ \t\r\n]|(?:---|\.\.\.)(?:$|[ \t\r\n\[\]{},])/.test(s)) return yamlQuote(s);
+    if (!s || /^[&*?|\-<>!%@:,[\]{}#'"` \t\r\n\uFEFF]/.test(s) || /[ \t\r\n:]$/.test(s)) return yamlQuote(s);
+    // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
+    if (/[{}[\],#`'"\x00-\x1f\x7f\x85\xa0\u2028\u2029]|:[ \t\r\n]|(?:---|\.\.\.)(?:$|[ \t\r\n[\]{},])/.test(s)) return yamlQuote(s);
     if (/^(?:true|True|TRUE|false|False|FALSE|yes|Yes|YES|no|No|NO|on|On|ON|off|Off|OFF|n|N|y|Y|null|Null|NULL|~|\.inf|\.Inf|\.INF|\.nan|\.NaN|\.NAN)$/.test(s)) return yamlQuote(s);
     if (/^[-+]?(?:\.inf|\.Inf|\.INF|(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?))$/.test(s)) return yamlQuote(s);
     return s;
@@ -155,6 +157,7 @@
   }
 
   function json5Quote(s) {
+    // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
     return "'" + s.replace(/[\x00-\x1f'\\\x7f\u2028\u2029]/g, (c) => {
       const known = { "\0": "\\0", "\b": "\\b", "\t": "\\t", "\n": "\\n", "\v": "\\v", "\f": "\\f", "\r": "\\r", "'": "\\'", "\\": "\\\\", "\u2028": "\\u2028", "\u2029": "\\u2029" };
       return known[c] || "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0");

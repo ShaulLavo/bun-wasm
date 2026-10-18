@@ -1,4 +1,4 @@
-export interface NamedModules {
+interface NamedModules {
   url(key: string): string;
   put(url: string, source: string): void | Promise<unknown>;
 }
@@ -31,18 +31,22 @@ export class ContentModules {
     return url;
   }
 
-  private build(key: string): string {
-    const cached = this.urls.get(key);
-    if (cached && this.building.has(key)) return cached.url;
-    if (cached && (cached.kind === "content" || cached.ready)) {
-      // A cached child can point back to a source build that failed. Repair reachable
-      // reservations before returning it, even when the caller retries through the child.
+  private repairReservations(key: string): void {
       if (this.pending.size > 0) {
         this.building.add(key);
         try {
           for (const dependency of this.dependencies.get(key) ?? []) this.build(dependency);
         } finally { this.building.delete(key); }
       }
+  }
+
+  private build(key: string): string {
+    const cached = this.urls.get(key);
+    if (cached && this.building.has(key)) return cached.url;
+    if (cached && (cached.kind === "content" || cached.ready)) {
+      // A cached child can point back to a source build that failed. Repair reachable
+      // reservations before returning it, even when the caller retries through the child.
+      this.repairReservations(key);
       return cached.url;
     }
     if (this.building.has(key)) return this.reserve(key);

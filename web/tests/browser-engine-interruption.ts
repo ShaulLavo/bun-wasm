@@ -116,6 +116,7 @@ export async function runBrowserGate(options: {
   const output: BrowserGateOutput = { ok: false, artifacts: options.artifacts, reports: [], cleanup: { safe: false } };
   options.onState?.(output);
   try {
+    const checkEngineCase = async () => {
     await options.prepare?.();
     for (const name of options.names) {
       const report: BrowserGateReport = { browser: name, ok: false, cleanup: { safe: true } };
@@ -147,6 +148,9 @@ export async function runBrowserGate(options: {
       options.onReport?.(report);
       if (output.unsafeCleanup) break;
     }
+
+    };
+    await checkEngineCase();
   } catch (error) { output.error = errorText(error); }
   finally {
     try { output.cleanup = await boundedCleanup("all owned resources", options.cleanup, options.cleanupTimeoutMs ?? 45_000); }
@@ -261,6 +265,7 @@ async function main(): Promise<boolean> {
     interruption ??= (async () => {
       console.error(reason);
       try {
+        const checkEngineCase = async () => {
         let cleaned: RunnerCleanup;
         try { cleaned = await boundedCleanup("interrupted owned resources", cleanup, 45_000); }
         catch (error) { cleaned = { safe: false, errors: [errorText(error)] }; }
@@ -271,6 +276,9 @@ async function main(): Promise<boolean> {
           for (const report of state.reports) if (!report.browserCleanup) { report.ok = false; report.cleanup.safe = false; }
           await writeReport(state);
         }
+
+        };
+        await checkEngineCase();
       } finally { process.exit(1); }
     })();
   }
@@ -324,6 +332,7 @@ async function main(): Promise<boolean> {
         assertRunning(); browserCleanupPromise = undefined;
         let result: any, version: string;
         if (name === "safari") {
+          const runSafariEngine = async () => {
           driverPort = await allocateSafariDriverPort(requestedDriverPort);
           assertRunning();
           const spawnedAfter = Date.now();
@@ -344,11 +353,15 @@ async function main(): Promise<boolean> {
           if (diagnostic) console.log(JSON.stringify({ safariDriverOwnershipDiagnostic: diagnostic }));
           assertRunning();
           const opened = await (openingSession = webdriver("/session", "POST", { capabilities: { alwaysMatch: { browserName: "safari" } } }));
-          session = opened.sessionId; version = opened.capabilities.browserVersion; report.version = version;
+          session = opened.sessionId; report.version = opened.capabilities.browserVersion;
           assertRunning();
           await webdriver(`/session/${session}/timeouts`, "POST", { script: benchmark ? 530_000 : functionalDriverTimeoutMs, pageLoad: 30_000, implicit: 0 });
           await webdriver(`/session/${session}/url`, "POST", { url });
           result = await safariScript(`const end=Date.now()+${benchmark ? 525_000 : functionalPageTimeoutMs}; while(!globalThis.engineInterruptionResult){if(Date.now()>end)throw Error('engine interruption page timed out');await new Promise(r=>setTimeout(r,25));} return globalThis.engineInterruptionResult;`);
+
+          return String(opened.capabilities.browserVersion);
+          };
+          version = await runSafariEngine();
         } else {
           const types = await import("playwright");
           assertRunning();

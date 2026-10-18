@@ -1,5 +1,4 @@
 import { expect, spyOn, test } from "bun:test";
-import type { RuntimeFilesystem } from "waffle";
 import { createFilesystemIdentity } from "waffle/fs";
 import { startRun } from "../src/runner";
 import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess-broker";
@@ -12,7 +11,7 @@ test("a Preview1-first runtime does not register its guest as the immutable Bun 
   const ports: MessagePort[] = [];
   const registrations = new Map<string, ExecutableRegistration>();
   const register = SubprocessBroker.prototype.register;
-  const registration = spyOn(SubprocessBroker.prototype, "register").mockImplementation(function(name, entry) {
+  const registration = spyOn(SubprocessBroker.prototype, "register").mockImplementation(function(this: SubprocessBroker, name, entry) {
     registrations.set(name, entry); return register.call(this, name, entry);
   });
   const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) =>
@@ -25,7 +24,7 @@ test("a Preview1-first runtime does not register its guest as the immutable Bun 
   const runtime = processRuntimeFixture({
     fork() { const channel = new MessageChannel(); ports.push(channel.port1, channel.port2); return { ...createFilesystemIdentity(), port: channel.port1 }; },
     revoke() {}, reap() {}, async quiesce() {},
-  } as RuntimeFilesystem);
+  });
   const runs: ReturnType<typeof startRun>[] = [];
   try {
     const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));

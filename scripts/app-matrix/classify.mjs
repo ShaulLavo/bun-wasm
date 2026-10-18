@@ -1,6 +1,7 @@
 import { exitProvenance } from "./exit-provenance.ts";
 
 export function stageOutput(log, command) {
+  // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
   const lines = log.replace(/\x1b\[[0-9;]*m/g, "").split("\n");
   const start = lines.findLastIndex(line => line.endsWith(`user@bun:~$ ${command}`));
   if (start === -1) throw new Error(`Missing stage boundary for ${command}`);
@@ -9,6 +10,7 @@ export function stageOutput(log, command) {
 }
 
 export function firstError(output) {
+  // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
   const lines = output.replace(/\x1b\[[0-9;]*m/g, "").split("\n").map(line => line.trim().replace(/^\d{1,2}:\d{2}:\d{2} [AP]M \[vite\] (?:\([^)]*\) )?/, "").replace(/^(?:unhandledRejection|uncaughtException)\s+\[?(\w*Error:.*?)\]?$/, "$1").replace(/^\[((?:\w*Error|error):.*)\]$/, "$1"));
   const diagnostic = lines.find(line => /^(?:(?:\w*Error|error|panic|fatal|bun-wasm|E[A-Z][A-Z0-9_]+):|Error when evaluating SSR module |circular import:|Export named .* not found in module |The requested module .*does not provide an export named|memory allocation of \d+ bytes failed|thread '.+' panicked|[^|\n]+error TS\d+:)/i.test(line));
   const exit = exitProvenance({ code: null, output }).runtimeExits.at(-1);

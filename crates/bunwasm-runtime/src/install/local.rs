@@ -3,7 +3,7 @@ use super::{
     resolve,
 };
 use crate::Transpiler;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     collections::BTreeMap,
     fs,
@@ -36,7 +36,11 @@ pub fn root(parser: &dyn Transpiler) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-pub fn workspaces(root: &Path, manifest: &Value, parser: &dyn Transpiler) -> Result<BTreeMap<String, Local>> {
+pub fn workspaces(
+    root: &Path,
+    manifest: &Value,
+    parser: &dyn Transpiler,
+) -> Result<BTreeMap<String, Local>> {
     let mut members = BTreeMap::new();
     let config = &manifest["workspaces"];
     if config.is_null() {
@@ -48,8 +52,12 @@ pub fn workspaces(root: &Path, manifest: &Value, parser: &dyn Transpiler) -> Res
         .ok_or("workspaces must be an array or an object with packages")?;
     let mut paths = Vec::new();
     for pattern in patterns {
-        let pattern = pattern.as_str().ok_or("workspace patterns must be strings")?;
-        let (exclude, pattern) = pattern.strip_prefix('!').map_or((false, pattern), |p| (true, p));
+        let pattern = pattern
+            .as_str()
+            .ok_or("workspace patterns must be strings")?;
+        let (exclude, pattern) = pattern
+            .strip_prefix('!')
+            .map_or((false, pattern), |p| (true, p));
         let pattern = format!("{}/package.json", pattern.trim_end_matches('/'));
         let mut walker = bun_glob::BunGlobWalker::init_with_cwd(
             pattern.as_bytes(),
@@ -67,8 +75,12 @@ pub fn workspaces(root: &Path, manifest: &Value, parser: &dyn Transpiler) -> Res
             .walk()
             .map_err(|e| format!("Workspace glob: {e:?}"))?
             .map_err(|e| format!("Workspace glob: {e:?}"))?;
-        let matched: Vec<_> = walker.matched_paths.keys().iter()
-            .map(|path| PathBuf::from(String::from_utf8_lossy(path).into_owned())).collect();
+        let matched: Vec<_> = walker
+            .matched_paths
+            .keys()
+            .iter()
+            .map(|path| PathBuf::from(String::from_utf8_lossy(path).into_owned()))
+            .collect();
         if exclude {
             paths.retain(|path| !matched.contains(path));
             continue;
@@ -152,26 +164,6 @@ pub fn bin_link(target: &Path, path: &Path) -> Result<BinLink> {
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bin_link_errors() {
-        for code in [libc::ENOTSUP, libc::EPERM] {
-            assert!(matches!(
-                bin_link_result(Err(std::io::Error::from_raw_os_error(code))),
-                Ok(BinLink::Unsupported)
-            ));
-        }
-        for code in [libc::EACCES, libc::ENOENT, libc::EIO, libc::EEXIST, 76] {
-            assert!(bin_link_result(Err(std::io::Error::from_raw_os_error(code))).is_err());
-        }
-        assert!(bin_link_result(Err(std::io::ErrorKind::PermissionDenied.into())).is_err());
-        assert!(matches!(bin_link_result(Ok(())), Ok(BinLink::Linked)));
-    }
-}
-
 pub fn physical(path: &Path) -> Result<PathBuf> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut path = PathBuf::from(crate::resolve::normalize(&cwd.join(path).to_string_lossy()));
@@ -218,4 +210,24 @@ pub fn relative(target: &Path, base: &Path) -> PathBuf {
         return path;
     }
     target.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bin_link_errors() {
+        for code in [libc::ENOTSUP, libc::EPERM] {
+            assert!(matches!(
+                bin_link_result(Err(std::io::Error::from_raw_os_error(code))),
+                Ok(BinLink::Unsupported)
+            ));
+        }
+        for code in [libc::EACCES, libc::ENOENT, libc::EIO, libc::EEXIST, 76] {
+            assert!(bin_link_result(Err(std::io::Error::from_raw_os_error(code))).is_err());
+        }
+        assert!(bin_link_result(Err(std::io::ErrorKind::PermissionDenied.into())).is_err());
+        assert!(matches!(bin_link_result(Ok(())), Ok(BinLink::Linked)));
+    }
 }

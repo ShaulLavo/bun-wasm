@@ -184,6 +184,7 @@
   class Statement {
     #id;
     // Keeps the Database (and so its connection) alive while this lives.
+    // oxlint-disable-next-line no-unused-private-class-members -- Strong reference keeps the connection alive until the statement is collected.
     #db;
     #names;
     #strict;

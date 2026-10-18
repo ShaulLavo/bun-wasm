@@ -59,41 +59,13 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
       adapter: `bun:${engine}`, cooperative: true,
       module: () => loadBunWasm(options),
     }));
-    // Check every path before creating any files, so a conflict cannot leave a partial install.
-    for (const name of names) {
-      const entry = await runtime.filesystem.lookup(name);
-      if (entry && (entry.kind !== "file" || !matchesMarker(await runtime.filesystem.readFile(name)))) {
-        throw new BunWasmExecutableConflictError(name);
-      }
-    }
-    for (const name of names) {
-      const existing = await runtime.filesystem.lookup(name);
-      if (existing) {
-        if (existing.kind !== "file" || !matchesMarker(await runtime.filesystem.readFile(name))) throw new BunWasmExecutableConflictError(name);
-        continue;
-      }
-      await runtime.filesystem.mkdirp(name.slice(0, name.lastIndexOf("/")) || "/");
-      // Recheck after creating parents, rather than overwriting an entry created meanwhile.
-      if (await runtime.filesystem.lookup(name)) {
-        if (!matchesMarker(await runtime.filesystem.readFile(name))) throw new BunWasmExecutableConflictError(name);
-        continue;
-      }
-      await runtime.filesystem.writeFile(name, executableMarker);
-      created.push(name);
-    }
+    // Preflight every path before writing; provisionMarker rechecks after parent creation.
+    for (const name of names) await checkMarker(runtime.filesystem, name);
+    for (const name of names) await provisionMarker(runtime.filesystem, name, created);
   } catch (error) {
     for (const unregister of unregisters.reverse()) unregister();
-    // Waffle also queues mutation errors for drain; consume the already-caught failure
-    // before rollback reads, or their drain would fail without checking the marker.
-    try { await runtime.filesystem.drain(); } catch {}
-    for (const name of created.reverse()) {
-      try {
-        if (matchesMarker(await runtime.filesystem.readFile(name))) await runtime.filesystem.remove(name);
-      } catch {
-        // Clear a failed rollback mutation too, so cleanup of other markers can continue.
-        try { await runtime.filesystem.drain(); } catch {}
-      }
-    }
+    await clearMutationFailure(runtime.filesystem);
+    for (const name of created.reverse()) await rollbackMarker(runtime.filesystem, name);
     throw error;
   } finally { installing.delete(runtime); }
   let active = true;
@@ -107,4 +79,32 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
   };
   installations.set(runtime, installation);
   return installation;
+}
+
+async function checkMarker(filesystem: Runtime["filesystem"], path: string): Promise<boolean> {
+  const entry = await filesystem.lookup(path);
+  if (!entry) return false;
+  if (entry.kind !== "file" || !matchesMarker(await filesystem.readFile(path))) throw new BunWasmExecutableConflictError(path);
+  return true;
+}
+
+async function provisionMarker(filesystem: Runtime["filesystem"], path: string, created: string[]): Promise<void> {
+  if (await checkMarker(filesystem, path)) return;
+  await filesystem.mkdirp(path.slice(0, path.lastIndexOf("/")) || "/");
+  if (await checkMarker(filesystem, path)) return;
+  await filesystem.writeFile(path, executableMarker);
+  created.push(path);
+}
+
+async function clearMutationFailure(filesystem: Runtime["filesystem"]): Promise<void> {
+  // Waffle queues mutation failures for drain, including failures already caught here.
+  try { await filesystem.drain(); } catch {}
+}
+
+async function rollbackMarker(filesystem: Runtime["filesystem"], path: string): Promise<void> {
+  try {
+    if (matchesMarker(await filesystem.readFile(path))) await filesystem.remove(path);
+  } catch {
+    await clearMutationFailure(filesystem);
+  }
 }

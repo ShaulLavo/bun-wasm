@@ -172,6 +172,7 @@ if (import.meta.main) {
     console.log(report.method);
     console.table(report.layers.map(({ name, minified, gzip, guideGzip }) => ({ layer: name, minified, gzip, guideGzip })));
     for (const [name, scenarios] of Object.entries(report.applications)) {
+const printApplicationSizes = () => {
       console.log(`\n${name}:`);
       for (const [scenario, details] of Object.entries(scenarios as Record<string, Awaited<ReturnType<typeof application>>>)) {
         console.log(`${scenario}: logical JS ${details.logicalJavaScript.minified} B / ${details.logicalJavaScript.gzip} B gzip; Bun light initial JS ${details.bunLightInitialJavaScript.minified} B / ${details.bunLightInitialJavaScript.gzip} B gzip`);
@@ -180,7 +181,10 @@ if (import.meta.main) {
         console.log("Other Bun light downloads:", details.otherBunLightDownloads.join(", "));
         console.log(`Proc eager: ${details.proc.eager}; ${details.proc.note}`);
       }
-    }
+
+};
+printApplicationSizes();
+}
   }
   checkCoreBudget(report.layers.find((layer) => layer.name === "core")!.gzip);
 }

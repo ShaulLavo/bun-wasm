@@ -13,7 +13,7 @@ extern "C" fn errno_location() -> *mut c_int {
         static mut errno: c_int;
     }
     // SAFETY: address of wasi-libc's errno.
-    unsafe { &raw mut errno }
+    &raw mut errno
 }
 
 // ── WTF strings: never created without JavaScriptCore ─────────────────────
@@ -112,7 +112,9 @@ fn js_string_to_number(text: &str) -> f64 {
         return sign * f64::INFINITY;
     }
     let valid = !body.is_empty()
-        && body.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-'))
+        && body
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-'))
         && body.bytes().any(|b| b.is_ascii_digit());
     if !valid {
         return f64::NAN;
@@ -123,11 +125,7 @@ fn js_string_to_number(text: &str) -> f64 {
 // ── ICU collation (Intl.Collator-style compare), code point order ────────
 
 fn collate<T: Ord + Copy + Into<u32>>(numeric: bool, a: &[T], b: &[T]) -> i32 {
-    let ordering = if numeric {
-        natural_cmp(a, b)
-    } else {
-        a.cmp(b)
-    };
+    let ordering = if numeric { natural_cmp(a, b) } else { a.cmp(b) };
     ordering as i32
 }
 
@@ -145,7 +143,11 @@ fn natural_cmp<T: Copy + Into<u32>>(a: &[T], b: &[T]) -> core::cmp::Ordering {
             while j < b.len() && digit(b[j].into()) {
                 j += 1;
             }
-            let num = |s: &[T]| s.iter().fold(0u128, |n, &c| n.saturating_mul(10) + (c.into() - b'0' as u32) as u128);
+            let num = |s: &[T]| {
+                s.iter().fold(0u128, |n, &c| {
+                    n.saturating_mul(10) + (c.into() - b'0' as u32) as u128
+                })
+            };
             match num(&a[si..i]).cmp(&num(&b[sj..j])) {
                 core::cmp::Ordering::Equal => continue,
                 other => return other,
@@ -163,9 +165,20 @@ fn natural_cmp<T: Copy + Into<u32>>(a: &[T], b: &[T]) -> core::cmp::Ordering {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn Bun__collateUTF8(numeric: bool, a: *const u8, a_len: usize, b: *const u8, b_len: usize) -> i32 {
+unsafe extern "C" fn Bun__collateUTF8(
+    numeric: bool,
+    a: *const u8,
+    a_len: usize,
+    b: *const u8,
+    b_len: usize,
+) -> i32 {
     // SAFETY: caller passes valid slices.
-    let (a, b) = unsafe { (core::slice::from_raw_parts(a, a_len), core::slice::from_raw_parts(b, b_len)) };
+    let (a, b) = unsafe {
+        (
+            core::slice::from_raw_parts(a, a_len),
+            core::slice::from_raw_parts(b, b_len),
+        )
+    };
     let (a, b): (Vec<u32>, Vec<u32>) = (
         bstr::ByteSlice::chars(a).map(u32::from).collect(),
         bstr::ByteSlice::chars(b).map(u32::from).collect(),
@@ -174,9 +187,20 @@ unsafe extern "C" fn Bun__collateUTF8(numeric: bool, a: *const u8, a_len: usize,
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn Bun__collateUTF16(numeric: bool, a: *const u16, a_len: usize, b: *const u16, b_len: usize) -> i32 {
+unsafe extern "C" fn Bun__collateUTF16(
+    numeric: bool,
+    a: *const u16,
+    a_len: usize,
+    b: *const u16,
+    b_len: usize,
+) -> i32 {
     // SAFETY: caller passes valid slices.
-    let (a, b) = unsafe { (core::slice::from_raw_parts(a, a_len), core::slice::from_raw_parts(b, b_len)) };
+    let (a, b) = unsafe {
+        (
+            core::slice::from_raw_parts(a, a_len),
+            core::slice::from_raw_parts(b, b_len),
+        )
+    };
     collate(numeric, a, b)
 }
 
@@ -226,3 +250,19 @@ macro_rules! unreachable_c {
     )*};
 }
 unreachable_c!(i2d_SSL_SESSION, SSL_SESSION_up_ref, SSL_SESSION_free);
+
+/// Macro evaluation requires a JS engine, not the standalone parser adapter.
+#[allow(clippy::too_many_arguments)] // Exact ABI declared by bun_js_parser::Macro.
+#[unsafe(no_mangle)]
+fn __bun_macro_context_call(
+    _ctx: &mut bun_js_parser::Macro::MacroContext,
+    _path: &[u8],
+    _source_dir: &[u8],
+    _log: &mut bun_ast::Log,
+    _source: &bun_ast::Source,
+    _range: bun_ast::Range,
+    _caller: bun_ast::Expr,
+    _function: &[u8],
+) -> Result<bun_ast::Expr, bun_js_parser::Error> {
+    Err(bun_js_parser::Error::MacroFailed)
+}

@@ -331,7 +331,7 @@ fn process_functions(store: &mut Store<Host>) -> Vec<Func> {
                 };
                 match host.processes.pipe() {
                     Ok(ends) => {
-                        for (word, fd) in memory[at].chunks_exact_mut(4).zip(ends) {
+                        for (word, fd) in memory[at].as_chunks_mut::<4>().0.iter_mut().zip(ends) {
                             word.copy_from_slice(&fd.to_le_bytes());
                         }
                         Ok(0)
@@ -452,10 +452,14 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
     for (name, function) in PROCESS_NAMES.into_iter().zip(process_functions(store)) {
         linker.define(&mut *store, "runtime_proc", name, function)?;
     }
-    linker.func_wrap("runtime_proc", "start_status", |caller: Caller<'_, Host>, pid: i32| -> Result<i32> {
-        caller.data().cancel.check()?;
-        Ok(caller.data().processes.start_status(pid))
-    })?;
+    linker.func_wrap(
+        "runtime_proc",
+        "start_status",
+        |caller: Caller<'_, Host>, pid: i32| -> Result<i32> {
+            caller.data().cancel.check()?;
+            Ok(caller.data().processes.start_status(pid))
+        },
+    )?;
     linker.func_wrap(
         "runtime_proc",
         "access_start",
@@ -552,8 +556,10 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
             let memory = crate::process::wasi::memory(&mut caller)?;
             let bytes = &memory.data(&caller)[range(memory.data(&caller), packet, 20)?];
             let words: Vec<i32> = bytes
-                .chunks_exact(4)
-                .map(|b| i32::from_le_bytes(b.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| i32::from_le_bytes(*b))
                 .collect();
             let Some(func) = caller.data().functions.get(words[0] as usize).copied() else {
                 return Ok(58);

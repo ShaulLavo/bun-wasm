@@ -7,6 +7,7 @@ const root = fileURLToPath(new URL("../../crates/bunwasm-runtime/src/js/", impor
 const provider = webcrypto.subtle;
 const signMetadata = {name:provider.sign.name, length:provider.sign.length};
 const beforeSign = provider.sign.bind(provider), beforeVerify = provider.verify.bind(provider);
+// oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
 const load = path => (0, eval)(readFileSync(path, "utf8"));
 const internal = {
  native:{subtleCrypto:provider, CryptoKey:globalThis.CryptoKey, SubtleCrypto:globalThis.SubtleCrypto,

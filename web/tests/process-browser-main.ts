@@ -361,12 +361,7 @@ try {
       let previous = 1; let retired: Child | undefined;
       for (let index = 0; index < 8; index++) {
         const child = s.spawn("tiny"); truth(child.pid > previous, "pids are monotonic"); previous = child.pid;
-        if (retired) {
-          let rejected = false;
-          try { controlLoad(retired.state.signals.interrupt, 0); }
-          catch (error) { rejected = error instanceof ProcessError && error.errno === ProcessErrno.SRCH; }
-          truth(rejected, "retired process capability cannot observe a reused directory slot");
-        }
+        if (retired) assertRetiredCapability(retired);
         await exit(child, 0);
         for (const fd of [1, 2]) child.owner.descriptors.close(child.readers[fd]!);
         const supervisor = await s.service.ready();
@@ -395,8 +390,7 @@ try {
           truth(liveDescendants().length > 0, "unawaited child still owns capacity after its parent exits");
           equal(await s.filesystem.readFile(marker), undefined, "orphan has not been allowed to finish before parent exit");
           await s.filesystem.writeFile(permit, "go");
-          const end = performance.now() + 10_000;
-          while (decoder.decode(await s.filesystem.readFile(marker)) !== "done") { if (performance.now() > end) throw new Error(`orphan ${iteration} lost filesystem access after parent exit`); await pause(); }
+          await waitForOrphanMarker(() => s.filesystem.readFile(marker), iteration);
           await until(() => liveDescendants().length === 0, "orphan completion releases capacity without a living parent waiter");
           for (const fd of [1, 2]) parent.owner.descriptors.close(parent.readers[fd]!);
           const supervisor = await s.service.ready();
@@ -443,4 +437,18 @@ try {
   try { await activeRuntime?.dispose(); }
   catch (error) { Object.assign(globalThis, { processResult: { ok: false, checks, cleanupError: String(error) } }); }
   finally { for (const worker of activeWorkers) worker.terminate(); globalThis.Worker = NativeWorker; }
+}
+
+function assertRetiredCapability(child: Child) {
+  let rejected = false;
+  try { controlLoad(child.state.signals.interrupt, 0); }
+  catch (error) { rejected = error instanceof ProcessError && error.errno === ProcessErrno.SRCH; }
+  truth(rejected, "retired process capability cannot observe a reused directory slot");
+}
+async function waitForOrphanMarker(read: () => Promise<Uint8Array | undefined>, iteration: number) {
+  const end = performance.now() + 10_000;
+  while (decoder.decode(await read()) !== "done") {
+    if (performance.now() > end) throw new Error(`orphan ${iteration} lost filesystem access after parent exit`);
+    await pause();
+  }
 }

@@ -140,7 +140,7 @@ fn io(
         return Ok(-FAULT);
     };
     let mut iovecs = Vec::new();
-    for iovec in bytes[input].chunks_exact(8) {
+    for iovec in bytes[input].as_chunks::<8>().0.iter() {
         let ptr = i32::from_le_bytes(iovec[..4].try_into().unwrap());
         let len = u32::from_le_bytes(iovec[4..].try_into().unwrap()) as usize;
         let Some(at) = span(bytes, ptr, len) else {
@@ -186,6 +186,8 @@ fn io(
 
 /// Merge stream, filesystem and clock readiness with nonblocking preview1 scans.
 /// The delegate uses private memory, so no guest buffers are temporarily changed.
+// Keep the preview1 call's four positional arguments alongside its delegate context.
+#[allow(clippy::too_many_arguments)]
 fn poll_oneoff(
     caller: &mut Caller<'_, Host>,
     delegate: &Delegated,
@@ -221,7 +223,9 @@ fn poll_oneoff(
     };
     let mut marker = u64::MAX;
     while subscriptions
-        .chunks_exact(48)
+        .as_chunks::<48>()
+        .0
+        .iter()
         .any(|sub| u64::from_le_bytes(sub[..8].try_into().unwrap()) == marker)
     {
         marker -= 1;
@@ -240,7 +244,7 @@ fn poll_oneoff(
         }
         let mut events = Vec::new();
         let mut delegated = Vec::new();
-        for sub in subscriptions.chunks_exact(48) {
+        for sub in subscriptions.as_chunks::<48>().0.iter() {
             if process(sub, caller.data()) {
                 let fd = i32::from_le_bytes(sub[16..20].try_into().unwrap());
                 let readiness = caller.data().processes.readiness(fd, sub[8] == 2);
@@ -257,7 +261,7 @@ fn poll_oneoff(
                     events.extend_from_slice(&event);
                 }
             } else {
-                let mut sub: [u8; 48] = sub.try_into().unwrap();
+                let mut sub = *sub;
                 if sub[8] == 1 || sub[8] == 2 {
                     let external = i32::from_le_bytes(sub[16..20].try_into().unwrap());
                     let Some(actual) = namespace.files.get(&external) else {
@@ -303,7 +307,11 @@ fn poll_oneoff(
             let bytes = scratch.data(&*caller);
             let amount =
                 u32::from_le_bytes(bytes[count_at..count_at + 4].try_into().unwrap()) as usize;
-            for event in bytes[output_at..output_at + amount * 32].chunks_exact(32) {
+            for event in bytes[output_at..output_at + amount * 32]
+                .as_chunks::<32>()
+                .0
+                .iter()
+            {
                 if event[10] != 0 || u64::from_le_bytes(event[..8].try_into().unwrap()) != marker {
                     events.extend_from_slice(event);
                 }

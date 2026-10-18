@@ -86,7 +86,7 @@
     makeTypeError: message => new TypeError(message),
     throwTypeError(message) { throw new TypeError(message); },
     throwRangeError(message) { throw new RangeError(message); },
-    makeErrorWithCode(id, ...args) {
+    makeErrorWithCode(id, ..._args) {
       const code = native.bunBuiltinErrorCode(id);
       if (code === "ERR_INVALID_URI") return Object.assign(new URIError("URI malformed"), { code });
       throw unsupported(`error constructor ${code}`);

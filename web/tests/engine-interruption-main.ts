@@ -390,15 +390,18 @@ async function testIdleHandled(module: WebAssembly.Module, engine: Engine, route
     const trials: (Awaited<ReturnType<typeof runTrial>> & { warmup: boolean })[] = [];
     let complete = true;
     for (const delivery of deliveries) {
-      const identity = { engine, route, name: "idle-handled-SIGINT", delivery };
-      const negative = await runCase({ ...identity, control: "notify-removal" }, () => runTrial(true, delivery));
-      if (negative.ok) negativeControls.push(negative.result as Awaited<ReturnType<typeof runTrial>>);
-      else complete = false;
-      for (let trial = 0; trial < 8; trial++) {
-        const positive = await runCase({ ...identity, control: "positive", trial }, () => runTrial(false, delivery));
-        if (positive.ok) trials.push({ warmup: trial === 0, ...positive.result as Awaited<ReturnType<typeof runTrial>> });
+      const runDeliveryTrials = async () => {
+        const identity = { engine, route, name: "idle-handled-SIGINT", delivery };
+        const negative = await runCase({ ...identity, control: "notify-removal" }, () => runTrial(true, delivery));
+        if (negative.ok) negativeControls.push(negative.result as Awaited<ReturnType<typeof runTrial>>);
         else complete = false;
-      }
+        for (let trial = 0; trial < 8; trial++) {
+          const positive = await runCase({ ...identity, control: "positive", trial }, () => runTrial(false, delivery));
+          if (positive.ok) trials.push({ warmup: trial === 0, ...positive.result as Awaited<ReturnType<typeof runTrial>> });
+          else complete = false;
+        }
+      };
+      await runDeliveryTrials();
     }
     if (!complete) return;
     const times = trials.filter(trial => !trial.warmup).map(trial => trial.handlerLatencyMs);
@@ -589,61 +592,64 @@ void (async () => {
   let fatalError: unknown;
   let functionalComplete = false;
   try {
-    truth(crossOriginIsolated, "engine interruption requires cross-origin isolation");
-    for (const [engine, name] of [["quickjs", "bun.wasm"], ["jsc", "bun-jsc.wasm"], ["browser", "bun-browser.wasm"]] as const) {
-      let module: WebAssembly.Module | undefined, hash = "";
-      await runCase({ engine, route: "artifact", name: "load-candidate" }, async () => {
-        const response = await fetch(`/${name}`); truth(response.ok, `fresh artifact ${name}: HTTP ${response.status}`);
-        const bytes = await response.arrayBuffer();
-        hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
-        artifacts.push({ engine, name, sha256: hash });
-        module = await WebAssembly.compile(bytes);
-      });
-      // Other engines and Preview1 remain independent of an unavailable artifact.
-      if (!module) continue;
-      const loaded = module;
-      modules.push({ engine, name, hash, module: loaded });
-      await runCase({ engine, route: "legacy", name: "boot" }, async () => {
-        const boot = await scope(loaded, engine);
-        try {
-          const child = boot.spawn("require('node:fs').writeSync(2,'boot\\n');");
-          await boot.exit(child, 0);
-          equal(child.stderr, "boot\n", `${engine} guest bootstrap`);
-        } finally { await boot.dispose(); }
-      });
-      for (const signal of [2, 15] as const) await runCase({ engine, route: "legacy", name: `default-${signal}` }, () => testDefault(loaded, engine, signal));
-      if (engine !== "browser") {
-        await runCase({ engine, route: "legacy", name: "native-true-return" }, () => testNativeInterrupt(loaded, engine));
-        await runCase({ engine, route: "legacy", name: "handled-SIGINT" }, () => testHandled(loaded, engine));
-        await runCase({ engine, route: "legacy", name: "nested-SIGINT-default-15" }, () => testDefault(loaded, engine, 15, true));
-        await testIdleHandled(loaded, engine);
-        for (const signal of [2, 15] as const) await runCase({ engine, route: "runtimeProcess", name: `default-${signal}` }, () => testDefault(loaded, engine, signal, false, "runtimeProcess"));
-        await runCase({ engine, route: "runtimeProcess", name: "handled-SIGINT" }, () => testHandled(loaded, engine, "runtimeProcess"));
-        await runCase({ engine, route: "runtimeProcess", name: "nested-SIGINT-default-15" }, () => testDefault(loaded, engine, 15, true, "runtimeProcess"));
-        await testIdleHandled(loaded, engine, "legacy", true);
-        await testIdleHandled(loaded, engine, "runtimeProcess", true);
-        await testSleepSyncSignals(loaded, engine);
-      }
-    }
-    await testPreview1Clock(true); await testPreview1Clock(false);
-    functionalComplete = true;
-    // Never start timings when even one functional scenario is RED. Functional
-    // matrix runs have already retained every safely reachable independent case.
-    const query = new URLSearchParams(location.search);
-    if (functional.ok && query.has("benchmark")) {
-      for (const { engine, name, hash, module } of modules) {
-        if (engine === "browser") continue;
-        let pristine: WebAssembly.Module | undefined, pristineSha256: string | undefined;
-        if (query.has("baseline")) {
-          const response = await fetch(`/baseline/${name}`); truth(response.ok, `pristine baseline ${name}: HTTP ${response.status}`);
+    const runEngineMatrix = async () => {
+      truth(crossOriginIsolated, "engine interruption requires cross-origin isolation");
+      for (const [engine, name] of [["quickjs", "bun.wasm"], ["jsc", "bun-jsc.wasm"], ["browser", "bun-browser.wasm"]] as const) {
+        let module: WebAssembly.Module | undefined, hash = "";
+        await runCase({ engine, route: "artifact", name: "load-candidate" }, async () => {
+          const response = await fetch(`/${name}`); truth(response.ok, `fresh artifact ${name}: HTTP ${response.status}`);
           const bytes = await response.arrayBuffer();
-          pristineSha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
-          truth(pristineSha256 !== hash, "pristine baseline must not reuse candidate bytes");
-          pristine = await WebAssembly.compile(bytes);
+          hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
+          artifacts.push({ engine, name, sha256: hash });
+          module = await WebAssembly.compile(bytes);
+        });
+        // Other engines and Preview1 remain independent of an unavailable artifact.
+        if (!module) continue;
+        const loaded = module;
+        modules.push({ engine, name, hash, module: loaded });
+        await runCase({ engine, route: "legacy", name: "boot" }, async () => {
+          const boot = await scope(loaded, engine);
+          try {
+            const child = boot.spawn("require('node:fs').writeSync(2,'boot\\n');");
+            await boot.exit(child, 0);
+            equal(child.stderr, "boot\n", `${engine} guest bootstrap`);
+          } finally { await boot.dispose(); }
+        });
+        for (const signal of [2, 15] as const) await runCase({ engine, route: "legacy", name: `default-${signal}` }, () => testDefault(loaded, engine, signal));
+        if (engine !== "browser") {
+          await runCase({ engine, route: "legacy", name: "native-true-return" }, () => testNativeInterrupt(loaded, engine));
+          await runCase({ engine, route: "legacy", name: "handled-SIGINT" }, () => testHandled(loaded, engine));
+          await runCase({ engine, route: "legacy", name: "nested-SIGINT-default-15" }, () => testDefault(loaded, engine, 15, true));
+          await testIdleHandled(loaded, engine);
+          for (const signal of [2, 15] as const) await runCase({ engine, route: "runtimeProcess", name: `default-${signal}` }, () => testDefault(loaded, engine, signal, false, "runtimeProcess"));
+          await runCase({ engine, route: "runtimeProcess", name: "handled-SIGINT" }, () => testHandled(loaded, engine, "runtimeProcess"));
+          await runCase({ engine, route: "runtimeProcess", name: "nested-SIGINT-default-15" }, () => testDefault(loaded, engine, 15, true, "runtimeProcess"));
+          await testIdleHandled(loaded, engine, "legacy", true);
+          await testIdleHandled(loaded, engine, "runtimeProcess", true);
+        await testSleepSyncSignals(loaded, engine);
         }
-        benchmarks.push({ wasmSha256: hash, pristineSha256, ...await benchmark(module, engine, pristine) });
       }
-    }
+      await testPreview1Clock(true); await testPreview1Clock(false);
+      functionalComplete = true;
+      // Never start timings when even one functional scenario is RED. Functional
+      // matrix runs have already retained every safely reachable independent case.
+      const query = new URLSearchParams(location.search);
+      if (functional.ok && query.has("benchmark")) {
+        for (const { engine, name, hash, module } of modules) {
+          if (engine === "browser") continue;
+          let pristine: WebAssembly.Module | undefined, pristineSha256: string | undefined;
+          if (query.has("baseline")) {
+            const response = await fetch(`/baseline/${name}`); truth(response.ok, `pristine baseline ${name}: HTTP ${response.status}`);
+            const bytes = await response.arrayBuffer();
+            pristineSha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
+            truth(pristineSha256 !== hash, "pristine baseline must not reuse candidate bytes");
+            pristine = await WebAssembly.compile(bytes);
+          }
+          benchmarks.push({ wasmSha256: hash, pristineSha256, ...await benchmark(module, engine, pristine) });
+        }
+      }
+    };
+    await runEngineMatrix();
   } catch (error) { fatalError = error; }
   finally {
     await destroy(); clearTimeout(watchdog);

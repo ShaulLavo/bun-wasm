@@ -5,6 +5,7 @@ import { Buffer } from "node:buffer";
 // A host may synchronously fail a write. Simulate that boundary so the race
 // does not depend on the kernel delivering an EPIPE at a particular instant.
 test("a failed close-frame write releases the close-handshake timer", () => {
+  // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
   const factory = (0, eval)(readFileSync(new URL("../../crates/bunwasm-runtime/src/js/websocket.js", import.meta.url), "utf8"));
   const api = factory({ require: () => ({ Buffer }), printError: (error) => { throw error; } });
   const timers = [];
@@ -35,6 +36,7 @@ test("a failed close-frame write releases the close-handshake timer", () => {
 
 
 test("WebSocket bufferedAmount uses its connection byte count", () => {
+  // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
   const factory = (0, eval)(readFileSync(new URL("../../crates/bunwasm-runtime/src/js/websocket.js", import.meta.url), "utf8"));
   const api = factory({ require: () => ({ Buffer }), printError: error => { throw error; } });
   const connection = { closed: false, bufferedAmount: 42, peer: () => ({ address: "127.0.0.1" }) };

@@ -1,7 +1,7 @@
 From 5e0baa66516f3af00b008cdf1521c681317741e8 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sat, 17 Oct 2026 08:24:52 +0300
-Subject: [PATCH 12/12] wasm: embed lint rule docs with native generators
+Subject: [PATCH 12/13] wasm: embed lint rule docs with native generators
 
 ---
  src/lint/driver/Cargo.toml |  1 +

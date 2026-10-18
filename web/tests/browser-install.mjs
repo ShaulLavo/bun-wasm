@@ -66,10 +66,14 @@ try {
   const browsers = process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "webkit"];
   const runtimes = (process.env.ENGINES ?? "browser,quickjs,jsc").split(",");
   for (const browser of browsers) {
+    const checkInstallCase = async () => {
     for (const runtime of runtimes) {
       try { await checkBrowser(browser, runtime, url); }
       catch (error) { failures.push(`${browser}/${runtime}`); console.error(`FAIL ${browser}/${runtime}\n${error.stack}`); }
     }
+
+    };
+    await checkInstallCase();
   }
   console.log(`${browsers.length * runtimes.length - failures.length} passed, ${failures.length} failed; ${registry.requests.length} local registry requests`);
 } finally {

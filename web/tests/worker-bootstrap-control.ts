@@ -78,7 +78,7 @@ export async function inheritedFilesystemControl() {
         reads += read(17); check(reads === "bc" && file.offset === 3, "first read did not advance shared offset");
         await fs.asyncCall("removePath", [path, false]); service.sweep();
         check(backend.shared.hasFile(path.node), "unlink released an open file");
-        reads += read(31); check(reads === "bcde" && file.offset === 5, "duplicate did not share file offset after unlink");
+        reads += read(31); check(reads === "bcde" && Number(file.offset) === 5, "duplicate did not share file offset after unlink");
         wasi.descriptors.close(17); reads += read(31); finalOffset = file.offset;
         check(reads === "bcdef" && finalOffset === 6, "closing one duplicate invalidated the other");
         return 0;
@@ -109,6 +109,7 @@ export function webIdlBoundaryControl() {
   const fs = new MemFS(), output: string[] = [];
   fs.writeFile("/inherited", new TextEncoder().encode("file"));
   const wasi = new Wasi({ args: [], env: {}, fs, preopens: { "/": "/" },
+    sleep() { throw new Error("unexpected synchronous wait"); },
     stdout(data) { output.push(new TextDecoder().decode(data)); }, stderr() {},
   });
   try {

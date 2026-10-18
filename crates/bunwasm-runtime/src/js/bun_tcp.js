@@ -1,7 +1,7 @@
 (function (internal) {
   "use strict";
   return function (transport) {
-    const { Connection, listenOrThrow, acceptLoop, waiters } = transport;
+    const { listenOrThrow, acceptLoop, waiters } = transport;
     const { Socket } = internal.builtin("node:net");
     const { port, error } = internal.require("net_address");
     const native = internal.native;

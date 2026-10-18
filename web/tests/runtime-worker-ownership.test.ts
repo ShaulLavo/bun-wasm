@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } from "waffle/fs";
-import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { startRun } from "../src/runner";
 import type { SharedFilesystem } from "../src/shared-fs";
@@ -75,7 +75,7 @@ test("generic worker root and child use the same lazy supervisor and exact share
     expect(root.signalState.byteOffset).toBe(signals.signalState.byteOffset);
     const request = state.workers.get(pid)!.request;
     expect(request.runtimeProcess).toBeDefined();
-    expect(request.child).toBeUndefined();
+    expect("child" in request).toBe(false);
     expect(state.workers.get(pid)!.url).toBe("http://localhost/preview1-worker.js");
     expect(request.filesystem.owner).toBe((request.runtimeProcess!.data as { filesystem: FilesystemIdentity }).filesystem.owner);
     state.workers.get(pid)!.message({ type: "exit", code: 7, sleep: "atomics" });

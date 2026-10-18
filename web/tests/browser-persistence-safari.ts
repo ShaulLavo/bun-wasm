@@ -69,6 +69,7 @@ function cleanup(): Promise<void> {
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
 const deadline = setTimeout(() => { console.error("Safari persistence gate exceeded deadline"); void cleanup().finally(() => process.exit(1)); }, smoke ? 120_000 : 900_000);
 try {
+  const checkSafariPersistence = async () => {
   scratch = await mkdtemp(resolve(import.meta.dir, "../node_modules/.persistence-safari-"));
   const out = join(scratch, "dist"), main = join(scratch, "main.ts");
   await Bun.write(main, `import ${JSON.stringify(resolve(import.meta.dir, "persistence-browser-main.ts"))};`);
@@ -175,6 +176,9 @@ try {
   }
   report.ok = true;
   console.log(`Safari ${report.version}: ${storage} storage, reload, writer, crash gates${smoke ? "" : " and 10,003-file corpus"} passed`);
+
+  };
+  await checkSafariPersistence();
 } catch (error) { report.error = error instanceof Error ? error.stack : String(error); throw error; }
 finally {
   clearTimeout(deadline); await cleanup();
