@@ -1108,17 +1108,28 @@ The previous partial Node POSIX implementation in `src/js/path.js` is removed.
 `crates/bunwasm-runtime/src/node_path.rs` and `src/js/path.ts` are **Host feature**
 original adapters. Little-endian UTF-16 buffers preserve JavaScript code units,
 including lone surrogates and U+FEFF. JavaScript validates and converts arguments
-before native calls. The adapter implements resolve, relative, format, namespace
+before native calls. The adapter implements POSIX resolve, relative, format, namespace
 conversion, and `_makeLong` over the native lexical operations and guest
 `process.cwd()`. Bun's native resolve and relative functions read a process-wide
 filesystem singleton, so calling them directly would use the toolchain's cwd
 instead of the current guest cwd. The adapter does not initialize or change
-that shared state. `scripts/generate-node-path.ts` extracts each relative
-function's computation after its resolution preamble from the same upstream
-file. It specializes `T` to `u16` and accepts resolved input slices instead of
-reading cwd. Bun's comparisons, separator scans, UNC rules, and output writes
-remain unchanged. The generator rejects an unexpected source shape or residual
-cwd dependency. Argument traversal and suffix-before-path validation adapt
+that shared state.
+
+`scripts/generate-node-path.ts` extracts Bun's Windows resolver and its six
+private helpers from the same upstream file. Class **Port**. It replaces the
+two cwd reads with a supplied guest cwd slice and specializes the tail normalizer
+to Windows. Bun's device selection, separator handling, tail normalization and
+output writes remain unchanged. The generated upstream functions retain their
+original control flow. The original host adapter passes validated UTF-16 paths
+and the current guest cwd to this resolver. It replaces the previous handwritten
+Windows resolution algorithm, which could create a false UNC root by joining
+cwd `/` and a relative tail before normalization.
+
+The generator also extracts each relative function's computation after its
+resolution preamble. It specializes `T` to `u16` and accepts resolved input slices
+instead of reading cwd. Bun's comparisons, separator scans, UNC rules, and output
+writes remain unchanged. The generator rejects an unexpected source shape or
+residual cwd dependency. Argument traversal and suffix-before-path validation adapt
 `src/runtime/node/path.rs` at the same revision. POSIX resolution stops checking
 arguments at an absolute path; Windows resolution validates every argument.
 `matchesGlob` uses the existing Bun glob native and normalizes

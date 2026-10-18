@@ -1,6 +1,7 @@
 declare namespace BunWasm {
   interface Native {
     nodePath: {
+      resolveWindows(cwd: Uint8Array, paths: Uint8Array[]): Uint8Array;
       lexical(windows: boolean, operation: "isAbsolute", path: Uint8Array): boolean;
       lexical(windows: boolean, operation: "parse", path: Uint8Array): Record<"root" | "dir" | "base" | "ext" | "name", Uint8Array>;
       lexical(windows: boolean, operation: "basename" | "dirname" | "extname" | "normalize", path: Uint8Array, suffix?: Uint8Array): Uint8Array;

@@ -62,38 +62,19 @@
     return paths;
   }
 
-  function device(root: string): string {
-    if (root[1] === ":") return root.slice(0, 2);
-    if (/^[/\\]{2}[^/\\]/.test(root)) return "\\\\" + root.split(/[/\\]+/).filter(Boolean).join("\\");
-    return "";
-  }
-
   function resolve(windows: boolean, paths: readonly string[]): string {
+    if (windows) return decode(native.resolveWindows(encode(process.cwd()), paths.map(encode)));
     let tail = "";
-    let root = "";
     let absolute = false;
-    for (let i = paths.length - 1; i >= -1 && !(absolute && (!windows || root)); i--) {
-      const value = i >= 0 ? paths[i] : fallbackCwd(windows, root);
+    for (let i = paths.length - 1; i >= -1 && !absolute; i--) {
+      const value = i >= 0 ? paths[i] : process.cwd();
       if (!value) continue;
-      const parsed = parse(windows, value);
-      const nextDevice = windows ? device(parsed.root) : "";
-      if (nextDevice && root && nextDevice.toLowerCase() !== root.toLowerCase()) continue;
-      root ||= nextDevice;
-      if (absolute) continue;
-      tail = value.slice(parsed.root.length) + (windows ? "\\" : "/") + tail;
-      absolute = windows ? native.lexical(true, "isAbsolute", encode(value)) : parsed.root === "/";
+      const parsed = parse(false, value);
+      tail = value.slice(parsed.root.length) + "/" + tail;
+      absolute = parsed.root === "/";
     }
-    const separator = windows ? "\\" : "/";
-    const result = normalize(windows, root + (absolute ? separator : "") + tail);
-    const rootLength = parse(windows, result).root.length;
-    return result.length > rootLength && result.endsWith(separator) ? result.slice(0, -1) : result;
-  }
-
-  function fallbackCwd(windows: boolean, root: string): string {
-    const cwd = process.cwd();
-    if (!windows || !root) return cwd;
-    const cwdDevice = device(parse(true, cwd).root);
-    return cwdDevice && cwdDevice.toLowerCase() !== root.toLowerCase() ? root + "\\" : cwd;
+    const result = normalize(false, (absolute ? "/" : "") + tail);
+    return result.length > 1 && result.endsWith("/") ? result.slice(0, -1) : result;
   }
 
   function relative(windows: boolean, from: string, to: string): string {

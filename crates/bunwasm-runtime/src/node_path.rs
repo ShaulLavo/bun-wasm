@@ -5,7 +5,6 @@ use crate::natives::Table;
 
 use path::{CHAR_BACKWARD_SLASH, CHAR_FORWARD_SLASH};
 const CHAR_DOT: u8 = b'.';
-
 fn memmove<T: Copy>(destination: &mut [T], source: &[T]) {
     destination.copy_from_slice(source);
 }
@@ -68,6 +67,20 @@ fn lexical(a: Args<'_>) -> NativeResult {
     Ok(bytes(value))
 }
 
+fn resolve_windows(a: Args<'_>) -> NativeResult {
+    let cwd = units(a.bytes(0)?);
+    let input = a.array(1).ok_or_else(|| NativeError::type_error("Expected path array"))?;
+    let paths: Result<Vec<_>, _> = input.iter().map(|v| Args(std::slice::from_ref(v)).bytes(0).map(units)).collect();
+    let paths = paths?;
+    let slices: Vec<_> = paths.iter().map(Vec::as_slice).collect();
+    let size = path::resolve_buf_len(true, &slices).max(cwd.len() + 2);
+    let mut output = vec![0; size];
+    let mut scratch = vec![0; size];
+    let result = windows_resolver::resolve_windows_guest_t(&slices, &cwd, &mut output, &mut scratch)
+        .map_err(|error| NativeError::error(error.to_string()))?;
+    Ok(bytes(result))
+}
+
 fn join(a: Args<'_>) -> NativeResult {
     let windows = a.bool(0);
     let input = a.array(1).ok_or_else(|| NativeError::type_error("Expected path array"))?;
@@ -87,6 +100,7 @@ fn join(a: Args<'_>) -> NativeResult {
 
 pub fn install(table: &mut Table) {
     table.add("nodePath.lexical", lexical);
+    table.add("nodePath.resolveWindows", resolve_windows);
     table.add("nodePath.join", join);
     table.add("nodePath.relative", |a| {
         let from = units(a.bytes(1)?);

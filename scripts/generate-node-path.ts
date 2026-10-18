@@ -21,4 +21,52 @@ ${platform === "posix" ? "    let to_orig = &buf[..to_orig_len];\n" : ""}${body}
 `;
 }
 
-writeFileSync(outputPath, relative("posix", "relative_windows_t").concat(relative("windows", "resolve_posix_t")));
+function upstreamFunction(name: string): string {
+  const start = source.indexOf(`fn ${name}<`);
+  const end = source.indexOf("\n}", start);
+  if (start < 0 || end < 0) throw new Error(`Missing Bun path helper: ${name}`);
+  return source.slice(start, end + 2);
+}
+
+function resolveWindowsWithCwd(): string {
+  let resolver = upstreamFunction("resolve_windows_t")
+    .replace("fn resolve_windows_t", "pub fn resolve_windows_guest_t")
+    .replace("    paths: &[&[T]],\n    buf:", "    paths: &[&[T]],\n    cwd: &[T],\n    buf:")
+    .replace("get_cwd_t(&mut tmp_buf[..])?", "guest_cwd(cwd, &mut tmp_buf[..])?")
+    .replace("get_cwd_t(&mut tmp_buf[resolved_device_len..])?", "guest_cwd(cwd, &mut tmp_buf[resolved_device_len..])?");
+  if (resolver.includes("get_cwd_t")) throw new Error("Guest resolver still uses host cwd");
+  const normalize = upstreamFunction("normalize_string_t")
+    .replace("fn normalize_string_t<T: PathCharCwd, const PLATFORM: Platform>", "fn normalize_string_t<T: PathCharCwd>")
+    .replace(
+      "let is_sep_t: fn(T) -> bool = if matches!(PLATFORM, Platform::Posix) {\n        is_sep_posix_t::<T>\n    } else {\n        is_sep_windows_t::<T>\n    };",
+      "let is_sep_t = is_sep_windows_t::<T>;",
+    );
+  resolver = resolver.replace("normalize_string_t::<T, { Platform::Windows }>", "normalize_string_t::<T>");
+  if (normalize.includes("Platform") || resolver.includes("Platform")) throw new Error("Unexpected platform-dependent path helper");
+  return `mod windows_resolver {
+use bun_core::strings;
+use bun_node_path::{PathCharCwd, is_sep_windows_t, CHAR_BACKWARD_SLASH, CHAR_FORWARD_SLASH, CHAR_STR_DOT};
+use bun_paths::{MAX_PATH_BYTES, PATH_MAX_WIDE};
+type MaybeSlice<'a, T> = bun_sys::Result<&'a [T]>;
+const CHAR_COLON: u8 = b':';
+const CHAR_DOT: u8 = b'.';
+const MAX_PATH_SIZE_UPPER: usize = if MAX_PATH_BYTES > PATH_MAX_WIDE { MAX_PATH_BYTES } else { PATH_MAX_WIDE };
+
+fn guest_cwd<'a, T: PathCharCwd>(cwd: &[T], buf: &'a mut [T]) -> bun_sys::Result<&'a mut [T]> {
+    if cwd.len() > buf.len() {
+        return Err(bun_sys::Error::from_code(bun_sys::E::ENAMETOOLONG, bun_sys::Tag::TODO));
+    }
+    buf[..cwd.len()].copy_from_slice(cwd);
+    Ok(&mut buf[..cwd.len()])
+}
+
+${["l", "eql_ignore_case_t", "to_lower_t", "memmove", "is_windows_device_root_t", "pop_last_segment_t"].map(upstreamFunction).join("\n\n")}
+
+${normalize}
+
+${resolver}
+}
+`;
+}
+
+writeFileSync(outputPath, resolveWindowsWithCwd().concat(relative("posix", "relative_windows_t"), relative("windows", "resolve_posix_t")));
