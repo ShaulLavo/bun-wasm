@@ -340,7 +340,7 @@ descendants reaped with the background job surviving, pid monotonicity across re
 `--artifact` orphan-lifetime check on the real Bun light guest. Scenarios that asserted the old
 four-slot budget or `SubprocessHost` return codes become pid monotonicity and Waffle errnos.
 Physical directory slots can be recycled; the replacement check requires retired tagged
-capabilities to reject access with ECHILD after a subsequent admission, rather than demanding
+capabilities to reject access with ESRCH after a subsequent admission, rather than demanding
 never-reused slot numbers. Startup failures assert their typed kind as well as 127/126 projection.
 The Chromium baseline comparison (`--benchmark`) needs a frozen pre-7b revision whose harness still builds.
 

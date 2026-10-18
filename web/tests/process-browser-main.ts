@@ -364,7 +364,7 @@ try {
         if (retired) {
           let rejected = false;
           try { controlLoad(retired.state.signals.interrupt, 0); }
-          catch (error) { rejected = error instanceof ProcessError && error.errno === ProcessErrno.CHILD; }
+          catch (error) { rejected = error instanceof ProcessError && error.errno === ProcessErrno.SRCH; }
           truth(rejected, "retired process capability cannot observe a reused directory slot");
         }
         await exit(child, 0);
