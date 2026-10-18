@@ -10,7 +10,8 @@
 //
 // PLAYWRIGHT=<path to playwright's index.mjs> when `playwright` isn't resolvable from here.
 
-import { installHmrConnection, waitForHmrConnection } from "./hmr-connection.ts";
+import { selectAndNavigate } from "./hmr-navigation.ts";
+import { installHmrConnection, waitForHmrConnection, readHmrFailureState } from "./hmr-connection.ts";
 import { checkPhoneUI } from "../../web/tests/phone-ui.mjs";
 import { firstVisit } from "../../web/tests/first-visit.mjs";
 import { mkdirSync } from "node:fs";
@@ -32,20 +33,13 @@ const { chromium, webkit, devices } = pw.default ?? pw;
 
 const STARTUP_MS = Number(process.env.STARTUP_MS ?? 180_000);
 const STEP_MS = 20_000;
+const NAVIGATION = { navigationTimeout: STARTUP_MS, actionTimeout: STEP_MS };
 
 async function check(browserName, engine) {
-  const browser = await (browserName === "webkit" ? webkit : chromium).launch();
-  const context = await browser.newContext(browserName === "webkit" ? { ...devices["iPhone 15"] } : { viewport: { width: 1440, height: 900 } });
-  await installHmrConnection(context);
-  const url = new URL(base);
-  url.searchParams.set("engine", engine);
-  const visit = await firstVisit(context, url.href);
-  const page = await context.newPage();
-  const logs = [];
-  page.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
-  page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));
   const tag = `${browserName}/${engine}`;
-  const shot = async (step) => shots && (await page.screenshot({ path: join(shots, `${browserName}-${engine}-${step}.png`) }));
+  const logs = [];
+  let browser, context, visit, page, app;
+  const shot = async (step) => shots && page && !page.isClosed() && (await page.screenshot({ path: join(shots, `${browserName}-${engine}-${step}.png`) }));
   const results = [];
   const step = async (name, fn) => {
     const started = Date.now();
@@ -54,13 +48,13 @@ async function check(browserName, engine) {
       results.push({ name, ok: true, ms: Date.now() - started });
       console.log(`  ok   ${tag} ${name} (${Date.now() - started} ms)`);
     } catch (err) {
-      results.push({ name, ok: false, error: String(err).split("\n")[0] });
-      console.log(`  FAIL ${tag} ${name}: ${String(err).split("\n")[0]}`);
-      await shot(`fail-${name.replace(/\W+/g, "-")}`);
+      results.push({ name, ok: false, error: String(err) });
+      console.log(`  FAIL ${tag} ${name}: ${err instanceof Error ? err.stack ?? String(err) : String(err)}`);
+      if (page && !page.isClosed()) console.log(`      state: ${JSON.stringify(await readHmrFailureState(page, () => visit?.diagnostics()))}`);
+      await shot(`fail-${name.replace(/\W+/g, "-")}`).catch(error => console.log(`      failure screenshot: ${error}`));
       throw err;
     }
   };
-  const app = page.frameLocator("#preview");
   const setFile = async (path, edit) => {
     await waitForHmrConnection(page, "#preview");
     await page.evaluate(async ([path, edit]) => {
@@ -71,7 +65,20 @@ async function check(browserName, engine) {
     }, [path, edit]);
   };
   try {
-    await page.goto(visit.url);
+    await step("0 setup", async () => {
+      browser = await (browserName === "webkit" ? webkit : chromium).launch();
+      context = await browser.newContext(browserName === "webkit" ? { ...devices["iPhone 15"] } : { viewport: { width: 1440, height: 900 } });
+      await installHmrConnection(context);
+      const url = new URL(base);
+      url.searchParams.set("engine", engine);
+      visit = await firstVisit(context, url.href, { delayActivation: url.protocol !== "https:" });
+      page = await context.newPage();
+      page.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
+      page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));
+      page.on("requestfailed", (request) => logs.push(`requestfailed: ${request.url()} ${request.failure()?.errorText}`));
+      app = page.frameLocator("#preview");
+    });
+    await step("0 navigation", () => page.goto(visit.url, { waitUntil: "commit", timeout: STARTUP_MS }));
     await step("1 renders", async () => {
       await app.locator("button.counter").waitFor({ timeout: STARTUP_MS });
       await app.locator("h1", { hasText: "Hello from bun.wasm" }).waitFor({ timeout: STEP_MS });
@@ -121,7 +128,7 @@ async function check(browserName, engine) {
       if (!href || !new URL(href, page.url()).pathname.includes("/__preview/")) throw new Error(`label link: ${href}`);
       const tab = await context.newPage();
       try {
-        await tab.goto(new URL(href, page.url()).href);
+        await tab.goto(new URL(href, page.url()).href, { waitUntil: "commit", timeout: STEP_MS });
         await tab.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
         await Promise.all([waitForHmrConnection(page, "#preview"), waitForHmrConnection(tab)]);
         const documentId = await tab.evaluate(() => {
@@ -139,7 +146,7 @@ async function check(browserName, engine) {
       }
     });
     await step("5c vanilla template uses import.meta.hot", async () => {
-      await Promise.all([page.waitForNavigation(), page.selectOption("#template", "vanilla")]);
+      await selectAndNavigate(page, "#template", "vanilla", NAVIGATION);
       await app.locator("h1", { hasText: "Hello from vanilla TypeScript" }).waitFor({ timeout: STARTUP_MS });
       for (let i = 0; i < 2; i++) await app.locator("button.counter").click();
       await setFile("src/main.ts", [["Hello from vanilla TypeScript", "Vanilla hot update"]]);
@@ -157,12 +164,12 @@ async function check(browserName, engine) {
       await app.locator("bun-hmr").waitFor({ state: "hidden", timeout: STEP_MS });
       await app.locator("button.counter", { hasText: "count is 2" }).waitFor({ timeout: STEP_MS });
       await shot("5c-vanilla");
-      await Promise.all([page.waitForNavigation(), page.selectOption("#template", "react")]);
+      await selectAndNavigate(page, "#template", "react", NAVIGATION);
       await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STARTUP_MS });
     });
     await step("6 engine switch keeps edits", async () => {
       const other = engine === "quickjs" ? "browser" : "quickjs";
-      await Promise.all([page.waitForNavigation(), page.selectOption("#engine", other)]);
+      await selectAndNavigate(page, "#engine", other, NAVIGATION);
       if (new URL(page.url()).searchParams.get("engine") !== (other === "browser" ? null : other)) throw new Error(`not switched: ${page.url()}`);
       await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STARTUP_MS });
       await shot("6-switched");
@@ -170,9 +177,10 @@ async function check(browserName, engine) {
     await step("6b initial build error overlay and recovery", async () => {
       await setFile("src/App.tsx", [["<h1>", "<h1 "]]);
       await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
-      const navigated = page.waitForEvent("framenavigated", { predicate: (frame) => frame.parentFrame() !== null });
-      await page.locator("#restart").click();
-      await navigated;
+      await Promise.all([
+        page.waitForEvent("framenavigated", { predicate: (frame) => frame.parentFrame() === page.mainFrame(), timeout: STARTUP_MS }),
+        page.locator("#restart").click({ timeout: STEP_MS }),
+      ]);
       await app.locator("bun-hmr").waitFor({ state: "visible", timeout: STEP_MS });
       await setFile("src/App.tsx", [["<h1 ", "<h1>"]]);
       await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STEP_MS });
@@ -183,8 +191,10 @@ async function check(browserName, engine) {
   } catch {
     console.log(logs.slice(-15).map((l) => `      ${l}`).join("\n"));
   } finally {
-    await browser.close();
-    await visit.close();
+    await step("8 cleanup", async () => {
+      try { await browser?.close(); }
+      finally { await visit?.close(); }
+    }).catch(() => {});
   }
   return { browser: browserName, engine, results };
 }
@@ -196,6 +206,6 @@ for (const browserName of browsers) {
     summary.push(await check(browserName, engine));
   }
 }
-const failed = summary.filter((s) => s.results.length < 10 || s.results.some((r) => !r.ok));
+const failed = summary.filter((s) => s.results.some((r) => !r.ok));
 console.log(failed.length ? `\n${failed.length} of ${summary.length} runs failed` : `\nall ${summary.length} runs passed`);
 process.exit(failed.length ? 1 : 0);

@@ -87,6 +87,7 @@ for slots in table imports; do
 done
 
 if [[ $browser == 1 ]]; then
+  node --test "$root/sandbox/tests/first-visit-lifecycle.test.ts" || failed=1
   bash "$root/scripts/test-web-host.sh" --browser || failed=1
   bun tests/browser-editor.ts webkit || failed=1
   bun tests/browser-filesystem-lifecycle.ts chromium || failed=1

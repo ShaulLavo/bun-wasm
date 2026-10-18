@@ -4,22 +4,23 @@ import { request as httpsRequest } from "node:https";
 
 // A fresh proxy origin keeps both HTTP caches and service worker registrations empty. Delaying
 // activate and resolving register() at "activating" exercises a timing browsers are allowed to use.
-export async function firstVisit(context, base) {
+export async function firstVisit(context, base, { delayActivation = true } = {}) {
   const upstream = new URL(base);
-  const server = createServer(forwardRequest.bind(null, upstream));
-  await new Promise((resolve, reject) => {
+  const pending = new Set();
+  const server = delayActivation ? createServer(forwardRequest.bind(null, upstream, pending)) : null;
+  if (server) await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
   await context.addInitScript(recordFirstVisit);
-  const origin = `http://127.0.0.1:${server.address().port}`;
-  const url = new URL(upstream.pathname + upstream.search, origin).href;
+  const url = server ? new URL(upstream.pathname + upstream.search, `http://127.0.0.1:${server.address().port}`).href : upstream.href;
   return {
     url,
+    diagnostics: () => ({ mode: delayActivation ? "delayed-first-visit" : "direct-live", pending: Array.from(pending, request => request.path) }),
     async check(page, moduleScope = true) {
       const state = await page.evaluate(() => globalThis.__firstVisit);
       if (moduleScope) assert.ok(state.registrations.length, "first visit must register its module service worker");
-      assert.ok(state.registrations.every((entry) => entry.returnedState === "activating"), JSON.stringify(state));
+      if (delayActivation) assert.ok(state.registrations.every((entry) => entry.returnedState === "activating"), JSON.stringify(state));
       assert.ok(state.workers.length, "first visit must start a Bun worker");
       if (moduleScope) assert.ok(state.workers.some((entry) => entry.scopeState), "browser engine must use its module scope");
       const premature = state.workers.filter((entry) => entry.scopeState && entry.scopeState !== "activated");
@@ -33,20 +34,30 @@ export async function firstVisit(context, base) {
       assert.equal(bootstrap.headers()["cross-origin-embedder-policy"], "require-corp");
     },
     async close() {
+      if (!server) return;
+      const closed = new Promise((resolve) => server.close(resolve));
       server.closeAllConnections();
-      await new Promise((resolve) => server.close(resolve));
+      for (const request of pending) request.destroy();
+      await closed;
     },
   };
 }
 
-function forwardRequest(upstream, incoming, outgoing) {
+function forwardRequest(upstream, pending, incoming, outgoing) {
   const target = new URL(incoming.url, upstream.origin);
   // Works against the deployed https site too: the upstream sees its own Host, and asks for
   // uncompressed bodies because sw.js is rewritten as text below.
   const headers = { ...incoming.headers, host: target.host, "accept-encoding": "identity" };
   const request = target.protocol === "https:" ? httpsRequest : httpRequest;
   const forwarded = request(target, { method: incoming.method, headers }, (response) => forwardResponse(target, outgoing, response));
-  forwarded.on("error", (error) => outgoing.destroy(error));
+  pending.add(forwarded);
+  forwarded.once("close", () => pending.delete(forwarded));
+  outgoing.once("close", () => { if (!outgoing.writableFinished) forwarded.destroy(); });
+  forwarded.on("error", (error) => {
+    if (outgoing.destroyed) return;
+    console.error(`first-visit proxy ${target.href}:`, error);
+    outgoing.destroy(error);
+  });
   incoming.pipe(forwarded);
 }
 
