@@ -511,6 +511,66 @@
     return chunk.length;
   }
 
+  function readVectors(buffers) {
+    if (!Array.isArray(buffers)) throw invalidArg("buffers", "an array", buffers);
+    const views = [];
+    for (const buffer of buffers) {
+      if (!ArrayBuffer.isView(buffer)) throw invalidArg("buffers", "an array of ArrayBufferView instances", buffers);
+      // Bun/Node submit at most IOV_MAX (1024) views, but validate the whole array.
+      if (views.length === 1024) continue;
+      views.push(internal.toUint8(buffer));
+    }
+    return views;
+  }
+
+  function vectorLength(views) {
+    return views.reduce((length, view) => length + view.byteLength, 0);
+  }
+
+  function readvPosition(position) {
+    return Number.isSafeInteger(position) && position >= 0 ? position : -1;
+  }
+
+  function scatterRead(views, chunk) {
+    let offset = 0;
+    for (const view of views) {
+      const count = Math.min(view.byteLength, chunk.length - offset);
+      if (count === 0) continue;
+      view.set(chunk.subarray(offset, offset + count));
+      offset += count;
+    }
+    return chunk.length;
+  }
+
+  function readvSync(fd, buffers, position) {
+    validateFd(fd);
+    const views = readVectors(buffers);
+    // Bun skips the syscall for [], but [empty] must still validate the descriptor.
+    if (views.length === 0) return 0;
+    return scatterRead(views, native.read(fd, vectorLength(views), readvPosition(position)));
+  }
+
+  function readvStdin(views, buffers, length, callback) {
+    const target = new Uint8Array(length);
+    return callbackApi.read(0, target, 0, length, null, (error, count) => {
+      if (!error) scatterRead(views, target.subarray(0, count));
+      callback(error, count, buffers);
+    });
+  }
+
+  function readv(fd, buffers, position, callback) {
+    if (typeof position === "function") { callback = position; position = null; }
+    validateFd(fd);
+    const views = readVectors(buffers);
+    if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
+    const length = vectorLength(views);
+    // Share the existing nonblocking stdin waiter instead of blocking the browser worker.
+    if (fd === 0 && native.hostCaps.proc_spawn && length > 0 && readvPosition(position) < 0) return readvStdin(views, buffers, length, callback);
+    let count = 0, error = null;
+    try { if (views.length) count = scatterRead(views, native.read(fd, length, readvPosition(position))); } catch (err) { error = err; }
+    later(() => callback(error, count, buffers));
+  }
+
   function writeSync(fd, data, offsetOrPosition, lengthOrEncoding, position) {
     if (typeof data === "string") {
       const bytes = toBytes(data, typeof lengthOrEncoding === "string" ? lengthOrEncoding : "utf8");
@@ -623,7 +683,7 @@
   const sync = {
     readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, mkdirSync, readdirSync,
     rmSync, rmdirSync, unlinkSync, renameSync, copyFileSync, cpSync, realpathSync, accessSync, mkdtempSync,
-    openSync, closeSync, readSync, writeSync, writevSync, globSync, opendirSync,
+    openSync, closeSync, readSync, readvSync, writeSync, writevSync, globSync, opendirSync,
     fstatSync: (fd) => new Stats(native.fstat(fd)),
     ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
     truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
@@ -677,6 +737,7 @@
   callbackApi.glob = glob;
   callbackApi.opendir = opendir;
   callbackApi.writev = writev;
+  callbackApi.readv = readv;
   const readCallback = callbackify("read", readSync, (cb, err, n, args) => cb(err, n, args[1]));
   // runtime_proc reports negative WASI errnos, not the networking slot status codes.
   // Match the Node error names/errnos used by the synchronous filesystem natives.
@@ -750,6 +811,10 @@
       const bytesRead = readSync(this.fd, target, offset, length, position);
       return { bytesRead, buffer: target };
     }
+    async readv(buffers, position) {
+      if (this.fd < 0) throw badFd("readv");
+      return { bytesRead: readvSync(this.fd, buffers, position), buffers };
+    }
     async write(data, offset, length, position) {
       const bytesWritten = writeSync(this.fd, data, offset, length, position);
       return { bytesWritten, buffer: data };
@@ -783,6 +848,7 @@
   promises.open = async (path, flags) => new FileHandle(openSync(path, flags));
   promises.constants = constants;
   delete promises.close;
+  delete promises.readv;
   delete promises.fstat;
   delete promises.ftruncate;
 

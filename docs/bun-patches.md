@@ -57,6 +57,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Node startup diagnostic drain](#node-startup-diagnostic-drain) | Host feature | Use Waffle's public cancellable, bounded asynchronous diagnostic drain for the Node process host's immediate stderr writes. |
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
+| [Filesystem vectored reads](#filesystem-vectored-reads) | Host feature | Original readv/readvSync and FileHandle.readv adapters perform one native read, scatter into borrowed views, preserve shared cursors and follow Bun's empty-vector contract. |
 | [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle 0.0.48's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
@@ -2840,6 +2841,33 @@ The Waffle core budget is 7,680 B gzip, matching its upstream budget; this pin
 measures 7,516 B. Tagged process directory/control and startup value primitives
 remain included in the startup byte totals. Supervisor, registry, table, worker
 service, pipes and interrupt rewriting still cannot load before first use.
+
+## Filesystem vectored reads
+
+Class **Host feature**. `crates/bunwasm-runtime/src/js/node_fs.js` adds original
+`readvSync`, callback `readv`, and `FileHandle.readv` adapters over the existing
+Rust `read` native. No Bun or Node implementation is copied or adapted. Public
+behaviour is measured against Bun 1.4.2 (`744846f84`) and Node 26.7.0. One native
+read requests the vector's combined byte capacity, then scatters the returned
+short result in vector order without touching bytes outside each view or after
+EOF. As in the measured native Bun and Node calls, at most 1024 views participate
+in one operation, while every supplied view is validated. Positioned reads retain
+the shared open-file cursor. Only nonnegative safe
+integer positions select a positioned read, matching Bun's observed coercion.
+Callbacks deliver the original array on a later turn; sequential process-stdin
+callbacks reuse the nonblocking `runtime_proc` waiter, including EAGAIN, saved
+async context, EOF and errno handling. Explicitly positioned stdin keeps the
+native positional-read path rather than silently discarding its position.
+
+Bun returns zero for an empty vector `[]`, including a closed positive fd,
+without issuing a native read. Node returns EINVAL instead; this known difference
+is excluded from the shared Bun/Node parity cases. Both validate fd argument
+shape, and a nonempty vector containing only empty views still validates the
+actual descriptor. A closed FileHandle rejects even `readv([])`. Counted native
+fixtures exercise short reads, overlapping and offset DataViews, EOF, argument
+ordering and callback identity; separate native-reference fixtures keep the
+shared behaviour and Bun-only empty-vector contract apart. These fixtures own
+and remove their temporary input files.
 
 ## Patched sysroot and native descriptor bridge
 

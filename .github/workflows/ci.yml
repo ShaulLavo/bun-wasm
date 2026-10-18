@@ -138,6 +138,8 @@ jobs:
       - run: bun run test
         env:
           TMPDIR: ${{ runner.temp }}
+      - name: Test filesystem vectored reads and process stdin
+        run: bun test scripts/node-fs-readv.test.ts scripts/node-fs-runtime-proc.test.ts
 
   web:
     name: Web host
