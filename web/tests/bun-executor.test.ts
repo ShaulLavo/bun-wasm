@@ -1,5 +1,6 @@
 import { afterAll, expect, mock, test } from "bun:test";
-import { createFilesystemConnection } from "waffle/fs";
+import { createFilesystemConnection, revokeFilesystem } from "waffle/fs";
+import { controlAdd, controlLoad } from "waffle/proc/control";
 import { WasiExit } from "waffle/core";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
@@ -270,3 +271,129 @@ test("without a networking ring no slots are installed", async () => {
   await run();
   expect(installed).toEqual([]);
 });
+
+// These tests invoke the actual linked imports. Descriptor readiness and Atomics.wait
+// are observation/injection points; neither the ABI scanner nor bootstrap wait hooks
+// are substituted. All process, filesystem and native-wait state is test-owned.
+for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
+  const importName = route === "runtime_proc" ? "poll" : "poll_oneoff";
+  for (const stage of ["before", "after"] as const) {
+    for (const terminal of (stage === "before" ? ["exited", "revoked"] : ["exited", "signaled", "revoked"]) as ("exited" | "signaled" | "revoked")[]) {
+      test(`${route} checks ${terminal} liveness ${stage} its native wait`, async () => {
+        const connection = createFilesystemConnection();
+        const transport = createWorkerProcessTransport();
+        const state = workerProcessState(transport);
+        const messages: WorkerMessage[] = [];
+        const host: BunExecutorHost & RuntimeWorkerHost = {
+          crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+          postMessage(message: WorkerMessage) { messages.push(message); },
+          async fetch() { throw new Error("unexpected fetch"); },
+        };
+        const request: RunRequest = { engine: "browser", module: guest(0, [{ namespace: route, name: importName }]),
+          args: ["/bin/bun"], env: {}, filesystem: connection.client, runtimeProcess: transport,
+          trace: false, net: null, moduleCache: null };
+        const executor = createBunExecutor(request, host);
+        const nativeWait = Atomics.wait;
+        let call!: (...args: number[]) => unknown;
+        let waits = 0, scans = 0;
+        let failure: unknown;
+        const select = () => {
+          if (terminal === "revoked") revokeFilesystem(connection.client);
+          else claimOutcome(state.signals.outcome, { kind: terminal, code: terminal === "signaled" ? 15 : 23 });
+        };
+        try {
+          await bootstrap(request, { ...executor,
+            setup(context) {
+              context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
+              executor.setup?.(context);
+            },
+            imports(linked) { call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
+            run({ instance, wasi }) {
+              const fd = wasi.descriptors.open({ kind: "pipe", notification: state.wake,
+                read: () => -6, write: () => -6,
+                readiness() { scans++; if (stage === "before") select(); return { readable: false, writable: false, hangup: false }; },
+              }, 1n << 27n, 0n);
+              const view = new DataView((instance.exports.memory as WebAssembly.Memory).buffer);
+              if (route === "runtime_proc") { view.setUint32(0, 0, true); view.setUint32(4, fd, true); }
+              else { view.setUint8(8, 1); view.setUint32(16, fd, true); }
+              Atomics.wait = ((word: Int32Array, index: number, expected: number) => {
+                expect(word.buffer).toBe(state.wake.buffer);
+                expect(word.byteOffset + index * 4).toBe(state.wake.byteOffset);
+                waits++; select(); return "timed-out";
+              }) as typeof Atomics.wait;
+              try { route === "runtime_proc" ? call(0, 1, 1000, 128) : call(0, 128, 1, 256); }
+              catch (error) { failure = error; throw error; }
+              finally { Atomics.wait = nativeWait; }
+              throw new Error("selected death escaped the production wait guard");
+            },
+          }, host);
+          expect(scans).toBe(1);
+          expect(waits).toBe(stage === "before" ? 0 : 1);
+          expect(failure).toBeInstanceOf(terminal === "signaled" ? DefaultSignal : WasiExit);
+          expect(exits(messages)).toContainEqual({ type: "exit", code: terminal === "signaled" ? 143 : terminal === "exited" ? 23 : 1,
+            signal: terminal === "signaled" ? 15 : undefined, sleep: "atomics" });
+        } finally { Atomics.wait = nativeWait; connection.client.port.close(); connection.server.port.close(); }
+      });
+    }
+  }
+
+  test(`${route} passes the original pre-scan readiness snapshot to native wait`, async () => {
+    const connection = createFilesystemConnection();
+    const transport = createWorkerProcessTransport();
+    const state = workerProcessState(transport);
+    const host: BunExecutorHost & RuntimeWorkerHost = {
+      crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+      postMessage() {}, async fetch() { throw new Error("unexpected fetch"); },
+    };
+    const request: RunRequest = { engine: "browser", module: guest(0, [{ namespace: route, name: importName }]),
+      args: ["/bin/bun"], env: {}, filesystem: connection.client, runtimeProcess: transport,
+      trace: false, net: null, moduleCache: null };
+    const executor = createBunExecutor(request, host);
+    const nativeWait = Atomics.wait;
+    let call!: (...args: number[]) => unknown;
+    let waits = 0, scans = 0;
+    let result: unknown, nativeResult: unknown;
+    let original = -1;
+    try {
+      await bootstrap(request, { ...executor,
+        setup(context) {
+          context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
+          executor.setup?.(context);
+        },
+        imports(linked) { call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
+        run({ instance, wasi }) {
+          const fd = wasi.descriptors.open({ kind: "pipe", notification: state.wake,
+            read: () => -6, write: () => -6,
+            readiness() {
+              scans++;
+              if (scans === 1) controlAdd(state.wake, 0, 1);
+              return { readable: scans > 1, writable: false, hangup: false };
+            },
+          }, 1n << 27n, 0n);
+          const view = new DataView((instance.exports.memory as WebAssembly.Memory).buffer);
+          if (route === "runtime_proc") { view.setUint32(0, 0, true); view.setUint32(4, fd, true); }
+          else { view.setUint8(8, 1); view.setUint32(16, fd, true); }
+          original = controlLoad(state.wake, 0);
+          Atomics.wait = ((word: Int32Array, index: number, expected: number) => {
+            waits++;
+            expect(word.buffer).toBe(state.wake.buffer);
+            expect(word.byteOffset + index * 4).toBe(state.wake.byteOffset);
+            expect(expected).toBe(original);
+            expect(Atomics.load(word, index)).toBe(original + 1);
+            // Calling the real native primitive proves the old snapshot refuses sleep.
+            nativeResult = nativeWait(word, index, expected, 0);
+            return nativeResult;
+          }) as typeof Atomics.wait;
+          try { result = route === "runtime_proc" ? call(0, 1, 1000, 128) : call(0, 128, 1, 256); }
+          finally { Atomics.wait = nativeWait; }
+          if (route !== "runtime_proc") expect(view.getUint32(256, true)).toBe(1);
+          return 0;
+        },
+      }, host);
+      expect(scans).toBe(2);
+      expect(waits).toBe(1);
+      expect(nativeResult).toBe("not-equal");
+      expect(result).toBe(route === "runtime_proc" ? 1 : 0);
+    } finally { Atomics.wait = nativeWait; connection.client.port.close(); connection.server.port.close(); }
+  });
+}

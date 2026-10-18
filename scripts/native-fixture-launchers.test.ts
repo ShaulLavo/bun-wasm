@@ -44,8 +44,8 @@ function run(script: string, args: readonly string[], expected?: string) {
 for (const engine of ["quickjs", "jsc"]) {
   test(`open-empty-stdin harness launches ${engine} through runtime_proc host`, () => {
     const result = run("tests/test-empty-stdin.py", ["--engine", engine, "--wasm", wasm], join(root, "tests/fixtures/fs-empty-read/expected.txt"));
-    expect(result.args.slice(0, 9)).toEqual([
-      "--wasm", wasm, "--dir", `${root}/tests/fixtures/fs-empty-read::/`,
+    expect(result.args.slice(0, 13)).toEqual([
+      "--wasm", wasm, "--engine", `${engine}=${wasm}`, "--env", `PATH=/opt/bun/${engine}/bin:/bin:/usr/bin`, "--dir", `${root}/tests/fixtures/fs-empty-read::/`,
       "--env", "PWD=/", "--", "run", "/index.js",
     ]);
     expect(result.stdout).toContain(`PASS ${engine}`);
@@ -53,9 +53,9 @@ for (const engine of ["quickjs", "jsc"]) {
 
   test(`partial-write harness launches ${engine} without a compiled-module cache`, () => {
     const result = run("tests/test-writev-partial.py", ["--engine", engine, "--wasm", wasm], join(root, "tests/fixtures/fs-writev-partial/expected.txt"));
-    expect(result.args.slice(0, 3)).toEqual(["--wasm", wasm, "--dir"]);
-    expect(result.args[3]).toMatch(/^\/work\/tmp\/bun-wasm-next-review-partial-.*::\/$/);
-    expect(result.args.slice(4, 9)).toEqual(["--env", "PWD=/", "--", "run", "/index.mjs"]);
+    expect(result.args.slice(0, 7)).toEqual(["--wasm", wasm, "--engine", `${engine}=${wasm}`, "--env", `PATH=/opt/bun/${engine}/bin:/bin:/usr/bin`, "--dir"]);
+    expect(result.args[7]).toMatch(/^\/work\/tmp\/bun-wasm-next-review-partial-.*::\/$/);
+    expect(result.args.slice(8, 13)).toEqual(["--env", "PWD=/", "--", "run", "/index.mjs"]);
     expect(result.args).toContain("cache=off");
     expect(result.args).toContain("cow=0");
     expect(result.stdout).toContain(`PASS fs-writev-partial ${engine}`);
@@ -76,7 +76,7 @@ test("Worker regression runner honors the native launcher override", () => {
   const expected = join(scratch, "worker-expected.txt");
   writeFileSync(expected, "clone transfer attached\n");
   const result = run("tests/check-worker-regressions.ts", ["--engine", "quickjs", "--wasm", wasm, "--case", "clone-atomic-transfer"], expected);
-  expect(result.args.slice(0, 4)).toEqual(["--wasm", wasm, "--", "-e"]);
+  expect(result.args.slice(0, 8)).toEqual(["--wasm", wasm, "--engine", `quickjs=${wasm}`, "--env", "PATH=/opt/bun/quickjs/bin:/bin:/usr/bin", "--", "-e"]);
   expect(result.stdout).toContain("PASS quickjs/native clone-atomic-transfer");
 });
 

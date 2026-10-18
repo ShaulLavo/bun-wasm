@@ -728,3 +728,21 @@ for (const terminal of [{ code: 0 }, { code: 143, signal: 15 }]) test(`worker cl
     try { await state.dispose(); } finally { report.mockRestore(); }
   }
 });
+
+
+test("process runtime fixture releases program registrations idempotently", async () => {
+  const runtime = processRuntimeFixture({} as SharedFilesystem);
+  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  const program = { adapter: "fixture", module, cooperative: true } as const;
+  const unregisterAdapter = runtime.registerAdapter("fixture", async () => { throw new Error("unused launcher"); });
+  try {
+    const unregister = runtime.registerProgram("/bin/fixture", program);
+    expect(() => runtime.registerProgram("/bin/fixture", program)).toThrow("already registered");
+    unregister();
+    const replacement = runtime.registerProgram("/bin/fixture", program);
+    unregister();
+    expect(() => runtime.registerProgram("/bin/fixture", program)).toThrow("already registered");
+    replacement();
+    runtime.registerProgram("/bin/fixture", program)();
+  } finally { unregisterAdapter(); await runtime.dispose(); }
+});

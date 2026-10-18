@@ -50,6 +50,12 @@ export function processRuntimeFixture(filesystem: RuntimeFilesystem, options: {
         const source = typeof program.source === "function" ? await program.source() : program.source!;
         return compileInterruptible(source);
       } : program.cooperative === true ? program.module : async () => { throw new TypeError("Third-party programs require source bytes"); } });
+      let registered = true;
+      return () => {
+        if (!registered) return;
+        registered = false;
+        registry.unregister(name);
+      };
     },
     processes() {
       if (disposed) return Promise.reject(new Error("Runtime is disposed"));
