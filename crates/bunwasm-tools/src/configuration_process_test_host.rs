@@ -63,9 +63,11 @@ pub(super) fn proc_spawn(bytes: &[u8]) -> i32 {
     with(|state| {
         let request: serde_json::Value = serde_json::from_slice(bytes).unwrap();
         for binding in request["fds"].as_array().unwrap() {
-            assert!(state
-                .open
-                .contains(&(binding["parent"].as_i64().unwrap() as i32)));
+            assert!(
+                state
+                    .open
+                    .contains(&(binding["parent"].as_i64().unwrap() as i32))
+            );
         }
         state.requests.push(request);
         state.live = state.spawn > 0;
@@ -107,7 +109,7 @@ pub(super) fn proc_wait(pid: i32) -> Result<(u32, i32), i32> {
 }
 pub(super) fn proc_poll(subscriptions: &[u8], _timeout: i32) -> Result<Vec<u8>, i32> {
     with(|state| {
-        for sub in subscriptions.chunks_exact(16) {
+        for sub in subscriptions.as_chunks::<16>().0 {
             let kind = u32::from_le_bytes(sub[..4].try_into().unwrap());
             let id = i32::from_le_bytes(sub[4..8].try_into().unwrap());
             if kind == 0 {

@@ -22,7 +22,7 @@ test("browser build uses consumer exports through a dotted Git cache, not siblin
     expect(installed.source("waffle/core")).toBe(join(consumer, "node_modules/waffle/browser.ts"));
     expect(() => installed.source("waffle/internal/private")).toThrow("not exported");
     expect(() => installed.source("waffle/blocked")).toThrow("not exported");
-    const { outdir, ...config } = browserBuildConfig([entry], join(scratch, "output"));
+    const { outdir: _outdir, ...config } = browserBuildConfig([entry], join(scratch, "output"));
     const result = await Bun.build(config);
     expect(result.success).toBe(true);
     expect(await result.outputs[0]!.text()).toContain("consumer-installed-git");

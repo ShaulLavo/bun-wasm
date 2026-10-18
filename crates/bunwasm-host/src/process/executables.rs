@@ -86,37 +86,54 @@ impl Executables {
             format!("{cwd}/{executable}")
         };
         let mut path = PathBuf::from("/");
-        let mut remaining: VecDeque<String> = absolute.split('/').skip(1).map(str::to_owned).collect();
+        let mut remaining: VecDeque<String> =
+            absolute.split('/').skip(1).map(str::to_owned).collect();
         let mut links = 0;
         while let Some(component) = remaining.pop_front() {
             // Inspect each original component, including those before `..` and trailing `/`.
-            if !matches!(entry(&path, dirs)?, Entry::Directory) { return Err(NOTDIR); }
+            if !matches!(entry(&path, dirs)?, Entry::Directory) {
+                return Err(NOTDIR);
+            }
             match component.as_str() {
-                ".." => { path.pop(); }
+                ".." => {
+                    path.pop();
+                }
                 "" | "." => {}
                 part => path.push(part),
             }
             if let Entry::Symlink(target) = entry(&path, dirs)? {
                 links += 1;
-                if links > 40 { return Err(-32); } // WASI ELOOP.
+                if links > 40 {
+                    return Err(-32);
+                } // WASI ELOOP.
                 path.pop();
-                if target.is_absolute() { path = PathBuf::from("/"); }
+                if target.is_absolute() {
+                    path = PathBuf::from("/");
+                }
                 let target = target.to_str().ok_or(IO)?;
-                for part in target.split('/').rev() { remaining.push_front(part.to_owned()); }
+                for part in target.split('/').rev() {
+                    remaining.push_front(part.to_owned());
+                }
             }
         }
-        if matches!(entry(&path, dirs)?, Entry::Directory) { return Err(ACCES); }
+        if matches!(entry(&path, dirs)?, Entry::Directory) {
+            return Err(ACCES);
+        }
         // Match the pinned Waffle registry: a resolved alias cannot change its lexical key.
         // Do this only after walking every original component, so missing/.. still fails.
         let mut lexical = PathBuf::from("/");
         for component in absolute.split('/') {
             match component {
-                ".." => { lexical.pop(); }
+                ".." => {
+                    lexical.pop();
+                }
                 "" | "." => {}
                 part => lexical.push(part),
             }
         }
-        if path != lexical { return Err(ACCES); }
+        if path != lexical {
+            return Err(ACCES);
+        }
         self.entries
             .lock()
             .unwrap()
@@ -135,7 +152,11 @@ impl Drop for Executables {
     }
 }
 
-enum Entry { Directory, File, Symlink(PathBuf) }
+enum Entry {
+    Directory,
+    File,
+    Symlink(PathBuf),
+}
 
 fn entry(path: &Path, dirs: &[(PathBuf, String)]) -> Result<Entry, i32> {
     // A nested mount makes its ancestors directories in the guest namespace.
@@ -160,8 +181,11 @@ fn entry(path: &Path, dirs: &[(PathBuf, String)]) -> Result<Entry, i32> {
     if metadata.is_symlink() {
         // Interpret targets in the guest namespace, never against the host's root filesystem.
         Ok(Entry::Symlink(fs::read_link(host).map_err(map_io)?))
-    } else if metadata.is_dir() { Ok(Entry::Directory) }
-    else { Ok(Entry::File) }
+    } else if metadata.is_dir() {
+        Ok(Entry::Directory)
+    } else {
+        Ok(Entry::File)
+    }
 }
 
 fn map_io(error: io::Error) -> i32 {

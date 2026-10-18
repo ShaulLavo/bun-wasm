@@ -74,7 +74,7 @@ for (const untracked of [false, true]) test(`source sync refuses ${untracked ? "
     writeFileSync(path, "keep this work\n");
     const result = sync();
     expect(result.exitCode).toBe(1);
-    expect(result.stderr.toString()).toContain("has local changes; refusing");
+    expect((result.stderr ?? "").toString()).toContain("has local changes; refusing");
     expect(readFileSync(path, "utf8")).toBe("keep this work\n");
     expect(git(vendor, "rev-parse", "HEAD")).toBe(first);
   });

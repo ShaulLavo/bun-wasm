@@ -5,7 +5,6 @@ import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, 
 import { WorkerPipeHost } from "waffle/proc/worker-pipes";
 import type { PipeEndpoint } from "waffle/proc/pipes";
 import type { RuntimeWorkerRequest } from "waffle/browser/worker";
-import type { RuntimeFilesystem } from "waffle";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 
@@ -34,7 +33,7 @@ test("explicit recursive Preview1 programs retain inherited writers across ordin
   const runtime = processRuntimeFixture({
     connect(identity) { const channel = new MessageChannel(); ports.push(channel.port1, channel.port2); return { ...identity, port: channel.port1 }; },
     revoke() {}, reap() {}, async quiesce() {},
-  } as RuntimeFilesystem);
+  });
   const root = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   root.data = { filesystem: createFilesystemIdentity() };
   const broker = new SubprocessBroker("https://example.test/worker.js", runtime);

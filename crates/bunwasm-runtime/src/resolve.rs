@@ -28,26 +28,84 @@ pub enum Resolved {
 /// Node built-ins we know by name. Some are only stubs that throw on use, but
 /// every one of them can be imported.
 pub const NODE_BUILTINS: &[&str] = &[
-    "assert", "assert/strict", "async_hooks", "buffer", "child_process", "cluster", "console",
-    "constants", "crypto", "dgram", "diagnostics_channel", "dns", "dns/promises", "domain",
-    "events", "fs", "fs/promises", "http", "http2", "https", "inspector", "module", "net", "os",
-    "path", "path/posix", "path/win32", "perf_hooks", "process", "punycode", "querystring",
-    "readline", "readline/promises", "repl", "stream", "stream/promises", "stream/web",
-    "string_decoder", "sys", "test", "timers", "timers/promises", "tls", "tty", "url", "util",
-    "util/types", "v8", "vm", "wasi", "worker_threads", "zlib",
+    "assert",
+    "assert/strict",
+    "async_hooks",
+    "buffer",
+    "child_process",
+    "cluster",
+    "console",
+    "constants",
+    "crypto",
+    "dgram",
+    "diagnostics_channel",
+    "dns",
+    "dns/promises",
+    "domain",
+    "events",
+    "fs",
+    "fs/promises",
+    "http",
+    "http2",
+    "https",
+    "inspector",
+    "module",
+    "net",
+    "os",
+    "path",
+    "path/posix",
+    "path/win32",
+    "perf_hooks",
+    "process",
+    "punycode",
+    "querystring",
+    "readline",
+    "readline/promises",
+    "repl",
+    "stream",
+    "stream/promises",
+    "stream/web",
+    "string_decoder",
+    "sys",
+    "test",
+    "timers",
+    "timers/promises",
+    "tls",
+    "tty",
+    "url",
+    "util",
+    "util/types",
+    "v8",
+    "vm",
+    "wasi",
+    "worker_threads",
+    "zlib",
 ];
 
-const BUN_BUILTINS: &[&str] = &["bun", "bun:jsc", "bun:test", "bun:sqlite", "bun:ffi", "bun:wrap", "bun:internal-for-testing", "ws"];
+const BUN_BUILTINS: &[&str] = &[
+    "bun",
+    "bun:jsc",
+    "bun:test",
+    "bun:sqlite",
+    "bun:ffi",
+    "bun:wrap",
+    "bun:internal-for-testing",
+    "ws",
+];
 
 /// Extensions probed for extensionless specifiers, in Bun's order.
-const EXTENSIONS: &[&str] = &[".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts", ".json"];
+const EXTENSIONS: &[&str] = &[
+    ".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts", ".json",
+];
 
 pub fn builtin_name(spec: &str) -> Option<String> {
     if spec.starts_with("bun:plugin:") || BUN_BUILTINS.contains(&spec) {
         return Some(spec.to_owned());
     }
     let bare = spec.strip_prefix("node:").unwrap_or(spec);
-    NODE_BUILTINS.contains(&bare).then(|| format!("node:{bare}"))
+    NODE_BUILTINS
+        .contains(&bare)
+        .then(|| format!("node:{bare}"))
 }
 
 /// Lexically normalize an absolute POSIX path (`.`/`..`/duplicate slashes).
@@ -103,8 +161,12 @@ pub fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok());
-        let decoded = hex.filter(|_| bytes[i] == b'%').and_then(|h| u8::from_str_radix(h, 16).ok());
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok());
+        let decoded = hex
+            .filter(|_| bytes[i] == b'%')
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
         match decoded {
             Some(b) => {
                 out.push(b);
@@ -173,28 +235,41 @@ impl Resolver {
             return Err(format!("Cannot find module '{spec}' from '{from}'"));
         }
         if spec.starts_with("data:") && !spec[5..].contains(',') {
-            return Err(format!("Cannot resolve invalid data URL '{spec}' from '{from}'"));
+            return Err(format!(
+                "Cannot resolve invalid data URL '{spec}' from '{from}'"
+            ));
         }
-        let from_dir = if from.ends_with('/') { from.trim_end_matches('/') } else { dirname(from) };
+        let from_dir = if from.ends_with('/') {
+            from.trim_end_matches('/')
+        } else {
+            dirname(from)
+        };
         let from_dir = if from_dir.is_empty() { "/" } else { from_dir };
 
         if spec.starts_with("file:") {
             let path = file_url_to_path(spec).ok_or_else(|| format!("Invalid file URL: {spec}"))?;
-            return self.resolve_path(&path, kind).ok_or_else(|| not_found_module(spec, from));
+            return self
+                .resolve_path(&path, kind)
+                .ok_or_else(|| not_found_module(spec, from));
         }
         if is_relative_or_absolute(spec) {
             let path = join(from_dir, spec);
-            return self.resolve_path(&path, kind).ok_or_else(|| not_found_module(spec, from));
+            return self
+                .resolve_path(&path, kind)
+                .ok_or_else(|| not_found_module(spec, from));
         }
         if spec.starts_with('#') {
-            return self.resolve_imports_field(spec, from_dir, kind).ok_or_else(|| not_found_module(spec, from));
+            return self
+                .resolve_imports_field(spec, from_dir, kind)
+                .ok_or_else(|| not_found_module(spec, from));
         }
-        self.resolve_package(spec, from_dir, kind)
-            .ok_or_else(|| if spec.contains('/') {
+        self.resolve_package(spec, from_dir, kind).ok_or_else(|| {
+            if spec.contains('/') {
                 not_found_module(spec, from)
             } else {
                 format!("Cannot find package '{spec}' from '{from}'")
-            })
+            }
+        })
     }
 
     pub fn notes(&self) -> Vec<ResolveNote> {
@@ -203,14 +278,20 @@ impl Resolver {
 
     /// Resolve an absolute path as a file or directory.
     fn resolve_path(&self, path: &str, kind: Kind) -> Option<Resolved> {
-        self.resolve_file(path).or_else(|| self.resolve_directory(path, kind)).map(Resolved::File)
+        self.resolve_file(path)
+            .or_else(|| self.resolve_directory(path, kind))
+            .map(Resolved::File)
     }
 
     fn resolve_file(&self, path: &str) -> Option<String> {
         if is_file(path) {
             return Some(path.to_owned());
         }
-        if let Some(found) = EXTENSIONS.iter().map(|ext| format!("{path}{ext}")).find(|p| is_file(p)) {
+        if let Some(found) = EXTENSIONS
+            .iter()
+            .map(|ext| format!("{path}{ext}"))
+            .find(|p| is_file(p))
+        {
             return Some(found);
         }
         // TypeScript-style imports: "./foo.js" may name "./foo.ts".
@@ -222,23 +303,29 @@ impl Resolver {
             "cjs" => &["cts"],
             _ => &[],
         };
-        alternates.iter().map(|alt| format!("{stem}.{alt}")).find(|p| is_file(p))
+        alternates
+            .iter()
+            .map(|alt| format!("{stem}.{alt}"))
+            .find(|p| is_file(p))
     }
 
     fn resolve_directory(&self, dir: &str, kind: Kind) -> Option<String> {
         if !is_dir(dir) {
             return None;
         }
-        if let Some(pkg) = self.package_json_in(dir) {
-            if let Some(found) = self.resolve_main_fields(dir, &pkg, kind) {
-                return Some(found);
-            }
+        if let Some(pkg) = self.package_json_in(dir)
+            && let Some(found) = self.resolve_main_fields(dir, &pkg, kind)
+        {
+            return Some(found);
         }
         self.resolve_index(dir)
     }
 
     fn resolve_index(&self, dir: &str) -> Option<String> {
-        EXTENSIONS.iter().map(|ext| format!("{dir}/index{ext}")).find(|p| is_file(p))
+        EXTENSIONS
+            .iter()
+            .map(|ext| format!("{dir}/index{ext}"))
+            .find(|p| is_file(p))
     }
 
     /// `main` field of a package without `exports`. Like Bun's runtime,
@@ -249,9 +336,14 @@ impl Resolver {
             Kind::Require => &["main"],
         };
         for field in fields {
-            let Some(main) = pkg.get(*field).and_then(Json::as_str) else { continue };
+            let Some(main) = pkg.get(*field).and_then(Json::as_str) else {
+                continue;
+            };
             let path = join(dir, main);
-            if let Some(found) = self.resolve_file(&path).or_else(|| self.resolve_index(&path)) {
+            if let Some(found) = self
+                .resolve_file(&path)
+                .or_else(|| self.resolve_index(&path))
+            {
                 return Some(found);
             }
         }
@@ -267,10 +359,10 @@ impl Resolver {
         let mut dir = from_dir.to_owned();
         loop {
             let candidate = format!("{}/node_modules/{name}", dir.trim_end_matches('/'));
-            if is_dir(&candidate) {
-                if let Some(found) = self.resolve_in_package(&candidate, &subpath, kind) {
-                    return Some(Resolved::File(found));
-                }
+            if is_dir(&candidate)
+                && let Some(found) = self.resolve_in_package(&candidate, &subpath, kind)
+            {
+                return Some(Resolved::File(found));
             }
             if dir == "/" {
                 return None;
@@ -279,7 +371,13 @@ impl Resolver {
         }
     }
 
-    fn resolve_self_reference(&self, name: &str, subpath: &str, from_dir: &str, kind: Kind) -> Option<String> {
+    fn resolve_self_reference(
+        &self,
+        name: &str,
+        subpath: &str,
+        from_dir: &str,
+        kind: Kind,
+    ) -> Option<String> {
         let (pkg_dir, pkg) = self.nearest_package_json(from_dir)?;
         if pkg.get("name").and_then(Json::as_str) != Some(name) {
             return None;
@@ -294,7 +392,10 @@ impl Resolver {
             return resolve_exports(pkg_dir, exports, subpath, kind).filter(|p| is_file(p));
         }
         if subpath == "." {
-            if let Some(found) = pkg.as_ref().and_then(|p| self.resolve_main_fields(pkg_dir, p, kind)) {
+            if let Some(found) = pkg
+                .as_ref()
+                .and_then(|p| self.resolve_main_fields(pkg_dir, p, kind))
+            {
                 return Some(found);
             }
             return self.resolve_index(pkg_dir);
@@ -312,7 +413,8 @@ impl Resolver {
         let imports = pkg.get("imports")?.as_object()?;
         let target = match_subpath_map(imports, spec, kind)?;
         if target.starts_with("./") {
-            return Some(Resolved::File(join(&pkg_dir, &target))).filter(|r| matches!(r, Resolved::File(p) if is_file(p)));
+            return Some(Resolved::File(join(&pkg_dir, &target)))
+                .filter(|r| matches!(r, Resolved::File(p) if is_file(p)));
         }
         // An import map entry may point at a package or built-in.
         self.resolve(&target, &format!("{pkg_dir}/"), kind).ok()
@@ -326,7 +428,9 @@ impl Resolver {
             return cached.clone();
         }
         let parsed = self.read_package_json(dir).map(Rc::new);
-        self.package_json.borrow_mut().insert(dir.to_owned(), parsed.clone());
+        self.package_json
+            .borrow_mut()
+            .insert(dir.to_owned(), parsed.clone());
         parsed
     }
 
@@ -336,14 +440,42 @@ impl Resolver {
         match serde_json::from_str::<Json>(&text) {
             Ok(value) => Some(value),
             Err(error) => {
-                let prefix = if error.is_eof() { text.trim_end() } else { &text };
-                let line = if error.is_eof() { prefix.lines().count().max(1) } else { error.line() };
-                let line_text = prefix.lines().nth(line.saturating_sub(1)).unwrap_or("").to_owned();
-                let column = if error.is_eof() { line_text.len() + 1 } else { error.column() };
-                let message = if error.is_eof() { "Unexpected end of file".to_owned() } else { error.to_string() };
-                let note = ResolveNote { file, line_text, line, column, message };
+                let prefix = if error.is_eof() {
+                    text.trim_end()
+                } else {
+                    &text
+                };
+                let line = if error.is_eof() {
+                    prefix.lines().count().max(1)
+                } else {
+                    error.line()
+                };
+                let line_text = prefix
+                    .lines()
+                    .nth(line.saturating_sub(1))
+                    .unwrap_or("")
+                    .to_owned();
+                let column = if error.is_eof() {
+                    line_text.len() + 1
+                } else {
+                    error.column()
+                };
+                let message = if error.is_eof() {
+                    "Unexpected end of file".to_owned()
+                } else {
+                    error.to_string()
+                };
+                let note = ResolveNote {
+                    file,
+                    line_text,
+                    line,
+                    column,
+                    message,
+                };
                 self.notes.borrow_mut().push(note.clone());
-                self.package_errors.borrow_mut().insert(dir.to_owned(), note);
+                self.package_errors
+                    .borrow_mut()
+                    .insert(dir.to_owned(), note);
                 None
             }
         }
@@ -376,7 +508,11 @@ impl Resolver {
 }
 
 fn is_relative_or_absolute(spec: &str) -> bool {
-    spec.starts_with('/') || spec.starts_with("./") || spec.starts_with("../") || spec == "." || spec == ".."
+    spec.starts_with('/')
+        || spec.starts_with("./")
+        || spec.starts_with("../")
+        || spec == "."
+        || spec == ".."
 }
 
 fn not_found_module(spec: &str, from: &str) -> String {
@@ -428,8 +564,13 @@ fn match_subpath_map(map: &serde_json::Map<String, Json>, key: &str, kind: Kind)
     // Longest prefix wins among "./prefix*suffix" patterns.
     let mut best: Option<(&str, &Json, String)> = None;
     for (pattern, target) in map {
-        let Some((prefix, suffix)) = pattern.split_once('*') else { continue };
-        if !key.starts_with(prefix) || !key.ends_with(suffix) || key.len() < prefix.len() + suffix.len() {
+        let Some((prefix, suffix)) = pattern.split_once('*') else {
+            continue;
+        };
+        if !key.starts_with(prefix)
+            || !key.ends_with(suffix)
+            || key.len() < prefix.len() + suffix.len()
+        {
             continue;
         }
         let captured = key[prefix.len()..key.len() - suffix.len()].to_owned();
@@ -444,7 +585,9 @@ fn match_subpath_map(map: &serde_json::Map<String, Json>, key: &str, kind: Kind)
     map.iter()
         .filter(|(k, _)| k.ends_with('/') && key.starts_with(k.as_str()))
         .max_by_key(|(k, _)| k.len())
-        .and_then(|(k, target)| resolve_target(target, kind, None).map(|t| format!("{t}{}", &key[k.len()..])))
+        .and_then(|(k, target)| {
+            resolve_target(target, kind, None).map(|t| format!("{t}{}", &key[k.len()..]))
+        })
 }
 
 fn resolve_target(target: &Json, kind: Kind, captured: Option<&str>) -> Option<String> {
@@ -469,7 +612,10 @@ mod tests {
     #[test]
     fn names() {
         assert_eq!(package_name("lodash"), ("lodash", ".".to_owned()));
-        assert_eq!(package_name("lodash/fp/map"), ("lodash", "./fp/map".to_owned()));
+        assert_eq!(
+            package_name("lodash/fp/map"),
+            ("lodash", "./fp/map".to_owned())
+        );
         assert_eq!(package_name("@a/b/c"), ("@a/b", "./c".to_owned()));
         assert_eq!(normalize("/a/./b/../c//d"), "/a/c/d");
         assert_eq!(dirname("/a/b.js"), "/a");

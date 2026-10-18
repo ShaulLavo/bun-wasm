@@ -11,7 +11,6 @@ const source = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.sp
   new URL("../crates/bunwasm-runtime/src/js/spawn.ts", import.meta.url), "utf8")}`);
 
 const EAGAIN = -6;
-const ENOENT = -44;
 
 interface FakePipe { chunks: Uint8Array[]; readers: number; writers: number }
 // Canonical runtime_proc.wait results, not shell-style 128 + signal exit statuses.
@@ -220,4 +219,3 @@ export function load(fake: ReturnType<typeof service>, options: { timers?: TestT
   };
   return { module, waiters, pump, pumpTurn };
 }
-

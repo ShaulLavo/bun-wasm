@@ -55,6 +55,7 @@ function cleanup(): Promise<void> {
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
 const deadline = setTimeout(() => { void cleanup().finally(() => process.exit(1)); }, 240_000);
 try {
+  const checkSafariCase = async () => {
   const occupied = await fetch(`${origin}/status`, { signal: AbortSignal.timeout(500) }).then(() => true, () => false);
   assert.equal(occupied, false, "The Safari driver port must be unused");
   driver = Bun.spawn(["/usr/bin/safaridriver", "--port", String(port)], { stdout: "ignore", stderr: "ignore" });
@@ -141,6 +142,9 @@ try {
   report.recovered = true;
   report.ok = true;
   console.log("Safari playground: fresh startup, three durable reloads, newest writer wins, complete displacement diagnostic and retry passed");
+
+  };
+  await checkSafariCase();
 } catch (error) {
   report.error = error instanceof Error ? error.stack || String(error) : String(error);
   if (device && process.env.SAFARI_SCREENSHOT) {

@@ -1,4 +1,4 @@
-import { controlLoad } from "waffle/proc/control";
+import { controlLoad, controlWait } from "waffle/proc/control";
 import { expect, test } from "bun:test";
 import { Wasi } from "waffle/core/wasi";
 import { MemFS } from "waffle/fs/memory";
@@ -14,10 +14,10 @@ test("dequeue preserves later pending signals and releases the final WASI wait",
   const fs = new MemFS();
   const wasi = new Wasi({ fs, args: [], env: {}, preopens: {}, interrupt: signals.interrupt, interruptPending: () => signalPending(signals),
     stdout() {}, stderr() {}, sleep() { throw new Error("shared interrupt must select a native wait"); },
-    wait(word, expected, milliseconds) { waits++; Atomics.wait(word, 0, expected, milliseconds); } });
+    wait(word, expected, milliseconds) { waits++; controlWait(word, 0, expected, milliseconds); } });
   const unused = (): never => { throw new Error("unexpected service operation"); };
   const abi = new ProcessABI({ memory, descriptors: wasi.descriptors, fs, pid: 1, signals,
-    service: { spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused } });
+    service: { waitJob: unused, jobEmpty: unused, childExited: unused, startStatus: unused, spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused } });
   const signal = abi.imports.signal!;
   const imports = (wasi as unknown as { functions(): Record<string, (...args: number[]) => number> }).functions();
   wasi.start({ exports: { memory, _start() {} } } as unknown as WebAssembly.Instance);

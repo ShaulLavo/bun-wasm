@@ -93,11 +93,19 @@ impl Supervisor {
         {
             job.result = Some(outcome);
         }
-        let orphans: Vec<_> = self.processes.iter().filter_map(|(&pid, child)| {
-            (child.result.is_some() && child.parent != 0
-                && self.processes.get(&child.parent).is_none_or(|parent| parent.result.is_some()))
+        let orphans: Vec<_> = self
+            .processes
+            .iter()
+            .filter_map(|(&pid, child)| {
+                (child.result.is_some()
+                    && child.parent != 0
+                    && self
+                        .processes
+                        .get(&child.parent)
+                        .is_none_or(|parent| parent.result.is_some()))
                 .then_some(pid)
-        }).collect();
+            })
+            .collect();
         for pid in orphans {
             // The current thread may own this record; dropping its handle detaches only the
             // completed epilogue. Running descendants retain their records and shutdown joins.
@@ -526,24 +534,31 @@ impl Processes {
             .max_by_key(|(length, _)| *length)
             .map(|(_, path)| path);
         if !cwd.is_absolute()
-            || cwd.components().any(|component| matches!(component, std::path::Component::ParentDir))
+            || cwd
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
         {
             return Err(INVAL);
         }
         // Revalidate the executable independently of an earlier access query. Startup failures
         // own an ordinary child record, with descriptors released before its typed publication.
-        let startup = self.runtime.executables.check(
-            &request.executable, &request.cwd, &self.runtime.dirs,
-        ).map_err(|errno| match errno {
-            NOENT | ACCES | NOTDIR | -45 | -48 | AGAIN | IO => errno,
-            PERM => ACCES,
-            _ => IO,
-        }).and_then(|module| {
-            let path = mapped.ok_or(NOENT)?;
-            let metadata = path.metadata().map_err(|error| -startup_io_errno(&error))?;
-            if !metadata.is_dir() { return Err(NOTDIR); }
-            Ok(module)
-        });
+        let startup = self
+            .runtime
+            .executables
+            .check(&request.executable, &request.cwd, &self.runtime.dirs)
+            .map_err(|errno| match errno {
+                NOENT | ACCES | NOTDIR | -45 | -48 | AGAIN | IO => errno,
+                PERM => ACCES,
+                _ => IO,
+            })
+            .and_then(|module| {
+                let path = mapped.ok_or(NOENT)?;
+                let metadata = path.metadata().map_err(|error| -startup_io_errno(&error))?;
+                if !metadata.is_dir() {
+                    return Err(NOTDIR);
+                }
+                Ok(module)
+            });
         let cancel = Arc::new(Cancellation::default());
         // Admission and thread-handle publication are one supervisor operation.
         // A very fast child can finish only after this lock is released.
@@ -603,32 +618,37 @@ impl Processes {
                         cancellation.select(FinalOutcome::StartFailed(-errno))
                     }
                     Ok((module, executable)) => {
-                    let stdio = Stdio {
-                        fds,
-                        pid,
-                        memory_limit,
-                    };
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        crate::run_module_instance(
-                            runtime.clone(),
-                            &module,
-                            request.argv,
-                            {
-                                let mut env = request.env;
-                                env.insert("BUNWASM_EXEC_PATH".into(), executable);
-                                env.into_iter().collect()
-                            },
-                            stdio,
-                            cancellation.clone(),
-                        )
-                    }))
-                    .unwrap_or_else(|_| Err(std::io::Error::other("child guest panicked").into()))
-                    .unwrap_or_else(|error| {
-                        eprintln!("bun-wasm child: {error:#}");
-                        let errno = error.chain().find_map(|cause| cause.downcast_ref::<std::io::Error>())
-                            .map(startup_io_errno).unwrap_or(45); // ENOEXEC: invalid module/entry point.
-                        cancellation.select(FinalOutcome::StartFailed(errno))
-                    })
+                        let stdio = Stdio {
+                            fds,
+                            pid,
+                            memory_limit,
+                        };
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            crate::run_module_instance(
+                                runtime.clone(),
+                                &module,
+                                request.argv,
+                                {
+                                    let mut env = request.env;
+                                    env.insert("BUNWASM_EXEC_PATH".into(), executable);
+                                    env.into_iter().collect()
+                                },
+                                stdio,
+                                cancellation.clone(),
+                            )
+                        }))
+                        .unwrap_or_else(|_| {
+                            Err(std::io::Error::other("child guest panicked").into())
+                        })
+                        .unwrap_or_else(|error| {
+                            eprintln!("bun-wasm child: {error:#}");
+                            let errno = error
+                                .chain()
+                                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                                .map(startup_io_errno)
+                                .unwrap_or(45); // ENOEXEC: invalid module/entry point.
+                            cancellation.select(FinalOutcome::StartFailed(errno))
+                        })
                     }
                 };
                 let mut state = runtime.state.lock().unwrap();
@@ -680,7 +700,10 @@ impl Processes {
     /// Non-consuming observation; terminal selection need not be safely published yet.
     pub fn start_status(&self, pid: i32) -> i32 {
         let state = self.runtime.state.lock().unwrap();
-        state.processes.get(&pid).filter(|child| child.parent == self.pid)
+        state
+            .processes
+            .get(&pid)
+            .filter(|child| child.parent == self.pid)
             .map_or(CHILD, |child| child.cancel.start_status())
     }
 
@@ -840,11 +863,13 @@ impl Processes {
         timeout: i32,
         is_file: impl Fn(i32) -> bool,
     ) -> Result<Vec<u8>, i32> {
-        if timeout < -1 || subscriptions.len() % 16 != 0 {
+        if timeout < -1 || !subscriptions.len().is_multiple_of(16) {
             return Err(INVAL);
         }
         if subscriptions
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .any(|sub| u32::from_le_bytes(sub[..4].try_into().unwrap()) > 6)
         {
             return Err(INVAL);
@@ -856,7 +881,7 @@ impl Processes {
                 return Ok(Vec::new());
             }
             let mut events = Vec::new();
-            for sub in subscriptions.chunks_exact(16) {
+            for sub in subscriptions.as_chunks::<16>().0.iter() {
                 let kind = u32::from_le_bytes(sub[..4].try_into().unwrap());
                 let id = i32::from_le_bytes(sub[4..8].try_into().unwrap());
                 let (ready, hangup) = match kind {

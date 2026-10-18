@@ -50,7 +50,7 @@ function micro(arm: string, name: string, n: number, connection: any) {
   assert(checks === 0, `${arm} ${name}: errno ${checks}`);
   if (name === "fd_read" || name === "fd_write") assert(view.getUint32(1024, true) === 64, "full I/O");
   core.descriptors.dispose();
-  if (arm === "head") fs.dispose();
+  if ("dispose" in fs) fs.dispose();
   return { arm, syscall: name, calls: n, ms, nsPerCall: ms * 1e6 / n };
 }
 self.onmessage = ({ data }) => {

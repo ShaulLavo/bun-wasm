@@ -15,9 +15,9 @@
 use std::ffi::CStr;
 use std::ptr;
 
+use crate::zlib_ffi as z;
 use bun_brotli_sys::brotli_c as br;
 use bun_zstd::c as zs;
-use crate::zlib_ffi as z;
 // Links the Zstd C library that `bun_zstd` declares.
 use zstd_sys as _;
 
@@ -85,14 +85,20 @@ impl Mode {
             "brotliDecode" => Self::BrotliDecode,
             "zstdCompress" => Self::ZstdCompress,
             "zstdDecompress" => Self::ZstdDecompress,
-            _ => return Err(NativeError::type_error(format!("Unsupported compression mode {name}"))),
+            _ => {
+                return Err(NativeError::type_error(format!(
+                    "Unsupported compression mode {name}"
+                )));
+            }
         })
     }
 
     /// `Z_FINISH`, `BROTLI_OPERATION_FINISH` or `ZSTD_e_end`.
     pub fn finish_flush(self) -> i32 {
         match self {
-            Self::BrotliEncode | Self::BrotliDecode | Self::ZstdCompress | Self::ZstdDecompress => 2,
+            Self::BrotliEncode | Self::BrotliDecode | Self::ZstdCompress | Self::ZstdDecompress => {
+                2
+            }
             _ => z::Z_FINISH,
         }
     }
@@ -114,7 +120,15 @@ pub struct Options<'a> {
 
 impl Default for Options<'_> {
     fn default() -> Self {
-        Self { level: -1, window_bits: 15, mem_level: 8, strategy: 0, params: Vec::new(), dictionary: &[], reject_garbage: false }
+        Self {
+            level: -1,
+            window_bits: 15,
+            mem_level: 8,
+            strategy: 0,
+            params: Vec::new(),
+            dictionary: &[],
+            reject_garbage: false,
+        }
     }
 }
 
@@ -122,19 +136,32 @@ impl<'a> Options<'a> {
     /// Reads the JSON object node:zlib passes: `level`, `windowBits`, `memLevel`,
     /// `strategy` and `params` (`{ key: value }`).
     pub fn parse(json: Option<&str>, dictionary: &'a [u8]) -> Result<Self, NativeError> {
-        let mut options = Self { dictionary, ..Self::default() };
+        let mut options = Self {
+            dictionary,
+            ..Self::default()
+        };
         let Some(json) = json else { return Ok(options) };
         let value: serde_json::Value =
             serde_json::from_str(json).map_err(|e| NativeError::type_error(e.to_string()))?;
-        let int = |key: &str| value.get(key).and_then(serde_json::Value::as_f64).map(|n| n as i32);
+        let int = |key: &str| {
+            value
+                .get(key)
+                .and_then(serde_json::Value::as_f64)
+                .map(|n| n as i32)
+        };
         options.level = int("level").unwrap_or(options.level);
         options.window_bits = int("windowBits").unwrap_or(options.window_bits);
         options.mem_level = int("memLevel").unwrap_or(options.mem_level);
         options.strategy = int("strategy").unwrap_or(options.strategy);
-        options.reject_garbage = value.get("rejectGarbageAfterEnd").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        options.reject_garbage = value
+            .get("rejectGarbageAfterEnd")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         if let Some(params) = value.get("params").and_then(serde_json::Value::as_object) {
             for (key, value) in params {
-                let key = key.parse::<u32>().map_err(|_| NativeError::type_error("Invalid parameter"))?;
+                let key = key
+                    .parse::<u32>()
+                    .map_err(|_| NativeError::type_error("Invalid parameter"))?;
                 let value = match value {
                     serde_json::Value::Bool(flag) => u32::from(*flag),
                     other => other.as_f64().unwrap_or(0.0) as i64 as u32,
@@ -255,7 +282,8 @@ impl Zlib {
             flush: z::Z_NO_FLUSH,
             reject_garbage: options.reject_garbage,
         };
-        zlib.set_dictionary().map_err(|_| init_failed("Initialization failed"))?;
+        zlib.set_dictionary()
+            .map_err(|_| init_failed("Initialization failed"))?;
         Ok(zlib)
     }
 
@@ -264,7 +292,9 @@ impl Zlib {
             fallback.to_owned()
         } else {
             // SAFETY: zlib's `msg` is a static C string.
-            unsafe { CStr::from_ptr(self.stream.msg) }.to_string_lossy().into_owned()
+            unsafe { CStr::from_ptr(self.stream.msg) }
+                .to_string_lossy()
+                .into_owned()
         };
         codec_error(message, zlib_code(self.err), self.err)
     }
@@ -277,7 +307,9 @@ impl Zlib {
         // SAFETY: the stream is initialized; `data` borrows the owned dictionary.
         self.err = unsafe {
             match self.mode {
-                Mode::Deflate | Mode::DeflateRaw => z::deflateSetDictionary(&mut *self.stream, data, size),
+                Mode::Deflate | Mode::DeflateRaw => {
+                    z::deflateSetDictionary(&mut *self.stream, data, size)
+                }
                 Mode::InflateRaw => z::inflateSetDictionary(&mut *self.stream, data, size),
                 _ => z::Z_OK,
             }
@@ -293,7 +325,9 @@ impl Zlib {
         self.err = unsafe {
             match self.mode {
                 Mode::Deflate | Mode::Gzip | Mode::DeflateRaw => z::deflateReset(&mut *self.stream),
-                Mode::Inflate | Mode::Gunzip | Mode::InflateRaw => z::inflateReset(&mut *self.stream),
+                Mode::Inflate | Mode::Gunzip | Mode::InflateRaw => {
+                    z::inflateReset(&mut *self.stream)
+                }
                 _ => z::Z_OK,
             }
         };
@@ -306,7 +340,10 @@ impl Zlib {
     fn inflate(&mut self) -> Result<(), NativeError> {
         // SAFETY: the stream is initialized and its buffers were set by `write`.
         self.err = unsafe { z::inflate(&mut *self.stream, self.flush) };
-        if self.mode != Mode::InflateRaw && self.err == z::Z_NEED_DICT && !self.dictionary.is_empty() {
+        if self.mode != Mode::InflateRaw
+            && self.err == z::Z_NEED_DICT
+            && !self.dictionary.is_empty()
+        {
             let (data, size) = (self.dictionary.as_ptr(), self.dictionary.len() as u32);
             // SAFETY: as above; `data` borrows the owned dictionary.
             self.err = unsafe { z::inflateSetDictionary(&mut *self.stream, data, size) };
@@ -342,7 +379,11 @@ impl Zlib {
         while self.mode == Mode::Unzip && index < available {
             // SAFETY: index < avail_in.
             let byte = unsafe { *self.stream.next_in.add(index) };
-            let expected = if self.gzip_id_bytes_read == 0 { Self::GZIP_HEADER_ID1 } else { Self::GZIP_HEADER_ID2 };
+            let expected = if self.gzip_id_bytes_read == 0 {
+                Self::GZIP_HEADER_ID1
+            } else {
+                Self::GZIP_HEADER_ID2
+            };
             if byte != expected {
                 self.mode = Mode::Inflate;
             } else {
@@ -355,15 +396,22 @@ impl Zlib {
         }
     }
 
-    fn write(&mut self, input: &[u8], flush: i32, output: &mut [u8]) -> Result<(usize, usize), NativeError> {
+    fn write(
+        &mut self,
+        input: &[u8],
+        flush: i32,
+        output: &mut [u8],
+    ) -> Result<(usize, usize), NativeError> {
         if !(0..=6).contains(&flush) {
             return Err(NativeError::type_error("Invalid flush value"));
         }
         self.flush = flush;
         self.stream.next_in = input.as_ptr().cast_mut();
-        self.stream.avail_in = u32::try_from(input.len()).map_err(|_| too_large(u32::MAX as usize))?;
+        self.stream.avail_in =
+            u32::try_from(input.len()).map_err(|_| too_large(u32::MAX as usize))?;
         self.stream.next_out = output.as_mut_ptr();
-        self.stream.avail_out = u32::try_from(output.len()).map_err(|_| too_large(u32::MAX as usize))?;
+        self.stream.avail_out =
+            u32::try_from(output.len()).map_err(|_| too_large(u32::MAX as usize))?;
         match self.mode {
             Mode::Deflate | Mode::Gzip | Mode::DeflateRaw => {
                 // SAFETY: the stream is initialized and its buffers borrow `input`/`output`.
@@ -376,7 +424,10 @@ impl Zlib {
                 self.inflate()?;
             }
         }
-        let left = (self.stream.avail_in as usize, self.stream.avail_out as usize);
+        let left = (
+            self.stream.avail_in as usize,
+            self.stream.avail_out as usize,
+        );
         self.stream.next_in = ptr::null_mut();
         self.stream.next_out = ptr::null_mut();
         match self.err {
@@ -384,7 +435,9 @@ impl Zlib {
                 Err(self.error_for_message("unexpected end of file"))
             }
             z::Z_OK | z::Z_BUF_ERROR | z::Z_STREAM_END => Ok(left),
-            z::Z_NEED_DICT if self.dictionary.is_empty() => Err(self.error_for_message("Missing dictionary")),
+            z::Z_NEED_DICT if self.dictionary.is_empty() => {
+                Err(self.error_for_message("Missing dictionary"))
+            }
             z::Z_NEED_DICT => Err(self.error_for_message("Bad dictionary")),
             _ => Err(self.error_for_message("Zlib error")),
         }
@@ -429,16 +482,20 @@ impl Brotli {
         let (data, size) = (brotli.dictionary.as_ptr(), brotli.dictionary.len());
         if decode {
             // SAFETY: FFI with the default allocator.
-            brotli.decoder = unsafe { br::BrotliDecoderCreateInstance(None, None, ptr::null_mut()) };
+            brotli.decoder =
+                unsafe { br::BrotliDecoderCreateInstance(None, None, ptr::null_mut()) };
             // SAFETY: non-null decoders are exclusively owned here.
-            let decoder = unsafe { brotli.decoder.as_mut() }.ok_or_else(|| init_failed("Initialization failed"))?;
+            let decoder = unsafe { brotli.decoder.as_mut() }
+                .ok_or_else(|| init_failed("Initialization failed"))?;
             for &(key, value) in &options.params {
                 if br::BrotliDecoderSetParameter(decoder, key, value) == 0 {
                     return Err(init_failed("Initialization failed"));
                 }
             }
             // SAFETY: the decoder is live and the dictionary outlives it.
-            if size > 0 && unsafe { br::BrotliDecoderAttachDictionary(brotli.decoder, 0, size, data) } == 0 {
+            if size > 0
+                && unsafe { br::BrotliDecoderAttachDictionary(brotli.decoder, 0, size, data) } == 0
+            {
                 return Err(init_failed("Initialization failed"));
             }
             return Ok(brotli);
@@ -446,7 +503,8 @@ impl Brotli {
         // SAFETY: FFI with the default allocator.
         brotli.encoder = unsafe { br::BrotliEncoderCreateInstance(None, None, ptr::null_mut()) };
         // SAFETY: non-null encoders are exclusively owned here.
-        let encoder = unsafe { brotli.encoder.as_mut() }.ok_or_else(|| init_failed("Initialization failed"))?;
+        let encoder = unsafe { brotli.encoder.as_mut() }
+            .ok_or_else(|| init_failed("Initialization failed"))?;
         for &(key, value) in &options.params {
             if br::BrotliEncoderSetParameter(encoder, key, value) == 0 {
                 return Err(init_failed("Initialization failed"));
@@ -455,11 +513,21 @@ impl Brotli {
         if size > 0 {
             // SAFETY: FFI; `data` stays valid while the prepared dictionary lives.
             brotli.prepared = unsafe {
-                br::BrotliEncoderPrepareDictionary(0, size, data, br::BROTLI_MAX_QUALITY, None, None, ptr::null_mut())
+                br::BrotliEncoderPrepareDictionary(
+                    0,
+                    size,
+                    data,
+                    br::BROTLI_MAX_QUALITY,
+                    None,
+                    None,
+                    ptr::null_mut(),
+                )
             };
             // SAFETY: both pointers are live and owned by this coder.
             if brotli.prepared.is_null()
-                || unsafe { br::BrotliEncoderAttachPreparedDictionary(brotli.encoder, brotli.prepared) } == 0
+                || unsafe {
+                    br::BrotliEncoderAttachPreparedDictionary(brotli.encoder, brotli.prepared)
+                } == 0
             {
                 return Err(init_failed("Initialization failed"));
             }
@@ -467,7 +535,12 @@ impl Brotli {
         Ok(brotli)
     }
 
-    fn write(&mut self, input: &[u8], flush: i32, output: &mut [u8]) -> Result<(usize, usize), NativeError> {
+    fn write(
+        &mut self,
+        input: &[u8],
+        flush: i32,
+        output: &mut [u8],
+    ) -> Result<(usize, usize), NativeError> {
         let mut available_in = input.len();
         let mut next_in = input.as_ptr();
         let mut available_out = output.len();
@@ -493,7 +566,11 @@ impl Brotli {
                 )
             };
             if ok == 0 {
-                return Err(codec_error("Compression failed", "ERR_BROTLI_COMPRESSION_FAILED", -1));
+                return Err(codec_error(
+                    "Compression failed",
+                    "ERR_BROTLI_COMPRESSION_FAILED",
+                    -1,
+                ));
             }
             return Ok((available_in, available_out));
         }
@@ -515,11 +592,20 @@ impl Brotli {
             // SAFETY: the decoder is live.
             let code = br::BrotliDecoderGetErrorCode(unsafe { &*self.decoder });
             // SAFETY: Brotli's error strings are static C strings.
-            let name = unsafe { CStr::from_ptr(br::BrotliDecoderErrorString(code)) }.to_string_lossy();
-            return Err(codec_error("Decompression failed", format!("ERR_{name}"), code as i32));
+            let name =
+                unsafe { CStr::from_ptr(br::BrotliDecoderErrorString(code)) }.to_string_lossy();
+            return Err(codec_error(
+                "Decompression failed",
+                format!("ERR_{name}"),
+                code as i32,
+            ));
         }
         if flush == 2 && result == br::BrotliDecoderResult::needs_more_input {
-            return Err(codec_error("unexpected end of file", "Z_BUF_ERROR", z::Z_BUF_ERROR));
+            return Err(codec_error(
+                "unexpected end of file",
+                "Z_BUF_ERROR",
+                z::Z_BUF_ERROR,
+            ));
         }
         Ok((available_in, available_out))
     }
@@ -565,7 +651,11 @@ fn zstd_check(result: usize) -> Result<usize, NativeError> {
     let code = zs::ZSTD_getErrorCode(result);
     // SAFETY: Zstd's error strings are static C strings.
     let message = unsafe { CStr::from_ptr(zs::ZSTD_getErrorString(code)) }.to_string_lossy();
-    Err(codec_error(message.into_owned(), zstd_code_name(code as u32), code as i32))
+    Err(codec_error(
+        message.into_owned(),
+        zstd_code_name(code as u32),
+        code as i32,
+    ))
 }
 
 const ZSTD_MAGIC: [u8; 4] = 0xFD2F_B528u32.to_le_bytes();
@@ -574,7 +664,11 @@ const ZSTD_MAGIC_SKIPPABLE: [u8; 3] = [0x2A, 0x4D, 0x18];
 /// True when `head` (1..=4 bytes) is a prefix of a Zstd or skippable frame magic.
 fn is_zstd_frame_prefix(head: &[u8]) -> bool {
     head.iter().zip(ZSTD_MAGIC).all(|(a, b)| *a == b)
-        || ((head[0] & 0xF0) == 0x50 && head[1..].iter().zip(ZSTD_MAGIC_SKIPPABLE).all(|(a, b)| *a == b))
+        || ((head[0] & 0xF0) == 0x50
+            && head[1..]
+                .iter()
+                .zip(ZSTD_MAGIC_SKIPPABLE)
+                .all(|(a, b)| *a == b))
 }
 
 /// Bun's `NativeZstd` context.
@@ -602,17 +696,24 @@ impl Drop for Zstd {
 
 impl Zstd {
     fn new(decode: bool, options: &Options) -> Result<Self, NativeError> {
-        let mut zstd = Self { encoder: ptr::null_mut(), decoder: ptr::null_mut(), frame_done: false, reject_garbage: options.reject_garbage };
+        let mut zstd = Self {
+            encoder: ptr::null_mut(),
+            decoder: ptr::null_mut(),
+            frame_done: false,
+            reject_garbage: options.reject_garbage,
+        };
         let (data, size) = (options.dictionary.as_ptr().cast(), options.dictionary.len());
         let load = |result: usize| {
             if zs::ZSTD_isError(result) != 0 {
-                return Err(NativeError::error("Failed to load zstd dictionary").prop("code", "ERR_ZLIB_DICTIONARY_LOAD_FAILED"));
+                return Err(NativeError::error("Failed to load zstd dictionary")
+                    .prop("code", "ERR_ZLIB_DICTIONARY_LOAD_FAILED"));
             }
             Ok(())
         };
         let set = |result: usize| {
             if zs::ZSTD_isError(result) != 0 {
-                return Err(NativeError::error("Setting parameter failed").prop("code", "ERR_ZSTD_PARAM_SET_FAILED"));
+                return Err(NativeError::error("Setting parameter failed")
+                    .prop("code", "ERR_ZSTD_PARAM_SET_FAILED"));
             }
             Ok(())
         };
@@ -646,22 +747,39 @@ impl Zstd {
         Ok(zstd)
     }
 
-    fn write(&mut self, input: &[u8], flush: i32, output: &mut [u8]) -> Result<(usize, usize), NativeError> {
+    fn write(
+        &mut self,
+        input: &[u8],
+        flush: i32,
+        output: &mut [u8],
+    ) -> Result<(usize, usize), NativeError> {
         if !(0..=2).contains(&flush) {
             return Err(NativeError::type_error("Invalid flush value"));
         }
-        let mut source = zs::ZSTD_inBuffer { src: input.as_ptr().cast(), size: input.len(), pos: 0 };
-        let mut sink = zs::ZSTD_outBuffer { dst: output.as_mut_ptr().cast(), size: output.len(), pos: 0 };
+        let mut source = zs::ZSTD_inBuffer {
+            src: input.as_ptr().cast(),
+            size: input.len(),
+            pos: 0,
+        };
+        let mut sink = zs::ZSTD_outBuffer {
+            dst: output.as_mut_ptr().cast(),
+            size: output.len(),
+            pos: 0,
+        };
         if !self.encoder.is_null() {
             // SAFETY: the context is live; the buffers borrow `input`/`output`.
-            zstd_check(unsafe { zs::ZSTD_compressStream2(self.encoder, &mut sink, &mut source, flush as u32) })?;
+            zstd_check(unsafe {
+                zs::ZSTD_compressStream2(self.encoder, &mut sink, &mut source, flush as u32)
+            })?;
             return Ok((input.len() - source.pos, output.len() - sink.pos));
         }
         let mut remaining;
         loop {
             let consumed = source.pos;
             // SAFETY: as above.
-            remaining = zstd_check(unsafe { zs::ZSTD_decompressStream(self.decoder, &mut sink, &mut source) })?;
+            remaining = zstd_check(unsafe {
+                zs::ZSTD_decompressStream(self.decoder, &mut sink, &mut source)
+            })?;
             if remaining == 0 {
                 self.frame_done = true;
             } else if source.pos > consumed {
@@ -669,14 +787,28 @@ impl Zstd {
             }
             // A finished frame may be followed by another one (RFC 8878 §3.1).
             let next = &input[source.pos..input.len().min(source.pos + 4)];
-            if remaining != 0 || sink.pos == sink.size || next.is_empty() || self.reject_garbage || !is_zstd_frame_prefix(next) {
+            if remaining != 0
+                || sink.pos == sink.size
+                || next.is_empty()
+                || self.reject_garbage
+                || !is_zstd_frame_prefix(next)
+            {
                 break;
             }
         }
         // Zstd reports an unfinished frame only through its size hint; Node
         // calls input that ends inside a frame an unexpected end of file.
-        if flush == 2 && remaining != 0 && !self.frame_done && source.pos == source.size && sink.pos < sink.size {
-            return Err(codec_error("unexpected end of file", "Z_BUF_ERROR", z::Z_BUF_ERROR));
+        if flush == 2
+            && remaining != 0
+            && !self.frame_done
+            && source.pos == source.size
+            && sink.pos < sink.size
+        {
+            return Err(codec_error(
+                "unexpected end of file",
+                "Z_BUF_ERROR",
+                z::Z_BUF_ERROR,
+            ));
         }
         Ok((input.len() - source.pos, output.len() - sink.pos))
     }
@@ -696,8 +828,12 @@ pub struct Handle {
 impl Handle {
     pub fn new(mode: Mode, options: &Options) -> Result<Self, NativeError> {
         let backend = match mode {
-            Mode::BrotliEncode | Mode::BrotliDecode => Backend::Brotli(Brotli::new(mode == Mode::BrotliDecode, options)?),
-            Mode::ZstdCompress | Mode::ZstdDecompress => Backend::Zstd(Zstd::new(mode == Mode::ZstdDecompress, options)?),
+            Mode::BrotliEncode | Mode::BrotliDecode => {
+                Backend::Brotli(Brotli::new(mode == Mode::BrotliDecode, options)?)
+            }
+            Mode::ZstdCompress | Mode::ZstdDecompress => {
+                Backend::Zstd(Zstd::new(mode == Mode::ZstdDecompress, options)?)
+            }
             _ => Backend::Zlib(Zlib::new(mode, options)?),
         };
         Ok(Self { backend })
@@ -705,7 +841,12 @@ impl Handle {
 
     /// One codec call. Returns the input and output bytes left over, Node's
     /// `[availInAfter, availOutAfter]` write state.
-    pub fn write(&mut self, input: &[u8], flush: i32, output: &mut [u8]) -> Result<(usize, usize), NativeError> {
+    pub fn write(
+        &mut self,
+        input: &[u8],
+        flush: i32,
+        output: &mut [u8],
+    ) -> Result<(usize, usize), NativeError> {
         match &mut self.backend {
             Backend::Zlib(codec) => codec.write(input, flush, output),
             Backend::Brotli(codec) => codec.write(input, flush, output),
@@ -715,7 +856,9 @@ impl Handle {
 
     /// node:zlib's `params(level, strategy)`, after the caller's sync flush.
     pub fn params(&mut self, level: i32, strategy: i32) -> Result<(), NativeError> {
-        let Backend::Zlib(codec) = &mut self.backend else { return Ok(()) };
+        let Backend::Zlib(codec) = &mut self.backend else {
+            return Ok(());
+        };
         if !matches!(codec.mode, Mode::Deflate | Mode::DeflateRaw) {
             return Ok(());
         }
@@ -826,12 +969,17 @@ struct Pending {
 enum Progress {
     Done,
     /// Stopped at the output cap; `consumed` bytes of this step's input are used up.
-    More { consumed: usize },
+    More {
+        consumed: usize,
+    },
 }
 
 enum WebBackend {
     Deflate(Box<z::z_stream>),
-    Inflate { stream: Box<z::z_stream>, gzip: bool },
+    Inflate {
+        stream: Box<z::z_stream>,
+        gzip: bool,
+    },
     BrotliEncode(*mut br::BrotliEncoder),
     BrotliDecode(*mut br::BrotliDecoder),
     ZstdEncode(*mut zs::ZSTD_CCtx),
@@ -877,7 +1025,12 @@ impl Drop for WebCoder {
 
 impl WebCoder {
     /// `level` is range-checked by the caller and ignored for decompression.
-    pub fn new(format: WebFormat, decompress: bool, high_water_mark: usize, level: Option<i32>) -> Result<Self, NativeError> {
+    pub fn new(
+        format: WebFormat,
+        decompress: bool,
+        high_water_mark: usize,
+        level: Option<i32>,
+    ) -> Result<Self, NativeError> {
         let level = level.filter(|_| !decompress);
         // SAFETY: zlibVersion returns a static C string.
         let version = unsafe { z::zlibVersion() };
@@ -887,13 +1040,18 @@ impl WebCoder {
                 // SAFETY: FFI with the default allocator.
                 let p = unsafe { br::BrotliEncoderCreateInstance(None, None, ptr::null_mut()) };
                 // SAFETY: non-null encoders are exclusively owned here.
-                let encoder = unsafe { p.as_mut() }.ok_or_else(|| web_error("failed to initialize brotli encoder"))?;
-                if let Some(quality) = level {
-                    if br::BrotliEncoderSetParameter(encoder, br::BROTLI_PARAM_QUALITY, quality as u32) == 0 {
-                        // SAFETY: `p` is not stored anywhere else.
-                        unsafe { br::BrotliEncoderDestroyInstance(p) };
-                        return Err(web_error("failed to set brotli quality"));
-                    }
+                let encoder = unsafe { p.as_mut() }
+                    .ok_or_else(|| web_error("failed to initialize brotli encoder"))?;
+                if let Some(quality) = level
+                    && br::BrotliEncoderSetParameter(
+                        encoder,
+                        br::BROTLI_PARAM_QUALITY,
+                        quality as u32,
+                    ) == 0
+                {
+                    // SAFETY: `p` is not stored anywhere else.
+                    unsafe { br::BrotliEncoderDestroyInstance(p) };
+                    return Err(web_error("failed to set brotli quality"));
                 }
                 WebBackend::BrotliEncode(p)
             }
@@ -912,7 +1070,9 @@ impl WebCoder {
                 }
                 if let Some(level) = level {
                     // SAFETY: `p` is a live context.
-                    let result = unsafe { zs::ZSTD_CCtx_setParameter(p, zs::ZSTD_c_compressionLevel, level) };
+                    let result = unsafe {
+                        zs::ZSTD_CCtx_setParameter(p, zs::ZSTD_c_compressionLevel, level)
+                    };
                     if zs::ZSTD_isError(result) != 0 {
                         // SAFETY: `p` is not stored anywhere else.
                         unsafe { zs::ZSTD_freeCCtx(p) };
@@ -932,7 +1092,16 @@ impl WebCoder {
                 let mut stream = new_stream();
                 // SAFETY: a boxed, initialized z_stream.
                 let rc = unsafe {
-                    z::deflateInit2_(&mut *stream, level.unwrap_or(-1), z::Z_DEFLATED, format.window_bits(), 8, 0, version, size)
+                    z::deflateInit2_(
+                        &mut *stream,
+                        level.unwrap_or(-1),
+                        z::Z_DEFLATED,
+                        format.window_bits(),
+                        8,
+                        0,
+                        version,
+                        size,
+                    )
                 };
                 if rc != z::Z_OK {
                     return Err(web_error("failed to initialize deflate"));
@@ -942,11 +1111,15 @@ impl WebCoder {
             (_, true) => {
                 let mut stream = new_stream();
                 // SAFETY: a boxed, initialized z_stream.
-                let rc = unsafe { z::inflateInit2_(&mut *stream, format.window_bits(), version, size) };
+                let rc =
+                    unsafe { z::inflateInit2_(&mut *stream, format.window_bits(), version, size) };
                 if rc != z::Z_OK {
                     return Err(web_error("failed to initialize inflate"));
                 }
-                WebBackend::Inflate { stream, gzip: format == WebFormat::Gzip }
+                WebBackend::Inflate {
+                    stream,
+                    gzip: format == WebFormat::Gzip,
+                }
             }
         };
         Ok(Self {
@@ -967,7 +1140,13 @@ impl WebCoder {
         let mut out = Vec::new();
         if let Some(mut pending) = self.pending.take() {
             let rest = std::mem::take(&mut pending.input);
-            return match self.run(&rest[pending.pos..], pending.finish, true, pending.cap, &mut out)? {
+            return match self.run(
+                &rest[pending.pos..],
+                pending.finish,
+                true,
+                pending.cap,
+                &mut out,
+            )? {
                 Progress::Done => Ok((out, false)),
                 Progress::More { consumed } => {
                     pending.pos += consumed;
@@ -990,7 +1169,12 @@ impl WebCoder {
         match self.run(bytes, finish, false, cap, &mut out)? {
             Progress::Done => Ok((out, false)),
             Progress::More { consumed } => {
-                self.pending = Some(Pending { input: bytes[consumed..].to_vec(), pos: 0, finish, cap });
+                self.pending = Some(Pending {
+                    input: bytes[consumed..].to_vec(),
+                    pos: 0,
+                    finish,
+                    cap,
+                });
                 Ok((out, true))
             }
         }
@@ -999,14 +1183,30 @@ impl WebCoder {
     /// Drives the codec until the chunk is done or `out` holds `cap` bytes. A
     /// continuing step (not the chunk's first) calls the codec even with no input
     /// left, to drain the output it is holding.
-    fn run(&mut self, input: &[u8], finish: bool, continuing: bool, cap: usize, out: &mut Vec<u8>) -> Result<Progress, NativeError> {
+    fn run(
+        &mut self,
+        input: &[u8],
+        finish: bool,
+        continuing: bool,
+        cap: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<Progress, NativeError> {
         match &mut self.backend {
             WebBackend::Deflate(stream) => Self::deflate(stream, input, finish, cap, out),
-            WebBackend::Inflate { stream, gzip } => {
-                Self::inflate(stream, *gzip, &mut self.ended, input, finish, continuing, cap, out)
-            }
+            WebBackend::Inflate { stream, gzip } => Self::inflate(
+                stream,
+                *gzip,
+                &mut self.ended,
+                input,
+                finish,
+                continuing,
+                cap,
+                out,
+            ),
             WebBackend::BrotliEncode(p) => Self::brotli_encode(*p, input, finish, cap, out),
-            WebBackend::BrotliDecode(p) => Self::brotli_decode(*p, &mut self.ended, input, finish, cap, out),
+            WebBackend::BrotliDecode(p) => {
+                Self::brotli_decode(*p, &mut self.ended, input, finish, cap, out)
+            }
             WebBackend::ZstdEncode(p) => Self::zstd_encode(*p, input, finish, cap, out),
             WebBackend::ZstdDecode(p) => {
                 let head = (&mut self.zstd_head, &mut self.zstd_head_len);
@@ -1015,15 +1215,27 @@ impl WebCoder {
         }
     }
 
-    fn deflate(s: &mut z::z_stream, input: &[u8], finish: bool, cap: usize, out: &mut Vec<u8>) -> Result<Progress, NativeError> {
+    fn deflate(
+        s: &mut z::z_stream,
+        input: &[u8],
+        finish: bool,
+        cap: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<Progress, NativeError> {
         let mut remaining = input;
         loop {
             if out.len() >= cap {
-                return Ok(Progress::More { consumed: input.len() - remaining.len() });
+                return Ok(Progress::More {
+                    consumed: input.len() - remaining.len(),
+                });
             }
             let take = remaining.len().min(u32::MAX as usize);
             let tail = remaining.len() > take;
-            let flush = if finish && !tail { z::Z_FINISH } else { z::Z_NO_FLUSH };
+            let flush = if finish && !tail {
+                z::Z_FINISH
+            } else {
+                z::Z_NO_FLUSH
+            };
             let start = web_spare(out, cap)?;
             let room = out.len() - start;
             s.next_in = remaining.as_ptr().cast_mut();
@@ -1082,11 +1294,17 @@ impl WebCoder {
         let mut remaining = input;
         loop {
             if out.len() >= cap {
-                return Ok(Progress::More { consumed: input.len() - remaining.len() });
+                return Ok(Progress::More {
+                    consumed: input.len() - remaining.len(),
+                });
             }
             let take = remaining.len().min(u32::MAX as usize);
             let tail = remaining.len() > take;
-            let flush = if finish && !tail { z::Z_FINISH } else { z::Z_NO_FLUSH };
+            let flush = if finish && !tail {
+                z::Z_FINISH
+            } else {
+                z::Z_NO_FLUSH
+            };
             let start = web_spare(out, cap)?;
             let room = out.len() - start;
             s.next_in = remaining.as_ptr().cast_mut();
@@ -1136,13 +1354,25 @@ impl WebCoder {
         }
     }
 
-    fn brotli_encode(p: *mut br::BrotliEncoder, input: &[u8], finish: bool, cap: usize, out: &mut Vec<u8>) -> Result<Progress, NativeError> {
-        let op = if finish { br::BrotliEncoderOperation::finish } else { br::BrotliEncoderOperation::process };
+    fn brotli_encode(
+        p: *mut br::BrotliEncoder,
+        input: &[u8],
+        finish: bool,
+        cap: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<Progress, NativeError> {
+        let op = if finish {
+            br::BrotliEncoderOperation::finish
+        } else {
+            br::BrotliEncoderOperation::process
+        };
         let mut next_in = input.as_ptr();
         let mut avail_in = input.len();
         loop {
             if out.len() >= cap {
-                return Ok(Progress::More { consumed: input.len() - avail_in });
+                return Ok(Progress::More {
+                    consumed: input.len() - avail_in,
+                });
             }
             let start = web_spare(out, cap)?;
             let room = out.len() - start;
@@ -1150,7 +1380,15 @@ impl WebCoder {
             let mut avail_out = room;
             // SAFETY: the encoder is live; the pointers borrow `input`/`out`.
             let ok = unsafe {
-                br::BrotliEncoderCompressStream(p, op, &mut avail_in, &mut next_in, &mut avail_out, &mut next_out, ptr::null_mut())
+                br::BrotliEncoderCompressStream(
+                    p,
+                    op,
+                    &mut avail_in,
+                    &mut next_in,
+                    &mut avail_out,
+                    &mut next_out,
+                    ptr::null_mut(),
+                )
             };
             out.truncate(start + room - avail_out);
             if ok == 0 {
@@ -1180,7 +1418,9 @@ impl WebCoder {
         let mut avail_in = input.len();
         loop {
             if out.len() >= cap {
-                return Ok(Progress::More { consumed: input.len() - avail_in });
+                return Ok(Progress::More {
+                    consumed: input.len() - avail_in,
+                });
             }
             let start = web_spare(out, cap)?;
             let room = out.len() - start;
@@ -1188,7 +1428,14 @@ impl WebCoder {
             let mut avail_out = room;
             // SAFETY: the decoder is live; the pointers borrow `input`/`out`.
             let result = unsafe {
-                br::BrotliDecoderDecompressStream(p, &mut avail_in, &mut next_in, &mut avail_out, &mut next_out, ptr::null_mut())
+                br::BrotliDecoderDecompressStream(
+                    p,
+                    &mut avail_in,
+                    &mut next_in,
+                    &mut avail_out,
+                    &mut next_out,
+                    ptr::null_mut(),
+                )
             };
             let written = room - avail_out;
             out.truncate(start + written);
@@ -1219,8 +1466,11 @@ impl WebCoder {
                         return Err(out_of_memory());
                     }
                     // SAFETY: Brotli's error strings are static C strings.
-                    let detail = unsafe { CStr::from_ptr(br::BrotliDecoderErrorString(code)) }.to_string_lossy();
-                    return Err(web_error("brotli decode failed").prop("code", format!("ERR_{detail}")).prop("detail", detail.into_owned()));
+                    let detail = unsafe { CStr::from_ptr(br::BrotliDecoderErrorString(code)) }
+                        .to_string_lossy();
+                    return Err(web_error("brotli decode failed")
+                        .prop("code", format!("ERR_{detail}"))
+                        .prop("detail", detail.into_owned()));
                 }
             }
         }
@@ -1233,16 +1483,32 @@ impl WebCoder {
         web_error(message)
     }
 
-    fn zstd_encode(p: *mut zs::ZSTD_CCtx, input: &[u8], finish: bool, cap: usize, out: &mut Vec<u8>) -> Result<Progress, NativeError> {
+    fn zstd_encode(
+        p: *mut zs::ZSTD_CCtx,
+        input: &[u8],
+        finish: bool,
+        cap: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<Progress, NativeError> {
         let end = if finish { 2 } else { 0 };
-        let mut source = zs::ZSTD_inBuffer { src: input.as_ptr().cast(), size: input.len(), pos: 0 };
+        let mut source = zs::ZSTD_inBuffer {
+            src: input.as_ptr().cast(),
+            size: input.len(),
+            pos: 0,
+        };
         loop {
             if out.len() >= cap {
-                return Ok(Progress::More { consumed: source.pos });
+                return Ok(Progress::More {
+                    consumed: source.pos,
+                });
             }
             let start = web_spare(out, cap)?;
             let room = out.len() - start;
-            let mut sink = zs::ZSTD_outBuffer { dst: out[start..].as_mut_ptr().cast(), size: room, pos: 0 };
+            let mut sink = zs::ZSTD_outBuffer {
+                dst: out[start..].as_mut_ptr().cast(),
+                size: room,
+                pos: 0,
+            };
             // SAFETY: the context is live; the buffers borrow `input`/`out`.
             let remaining = unsafe { zs::ZSTD_compressStream2(p, &mut sink, &mut source, end) };
             out.truncate(start + sink.pos);
@@ -1264,7 +1530,11 @@ impl WebCoder {
         cap: usize,
         out: &mut Vec<u8>,
     ) -> Result<Progress, NativeError> {
-        let mut source = zs::ZSTD_inBuffer { src: input.as_ptr().cast(), size: input.len(), pos: 0 };
+        let mut source = zs::ZSTD_inBuffer {
+            src: input.as_ptr().cast(),
+            size: input.len(),
+            pos: 0,
+        };
         loop {
             if *ended {
                 let rest = &input[source.pos..];
@@ -1288,11 +1558,17 @@ impl WebCoder {
                 *ended = false;
             }
             if out.len() >= cap {
-                return Ok(Progress::More { consumed: source.pos });
+                return Ok(Progress::More {
+                    consumed: source.pos,
+                });
             }
             let start = web_spare(out, cap)?;
             let room = out.len() - start;
-            let mut sink = zs::ZSTD_outBuffer { dst: out[start..].as_mut_ptr().cast(), size: room, pos: 0 };
+            let mut sink = zs::ZSTD_outBuffer {
+                dst: out[start..].as_mut_ptr().cast(),
+                size: room,
+                pos: 0,
+            };
             // SAFETY: the context is live; the buffers borrow `input`/`out`.
             let remaining = unsafe { zs::ZSTD_decompressStream(p, &mut sink, &mut source) };
             out.truncate(start + sink.pos);
@@ -1318,8 +1594,8 @@ pub(crate) mod tests {
     use super::*;
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     thread_local! {
         // Only the measuring thread counts, so parallel tests do not interfere.
@@ -1345,7 +1621,10 @@ pub(crate) mod tests {
     }
     fn forget(size: usize) {
         if tracking() {
-            LIVE.store(LIVE.load(Ordering::Relaxed).saturating_sub(size), Ordering::Relaxed);
+            LIVE.store(
+                LIVE.load(Ordering::Relaxed).saturating_sub(size),
+                Ordering::Relaxed,
+            );
         }
     }
     unsafe impl GlobalAlloc for Allocator {
@@ -1373,7 +1652,11 @@ pub(crate) mod tests {
         TRACK.with(|track| track.set(true));
         let value = f();
         TRACK.with(|track| track.set(false));
-        (value, LARGEST.load(Ordering::Relaxed), PEAK.load(Ordering::Relaxed))
+        (
+            value,
+            LARGEST.load(Ordering::Relaxed),
+            PEAK.load(Ordering::Relaxed),
+        )
     }
 
     const EXPANDED: usize = 4 * 1024 * 1024;
@@ -1386,17 +1669,40 @@ pub(crate) mod tests {
     ];
 
     fn bomb(mode: Mode) -> Vec<u8> {
-        convert(mode, &Options::default(), &vec![0; EXPANDED], mode.finish_flush(), 16384, usize::MAX).unwrap()
+        convert(
+            mode,
+            &Options::default(),
+            &vec![0; EXPANDED],
+            mode.finish_flush(),
+            16384,
+            usize::MAX,
+        )
+        .unwrap()
     }
 
     #[test]
     fn sync_limit_stops_expansion_after_one_piece() {
         for (encode, decode) in MODES {
             let compressed = bomb(encode);
-            let (result, largest, _) = measure(|| convert(decode, &Options::default(), &compressed, decode.finish_flush(), 16384, 1024));
+            let (result, largest, _) = measure(|| {
+                convert(
+                    decode,
+                    &Options::default(),
+                    &compressed,
+                    decode.finish_flush(),
+                    16384,
+                    1024,
+                )
+            });
             let error = result.expect_err("limit");
-            assert_eq!(error.message, "Cannot create a Buffer larger than 1024 bytes", "{decode:?}");
-            assert!(largest <= 64 * 1024 + 16384, "{decode:?} allocated {largest} bytes before the limit");
+            assert_eq!(
+                error.message, "Cannot create a Buffer larger than 1024 bytes",
+                "{decode:?}"
+            );
+            assert!(
+                largest <= 64 * 1024 + 16384,
+                "{decode:?} allocated {largest} bytes before the limit"
+            );
         }
     }
 
@@ -1408,17 +1714,23 @@ pub(crate) mod tests {
             let mut input = compressed.as_slice();
             let mut total = 0;
             let mut output = vec![0; 1024];
-            let (_, largest, peak) = measure(|| loop {
-                let (available_in, available_out) = handle.write(input, 0, &mut output).unwrap();
-                total += 1024 - available_out;
-                input = &input[input.len() - available_in..];
-                if available_out != 0 {
-                    break;
+            let (_, largest, peak) = measure(|| {
+                loop {
+                    let (available_in, available_out) =
+                        handle.write(input, 0, &mut output).unwrap();
+                    total += 1024 - available_out;
+                    input = &input[input.len() - available_in..];
+                    if available_out != 0 {
+                        break;
+                    }
                 }
             });
             assert_eq!(total, EXPANDED, "{decode:?}");
             // The decoder's own window is the only large allocation.
-            assert!(largest <= 4 * 1024 * 1024 && peak <= 4 * 1024 * 1024, "{decode:?}: {largest} {peak}");
+            assert!(
+                largest <= 4 * 1024 * 1024 && peak <= 4 * 1024 * 1024,
+                "{decode:?}: {largest} {peak}"
+            );
         }
     }
 
@@ -1449,7 +1761,12 @@ pub(crate) mod tests {
 
     #[test]
     fn corrupt_input_keeps_node_error_codes() {
-        let code = |e: &NativeError| e.props.iter().find(|(k, _)| k == "code").map(|(_, v)| format!("{v:?}"));
+        let code = |e: &NativeError| {
+            e.props
+                .iter()
+                .find(|(k, _)| k == "code")
+                .map(|(_, v)| format!("{v:?}"))
+        };
         for (decode, expected) in [
             (Mode::Gunzip, "Z_DATA_ERROR"),
             (Mode::Inflate, "Z_DATA_ERROR"),
@@ -1457,9 +1774,29 @@ pub(crate) mod tests {
             (Mode::BrotliDecode, "ERR__ERROR_FORMAT_PADDING_2"),
             (Mode::ZstdDecompress, "ZSTD_error_prefix_unknown"),
         ] {
-            let error = convert(decode, &Options::default(), &[255; 5], decode.finish_flush(), 64, usize::MAX).unwrap_err();
-            assert!(code(&error).unwrap().contains(expected), "{decode:?}: {:?}", code(&error));
-            let error = convert(decode, &Options::default(), &[], decode.finish_flush(), 64, usize::MAX).unwrap_err();
+            let error = convert(
+                decode,
+                &Options::default(),
+                &[255; 5],
+                decode.finish_flush(),
+                64,
+                usize::MAX,
+            )
+            .unwrap_err();
+            assert!(
+                code(&error).unwrap().contains(expected),
+                "{decode:?}: {:?}",
+                code(&error)
+            );
+            let error = convert(
+                decode,
+                &Options::default(),
+                &[],
+                decode.finish_flush(),
+                64,
+                usize::MAX,
+            )
+            .unwrap_err();
             assert_eq!(error.message, "unexpected end of file", "{decode:?}");
         }
     }

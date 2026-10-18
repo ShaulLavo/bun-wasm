@@ -16,6 +16,7 @@ if (!directory) {
   if (engine) assert(engines.has(engine), `unknown engine ${engine}`);
   const scratch = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-directory-descriptors-"));
   try {
+const checkDirectoryDescriptors = () => {
     mkdirSync(`${scratch}/retained-tree`);
     const failures: string[] = [];
     const cases = Array.from(engines.keys()).flatMap(name => [[name, "natural"], [name, "explicit"], [name, "gc"]])
@@ -45,7 +46,10 @@ if (!directory) {
       nodeProcess.stdout.write(result.stdout);
     }
     assert.deepEqual(failures, []);
-  } finally {
+
+};
+checkDirectoryDescriptors();
+} finally {
     rmSync(scratch, { recursive: true });
   }
 } else {
@@ -108,33 +112,33 @@ async function observe() {
   });
   const host = processHost.install(imports as NodeWasiImports, () => instance);
   try {
-    instance = await WebAssembly.instantiate(module, imports);
+  instance = await WebAssembly.instantiate(module, imports);
     host.installSlots();
-    const expectedCode = new Map([["abort", 134], ["kill", 143], ["uncaught", 1]]).get(mode) || 0;
-    const code = wasi.start(instance);
-    if (engine === "browser") {
-      await globalThis.fetch("data:,");
-      let exitSnapshot;
+  const expectedCode = new Map([["abort", 134], ["kill", 143], ["uncaught", 1]]).get(mode) || 0;
+  const code = wasi.start(instance);
+  if (engine === "browser") {
+    await globalThis.fetch("data:,");
+    let exitSnapshot;
       const exitCode = await startEngineHost({ instance, moduleUrls: "data", net: processHost.engineNet(), onExit() {
-        exitSnapshot = { cursors: globalThis.directoryCountForTest(), descriptors: live.size };
-      } });
-      assert.equal(exitCode, expectedCode);
-      assert.deepEqual(exitSnapshot, { cursors: 0, descriptors: 0 }, "host exit notification observes no cursors or descriptors");
-    } else assert.equal(code, expectedCode);
-    const expected = mode === "gc" ? 22 : ["natural", "explicit", "uncaught"].includes(mode) ? 11 : 10;
-    assert.equal(opened, expected, "guest owners opened real WASI descriptors");
-    if (mode === "gc") assert(collectedDescriptorsReleased);
-    assert.equal(live.size, 0, "guest exit closes every descriptor while its wasm instance is retained");
-    assert(memory().byteLength > 0);
-    if (engine === "browser" && mode !== "gc") {
-      globalThis.reopenDirectoryForTest();
-      assert.equal(opened, expected + 1);
-      const reused = descriptors.at(-1);
-      assert(reused !== undefined);
-      assert(descriptors.slice(0, -1).includes(reused), "retained instance reuses a released directory descriptor");
-      assert.equal(globalThis.directoryCountForTest(), 0);
-      assert.equal(live.size, 0);
-    }
-    nodeProcess.stdout.write(`PASS directory descriptors ${engine} ${mode}: ${opened} opens, ${opened} closes, retained instance\n`);
+      exitSnapshot = { cursors: globalThis.directoryCountForTest(), descriptors: live.size };
+    } });
+    assert.equal(exitCode, expectedCode);
+    assert.deepEqual(exitSnapshot, { cursors: 0, descriptors: 0 }, "host exit notification observes no cursors or descriptors");
+  } else assert.equal(code, expectedCode);
+  const expected = mode === "gc" ? 22 : ["natural", "explicit", "uncaught"].includes(mode) ? 11 : 10;
+  assert.equal(opened, expected, "guest owners opened real WASI descriptors");
+  if (mode === "gc") assert(collectedDescriptorsReleased);
+  assert.equal(live.size, 0, "guest exit closes every descriptor while its wasm instance is retained");
+  assert(memory().byteLength > 0);
+  if (engine === "browser" && mode !== "gc") {
+    globalThis.reopenDirectoryForTest();
+    assert.equal(opened, expected + 1);
+    const reused = descriptors.at(-1);
+    assert(reused !== undefined);
+    assert(descriptors.slice(0, -1).includes(reused), "retained instance reuses a released directory descriptor");
+    assert.equal(globalThis.directoryCountForTest(), 0);
+    assert.equal(live.size, 0);
+  }
+  nodeProcess.stdout.write(`PASS directory descriptors ${engine} ${mode}: ${opened} opens, ${opened} closes, retained instance\n`);
   } finally { processHost.dispose(); broker.dispose(); }
 }

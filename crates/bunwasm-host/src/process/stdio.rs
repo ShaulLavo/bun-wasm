@@ -75,14 +75,18 @@ impl Cancellation {
     /// Entry and terminal selection share a lock: the losing host never enters guest code.
     pub fn mark_started(&self) -> bool {
         let mut state = self.state.lock().unwrap();
-        if state.selected.is_some() { return false; }
+        if state.selected.is_some() {
+            return false;
+        }
         state.started = true;
         true
     }
 
     pub fn start_status(&self) -> i32 {
         let state = self.state.lock().unwrap();
-        if state.started { return 0; }
+        if state.started {
+            return 0;
+        }
         match state.selected {
             Some(FinalOutcome::StartFailed(errno)) => errno,
             Some(_) => -11, // ECANCELED: terminal selection beat entry.

@@ -1,4 +1,4 @@
-(function (internal) {
+(function (_internal) {
   "use strict";
 
   // Port of the pinned Bun Cookie.cpp, CookieMap.cpp and their JS bindings.

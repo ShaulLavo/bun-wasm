@@ -328,6 +328,14 @@ function streamMethods(Ctor: typeof ReadableStream | typeof WritableStream, read
   }
 }
 
+function publishNativeHooks(): void {
+  for (const Ctor of [Native.ReadableStream, Native.WritableStream]) {
+    for (const key of [closedKey, errorKey]) {
+      if (!(key in Ctor.prototype)) Object.defineProperty(Ctor.prototype, key, { configurable: true, writable: true, value: undefined });
+    }
+  }
+}
+
 export function installNativeStreamState() {
   if (!constructors) {
     if (closedKey in Native.ReadableStream.prototype) return () => {};
@@ -335,11 +343,7 @@ export function installNativeStreamState() {
     // capability slots for the guest's prototype check, never getter-only hooks
     // that would prevent those assignments. Each instance keeps its native state.
     if (closedKey in new Native.ReadableStream({ start(controller) { controller.close(); } })) {
-      for (const Ctor of [Native.ReadableStream, Native.WritableStream]) {
-        for (const key of [closedKey, errorKey]) {
-          if (!(key in Ctor.prototype)) Object.defineProperty(Ctor.prototype, key, { configurable: true, writable: true, value: undefined });
-        }
-      }
+      publishNativeHooks();
       return () => {};
     }
   }

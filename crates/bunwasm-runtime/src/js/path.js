@@ -1,7 +1,7 @@
 // node:path polyfill (POSIX). Ported from Node's lib/path.js posix
 // implementation. `path.win32` is the same POSIX logic with win32 separators
 // exposed; it does not implement Windows path semantics.
-(function (internal) {
+(function (_internal) {
   "use strict";
 
   const CHAR_DOT = 46;

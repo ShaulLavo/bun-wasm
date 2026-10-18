@@ -17,7 +17,11 @@ std::thread_local! {
 /// Joins `rel` onto `base` (absolute), resolving `.` and `..`.
 fn join(base: &[u8], rel: &[u8]) -> Vec<u8> {
     let mut parts: Vec<&[u8]> = Vec::new();
-    let start: &[u8] = if rel.first() == Some(&b'/') { b"" } else { base };
+    let start: &[u8] = if rel.first() == Some(&b'/') {
+        b""
+    } else {
+        base
+    };
     for part in start.split(|&c| c == b'/').chain(rel.split(|&c| c == b'/')) {
         match part {
             b"" | b"." => {}
@@ -76,7 +80,9 @@ fn canonicalize(path: &[u8]) -> Vec<u8> {
         let parent_len = out.len();
         out.push(b'/');
         out.extend_from_slice(&part);
-        let Some(target) = readlink(&out) else { continue };
+        let Some(target) = readlink(&out) else {
+            continue;
+        };
         hops += 1;
         if hops > 40 {
             break;
@@ -85,7 +91,13 @@ fn canonicalize(path: &[u8]) -> Vec<u8> {
         if target.first() == Some(&b'/') {
             out.clear();
         }
-        pending.extend(target.split(|&c| c == b'/').filter(|p| !p.is_empty()).rev().map(<[u8]>::to_vec));
+        pending.extend(
+            target
+                .split(|&c| c == b'/')
+                .filter(|p| !p.is_empty())
+                .rev()
+                .map(<[u8]>::to_vec),
+        );
     }
     if out.is_empty() {
         out.push(b'/');
@@ -118,7 +130,10 @@ unsafe extern "C" {
 }
 
 fn preopen_name(fd: c_int) -> Option<Vec<u8>> {
-    let mut stat = Prestat { tag: 0, name_len: 0 };
+    let mut stat = Prestat {
+        tag: 0,
+        name_len: 0,
+    };
     // SAFETY: `stat` is a valid out-parameter.
     if unsafe { fd_prestat_get(fd, &mut stat) } != 0 || stat.tag != 0 {
         return None;
@@ -138,7 +153,9 @@ fn path_of(fd: c_int) -> Option<Vec<u8>> {
     if fd == libc::AT_FDCWD {
         return cwd();
     }
-    PATHS.with_borrow(|m| m.get(&fd).cloned()).or_else(|| preopen_name(fd))
+    PATHS
+        .with_borrow(|m| m.get(&fd).cloned())
+        .or_else(|| preopen_name(fd))
 }
 
 /// `fd` was opened at `path`, relative to `dirfd` (or `AT_FDCWD`).

@@ -29,7 +29,10 @@ fn main() -> ExitCode {
             _ => (arg.clone(), None),
         };
         let mut value = |name: &str| -> Result<String, String> {
-            inline.clone().or_else(|| argv.next()).ok_or_else(|| format!("{name} needs a value"))
+            inline
+                .clone()
+                .or_else(|| argv.next())
+                .ok_or_else(|| format!("{name} needs a value"))
         };
         let r: Result<(), String> = (|| {
             match flag.as_str() {
@@ -59,7 +62,11 @@ fn main() -> ExitCode {
                         "esm" => Format::Esm,
                         "cjs" => Format::Cjs,
                         "iife" => Format::Iife,
-                        other => return Err(format!("Invalid value for --format: \"{other}\". Must be 'esm', 'cjs', or 'iife'.")),
+                        other => {
+                            return Err(format!(
+                                "Invalid value for --format: \"{other}\". Must be 'esm', 'cjs', or 'iife'."
+                            ));
+                        }
                     }
                 }
                 "--target" => {
@@ -76,7 +83,9 @@ fn main() -> ExitCode {
                         Some("inline") => SourceMap::Inline,
                         Some("external") => SourceMap::External,
                         Some("none") => SourceMap::None,
-                        Some(other) => return Err(format!("Invalid sourcemap setting: \"{other}\"")),
+                        Some(other) => {
+                            return Err(format!("Invalid sourcemap setting: \"{other}\""));
+                        }
                     }
                 }
                 "--packages" => {
@@ -89,7 +98,9 @@ fn main() -> ExitCode {
                 "-e" | "--external" => args.external.push(value("--external")?),
                 "--define" => {
                     let d = value("--define")?;
-                    let (k, v) = d.split_once(['=', ':']).ok_or("--define expects KEY=VALUE")?;
+                    let (k, v) = d
+                        .split_once(['=', ':'])
+                        .ok_or("--define expects KEY=VALUE")?;
                     args.define.push((k.to_string(), v.to_string()));
                 }
                 "--drop" => args.drop.push(value("--drop")?),
@@ -122,14 +133,21 @@ fn main() -> ExitCode {
             if let Some(bytes) = &out.stdout {
                 let _ = stdout.write_all(bytes);
             } else {
-                let _ = stdout.write_all(out.summary(start.elapsed().as_millis(), stdout_colors).as_bytes());
+                let _ = stdout.write_all(
+                    out.summary(start.elapsed().as_millis(), stdout_colors)
+                        .as_bytes(),
+                );
             }
             let _ = stdout.flush();
             for e in &out.write_errors {
                 eprintln!("{e}");
             }
             eprint!("{}", out.log);
-            if out.write_errors.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) }
+            if out.write_errors.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
         }
         Err(e) => {
             eprint!("{e}");

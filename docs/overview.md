@@ -25,4 +25,3 @@ The native launcher supplies the guest's `runtime_proc` process imports; plain
 `wasmtime run dist/bun.wasm` cannot instantiate this runtime.
 
 [Changes to Bun and vendored dependencies](bun-patches.md) lists each patch and distinguishes port work, host features, and upstream bugs.
-

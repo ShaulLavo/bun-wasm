@@ -13,7 +13,11 @@ const ENOSYS: c_int = libc::ENOSYS;
 // ── signals ───────────────────────────────────────────────────────────────
 
 #[unsafe(no_mangle)]
-pub extern "C" fn sigaction(_sig: c_int, _act: *const libc::sigaction, old: *mut libc::sigaction) -> c_int {
+pub extern "C" fn sigaction(
+    _sig: c_int,
+    _act: *const libc::sigaction,
+    old: *mut libc::sigaction,
+) -> c_int {
     if !old.is_null() {
         // SAFETY: caller-provided out pointer; SIG_DFL with no flags.
         unsafe { old.write(core::mem::zeroed()) };
@@ -49,7 +53,11 @@ pub extern "C" fn sigprocmask(_how: c_int, _set: *const sigset_t, _old: *mut sig
     0
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn pthread_sigmask(_how: c_int, _set: *const sigset_t, _old: *mut sigset_t) -> c_int {
+pub extern "C" fn pthread_sigmask(
+    _how: c_int,
+    _set: *const sigset_t,
+    _old: *mut sigset_t,
+) -> c_int {
     0
 }
 #[unsafe(no_mangle)]
@@ -81,7 +89,11 @@ pub extern "C" fn fork() -> pid_t {
     fail(ENOSYS)
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn execve(_p: *const c_char, _a: *const *const c_char, _e: *const *const c_char) -> c_int {
+pub extern "C" fn execve(
+    _p: *const c_char,
+    _a: *const *const c_char,
+    _e: *const *const c_char,
+) -> c_int {
     fail(ENOSYS)
 }
 #[unsafe(no_mangle)]
@@ -93,7 +105,12 @@ pub extern "C" fn waitpid(_pid: pid_t, _status: *mut c_int, _options: c_int) -> 
     fail(libc::ECHILD)
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn wait4(_pid: pid_t, _status: *mut c_int, _options: c_int, _ru: *mut libc::rusage) -> pid_t {
+pub extern "C" fn wait4(
+    _pid: pid_t,
+    _status: *mut c_int,
+    _options: c_int,
+    _ru: *mut libc::rusage,
+) -> pid_t {
     fail(libc::ECHILD)
 }
 #[unsafe(no_mangle)]
@@ -215,9 +232,18 @@ pub extern "C" fn cfmakeraw(_t: *mut libc::termios) {}
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getrlimit(resource: c_int, rlim: *mut rlimit) -> c_int {
     // Descriptor counts get a finite answer: callers size tables from it.
-    let limit = if resource == libc::RLIMIT_NOFILE { 65536 } else { libc::RLIM_INFINITY };
+    let limit = if resource == libc::RLIMIT_NOFILE {
+        65536
+    } else {
+        libc::RLIM_INFINITY
+    };
     // SAFETY: caller-provided out pointer.
-    unsafe { rlim.write(rlimit { rlim_cur: limit, rlim_max: limit }) };
+    unsafe {
+        rlim.write(rlimit {
+            rlim_cur: limit,
+            rlim_max: limit,
+        })
+    };
     0
 }
 #[unsafe(no_mangle)]
@@ -265,7 +291,9 @@ pub extern "C" fn dlclose(_handle: *mut c_void) -> c_int {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn dlerror() -> *mut c_char {
-    c"dynamic loading is not available in WASI".as_ptr().cast_mut()
+    c"dynamic loading is not available in WASI"
+        .as_ptr()
+        .cast_mut()
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn dl_iterate_phdr(

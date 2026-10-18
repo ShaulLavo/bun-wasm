@@ -1,8 +1,9 @@
+import { browserType } from "./browser-type.ts";
 // Fresh subprocess workers on the real browser worker bootstrap, across all wasm engines.
 // cd web && bun run build && bun tests/browser-subprocess.ts [chromium|firefox|webkit] [--api-only] [--engine=browser] [--repeat=20]
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { playwright, session, ready, writeFile, run } from "./playground.mjs";
+import { session, ready, writeFile, run } from "./playground.mjs";
 import { checkWorkers } from "./browser-workers.ts";
 const closedOutput = readFileSync(new URL("../../tests/fixtures/pipe-closed-child/index.ts", import.meta.url), "utf8");
 const orderedOutput = readFileSync(new URL("../../tests/fixtures/pipe-write-order/index.ts", import.meta.url), "utf8");
@@ -168,7 +169,8 @@ const deadline = setTimeout(() => { console.error("subprocess browser gate timed
 try {
   const url = await s.serve();
   for (const { browserName, iteration } of browsers.flatMap(browserName => Array.from({ length: repeats }, (_, index) => ({ browserName, iteration: index + 1 })))) {
-    const browser = await s.launch(playwright[browserName]);
+    const checkSubprocessCase = async () => {
+    const browser = await s.launch(browserType(browserName));
     const page = await browser.newPage();
     await page.goto(url);
     await ready(page);
@@ -209,7 +211,7 @@ try {
       }
       console.log(`ok ${browserName} ${engine}: closed child stdout/stderr reports EPIPE and exits`);
       await writeFile(page, "/child.ts", orderedChild);
-      for (const [name, source] of [["pipe-write-order.ts", orderedOutput], ["pipe-stdin-race.ts", stdinRace]]) {
+      for (const [name, source] of [["pipe-write-order.ts", orderedOutput], ["pipe-stdin-race.ts", stdinRace]] as const) {
         await writeFile(page, `/home/user/${name}`, source);
         const checked = await run(page, `bun run ${name}`);
         assert.equal(checked.code, 0, checked.output);
@@ -218,5 +220,8 @@ try {
       await checkWorkers(page, `${browserName} ${engine}`);
     }
     await browser.close();
+
+    };
+    await checkSubprocessCase();
   }
 } finally { clearTimeout(deadline); await s.cleanup(); }
