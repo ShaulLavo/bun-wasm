@@ -991,7 +991,7 @@ js/node/net/socket-reconnect-live.test.ts	d	HTTP/server/fetch/WebSocket semantic
 js/node/no-addons.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	2	False	--no-addons stays in effect inside a Worker with an empty execArgv	error: expect(received).toBe(expected)
 js/node/nodettywrap.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	1	False	process.binding('tty_wrap')	error: No such module: tty_wrap
 js/node/os/os.test.js	d	test runner/assertion or runtime semantics	needs reproduction	19	35	False	arch	error: expect(received).toBe(expected)
-js/node/path/resolve.test.js	d	test runner/assertion or runtime semantics	needs reproduction	4	1	False	path.resolve > win32 drive-relative input resolves when the working directory is the filesystem root	error: spawn cwd / ENOENT
+js/node/path/resolve.test.js	f	passes on browser	measured	4	1	False	path.resolve > win32 drive-relative input resolves when the working directory is the filesystem root	error: spawn /bin/bun ENOENT
 js/node/perf_hooks/perf_hooks.test.ts	d	HTTP/server/fetch/WebSocket semantics	needs reproduction	1	12	False	stubs	error: expect(received).toBeObject()
 js/node/process-binding.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	2	False	process.binding > process.binding('constants')	error: No such module: constants
 js/node/process/call-constructor.test.js	d	test runner/assertion or runtime semantics	needs reproduction	1	1	False	the constructor of process can be called	TypeError: not an object

@@ -423,6 +423,31 @@ this review changes only the 19 path rows. PR #77's 49-file dependency refresh
 remains intact. The earlier 82-file control outcomes remain in their evidence
 files and do not overwrite newer failure assignments.
 
+## Main quality-gate merge replay
+
+The merge includes main `6d417fad` and preserves the approved resolver behavior.
+The obsolete JavaScript adapter is removed. The TypeScript adapter still builds
+through the runtime transpiler, and `scripts/generate-node-path.ts` regenerates
+Bun's Rust path routines. Quality fixes add no authored-code exclusions.
+
+The focused replay at runtime source `d2f764b91783596ccc20961f0969f6609375ea03`
+selects exactly 19 path files per engine. QuickJS and JSC each retain 17 fully
+passing files, 123 observed passes, one failure and zero timeouts. Browser has
+18 fully passing files, 124 observed passes, no failures and zero timeouts.
+Its child-process cwd case passes. QuickJS and JSC still report
+`spawn /bin/bun ENOENT`. The remaining browser file is Windows-platform skip-only.
+Changed suite and host inputs make these integration results distinct from
+the original matched before/after comparison.
+
+Complete fixture gates report 238 passes and the known `node-misc` failure
+on QuickJS and JSC. Browser reports 237 passes and the known `build-outdir`
+and `npm-packages` failures. The native path fixture passes on every engine.
+The full `bun run quality` command passes, including the deliberate WASI warning
+rejection probe. Only measured failure-index rows are refreshed; the full census
+remains deferred. [The focused summary](partial-summary.json) records input
+hashes and engine totals. Raw logs are retained in the report's
+`main-quality-merge/` directory.
+
 ## Reproduction and retained evidence
 
 Run the focused selection on each built engine through the heavy wrapper.
