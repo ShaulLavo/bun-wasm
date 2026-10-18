@@ -42,3 +42,9 @@ setInterval(() => {}, 1000);
     expect(live).toEqual([]);
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
+
+test("command deadline lets teardown finish before forced termination", async () => {
+  const result = await run("0.2", ["-e", `process.on("SIGTERM", () => { console.log("teardown complete"); process.exit(0); }); setInterval(() => {}, 1000);`]);
+  expect(result.code).toBe(124);
+  expect(result.stdout).toBe("teardown complete\n");
+});

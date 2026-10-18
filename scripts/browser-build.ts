@@ -71,6 +71,13 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
           runtimePackage ??= resolveRuntimePackage(main);
           return { path: runtimePackage.source(path) };
         });
+        // Relative imports need the same consumer path, or symlinks duplicate control classes.
+        build.onResolve({ filter: /^\./ }, ({ path, importer }) => {
+          if (!runtimePackage || runtimePackage.relativeInput(importer) === undefined) return;
+          const resolved = Bun.resolveSync(path, dirname(importer));
+          const input = runtimePackage.relativeInput(resolved);
+          if (input !== undefined) return { path: join(runtimePackage.path, input) };
+        });
       },
     }],
   };

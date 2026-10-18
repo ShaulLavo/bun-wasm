@@ -38,7 +38,7 @@ test("isolated consumer exports and runtime relative imports share process class
     await mkdir(cached, { recursive: true });
     await writeFile(join(cached, "package.json"), JSON.stringify({ name: "waffle", type: "module", exports: { "./control": "./control.ts", "./client": "./client.ts" } }));
     await writeFile(join(cached, "control.ts"), "export class Cell { value = 42; }");
-    await writeFile(join(cached, "client.ts"), 'import { Cell } from "./control.ts"; export const create = () => new Cell();');
+    await writeFile(join(cached, "client.ts"), 'import { Cell } from "./control.js"; export const create = () => new Cell();');
     await symlink(cached, join(consumer, "node_modules/waffle"));
     const entry = join(consumer, "main.ts");
     await writeFile(entry, 'import { Cell } from "waffle/control"; import { create } from "waffle/client"; if (!(create() instanceof Cell)) throw new Error("process cell identity split");');

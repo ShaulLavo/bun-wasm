@@ -184,11 +184,11 @@ async function until(condition: () => boolean, label: string) {
 
 async function checkForegroundStops(runtime: Runtime): Promise<number[]> {
   const codes: number[] = [];
-  for (const signal of [2, 9]) {
+  for (const signal of [2, 9] as const) {
     let output = "";
     const foreground = startRun({ engine: "browser", adapter: "preview1", runtime,
       module: new WebAssembly.Module(cliShimFixture("wait")), args: ["foreground-stop"], env: {}, moduleScope: false,
-    }, { stdout(bytes) { output += new TextDecoder().decode(bytes); } });
+    }, { stdout(bytes) { output += new TextDecoder().decode(bytes); }, stderr(bytes) { throw new Error(new TextDecoder().decode(bytes)); } });
     try {
       await until(() => output === "runner-ready\n", "foreground guest reached signal polling");
       foreground.kill(signal);
