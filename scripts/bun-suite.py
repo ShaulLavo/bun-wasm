@@ -110,11 +110,12 @@ def install_aliases(source):
     test = source / "test"
     modules = test / "node_modules"
     modules.mkdir(exist_ok=True)
-    aliases = {"harness": "harness.ts", "node-harness": "js/node/harness.ts", "registry": "packages/registry/test-registry.ts", "mkfifo": "mkfifo.ts", "s3-server": "packages/s3-server/index.ts", "deno:harness": "js/deno/harness.ts"}
+    aliases = {"harness": "harness.ts", "node-harness": "js/node/harness.ts", "registry": "packages/registry/test-registry.ts", "mkfifo": "mkfifo.ts", "s3-server": "packages/s3-server/index.ts", "deno:harness": "js/deno/harness.ts",
+               "bake/data-view": "../src/runtime/bake/client/data-view.ts", "bake/error-serialization.ts": "../src/runtime/bake/client/error-serialization.ts"}
     for name, target in aliases.items():
         package = modules / name
-        package.mkdir(exist_ok=True)
-        (package / "package.json").write_text(json.dumps({"main": "../../" + target}))
+        package.mkdir(parents=True, exist_ok=True)
+        (package / "package.json").write_text(json.dumps({"main": os.path.relpath(test / target, package)}))
     for name in ["_util", "js"]:
         (modules / name).symlink_to("../" + name, target_is_directory=True)
 

@@ -25,7 +25,7 @@ def failed(record):
 
 def error_lines(record):
     # Source code frames may themselves contain strings such as "Cannot find".
-    return [line for line in record["first_errors"] if not re.match(r"^\s*\d+\s*\|", line)]
+    return [line for line in record["first_errors"] if not re.match(r"^\s*\d+\s*\||^\[fs-extra-WARN\d+\] Warning:", line)]
 
 
 def subprocess_topic(path, source):
@@ -53,6 +53,8 @@ def classify(record, source, comparisons):
     other_pass = [engine for engine, records in comparisons.items() if path in records and records[path]["fully_passing"]]
     if other_pass:
         return "f", "passes on " + ", ".join(other_pass), "measured"
+    if path == "cli/inspect/BunFrontendDevServer.test.ts" and "Unix sockets" in evidence:
+        return "a", "inspector fixture requires Unix-domain sockets outside the current host ABI", "error/context"
     # The size checks now pass; the remaining control launches external echo.
     if path == "js/bun/spawn/spawn-large-array-length.test.ts" and record.get("failing_tests", [])[:1] == ["spawn with spoofed array length > Bun.spawnSync still works with normal arrays"]:
         return "b", "external echo executable in normal-array control", "reproduced"
@@ -82,7 +84,23 @@ def classify(record, source, comparisons):
         return "c", "Bun's fs/promises.exists extension", "error"
     if 'property must be of type string, got object' in evidence:
         return "c", "boxed String paths from harness.tempDir", "error/context"
-    if re.search(r"Cannot find package", evidence):
+    missing = re.search(r"Cannot find (?:package|module) '([^']+)'", evidence)
+    specifier = missing[1] if missing else ""
+    if specifier.startswith("data:"):
+        return "d", "data URL module loading", "error"
+    if re.match(r"_(?:http|stream)_", specifier):
+        return "d", "Node builtin aliases and stub modules", "error"
+    if specifier == "test-package" and "Module._resolveFilename" in source:
+        return "d", "Module._resolveFilename options.paths lookup", "error/context"
+    if specifier.split("/")[0] == "react" and "/tmp/jsx-tsconfig" in evidence:
+        return "d", "tsconfig JSX runtime selection and jsxImportSource", "error/context"
+    if "Secret not found:" in evidence:
+        return "a", "live external service credentials unavailable in the isolated suite replay", "error/context"
+    if "functional `docker` is required" in evidence:
+        return "b", "Docker-backed fixture requires an external docker executable", "error/context"
+    if re.search(r"Cannot find native binding|Failed to load native binding|No native build was found for platform=wasi|Unsupported OS: wasi|Unsupported architecture on Linux: wasm32|Could not load the .sharp. module using the .*wasm32 runtime|not yet supported by the native Rollup build", evidence):
+        return "a", "dependency requires a native addon binding unavailable to the WASI guest", "error"
+    if specifier and not specifier.startswith((".", "/", "node:", "bun:")):
         return "c", "uninstalled suite dependency, setup work before API triage", "error"
     if re.search(r"Glob|globSync|glob'", evidence):
         return "d", "glob matching and filesystem traversal APIs", "error"

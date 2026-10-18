@@ -1,0 +1,3345 @@
+{
+  "schema": 1,
+  "date": "2026-10-18",
+  "host": "pc",
+  "runtime_source_commit": "2ea5c62fa6bb63cc5396cb345e3897956bb710f1",
+  "setup_source_commit": "ea8b411551fa578af71a096400355180a6bcef58",
+  "classifier_sha256": "c950786e8ada829d969c1c2f4001f0396de2a395a9373bcf641d4092e21a6e9e",
+  "selection": [
+    "bundler/bundler_edgecase.test.ts",
+    "bundler/transpiler/jsx-tsconfig-react-jsx.test.ts",
+    "cli/inspect/BunFrontendDevServer.test.ts",
+    "integration/jsdom/jsdom.test.ts",
+    "integration/mysql2/mysql2.test.ts",
+    "integration/nest/nest_metadata.test.ts",
+    "integration/sass/sass.test.ts",
+    "integration/sharp/sharp.test.ts",
+    "integration/svelte/client-side.test.ts",
+    "integration/typegraphql/src/typegraphql.test.ts",
+    "js/bun/plugin/plugins.test.ts",
+    "js/bun/test/fake-timers/fake-timers.test.ts",
+    "js/first_party/utf-8-validate/utf-8-validate.test.ts",
+    "js/node/http/node-fetch-cjs.test.js",
+    "js/node/http/node-fetch-primordials.test.ts",
+    "js/node/http/node-fetch.test.js",
+    "js/node/http/node-http.test.ts",
+    "js/node/module/module-resolve-filename-paths.test.js",
+    "js/node/string-module.test.js",
+    "js/node/stubs.test.js",
+    "js/node/vm/happy-dom-vm-16277.test.ts",
+    "js/third_party/@azure/service-bus/azure-service-bus.test.ts",
+    "js/third_party/@electric-sql/pglite/pglite.test.ts",
+    "js/third_party/@fastify/websocket/fastity-test-websocket.test.js",
+    "js/third_party/@napi-rs/canvas/napi-rs-canvas.test.ts",
+    "js/third_party/astro/astro-post.test.js",
+    "js/third_party/grpc-js/test-tonic.test.ts",
+    "js/third_party/hono/hello-world-fixture.test.ts",
+    "js/third_party/hono/hello-world.test.ts",
+    "js/third_party/http2-wrapper/http2-wrapper.test.ts",
+    "js/third_party/mongodb/mongodb.test.ts",
+    "js/third_party/pg-gateway/pglite.test.ts",
+    "js/third_party/pg/pg.test.ts",
+    "js/third_party/postgres/postgres.test.ts",
+    "js/third_party/prisma/prisma.test.ts",
+    "js/third_party/prompts/prompts.test.ts",
+    "js/third_party/remix/remix.test.ts",
+    "js/third_party/resvg/bbox.test.js",
+    "js/third_party/rollup-v4/rollup-v4.test.ts",
+    "js/third_party/solc/solc.test.ts",
+    "js/third_party/stripe/stripe.test.ts",
+    "js/third_party/svelte/svelte.test.ts",
+    "js/web/nationalized.test.ts",
+    "regression/issue/014865.test.ts",
+    "regression/issue/04947.test.js",
+    "regression/issue/09739.test.ts",
+    "regression/issue/14982/14982.test.ts",
+    "regression/issue/16312.test.ts",
+    "regression/issue/25589-frame-size-connect.test.ts"
+  ],
+  "selection_sha256": "02220201dd78776f9ba8ef90f81b9e5573e16522ca4f1baa9f8a7869ce4bc839",
+  "before_manifest_sha256": "21c7510427080336ccb1cb0dbd8df3150ca663a145bb89081912644e4c0b5e69",
+  "before_lock_sha256": "a1b37d5e1cbf64deef4d356973a4ccad735448bed56e5c26d705b84070273e67",
+  "after_manifest_sha256": "8dc2df81a3c4baf19607ac889fbd6f11119b6586d2f8e565d38d8fd3322bb06e",
+  "after_lock_sha256": "2492b9500866f04f33d9c41b3ff7fe2e7fed321ac4145570ab551453d340e166",
+  "engines": {
+    "quickjs": {
+      "before": {
+        "raw_json": "/work/reports/bun-wasm-suite-dependencies-2026-10-18/before-final/quickjs.json",
+        "sha256": "08077689a4a39f68aa1322e7afe57ae943eca99e5f8d9478da923808f0fa47b4",
+        "provenance": {
+          "schema": 1,
+          "engine": "quickjs",
+          "suite_commit": "5e0baa66516f3af00b008cdf1521c681317741e8",
+          "wasm_sha256": "2b64d0818edeb4225eb6aa934be4f494646866cc4d7ad0dd3649fa9a02c5aa69",
+          "tools_sha256": "1571ead52d26036b0976516147e3c0d9803b5c2f54b4642b4b38ffc71c8cdfdb",
+          "runner_sha256": "26f6bfa8a39a91f33d41e423edf4d0f44c5300bdee349c22b3660987ec97a5c5",
+          "launcher_sha256": "0b526691ec2b8e3d3eaa5d804a152a19eef92a6012e946e7f362bb802c4d341f",
+          "host_sources": {},
+          "runtime_package": {},
+          "dependencies": {
+            "files": 537,
+            "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
+          },
+          "test_dependencies": {
+            "files": 5114,
+            "sha256": "a910b0ce89bff99141fa49645e8329d8b0a96caf0cd5b38476e9b61193f82cee"
+          },
+          "node_parallel": false,
+          "network": "loopback",
+          "timeout_seconds": 15.0,
+          "test_timeout_ms": 2000
+        },
+        "summary": {
+          "files": 49,
+          "fully_passing": 0,
+          "timeouts": 0,
+          "counts": {
+            "pass": 306,
+            "fail": 126,
+            "skip": 0,
+            "todo": 0,
+            "errors": 38
+          }
+        }
+      },
+      "after": {
+        "raw_json": "/work/reports/bun-wasm-suite-dependencies-2026-10-18/after-complete/quickjs.json",
+        "sha256": "b70c9e8f7321f805642bc77bf69c62d1f343e1cf643781238a71cfc55e2670fc",
+        "provenance": {
+          "schema": 1,
+          "engine": "quickjs",
+          "suite_commit": "5e0baa66516f3af00b008cdf1521c681317741e8",
+          "wasm_sha256": "2b64d0818edeb4225eb6aa934be4f494646866cc4d7ad0dd3649fa9a02c5aa69",
+          "tools_sha256": "1571ead52d26036b0976516147e3c0d9803b5c2f54b4642b4b38ffc71c8cdfdb",
+          "runner_sha256": "da066d18bd960ac43f71781956112289519b45365815b6d8f342e2c849828b2f",
+          "launcher_sha256": "0b526691ec2b8e3d3eaa5d804a152a19eef92a6012e946e7f362bb802c4d341f",
+          "host_sources": {},
+          "runtime_package": {},
+          "dependencies": {
+            "files": 537,
+            "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
+          },
+          "test_dependencies": {
+            "files": 49788,
+            "sha256": "7ac4fd8e9679e21069eeca9dbbc332203212faa0083b12ecd66f31e35a6cb231"
+          },
+          "node_parallel": false,
+          "network": "loopback",
+          "timeout_seconds": 15.0,
+          "test_timeout_ms": 2000
+        },
+        "summary": {
+          "files": 49,
+          "fully_passing": 8,
+          "timeouts": 0,
+          "counts": {
+            "pass": 375,
+            "fail": 120,
+            "skip": 0,
+            "todo": 11,
+            "errors": 22
+          }
+        },
+        "outcomes": [
+          {
+            "file": "bundler/bundler_edgecase.test.ts",
+            "counts": {
+              "pass": 59,
+              "fail": 3,
+              "skip": 0,
+              "todo": 11,
+              "errors": 0
+            },
+            "exit": 134,
+            "complete": false,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "bundler > edgecase/InvalidLoaderSegfault",
+            "first_error": "error: Unexpected errors reported while bundling:",
+            "category": "d",
+            "topic": "CLI option or command implementation",
+            "confidence": "error/context"
+          },
+          {
+            "file": "bundler/transpiler/jsx-tsconfig-react-jsx.test.ts",
+            "counts": {
+              "pass": 2,
+              "fail": 5,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "tsconfig compilerOptions.jsx > \"react-jsx\" selects the matching automatic runtime",
+            "first_error": "error: Cannot find module 'react/jsx-dev-runtime' from '/tmp/jsx-tsconfig_Q3qJ7t/m.jsx'",
+            "category": "d",
+            "topic": "tsconfig JSX runtime selection and jsxImportSource",
+            "confidence": "error/context"
+          },
+          {
+            "file": "cli/inspect/BunFrontendDevServer.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "BunFrontendDevServer inspector protocol > (unnamed)",
+            "first_error": "error: Unix sockets and TLS sockets are not supported in bun-wasm",
+            "category": "a",
+            "topic": "inspector fixture requires Unix-domain sockets outside the current host ABI",
+            "confidence": "error/context"
+          },
+          {
+            "file": "integration/jsdom/jsdom.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "jsdom > runScripts: dangerously",
+            "first_error": "TypeError: cannot read property 'querySelector' of undefined",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "integration/mysql2/mysql2.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: A functional `docker` is required in CI for some tests.",
+            "category": "b",
+            "topic": "Docker-backed fixture requires an external docker executable",
+            "confidence": "error/context"
+          },
+          {
+            "file": "integration/nest/nest_metadata.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: ",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "integration/sass/sass.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "integration/sharp/sharp.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Could not load the \"sharp\" module using the linuxnull-wasm32 runtime",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "integration/svelte/client-side.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "generating client-side code > Using Svelte components in Bun's dev server > (unnamed)",
+            "first_error": "  ^ this test timed out after 2000ms.",
+            "category": "d",
+            "topic": "unresolved runtime/module semantics, inspect the recorded failure first",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "integration/typegraphql/src/typegraphql.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: cannot read property 'Symbol.iterator' of undefined",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/bun/plugin/plugins.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: not a function",
+            "category": "d",
+            "topic": "bundler options, plugins or compiler output",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/bun/test/fake-timers/fake-timers.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: Could not find export 'RedisClient' in module 'bun'",
+            "category": "d",
+            "topic": "database, Redis or S3 clients",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/first_party/utf-8-validate/utf-8-validate.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "js/node/http/node-fetch-cjs.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "require('node-fetch') fetches",
+            "first_error": "error: expect(received).toBeInstanceOf(expected)",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/http/node-fetch-primordials.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "fetch, Response, Request can be overriden",
+            "first_error": "TypeError: not a function",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/http/node-fetch.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: Could not find export 'fetch' in module '/bun/test/node_modules/node-fetch/lib/index.js'",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/http/node-http.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: Could not find export 'OutgoingMessage' in module 'node:http'",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/module/module-resolve-filename-paths.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 6,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "Module._resolveFilename respects options.paths for package resolution",
+            "first_error": "ResolveMessage: Cannot find package 'test-package' from '/some/other/directory/file.js'",
+            "category": "d",
+            "topic": "Module._resolveFilename options.paths lookup",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/node/string-module.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 6,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "should import and execute ES module from string",
+            "first_error": "ResolveMessage: Cannot find module 'data:text/javascript,export default function test(arg) { return arg + arg };' from '/bun/test/js/node/string-module.test.js'",
+            "category": "d",
+            "topic": "data URL module loading",
+            "confidence": "error"
+          },
+          {
+            "file": "js/node/stubs.test.js",
+            "counts": {
+              "pass": 304,
+              "fail": 62,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "stubbed CJS import.meta.require _http_agent",
+            "first_error": "ResolveMessage: Cannot find package '_http_agent' from '/bun/test/js/node/stubs.test.js'",
+            "category": "d",
+            "topic": "Node builtin aliases and stub modules",
+            "confidence": "error"
+          },
+          {
+            "file": "js/node/vm/happy-dom-vm-16277.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: Could not find export 'Blob' in module 'node:buffer'",
+            "category": "d",
+            "topic": "unresolved runtime/module semantics, inspect the recorded failure first",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/@azure/service-bus/azure-service-bus.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TEST_INFO_AZURE_SERVICE_BUS",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/@electric-sql/pglite/pglite.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "pglite > can initialize successfully",
+            "first_error": "LinkError: Standalone WebAssembly memories are not supported",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/@fastify/websocket/fastity-test-websocket.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": false,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: \"undefined/websocket\" cannot be parsed as a URL.",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/@napi-rs/canvas/napi-rs-canvas.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Cannot find native binding. npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). Please try `npm i` again after removing both package-lock.json and node_modules directory.",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/astro/astro-post.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: circular import: binding 'Fragment' is not resolvable in module '/bun/test/node_modules/astro/dist/runtime/server/index.js'",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/grpc-js/test-tonic.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: cannot read property 'loadSync' of undefined",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/hono/hello-world-fixture.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "Hono app export bug",
+            "first_error": "error: expect(received).toBeTruthy()",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/hono/hello-world.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "js/third_party/http2-wrapper/http2-wrapper.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: tls.TLSSocket is not supported in bun-wasm: WASI has no network access",
+            "category": "d",
+            "topic": "TLS or HTTP/2",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/mongodb/mongodb.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TLS_MONGODB_DATABASE_URL",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/pg-gateway/pglite.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: Could not find export 'SQL' in module 'bun'",
+            "category": "d",
+            "topic": "database, Redis or S3 clients",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/pg/pg.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TLS_POSTGRES_DATABASE_URL",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/postgres/postgres.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TLS_POSTGRES_DATABASE_URL",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/prisma/prisma.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Cannot find native binding. npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). Please try `npm i` again after removing both package-lock.json and node_modules directory.",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/prompts/prompts.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "works with prompts",
+            "first_error": "error: write after end",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/remix/remix.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "remix works",
+            "first_error": "SyntaxError: invalid field name",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/resvg/bbox.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Unsupported architecture on Linux: wasm32",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/rollup-v4/rollup-v4.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "js/third_party/solc/solc.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "failed to compile wasm module: LinkError: Unsupported WebAssembly export table",
+            "category": "f",
+            "topic": "passes on browser",
+            "confidence": "measured"
+          },
+          {
+            "file": "js/third_party/stripe/stripe.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TEST_INFO_STRIPE",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/svelte/svelte.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: Runtime module plugin setup must be synchronous",
+            "category": "d",
+            "topic": "bundler options, plugins or compiler output",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/web/nationalized.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "abort-controller > CJS",
+            "first_error": "error: expect(received).toBe(expected)",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "regression/issue/014865.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/04947.test.js",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/09739.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "AbortController from abort-controller fixture works when used with ESM -> CJS -> ESM",
+            "first_error": "error: expect(received).toBe(expected)",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "regression/issue/14982/14982.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/16312.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/25589-frame-size-connect.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "(unnamed)",
+            "first_error": "error: dns.promises.Resolver is not supported in bun-wasm: WASI has no network access",
+            "category": "a",
+            "topic": "network operations beyond the current host ABI",
+            "confidence": "error"
+          }
+        ],
+        "categories": {
+          "a": 11,
+          "b": 1,
+          "c": 0,
+          "d": 28,
+          "e": 0,
+          "f": 1
+        }
+      },
+      "regressions_from_before": []
+    },
+    "jsc": {
+      "before": {
+        "raw_json": "/work/reports/bun-wasm-suite-dependencies-2026-10-18/before-final/jsc.json",
+        "sha256": "65746247879dd299f5fcdcaef29cb401f9ed23a6446b7dae80a988434f7f565a",
+        "provenance": {
+          "schema": 1,
+          "engine": "jsc",
+          "suite_commit": "5e0baa66516f3af00b008cdf1521c681317741e8",
+          "wasm_sha256": "17f87acb7d6c83d6914cf960b340738d1202652e76f577e8961411571d64532c",
+          "tools_sha256": "1571ead52d26036b0976516147e3c0d9803b5c2f54b4642b4b38ffc71c8cdfdb",
+          "runner_sha256": "26f6bfa8a39a91f33d41e423edf4d0f44c5300bdee349c22b3660987ec97a5c5",
+          "launcher_sha256": "0b526691ec2b8e3d3eaa5d804a152a19eef92a6012e946e7f362bb802c4d341f",
+          "host_sources": {},
+          "runtime_package": {},
+          "dependencies": {
+            "files": 537,
+            "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
+          },
+          "test_dependencies": {
+            "files": 5114,
+            "sha256": "a910b0ce89bff99141fa49645e8329d8b0a96caf0cd5b38476e9b61193f82cee"
+          },
+          "node_parallel": false,
+          "network": "loopback",
+          "timeout_seconds": 15.0,
+          "test_timeout_ms": 2000
+        },
+        "summary": {
+          "files": 49,
+          "fully_passing": 0,
+          "timeouts": 0,
+          "counts": {
+            "pass": 306,
+            "fail": 126,
+            "skip": 0,
+            "todo": 0,
+            "errors": 38
+          }
+        }
+      },
+      "after": {
+        "raw_json": "/work/reports/bun-wasm-suite-dependencies-2026-10-18/after-complete/jsc.json",
+        "sha256": "bd6e6caf22a6bdd1f78e25fa6bfeb2e946d4dca9cfba0d022b4187cd1b3eb5d0",
+        "provenance": {
+          "schema": 1,
+          "engine": "jsc",
+          "suite_commit": "5e0baa66516f3af00b008cdf1521c681317741e8",
+          "wasm_sha256": "17f87acb7d6c83d6914cf960b340738d1202652e76f577e8961411571d64532c",
+          "tools_sha256": "1571ead52d26036b0976516147e3c0d9803b5c2f54b4642b4b38ffc71c8cdfdb",
+          "runner_sha256": "da066d18bd960ac43f71781956112289519b45365815b6d8f342e2c849828b2f",
+          "launcher_sha256": "0b526691ec2b8e3d3eaa5d804a152a19eef92a6012e946e7f362bb802c4d341f",
+          "host_sources": {},
+          "runtime_package": {},
+          "dependencies": {
+            "files": 537,
+            "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
+          },
+          "test_dependencies": {
+            "files": 49788,
+            "sha256": "7ac4fd8e9679e21069eeca9dbbc332203212faa0083b12ecd66f31e35a6cb231"
+          },
+          "node_parallel": false,
+          "network": "loopback",
+          "timeout_seconds": 15.0,
+          "test_timeout_ms": 2000
+        },
+        "summary": {
+          "files": 49,
+          "fully_passing": 8,
+          "timeouts": 0,
+          "counts": {
+            "pass": 375,
+            "fail": 120,
+            "skip": 0,
+            "todo": 11,
+            "errors": 22
+          }
+        },
+        "outcomes": [
+          {
+            "file": "bundler/bundler_edgecase.test.ts",
+            "counts": {
+              "pass": 59,
+              "fail": 3,
+              "skip": 0,
+              "todo": 11,
+              "errors": 0
+            },
+            "exit": 134,
+            "complete": false,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "bundler > edgecase/InvalidLoaderSegfault",
+            "first_error": "error: Unexpected errors reported while bundling:",
+            "category": "d",
+            "topic": "CLI option or command implementation",
+            "confidence": "error/context"
+          },
+          {
+            "file": "bundler/transpiler/jsx-tsconfig-react-jsx.test.ts",
+            "counts": {
+              "pass": 2,
+              "fail": 5,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "tsconfig compilerOptions.jsx > \"react-jsx\" selects the matching automatic runtime",
+            "first_error": "error: Cannot find module 'react/jsx-dev-runtime' from '/tmp/jsx-tsconfig_L6pUaQ/m.jsx'",
+            "category": "d",
+            "topic": "tsconfig JSX runtime selection and jsxImportSource",
+            "confidence": "error/context"
+          },
+          {
+            "file": "cli/inspect/BunFrontendDevServer.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "BunFrontendDevServer inspector protocol > (unnamed)",
+            "first_error": "error: Unix sockets and TLS sockets are not supported in bun-wasm",
+            "category": "a",
+            "topic": "inspector fixture requires Unix-domain sockets outside the current host ABI",
+            "confidence": "error/context"
+          },
+          {
+            "file": "integration/jsdom/jsdom.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "jsdom > runScripts: dangerously",
+            "first_error": "TypeError: Cannot set prototype of immutable prototype object",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "integration/mysql2/mysql2.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: A functional `docker` is required in CI for some tests.",
+            "category": "b",
+            "topic": "Docker-backed fixture requires an external docker executable",
+            "confidence": "error/context"
+          },
+          {
+            "file": "integration/nest/nest_metadata.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: ",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "integration/sass/sass.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "integration/sharp/sharp.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Could not load the \"sharp\" module using the linuxnull-wasm32 runtime",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "integration/svelte/client-side.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "generating client-side code > Using Svelte components in Bun's dev server > (unnamed)",
+            "first_error": "  ^ this test timed out after 2000ms.",
+            "category": "d",
+            "topic": "unresolved runtime/module semantics, inspect the recorded failure first",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "integration/typegraphql/src/typegraphql.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: undefined is not an object (evaluating 'globalPath of globalPaths')",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/bun/plugin/plugins.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: undefined is not a function (near '...builder.onLoad({ filter: /.*/, namespace: \"rejected-promise\" }, async ({ path }) => {",
+            "category": "d",
+            "topic": "bundler options, plugins or compiler output",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/bun/test/fake-timers/fake-timers.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: Export named 'RedisClient' not found in module 'bun'.",
+            "category": "d",
+            "topic": "database, Redis or S3 clients",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/first_party/utf-8-validate/utf-8-validate.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "js/node/http/node-fetch-cjs.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "require('node-fetch') fetches",
+            "first_error": "error: expect(received).toBeInstanceOf(expected)",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/http/node-fetch-primordials.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "fetch, Response, Request can be overriden",
+            "first_error": "TypeError: fetch is not a function. (In 'fetch(server.url)', 'fetch' is undefined)",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/http/node-fetch.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: Export named 'fetch' not found in module '/bun/test/node_modules/node-fetch/lib/index.js'.",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/http/node-http.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: Export named 'OutgoingMessage' not found in module 'node:http'.",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/module/module-resolve-filename-paths.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 6,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "Module._resolveFilename respects options.paths for package resolution",
+            "first_error": "ResolveMessage: Cannot find package 'test-package' from '/some/other/directory/file.js'",
+            "category": "d",
+            "topic": "Module._resolveFilename options.paths lookup",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/node/string-module.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 6,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "should import and execute ES module from string",
+            "first_error": "ResolveMessage: Cannot find module 'data:text/javascript,export default function test(arg) { return arg + arg };' from '/bun/test/js/node/string-module.test.js'",
+            "category": "d",
+            "topic": "data URL module loading",
+            "confidence": "error"
+          },
+          {
+            "file": "js/node/stubs.test.js",
+            "counts": {
+              "pass": 304,
+              "fail": 62,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "stubbed CJS import.meta.require _http_agent",
+            "first_error": "ResolveMessage: Cannot find package '_http_agent' from '/bun/test/js/node/stubs.test.js'",
+            "category": "d",
+            "topic": "Node builtin aliases and stub modules",
+            "confidence": "error"
+          },
+          {
+            "file": "js/node/vm/happy-dom-vm-16277.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "ResolveMessage: Cannot find package '' from '/bun/test/node_modules/happy-dom/lib/nodes/element/Element.js'",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/@azure/service-bus/azure-service-bus.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TEST_INFO_AZURE_SERVICE_BUS",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/@electric-sql/pglite/pglite.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "pglite > can initialize successfully",
+            "first_error": "LinkError: Standalone WebAssembly memories are not supported",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/@fastify/websocket/fastity-test-websocket.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": false,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: \"undefined/websocket\" cannot be parsed as a URL.",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/@napi-rs/canvas/napi-rs-canvas.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Cannot find native binding. npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). Please try `npm i` again after removing both package-lock.json and node_modules directory.",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/astro/astro-post.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: Export named 'Http2ServerResponse' not found in module 'node:http2'.",
+            "category": "d",
+            "topic": "TLS or HTTP/2",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/grpc-js/test-tonic.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: undefined is not an object (evaluating 'protoLoader.loadSync')",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/hono/hello-world-fixture.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "Hono app export bug",
+            "first_error": "error: expect(received).toBeTruthy()",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/hono/hello-world.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "js/third_party/http2-wrapper/http2-wrapper.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: tls.TLSSocket is not supported in bun-wasm: WASI has no network access",
+            "category": "d",
+            "topic": "TLS or HTTP/2",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/mongodb/mongodb.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TLS_MONGODB_DATABASE_URL",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/pg-gateway/pglite.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: Export named 'SQL' not found in module 'bun'.",
+            "category": "d",
+            "topic": "database, Redis or S3 clients",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/pg/pg.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TLS_POSTGRES_DATABASE_URL",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/postgres/postgres.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TLS_POSTGRES_DATABASE_URL",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/prisma/prisma.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Cannot find native binding. npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). Please try `npm i` again after removing both package-lock.json and node_modules directory.",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/prompts/prompts.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "works with prompts",
+            "first_error": "error: write after end",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/remix/remix.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "remix works",
+            "first_error": "TypeError: Right hand side of instanceof is not an object",
+            "category": "d",
+            "topic": "Node/Web stream semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/resvg/bbox.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Unsupported architecture on Linux: wasm32",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/rollup-v4/rollup-v4.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "js/third_party/solc/solc.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "failed to compile wasm module: LinkError: Unsupported WebAssembly export table",
+            "category": "f",
+            "topic": "passes on browser",
+            "confidence": "measured"
+          },
+          {
+            "file": "js/third_party/stripe/stripe.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TEST_INFO_STRIPE",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/svelte/svelte.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: Runtime module plugin setup must be synchronous",
+            "category": "d",
+            "topic": "bundler options, plugins or compiler output",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/web/nationalized.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "abort-controller > CJS",
+            "first_error": "error: expect(received).toBe(expected)",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "regression/issue/014865.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/04947.test.js",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/09739.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "AbortController from abort-controller fixture works when used with ESM -> CJS -> ESM",
+            "first_error": "error: expect(received).toBe(expected)",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "regression/issue/14982/14982.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/16312.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/25589-frame-size-connect.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "(unnamed)",
+            "first_error": "error: dns.promises.Resolver is not supported in bun-wasm: WASI has no network access",
+            "category": "a",
+            "topic": "network operations beyond the current host ABI",
+            "confidence": "error"
+          }
+        ],
+        "categories": {
+          "a": 11,
+          "b": 1,
+          "c": 0,
+          "d": 28,
+          "e": 0,
+          "f": 1
+        }
+      },
+      "regressions_from_before": []
+    },
+    "browser": {
+      "before": {
+        "raw_json": "/work/reports/bun-wasm-suite-dependencies-2026-10-18/before-final/browser.json",
+        "sha256": "5939c9c47e58cfa69796f8895dcb8e0e0034547b945277a6b680e3d1f3db7abe",
+        "provenance": {
+          "schema": 1,
+          "engine": "browser",
+          "suite_commit": "5e0baa66516f3af00b008cdf1521c681317741e8",
+          "wasm_sha256": "0f3f0e3b57a6eb8a541a61da479d09002389e9bef6ab83b8c767a73362e4b6b8",
+          "tools_sha256": "1571ead52d26036b0976516147e3c0d9803b5c2f54b4642b4b38ffc71c8cdfdb",
+          "runner_sha256": "26f6bfa8a39a91f33d41e423edf4d0f44c5300bdee349c22b3660987ec97a5c5",
+          "launcher_sha256": "d045e895cb61c05ea871d5e3afc84f39b2c654f08804a93922b1f3936d00b84d",
+          "host_sources": {
+            "web/src/engine-host.js": "fb9dde1d26aa91624483ea78e5af3ffe935ff48fe573684d290bf90a7947fac1",
+            "web/scripts/node-net.mjs": "f4d380d0a0300b48de95e60a40296580038778a193d736f32cbd527c160272ec",
+            "web/scripts/node-install-net.mjs": "5eab5840c0bc5af72dfda2864ed283da0d2c85172f2015c2fd93d4758c2a40a1",
+            "web/src/net/package-fetch.ts": "879add6dd2e73de9790e4435f40215d135303a0a608e8421cca1e0c98484a8a4",
+            "web/scripts/node-stdio.ts": "95d41faa574afb31f1b88a7b9fa1b810360872fe313cf9eb75dfbd7660a0cd60",
+            "web/scripts/node-spawn.ts": "f8a67c324bdf766b591a99f776ec505ff113c8d635f95fab35748fcdb2236758",
+            "web/src/subprocess.ts": "98cc2ff90976d2c08f3d3d6e996a02afe71daf41bf07f517f41fcaccbeec3d34",
+            "web/src/fs.ts": "aa5b0e141cb82e5d9040dcbdbfdb3a34df19fa3c4e69655cab5646e1456365c8"
+          },
+          "runtime_package": {
+            "name": "waffle",
+            "version": "0.0.24",
+            "node_entry": "dist/core/index.js",
+            "package_sha256": "735a6bd872e709c903c93943002b7ca323c670ac7662a7ee277066a2ea21d8b1",
+            "sources": {
+              "build.ts": "7f5d440aed2e8a071293045a07c96bfdfa7748f31a2adecf34e36b530c8ca81a",
+              "index.ts": "cfb5f761047469744af1232a43bf71c6ae488cc9a1c5c204387ce4672c3a2178",
+              "prepare.ts": "e222daf2060914b5c08f4e1a866a3677a95c2a1d4755c93ffb84f885e8fbfa21",
+              "runtime.ts": "3bef1f8a5f311244cf0aa79101b44f1f8c2c5025a501063f3c80c783cc9b5088",
+              "browser/fs-worker.ts": "8f4955aa0c172eb8d6a3ae7e6a3211bcb0c2ae9f809793ed0eac9c4dbf8b5a4a",
+              "browser/preview-protocol.ts": "e82b04c4937ebc96c47839106ac300ff66ea9f43d8eb1fcf4539d8288f6bfb61",
+              "browser/preview.ts": "e0401dda55aa27773dc803341f07bc2b01fc2da6af8cff0b5808a0a1a43ab29c",
+              "browser/preview1-worker.ts": "b4799c2d49b8f55a6a666425b00e238659fec52385714033aa8e6c55c693fb2d",
+              "browser/process-broker.ts": "431641c265369014aff0b0bfaedf552f775ce0ecbe947dbbf9ce061e78beaecc",
+              "browser/runtime-terminals.ts": "1f49c5462767f919d4d294df50b4b5586d0c0ef2fd2ca0361d53efe11ccefdee",
+              "browser/service-worker.ts": "567d8656d16d6a4f46655176a63d4ac42366be43b23b84e322f48160fc448617",
+              "browser/shared-fs.ts": "4f3e9436f708a15d4e637a6fc46f6a9aaa0d91af504c50317d00c43e6577d1ab",
+              "browser/worker.ts": "4c11679be23cdaed36555b551338f9e6e7fee58488a4db21797e1a6f05ebdb54",
+              "browser/net/helper.ts": "e4e150a25be377c35df9915be0ffcda6d2418cc729e1d771d0ad44340ddd6be7",
+              "browser/net/host.ts": "f7a2b049df8934916639e75bf5d638883d245748419604e65608243fdcd944a3",
+              "browser/net/http1.ts": "b93de8cc68e7fd163d5d29b18bac334c02ffddefcdb1457753ab974666f4f3c4",
+              "browser/net/protocol.ts": "82e3c8f1e49811f2c99c2cc5415b36fd95cd198bbfac06deb8f4e195e5968435",
+              "browser/net/ring.ts": "a55377343222b3e55dd86201bee5736d8ff6028af40e55927fdcf5e37bd4818f",
+              "core/descriptors.ts": "3810458640ffcb7eee908c56d6581c571581527a5e8eeae3e18201abf0488664",
+              "core/filesystem.ts": "52fb688a22b1dc6108eb377a62f9c3f4ad8f923881f524a3eb494e47c918c80a",
+              "core/index.ts": "bd749216a5eaa770937596d9630b90d06b85492f649f5a3e4bd028a145e96b89",
+              "core/memory-views.d.ts": "36fefdeacac81bebe65edf70204ed947d70c79ba2f699a1beeef4e1f6f2892fd",
+              "core/memory-views.js": "5f28415351a3f6b5c86e83c41c27bcbafe452b5d9826c817ca1fb87f146653fb",
+              "core/open-file.ts": "a879ccb6bb86d99f16c0669ae865875638a1267494ffb84ed4a29846979d8cc9",
+              "core/path.ts": "31f2d7f1b154821a0cc19b3d1477f4ed2587627bd5a49aeb64e298c522c00b48",
+              "core/wasi.ts": "177d0b73286fb754030083a586cdf8a5314454f3c2c9501ac698ff6a5a96b192",
+              "fs/backend.ts": "4d6d48fd652894fca75e3c10ceb4018160d0a836d577c7c9c1387046d7f8806d",
+              "fs/client.ts": "9150324b9528def98cbaba2a40795588ba476549f8ba99478f6abc876ccfbe5e",
+              "fs/index.ts": "c5efa9b2c2d996e2ed24404a19fab5ea6e3713b8cfb90bb1e4e18fb629f66b4e",
+              "fs/indexeddb.ts": "44c0b640edaa8225bc3f52bc722ba74ed327db76a0e0464a706331ea0e42e555",
+              "fs/memory.ts": "01b728c1ca777950a9e07d884819248e31e3fdd8a67d06b7b73685c3d7e23bfb",
+              "fs/opfs.ts": "dc2a3a85efdd9d891a66f77ec73d6de8e3becdac33720a1e06fe5e807dac60b1",
+              "fs/persistent.ts": "78b73afce82e0410356c6ae1f0f3eb7a0c4abb23f2d81820bb617f729e2a5435",
+              "fs/protocol.ts": "6ce73b8407f7b44625b975295d531882066642d5f88f29958d698be26239b03f",
+              "fs/service.ts": "ca0b005a5994301bc6b071ee4fa93b09f84f45e7b6ab733c1b842400b23745b8",
+              "fs/shared.ts": "cd6f208dfd24192a2e2cffb93a44235ce4cf074a6ff6fb2b576cff66d6e5d6bc",
+              "fs/storage.ts": "cc8bae3e4dba032600e9e7c806b7bc65ce6950d14bafbd8fe88184890dd15672",
+              "interrupt/check.ts": "3a0277bcfcb2765c5c435894981795c72b275737344e88320ae59af6404381a3",
+              "interrupt/index.ts": "90985601e6a214a4ed3e7a5972c00ade1257a67967b274e33035850b2b027bae",
+              "interrupt/loader.ts": "11ee9e291d1422322ba9e63d775866c27e818940b52ec2c8aaf3eb186541f4ff",
+              "interrupt/rewriter.ts": "7855b47f4ce20811417084e8618040f6179f5f18c1dad2e40a11d95ffc60e636",
+              "proc/abi.ts": "6129d929c9e41d33fe64661d0bc922fd3991a4b979c9dbeb4176c8eb347f522b",
+              "proc/admission.ts": "84262ab45000eba5ad11bff210e995076ef38fe0ab18154143704e823d6fd864",
+              "proc/filesystem-codec.ts": "5a221e0e07b61c970b5e5b2d29c37a1559effc4bfb0e0696189de0819379d7c8",
+              "proc/identity.ts": "616d2d9c5c9962455b090449c3228d800a83538432f0451f15272be55e4e9e7a",
+              "proc/index.ts": "603b872b7332e3de0dc4623eb4aaba8a47d89d03f4dbf55247333b677edfac45",
+              "proc/outcome.ts": "51676c8c658e308692f39362b5a33aed4b6d28d9a0d5a77be332e4b7aea02c8f",
+              "proc/pipes.ts": "00fcf067edea88302027234d00f37be225606fd6afa39fe29c1e14066e00541b",
+              "proc/registry.ts": "a539f67cd073bc168134b0d8d4ec6b51d57c75694aef4ea34b050d29660eee8d",
+              "proc/signals.ts": "5ad70a7f5bd20c32e9a81b1f9f5f9f812051dc1cf884e5d9548b71362525a078",
+              "proc/stub.ts": "a17e1937fad89eef24a1b72351c87ddc743bbf5e0ddfe8454f2df6f0c09d8a2f",
+              "proc/supervisor.ts": "9e9c553f64c8154caa88a1de6fbf81d6d1d2e29cf418d56fec63a35ea28cecee",
+              "proc/table.ts": "4f255b611b8a1f88166cb628affb3bbbfe198af3e918db5284fb7bdee7c4b15e",
+              "proc/types.ts": "da7c6ef6091b9eb7f5318672d4a38722603b7ebdc415d7d9c09ffd1614788033",
+              "proc/wait-status.ts": "d20322a60d3f5ea27054c6e41db0918f8c3939a743043b709f73905b35d2ba7a",
+              "proc/worker-broker.ts": "fae078add353fdf1f765e8b2b9b48e03b3e79f29d3535569c160a8a76539e432",
+              "proc/worker-client.ts": "d29ca5130be8f7e0f4bc67933c36a274aec8ffefc52803b4213f678e32fbc05b",
+              "proc/worker-pipes.ts": "8220eb857a20cd4d067e50eada6e66a5245bd401d9949f5337ce0acb3673f8a9",
+              "site/astro.config.ts": "9c96e291671bd62528b962a65a4a7902f5b3e5b18fb860024944d881aeb8ab7f",
+              "site/scripts/extract-reference.ts": "45ac9264f9f5174788df45c60540ead78457175b815ae263a72de5531338b577",
+              "site/scripts/performance.ts": "8bb759f84d1d0d9aaf81f138da8f70c3694e7ea2c570f719241fa259f3be68e6",
+              "site/scripts/verify.ts": "0d39bb9c051a7234bd427f7ca67713585202d4e98460dcbc234d778222efdefb",
+              "site/scripts/visibility.ts": "53d858ea309b1e4fadb43a78af0ce8757d448090905f9bc11195f7267ba9731e",
+              "site/src/scripts/landing.ts": "983c72fbba7677bb0130f79edb79ac6cbc28cd88ab3855e27d606323187efb04",
+              "site/src/scripts/waffle-scene.ts": "a70065c1e8ee65ef7a27b678e47df522415c040644214b12b4282208abddf052",
+              "tooling/runtime-size.ts": "b1faa6157545ece03b456529196ad0f8eaedaef9f8b3dc1b39cc88e429406097"
+            },
+            "generated": {
+              "dist/index.js": "b087427dff737f56910484244f5c1a436b9982dfa8f94dbeb2c773c0c4c2a114",
+              "dist/runtime.js": "1972416e050472369b87a1413b215cb61f0115219b802cecbb76d99ad1d3ef7d",
+              "dist/browser/fs-worker.js": "d4d5ae0a2f8517e9e69d50a5575121c75a1cd3c25b3d0437173b0e09f0bb1f04",
+              "dist/browser/preview-protocol.js": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "dist/browser/preview.js": "3ad4d5e34e2c8ad3f47ff750bcd35d75c0b23b7464cf9bec07e59abdd9f97fbc",
+              "dist/browser/preview1-worker.js": "ca8c38eed1f481049a6f7e4089072e50d6156fd886546378ea67adb3987ee398",
+              "dist/browser/process-broker.js": "7c33a31947bcae095e7ee75c3b8391833c15d5cfd85d5d2e4b21f369735eac9c",
+              "dist/browser/runtime-terminals.js": "3bedc122d386985fd0a2728e219faed4fc8bbc796a8fedf03b34bb5c5ea0b170",
+              "dist/browser/service-worker.js": "91e33a95a54449f8b2ec60f621d78d16180082a1cc11cbf6c23ddb0c5efc6f1f",
+              "dist/browser/shared-fs.js": "2315d25447dd19d2bae4bff23582179a8188573b70b20241e8b617aabb512980",
+              "dist/browser/worker.js": "d135958151778e3cb733a1ac4d7cf833015df751fd11ec2e36bcbb3f2f785529",
+              "dist/browser/net/helper.js": "2ee4c369b8062fb15ce9eb2f5d84e656168f46721ef25b3a4ff8929e23d5a760",
+              "dist/browser/net/host.js": "0dc74018ca7ed57a5a0b8dd56452b33c8b8c688ecb9c088b986e3257b3d5b55c",
+              "dist/browser/net/http1.js": "07ef14b2e670a87b675a7d008c304b93e1b9c22f578c1023403a6f611ef748c0",
+              "dist/browser/net/protocol.js": "3dd691cc8a65612e3f34cfc33234da61cef6de376ebf87179c102b00823b54ca",
+              "dist/browser/net/ring.js": "43feb782fbc356b995bf7ae58916838f443c5083b49dadbea34a2666d93f2a56",
+              "dist/core/descriptors.js": "bd7d6c2f2bf2aff34a037ee611380d6f22c23671b5c3da4148afba8ab89fad58",
+              "dist/core/filesystem.js": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "dist/core/index.js": "6fdf0def45acfc1a808a9d665bd217538cdfda84e1d6d30e497cd7323d7c99bf",
+              "dist/core/memory-views.js": "5f28415351a3f6b5c86e83c41c27bcbafe452b5d9826c817ca1fb87f146653fb",
+              "dist/core/open-file.js": "e9d54fd56a5d1b0822d2641163a61fd1c3f146b9a7cb79a690248abbd9275ffe",
+              "dist/core/path.js": "f031c93947fdcea89ea9d0845effee0783ceacdbbc32fef076e6cdc045905b8e",
+              "dist/core/wasi.js": "ea438a5d9b5a384e959ebe34ef3ca9607c68fba78019fc8907bfa011fe55c192",
+              "dist/fs/backend.js": "cabea447cdf379aa8e73f70e8ac618d1b603708ee97e3d7f28f5f76cac65d9ba",
+              "dist/fs/client.js": "17697e4c4b49f4639afcef31a18ffe92ca813bea001ecf14d2dd806caf2ec2a7",
+              "dist/fs/index.js": "fe35fd3c41895e91ae7dcdf8b783e86ce167821f42fb920640900ac6ff666622",
+              "dist/fs/indexeddb.js": "84a576e4600543a0fdfc6ce5b4f69f010d4a3201762713e51fb6d72a3c113e71",
+              "dist/fs/memory.js": "bdeae0def7ccdbeb560dbd3d9fd5a5a9d2070039a52b988741040e2037a6bb0b",
+              "dist/fs/opfs.js": "a96c7199c7a0a3e22604fa384efd0bab01f4b5f78770e23e11290baf573238d5",
+              "dist/fs/persistent.js": "5e6271c77b4da32a73ea3a6b0761e2823bdb4f4c5f40900102c353167efc97c8",
+              "dist/fs/protocol.js": "ce593febb371418ee05053f268f951b04070a5ca7a90b3888c18e9bf87366d44",
+              "dist/fs/service.js": "08fa189bb0523e92458db9eb7b5d0589cfd4376e2697fddf64bbc8cc548b56fd",
+              "dist/fs/shared.js": "f094556dc46a22eda66e3b5b5086e4bfb68bd48f05348daa1efc934ea9ebdf98",
+              "dist/fs/storage.js": "29805af20e65b6dcadca5fbf0f273854e6381ad511dd328a76740c51429a5051",
+              "dist/interrupt/check.js": "9e81ae16c6ac8a643807905284e0ace36844b26a234d203486b019eb51af1579",
+              "dist/interrupt/index.js": "509a817b9193a4f2c2dea3606e1478fc637c4f17beabb88e46d1938e26273c7c",
+              "dist/interrupt/loader.js": "7834981e86849b0e616b477c48392ac07460b0a873d4fc2e0247d6fca46a466d",
+              "dist/interrupt/rewriter.js": "9e02796fa35b9c9c41b2bd1f25aaf9eba1b782ce20df97d966c79af97271c07e",
+              "dist/proc/abi.js": "e9943bcc944091925d2e0b3a0030bd3d5414be9bb5b57177e22bc619a527545b",
+              "dist/proc/admission.js": "5ff4da0573c8381ae0fd4d1b1aadee98a48c99f8ca387b679878902cd9cb8170",
+              "dist/proc/filesystem-codec.js": "ac5c80ec4310214ef90ec5a6dbdb2f46c6321a1deac330f5e194ad6dc5c63a10",
+              "dist/proc/identity.js": "5676e75fef4677ca6a328a3141a3e2a8d80a285b30201b599bc121d2e1d6d04c",
+              "dist/proc/index.js": "b496594cea90f2ca7dcb176701155253b6f134f29318b6ce4a5a2eb5ea172521",
+              "dist/proc/outcome.js": "2f4c455d2487c9b4577b05ee26344923bec76b473a3507eae44fadb8b5f0bd26",
+              "dist/proc/pipes.js": "aa25078c17552d518e4b85bbc4108547c8ef7d7ec6c696300d89e82f3ff5b37e",
+              "dist/proc/registry.js": "4a65e7a195ec284f5f124f524235dfe577c851344e5352331b6914074c8aa925",
+              "dist/proc/signals.js": "2145d36ecbf9a72b5973ced90418c55522068d83f01a761c74f3295bb8fff09e",
+              "dist/proc/stub.js": "73676c6125c51db03ec7d4e5d3414336afcf1b8ca36a22d0e68cbe99eae0735b",
+              "dist/proc/supervisor.js": "4bbe78111a580a7724d298aff6c112bef2eaf5b16ea84308aab7b86f482d900b",
+              "dist/proc/table.js": "ca87da2d16c1ae98fd99fcca3647db48f8ef881f1eac5128c61fc7093b76905f",
+              "dist/proc/types.js": "ff33535ac4b8d803447a0b127e952aeb654b51da4feb1e1a5abbac4f4420e149",
+              "dist/proc/wait-status.js": "29b9a4f742860111eb7badf4f351e0a8dd6161657b45ab9fb2415babe833b12c",
+              "dist/proc/worker-broker.js": "0d02cc1344ad23dd5b229443444f2dc59a5ce2302fbb61adf65c201e1d6ac3cc",
+              "dist/proc/worker-client.js": "550eacf24064d23e8916ed7e6dcb5d25f413e25ba67c7a270f042174664af736",
+              "dist/proc/worker-pipes.js": "334270af39876cc8eccf874f81611c6f9fedde1c795706540190d8163027c42e"
+            },
+            "consumer": {
+              "pin": "git+https://github.com/ShaulLavo/waffle.git#5677fc64dd7443a073747284702e1fba92d6b7c0",
+              "package_sha256": "729a80007363dbaf1397502f6344f23bc03fa792f79bed0b4c058072d7cb4b95",
+              "lock_sha256": "58d64ba39a847a79213b07da0cf3ec3c5b5c0fc97e0ccacb0f1ee6ace95e8c40"
+            }
+          },
+          "dependencies": {
+            "files": 537,
+            "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
+          },
+          "test_dependencies": {
+            "files": 5114,
+            "sha256": "a910b0ce89bff99141fa49645e8329d8b0a96caf0cd5b38476e9b61193f82cee"
+          },
+          "node_parallel": false,
+          "network": "loopback",
+          "timeout_seconds": 15.0,
+          "test_timeout_ms": 2000
+        },
+        "summary": {
+          "files": 49,
+          "fully_passing": 0,
+          "timeouts": 0,
+          "counts": {
+            "pass": 304,
+            "fail": 128,
+            "skip": 0,
+            "todo": 0,
+            "errors": 38
+          }
+        }
+      },
+      "after": {
+        "raw_json": "/work/reports/bun-wasm-suite-dependencies-2026-10-18/after-complete/browser.json",
+        "sha256": "28f9e97bf3753507b6dcb950723a160a10a60c6fb0999c406afc4a80f6954d58",
+        "provenance": {
+          "schema": 1,
+          "engine": "browser",
+          "suite_commit": "5e0baa66516f3af00b008cdf1521c681317741e8",
+          "wasm_sha256": "0f3f0e3b57a6eb8a541a61da479d09002389e9bef6ab83b8c767a73362e4b6b8",
+          "tools_sha256": "1571ead52d26036b0976516147e3c0d9803b5c2f54b4642b4b38ffc71c8cdfdb",
+          "runner_sha256": "da066d18bd960ac43f71781956112289519b45365815b6d8f342e2c849828b2f",
+          "launcher_sha256": "d045e895cb61c05ea871d5e3afc84f39b2c654f08804a93922b1f3936d00b84d",
+          "host_sources": {
+            "web/src/engine-host.js": "fb9dde1d26aa91624483ea78e5af3ffe935ff48fe573684d290bf90a7947fac1",
+            "web/scripts/node-net.mjs": "f4d380d0a0300b48de95e60a40296580038778a193d736f32cbd527c160272ec",
+            "web/scripts/node-install-net.mjs": "5eab5840c0bc5af72dfda2864ed283da0d2c85172f2015c2fd93d4758c2a40a1",
+            "web/src/net/package-fetch.ts": "879add6dd2e73de9790e4435f40215d135303a0a608e8421cca1e0c98484a8a4",
+            "web/scripts/node-stdio.ts": "95d41faa574afb31f1b88a7b9fa1b810360872fe313cf9eb75dfbd7660a0cd60",
+            "web/scripts/node-spawn.ts": "f8a67c324bdf766b591a99f776ec505ff113c8d635f95fab35748fcdb2236758",
+            "web/src/subprocess.ts": "98cc2ff90976d2c08f3d3d6e996a02afe71daf41bf07f517f41fcaccbeec3d34",
+            "web/src/fs.ts": "aa5b0e141cb82e5d9040dcbdbfdb3a34df19fa3c4e69655cab5646e1456365c8"
+          },
+          "runtime_package": {
+            "name": "waffle",
+            "version": "0.0.24",
+            "node_entry": "dist/core/index.js",
+            "package_sha256": "735a6bd872e709c903c93943002b7ca323c670ac7662a7ee277066a2ea21d8b1",
+            "sources": {
+              "build.ts": "7f5d440aed2e8a071293045a07c96bfdfa7748f31a2adecf34e36b530c8ca81a",
+              "index.ts": "cfb5f761047469744af1232a43bf71c6ae488cc9a1c5c204387ce4672c3a2178",
+              "prepare.ts": "e222daf2060914b5c08f4e1a866a3677a95c2a1d4755c93ffb84f885e8fbfa21",
+              "runtime.ts": "3bef1f8a5f311244cf0aa79101b44f1f8c2c5025a501063f3c80c783cc9b5088",
+              "browser/fs-worker.ts": "8f4955aa0c172eb8d6a3ae7e6a3211bcb0c2ae9f809793ed0eac9c4dbf8b5a4a",
+              "browser/preview-protocol.ts": "e82b04c4937ebc96c47839106ac300ff66ea9f43d8eb1fcf4539d8288f6bfb61",
+              "browser/preview.ts": "e0401dda55aa27773dc803341f07bc2b01fc2da6af8cff0b5808a0a1a43ab29c",
+              "browser/preview1-worker.ts": "b4799c2d49b8f55a6a666425b00e238659fec52385714033aa8e6c55c693fb2d",
+              "browser/process-broker.ts": "431641c265369014aff0b0bfaedf552f775ce0ecbe947dbbf9ce061e78beaecc",
+              "browser/runtime-terminals.ts": "1f49c5462767f919d4d294df50b4b5586d0c0ef2fd2ca0361d53efe11ccefdee",
+              "browser/service-worker.ts": "567d8656d16d6a4f46655176a63d4ac42366be43b23b84e322f48160fc448617",
+              "browser/shared-fs.ts": "4f3e9436f708a15d4e637a6fc46f6a9aaa0d91af504c50317d00c43e6577d1ab",
+              "browser/worker.ts": "4c11679be23cdaed36555b551338f9e6e7fee58488a4db21797e1a6f05ebdb54",
+              "browser/net/helper.ts": "e4e150a25be377c35df9915be0ffcda6d2418cc729e1d771d0ad44340ddd6be7",
+              "browser/net/host.ts": "f7a2b049df8934916639e75bf5d638883d245748419604e65608243fdcd944a3",
+              "browser/net/http1.ts": "b93de8cc68e7fd163d5d29b18bac334c02ffddefcdb1457753ab974666f4f3c4",
+              "browser/net/protocol.ts": "82e3c8f1e49811f2c99c2cc5415b36fd95cd198bbfac06deb8f4e195e5968435",
+              "browser/net/ring.ts": "a55377343222b3e55dd86201bee5736d8ff6028af40e55927fdcf5e37bd4818f",
+              "core/descriptors.ts": "3810458640ffcb7eee908c56d6581c571581527a5e8eeae3e18201abf0488664",
+              "core/filesystem.ts": "52fb688a22b1dc6108eb377a62f9c3f4ad8f923881f524a3eb494e47c918c80a",
+              "core/index.ts": "bd749216a5eaa770937596d9630b90d06b85492f649f5a3e4bd028a145e96b89",
+              "core/memory-views.d.ts": "36fefdeacac81bebe65edf70204ed947d70c79ba2f699a1beeef4e1f6f2892fd",
+              "core/memory-views.js": "5f28415351a3f6b5c86e83c41c27bcbafe452b5d9826c817ca1fb87f146653fb",
+              "core/open-file.ts": "a879ccb6bb86d99f16c0669ae865875638a1267494ffb84ed4a29846979d8cc9",
+              "core/path.ts": "31f2d7f1b154821a0cc19b3d1477f4ed2587627bd5a49aeb64e298c522c00b48",
+              "core/wasi.ts": "177d0b73286fb754030083a586cdf8a5314454f3c2c9501ac698ff6a5a96b192",
+              "fs/backend.ts": "4d6d48fd652894fca75e3c10ceb4018160d0a836d577c7c9c1387046d7f8806d",
+              "fs/client.ts": "9150324b9528def98cbaba2a40795588ba476549f8ba99478f6abc876ccfbe5e",
+              "fs/index.ts": "c5efa9b2c2d996e2ed24404a19fab5ea6e3713b8cfb90bb1e4e18fb629f66b4e",
+              "fs/indexeddb.ts": "44c0b640edaa8225bc3f52bc722ba74ed327db76a0e0464a706331ea0e42e555",
+              "fs/memory.ts": "01b728c1ca777950a9e07d884819248e31e3fdd8a67d06b7b73685c3d7e23bfb",
+              "fs/opfs.ts": "dc2a3a85efdd9d891a66f77ec73d6de8e3becdac33720a1e06fe5e807dac60b1",
+              "fs/persistent.ts": "78b73afce82e0410356c6ae1f0f3eb7a0c4abb23f2d81820bb617f729e2a5435",
+              "fs/protocol.ts": "6ce73b8407f7b44625b975295d531882066642d5f88f29958d698be26239b03f",
+              "fs/service.ts": "ca0b005a5994301bc6b071ee4fa93b09f84f45e7b6ab733c1b842400b23745b8",
+              "fs/shared.ts": "cd6f208dfd24192a2e2cffb93a44235ce4cf074a6ff6fb2b576cff66d6e5d6bc",
+              "fs/storage.ts": "cc8bae3e4dba032600e9e7c806b7bc65ce6950d14bafbd8fe88184890dd15672",
+              "interrupt/check.ts": "3a0277bcfcb2765c5c435894981795c72b275737344e88320ae59af6404381a3",
+              "interrupt/index.ts": "90985601e6a214a4ed3e7a5972c00ade1257a67967b274e33035850b2b027bae",
+              "interrupt/loader.ts": "11ee9e291d1422322ba9e63d775866c27e818940b52ec2c8aaf3eb186541f4ff",
+              "interrupt/rewriter.ts": "7855b47f4ce20811417084e8618040f6179f5f18c1dad2e40a11d95ffc60e636",
+              "proc/abi.ts": "6129d929c9e41d33fe64661d0bc922fd3991a4b979c9dbeb4176c8eb347f522b",
+              "proc/admission.ts": "84262ab45000eba5ad11bff210e995076ef38fe0ab18154143704e823d6fd864",
+              "proc/filesystem-codec.ts": "5a221e0e07b61c970b5e5b2d29c37a1559effc4bfb0e0696189de0819379d7c8",
+              "proc/identity.ts": "616d2d9c5c9962455b090449c3228d800a83538432f0451f15272be55e4e9e7a",
+              "proc/index.ts": "603b872b7332e3de0dc4623eb4aaba8a47d89d03f4dbf55247333b677edfac45",
+              "proc/outcome.ts": "51676c8c658e308692f39362b5a33aed4b6d28d9a0d5a77be332e4b7aea02c8f",
+              "proc/pipes.ts": "00fcf067edea88302027234d00f37be225606fd6afa39fe29c1e14066e00541b",
+              "proc/registry.ts": "a539f67cd073bc168134b0d8d4ec6b51d57c75694aef4ea34b050d29660eee8d",
+              "proc/signals.ts": "5ad70a7f5bd20c32e9a81b1f9f5f9f812051dc1cf884e5d9548b71362525a078",
+              "proc/stub.ts": "a17e1937fad89eef24a1b72351c87ddc743bbf5e0ddfe8454f2df6f0c09d8a2f",
+              "proc/supervisor.ts": "9e9c553f64c8154caa88a1de6fbf81d6d1d2e29cf418d56fec63a35ea28cecee",
+              "proc/table.ts": "4f255b611b8a1f88166cb628affb3bbbfe198af3e918db5284fb7bdee7c4b15e",
+              "proc/types.ts": "da7c6ef6091b9eb7f5318672d4a38722603b7ebdc415d7d9c09ffd1614788033",
+              "proc/wait-status.ts": "d20322a60d3f5ea27054c6e41db0918f8c3939a743043b709f73905b35d2ba7a",
+              "proc/worker-broker.ts": "fae078add353fdf1f765e8b2b9b48e03b3e79f29d3535569c160a8a76539e432",
+              "proc/worker-client.ts": "d29ca5130be8f7e0f4bc67933c36a274aec8ffefc52803b4213f678e32fbc05b",
+              "proc/worker-pipes.ts": "8220eb857a20cd4d067e50eada6e66a5245bd401d9949f5337ce0acb3673f8a9",
+              "site/astro.config.ts": "9c96e291671bd62528b962a65a4a7902f5b3e5b18fb860024944d881aeb8ab7f",
+              "site/scripts/extract-reference.ts": "45ac9264f9f5174788df45c60540ead78457175b815ae263a72de5531338b577",
+              "site/scripts/performance.ts": "8bb759f84d1d0d9aaf81f138da8f70c3694e7ea2c570f719241fa259f3be68e6",
+              "site/scripts/verify.ts": "0d39bb9c051a7234bd427f7ca67713585202d4e98460dcbc234d778222efdefb",
+              "site/scripts/visibility.ts": "53d858ea309b1e4fadb43a78af0ce8757d448090905f9bc11195f7267ba9731e",
+              "site/src/scripts/landing.ts": "983c72fbba7677bb0130f79edb79ac6cbc28cd88ab3855e27d606323187efb04",
+              "site/src/scripts/waffle-scene.ts": "a70065c1e8ee65ef7a27b678e47df522415c040644214b12b4282208abddf052",
+              "tooling/runtime-size.ts": "b1faa6157545ece03b456529196ad0f8eaedaef9f8b3dc1b39cc88e429406097"
+            },
+            "generated": {
+              "dist/index.js": "b087427dff737f56910484244f5c1a436b9982dfa8f94dbeb2c773c0c4c2a114",
+              "dist/runtime.js": "1972416e050472369b87a1413b215cb61f0115219b802cecbb76d99ad1d3ef7d",
+              "dist/browser/fs-worker.js": "d4d5ae0a2f8517e9e69d50a5575121c75a1cd3c25b3d0437173b0e09f0bb1f04",
+              "dist/browser/preview-protocol.js": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "dist/browser/preview.js": "3ad4d5e34e2c8ad3f47ff750bcd35d75c0b23b7464cf9bec07e59abdd9f97fbc",
+              "dist/browser/preview1-worker.js": "ca8c38eed1f481049a6f7e4089072e50d6156fd886546378ea67adb3987ee398",
+              "dist/browser/process-broker.js": "7c33a31947bcae095e7ee75c3b8391833c15d5cfd85d5d2e4b21f369735eac9c",
+              "dist/browser/runtime-terminals.js": "3bedc122d386985fd0a2728e219faed4fc8bbc796a8fedf03b34bb5c5ea0b170",
+              "dist/browser/service-worker.js": "91e33a95a54449f8b2ec60f621d78d16180082a1cc11cbf6c23ddb0c5efc6f1f",
+              "dist/browser/shared-fs.js": "2315d25447dd19d2bae4bff23582179a8188573b70b20241e8b617aabb512980",
+              "dist/browser/worker.js": "d135958151778e3cb733a1ac4d7cf833015df751fd11ec2e36bcbb3f2f785529",
+              "dist/browser/net/helper.js": "2ee4c369b8062fb15ce9eb2f5d84e656168f46721ef25b3a4ff8929e23d5a760",
+              "dist/browser/net/host.js": "0dc74018ca7ed57a5a0b8dd56452b33c8b8c688ecb9c088b986e3257b3d5b55c",
+              "dist/browser/net/http1.js": "07ef14b2e670a87b675a7d008c304b93e1b9c22f578c1023403a6f611ef748c0",
+              "dist/browser/net/protocol.js": "3dd691cc8a65612e3f34cfc33234da61cef6de376ebf87179c102b00823b54ca",
+              "dist/browser/net/ring.js": "43feb782fbc356b995bf7ae58916838f443c5083b49dadbea34a2666d93f2a56",
+              "dist/core/descriptors.js": "bd7d6c2f2bf2aff34a037ee611380d6f22c23671b5c3da4148afba8ab89fad58",
+              "dist/core/filesystem.js": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "dist/core/index.js": "6fdf0def45acfc1a808a9d665bd217538cdfda84e1d6d30e497cd7323d7c99bf",
+              "dist/core/memory-views.js": "5f28415351a3f6b5c86e83c41c27bcbafe452b5d9826c817ca1fb87f146653fb",
+              "dist/core/open-file.js": "e9d54fd56a5d1b0822d2641163a61fd1c3f146b9a7cb79a690248abbd9275ffe",
+              "dist/core/path.js": "f031c93947fdcea89ea9d0845effee0783ceacdbbc32fef076e6cdc045905b8e",
+              "dist/core/wasi.js": "ea438a5d9b5a384e959ebe34ef3ca9607c68fba78019fc8907bfa011fe55c192",
+              "dist/fs/backend.js": "cabea447cdf379aa8e73f70e8ac618d1b603708ee97e3d7f28f5f76cac65d9ba",
+              "dist/fs/client.js": "17697e4c4b49f4639afcef31a18ffe92ca813bea001ecf14d2dd806caf2ec2a7",
+              "dist/fs/index.js": "fe35fd3c41895e91ae7dcdf8b783e86ce167821f42fb920640900ac6ff666622",
+              "dist/fs/indexeddb.js": "84a576e4600543a0fdfc6ce5b4f69f010d4a3201762713e51fb6d72a3c113e71",
+              "dist/fs/memory.js": "bdeae0def7ccdbeb560dbd3d9fd5a5a9d2070039a52b988741040e2037a6bb0b",
+              "dist/fs/opfs.js": "a96c7199c7a0a3e22604fa384efd0bab01f4b5f78770e23e11290baf573238d5",
+              "dist/fs/persistent.js": "5e6271c77b4da32a73ea3a6b0761e2823bdb4f4c5f40900102c353167efc97c8",
+              "dist/fs/protocol.js": "ce593febb371418ee05053f268f951b04070a5ca7a90b3888c18e9bf87366d44",
+              "dist/fs/service.js": "08fa189bb0523e92458db9eb7b5d0589cfd4376e2697fddf64bbc8cc548b56fd",
+              "dist/fs/shared.js": "f094556dc46a22eda66e3b5b5086e4bfb68bd48f05348daa1efc934ea9ebdf98",
+              "dist/fs/storage.js": "29805af20e65b6dcadca5fbf0f273854e6381ad511dd328a76740c51429a5051",
+              "dist/interrupt/check.js": "9e81ae16c6ac8a643807905284e0ace36844b26a234d203486b019eb51af1579",
+              "dist/interrupt/index.js": "509a817b9193a4f2c2dea3606e1478fc637c4f17beabb88e46d1938e26273c7c",
+              "dist/interrupt/loader.js": "7834981e86849b0e616b477c48392ac07460b0a873d4fc2e0247d6fca46a466d",
+              "dist/interrupt/rewriter.js": "9e02796fa35b9c9c41b2bd1f25aaf9eba1b782ce20df97d966c79af97271c07e",
+              "dist/proc/abi.js": "e9943bcc944091925d2e0b3a0030bd3d5414be9bb5b57177e22bc619a527545b",
+              "dist/proc/admission.js": "5ff4da0573c8381ae0fd4d1b1aadee98a48c99f8ca387b679878902cd9cb8170",
+              "dist/proc/filesystem-codec.js": "ac5c80ec4310214ef90ec5a6dbdb2f46c6321a1deac330f5e194ad6dc5c63a10",
+              "dist/proc/identity.js": "5676e75fef4677ca6a328a3141a3e2a8d80a285b30201b599bc121d2e1d6d04c",
+              "dist/proc/index.js": "b496594cea90f2ca7dcb176701155253b6f134f29318b6ce4a5a2eb5ea172521",
+              "dist/proc/outcome.js": "2f4c455d2487c9b4577b05ee26344923bec76b473a3507eae44fadb8b5f0bd26",
+              "dist/proc/pipes.js": "aa25078c17552d518e4b85bbc4108547c8ef7d7ec6c696300d89e82f3ff5b37e",
+              "dist/proc/registry.js": "4a65e7a195ec284f5f124f524235dfe577c851344e5352331b6914074c8aa925",
+              "dist/proc/signals.js": "2145d36ecbf9a72b5973ced90418c55522068d83f01a761c74f3295bb8fff09e",
+              "dist/proc/stub.js": "73676c6125c51db03ec7d4e5d3414336afcf1b8ca36a22d0e68cbe99eae0735b",
+              "dist/proc/supervisor.js": "4bbe78111a580a7724d298aff6c112bef2eaf5b16ea84308aab7b86f482d900b",
+              "dist/proc/table.js": "ca87da2d16c1ae98fd99fcca3647db48f8ef881f1eac5128c61fc7093b76905f",
+              "dist/proc/types.js": "ff33535ac4b8d803447a0b127e952aeb654b51da4feb1e1a5abbac4f4420e149",
+              "dist/proc/wait-status.js": "29b9a4f742860111eb7badf4f351e0a8dd6161657b45ab9fb2415babe833b12c",
+              "dist/proc/worker-broker.js": "0d02cc1344ad23dd5b229443444f2dc59a5ce2302fbb61adf65c201e1d6ac3cc",
+              "dist/proc/worker-client.js": "550eacf24064d23e8916ed7e6dcb5d25f413e25ba67c7a270f042174664af736",
+              "dist/proc/worker-pipes.js": "334270af39876cc8eccf874f81611c6f9fedde1c795706540190d8163027c42e"
+            },
+            "consumer": {
+              "pin": "git+https://github.com/ShaulLavo/waffle.git#5677fc64dd7443a073747284702e1fba92d6b7c0",
+              "package_sha256": "729a80007363dbaf1397502f6344f23bc03fa792f79bed0b4c058072d7cb4b95",
+              "lock_sha256": "58d64ba39a847a79213b07da0cf3ec3c5b5c0fc97e0ccacb0f1ee6ace95e8c40"
+            }
+          },
+          "dependencies": {
+            "files": 537,
+            "sha256": "febca47f17827dfe5386aec03585583cac2b7b12a587303447051d29a894d5f7"
+          },
+          "test_dependencies": {
+            "files": 49788,
+            "sha256": "7ac4fd8e9679e21069eeca9dbbc332203212faa0083b12ecd66f31e35a6cb231"
+          },
+          "node_parallel": false,
+          "network": "loopback",
+          "timeout_seconds": 15.0,
+          "test_timeout_ms": 2000
+        },
+        "summary": {
+          "files": 49,
+          "fully_passing": 9,
+          "timeouts": 0,
+          "counts": {
+            "pass": 378,
+            "fail": 237,
+            "skip": 0,
+            "todo": 11,
+            "errors": 21
+          }
+        },
+        "outcomes": [
+          {
+            "file": "bundler/bundler_edgecase.test.ts",
+            "counts": {
+              "pass": 63,
+              "fail": 119,
+              "skip": 0,
+              "todo": 11,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "bundler > edgecase/InvalidLoaderSegfault",
+            "first_error": "error: Unexpected errors reported while bundling:",
+            "category": "d",
+            "topic": "CLI option or command implementation",
+            "confidence": "error/context"
+          },
+          {
+            "file": "bundler/transpiler/jsx-tsconfig-react-jsx.test.ts",
+            "counts": {
+              "pass": 2,
+              "fail": 5,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "tsconfig compilerOptions.jsx > \"react-jsx\" selects the matching automatic runtime",
+            "first_error": "error: Cannot find module 'react/jsx-dev-runtime' from '/tmp/jsx-tsconfig_LQooPH/m.jsx'",
+            "category": "d",
+            "topic": "tsconfig JSX runtime selection and jsxImportSource",
+            "confidence": "error/context"
+          },
+          {
+            "file": "cli/inspect/BunFrontendDevServer.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "BunFrontendDevServer inspector protocol > (unnamed)",
+            "first_error": "error: Unix sockets and TLS sockets are not supported in bun-wasm",
+            "category": "a",
+            "topic": "inspector fixture requires Unix-domain sockets outside the current host ABI",
+            "confidence": "error/context"
+          },
+          {
+            "file": "integration/jsdom/jsdom.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "jsdom > runScripts: dangerously",
+            "first_error": "TypeError: Cannot read properties of undefined (reading 'querySelector')",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "integration/mysql2/mysql2.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: A functional `docker` is required in CI for some tests.",
+            "category": "b",
+            "topic": "Docker-backed fixture requires an external docker executable",
+            "confidence": "error/context"
+          },
+          {
+            "file": "integration/nest/nest_metadata.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: ",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "integration/sass/sass.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "integration/sharp/sharp.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Could not load the \"sharp\" module using the linuxnull-wasm32 runtime",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "integration/svelte/client-side.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "generating client-side code > Using Svelte components in Bun's dev server > (unnamed)",
+            "first_error": "  ^ this test timed out after 2000ms.",
+            "category": "d",
+            "topic": "unresolved runtime/module semantics, inspect the recorded failure first",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "integration/typegraphql/src/typegraphql.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: globalPaths is not iterable",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/bun/plugin/plugins.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: builder.onLoad is not a function",
+            "category": "d",
+            "topic": "bundler options, plugins or compiler output",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/bun/test/fake-timers/fake-timers.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: The requested module 'bunwasm:/m/bun' does not provide an export named 'RedisClient'",
+            "category": "d",
+            "topic": "database, Redis or S3 clients",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/first_party/utf-8-validate/utf-8-validate.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "js/node/http/node-fetch-cjs.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "require('node-fetch') fetches",
+            "first_error": "error: expect(received).toBeInstanceOf(expected)",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/http/node-fetch-primordials.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "fetch, Response, Request can be overriden",
+            "first_error": "TypeError: fetch is not a function",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/http/node-fetch.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: The requested module 'bunwasm:/m/%2Fbun%2Ftest%2Fnode_modules%2Fnode-fetch%2Flib%2Findex.js' does not provide an export named 'fetch'",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/http/node-http.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: The requested module 'bunwasm:/m/node%3Ahttp' does not provide an export named 'OutgoingMessage'",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/node/module/module-resolve-filename-paths.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 6,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "Module._resolveFilename respects options.paths for package resolution",
+            "first_error": "ResolveMessage: Cannot find package 'test-package' from '/some/other/directory/file.js'",
+            "category": "d",
+            "topic": "Module._resolveFilename options.paths lookup",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/node/string-module.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 6,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "should import and execute ES module from string",
+            "first_error": "ResolveMessage: Cannot find module 'data:text/javascript,export default function test(arg) { return arg + arg };' from '/bun/test/js/node/string-module.test.js'",
+            "category": "d",
+            "topic": "data URL module loading",
+            "confidence": "error"
+          },
+          {
+            "file": "js/node/stubs.test.js",
+            "counts": {
+              "pass": 302,
+              "fail": 64,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "stubbed CJS import.meta.require _http_agent",
+            "first_error": "ResolveMessage: Cannot find package '_http_agent' from '/bun/test/js/node/stubs.test.js'",
+            "category": "d",
+            "topic": "Node builtin aliases and stub modules",
+            "confidence": "error"
+          },
+          {
+            "file": "js/node/vm/happy-dom-vm-16277.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: The requested module 'bunwasm:/m/node%3Abuffer' does not provide an export named 'Blob'",
+            "category": "d",
+            "topic": "unresolved runtime/module semantics, inspect the recorded failure first",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/@azure/service-bus/azure-service-bus.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TEST_INFO_AZURE_SERVICE_BUS",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/@electric-sql/pglite/pglite.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "pglite > can initialize successfully",
+            "first_error": "error: No such module: constants",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/@fastify/websocket/fastity-test-websocket.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": false,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: \"undefined/websocket\" cannot be parsed as a URL.",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/@napi-rs/canvas/napi-rs-canvas.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Cannot find native binding. npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). Please try `npm i` again after removing both package-lock.json and node_modules directory.",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/astro/astro-post.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: The requested module 'bunwasm:/m/node%3Ahttp2' does not provide an export named 'Http2ServerResponse'",
+            "category": "d",
+            "topic": "TLS or HTTP/2",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/grpc-js/test-tonic.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: Cannot read properties of undefined (reading 'loadSync')",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/hono/hello-world-fixture.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "Hono app export bug",
+            "first_error": "error: expect(received).toBeTruthy()",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/hono/hello-world.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "js/third_party/http2-wrapper/http2-wrapper.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: tls.TLSSocket is not supported in bun-wasm: WASI has no network access",
+            "category": "d",
+            "topic": "TLS or HTTP/2",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/mongodb/mongodb.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TLS_MONGODB_DATABASE_URL",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/pg-gateway/pglite.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "SyntaxError: The requested module 'bunwasm:/m/bun' does not provide an export named 'SQL'",
+            "category": "d",
+            "topic": "database, Redis or S3 clients",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/pg/pg.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TLS_POSTGRES_DATABASE_URL",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/postgres/postgres.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TLS_POSTGRES_DATABASE_URL",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/prisma/prisma.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Cannot find native binding. npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). Please try `npm i` again after removing both package-lock.json and node_modules directory.",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/prompts/prompts.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "works with prompts",
+            "first_error": "  ^ this test timed out after 2000ms.",
+            "category": "d",
+            "topic": "unresolved runtime/module semantics, inspect the recorded failure first",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/remix/remix.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "remix works",
+            "first_error": "error: Dev server origin not set",
+            "category": "d",
+            "topic": "HTTP/server/fetch/WebSocket semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/third_party/resvg/bbox.test.js",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Unsupported architecture on Linux: wasm32",
+            "category": "a",
+            "topic": "dependency requires a native addon binding unavailable to the WASI guest",
+            "confidence": "error"
+          },
+          {
+            "file": "js/third_party/rollup-v4/rollup-v4.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "js/third_party/solc/solc.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "js/third_party/stripe/stripe.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "error: Secret not found: TEST_INFO_STRIPE",
+            "category": "a",
+            "topic": "live external service credentials unavailable in the isolated suite replay",
+            "confidence": "error/context"
+          },
+          {
+            "file": "js/third_party/svelte/svelte.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 1
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": null,
+            "first_error": "TypeError: Runtime module plugin setup must be synchronous",
+            "category": "d",
+            "topic": "bundler options, plugins or compiler output",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "js/web/nationalized.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "abort-controller > CJS",
+            "first_error": "error: expect(received).toBe(expected)",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "regression/issue/014865.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/04947.test.js",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/09739.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 2,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "AbortController from abort-controller fixture works when used with ESM -> CJS -> ESM",
+            "first_error": "error: expect(received).toBe(expected)",
+            "category": "d",
+            "topic": "test runner/assertion or runtime semantics",
+            "confidence": "needs reproduction"
+          },
+          {
+            "file": "regression/issue/14982/14982.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/16312.test.ts",
+            "counts": {
+              "pass": 1,
+              "fail": 0,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 0,
+            "complete": true,
+            "timed_out": false,
+            "status": "pass",
+            "first_failing_test": null,
+            "first_error": null
+          },
+          {
+            "file": "regression/issue/25589-frame-size-connect.test.ts",
+            "counts": {
+              "pass": 0,
+              "fail": 1,
+              "skip": 0,
+              "todo": 0,
+              "errors": 0
+            },
+            "exit": 1,
+            "complete": true,
+            "timed_out": false,
+            "status": "fail",
+            "first_failing_test": "(unnamed)",
+            "first_error": "error: dns.promises.Resolver is not supported in bun-wasm: WASI has no network access",
+            "category": "a",
+            "topic": "network operations beyond the current host ABI",
+            "confidence": "error"
+          }
+        ],
+        "categories": {
+          "a": 11,
+          "b": 1,
+          "c": 0,
+          "d": 28,
+          "e": 0,
+          "f": 0
+        }
+      },
+      "regressions_from_before": []
+    }
+  }
+}
