@@ -43,7 +43,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, browser module loading and stream adapters over separate host guest instances, with dynamically bound control pipes and typed wait outcomes. |
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
-| [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
+| [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, process-aware idle waits, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [0001](#0001-platform-selection-and-pointer-layout) | Port | Select WASI implementations and support 32-bit layouts and pointer tags. |
@@ -1961,6 +1961,15 @@ shapes are the behavior being preserved; no Bun source is copied. The original
 the mandatory `runtime_proc` process and signal capabilities remain owned by the guest,
 without an optional-slot probe or process-native substitution.
 
+The original idle adapter in `crates/bunwasm-runtime/src/host.rs` requests
+`runtime_proc.poll` with zero subscriptions for timer-only waits, rather than the
+networking poll slot. This uses the process ABI's signal/interrupt wake contract
+when there are no open network handles. `sleep`, including `Bun.sleepSync`, and
+the timer-only branch of the event loop in `src/lib.rs` wait in bounded steps of
+at most 25 ms before re-entering the signal checkpoint. Off-wasm host unit tests
+use the unsupported process-ABI stub and fall back to `std::thread::sleep`;
+the original idle unit test checks that the requested delay is retained. These
+are original guest control-flow adapters, not copied Bun, libc or host code.
 
 ## Native process descriptor bridge
 
