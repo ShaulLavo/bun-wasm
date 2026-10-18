@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Check first-blocker classification after self-spawn became available."""
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location("report", Path(__file__).with_name("bun-suite-report.py"))
@@ -14,6 +19,20 @@ def record(path, error, excerpt=""):
 
 
 class Classification(unittest.TestCase):
+    def test_report_updates_guide_and_preserves_short_readme(self):
+        counts = {"pass": 1, "fail": 0, "skip": 0, "todo": 0, "errors": 0}
+        result = {"file": "example.test.ts", "counts": counts, "exit": 0, "complete": True, "timed_out": False, "fully_passing": True, "first_errors": [], "failing_tests": [], "excerpt": ""}
+        runner = Path(__file__).with_name("bun-suite.py")
+        data = {"provenance": {"engine": "quickjs", "suite_commit": "fixture", "runner_sha256": hashlib.sha256(runner.read_bytes()).hexdigest()}, "summary": {"files": 1, "fully_passing": 1, "timeouts": 0, "counts": counts}, "results": [result]}
+        with tempfile.TemporaryDirectory(prefix="bun-wasm-report-guide-", dir="/work/tmp") as directory:
+            output = Path(directory)
+            (output / "README.md").write_text("Short entry point.\n")
+            source = output / "results.json"
+            source.write_text(json.dumps(data))
+            subprocess.run([sys.executable, report.__file__, str(source), "--output", str(output), "--runtime-commit", "fixture"], check=True, capture_output=True, text=True)
+            self.assertEqual((output / "README.md").read_text(), "Short entry point.\n")
+            self.assertIn("1 fully passing", (output / "guide.md").read_text())
+
     def test_data_url_is_not_an_uninstalled_package(self):
         item = record("js/node/string-module.test.js", "error: Cannot find package 'data:text'")
         self.assertEqual(report.classify(item, "", {})[1], "data URL module loading")
