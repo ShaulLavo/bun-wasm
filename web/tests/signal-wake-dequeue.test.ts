@@ -3,7 +3,7 @@ import { Wasi } from "waffle/core/wasi";
 import { MemFS } from "waffle/fs/memory";
 import { outcomeWord } from "waffle/proc/outcome";
 import { ProcessABI } from "waffle/proc/abi";
-import { createSignalState, requestSignal } from "waffle/proc/signals";
+import { createSignalState, requestSignal, signalPending } from "waffle/proc/signals";
 
 test("dequeue preserves later pending signals and releases the final WASI wait", () => {
   const signals = { signalState: createSignalState(), interrupt: new Int32Array(new SharedArrayBuffer(4)),
@@ -11,7 +11,7 @@ test("dequeue preserves later pending signals and releases the final WASI wait",
   const memory = new WebAssembly.Memory({ initial: 1 });
   let waits = 0;
   const fs = new MemFS();
-  const wasi = new Wasi({ fs, args: [], env: {}, preopens: {}, interrupt: signals.interrupt,
+  const wasi = new Wasi({ fs, args: [], env: {}, preopens: {}, interrupt: signals.interrupt, interruptPending: () => signalPending(signals),
     stdout() {}, stderr() {}, sleep() { throw new Error("shared interrupt must select a native wait"); },
     wait(word, expected, milliseconds) { waits++; Atomics.wait(word, 0, expected, milliseconds); } });
   const unused = (): never => { throw new Error("unexpected service operation"); };
