@@ -23,7 +23,7 @@ function runConfirmation(run: ReturnType<typeof startRun>) {
   return { result, confirmed: () => confirmed };
 }
 
-function isolatedRoot(isolated = true, engine: Engine = "browser", options: Parameters<typeof processRuntimeFixture>[1] = {}, args = ["-e", "0"]) {
+function isolatedRoot(isolated = true, engine: Engine = "browser", options: Parameters<typeof processRuntimeFixture>[1] = {}, args = ["-e", "0"], prepare?: (runtime: ReturnType<typeof processRuntimeFixture>) => void) {
   const originalWorker = globalThis.Worker;
   const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
@@ -45,6 +45,8 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
   let release!: () => void;
   const quiescence = new Promise<void>(resolve => { release = resolve; });
   class FakeWorker {
+    constructor() { worker ??= this; }
+    onerror: ((event: ErrorEvent) => void) | null = null;
     onmessage: ((event: MessageEvent) => void) | null = null;
     terminated = 0;
     postMessage(value: RunRequest) {
@@ -68,6 +70,7 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
     async quiesce() { revoked++; await quiescence; },
   } as unknown as SharedFilesystem;
   const runtime = processRuntimeFixture(filesystem, options);
+  prepare?.(runtime);
   const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   const run = startRun({ engine, module, args, env: {}, runtime, moduleScope: false }, {
     stdout(data) { output.push(new TextDecoder().decode(data)); }, stderr() {}, phase(name) { phases.push(name); },
@@ -776,4 +779,26 @@ test("page lint/fmt roots lazily compile verified tools once and retain the sele
     if (originalBuilds) Object.defineProperty(globalThis, "__bunwasmBuilds", originalBuilds);
     else Reflect.deleteProperty(globalThis, "__bunwasmBuilds");
   }
+});
+
+
+test("worker failure before deferred executable markers cannot adopt a late running root", async () => {
+  const gate = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const state = isolatedRoot(true, "browser", {}, ["-e", "0"], runtime => {
+    const lookup = runtime.filesystem.lookup.bind(runtime.filesystem);
+    runtime.filesystem.lookup = async path => { entered.resolve(); await gate.promise; return lookup(path); };
+  });
+  try {
+    await entered.promise;
+    state.worker.onerror!({ preventDefault() {}, message: "early worker failure" } as ErrorEvent);
+    state.release();
+    expect(await state.run.done).toMatchObject({ code: 1 });
+    expect(state.worker.terminated).toBe(1);
+    gate.resolve();
+    // Await every marker in the serialized preparation chain before inspecting service ownership.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const supervisor = await (await state.runtime.processes()).ready();
+    expect(supervisor.get(1)).toBeUndefined();
+  } finally { gate.resolve(); await state.dispose(); }
 });

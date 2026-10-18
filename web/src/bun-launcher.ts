@@ -46,7 +46,7 @@ export function bunLauncher(engine: Engine, options: BunLauncherOptions): GuestL
       workerUrl: options.workerUrl,
       request: {
         engine, adapter: "bun", module, interruptible: context.interruptible,
-        args: [context.request.executable].concat(context.request.argv.slice(1)), env: { ...context.request.env, PWD: context.request.cwd },
+        args: context.request.argv, env: { ...context.request.env, PWD: context.request.cwd, BUNWASM_EXEC_PATH: context.request.executable },
         trace: false, net: null, moduleCache,
       },
       cleanup: () => { if (moduleCache) void caches.delete(moduleCache); },

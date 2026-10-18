@@ -1,5 +1,5 @@
 import { readOutcome } from "waffle/proc/outcome";
-import { readSync } from "node:fs";
+import { readSync, writeSync } from "node:fs";
 import { DescriptorTable, OpenDescription, type Descriptor, type Resource, type Stream } from "waffle/core/descriptors";
 import { ProcessErrno, ProcessError } from "waffle/proc/types";
 import { MemFS } from "waffle/fs/memory";
@@ -32,7 +32,16 @@ function nativeStdio(fd: number): NativeStdio {
     kind: "terminal", nativeFd: fd, read,
     write: chunks => writeStdio(fd, chunks),
     // Native input is serviced by preview1's blocking fd_read, not a blocking runtime_proc import.
-    tryRead: () => -6, tryWrite: chunks => writeStdio(fd, chunks),
+    tryRead: () => -6,
+    tryWrite: chunks => {
+      const bytes = chunks.find(chunk => chunk.length);
+      if (!bytes) return 0;
+      try { return writeSync(fd, bytes); }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        return code === "EAGAIN" || code === "EWOULDBLOCK" || code === "EINTR" ? -6 : code === "EPIPE" ? -64 : -29;
+      }
+    },
     readiness: () => ({ readable: false, writable: fd !== 0, hangup: false }),
   };
 }

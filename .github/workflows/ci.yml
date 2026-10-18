@@ -13,6 +13,45 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  rust:
+    name: Rust workspace tests (QuickJS host)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/cargo-target
+      TMPDIR: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Configure portable toolchain homes
+        run: |
+          echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+          echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
+          git config --global user.name 'bun-wasm CI'
+          git config --global user.email 'ci@localhost'
+      - name: Install native build tools and pinned Rust
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config
+          rustup show
+      - run: bun install --frozen-lockfile
+      - name: Prepare pinned upstream sources and configure-time codegen
+        run: |
+          bash scripts/sync-bun.sh
+          bash scripts/sync-crypto.sh
+      - name: Test every workspace crate on the host
+        # Defaults select QuickJS; JSC's host target links no WASM-only C++ libraries.
+        # bunwasm-posix is cfg(wasi), so its WASI-only tests are not host-runnable.
+        # The transpile example links a WASI-only upstream executable, not a host test.
+        # All workspace tests live in library and binary unit-test targets.
+        run: cargo test --workspace --lib --bins --locked --release -j 2
+
   package:
     name: Browser adapter package
     runs-on: ubuntu-latest

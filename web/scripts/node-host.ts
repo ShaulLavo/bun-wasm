@@ -113,7 +113,8 @@ async function run(data: GuestData) {
   const config = data.settings;
   const request = data.request;
   const args = request ? request.argv.slice(1) : config.args;
-  const env = request ? { ...request.env, PWD: request.cwd, BUN_WASM_STACK_KIB: request.env.BUN_WASM_STACK_KIB ?? GUEST_STACK_KIB } : config.env;
+  const env: Record<string, string> = request ? { ...request.env, PWD: request.cwd, BUN_WASM_STACK_KIB: request.env.BUN_WASM_STACK_KIB ?? GUEST_STACK_KIB } : { ...config.env };
+  env.BUNWASM_EXEC_PATH = request?.executable ?? "/bin/bun";
   const state = workerProcessState(data.transport);
   const signals = createNodeSignalController(state.signals);
   let cliFetch: ReturnType<typeof installCliFetch> | undefined;
@@ -136,12 +137,13 @@ async function run(data: GuestData) {
       isSignalPending: () => signals.pending(),
       postMessage: message => parentPort!.postMessage(message), finish,
     });
-    const wasi = new WASI({ version: "preview1", args: ["bun"].concat(args), env: processHost.env, preopens: config.preopens, returnOnExit: true });
+    const wasi = new WASI({ version: "preview1", args: request?.argv ?? ["bun"].concat(args), env: processHost.env, preopens: config.preopens, returnOnExit: true });
     const imports = wasi.getImportObject() as NodeWasiImports;
     let instance: WebAssembly.Instance;
     if (config.withNet) cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
     const host = processHost.install(imports, () => instance, cliFetch?.call);
-    instance = await WebAssembly.instantiate(data.module, imports);
+    const module = request ? await nodeModule({ args, baseModule: data.module, wasmPath: config.wasmPath }) : data.module;
+    instance = await WebAssembly.instantiate(module, imports);
     cliFetch?.install();
     host.installSlots();
     if (typeof instance.exports._start !== "function" || !(instance.exports.memory instanceof WebAssembly.Memory)) {

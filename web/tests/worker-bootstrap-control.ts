@@ -1,9 +1,9 @@
 import { Wasi } from "waffle/core";
 import { MemFS } from "waffle/fs/memory";
-import { DescriptorTable } from "waffle/core/descriptors";
+import { DescriptorTable, OpenDescription } from "waffle/core/descriptors";
 import { FilesystemClient, FilesystemService, MemoryBackend, connectFilesystemIdentity, createFilesystemConnection, createProcessFilesystemIdentity } from "waffle/fs";
 import { createFilesystemDescriptorCodec } from "waffle/proc/filesystem-codec";
-import { WorkerProcessClient, createWorkerProcessTransport, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
+import { WorkerProcessClient, createWorkerProcessTransport, installWorkerBindings, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { bootstrap, type RuntimeWorkerMessage } from "waffle/browser/worker";
 import { readOutcome, startStatus } from "waffle/proc/outcome";
 
@@ -124,4 +124,31 @@ export function webIdlBoundaryControl() {
     check(output.join("") === "stdio snapshot", "stdio reached WebIDL decoder without a snapshot");
     return { pathDecoded: true, stdioDecoded: true, wasmResizable: Reflect.get(memory, "resizable") === true };
   } finally { wasi.descriptors.dispose(); }
+}
+
+/** Transactional import control shared with the real-browser gate. */
+export function partialBindingRollbackControl() {
+  const transport = createWorkerProcessTransport();
+  transport.bindings = [
+    { fd: 17, reference: 0, rightsBase: 1n, rightsInheriting: 0n },
+    { fd: 31, reference: 1, rightsBase: 1n, rightsInheriting: 0n },
+  ];
+  transport.resources = ["retained", "reject"];
+  const descriptors = new DescriptorTable();
+  const stream = { kind: "terminal" as const, read: () => 0, write: () => 0, readiness: () => ({ readable: false, writable: true, hangup: false }) };
+  const events: string[] = [];
+  const codecUnderTest = {
+    import(token: unknown) {
+      if (token === "reject") throw new TypeError("binding rejected");
+      return new OpenDescription(stream, () => events.push("dispose inherited"));
+    },
+    export() { throw new Error("unexpected export"); }, discard() {},
+  };
+  let failure: unknown;
+  try { installWorkerBindings(transport, descriptors, codecUnderTest); } catch (error) { failure = error; }
+  check(failure instanceof TypeError, "binding import error must retain its startup classification");
+  check(descriptors.get(17) === undefined && descriptors.get(31) === undefined, "partial bindings survived rollback");
+  check(events.length === 1 && events[0] === "dispose inherited", "inherited ownership not released exactly once");
+  descriptors.dispose();
+  return { typed: true, rolledBack: true, released: true };
 }

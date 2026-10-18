@@ -106,8 +106,18 @@ try {
         await page.waitForFunction(() => Reflect.get(globalThis, "bunRuntimeProcResult"), undefined, { timeout: 90_000 });
         const result = await page.evaluate(() => Reflect.get(globalThis, "bunRuntimeProcResult"));
         console.log(JSON.stringify({ browser: name, version: browser.version(), scenario, artifact: artifactReceipt, result, pageErrors: errors }));
-        assert.equal(result.ok, true, JSON.stringify(result));
-        assert.equal(result.cleanup.activeWorkers, 0, "normal path must stop all workers, not rely on forced teardown");
+        const expected = bunRuntimeProcScenarios.find(item => item.name === scenario)?.expectedFailure;
+        if (expected) {
+          // Keep executing the real failure: a fix is an unexpected pass, not a silent skip.
+          assert.equal(result.ok, false, "remove expected-failure marker after patched libc lands");
+          assert.ok(result.error?.includes("external generic root exit"), JSON.stringify(result));
+          assert.ok(result.stderr.includes(expected.stderr), JSON.stringify(result));
+          assert.equal(result.teardownError, undefined);
+          console.log(JSON.stringify({ browser: name, scenario, expectedFailure: expected.reason, observed: expected.stderr }));
+        } else {
+          assert.equal(result.ok, true, JSON.stringify(result));
+          assert.equal(result.cleanup.activeWorkers, 0, "normal path must stop all workers, not rely on forced teardown");
+        }
         assert.deepEqual(result.teardown, { forcedWorkers: 0, activeWorkers: 0 });
         assert.deepEqual(errors, []);
       } catch (error) {

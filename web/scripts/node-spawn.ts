@@ -12,6 +12,8 @@ import type { ProcessContext } from "waffle/proc/types";
 import { startStatus } from "waffle/proc/outcome";
 import { PipeController, PipePublicationRegistry } from "waffle/proc/pipes";
 import { nodeStdioCodec } from "./node-process.ts";
+import { drainStartupDiagnostic } from "./node-startup-diagnostic.ts";
+import { ProcessErrno, ProcessError } from "waffle/proc/types";
 
 export const nodeExecutables = ["/bin/bun", "/bin/node"] as const;
 export type NodeEngineModules = Partial<Record<"quickjs" | "jsc", WebAssembly.Module>>;
@@ -130,11 +132,21 @@ export class NodeProcessBroker {
         this.attach(worker, transport);
         return { terminate: () => worker.terminate().then(() => {}) };
       },
-      startFailed: (pid, error) => {
+      startFailed: (pid, error, active) => {
         const resource = this.supervisor.get(pid)?.descriptors.get(2)?.resource;
         const bytes = new TextEncoder().encode(`bun-wasm: ${error instanceof Error ? error.message : error}\n`);
-        if (resource?.kind === "pipe" || resource?.kind === "terminal") resource.write([bytes]);
-        else if (pid === 1) writeSync(2, bytes);
+        if (resource?.kind === "pipe" || resource?.kind === "terminal") {
+          const write = resource.tryWrite;
+          if (!write) throw new ProcessError(ProcessErrno.NOTSUP, "startup diagnostic requires immediate stderr writes");
+          return drainStartupDiagnostic(bytes, bytes => write.call(resource, [bytes]), active);
+        }
+        if (pid === 1) return drainStartupDiagnostic(bytes, bytes => {
+          try { return writeSync(2, bytes); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "EAGAIN" || (error as NodeJS.ErrnoException).code === "EWOULDBLOCK") return -ProcessErrno.AGAIN;
+            throw error;
+          }
+        }, active);
       },
       onError: options.onError,
     });

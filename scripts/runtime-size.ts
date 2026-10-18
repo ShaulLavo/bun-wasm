@@ -27,17 +27,19 @@ export function initialJavaScript(outputs: OutputGraph, roots: readonly string[]
   return Array.from(seen).sort();
 }
 
-const CORE_BUDGET_KIB = 7;
+// Waffle 0.0.41: typed startup, directory and fd-3 support; measured 7,516 B.
+const CORE_BUDGET_KIB = 7.5;
 export function checkCoreBudget(gzipBytes: number): void {
   const budget = CORE_BUDGET_KIB * 1024;
   if (gzipBytes > budget) throw new Error(`core exceeds ${budget} B gzip budget by ${gzipBytes - budget} B; inspect runtime/core imports and the layer report`);
 }
 
-/** Reservation and synchronous signal-control primitives are eager, not the process service. */
+/** Reservation/directory cells, signal control and typed startup values are eager, not the
+ * supervisor, executable registry or worker service. Their bytes remain in the size totals. */
 export function processServiceInputs(inputs: readonly string[], runtime: RuntimePackage): string[] {
   return inputs.filter(path => {
     const match = /^(?:dist\/)?proc\/(.+)\.(?:ts|js)$/.exec(runtime.relativeInput(path) ?? "");
-    return match !== null && !["identity", "stub", "outcome", "wait-status", "signals", "types"].includes(match[1]!);
+    return match !== null && !["identity", "stub", "control", "directory", "outcome", "start-errno", "start-failure", "wait-status", "signals", "types"].includes(match[1]!);
   });
 }
 export function checkLazyProcessService(inputs: readonly string[], runtime: RuntimePackage): void {

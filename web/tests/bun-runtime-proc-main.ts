@@ -105,7 +105,7 @@ try {
   };
   const completion = Promise.withResolvers<{ code: number; error?: string }>();
   await service.adoptRuntimeRoot(transport, { filesystem: identity, acknowledged: () => acknowledged,
-    output, quiesce: () => runtime!.filesystem.quiesce(identity),
+    output,
     stop: () => { rootWorker?.terminate(); completion.resolve({ code: 137 }); },
   });
   rootWorker = new Worker(new URL("./preview1-worker.js", location.href), { type: "module" });
@@ -185,7 +185,7 @@ try {
   equal(errors.length, 0, "worker errors");
   result = { ok: true, ...diagnostics(), pending: bunRuntimeProcPending };
 } catch (error) {
-  result = { ok: false, ...diagnostics(), error: error instanceof Error ? `${error.stack ?? error.message}` : String(error) };
+  result = { ok: false, ...diagnostics(), error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error) };
 } finally {
   try { installation?.dispose(); await runtime?.dispose(); }
   catch (error) { result = { ...result, ok: false, teardownError: String(error) }; }

@@ -50,6 +50,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, process-aware idle waits, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
+| [Process startup and executable identity](#process-startup-and-executable-identity) | Host feature | Original startup-before-wait observation, admitted executable metadata, lazy-root cancellation and Node child tool routing; no upstream implementation copied. |
+| [Node startup diagnostic drain](#node-startup-diagnostic-drain) | Host feature | Adapt Waffle's cancellable, bounded asynchronous diagnostic drain for the Node process host's immediate stderr writes. |
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
@@ -2521,7 +2523,7 @@ as the rest of the spawn facade tests.
 
 The former Bun-only `SubprocessHost`, startup supervisor and startup-probe helper
 are removed. Waffle owns process launch and worker lifecycle. Both `wait` and `wait_job` consume an eight-byte kind/value result from Waffle
-`cbb138b55034c7a6988e385021d9e1251fea0e34` (`proc/{types,abi,outcome}.ts` and
+`a0a0f8794cde02410a11be38771b31cdbd3af89a` (`proc/{types,abi,outcome}.ts` and
 `proc/worker-{client,abi}.ts`), shared by the root, web and sandbox consumers. START_FAILED
 is kind 2 with a positive WASI errno: ENOENT, EACCES, ENOTDIR, ENOEXEC, ENOMEM, EAGAIN
 or EIO. Original Rust guest/native bridges and `spawn.ts` preserve this distinction;
@@ -2701,3 +2703,63 @@ That temporary worktree and index are removed on both success and failure.
 codegen, and `--bun-dir` supports an explicit source checkout. Regression tests
 cover an old detached worktree, a stale shared ref, repeat sync, cleanup, and
 refusal to overwrite tracked or untracked work.
+
+
+## Process startup and executable identity
+
+Class **Host feature**, original guest, browser, native and Node adapters; no
+upstream implementation is copied. Async spawn observes nonconsuming startup
+status before every consuming wait, including kill probes, and keeps a pending
+startup record alive until entry or startup failure is decided. Regression
+coverage exercises a fast exit followed immediately by Node `kill(0)`.
+
+Hosts publish the absolute admitted executable through host-owned
+`BUNWASM_EXEC_PATH`, independently of the caller's preview1 argv[0]. The guest
+captures that as `process.execPath`; `process.argv0` retains the caller argument.
+Worker, fork and self-spawn therefore cannot switch engines or fail merely
+because a custom environment removes Bun from PATH. Native, Node and browser
+fixtures exercise missing and opposite-engine PATHs. Node children select the
+same tool module as root lint/format commands. A failed browser worker cannot
+be adopted as a running root after asynchronous executable-marker preparation.
+
+Rust CI runs all workspace library and binary unit-test targets with the default
+QuickJS host engine. The transpiler's example is a WASI executable rather than a
+host test; the POSIX crate is cfg(wasi). Environment defaults remain workstation
+paths but honor CI-provided toolchain and scratch locations.
+
+The external-runtime browser gate uses the broker's own root filesystem fence,
+not a redundant callback through the guarded public filesystem after disposal
+starts. All inherited-fd3 libc controls still execute as explicit expected
+failures, with exact ENOENT/EBADF diagnostics and verified teardown, until the
+patched wasi-libc follow-up lands.
+
+The Waffle core budget is 7,680 B gzip, matching its upstream budget; this pin
+measures 7,516 B. Tagged process directory/control and startup value primitives
+remain included in the startup byte totals. Supervisor, registry, table, worker
+service, pipes and interrupt rewriting still cannot load before first use.
+
+## Node startup diagnostic drain
+
+Class **Host feature**. `web/scripts/node-startup-diagnostic.ts` adapts
+Waffle's `browser/diagnostic.ts` at
+`a0a0f8794cde02410a11be38771b31cdbd3af89a` (MIT) for Node startup stderr.
+The original offset/progress-deadline algorithm is retained: positive writes
+reset the five-second no-progress bound; EAGAIN yields instead of blocking;
+errors identify the unwritten span. Names and imports are local because the
+upstream helper is not a public package export. Node's original broker adapter
+returns this drain to the supervisor's exactly-once startup sink and honors its
+active predicate, so disposal cancels delivery before descriptor release. Native
+stdio `tryWrite` now performs one immediate write rather than calling the
+blocking preview1 helper. Tests cover partial writes, delayed progress,
+competing error/exit notices and disposal during a blocked diagnostic. Post-entry
+diagnostic delivery remains a separate Waffle follow-up (#24).
+
+This pin includes Waffle #23's transactional inherited-binding rollback, which is
+now enabled in the shared unit/browser control, and #27's exactly-once startup
+sink ownership and cancellation. The core allowance changed from 7,168 to
+7,680 B gzip without removing code. The cbb138b5 core measured 7,454 B; a0a0f87
+measures 7,516 B (23,106 B minified). The deliberate upstream additions are #19
+(inherited fd3 support), #22 (startup observation), and #23 (transactional
+rollback); these primitives remain measured. #27's diagnostic service remains
+lazy. Follow-up: after #24 exports the shared drain, replace the Node adaptation
+with that public helper and delete the local copy.

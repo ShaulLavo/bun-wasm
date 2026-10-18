@@ -217,6 +217,8 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
     t.add("exit", move |a| st.exit(a.opt_num(0).unwrap_or(0.0) as i32));
     let st = state.clone();
     t.add("argv", move |_| Ok(Val::Array(st.argv.iter().map(|s| Val::from(s.as_str())).collect())));
+    // Host-owned metadata, independent of the caller-controlled preview1 argv[0] and PATH.
+    t.add("execPath", |_| Ok(std::env::var("BUNWASM_EXEC_PATH").unwrap_or_else(|_| "/bin/bun".into()).into()));
     let st = state.clone();
     t.add("mainPath", move |_| Ok(st.main.borrow().clone().into()));
     let st = state.clone();

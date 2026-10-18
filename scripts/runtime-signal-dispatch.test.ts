@@ -11,7 +11,7 @@ function runtime(pending: number[], reject: Record<number, number> = {}, guestEv
   const signals: [number, number][] = [];
   const internal: any = {
     native: {
-      platformInfo: {}, env: () => ({}), argv: () => [],
+      platformInfo: {}, env: () => ({}), argv: () => [], execPath: () => "/bin/bun",
       hostSignal(signal: number, mode: number) {
         signals.push([signal, mode]);
         if (signal in reject) return reject[signal];

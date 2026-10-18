@@ -250,7 +250,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     runtimeProcess: options.runtimeProcess,
     module: options.module,
     args: [`${ENGINE_BIN[options.engine]}/bun`].concat(options.args),
-    env: engineEnvironment(options.engine, options.env),
+    env: { ...engineEnvironment(options.engine, options.env), BUNWASM_EXEC_PATH: `${ENGINE_BIN[options.engine]}/bun` },
     filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
     trace: options.trace ?? false,
     net: ring,
@@ -406,7 +406,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     // The host endpoint and descriptor reservations use the same filesystem identity.
     const { port, ...filesystem } = request.filesystem;
     transport.data = { ...(transport.data as object | undefined), filesystem };
-    await subprocess.adoptRuntimeRoot(transport);
+    if (!await subprocess.adoptRuntimeRoot(transport, () => finished)) return;
     if (options.adapter !== "preview1" && isToolCommand(options.args)) request.module = await loadTools();
     rootOutcome = state.signals.outcome;
     rootPid = state.pid;

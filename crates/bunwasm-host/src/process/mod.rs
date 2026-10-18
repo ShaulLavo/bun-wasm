@@ -613,7 +613,11 @@ impl Processes {
                             runtime.clone(),
                             &module,
                             request.argv,
-                            request.env.into_iter().collect(),
+                            {
+                                let mut env = request.env;
+                                env.insert("BUNWASM_EXEC_PATH".into(), request.executable);
+                                env.into_iter().collect()
+                            },
                             stdio,
                             cancellation.clone(),
                         )

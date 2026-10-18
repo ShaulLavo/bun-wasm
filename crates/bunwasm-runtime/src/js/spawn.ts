@@ -519,12 +519,12 @@
       kill(signal) {
         if (settled) return;
         const number = signalNumber(signal);
-        if (waitChild(spec)) return;
+        if (observeAndWait()) return;
         // Signal 0 only asks whether the child is still alive.
         if (!number) return;
         const status = native.procKill(spec.pid, number);
         if (status < 0) {
-          if (waitChild(spec)) return;
+          if (observeAndWait()) return;
           throw processError(status, "kill");
         }
         child.killed = true;
@@ -563,18 +563,21 @@
       closed = true;
       sink.destroy();
     }
+    function observeAndWait(): Exit | null {
+      if (observingStart) {
+        const startup = native.procStartStatus(spec.pid);
+        // Do not consume a completion racing entry: retain the record until startup is final.
+        if (startup === AGAIN) return null;
+        observingStart = false;
+        if (startup === 0) (spec.options._onSpawn as () => void)();
+      }
+      return waitChild(spec);
+    }
     function step() {
       if (closed) return true;
       if (!settled) {
-        // Observe before consuming even a very fast exit; never delay entry on child output.
-        if (observingStart) {
-          const startup = native.procStartStatus(spec.pid);
-          if (startup !== AGAIN) {
-            observingStart = false;
-            if (startup === 0) (spec.options._onSpawn as () => void)();
-          }
-        }
-        const status = waitChild(spec);
+        // Every consuming path, including kill probes, observes startup first.
+        const status = observeAndWait();
         if (status) { sink.destroy(); finish(status); }
       }
       if (!settled) {

@@ -227,6 +227,8 @@ fn run(options: Options) -> Result<i32> {
         env.push(("PWD".into(), pwd));
     }
     env.extend(options.env);
+    env.retain(|(name, _)| name != "BUNWASM_EXEC_PATH");
+    env.push(("BUNWASM_EXEC_PATH".into(), "/bin/bun".into()));
     let mut runtime = process::Runtime::new(engine.clone(), module, dirs)?;
     Arc::get_mut(&mut runtime).unwrap().tools_path = Some(wasm.with_file_name("bun-tools.wasm"));
     for (name, path) in &options.engines {

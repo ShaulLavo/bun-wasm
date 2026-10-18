@@ -380,7 +380,7 @@ fn new_state(entry: &Entry, args: &[String], transpiler: Box<dyn Transpiler>) ->
         Entry::Eval(_) => None,
         Entry::Test(_) => Some("test".to_owned()),
     };
-    let argv = std::iter::once(String::from("bun"))
+    let argv = std::iter::once(std::env::args().next().unwrap_or_else(|| "bun".into()))
         .chain(script)
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();

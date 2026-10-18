@@ -10,6 +10,8 @@ const orderedChild = readFileSync(new URL("../../tests/fixtures/pipe-write-order
 const stdinRace = readFileSync(new URL("../../tests/fixtures/pipe-stdin-race/index.ts", import.meta.url), "utf8");
 const stdinLifecycle = readFileSync(new URL("../../tests/fixtures/spawn-stdin/index.ts", import.meta.url), "utf8");
 const stdinLifecycleExpected = readFileSync(new URL("../../tests/fixtures/spawn-stdin/expected.txt", import.meta.url), "utf8").trim().split("\n");
+const executableLifecycle = readFileSync(new URL("../../tests/fixtures/spawn-executable/index.ts", import.meta.url), "utf8");
+const executableChild = readFileSync(new URL("../../tests/fixtures/spawn-executable/child.ts", import.meta.url), "utf8");
 const configurationChecks = readFileSync(new URL("../../tests/fixtures/lint-fmt-config/index.ts", import.meta.url), "utf8");
 const configurationExpected = readFileSync(new URL("../../tests/fixtures/lint-fmt-config/expected.txt", import.meta.url), "utf8").trim().split("\n");
 const executableAliases = ["bun", "node", "/bin/bun", "/bin/node",
@@ -181,6 +183,12 @@ try {
       for (const line of apiExpected) assert.ok(api.output.includes(line), `missing ${line} in ${api.output}`);
       console.log(`ok ${browserName} ${engine} #${iteration}: Bun/Node subprocess APIs, nested workers, large stdin, cwd, files, timeout`);
       if (apiOnly) continue;
+      await writeFile(page, "/home/user/spawn-executable/index.ts", executableLifecycle);
+      await writeFile(page, "/home/user/spawn-executable/child.ts", executableChild);
+      const executable = await run(page, "bun run spawn-executable/index.ts");
+      assert.equal(executable.code, 0, executable.output);
+      assert.ok(executable.output.includes("absolute self-spawn, fork and Worker preserve the admitted executable without PATH"), executable.output);
+      console.log(`ok ${browserName} ${engine}: current executable survives missing or cross-engine PATH in spawn, fork and Worker`);
       await writeFile(page, "/home/user/spawn-stdin.ts", stdinLifecycle);
       const stdin = await run(page, "bun run spawn-stdin.ts");
       assert.equal(stdin.code, 0, stdin.output);

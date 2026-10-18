@@ -116,8 +116,10 @@ test("generic host failure confirms after its filesystem fence before physical t
     const shared = workerProcessState(transport);
     const record = supervisor.get(pid)!;
     let confirmedAtTermination = -1;
+    const terminationRequested = Promise.withResolvers<void>();
     worker.terminate = () => {
       confirmedAtTermination = record.jobSafe && record.result !== null ? 1 : 0;
+      terminationRequested.resolve();
       return physicalTermination;
     };
     worker.onerror?.({ preventDefault() {}, message: "worker startup failed" } as ErrorEvent);
@@ -128,7 +130,7 @@ test("generic host failure confirms after its filesystem fence before physical t
     expect(confirmedAtTermination).toBe(-1);
     state.release();
     expect(await waiting).toEqual({ kind: "start-failed", code: 5, error: "EIO", status: null });
-    await Promise.resolve();
+    await terminationRequested.promise;
     expect(controlLoad(shared.confirmed, 0)).toBe(1);
     expect(confirmedAtTermination).toBe(1);
     expect(record.jobSafe).toBe(true);

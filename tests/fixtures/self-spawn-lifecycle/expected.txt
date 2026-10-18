@@ -5,7 +5,7 @@ blocked input kill 137 SIGKILL
 missing cwd ENOENT
 nested 0 0 99
 clock timeout true true true
-child limit EAGAIN
+child capacity 0 fifth
 children stopped true true
 inherit 0 42
 late kill 0 null

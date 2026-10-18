@@ -94,7 +94,8 @@ test("generic engine scope reaches real launchRuntime with the process transport
     }
     const worker = realm.workers[0]!, request = worker.request!;
     expect(request.runtimeProcess).toBeDefined();
-    expect(request.args).toEqual(["/usr/libexec/engine-probe", "-e", "fixture-source"]);
+    expect(request.args).toEqual(["bun", "-e", "fixture-source"]);
+    expect(request.env.BUNWASM_EXEC_PATH).toBe("/usr/libexec/engine-probe");
     const state = workerProcessState(request.runtimeProcess!);
     expect(state.pid).toBe(child.pid);
     expect(child.signalState.buffer).toBe(state.signals.signalState.buffer);

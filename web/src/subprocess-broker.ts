@@ -65,17 +65,20 @@ export class SubprocessBroker {
   }
 
   /** Roots this run's process tree at a worker the page started with `transport`. */
-  async adoptRuntimeRoot(transport: WorkerProcessTransport): Promise<void> {
+  async adoptRuntimeRoot(transport: WorkerProcessTransport, cancelled?: () => boolean): Promise<boolean> {
     if (this.disposed) throw new Error("Process broker is disposed");
     const { workerProcessState } = await import("waffle/proc/worker-client");
     const state = workerProcessState(transport);
     this.root = { pid: state.pid, job: state.job, ...state.signals };
     const service = await this.processService();
     if (this.disposed) throw new Error("Process broker is disposed");
+    // Marker preparation may outlive a worker error and its already-confirmed run.
+    if (cancelled?.()) return false;
     await service.adoptRuntimeRoot(transport, {
       filesystem: this.options.rootFilesystem, acknowledged: this.options.rootAcknowledged,
       output: this.options.output, stop: this.options.stopRoot,
     });
+    return true;
   }
   async runtimeMessage(message: WorkerProcessMessage, senderPid: number): Promise<void> {
     return (await this.processService()).runtimeMessage(message, senderPid);

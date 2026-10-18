@@ -679,3 +679,23 @@ test("Node stdin destroy closes its runtime_proc writer and delivers EOF", async
   expect(fake.open()).toBe(0);
   expect(fake.calls.filter(call => call.startsWith("kill"))).toEqual([]);
 });
+
+for (const outcome of [[0, 0], [2, 44]] as const) {
+  test(`Node kill(0) observes startup before consuming completion ${outcome[0]}`, async () => {
+    const fake = service({ deferStart: true });
+    const { module, pump } = load(fake);
+    const child = module.nodeChildProcess().spawn("bun", ["-e", "0"], { stdio: "pipe" });
+    const events: string[] = [];
+    child.on("spawn", () => events.push("spawn"));
+    child.on("error", () => events.push("error"));
+    child.on("exit", () => events.push("exit"));
+    const record = fake.children.get(child.pid)!;
+    record.started = outcome[0] === 0;
+    fake.select(record, outcome);
+    fake.publish(record);
+    child.kill(0);
+    await pump();
+    expect(events).toEqual(outcome[0] === 0 ? ["spawn", "exit"] : ["error"]);
+    expect(fake.pipes.size).toBe(0);
+  });
+}

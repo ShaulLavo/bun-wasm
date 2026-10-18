@@ -80,7 +80,7 @@ test("every engine forwards to the production process worker", async () => {
     const context = { module, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { PATH: "/bin" }, cwd: "/" } };
     for (const [name, launch] of f.adapters) {
       await launch(context as never, { launchWorker(_context: unknown, options: unknown) { launches.push(options); return { terminate() {} }; } } as never);
-      expect(launches.at(-1)).toMatchObject({ workerUrl, request: { engine: name.slice(4), module, args: ["/bin/bun", "-e", "0"] } });
+      expect(launches.at(-1)).toMatchObject({ workerUrl, request: { engine: name.slice(4), module, args: ["bun", "-e", "0"], env: { BUNWASM_EXEC_PATH: "/bin/bun", PATH: "/bin" } } });
     }
     const load = f.programs.get("/bin/bun")!.module as () => Promise<WebAssembly.Module>;
     expect(await load()).toBe(module);

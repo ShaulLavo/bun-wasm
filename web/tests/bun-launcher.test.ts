@@ -35,7 +35,7 @@ for (const workerUrl of ["./worker.js", "worker.js", "https://cdn.test/assets/wo
   test(`${engine} with ordinary worker URL ${workerUrl} passes it unchanged and caches nothing`, async () => {
     const launched = await launch(engine, workerUrl);
     expect(launched.workerUrl).toBe(workerUrl);
-    expect(launched.request).toMatchObject({ engine, adapter: "bun", net: null, moduleCache: null, args: ["/bin/bun", "-e", "0"], env: { A: "1", PWD: "/work" } });
+    expect(launched.request).toMatchObject({ engine, adapter: "bun", net: null, moduleCache: null, args: ["bun", "-e", "0"], env: { A: "1", PWD: "/work", BUNWASM_EXEC_PATH: "/bin/bun" } });
     launched.cleanup!();
     expect(deleted).toEqual([]);
   });
@@ -77,7 +77,8 @@ test("launchers do not add hidden executable rewriting", async () => {
   await bunLauncher("jsc", { workerUrl: "./worker.js" })(context, service(launches));
   await preview1Launcher({ workerUrl: "./worker.js" })(context, service(launches));
   expect(launches.every(launch => launch.executableName === undefined)).toBe(true);
-  expect(launches[0]!.request.args[0]).toBe("/bin/bun");
+  expect(launches[0]!.request.args[0]).toBe("bun");
+  expect(launches[0]!.request.env.BUNWASM_EXEC_PATH).toBe("/bin/bun");
 });
 
 for (const engine of ["quickjs", "jsc", "browser"] as const) test(`${engine} lint/fmt selects tools without changing its process context or engine`, async () => {
@@ -89,7 +90,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) test(`${engine} lin
     const toolContext = { ...context, request: { ...context.request, argv: ["bun"].concat(args) } } as ProcessContext;
     await launcher(toolContext, service(launches));
     expect(launches).toHaveLength(1);
-    expect(launches[0]!.request).toMatchObject({ module: tools, engine, args: ["/bin/bun"].concat(args), env: { A: "1", PWD: "/work" } });
+    expect(launches[0]!.request).toMatchObject({ module: tools, engine, args: ["bun"].concat(args), env: { A: "1", PWD: "/work", BUNWASM_EXEC_PATH: "/bin/bun" } });
   }
   expect(loads).toBe(2);
   for (const args of [["run", "lint"], ["-e", "'fmt'"], ["build", "fmt"]]) {

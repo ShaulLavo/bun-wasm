@@ -17,6 +17,7 @@ export interface BunRuntimeScenario {
   stdout: string;
   stderr?: string;
   action?: "kill" | "dispose" | "kill-detached";
+  expectedFailure?: { reason: string; stderr: "ENOENT" | "EBADF" };
 }
 const encoder = new TextEncoder();
 function uint(value: number): number[] {
@@ -153,9 +154,11 @@ const mainScenarios: BunRuntimeScenario[] = [
   { name: "preopen-root", commands: [{ source: `console.log(await Bun.file('preopen-data').text());` }], stdout: "ROOT_PREOPEN_OK\nexternal-root-ok\n" },
 ];
 export const bunRuntimeProcScenarios: readonly BunRuntimeScenario[] = mainScenarios.concat([[3], [3, 4], [3, 5], [3, 1000000]].map<BunRuntimeScenario>(inherited => ({
-  name: `preopen-inherited-${inherited.join("-")}`, commands: [{ source: `console.log(await Bun.file('preopen-data').text());`, status: 71,
+  name: `preopen-inherited-${inherited.join("-")}`,
+  expectedFailure: { reason: "Pending patched wasi-libc root discovery with inherited fd3 (Waffle #19)", stderr: "ENOENT" }, commands: [{ source: `console.log(await Bun.file('preopen-data').text());`, status: 71,
     fds: ordinary.concat(inherited.map(fd => ({ child: fd, parent: 1 }))) }], stdout: "external-root-ok\n",
-})), [{ name: "preopen-blocks-fd4-read-fd3-write", commands: [{ source: `const f=require('node:fs'),b=Buffer.alloc(6);f.readSync(4,b,0,6,null);f.writeSync(3,'FD3:'+b.toString()+'\\n');`, status: 71,
+})), [{ name: "preopen-blocks-fd4-read-fd3-write",
+  expectedFailure: { reason: "Pending patched wasi-libc fd3/fd4 preopen discovery (Waffle #19)", stderr: "EBADF" }, commands: [{ source: `const f=require('node:fs'),b=Buffer.alloc(6);f.readSync(4,b,0,6,null);f.writeSync(3,'FD3:'+b.toString()+'\\n');`, status: 71,
   fds: ordinary.concat([{ child: 3, parent: 1 }, { child: 4, parent: 0 }]) }], stdout: "external-root-ok\n" }]);
 
 // These are guest/libc limitations, not passing substitutes for future successful inheritance.

@@ -393,7 +393,7 @@ mod tests {
 
     #[test]
     fn helper_failure_returns_stderr_and_repeated_successes_leave_no_handles() {
-        for outcome in [(0, 2), (1, 9), (2, 44)] {
+        for outcome in [(0, 2), (1, 9)] {
             host::reset();
             host::with(|state| {
                 state
@@ -412,6 +412,22 @@ mod tests {
             assert_eq!(run("0", "/", HashMap::new()), Ok(Vec::new()));
             clean();
         }
+    }
+
+    #[test]
+    fn startup_failure_reports_errno_instead_of_child_stderr_and_closes_handles() {
+        host::reset();
+        host::with(|state| {
+            state
+                .output
+                .insert(14, VecDeque::from([Ok(b"not an ordinary exit".to_vec())]));
+            state.waits.push_back(Ok((2, 44)));
+        });
+        assert_eq!(
+            run("0", "/", HashMap::new()),
+            Err(b"Configuration process failed to start: ENOENT: executable not found (-44)".to_vec())
+        );
+        clean();
     }
 
     #[test]

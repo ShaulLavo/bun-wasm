@@ -36,7 +36,7 @@ test("spawn requests keep their explicit executable without root-specific rewrit
       for (let turn = 0; turn < 100 && requests.length < (executable === "/bin/bun" ? 1 : 2); turn++) await new Promise(resolve => setTimeout(resolve, 0));
       const request = requests.at(-1)!;
       expect(request).toMatchObject({ engine: executable === "/bin/bun" ? "browser" : "jsc", adapter: "bun", net: null,
-        args: [executable], env: { PWD: "/", PATH: "/opt/bun/quickjs/bin:/bin" } });
+        args: ["bun"], env: { PWD: "/", PATH: "/opt/bun/quickjs/bin:/bin", BUNWASM_EXEC_PATH: executable } });
       expect(workerProcessState(request.runtimeProcess!).pid).toBe(pid);
     }
   } finally { await state.dispose(); globalThis.Worker = previousWorker; }
