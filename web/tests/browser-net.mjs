@@ -299,6 +299,8 @@ async function runEngine(browserName, engine, type, options, appUrl, fixtureBase
     ["net-tcp", "index.js"], ["net-bun-tcp", "index.js"],
     ["net-http-upgrade", "index.js"], ["net-ws-builtin", "index.js"],
     ["net-bun-response-stream", "index.ts"], ["net-tcp-empty-fin", "index.ts"],
+    ["net-bun-response-length", "index.ts"], ["net-bun-response-disconnect", "index.ts"],
+    ["net-fetch-abort-reasons", "index.ts"],
   ]) {
     const source = readFileSync(join(web, "../tests/fixtures", fixture, entry), "utf8");
     const expected = readFileSync(join(web, "../tests/fixtures", fixture, "expected.txt"), "utf8").trim();

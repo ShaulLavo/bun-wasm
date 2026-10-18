@@ -1,0 +1,5 @@
+body abort null identity
+body abort zero identity
+body abort false identity
+body abort string identity
+body abort error identity
