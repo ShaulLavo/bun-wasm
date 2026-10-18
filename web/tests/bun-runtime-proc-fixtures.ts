@@ -14,10 +14,11 @@ export interface BunRuntimeScenario {
   commands: BunRuntimeCommand[];
   pipe?: "pipeline" | "input" | "signal";
   input?: string;
+  /** Root opens this real file, consumes its prefix, then shares its cursor with the child. */
+  fileCursor?: boolean;
   stdout: string;
   stderr?: string;
   action?: "kill" | "dispose" | "kill-detached";
-  expectedFailure?: { reason: string; stderr: "ENOENT" | "EBADF" };
 }
 const encoder = new TextEncoder();
 function uint(value: number): number[] {
@@ -69,6 +70,15 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
   const memory = new Uint8Array(60_000);
   const body: number[] = [];
   if (scenario.pipe) body.push(...check(call(5, constant(128)), 0, 201), ...load(128), ...set(0), ...load(132), ...set(1));
+  if (scenario.fileCursor) {
+    const path = encoder.encode("home/user/inherited-cursor"); memory.set(path, 2048);
+    // The external root has no inherited extras, so its actual root preopen is fd3.
+    // path_open(fd, lookupflags, path, len, oflags, rights, inheriting, fdflags, result).
+    body.push(...check(call(10, constant(3), constant(0), constant(2048), constant(path.length), constant(0),
+      [0x42, 2], [0x42, 0], constant(0), constant(128)), 0, 211), ...load(128), ...set(0),
+      ...check(call(7, get(0), constant(1024), constant(2)), 2, 212),
+      ...check(load(1024).concat(constant(65535), [0x71]), 0x7878, 213));
+  }
   let pointer = 4096;
   for (const [index, command] of scenario.commands.entries()) {
     const spec: Omit<SpawnRequest, "fds"> & { fds: BunRuntimeCommand["fds"] } = {
@@ -116,6 +126,8 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
       call(3, constant(2), constant(768), constant(waitDiagnostic.length)), [0x1a, 0x0b],
       check(load(384), 0, 205), check(load(256), command.kind ?? 0, 206), check(load(260), command.status ?? 0, 206)));
   }
+  if (scenario.fileCursor) body.push(...check(call(7, get(0), constant(1024), constant(1)), 1, 214),
+    ...check(constant(1024).concat([0x2d, 0, 0]), 33, 215), ...close(get(0)));
   const marker = "external-root-ok\n"; memory.set(encoder.encode(marker), 512);
   body.push(...check(call(3, constant(1), constant(512), constant(marker.length)), marker.length, 207));
   const locals = 4 + scenario.commands.length;
@@ -127,8 +139,10 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
     ["runtime_proc", "pipe", 0], ["wasi_snapshot_preview1", "fd_close", 0],
     ["runtime_proc", "read", 2], ["runtime_proc", "poll", 5], ["runtime_proc", "kill_job", 1],
   ];
+  if (scenario.fileCursor) imports.push(["wasi_snapshot_preview1", "path_open", 6]);
+  const pathOpenSignature = [0x60, 9, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7e, 0x7e, 0x7f, 0x7f, 1, 0x7f];
   return new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0].concat(
-    section(1, [6].concat(signature(1), signature(2), signature(3), signature(1, false), signature(0, false), signature(4))),
+    section(1, [7].concat(signature(1), signature(2), signature(3), signature(1, false), signature(0, false), signature(4), pathOpenSignature)),
     section(2, uint(imports.length).concat(imports.flatMap(([namespace, name, type]) => text(namespace).concat(text(name), [0], uint(type))))),
     section(3, [1, 4]), section(5, [1, 0, 1]),
     section(7, [2].concat(text("memory"), [2, 0], text("_start"), [0, imports.length])),
@@ -151,7 +165,7 @@ const detachedTree = `Bun.spawn(['bun','-e',${JSON.stringify(detachedLeaf)}],{de
 const grandchildNoControls = `if(process.env.BUNWASM_WORKER_CONTROL!==undefined)throw Error('worker control metadata leaked');const f=require('node:fs');for(const fd of [1000,1001]){let code;try{f.fstatSync(fd)}catch(error){code=error.code}if(code!=='EBADF')throw Error('grandchild inherited fd '+fd)}console.log('grandchild-no-controls');`;
 const workerHighFds = `const f=require('node:fs'),opened=[];if(process.env.BUNWASM_WORKER_CONTROL!==undefined)throw Error('worker control metadata visible');try{while(opened.length<1100){const fd=f.openSync('/home/user/high-fd-data','w+');opened.push(fd);if(fd>=1001)break}for(const fd of [1000,1001]){if(!opened.includes(fd))throw Error('reserved magic fd '+fd);f.writeSync(fd,'X',0);const b=Buffer.alloc(1);if(f.readSync(fd,b,0,1,0)!==1||b[0]!==88)throw Error('ordinary high fd unusable '+fd)}const child=Bun.spawn(['bun','-e',${JSON.stringify(grandchildNoControls)}],{stdin:'inherit',stdout:'inherit',stderr:'inherit'});if(await child.exited!==0)throw Error('grandchild fd isolation failed');require('node:worker_threads').parentPort.postMessage('worker-high-fds-ok');}finally{for(const fd of opened)f.closeSync(fd)}require('node:worker_threads').parentPort.close();`;
 const workerControls = `const {Worker}=require('node:worker_threads');const worker=new Worker(${JSON.stringify(workerHighFds)},{eval:true});let message;worker.on('message',value=>{message=value});await new Promise((resolve,reject)=>{worker.on('error',reject);worker.on('exit',code=>code===0?resolve():reject(Error('Worker exit '+code)))});if(message!=='worker-high-fds-ok')throw Error('missing Worker control roundtrip');console.log(message);`;
-const ordinary = [{ child: 0, parent: 0 }, { child: 1, parent: 1 }, { child: 2, parent: 2 }];
+const ordinary: NonNullable<BunRuntimeCommand["fds"]> = [{ child: 0, parent: 0 }, { child: 1, parent: 1 }, { child: 2, parent: 2 }];
 const mainScenarios: BunRuntimeScenario[] = [
   { name: "nested", commands: [{ source: `const p=Bun.spawn(['bun','-e',${JSON.stringify(nested)}],{stdin:'inherit',stdout:'inherit',stderr:'inherit'});if(await p.exited!==0)throw Error('child failed');console.log('nested-ok');` }], stdout: "nested-node\nnested-ok\nexternal-root-ok\n", stderr: "nested-err\n" },
   { name: "pipeline-merged", pipe: "pipeline", commands: [
@@ -166,19 +180,17 @@ const mainScenarios: BunRuntimeScenario[] = [
   { name: "detached-excluded-from-foreground-kill", commands: [{ source: detachedTree, kind: 1, status: 9 }], action: "kill-detached", stdout: "external-root-ok\n" },
   { name: "dispose-live-descendants", commands: [{ source: tree }], action: "dispose", stdout: "" },
   { name: "worker-control-fd-isolation", commands: [{ source: workerControls }], stdout: "grandchild-no-controls\nworker-high-fds-ok\nexternal-root-ok\n" },
+  { name: "inherited-descriptor-semantics", pipe: "input", input: "x", commands: [{
+    source: `const f=require('node:fs');const pipe=f.fstatSync(0),terminal=f.fstatSync(3);if(!pipe.isFIFO()||pipe.isFile()||pipe.isCharacterDevice()||pipe.isBlockDevice())throw Error('inherited pipe type');if(!terminal.isCharacterDevice()||terminal.isFile()||terminal.isFIFO()||terminal.isBlockDevice())throw Error('inherited terminal type');for(const run of [()=>f.closeSync(-1),()=>f.closeSync(-7),()=>f.writeSync(1000000,Buffer.alloc(0)),()=>f.writevSync(1000000,[Buffer.alloc(0)]),()=>f.writevSync(1000000,[Buffer.alloc(0),Buffer.alloc(0)])]){let code;try{run()}catch(e){code=e.code}if(code!=='EBADF')throw Error('empty closed descriptor '+code)}if(f.readSync(1000000,Buffer.alloc(0))!==0||f.readSync(1000000,Buffer.alloc(4),0,0,null)!==0)throw Error('empty closed descriptor read');await new Promise((resolve,reject)=>f.read(1000000,Buffer.alloc(0),0,0,null,(error,count)=>error?reject(error):count===0?resolve():reject(Error('empty callback read'))));const handle=await f.promises.open('preopen-data','r');await handle.close();let handleCode;try{await handle.read(Buffer.alloc(0),0,0,null)}catch(error){handleCode=error.code}if(handleCode!=='EBADF')throw Error('closed empty FileHandle read '+handleCode);if(f.readSync(0,Buffer.alloc(0))!==0)throw Error('empty pipe read');const b=Buffer.alloc(1);if(f.readSync(0,b,0,1,null)!==1||b.toString()!=='x')throw Error('empty read consumed pipe');f.writeSync(1,'buffered;');f.writeSync(3,'alias;');f.writeSync(1,'buffered-v;');f.writevSync(3,[Buffer.from('alias-v;')]);f.writeSync(1,'done\\n');`,
+    fds: [{ child: 0, parent: "reader" }, { child: 1, parent: 1 }, { child: 2, parent: 2 }, { child: 3, parent: 1 }],
+  }], stdout: "buffered;alias;buffered-v;alias-v;done\nexternal-root-ok\n" },
   { name: "start-failed", commands: [{ executable: "/bin/broken-bun", source: "", kind: 2, status: 29 }], stdout: "external-root-ok\n" },
   { name: "preopen-root", commands: [{ source: `console.log(await Bun.file('preopen-data').text());` }], stdout: "ROOT_PREOPEN_OK\nexternal-root-ok\n" },
 ];
 export const bunRuntimeProcScenarios: readonly BunRuntimeScenario[] = mainScenarios.concat([[3], [3, 4], [3, 5], [3, 1000000]].map<BunRuntimeScenario>(inherited => ({
   name: `preopen-inherited-${inherited.join("-")}`,
-  expectedFailure: { reason: "Pending patched wasi-libc root discovery with inherited fd3 (Waffle #19)", stderr: "ENOENT" }, commands: [{ source: `console.log(await Bun.file('preopen-data').text());`, status: 71,
-    fds: ordinary.concat(inherited.map(fd => ({ child: fd, parent: 1 }))) }], stdout: "external-root-ok\n",
-})), [{ name: "preopen-blocks-fd4-read-fd3-write",
-  expectedFailure: { reason: "Pending patched wasi-libc fd3/fd4 preopen discovery (Waffle #19)", stderr: "EBADF" }, commands: [{ source: `const f=require('node:fs'),b=Buffer.alloc(6);f.readSync(4,b,0,6,null);f.writeSync(3,'FD3:'+b.toString()+'\\n');`, status: 71,
-  fds: ordinary.concat([{ child: 3, parent: 1 }, { child: 4, parent: 0 }]) }], stdout: "external-root-ok\n" }]);
-
-// These are guest/libc limitations, not passing substitutes for future successful inheritance.
-export const bunRuntimeProcPending = [
-  "actual Bun discovers its relocated root with inherited fd3 and exits 0",
-  "actual Bun shares inherited fd4 offsets and writes fd3 after preopen discovery",
-] as const;
+  commands: [{ source: `console.log(await Bun.file('preopen-data').text());`,
+    fds: ordinary.concat(inherited.map(fd => ({ child: fd, parent: 1 }))) }], stdout: "ROOT_PREOPEN_OK\nexternal-root-ok\n",
+})), [{ name: "preopen-blocks-fd4-read-fd3-write", fileCursor: true,
+  commands: [{ source: `const f=require('node:fs'),b=Buffer.alloc(6);if(f.readSync(4,b,0,6,null)!==6||b.toString()!=='cursor')throw Error('inherited file cursor');if(await Bun.file('preopen-data').text()!=='ROOT_PREOPEN_OK')throw Error('relocated root');f.writeSync(3,'FD3:'+b.toString()+'\\n');`,
+  fds: ordinary.concat([{ child: 3, parent: 1 }, { child: 4, parent: "reader" }]) }], stdout: "FD3:cursor\nexternal-root-ok\n" }]);

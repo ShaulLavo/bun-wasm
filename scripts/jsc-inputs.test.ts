@@ -15,11 +15,19 @@ function fixture(run: (root: string, shell: (command: string, env?: Record<strin
     for (const file of ["wasi-compat.h", "wasi-compat.c", "madvise.c"]) {
       writeFileSync(join(root, "jsc", "shim", file), `// fixture ${file}\n`);
     }
+    // Input-stamp tests need identities, not a real SDK or workstation tools.
+    const sdk = join(root, "sdk"), sysroot = join(root, "sysroot"), bin = join(root, "bin");
+    for (const path of [join(sdk, "bin"), sysroot, bin]) mkdirSync(path, { recursive: true });
+    writeFileSync(join(sdk, "VERSION"), "34.0\n");
+    writeFileSync(join(sysroot, "bun-wasm-sysroot.json"), '{"fixture":"patched sysroot"}\n');
+    for (const tool of [join(sdk, "bin/clang"), join(bin, "cmake"), join(bin, "ninja"), join(bin, "wasm-opt")]) {
+      writeFileSync(tool, "#!/usr/bin/env bash\necho 'fixture tool version 1'\n", { mode: 0o755 });
+    }
     const shell = (command: string, env: Record<string, string> = {}) => {
       const result = Bun.spawnSync(["bash", "-c", 'source "$1/jsc/common.sh"; copy_jsc_config_inputs; ' + command, "jsc-inputs-test", root], {
-        env: { ...process.env, ...env, JSC_BUILD_DIR: join(root, "build") },
+        env: { ...process.env, ...env, JSC_BUILD_DIR: join(root, "build"), WASM_TOOLS: join(root, "tools"), WASI_SDK_PATH: sdk, BUN_WASM_SYSROOT: sysroot, PATH: `${bin}:${process.env.PATH ?? ""}` },
       });
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
       expect(result.stderr.toString()).toBe("");
       return result.stdout.toString().trim();
     };

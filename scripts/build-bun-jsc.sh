@@ -10,10 +10,10 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$root/jsc/common.sh"
+bun "$root/scripts/build-wasi-sysroot.ts"
 check_jsc_inputs_stamp
 "$root/scripts/sync-crypto.sh"
 export CARGO_TARGET_DIR="${JSC_CARGO_TARGET_DIR:-$JSC_BUILD_DIR/target}"
-export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--cap-lints=warn -C link-self-contained=no"
 export JSC_BUILD_DIR
 # rquickjs-sys isn't built here, but sqlite's cc build uses the same wasi-sdk.
 export WASI_SDK="${WASI_SDK:-$WASI_SDK_PATH}"
@@ -32,10 +32,12 @@ if ! LC_ALL=C grep -qa BUN_WASM_STACK_KIB "$JSC_OBJ/lib/libWTF.a"; then
   exit 1
 fi
 
+guest_inputs=$(bun "$root/scripts/guest-build-receipt.ts" inputs)
 PATH="$PATH_NO_BINARYEN" $CAGE cargo build -j "$JOBS" --release --target wasm32-wasip1 -p bunwasm-cli \
   --no-default-features --features engine-jsc,bun-transpiler,bun-build
 raw="$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm"
 mkdir -p "$root/dist"
 "$root/jsc/finalize.sh" "$raw" "$root/dist/bun-jsc.wasm"
+bun "$root/scripts/guest-build-receipt.ts" write "$root/dist/bun-jsc.wasm" "$guest_inputs"
 printf 'dist/bun-jsc.wasm: %s bytes (cargo output: %s bytes)\n' \
   "$(stat -c %s "$root/dist/bun-jsc.wasm")" "$(stat -c %s "$raw")"

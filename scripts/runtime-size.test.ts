@@ -29,7 +29,7 @@ test("initial download accounting refuses unmeasured static external scripts", (
 });
 
 test("the first-spawn service gate allows reservation primitives but rejects service code", () => {
-  const inputs = ["proc/stub.ts", "proc/identity.ts", "proc/control.ts", "proc/directory.ts", "proc/outcome.ts", "proc/start-errno.ts", "proc/start-failure.ts", "proc/wait-status.ts", "proc/signals.ts", "proc/types.ts"].map(installed).concat(["web/src/bun-launcher.ts", "web/src/subprocess-broker.ts"]);
+  const inputs = ["proc/stub.ts", "proc/identity.ts", "proc/intrinsics.ts", "proc/control.ts", "proc/directory.ts", "proc/outcome.ts", "proc/start-errno.ts", "proc/start-failure.ts", "proc/wait-status.ts", "proc/signals.ts", "proc/types.ts"].map(installed).concat(["web/src/bun-launcher.ts", "web/src/subprocess-broker.ts"]);
   expect(() => checkLazyProcessService(inputs, runtime)).not.toThrow();
   expect(processServiceInputs(inputs.concat([installed("proc/table.ts")]), runtime)).toEqual([installed("proc/table.ts")]);
   expect(() => checkLazyProcessService(inputs.concat([installed("proc/supervisor.ts")]), runtime)).toThrow("process service is eager");
@@ -49,8 +49,8 @@ test("Bun policy attribution names current adapters without hiding generic servi
 });
 
 test("core gzip budget includes boundary, reports actionable excess", () => {
-  expect(() => checkCoreBudget(7.5 * 1024)).not.toThrow();
-  expect(() => checkCoreBudget(7.5 * 1024 + 1)).toThrow("core exceeds 7680 B gzip budget by 1 B");
+  expect(() => checkCoreBudget(8 * 1024)).not.toThrow();
+  expect(() => checkCoreBudget(8 * 1024 + 1)).toThrow("core exceeds 8192 B gzip budget by 1 B");
 });
 
 test("Bun light initial downloads allow the tiny fatal check but never the binary rewriter", () => {

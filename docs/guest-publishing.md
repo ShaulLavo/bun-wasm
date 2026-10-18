@@ -16,7 +16,7 @@ The custom domain was selected after checking Cloudflare DNS, Worker custom doma
 
 The setup above is already live; normal publishing does **not** repeat it. For recreation, first inspect `cf r2 buckets list`, exact DNS records, account Worker custom domains, zone Worker routes, and `mesh serve ls`. Preserve all unrelated records, Mesh-owned names, and the private wildcard. The hostname must remain dedicated to this public artifact store.
 
-Install the site's pinned Wrangler with `bun install --cwd site --frozen-lockfile`, refresh the existing login with `cf auth whoami >/dev/null`, and create the bucket only if it is absent:
+Install the site's pinned Wrangler with `bun install --cwd site --frozen-lockfile`, refresh the existing login with `cf auth whoami >/dev/null`, and create the bucket only if it is absent. This is infrastructure setup only; publishing also requires the [browser dependencies below](#commands).
 
 ```sh
 CLOUDFLARE_API_TOKEN="$(python3 -c "import json; print(json.load(open('$HOME/.config/cloudflare/config/default.json'))['oauth_token'])")" \
@@ -52,12 +52,23 @@ Raw and gzip input are accepted. The publisher always hashes decompressed bytes,
 
 ## Commands
 
-Run from this package checkout. Install the site's lockfile-pinned Wrangler **4.151.0** first:
+Run from this package checkout with Bun installed. A fresh checkout needs the root package dependencies, the site's lockfile-pinned Wrangler **4.151.0**, the web development dependencies (including Playwright), and all three browser executables:
 
 ```sh
 source env.sh
+export PLAYWRIGHT_BROWSERS_PATH=/work/cache/ms-playwright
+bun install --frozen-lockfile
 bun install --cwd site --frozen-lockfile
-cf auth whoami >/dev/null  # Refresh the existing local CF login before using its token.
+bun install --cwd web --frozen-lockfile
+(cd web && bunx --no-install playwright install chromium firefox webkit)
+```
+
+On other machines, set `PLAYWRIGHT_BROWSERS_PATH` to a writable data/cache directory and retain that same value when publishing. The browser install uses the web lockfile's exact Playwright version, not a newly downloaded CLI. Linux also needs Playwright's system libraries; provision them through the host's normal package workflow if browser launch reports a missing shared library. Installation alone does not create the three guest builds: build the [matching engines](browser-package.md#required-full-build-interruption-acceptance) before publishing. For a PC publication, use the shared heavy runner as described there.
+
+Refresh only the existing authenticated Cloudflare session when ready to publish:
+
+```sh
+cf auth whoami >/dev/null
 ```
 
 `CLOUDFLARE_API_TOKEN` is read only from the environment and is never printed or stored. Set `CLOUDFLARE_ACCOUNT_ID` to the bucket's account ID; obtain it from the selected Cloudflare account or the authenticated CLI. Do not run a new login or create a credential as part of publishing.
@@ -76,9 +87,11 @@ CLOUDFLARE_API_TOKEN="$(python3 -c "import json; print(json.load(open('$HOME/.co
 bun scripts/publish-guest.ts /path/to/bun.wasm --output src/guest-asset.generated.ts
 ```
 
+Publication first snapshots all three matching real engine builds from `dist/` (or `--dist`) into a private, read-only directory. The requested upload must match a snapshot artifact. The [required full-build interruption matrix](browser-package.md#required-full-build-interruption-acceptance) fetches only that snapshot in Chromium, Firefox and WebKit. Each browser records the SHA-256 and byte count of the exact buffers it compiles; all receipts must match the snapshot manifest. The upload is then prepared from those verified snapshot bytes, never by rereading the live build directory. Concurrent rebuilds cannot replace the tested guest. Missing builds, failed proofs, mismatched receipts and unsafe cleanup prevent storage access and descriptor changes.
+
 The publisher uses the site's lockfile-pinned Wrangler for the upload. It creates only a temporary `bun-wasm-guest-publish-*` directory (under `TMPDIR` when set, otherwise `/work/tmp` when available, otherwise the OS temporary directory). Success, failure, and interruption stop the upload child before removing that directory. It does not create a Worker or permanent upload service.
 
-The current generated descriptor is deliberately `null`: the previously published guest does not match the package's upcoming guest and must not be referenced.
+`src/guest-asset.generated.ts` records the last verified publication; update it only after the matching full-build acceptance and public read-back succeed.
 
 ## Verification and disposable tests
 
@@ -87,6 +100,6 @@ bun test tests/package/guest-artifact.test.ts
 bun run check
 ```
 
-For a live smoke test, use a small valid WASM fixture and write its generated descriptor to scratch, never to the package's default descriptor. Publish it twice to check idempotence, and test an actual browser `fetch()` from a different HTTPS origin: its response must be `cors`, its body must decode to the descriptor's byte count and SHA-256, and the module must validate. Check object metadata and CORS with a separate request carrying an `Origin` header.
+Artifact-free unit tests use small valid WASM fixtures and fake storage. They do not bypass full-build acceptance for live publication. For a live disposable test, use task-owned copies of all three real builds and give the selected guest a unique harmless WASM custom section, preserving its behavior. It must pass the same browser matrix. Write its descriptor to scratch, never to the package's default descriptor. Publish twice to check idempotence, and test an actual browser `fetch()` from a different HTTPS origin: its response must be `cors`, its body must decode to the descriptor's byte count and SHA-256, and the module must validate. Check object metadata and CORS with a separate request carrying an `Origin` header. Never remove a real published guest as test cleanup.
 
 Install fixture teardown before uploading. After stopping all fixture consumers, remove only its exact R2 key with the site's pinned `wrangler r2 object delete <bucket>/<sha256>/bun.wasm.gz --remote`. Immutable CDN entries survive an origin deletion, so also purge only that fixture URL (including its tested Origin cache-key variant) from the `shaulavo.dev` zone's cache. Confirm authenticated R2 GET **and** public GET both return 404. Remove local fixture files, temporary browser profiles, and test scratch, leaving the durable bucket/domain and real published guests intact.

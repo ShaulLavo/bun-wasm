@@ -1,14 +1,16 @@
-# Public site and guest artifacts
+# Bun guest artifact publishing
 
-The public demo combines the sandbox and playground, with immutable wasm guests published separately.
-
-From the repository root:
+Matching Bun guests are published as immutable, hash-addressed R2 objects and verified before descriptor generation.
 
 ```sh
 source env.sh
-cd site
-bun install
-bun run build
+bun install --cwd site --frozen-lockfile
 ```
 
-[Guest publication, Cloudflare resources, and verification](../docs/guest-publishing.md).
+With the matching full builds and existing Cloudflare credentials configured:
+
+```sh
+bun scripts/publish-guest.ts /path/to/bun.wasm --output src/guest-asset.generated.ts
+```
+
+[Publishing and cleanup](../docs/guest-publishing.md) · [Required browser acceptance](../docs/browser-package.md#required-full-build-interruption-acceptance)

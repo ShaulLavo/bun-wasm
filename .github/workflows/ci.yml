@@ -74,6 +74,10 @@ jobs:
           bash scripts/sync-bun.sh
           bash scripts/sync-crypto.sh
           cargo install cargo-machete --version 0.9.2 --locked --jobs 1
+      - name: Build patched WASI sysroot
+        run: |
+          source env.sh
+          time bun scripts/build-wasi-sysroot.ts
       - name: Blocking quality gates
         run: |
           source env.sh

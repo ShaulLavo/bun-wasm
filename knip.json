@@ -50,7 +50,7 @@
         "tests/crypto-aes192-gap.mjs",
         "tests/crypto-no-provider.mjs",
         "tests/node-root-signals.ts",
-        "tests/engine-interruption-{main,worker}.ts",
+        "tests/engine-interruption-{page,worker}.ts",
         "tests/filesystem-{bench-main,bench-worker,browser-failure,browser-guest,browser-main}.ts",
         "tests/persistence-browser-{main,worker}.ts",
         "tests/process-{bench-baseline,browser-main}.ts",
