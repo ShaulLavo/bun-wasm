@@ -1,7 +1,11 @@
 use bun_core::{ffi, strings};
 use bun_node_path as path;
-use bun_paths::{MAX_PATH_BYTES, PATH_MAX_WIDE, w_path_buffer_pool};
-use bytemuck::{cast_slice, cast_slice_mut};
+#[cfg(windows)]
+use bun_paths::w_path_buffer_pool;
+use bun_paths::{MAX_PATH_BYTES, PATH_MAX_WIDE};
+use bytemuck::cast_slice;
+#[cfg(windows)]
+use bytemuck::cast_slice_mut;
 
 use crate::engine::{Args, NativeError, NativeResult, Record, Val};
 use crate::natives::Table;
@@ -31,8 +35,11 @@ include!(concat!(env!("OUT_DIR"), "/node_path_relative.rs"));
 
 fn units(bytes: &[u8]) -> Vec<u16> {
     bytes
-        .chunks_exact(2)
-        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .copied()
+        .map(u16::from_le_bytes)
         .collect()
 }
 

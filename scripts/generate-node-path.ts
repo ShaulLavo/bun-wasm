@@ -44,7 +44,9 @@ function resolveWindowsWithCwd(): string {
   resolver = resolver.replace("normalize_string_t::<T, { Platform::Windows }>", "normalize_string_t::<T>");
   if (normalize.includes("Platform") || resolver.includes("Platform")) throw new Error("Unexpected platform-dependent path helper");
   const generated = `mod windows_resolver {
-use super::{ffi, strings, MAX_PATH_BYTES, PATH_MAX_WIDE, w_path_buffer_pool, cast_slice, cast_slice_mut};
+use super::{ffi, strings, MAX_PATH_BYTES, PATH_MAX_WIDE, cast_slice};
+#[cfg(windows)]
+use super::{w_path_buffer_pool, cast_slice_mut};
 use bun_node_path::{PathCharCwd, is_sep_windows_t, CHAR_BACKWARD_SLASH, CHAR_FORWARD_SLASH, CHAR_STR_DOT};
 type MaybeSlice<'a, T> = bun_sys::Result<&'a [T]>;
 const CHAR_COLON: u8 = b':';
