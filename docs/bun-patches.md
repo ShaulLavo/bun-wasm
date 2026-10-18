@@ -1969,12 +1969,21 @@ without an optional-slot probe or process-native substitution.
 The original idle adapter in `crates/bunwasm-runtime/src/host.rs` requests
 `runtime_proc.poll` with zero subscriptions for timer-only waits, rather than the
 networking poll slot. This uses the process ABI's signal/interrupt wake contract
-when there are no open network handles. `sleep`, including `Bun.sleepSync`, and
-the timer-only branch of the event loop in `src/lib.rs` wait in bounded steps of
-at most 25 ms before re-entering the signal checkpoint. Off-wasm host unit tests
-use the unsupported process-ABI stub and fall back to `std::thread::sleep`;
-the original idle unit test checks that the requested delay is retained. These
-are original guest control-flow adapters, not copied Bun, libc or host code.
+when there are no open network handles. The timer-only branch of the event loop
+in `crates/bunwasm-runtime/src/lib.rs` waits at most 25 ms before re-entering the
+signal checkpoint. The original `natives.rs` adapter routes `Bun.sleepSync`
+through `State::sleep` and `host::sleep_with`, also using zero-subscription process
+polls in slices of at most 25 ms. Before each slice, it dequeues handled signals
+from the service and parks them in guest state, preventing pending service signals
+from turning the sleep into a busy loop. JavaScript handlers wait until the next
+guest checkpoint, which dequeues parked signals before service signals; ignoring
+or restoring the default disposition also withdraws parked deliveries. Fatal
+selection can unwind from the service dequeue while sleep is still in progress.
+Off-wasm host unit tests use the unsupported process-ABI stub and fall back to
+`std::thread::sleep`. Original unit fixtures cover idle delays, parked-signal
+coalescing and withdrawal, bounded sleep waits, and unwind propagation. These
+are original guest control-flow adapters with no ABI change, not copied Bun,
+libc or host code.
 
 ## Portable installer and package commands
 
