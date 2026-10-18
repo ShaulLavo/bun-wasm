@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createServer } from "node:net";
+import { selectAndNavigate } from "./hmr-navigation.ts";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -22,3 +23,25 @@ test("a failed initial navigation reports its step and error", async () => {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
 }, 30_000);
+
+test("template navigation waits for the new document even when a subresource stays open", async () => {
+  const { chromium } = await import(process.env.PLAYWRIGHT ?? "../../web/node_modules/playwright/index.mjs");
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
+    if (new URL(request.url).pathname === "/pending") return new Response(new ReadableStream());
+    const selected = new URL(request.url).searchParams.has("template");
+    const html = selected ? '<h1>Vanilla ready</h1><img src="/pending">' : `<select id="template" onchange="location.assign('/?template=' + this.value)"><option>react</option><option>vanilla</option></select>`;
+    return new Response(html, { headers: { "content-type": "text/html" } });
+  } });
+  let browser;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    await selectAndNavigate(page, "#template", "vanilla", 1_000);
+    await expect(page.locator("h1").textContent()).resolves.toBe("Vanilla ready");
+    expect(await page.evaluate(() => document.readyState)).toBe("interactive");
+  } finally {
+    try { await browser?.close(); }
+    finally { server.stop(true); }
+  }
+}, 10_000);
