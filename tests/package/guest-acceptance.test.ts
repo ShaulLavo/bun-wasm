@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { acceptGuestPublication, verifyPublicationInputs } from "../../scripts/guest-acceptance.ts";
-import { describeGuest } from "../../scripts/guest-artifact.ts";
+import { fileURLToPath } from "node:url";
+import { acceptGuestPublication, acceptedPublicationArtifact, snapshotPublicationInputs, verifyPublicationInputs, verifyPublicationReport, type PublicationSnapshot } from "../../scripts/guest-acceptance.ts";
+import { decodeGuest, describeGuest } from "../../scripts/guest-artifact.ts";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const descriptor = describeGuest(wasm);
@@ -53,7 +54,7 @@ test("real publication CLI fails closed before storage or descriptor changes whe
   await fixture(async dist => {
     const input = join(dist, "bun.wasm"), output = join(dist, "descriptor.ts");
     await writeFile(input, wasm); await writeFile(output, "existing descriptor\n");
-    const child = Bun.spawn([process.execPath, new URL("../../scripts/publish-guest.ts", import.meta.url).pathname,
+    const child = Bun.spawn([process.execPath, fileURLToPath(new URL("../../scripts/publish-guest.ts", import.meta.url)),
       input, "--dist", dist, "--output", output, "--account-id", "a".repeat(32)], {
       env: { ...process.env, CLOUDFLARE_API_TOKEN: "test-invalid-not-a-credential" },
       stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5_000,
@@ -65,6 +66,92 @@ test("real publication CLI fails closed before storage or descriptor changes whe
       expect(stderr).toContain(join(dist, "bun-jsc.wasm"));
       expect(stderr).toContain(join(dist, "bun-browser.wasm"));
       expect(await Bun.file(output).text()).toBe("existing descriptor\n");
+    } finally { child.kill(); await child.exited; }
+  });
+});
+
+function greenReceipts(snapshot: PublicationSnapshot) {
+  return { ok: true, cleanup: { safe: true }, reports: ["chromium", "firefox", "webkit"].map(browser => ({
+    browser, ok: true, artifacts: snapshot.artifacts.map(artifact => ({ ...artifact })),
+  })) };
+}
+
+async function withSnapshot(run: (dist: string, snapshot: PublicationSnapshot) => Promise<void>) {
+  await fixture(async dist => {
+    for (const name of names) await writeFile(join(dist, name), wasm);
+    const snapshot = await snapshotPublicationInputs(dist, descriptor, join(dist, "snapshot"));
+    try { await run(dist, snapshot); }
+    finally { await chmod(snapshot.directory, 0o700); }
+  });
+}
+
+test("publication snapshots are private read-only copies and live rebuilds cannot change upload bytes", async () => {
+  await withSnapshot(async (dist, snapshot) => {
+    expect((await stat(snapshot.directory)).mode & 0o777).toBe(0o500);
+    expect((await stat(join(snapshot.directory, "bun.wasm"))).mode & 0o777).toBe(0o400);
+    const rebuilt = new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120]));
+    // Simulate the A -> B -> A race from review while the runner owns snapshot A.
+    for (const name of names) await writeFile(join(dist, name), rebuilt);
+    const loadedB = greenReceipts(snapshot);
+    loadedB.reports[0]!.artifacts[0]!.sha256 = describeGuest(rebuilt).sha256;
+    expect(() => verifyPublicationReport(snapshot, loadedB)).toThrow("loaded SHA-256");
+    for (const name of names) await writeFile(join(dist, name), wasm);
+    expect(() => verifyPublicationReport(snapshot, loadedB)).toThrow("loaded SHA-256");
+    // Even a second live replacement cannot change the accepted upload source.
+    await writeFile(join(dist, "bun.wasm"), rebuilt);
+    const artifact = await acceptedPublicationArtifact(snapshot, greenReceipts(snapshot), descriptor);
+    expect(artifact.descriptor).toEqual(descriptor);
+    expect(decodeGuest(artifact.gzip)).toEqual(wasm);
+    expect(await readFile(join(snapshot.directory, "bun.wasm"))).toEqual(Buffer.from(wasm));
+  });
+});
+
+test("publication rejects missing, duplicate, wrong-sized or non-green browser receipts", async () => {
+  await withSnapshot(async (_dist, snapshot) => {
+    const missing = greenReceipts(snapshot); missing.reports.pop();
+    expect(() => verifyPublicationReport(snapshot, missing)).toThrow("all publication browsers");
+    const duplicate = greenReceipts(snapshot); duplicate.reports[1]!.browser = "chromium";
+    expect(() => verifyPublicationReport(snapshot, duplicate)).toThrow("all publication browsers");
+    const wrongSize = greenReceipts(snapshot); wrongSize.reports[0]!.artifacts[0]!.bytes++;
+    expect(() => verifyPublicationReport(snapshot, wrongSize)).toThrow("loaded byte count");
+    const failed = greenReceipts(snapshot); failed.reports[0]!.ok = false;
+    expect(() => verifyPublicationReport(snapshot, failed)).toThrow("acceptance passed");
+    const unsafe = greenReceipts(snapshot); unsafe.cleanup.safe = false;
+    expect(() => verifyPublicationReport(snapshot, unsafe)).toThrow("runner cleanup");
+    const noArtifact = greenReceipts(snapshot); noArtifact.reports[0]!.artifacts.pop();
+    expect(() => verifyPublicationReport(snapshot, noArtifact)).toThrow("artifact receipt count");
+    const duplicateArtifact = greenReceipts(snapshot);
+    duplicateArtifact.reports[0]!.artifacts[1]!.name = "bun.wasm";
+    expect(() => verifyPublicationReport(snapshot, duplicateArtifact)).toThrow("distinct artifact receipts");
+  });
+});
+
+test("publication detects changed snapshot bytes even after matching browser receipts", async () => {
+  await withSnapshot(async (_dist, snapshot) => {
+    const path = join(snapshot.directory, snapshot.selected.name);
+    await chmod(path, 0o600);
+    await writeFile(path, new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120])));
+    await expect(acceptedPublicationArtifact(snapshot, greenReceipts(snapshot), descriptor)).rejects.toThrow("integrity mismatch");
+  });
+});
+
+test("real CLI resolves its default dist inside a checkout path containing spaces and #", async () => {
+  await fixture(async directory => {
+    const root = join(directory, "checkout with spaces # encoded"), dist = join(root, "dist");
+    await mkdir(join(root, "scripts"), { recursive: true }); await mkdir(dist);
+    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts"]) {
+      await copyFile(fileURLToPath(new URL(`../../scripts/${name}`, import.meta.url)), join(root, "scripts", name));
+    }
+    const input = join(dist, "bun.wasm"); await writeFile(input, wasm);
+    const child = Bun.spawn([process.execPath, join(root, "scripts/publish-guest.ts"), input, "--account-id", "a".repeat(32)], {
+      env: { ...process.env, CLOUDFLARE_API_TOKEN: "test-invalid-not-a-credential" },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5_000,
+    });
+    try {
+      const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      expect(code).not.toBe(0);
+      expect(stderr).toContain(join(dist, "bun-jsc.wasm"));
+      expect(stderr).toContain(join(dist, "bun-browser.wasm"));
     } finally { child.kill(); await child.exited; }
   });
 });

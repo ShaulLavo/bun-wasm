@@ -144,6 +144,9 @@ all three artifacts from the source revision being published: `dist/bun.wasm`,
 `dist/bun-jsc.wasm` and `dist/bun-browser.wasm`. The upload (raw or gzip) must match one
 of those exact artifacts; missing builds, failed proofs or unsafe cleanup stop publication.
 Use `--dist /absolute/full-build-directory` when the matching builds are elsewhere.
+Install the [publishing dependencies and browser executables](guest-publishing.md#commands)
+first. Publication serves a private read-only snapshot, checks every browser's actual
+loaded hashes and byte counts, then uploads only the verified snapshot bytes.
 
 ```sh
 source env.sh

@@ -588,7 +588,7 @@ async function benchmark(module: WebAssembly.Module, engine: Engine, pristine?: 
 
 void (async () => {
   const benchmarks: unknown[] = [];
-  const artifacts: { engine: Engine; name: string; sha256: string }[] = [];
+  const artifacts: { engine: Engine; name: string; sha256: string; bytes: number }[] = [];
   const modules: { engine: Engine; name: string; hash: string; module: WebAssembly.Module }[] = [];
   let fatalError: unknown;
   let functionalComplete = false;
@@ -600,7 +600,7 @@ void (async () => {
         const response = await fetch(`/${name}`); truth(response.ok, `fresh artifact ${name}: HTTP ${response.status}`);
         const bytes = await response.arrayBuffer();
         hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
-        artifacts.push({ engine, name, sha256: hash });
+        artifacts.push({ engine, name, sha256: hash, bytes: bytes.byteLength });
         module = await WebAssembly.compile(bytes);
       });
       // Other engines and Preview1 remain independent of an unavailable artifact.
