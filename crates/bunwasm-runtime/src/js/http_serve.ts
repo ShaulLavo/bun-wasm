@@ -37,7 +37,7 @@
     reportError(error: unknown): void;
     wake?: (delay: number) => void;
   };
-  type Pending = { receiver: Receiver; decoder: Decoder; output: Output[]; trailers: Pair[] };
+  type Pending = { receiver: Receiver; decoder: Decoder; output: Output[]; trailers: Pair[]; keepAlive: boolean };
   const empty = new Uint8Array(0);
   const encoder = new TextEncoder();
 
@@ -76,7 +76,7 @@
           return;
         }
         busy = false;
-        connection.busy = pending !== null;
+        connection.busy = false;
         if (outcome === false || !keepAlive || connection.serverClosing) { connection.end(); return; }
         next();
         options.wake?.(0);
@@ -98,10 +98,7 @@
         }
         active.receiver.receive(empty, active.trailers, true);
         pending = null;
-        if (!busy) {
-          connection.busy = false;
-          Promise.resolve().then(next);
-        }
+        respond(active.receiver.response, active.keepAlive);
         return;
       }
     }
@@ -111,9 +108,9 @@
       const keepAlive = options.wantsKeepAlive(head) && !ended;
       const receiver = start(head, connection, keepAlive);
       buffer = buffer.slice(head.headLength);
-      pending = { receiver, decoder, output: [], trailers: [] };
+      pending = { receiver, decoder, keepAlive, output: [], trailers: [] };
+      connection.busy = true;
       receiver.onRead(() => { next(); options.wake?.(0); });
-      respond(receiver.response, keepAlive);
       receive(pending);
     }
 
@@ -131,7 +128,7 @@
     }
 
     function next(): void {
-      if ((busy && !pending) || pumping || connection.closed) return;
+      if (busy || pumping || connection.closed) return;
       pumping = true;
       try { advance(); }
       catch {
@@ -140,7 +137,7 @@
       } finally { pumping = false; }
     }
 
-    connection.canRead = () => !options.startRequest || (pending ? pending.receiver.canRead() : !busy);
+    connection.canRead = () => !options.startRequest || (!busy && (!pending || pending.receiver.canRead()));
     connection.onData = bytes => { buffer = buffer.length ? concat(buffer, bytes) : bytes; next(); };
     connection.onEnd = () => {
       ended = true;
@@ -154,9 +151,7 @@
   type Incoming = {
     complete: boolean; aborted: boolean; destroyed: boolean;
     trailers: Record<string, string | string[]>; rawTrailers: string[]; trailersDistinct: Record<string, string[]>;
-    _readableState: { highWaterMark: number; resumeScheduled?: boolean }; _read(): void;
-    read(size?: number): unknown;
-    resume(): unknown;
+    _readableState: { highWaterMark: number }; _read(): void;
     push(bytes: Uint8Array | null): boolean;
     emit(event: string): void;
     listenerCount(event: string): number;
@@ -171,13 +166,7 @@
   function incoming(options: IncomingOptions): Receiver {
     const { request, socket } = options;
     let ready = true;
-    let consuming = false;
     let onRead = () => {};
-    const read = request.read;
-    request.read = function (size) { consuming = true; return read.call(this, size); };
-    options.response.then(() => {
-      if (!consuming && !request._readableState.resumeScheduled) request.resume();
-    }, () => {});
     if (options.highWaterMark !== undefined) request._readableState.highWaterMark = options.highWaterMark;
     request._read = () => { ready = true; socket.resume(); onRead(); };
     return {

@@ -1689,11 +1689,6 @@ request delivery and Bun response streaming. Node request listeners run after
 headers arrive. The existing body decoder forwards chunks and trailers into
 IncomingMessage, whose backpressure pauses host reads. Completion waits for
 both the body terminator and response finish before reusing the connection.
-A finished response drains an unread request body; a closing response ends
-without waiting for the remaining upload. The unread-body rule follows
-`emitResponseFinish` in Bun's `src/js/node/_http_server.ts` at the same pinned
-revision. The adapter tracks reads and resumes an untouched IncomingMessage
-instead of using Bun's private parser and `_dump` hooks.
 Bun Response streams send headers and body chunks without waiting for EOF.
 Each socket write finishes before another chunk is read. Fixed byte bodies
 retain their existing Content-Length path. These adapters use Bun's unchanged
