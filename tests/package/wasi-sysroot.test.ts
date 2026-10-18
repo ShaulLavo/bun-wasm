@@ -7,6 +7,7 @@ import { buildWasiSysroot, type SysrootOptions } from "../../scripts/build-wasi-
 // Only a tiny fake builder runs here. Real libc/guest builds belong in the heavy gate.
 async function fixture(run: (options: SysrootOptions) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), "bun-wasm-sysroot-test-"));
+  const originalPath = process.env.PATH;
   const options = {
     waffle: join(directory, "waffle"),
     sdk: join(directory, "sdk"), output: join(directory, "output"),
@@ -18,7 +19,7 @@ async function fixture(run: (options: SysrootOptions) => Promise<void>) {
       await mkdir(join(options.sdk, "share/wasi-sysroot", path), { recursive: true });
     }
     await mkdir(join(options.sdk, "bin"), { recursive: true });
-    for (const name of ["clang", "llvm-ar", "llvm-nm", "llvm-ranlib"]) {
+    for (const name of ["clang", "llvm-ar", "llvm-nm", "llvm-ranlib", "cmake", "ninja"]) {
       await writeFile(join(options.sdk, "bin", name), "#!/usr/bin/env bash\necho 'fixture SDK tool version 1'\n", { mode: 0o755 });
     }
     await writeFile(join(options.sdk, "VERSION"), "fake SDK for bootstrap tests\n");
@@ -29,8 +30,10 @@ await Bun.write(output + "/lib/wasm32-wasip1/libc.a", "fixture patched libc");
 `);
     await writeFile(join(options.waffle, "scripts/build-wasi-libc.sh"),
       `#!/usr/bin/env bash\nexec "${process.execPath}" "${join(options.waffle, "scripts/builder.ts")}" "$1"\n`);
+    process.env.PATH = `${join(options.sdk, "bin")}:${originalPath ?? ""}`;
     await run(options);
   } finally {
+    if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
     await rm(directory, { recursive: true, force: true });
   }
 }
