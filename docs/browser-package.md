@@ -15,8 +15,12 @@ Exports are explicit:
 ### Installation and ownership
 
 Registered programs launch ordinary Waffle processes through the generic `runtime_proc` bridge.
-Supply the bundler-produced worker URL and, until the matching immutable guest is published,
-a compiled module or verified asset descriptor. No legacy Bun-specific process controller is used.
+Supply the bundler-produced worker URL. The default browser engine loads the published immutable
+guest through `BUN_WASM_ASSET`, verifying its decompressed size and SHA-256 before compilation.
+No module or asset override is needed for that default. QuickJS and JSC are explicit opt-ins and
+require their matching compiled module or verified asset descriptor; the browser descriptor must
+not be used for them. Guest bytes remain outside the package. No legacy Bun-specific process
+controller is used.
 
 ```ts
 import { installBunAdapters } from "bun-wasm";
@@ -114,4 +118,16 @@ bun install
 bun run check
 bun test ./tests/package/*.test.ts
 bun run build
+```
+
+To repeat the public default's real-process acceptance after rebuilding the matching browser guest,
+explicitly opt into network downloads. The gate compares the build receipt with the descriptor and
+checks that each real guest scenario fetches the public immutable URL, never the local artifact.
+Its generic byte-fixture control stays artifact-free; inherited-fd libc limitations remain explicit
+expected failures. Browser profiles, listener and scratch bundles are removed on exit.
+
+```sh
+BUN_WASM_RUNTIME_PROC_ARTIFACT="$PWD/dist/bun-browser.wasm" \
+BUN_WASM_RUNTIME_PROC_PUBLISHED_DEFAULT=1 \
+  bun web/tests/bun-runtime-proc-browser.ts chromium firefox webkit
 ```

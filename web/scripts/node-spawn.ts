@@ -12,7 +12,7 @@ import type { ProcessContext } from "waffle/proc/types";
 import { startStatus } from "waffle/proc/outcome";
 import { PipeController, PipePublicationRegistry } from "waffle/proc/pipes";
 import { nodeStdioCodec } from "./node-process.ts";
-import { drainStartupDiagnostic } from "./node-startup-diagnostic.ts";
+import { drainDiagnostic } from "waffle/browser/diagnostic";
 import { ProcessErrno, ProcessError } from "waffle/proc/types";
 
 export const nodeExecutables = ["/bin/bun", "/bin/node"] as const;
@@ -138,9 +138,9 @@ export class NodeProcessBroker {
         if (resource?.kind === "pipe" || resource?.kind === "terminal") {
           const write = resource.tryWrite;
           if (!write) throw new ProcessError(ProcessErrno.NOTSUP, "startup diagnostic requires immediate stderr writes");
-          return drainStartupDiagnostic(bytes, bytes => write.call(resource, [bytes]), active);
+          return drainDiagnostic(bytes, bytes => write.call(resource, [bytes]), active);
         }
-        if (pid === 1) return drainStartupDiagnostic(bytes, bytes => {
+        if (pid === 1) return drainDiagnostic(bytes, bytes => {
           try { return writeSync(2, bytes); }
           catch (error) {
             if ((error as NodeJS.ErrnoException).code === "EAGAIN" || (error as NodeJS.ErrnoException).code === "EWOULDBLOCK") return -ProcessErrno.AGAIN;
