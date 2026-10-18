@@ -2507,7 +2507,8 @@ as the rest of the spawn facade tests.
 
 The former Bun-only `SubprocessHost`, startup supervisor and startup-probe helper
 are removed. Waffle owns process launch and worker lifecycle. Both `wait` and `wait_job` consume an eight-byte kind/value result from Waffle
-`ac1da7f02eaa73fcd7ca228f8a96f59beb8b3097` (`proc/{types,abi,outcome}.ts`). START_FAILED
+`4087eae447fc536b6c0a78e5f14b8049be11c467` (`proc/{types,abi,outcome}.ts` and
+`proc/worker-{client,abi}.ts`), shared by the root, web and sandbox consumers. START_FAILED
 is kind 2 with a positive WASI errno: ENOENT, EACCES, ENOTDIR, ENOEXEC, ENOMEM, EAGAIN
 or EIO. Original Rust guest/native bridges and `spawn.ts` preserve this distinction;
 real exits 126/127 remain ordinary exits. Native setup failures release their descriptor
