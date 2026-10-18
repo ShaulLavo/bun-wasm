@@ -113,15 +113,16 @@ test("an I/O yield does not grant a second signal-driven deferral before callbac
 for (const executable of [process.execPath, "node"]) {
   test(`native ${executable} reaches an immediate during microtask self-signalling`, () => {
     const guest = `
-      process.on('SIGUSR1', () => queueMicrotask(() => process.kill(process.pid, 'SIGUSR1')));
+      let handled = 0;
+      process.on('SIGUSR1', () => { handled++; queueMicrotask(() => process.kill(process.pid, 'SIGUSR1')); });
       process.kill(process.pid, 'SIGUSR1');
-      setImmediate(() => { console.log('after-pump'); process.exit(0); });
+      setImmediate(() => { console.log('after-pump ' + handled); process.exit(0); });
     `;
     // spawnSync owns termination if this control unexpectedly fails to exit.
     const result = spawnSync(executable, ["-e", guest], { encoding: "utf8", timeout: 4000, killSignal: "SIGKILL" });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe("after-pump\n");
+    expect(result.stdout).toMatch(/^after-pump [1-9]\d*\n$/);
   });
 }
 
