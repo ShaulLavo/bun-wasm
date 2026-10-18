@@ -9,14 +9,19 @@ import { mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { Browser, Page } from "playwright";
-import { bunRuntimeProcPending, bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
+import { bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
 import { bunRuntimeProcSmoke } from "./bun-runtime-proc-smoke";
 import { BUN_WASM_ASSET } from "../../src/guest-asset.generated.js";
 
+const engine = process.env.BUN_WASM_RUNTIME_PROC_ENGINE ?? "browser";
+assert.ok(["browser", "quickjs", "jsc"].includes(engine), "explicit matching guest engine required");
 const publishedDefault = process.env.BUN_WASM_RUNTIME_PROC_PUBLISHED_DEFAULT === "1";
-if (publishedDefault) assert.ok(BUN_WASM_ASSET, "published-default acceptance requires a generated descriptor");
+if (publishedDefault) {
+  assert.equal(engine, "browser", "only the browser engine has a published default");
+  assert.ok(BUN_WASM_ASSET, "published-default acceptance requires a generated descriptor");
+}
 const requestedArtifact = process.env.BUN_WASM_RUNTIME_PROC_ARTIFACT;
-assert.ok(requestedArtifact && isAbsolute(requestedArtifact), "BUN_WASM_RUNTIME_PROC_ARTIFACT must name the explicit absolute matching rebuilt Bun browser artifact; acceptance is pending without it");
+assert.ok(requestedArtifact && isAbsolute(requestedArtifact), "BUN_WASM_RUNTIME_PROC_ARTIFACT must name the explicit absolute matching rebuilt Bun artifact for the selected engine; acceptance is pending without it");
 assert.ok(await Bun.file(requestedArtifact).exists(), `explicit Bun artifact does not exist: ${requestedArtifact}; rebuild belongs to the guest lane`);
 const artifact = await realpath(requestedArtifact);
 const bytes = new Uint8Array(await Bun.file(artifact).arrayBuffer());
@@ -26,7 +31,7 @@ const procImports = WebAssembly.Module.imports(artifactModule).filter(entry => e
 for (const name of ["spawn", "pipe", "read", "write", "wait", "wait_job", "kill", "kill_job", "poll", "job_of", "signal", "start_status", "access_start", "access_take", "access_cancel"]) {
   assert.ok(procImports.includes(name), `matching rebuilt guest must directly import runtime_proc.${name}; an older slot-backed artifact does not prove step7b`);
 }
-const artifactReceipt = { path: artifact, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), procImports };
+const artifactReceipt = { engine, path: artifact, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), procImports };
 if (publishedDefault) {
   assert.equal(BUN_WASM_ASSET!.bytes, artifactReceipt.bytes, "published descriptor matches exact-merge build size");
   assert.equal(BUN_WASM_ASSET!.sha256, artifactReceipt.sha256, "published descriptor matches exact-merge build hash");
@@ -75,12 +80,12 @@ async function runScenario(browser: Browser, name: string, scenario: string) {
   const errors: string[] = [];
   const guestRequests: string[] = [];
   page.on("request", request => {
-    if (request.url() === BUN_WASM_ASSET?.url || new URL(request.url()).pathname === "/bun-browser.wasm") guestRequests.push(request.url());
+    if (request.url() === BUN_WASM_ASSET?.url || new URL(request.url()).pathname === "/bun-guest.wasm") guestRequests.push(request.url());
   });
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   try {
-    await page.goto(`http://127.0.0.1:${ownedPort}/?scenario=${encodeURIComponent(scenario)}${publishedDefault ? "&published-default" : ""}`);
+    await page.goto(`http://127.0.0.1:${ownedPort}/?engine=${engine}&scenario=${encodeURIComponent(scenario)}${publishedDefault ? "&published-default" : ""}`);
     await page.waitForFunction(() => Reflect.get(globalThis, "bunRuntimeProcResult"), undefined, { timeout: 90_000 });
     const result = await page.evaluate(() => Reflect.get(globalThis, "bunRuntimeProcResult"));
     console.log(JSON.stringify({ browser: name, version: browser.version(), scenario, artifact: artifactReceipt, publishedDefault, guestRequests, result, pageErrors: errors }));
@@ -89,18 +94,8 @@ async function runScenario(browser: Browser, name: string, scenario: string) {
       const expectedRequests = scenario === "generic-control" || scenario === "start-failed" ? [] : [BUN_WASM_ASSET!.url];
       assert.deepEqual(guestRequests, expectedRequests, "public default loads only for guest entry, exactly once without a local artifact fallback");
     }
-    const expected = bunRuntimeProcScenarios.find(item => item.name === scenario)?.expectedFailure;
-    if (expected) {
-      // Keep executing the real failure: a fix is an unexpected pass, not a silent skip.
-      assert.equal(result.ok, false, "remove expected-failure marker after patched libc lands");
-      assert.ok(result.error?.includes("external generic root exit"), JSON.stringify(result));
-      assert.ok(result.stderr.includes(expected.stderr), JSON.stringify(result));
-      assert.equal(result.teardownError, undefined);
-      console.log(JSON.stringify({ browser: name, scenario, expectedFailure: expected.reason, observed: expected.stderr }));
-    } else {
-      assert.equal(result.ok, true, JSON.stringify(result));
-      assert.equal(result.cleanup.activeWorkers, 0, "normal path must stop all workers, not rely on forced teardown");
-    }
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.cleanup.activeWorkers, 0, "normal path must stop all workers, not rely on forced teardown");
     assert.deepEqual(result.teardown, { forcedWorkers: 0, activeWorkers: 0 });
     assert.deepEqual(errors, []);
   } catch (error) {
@@ -127,7 +122,7 @@ try {
   scratch = await (scratchCreation = mkdtemp(join(base, "bun-wasm-bun-runtime-proc-")));
   process.env.TMPDIR = scratch;
   console.log(JSON.stringify({ resources: { existing: { artifact: artifactReceipt, installedPackages: "read only", browserCaches: "read only" },
-    created: { scratch, listener: "ephemeral loopback", browsers: names, downloads: publishedDefault ? { immutableGuest: BUN_WASM_ASSET!.url, storage: "browser memory only" } : "none" } }, pending: bunRuntimeProcPending, siteSmoke: site ? { build: site } : "pending: provide BUN_WASM_RUNTIME_PROC_SITE_DIR for production site/sandbox smoke" }));
+    created: { scratch, listener: "ephemeral loopback", browsers: names, downloads: publishedDefault ? { immutableGuest: BUN_WASM_ASSET!.url, storage: "browser memory only" } : "none" } }, siteSmoke: site ? { build: site } : "pending: provide BUN_WASM_RUNTIME_PROC_SITE_DIR for production site/sandbox smoke" }));
   const root = resolve(import.meta.dir, "../.."), out = join(scratch, "dist");
   await buildBrowserEntries([join(import.meta.dir, "bun-runtime-proc-main.ts"), join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts")], out, { runtimeWorker: true });
   await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./bun-runtime-proc-main.js"></script>');
@@ -135,7 +130,7 @@ try {
     const url = new URL(request.url);
     const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };
     if (url.pathname === "/favicon.ico") return new Response(null, { status: 204, headers });
-    if (url.pathname === "/bun-browser.wasm") return new Response(Bun.file(artifact), { headers: { ...headers, "Content-Type": "application/wasm" } });
+    if (url.pathname === "/bun-guest.wasm") return new Response(Bun.file(artifact), { headers: { ...headers, "Content-Type": "application/wasm" } });
     if (url.pathname === "/bun-browser.wasm.gz" && site) return new Response(Bun.gzipSync(bytes), { headers });
     if (url.pathname.startsWith("/site/") && site) {
       const suffix = url.pathname.slice("/site".length);

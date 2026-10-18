@@ -58,6 +58,7 @@ pkcs8 = { version = "0.10", features = ["alloc"] }
 spki = { version = "0.7", features = ["alloc"] }
 signature = "2"
 
+
 [dev-dependencies]
 bunwasm-glue = { path = "../bunwasm-glue" }
 bunwasm-posix = { path = "../bunwasm-posix" }

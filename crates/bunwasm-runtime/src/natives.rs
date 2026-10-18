@@ -11,8 +11,14 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Write};
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::os::fd::AsRawFd;
+use std::os::fd::FromRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
+#[cfg(target_os = "wasi")]
+use std::os::wasi::fs::FileTypeExt;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -41,6 +47,9 @@ impl Table {
 /// Node's (code, negative Linux errno, description) for an I/O error.
 fn errno_info(err: &io::Error) -> (&'static str, i32, &'static str) {
     use io::ErrorKind as K;
+    if err.raw_os_error() == Some(libc::EBADF) {
+        return ("EBADF", -9, "bad file descriptor");
+    }
     match err.kind() {
         K::BrokenPipe => ("EPIPE", -32, "broken pipe"),
         K::NotFound => ("ENOENT", -2, "no such file or directory"),
@@ -75,13 +84,6 @@ pub fn io_error(err: io::Error, syscall: &str, path: Option<&str>) -> NativeErro
         .prop("code", code)
 }
 
-fn bad_fd(syscall: &str) -> NativeError {
-    NativeError::error(format!("EBADF: bad file descriptor, {syscall}"))
-        .prop("syscall", syscall)
-        .prop("errno", -9)
-        .prop("code", "EBADF")
-}
-
 fn millis(time: io::Result<SystemTime>) -> f64 {
     time.ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -89,21 +91,26 @@ fn millis(time: io::Result<SystemTime>) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn stat_record(meta: &fs::Metadata) -> Val {
+fn stat_record(meta: &fs::Metadata, descriptor_mode: Option<libc::mode_t>) -> Val {
     let ft = meta.file_type();
     let (kind_bits, perm) = if ft.is_dir() {
         (0o040000, 0o755)
     } else if ft.is_symlink() {
         (0o120000, 0o777)
     } else {
-        (0o100000, 0o644)
+        (special_file_bits(ft), 0o644)
     };
     let (dev, ino, nlink) = inode_info(meta);
     let mtime = millis(meta.modified());
     Record::new()
         .set("dev", dev)
         .set("ino", ino)
-        .set("mode", (kind_bits | perm) as f64)
+        .set(
+            "mode",
+            descriptor_mode
+                .map(f64::from)
+                .unwrap_or(f64::from(kind_bits | perm)),
+        )
         .set("nlink", nlink)
         .set("uid", 0)
         .set("gid", 0)
@@ -116,6 +123,32 @@ fn stat_record(meta: &fs::Metadata) -> Val {
         .set("ctimeMs", mtime)
         .set("birthtimeMs", millis(meta.created()))
         .into()
+}
+
+#[cfg(any(unix, target_os = "wasi"))]
+fn special_file_bits(kind: fs::FileType) -> u32 {
+    #[cfg(unix)]
+    if kind.is_fifo() {
+        return 0o010000;
+    }
+    if kind.is_char_device() {
+        return 0o020000;
+    }
+    if kind.is_block_device() {
+        return 0o060000;
+    }
+    if kind.is_socket() {
+        return 0o140000;
+    }
+    if kind.is_file() {
+        return 0o100000;
+    }
+    0
+}
+
+#[cfg(not(any(unix, target_os = "wasi")))]
+fn special_file_bits(kind: fs::FileType) -> u32 {
+    if kind.is_file() { 0o100000 } else { 0 }
 }
 
 #[cfg(target_os = "wasi")]
@@ -150,12 +183,40 @@ fn copy_dir_all(from: &str, to: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Open files by fake fd (WASI has real fds, but std does not expose a way to
-/// adopt arbitrary numbers, so we keep our own table starting at 3).
+/// Own files opened by this runtime, indexed by their real process descriptor.
+/// Inherited descriptors share that namespace and remain owned by the process host.
 #[derive(Default)]
 pub struct FdTable {
     files: HashMap<i32, File>,
-    next: i32,
+}
+
+fn descriptor_metadata(fd: i32) -> io::Result<(fs::Metadata, libc::mode_t)> {
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
+    // Validate the descriptor before borrowing it. Guest native calls are synchronous;
+    // no JS can close or reuse it between this check and metadata().
+    if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // This view never acquires lifetime ownership: ManuallyDrop prevents close on
+    // return (including errors). Owned opens remain in FdTable; inherited fds remain
+    // owned by their host until an explicit close or process exit.
+    let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd as _) });
+    let mode = unsafe { stat.assume_init() }.st_mode;
+    // Preview1 has no FIFO tag: both process hosts encode pipe endpoints as
+    // UNKNOWN, which libc preserves with no POSIX type bits. Adapt that host
+    // representation without bypassing fd_filestat_get capability checks.
+    #[cfg(target_os = "wasi")]
+    let mode = if mode & 0o170000 == 0 {
+        mode | 0o010000
+    } else {
+        mode
+    };
+    Ok((file.metadata()?, mode))
+}
+
+fn descriptor_stat(fd: i32) -> io::Result<Val> {
+    let (meta, mode) = descriptor_metadata(fd)?;
+    Ok(stat_record(&meta, Some(mode)))
 }
 
 fn open_options(flags: &str) -> OpenOptions {
@@ -348,7 +409,7 @@ fn install_fs(t: &mut Table) {
         };
         let meta =
             meta.map_err(|e| io_error(e, if lstat { "lstat" } else { "stat" }, Some(path)))?;
-        Ok(stat_record(&meta))
+        Ok(stat_record(&meta, None))
     });
     t.add("mkdir", |a| {
         let path = a.str(0)?;
@@ -486,23 +547,16 @@ pub(crate) fn symlink(_: &str, _: &str) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
 }
 
-fn write_file_at(file: &mut File, bytes: &[u8], position: Option<u64>) -> io::Result<()> {
-    let Some(position) = position else {
-        return file.write_all(bytes);
-    };
-    let cursor = file.stream_position()?;
-    file.seek(SeekFrom::Start(position))?;
-    let result = file.write_all(bytes);
-    let restored = file.seek(SeekFrom::Start(cursor)).map(|_| ());
-    result.and(restored)
-}
-
 fn writev(state: &State, args: Args<'_>) -> NativeResult {
     let fd = match args.get(0) {
-        Val::Num(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(i32::MAX) => *n as i32,
+        Val::Num(n)
+            if n.fract() == 0.0 && *n >= f64::from(i32::MIN) && *n <= f64::from(i32::MAX) =>
+        {
+            *n as i32
+        }
         Val::Num(_) => {
             return Err(
-                NativeError::range_error("fd must be an integer between 0 and 2147483647")
+                NativeError::range_error("fd must be a signed 32-bit integer")
                     .prop("code", "ERR_OUT_OF_RANGE"),
             );
         }
@@ -522,21 +576,15 @@ fn writev(state: &State, args: Args<'_>) -> NativeResult {
             _ => Err(NativeError::type_error("expected a byte buffer")),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let files = state.fds.borrow();
-    let descriptor = match fd {
-        1 | 2 => {
-            state.flush();
-            fd
-        }
-        _ => libc::c_int::try_from(
-            files
-                .files
-                .get(&fd)
-                .ok_or_else(|| bad_fd("writev"))?
-                .as_raw_fd(),
-        )
-        .map_err(|_| bad_fd("writev"))?,
-    };
+    // Inherited descriptors can alias either output stream. Flush before every
+    // direct write, not only writes whose descriptor number is 1 or 2.
+    flush_descriptor_output(state).map_err(|e| io_error(e, "writev", None))?;
+    if buffers.iter().all(|bytes| bytes.is_empty()) {
+        return write_chunk(fd, &[], None)
+            .map(|n| Val::Num(n as f64))
+            .map_err(|e| io_error(e, "writev", None));
+    }
+    let descriptor = fd;
     let position = args
         .opt_num(2)
         .filter(|&n| n >= 0.0)
@@ -566,18 +614,134 @@ fn writev(state: &State, args: Args<'_>) -> NativeResult {
     Ok(Val::Num(written as f64))
 }
 
-fn write_chunk(fd: libc::c_int, bytes: &[u8], position: Option<libc::off_t>) -> io::Result<usize> {
-    // The argument frame owns these bytes until the synchronous call returns.
-    let written = unsafe {
-        match position {
-            Some(position) => libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position),
-            None => libc::write(fd, bytes.as_ptr().cast(), bytes.len()),
+fn flush_descriptor_output(state: &State) -> io::Result<()> {
+    state.flush_stdout()?;
+    io::stderr().flush()
+}
+
+fn retry_interrupted(mut operation: impl FnMut() -> io::Result<usize>) -> io::Result<usize> {
+    loop {
+        match operation() {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            result => return result,
         }
+    }
+}
+
+fn write_once(fd: libc::c_int, bytes: &[u8], position: Option<libc::off_t>) -> io::Result<usize> {
+    // The argument frame owns these bytes until the synchronous call returns.
+    let written = match position {
+        Some(position) => unsafe { libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position) },
+        None => unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) },
     };
     if written < 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(written as usize)
+}
+
+fn write_chunk(fd: libc::c_int, bytes: &[u8], position: Option<libc::off_t>) -> io::Result<usize> {
+    retry_interrupted(|| write_once(fd, bytes, position))
+}
+
+// Preserve committed progress when a later chunk fails. The initial empty syscall
+// is deliberate: even zero-byte writes must validate their descriptor.
+fn write_chunks_with(
+    bytes: &[u8],
+    position: Option<libc::off_t>,
+    mut write: impl FnMut(&[u8], Option<libc::off_t>) -> io::Result<usize>,
+) -> io::Result<usize> {
+    let mut written = 0;
+    loop {
+        let offset = position
+            .map(|base| {
+                base.checked_add(written as libc::off_t)
+                    .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))
+            })
+            .transpose();
+        let result =
+            offset.and_then(|offset| retry_interrupted(|| write(&bytes[written..], offset)));
+        match result {
+            Ok(0) if written == bytes.len() => return Ok(written),
+            Ok(0) if written == 0 => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(0) => return Ok(written),
+            Ok(count) => written += count,
+            Err(_) if written > 0 => return Ok(written),
+            Err(error) => return Err(error),
+        }
+        if written == bytes.len() {
+            return Ok(written);
+        }
+    }
+}
+
+fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
+    let fd = args.i32(0)?;
+    let bytes = args.bytes(1)?;
+    if bytes.is_empty() {
+        return write_chunk(fd, bytes, None)
+            .map(|n| Val::Num(n as f64))
+            .map_err(|e| io_error(e, "write", None));
+    }
+    if fd == 1 {
+        state
+            .write_stdout(bytes)
+            .map_err(|e| io_error(e, "write", None))?;
+        return Ok(Val::Num(bytes.len() as f64));
+    }
+    if fd == 2 {
+        state
+            .write_stderr(bytes)
+            .map_err(|e| io_error(e, "write", None))?;
+        return Ok(Val::Num(bytes.len() as f64));
+    }
+    flush_descriptor_output(state).map_err(|e| io_error(e, "write", None))?;
+    let position = args
+        .opt_num(2)
+        .filter(|p| *p >= 0.0)
+        .map(|p| p as libc::off_t);
+    write_chunks_with(bytes, position, |bytes, offset| {
+        write_chunk(fd, bytes, offset)
+    })
+    .map(|n| Val::Num(n as f64))
+    .map_err(|e| io_error(e, "write", None))
+}
+
+fn close_descriptor(state: &State, args: Args<'_>) -> NativeResult {
+    let fd = args.i32(0)?;
+    if (0..=2).contains(&fd) {
+        return ok();
+    }
+    if state.fds.borrow_mut().files.remove(&fd).is_some() {
+        return ok();
+    }
+    if unsafe { libc::close(fd) } < 0 {
+        return Err(io_error(io::Error::last_os_error(), "close", None));
+    }
+    ok()
+}
+
+fn read_descriptor(args: Args<'_>) -> NativeResult {
+    let fd = args.i32(0)?;
+    let mut buf = vec![0u8; args.num(1)? as usize];
+    let position = args.opt_num(2).filter(|p| *p >= 0.0);
+    // Positional reads must not advance the shared open-file cursor.
+    let count = match position {
+        Some(position) => unsafe {
+            libc::pread(
+                fd,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                position as libc::off_t,
+            )
+        },
+        None => unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) },
+    };
+    if count < 0 {
+        return Err(io_error(io::Error::last_os_error(), "read", None));
+    }
+    buf.truncate(count as usize);
+    Ok(Val::Bytes(buf))
 }
 
 fn install_fds(t: &mut Table, state: &Rc<State>) {
@@ -588,88 +752,26 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         let file = open_options(flags)
             .open(path)
             .map_err(|e| io_error(e, "open", Some(path)))?;
-        let mut fds = st.fds.borrow_mut();
-        let fd = fds.next.max(3);
-        fds.next = fd + 1;
-        fds.files.insert(fd, file);
+        let fd = file.as_raw_fd();
+        st.fds.borrow_mut().files.insert(fd, file);
         Ok(fd.into())
     });
     let st = state.clone();
-    t.add("close", move |a| {
-        let fd = a.i32(0)?;
-        if fd <= 2 {
-            return ok();
-        }
-        match st.fds.borrow_mut().files.remove(&fd) {
-            Some(_) => ok(),
-            None => Err(bad_fd("close")),
-        }
-    });
+    t.add("close", move |a| close_descriptor(&st, a));
+    t.add("read", read_descriptor);
     let st = state.clone();
-    t.add("read", move |a| {
-        let fd = a.i32(0)?;
-        let mut buf = vec![0u8; a.num(1)? as usize];
-        if fd == 0 && buf.is_empty() {
-            return Ok(Val::Bytes(buf));
-        }
-        let n = if fd == 0 {
-            let count = unsafe { libc::read(0, buf.as_mut_ptr().cast(), buf.len()) };
-            if count < 0 {
-                Err(io::Error::last_os_error())
-            } else {
-                Ok(count as usize)
-            }
-        } else {
-            let mut fds = st.fds.borrow_mut();
-            let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("read"))?;
-            if let Some(p) = a.opt_num(2).filter(|p| *p >= 0.0) {
-                file.seek(SeekFrom::Start(p as u64))
-                    .map_err(|e| io_error(e, "read", None))?;
-            }
-            file.read(&mut buf)
-        };
-        let n = n.map_err(|e| io_error(e, "read", None))?;
-        buf.truncate(n);
-        Ok(Val::Bytes(buf))
-    });
-    let st = state.clone();
-    t.add("write", move |a| {
-        let fd = a.i32(0)?;
-        let bytes = a.bytes(1)?;
-        match fd {
-            1 => st
-                .write_stdout(bytes)
-                .map_err(|e| io_error(e, "write", None))?,
-            2 => st
-                .write_stderr(bytes)
-                .map_err(|e| io_error(e, "write", None))?,
-            _ => {
-                let mut fds = st.fds.borrow_mut();
-                let file = fds.files.get_mut(&fd).ok_or_else(|| bad_fd("write"))?;
-                let position = a.opt_num(2).filter(|p| *p >= 0.0).map(|p| p as u64);
-                write_file_at(file, bytes, position).map_err(|e| io_error(e, "write", None))?;
-            }
-        }
-        Ok(Val::Num(bytes.len() as f64))
-    });
+    t.add("write", move |a| write_descriptor(&st, a));
     let st = state.clone();
     t.add("writev", move |a| writev(&st, a));
-    let st = state.clone();
-    t.add("fstat", move |a| {
-        let fds = st.fds.borrow();
-        let file = fds.files.get(&a.i32(0)?).ok_or_else(|| bad_fd("fstat"))?;
-        let meta = file.metadata().map_err(|e| io_error(e, "fstat", None))?;
-        Ok(stat_record(&meta))
+    t.add("fstat", |a| {
+        descriptor_stat(a.i32(0)?).map_err(|e| io_error(e, "fstat", None))
     });
-    let st = state.clone();
-    t.add("ftruncate", move |a| {
-        let fds = st.fds.borrow();
-        let file = fds
-            .files
-            .get(&a.i32(0)?)
-            .ok_or_else(|| bad_fd("ftruncate"))?;
-        file.set_len(a.opt_num(1).unwrap_or(0.0) as u64)
-            .map_err(|e| io_error(e, "ftruncate", None))?;
+    t.add("ftruncate", |a| {
+        let result =
+            unsafe { libc::ftruncate(a.i32(0)?, a.opt_num(1).unwrap_or(0.0) as libc::off_t) };
+        if result < 0 {
+            return Err(io_error(io::Error::last_os_error(), "ftruncate", None));
+        }
         ok()
     });
 }
@@ -1255,6 +1357,242 @@ mod builtin_tests {
             .find(|(key, _)| *key == name)
             .expect("shared data native");
         function(Args(args))
+    }
+
+    #[test]
+    fn real_descriptors_accept_inherited_files_without_stealing_their_lifetime() {
+        use std::io::{Read, Seek, SeekFrom};
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+            }
+        }
+        let path = std::env::temp_dir().join(format!(
+            "bun-wasm-native-fds-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let fixture = Fixture(path);
+        let mut inherited = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&fixture.0)
+            .unwrap();
+        inherited.write_all(b"xxcursor!").unwrap();
+        inherited.seek(SeekFrom::Start(2)).unwrap();
+        let fd = Val::Num(inherited.as_raw_fd() as f64);
+        let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
+        let natives = table(&state);
+        assert_eq!(
+            call(
+                &natives,
+                "read",
+                &[fd.clone(), Val::Num(2.0), Val::Num(0.0)]
+            )
+            .unwrap(),
+            Val::Bytes(b"xx".to_vec())
+        );
+        assert_eq!(inherited.stream_position().unwrap(), 2);
+        assert_eq!(
+            call(
+                &natives,
+                "read",
+                &[fd.clone(), Val::Num(6.0), Val::Num(-1.0)]
+            )
+            .unwrap(),
+            Val::Bytes(b"cursor".to_vec())
+        );
+        assert_eq!(inherited.stream_position().unwrap(), 8);
+        call(
+            &natives,
+            "write",
+            &[fd.clone(), Val::Bytes(b"X".to_vec()), Val::Num(0.0)],
+        )
+        .unwrap();
+        assert_eq!(inherited.stream_position().unwrap(), 8);
+        assert!(call(&natives, "fstat", std::slice::from_ref(&fd)).is_ok());
+        call(&natives, "ftruncate", &[fd.clone(), Val::Num(10.0)]).unwrap();
+        assert_eq!(inherited.metadata().unwrap().len(), 10);
+        call(
+            &natives,
+            "writev",
+            &[
+                fd.clone(),
+                Val::Array(vec![Val::Bytes(b"?".to_vec())]),
+                Val::Num(-1.0),
+            ],
+        )
+        .unwrap();
+        let own = call(
+            &natives,
+            "open",
+            &[Val::from(fixture.0.to_str().unwrap()), Val::from("r")],
+        )
+        .unwrap();
+        let Val::Num(own_fd) = own else {
+            panic!("open must return descriptor")
+        };
+        assert_ne!(own_fd, inherited.as_raw_fd() as f64);
+        assert_eq!(
+            state.fds.borrow().files[&(own_fd as i32)].as_raw_fd() as f64,
+            own_fd
+        );
+        call(&natives, "close", &[Val::Num(own_fd)]).unwrap();
+        let error = call(
+            &natives,
+            "read",
+            &[Val::Num(own_fd), Val::Num(1.0), Val::Num(-1.0)],
+        )
+        .unwrap_err();
+        assert!(error.props.contains(&("code".into(), Val::from("EBADF"))));
+        drop(natives);
+        drop(state);
+        inherited.seek(SeekFrom::Start(8)).unwrap();
+        let mut suffix = [0];
+        inherited.read_exact(&mut suffix).unwrap();
+        assert_eq!(suffix, [b'?']);
+    }
+
+    #[test]
+    fn writes_preserve_partial_progress_and_retry_interruptions() {
+        let mut attempts = 0;
+        assert_eq!(
+            write_chunks_with(b"abcd", Some(10), |bytes, offset| {
+                attempts += 1;
+                if attempts == 1 {
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                if attempts == 2 {
+                    assert_eq!(bytes, b"abcd");
+                    assert_eq!(offset, Some(10));
+                    return Ok(2);
+                }
+                assert_eq!(bytes, b"cd");
+                assert_eq!(offset, Some(12));
+                Err(io::ErrorKind::WouldBlock.into())
+            })
+            .unwrap(),
+            2
+        );
+        assert_eq!(attempts, 3);
+        assert_eq!(
+            write_chunks_with(b"a", None, |_, _| Err(
+                io::ErrorKind::PermissionDenied.into()
+            ))
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            write_chunks_with(b"ab", Some(libc::off_t::MAX), |_, _| Ok(1)).unwrap(),
+            1
+        );
+        assert_eq!(
+            write_chunks_with(b"a", None, |_, _| Ok(0))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WriteZero
+        );
+        assert_eq!(
+            write_chunks_with(b"", None, |bytes, _| {
+                assert!(bytes.is_empty());
+                Err(io::Error::from_raw_os_error(libc::EBADF))
+            })
+            .unwrap_err()
+            .raw_os_error(),
+            Some(libc::EBADF)
+        );
+        let mut interrupted = true;
+        assert_eq!(
+            retry_interrupted(|| {
+                if interrupted {
+                    interrupted = false;
+                    Err(io::ErrorKind::Interrupted.into())
+                } else {
+                    Ok(7)
+                }
+            })
+            .unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn invalid_descriptors_reject_close_and_empty_io() {
+        let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
+        let natives = table(&state);
+        for fd in [-1, -7, i32::MIN, i32::MAX] {
+            for (name, args) in [
+                ("close", vec![Val::Num(f64::from(fd))]),
+                ("read", vec![Val::Num(f64::from(fd)), Val::Num(0.0)]),
+                ("fstat", vec![Val::Num(f64::from(fd))]),
+                ("ftruncate", vec![Val::Num(f64::from(fd)), Val::Num(0.0)]),
+                ("write", vec![Val::Num(f64::from(fd)), Val::Bytes(vec![])]),
+                ("writev", vec![Val::Num(f64::from(fd)), Val::Array(vec![])]),
+            ] {
+                let error = call(&natives, name, &args).unwrap_err();
+                assert!(
+                    error.props.contains(&("code".into(), Val::from("EBADF"))),
+                    "{name}({fd}): {error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_writes_reject_closed_descriptors() {
+        let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
+        let natives = table(&state);
+        // Negative descriptors cannot be concurrently allocated by another test.
+        let error = call(&natives, "write", &[Val::Num(-1.0), Val::Bytes(vec![])]).unwrap_err();
+        assert!(error.props.contains(&("code".into(), Val::from("EBADF"))));
+        // A descriptor outside the process limit is likewise guaranteed closed.
+        for vectors in [
+            vec![],
+            vec![Val::Bytes(vec![])],
+            vec![Val::Bytes(vec![]), Val::Bytes(vec![])],
+        ] {
+            let error = call(
+                &natives,
+                "writev",
+                &[Val::Num(i32::MAX as f64), Val::Array(vectors)],
+            )
+            .unwrap_err();
+            assert!(error.props.contains(&("code".into(), Val::from("EBADF"))));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_pipe_and_character_device_keep_their_type() {
+        use std::os::unix::net::UnixStream;
+        let (socket, _peer) = UnixStream::pair().unwrap();
+        let mut pipes = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(pipes.as_mut_ptr()) }, 0);
+        let reader = unsafe { File::from_raw_fd(pipes[0]) };
+        let _writer = unsafe { File::from_raw_fd(pipes[1]) };
+        let device = File::open("/dev/null").unwrap();
+        let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
+        let natives = table(&state);
+        for (fd, kind) in [
+            (reader.as_raw_fd(), 0o010000),
+            (device.as_raw_fd(), 0o020000),
+            (socket.as_raw_fd(), 0o140000),
+        ] {
+            let Val::Object(fields) = call(&natives, "fstat", &[Val::Num(fd as f64)]).unwrap()
+            else {
+                panic!("stat object");
+            };
+            let (_, Val::Num(mode)) = fields.iter().find(|(key, _)| key == "mode").unwrap() else {
+                panic!("mode");
+            };
+            assert_eq!(*mode as u32 & 0o170000, kind);
+        }
     }
 
     #[test]

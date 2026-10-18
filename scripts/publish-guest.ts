@@ -3,13 +3,16 @@ import { createRequire } from "node:module";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 import {
   GUEST_BUCKET, GUEST_CACHE_CONTROL, GUEST_ORIGIN,
-  prepareGuest, verifyGuest, writeGuestDescriptor,
+  describeGuest, verifyGuest, writeGuestDescriptor,
 } from "./guest-artifact.ts";
 import type { GuestArtifact, GuestDescriptor } from "./guest-artifact.ts";
+
+import { acceptGuestPublication } from "./guest-acceptance.ts";
 
 export type GuestFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -104,19 +107,17 @@ if (import.meta.main) {
       origin: { type: "string", default: GUEST_ORIGIN },
       bucket: { type: "string", default: GUEST_BUCKET },
       output: { type: "string" },
+      dist: { type: "string", default: fileURLToPath(new URL("../dist/", import.meta.url)) },
       "account-id": { type: "string", default: process.env.CLOUDFLARE_ACCOUNT_ID },
     },
   });
-  if (positionals.length !== 1) throw new Error("Usage: bun scripts/publish-guest.ts <bun.wasm[.gz]> [--output descriptor.ts] [--origin https://host] [--bucket bucket] [--account-id id]");
+  if (positionals.length !== 1) throw new Error("Usage: bun scripts/publish-guest.ts <bun.wasm[.gz]> [--output descriptor.ts] [--dist full-build-directory] [--origin https://host] [--bucket bucket] [--account-id id]");
   const accountId = values["account-id"];
   const token = process.env.CLOUDFLARE_API_TOKEN;
   if (!accountId || !/^[a-f0-9]{32}$/.test(accountId)) throw new Error("Set CLOUDFLARE_ACCOUNT_ID or --account-id to the target account's ID");
   if (!token) throw new Error("Set CLOUDFLARE_API_TOKEN in the environment (never pass a token as an argument)");
   if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(values.bucket!)) throw new Error("Invalid R2 bucket name");
-  const artifact = prepareGuest(await readFile(positionals[0]!), values.origin);
-  // Resolve the site's lockfile-pinned Wrangler. Never download a CLI during publication.
-  const require = createRequire(new URL("../site/package.json", import.meta.url));
-  const wrangler = join(dirname(require.resolve("wrangler/package.json")), "bin/wrangler.js");
+  const requested = describeGuest(await readFile(positionals[0]!), values.origin);
   const scratchRoot = process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
   const scratch = await mkdtemp(join(scratchRoot, "bun-wasm-guest-publish-"));
   const controller = new AbortController();
@@ -124,6 +125,10 @@ if (import.meta.main) {
   process.once("SIGINT", abort);
   process.once("SIGTERM", abort);
   try {
+    const artifact = await acceptGuestPublication(resolve(values.dist!), requested, controller.signal);
+    // Resolve the site's lockfile-pinned Wrangler only after full acceptance.
+    const require = createRequire(new URL("../site/package.json", import.meta.url));
+    const wrangler = join(dirname(require.resolve("wrangler/package.json")), "bin/wrangler.js");
     const descriptor = await publishGuest(artifact, createR2Publisher({ accountId, token, bucket: values.bucket!, scratch, wrangler, signal: controller.signal }));
     // Publication failures must leave the consumer's existing descriptor untouched.
     if (values.output) await writeGuestDescriptor(values.output, descriptor);

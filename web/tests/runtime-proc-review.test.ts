@@ -1,6 +1,6 @@
 import { controlLoad, controlStore } from "waffle/proc/control";
 import { processRuntimeFixture } from "./process-runtime-fixture";
-import { expect, test } from "bun:test";
+import { afterAll, expect, mock, test } from "bun:test";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
@@ -9,6 +9,14 @@ import { SubprocessBroker } from "../src/subprocess-broker";
 import { claimOutcome } from "waffle/proc/outcome";
 import { setSignalDisposition } from "waffle/proc/signals";
 import type { RunRequest, WorkerMessage } from "../src/worker";
+
+const actualOutcome = { ...await import("waffle/proc/outcome") };
+let observeOutcome: typeof actualOutcome.readOutcome | undefined;
+mock.module("waffle/proc/outcome", () => ({ ...actualOutcome,
+  readOutcome: (...args: Parameters<typeof actualOutcome.readOutcome>) =>
+    (observeOutcome ?? actualOutcome.readOutcome)(...args),
+}));
+afterAll(() => { mock.module("waffle/proc/outcome", () => actualOutcome); });
 
 const pause = (ms = 1) => new Promise<void>(resolve => setTimeout(resolve, ms));
 async function until(condition: () => boolean, label: string, milliseconds = 500) {
@@ -82,20 +90,18 @@ for (const trigger of ["watcher", "late-kill", "handled-signal-before-exit", "pu
     if (trigger === "pump-signal-race") {
       setSignalDisposition(shared.signals.signalState, 15, 2);
       controlStore(shared.signals.requestedSignal, 0, 15);
-      const originalLoad = Atomics.load;
       let raced = false, reads = 0;
-      Atomics.load = ((array: Int32Array | BigInt64Array, index: number) => {
-        const previous = Reflect.apply(originalLoad, Atomics, [array, index]);
-        if (array instanceof BigInt64Array && array.buffer === shared.signals.outcome.buffer &&
-          array.byteOffset === shared.signals.outcome.byteOffset && index === 0 && ++reads === 2) {
+      observeOutcome = word => {
+        const previous = actualOutcome.readOutcome(word);
+        if (word.buffer === shared.signals.outcome.buffer && word.byteOffset === shared.signals.outcome.byteOffset && ++reads === 2) {
           // First read is the page sender guard; second is the generic broker's pump.
           raced = true;
           claimOutcome(shared.signals.outcome, { kind: "exited", code: 23 });
         }
         return previous;
-      }) as typeof Atomics.load;
+      };
       try { await state.broker.runtimeMessage({ type: "runtime-proc", operation: "exit", transport, targets: [pid] }, pid); }
-      finally { Atomics.load = originalLoad; }
+      finally { observeOutcome = undefined; }
       expect(raced).toBe(true);
     } else {
       claimOutcome(shared.signals.outcome, { kind: "exited", code: 23 });

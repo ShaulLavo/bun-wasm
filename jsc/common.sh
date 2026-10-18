@@ -37,7 +37,7 @@ jsc_inputs_hash() {
     printf 'ICU_SHA256=%s\n' "$ICU_SHA256"
     # Fingerprint the effective build environment, not unrelated workstation
     # scratch/cache policy or comments in the shell file that establishes it.
-    for variable in WASI_SDK_PATH CC CXX AR RANLIB CFLAGS CXXFLAGS CPPFLAGS LDFLAGS \
+    for variable in WASI_SDK_PATH BUN_WASM_SYSROOT CC CXX AR RANLIB CFLAGS CXXFLAGS CPPFLAGS LDFLAGS \
       CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH; do
       printf '%s=%s\n' "$variable" "${!variable-}"
     done
@@ -61,6 +61,8 @@ jsc_inputs_hash() {
         sha256sum "$file"
       done
     )
+    printf 'patched-sysroot/receipt\n'
+    cat "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json"
     printf 'wasi-sdk/VERSION\n'
     cat "$WASI_SDK_PATH/VERSION"
     printf 'clang: '
@@ -111,7 +113,7 @@ build_shim() {
   copy_jsc_config_inputs
   local c
   for c in wasi-compat madvise; do
-    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 -O2 -c "$JSC_CONFIG_SHIM_DIR/$c.c" -o "$SHIM_DIR/$c.o"
+    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -O2 -c "$JSC_CONFIG_SHIM_DIR/$c.c" -o "$SHIM_DIR/$c.o"
   done
   rm -f "$SHIM_DIR/libwasi-compat.a"
   "$WASI_SDK_PATH/bin/llvm-ar" rcs "$SHIM_DIR/libwasi-compat.a" "$SHIM_DIR/wasi-compat.o" "$SHIM_DIR/madvise.o"
