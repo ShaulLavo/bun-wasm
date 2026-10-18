@@ -628,20 +628,20 @@ fn retry_interrupted(mut operation: impl FnMut() -> io::Result<usize>) -> io::Re
     }
 }
 
+fn write_once(fd: libc::c_int, bytes: &[u8], position: Option<libc::off_t>) -> io::Result<usize> {
+    // The argument frame owns these bytes until the synchronous call returns.
+    let written = match position {
+        Some(position) => unsafe { libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position) },
+        None => unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) },
+    };
+    if written < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(written as usize)
+}
+
 fn write_chunk(fd: libc::c_int, bytes: &[u8], position: Option<libc::off_t>) -> io::Result<usize> {
-    retry_interrupted(|| {
-        // The argument frame owns these bytes until the synchronous call returns.
-        let written = match position {
-            Some(position) => unsafe {
-                libc::pwrite(fd, bytes.as_ptr().cast(), bytes.len(), position)
-            },
-            None => unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) },
-        };
-        if written < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(written as usize)
-    })
+    retry_interrupted(|| write_once(fd, bytes, position))
 }
 
 // Preserve committed progress when a later chunk fails. The initial empty syscall
