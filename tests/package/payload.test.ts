@@ -17,6 +17,7 @@ test("packed package includes a working public worker, no demo or guest binaries
     const { stdout: listing } = await execute("tar", ["-tzf", join(scratch, archive)], { timeout: 10_000 });
     const files = listing.trim().split("\n");
     expect(files).toContain("package/src/worker-entry.ts");
+    expect(files).toContain("package/web/src/tool-command.ts");
     expect(files).toContain("package/dist/package/index.js");
     expect(files.some(name => /\.wasm(?:\.gz)?$/.test(name))).toBe(false);
     expect(files).not.toContain("package/web/src/main.ts");
