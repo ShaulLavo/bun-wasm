@@ -2206,10 +2206,18 @@ Berry optional-edge classification adapt the corresponding rules from Bun at
 - `src/install/yarn_berry.rs` supplies registry precedence, registry identity checks and `dependenciesMeta` classification.
 - `src/install/pnpm.rs` supplies importer and link-target validation rules.
 - `src/install/lockfile/Tree.rs` supplies ancestor visibility and finite placement semantics.
+- `src/install/integrity.rs` supplies the supported hash algorithms, strongest-digest selection and SRI padding used by the portable verifier.
+- `src/install/npm.rs` and `src/install/NetworkTask.rs` supply configured Bearer/Basic authorization and registry-origin/path scoping rules.
 
 The local implementation uses serde values and the portable filesystem rather than
 Bun's package-manager graph. Unsupported selection rules fail before publication.
-No vendor source or patch changes.
+No vendor source or patch changes. The original request adapter now owns URL
+normalization for migration and ordinary installation. It drops URL userinfo,
+rejects transport queries, and keeps configured authorization out of URLs and lock
+records. Host error text and optional warnings use the shared URL redactor. The
+lock writer rejects credential-bearing URL metadata before publication. The
+portable verifier implements SHA-512, SHA-384, SHA-256 and SHA-1 and compares decoded
+digests, including Bun's serialized padding for SHA-256 and SHA-384.
 The text format follows Bun's `src/install/lockfile/bun.lock.rs`; selected references
 and bin representations are checked against native Bun rather than inferred from
 pretty JSON. Registry metadata can fill omitted bin, platform and script fields,

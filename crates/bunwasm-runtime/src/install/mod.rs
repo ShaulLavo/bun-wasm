@@ -27,10 +27,10 @@ struct Options {
 }
 
 pub fn run(command: &str, args: Vec<String>, parser: &dyn Transpiler) -> i32 {
-    match execute(command, args, parser) {
+    match execute(command, args, parser, None) {
         Ok(()) => 0,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {}", io::redact(&error));
             1
         }
     }
@@ -68,7 +68,7 @@ fn options(args: Vec<String>) -> Result<Options> {
     Ok(opts)
 }
 
-fn execute(command: &str, args: Vec<String>, parser: &dyn Transpiler) -> Result<()> {
+fn execute(command: &str, args: Vec<String>, parser: &dyn Transpiler, registry_override: Option<io::Registry>) -> Result<()> {
     let start = Instant::now();
     let mut opts = options(args)?;
     let member = local::root(parser)?;
@@ -113,7 +113,7 @@ fn execute(command: &str, args: Vec<String>, parser: &dyn Transpiler) -> Result<
     if command == "add" || command == "install" && !opts.names.is_empty() {
         add_names(&mut manifest, &opts)?;
     }
-    let registry = registry(&opts, parser)?;
+    let registry = match registry_override { Some(registry) => registry, None => registry(&opts, parser)? };
     let locked = if Path::new("bun.lock").exists() {
         io::read(Path::new("bun.lock"), "JSONC", parser)?
     } else {
@@ -208,24 +208,27 @@ fn manifest(command: &str, parser: &dyn Transpiler) -> Result<Value> {
     Ok(value)
 }
 
-fn registry(opts: &Options, parser: &dyn Transpiler) -> Result<String> {
+fn registry(opts: &Options, parser: &dyn Transpiler) -> Result<io::Registry> {
     if let Some(registry) = &opts.registry {
-        return Ok(registry.trim_end_matches('/').into());
+        return io::Registry::new(registry);
     }
     for variable in ["BUN_CONFIG_REGISTRY", "NPM_CONFIG_REGISTRY", "npm_config_registry"] {
         if let Ok(registry) = std::env::var(variable)
             && !registry.is_empty()
         {
-            return Ok(registry.trim_end_matches('/').into());
+            return io::Registry::new(&registry);
         }
     }
     if Path::new("bunfig.toml").exists() {
-        let config = io::read(Path::new("bunfig.toml"), "TOML", parser)?;
+        let config = io::read(Path::new("bunfig.toml"), "TOML", parser).map_err(|_| "Invalid registry configuration")?;
         if let Some(registry) = config["install"]["registry"].as_str() {
-            return Ok(registry.trim_end_matches('/').into());
+            return io::Registry::new(registry);
+        }
+        if !config["install"]["registry"].is_null() {
+            return io::Registry::configured(&config["install"]["registry"]);
         }
     }
-    Ok("https://registry.npmjs.org".into())
+    io::Registry::new("https://registry.npmjs.org")
 }
 
 fn remove_names(manifest: &mut Value, names: &[String]) -> Result<()> {
@@ -312,11 +315,11 @@ fn install_packages(resolver: &mut Resolver) -> Result<usize> {
         if package_present(package) {
             continue;
         }
-        if let Err(error) = install_package(package, resolver.refresh) {
+        if let Err(error) = install_package(package, resolver.refresh, &resolver.registry) {
             if !package.optional {
                 return Err(format!("{}@{}: {error}", package.name, package.version));
             }
-            eprintln!("warn: optional dependency {}: {error}", package.name);
+            eprintln!("warn: optional dependency {}: {}", package.name, io::redact(&error));
             resolver.packages.remove(&key);
             continue;
         }
@@ -325,11 +328,11 @@ fn install_packages(resolver: &mut Resolver) -> Result<usize> {
     Ok(installed)
 }
 
-fn install_package(package: &Package, refresh: bool) -> Result<()> {
+fn install_package(package: &Package, refresh: bool, registry: &io::Registry) -> Result<()> {
     if let Some(local) = &package.local {
         return local::link(&local.path, &package.path());
     }
-    let bytes = io::fetch(&package.tarball, true, refresh)?;
+    let bytes = io::fetch(&package.tarball, true, refresh, registry)?;
     io::integrity(&bytes, &package.integrity)?;
     let path = package.path();
     let staging = path.with_file_name(format!(".{}.bun-wasm-tmp", package.name.rsplit('/').next().unwrap()));
@@ -437,10 +440,10 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> Result<String> {
         };
         packages.insert(key.clone(), row);
     }
-    Ok(write_lock(&json!({"configVersion": resolver.locked["configVersion"].as_u64().unwrap_or(1), "workspaces": workspaces, "packages": packages})))
+    write_lock(&json!({"configVersion": resolver.locked["configVersion"].as_u64().unwrap_or(1), "workspaces": workspaces, "packages": packages}))
 }
 
-fn write_lock(lock: &Value) -> String {
+fn write_lock(lock: &Value) -> Result<String> {
     let config = lock["configVersion"].as_u64().unwrap_or(1);
     let mut out = format!("{{\n  \"lockfileVersion\": 2,\n  \"configVersion\": {config},\n  \"workspaces\": {{\n");
     if let Some(workspaces) = lock["workspaces"].as_object() {
@@ -452,12 +455,19 @@ fn write_lock(lock: &Value) -> String {
     }
     if lock["packages"].as_object().is_none_or(|packages| packages.is_empty()) {
         out.push_str("  },\n  \"packages\": {}\n}\n");
-        return out;
+        return checked_lock_text(out);
     }
     out.push_str("  },\n  \"packages\": {\n");
     if let Some(packages) = lock["packages"].as_object() { write_package_rows(packages, &mut out); }
     out.push_str("  }\n}\n");
-    out
+    checked_lock_text(out)
+}
+
+fn checked_lock_text(text: String) -> Result<String> {
+    if io::redact(&text) != text {
+        return Err("Lockfile contains credential-bearing or unsupported URL metadata".into());
+    }
+    Ok(text)
 }
 
 fn write_package_rows(packages: &serde_json::Map<String, Value>, out: &mut String) {
@@ -582,7 +592,7 @@ fn pm(opts: &Options, parser: &dyn Transpiler) -> Result<()> {
         let manifest = manifest("install", parser)?;
         let registry = registry(opts, parser)?;
         let lock = migration::read(&manifest, parser, &registry)?.ok_or("No lockfile found to migrate")?;
-        return io::write(Path::new("bun.lock"), migration::write(&lock).as_bytes());
+        return io::write(Path::new("bun.lock"), migration::write(&lock)?.as_bytes());
     }
     if opts.names.first().map(String::as_str) != Some("ls") {
         return Err("Only bun pm ls is supported in bun-wasm".into());
@@ -821,7 +831,7 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
     let registry = registry(&Options::default(), parser)?;
     let hash = format!(
         "{:x}",
-        Sha256::digest(format!("{registry}/{name}@{range}").as_bytes())
+        Sha256::digest(format!("{}/{name}@{range}", registry.url).as_bytes())
     );
     let cache = cwd.join(io::cache_dir()).join("bunx");
     let destination = cache.join(hash);
@@ -844,8 +854,9 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
             std::env::set_current_dir(&staging).map_err(|e| e.to_string())?;
             let installed = execute(
                 "install",
-                vec!["--silent".into(), "--registry".into(), registry],
+                vec!["--silent".into()],
                 parser,
+                Some(registry.clone()),
             );
             std::env::set_current_dir(&cwd).map_err(|e| e.to_string())?;
             installed?;

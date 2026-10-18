@@ -336,3 +336,29 @@ tarballs. It requires warnings for both skipped links, a written lockfile,
 execution through `bun run`, a package script and `bunx --no-install`, and a
 fatal result for a broken `.bin` directory. Chromium and WebKit run the same
 scenario on all three engines. No filesystem-link implementation is changed.
+
+
+## Registry credentials and archive verification
+
+Registry and tarball URLs are normalized before requests, cache lookup, diagnostics
+and lock publication. URL userinfo is discarded and does not create an
+Authorization header. Query-bearing transports and embedded npm authentication
+options reject before a request.
+
+Configure authentication separately in `bunfig.toml`:
+
+```toml
+[install.registry]
+url = "https://registry.example.invalid/"
+token = "YOUR_TOKEN"
+```
+
+A `username` and `password` pair configures Basic authorization instead. Headers
+apply only to the configured registry's origin and path. A tarball on another
+origin receives no configured authorization. Authentication values never become
+part of `bun.lock` or diagnostics.
+
+Archive verification supports SHA-512, SHA-384, SHA-256 and legacy SHA-1. Migration
+and verification use the same accepted algorithms. The strongest supported digest
+wins. Serialized SRI padding matches native Bun; verification compares decoded
+bytes so the native lock survives a frozen installation.

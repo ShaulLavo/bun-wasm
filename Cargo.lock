@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-build"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "bitflags",
  "bstr",
@@ -1065,14 +1065,14 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-bun-jsc"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "bunwasm-bun-jsc-macros",
 ]
 
 [[package]]
 name = "bunwasm-bun-jsc-macros"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-cli"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "bunwasm-build",
  "bunwasm-glue",
@@ -1090,14 +1090,14 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-crypto-sys"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "bunwasm-glue"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "bstr",
  "bun_ast",
@@ -1113,7 +1113,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-host"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1134,18 +1134,18 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-jsc"
-version = "0.0.26"
+version = "0.0.27"
 
 [[package]]
 name = "bunwasm-posix"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "bunwasm-runtime"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "aes",
  "aes-kw",
@@ -1195,7 +1195,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-semver"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "bstr",
  "bun_core",
@@ -1205,7 +1205,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-transpiler"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "bun_alloc",
  "bun_ast",

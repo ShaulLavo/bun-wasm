@@ -122,3 +122,18 @@ Plain registry URL userinfo is removed before any source is stored.
 A source selection that would replace a root workspace with a registry package
 also rejects. Bun reserves that root location for the workspace, so publishing the
 registry record there would lose the source selection.
+
+
+## Request and integrity regressions
+
+`tests/install/security.ts` captures local request URLs and headers for fresh
+installs, failed and timed-out metadata/tarball responses, and frozen installs from
+migrated locks. It checks stdout, stderr, errors and written locks for synthetic
+secrets. Configured authorization has separate positive and origin-isolation
+controls. Unsupported secret-bearing dependency metadata rejects before the lock
+writer publishes it.
+
+SHA-256 and SHA-384 cases compare the complete native/guest lock bytes, perform
+clean frozen extraction on both installers, and reject a corrupt archive. Bun's
+native installer verifies both algorithms, so the portable verifier implements them
+rather than rejecting otherwise usable native locks.

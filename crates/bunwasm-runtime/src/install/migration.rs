@@ -10,7 +10,11 @@ use std::{
     path::Path,
 };
 
-pub fn read(manifest: &Value, parser: &dyn Transpiler, registry: &str) -> Result<Option<Value>> {
+pub fn read(
+    manifest: &Value,
+    parser: &dyn Transpiler,
+    config: &io::Registry,
+) -> Result<Option<Value>> {
     if !["package-lock.json", "yarn.lock", "pnpm-lock.yaml"]
         .iter()
         .any(|name| Path::new(name).exists())
@@ -18,7 +22,7 @@ pub fn read(manifest: &Value, parser: &dyn Transpiler, registry: &str) -> Result
         return Ok(None);
     }
     reject_selection_config(manifest)?;
-    let registry = clean_registry(registry)?;
+    let registry = clean_registry(&config.url)?;
     let registry = registry.as_str();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let members = local::workspaces(&cwd, manifest, parser)?;
@@ -62,7 +66,7 @@ pub fn read(manifest: &Value, parser: &dyn Transpiler, registry: &str) -> Result
         return Ok(None);
     };
     if source != "package-lock.json" {
-        hydrate_metadata(&mut packages, registry);
+        hydrate_metadata(&mut packages, config);
     }
     eprintln!("migrated lockfile from {source}");
     Ok(Some(
@@ -132,7 +136,7 @@ fn record(name: &str, meta: &Value, registry: &str) -> Result<Value> {
     let tarball = clean_transport(tarball)?;
     let standard = transport(name, version, &tarball)?.is_empty();
     let integrity = match meta["integrity"].as_str() {
-        Some(value) if !value.is_empty() => value.to_owned(),
+        Some(value) if !value.is_empty() => io::normalized_integrity(value).unwrap_or_default(),
         _ if fragment.len() == 40 && fragment.bytes().all(|c| c.is_ascii_hexdigit()) => {
             let bytes = (0..40)
                 .step_by(2)
@@ -716,7 +720,7 @@ fn graph(
     Ok(())
 }
 
-pub fn write(lock: &Value) -> String {
+pub fn write(lock: &Value) -> Result<String> {
     super::write_lock(lock)
 }
 
@@ -815,7 +819,7 @@ fn graph_children(meta: &Value) -> Result<BTreeMap<String, (String, bool, bool)>
     Ok(children)
 }
 
-fn hydrate_metadata(packages: &mut BTreeMap<String, Value>, registry: &str) {
+fn hydrate_metadata(packages: &mut BTreeMap<String, Value>, registry: &io::Registry) {
     let mut cache: BTreeMap<String, Option<Value>> = BTreeMap::new();
     for row in packages.values_mut() {
         let Some((name, version)) = row[0].as_str().and_then(|id| id.rsplit_once('@')) else {
@@ -843,13 +847,15 @@ fn hydrate_row(row: &mut Value, meta: &Value) {
         }
     }
     if row[3] == "" && meta["dist"]["integrity"].is_string() {
-        row[3] = meta["dist"]["integrity"].clone();
+        row[3] = io::normalized_integrity(meta["dist"]["integrity"].as_str().unwrap())
+            .unwrap_or_default()
+            .into();
     }
 }
 
-fn registry_metadata(name: &str, registry: &str) -> Option<Value> {
-    let url = format!("{registry}/{}", name.replace('/', "%2f"));
-    let result = io::fetch(&url, false, false)
+fn registry_metadata(name: &str, registry: &io::Registry) -> Option<Value> {
+    let url = format!("{}/{}", registry.url, name.replace('/', "%2f"));
+    let result = io::fetch(&url, false, false, registry)
         .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()));
     if result.is_err() {
         eprintln!("warn: registry metadata unavailable while migrating {name}");
@@ -952,22 +958,7 @@ fn clean_transport(value: &str) -> Result<String> {
     if value.is_empty() {
         return Ok(String::new());
     }
-    if [":_authToken=", ":_auth=", ":username=", ":_password="]
-        .iter()
-        .any(|key| value.contains(key))
-    {
-        return Err("Embedded registry authentication is not supported during migration".into());
-    }
-    let mut url = url::Url::parse(value).map_err(|_| "Unsupported migrated resolution")?;
-    if !["https", "http"].contains(&url.scheme()) || url.host_str().is_none() {
-        return Err("Unsupported migrated resolution".into());
-    }
-    if url.query().is_some() {
-        return Err("Credential-bearing URL query is not supported during migration".into());
-    }
-    let _ = url.set_username("");
-    let _ = url.set_password(None);
-    Ok(url.into())
+    io::source_url(value)
 }
 
 pub(super) fn transport(name: &str, version: &str, value: &str) -> Result<String> {
@@ -1178,19 +1169,7 @@ fn yarn_registry(config: &Value, name: &str, registry: &str) -> Result<String> {
 }
 
 fn supported_integrity(integrity: &str) -> bool {
-    integrity.split_whitespace().any(|part| {
-        let Some((algorithm, digest)) = part.split_once('-') else {
-            return false;
-        };
-        let size = match algorithm {
-            "sha1" => 20,
-            "sha256" => 32,
-            "sha384" => 48,
-            "sha512" => 64,
-            _ => return false,
-        };
-        crate::encoding::base64_decode(digest).len() == size
-    })
+    io::normalized_integrity(integrity).is_some()
 }
 
 fn validate_pnpm_selection(name: &str, requested: &str, reference: &str) -> Result<()> {
