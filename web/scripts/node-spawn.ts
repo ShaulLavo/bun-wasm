@@ -68,7 +68,7 @@ function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngi
   for (const guest of Object.keys(preopens)) if (guest === "/bin" || guest.startsWith("/bin/") || guest === "/opt/bun" || guest.startsWith("/opt/bun/")) {
     throw new Error(`reserved executable mount: ${guest}`);
   }
-  const root = mkdtempSync("/work/tmp/bun-wasm-node-executables-");
+  const root = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? process.env.TMPDIR ?? "/work/tmp", "bun-wasm-node-executables-"));
   try {
     mkdirSync(join(root, "bin")); mkdirSync(join(root, "opt/bun"), { recursive: true });
     for (const name of ["bun", "node"]) writeFileSync(join(root, "bin", name), new Uint8Array());
