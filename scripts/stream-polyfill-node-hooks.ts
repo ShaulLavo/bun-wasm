@@ -23,15 +23,16 @@ function directStates(node: TS.Node): string[] {
   visit(node);
   return found;
 }
+function readerLockMessage(argument: TS.Expression): TS.Expression {
+  if (!ts.isStringLiteral(argument) || argument.text !== "This stream has already been locked for exclusive reading by another reader") return argument;
+  readerLockErrors++;
+  return ts.factory.createStringLiteral("ReadableStream is locked");
+}
 const transformed = ts.transform(tree, [context => {
   const f = context.factory;
   const visit: TS.Visitor = node => {
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "TypeError" && node.arguments?.some(argument => ts.isStringLiteral(argument) && /locked|already has a writer/i.test(argument.text))) {
-      const args = Array.from(node.arguments, argument => {
-        if (!ts.isStringLiteral(argument) || argument.text !== "This stream has already been locked for exclusive reading by another reader") return argument;
-        readerLockErrors++;
-        return f.createStringLiteral("ReadableStream is locked");
-      });
+      const args = Array.from(node.arguments, readerLockMessage);
       return f.createCallExpression(f.createIdentifier("__bunNodeInvalidState"), undefined, args);
     }
     if ((!ts.isFunctionDeclaration(node) && !ts.isFunctionExpression(node)) || !node.body) return ts.visitEachChild(node, visit, context);

@@ -150,7 +150,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. |
 | [Embedded WHATWG Streams](#whatwg-reader-lock-errors) | Port | Pinned portable streams with Bun reader-lock error text. |
 | [Streams AST hooks](#whatwg-reader-lock-errors) | Host feature | Original generator adapter preserves Node completion hooks and error codes. |
-| [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming bodies, response cancellation before and during writer ownership, Agent pool and upgrade response adapters shared by all engines. |
+| [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming bodies, response cancellation independent of transport disposal before and during writer ownership, Agent pool and upgrade response adapters shared by all engines. |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
 | [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns, pending-signal dispatch before check callbacks, and bounded immediate batches. |
 | [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations, with Node listener identity. |
@@ -1754,9 +1754,13 @@ length Bun response streams ignore a supplied Content-Length and use chunked
 framing. The response reader owns its EOF and close callbacks, which cancel it
 with native Bun's undefined disconnect reason and leave externally locked
 streams alone. The connection records peer EOF before notifying its reader.
-When an awaited handler returns after EOF or close, the response writer cancels
-the unused source before acquiring a reader or writing headers. The existing
-ownership guard leaves externally locked streams alone. Node sockets retain
+When an awaited handler returns after EOF or close, the response writer destroys
+the transport and starts cancellation of the unused source before acquiring a
+reader or writing headers. It does not await asynchronous producer cleanup,
+which may itself wait for the peer to observe EOF. Cancellation still runs once
+with an undefined reason. The existing ownership guard leaves externally locked
+streams alone. The deferred-cleanup regression uses native Bun 1.4.2 as its
+behavioral reference. Node sockets retain
 their separate half-close policy. Fetch-body waiter steps and rejection handling
 stay outside the promise executor, within three nesting levels. Fetch body and
 header waits preserve the exact AbortSignal reason, including null and other

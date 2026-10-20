@@ -47,7 +47,8 @@
     if (response.bodyUsed || source.locked) throw new TypeError("Body already used");
     response._bodyUsed = true;
     if (connection.closed || connection.readEnded) {
-      await source.cancel().catch(reportError);
+      connection.destroy();
+      void source.cancel().catch(reportError);
       return false;
     }
     const reader = source.getReader();

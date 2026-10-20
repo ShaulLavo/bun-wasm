@@ -13,6 +13,10 @@ async function disconnect(port: number): Promise<void> {
   } finally { socket.destroy(); }
 }
 
+function pendingResult(): Promise<IteratorResult<Uint8Array>> {
+  return new Promise(() => {});
+}
+
 async function check(iterator: boolean): Promise<void> {
   const cancelled = Promise.withResolvers<unknown>();
   let calls = 0;
@@ -22,7 +26,7 @@ async function check(iterator: boolean): Promise<void> {
       return {
         next() {
           if (calls++ === 0) return Promise.resolve({ done: false, value: encoder.encode("open") });
-          return new Promise<IteratorResult<Uint8Array>>(() => {});
+          return pendingResult();
         },
         return(reason: unknown) { cancellations++; cancelled.resolve(reason); return Promise.resolve({ done: true, value: undefined }); },
       };

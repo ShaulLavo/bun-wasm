@@ -301,6 +301,7 @@ async function runEngine(browserName, engine, type, options, appUrl, fixtureBase
     ["net-bun-response-stream", "index.ts"], ["net-tcp-empty-fin", "index.ts"],
     ["net-bun-response-length", "index.ts"], ["net-bun-response-disconnect", "index.ts"],
     ["net-bun-response-early-disconnect", "index.ts"], ["net-fetch-abort-reasons", "index.ts"],
+    ["net-bun-response-async-cancel", "index.ts"],
   ]) {
     const source = readFileSync(join(web, "../tests/fixtures", fixture, entry), "utf8");
     const expected = readFileSync(join(web, "../tests/fixtures", fixture, "expected.txt"), "utf8").trim();
