@@ -3,6 +3,7 @@
 # no WebAssembly), system malloc, static libraries, Bun's JSC additions on.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$JSC_OBJ"
+bash "$REPO/scripts/check-wasi-cmake-cache.sh" "$JSC_OBJ" "$JSC_TOOLCHAIN_FILE"
 build_shim
 flags="-include $JSC_CONFIG_SHIM_DIR/wasi-compat.h -msimd128 -DSIMDE_FLOAT16_API=1 \
 -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_GETPID"

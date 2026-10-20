@@ -7,6 +7,39 @@ fn main() {
     crypto(Path::new(&manifest), Path::new(&out));
 }
 
+fn check_crypto_cache(manifest: &Path, build: &Path, wasm: bool, guard: &Path) {
+    let mut preflight = Command::new("cmake");
+    preflight.arg(format!("-DBUILD_DIR={}", build.display()));
+    if wasm {
+        let sdk = std::env::var("WASI_SDK_PATH").expect("source env.sh");
+        let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
+        preflight.args([
+            format!("-DEXPECTED_C={sdk}/bin/clang"),
+            format!("-DEXPECTED_CXX={sdk}/bin/clang++"),
+            "-DEXPECTED_SYSTEM=WASI".into(),
+            "-DEXPECTED_PROCESSOR=wasm32".into(),
+            "-DEXPECTED_TARGET=wasm32-wasip1".into(),
+            format!("-DEXPECTED_SYSROOT={sysroot}"),
+            format!(
+                "-DEXPECTED_TOOLCHAIN_FILE={}",
+                manifest.join("../../jsc/wasi-jsc.cmake").display()
+            ),
+        ]);
+    } else {
+        preflight.args([
+            "-DEXPECTED_C=/usr/bin/cc",
+            "-DEXPECTED_CXX=/usr/bin/c++",
+            "-DEXPECTED_SYSTEM=native",
+            "-DEXPECTED_TOOLCHAIN_FILE=",
+            "-DEXPECTED_SYSROOT=",
+        ]);
+    }
+    assert!(
+        preflight.arg("-P").arg(guard).status().unwrap().success(),
+        "BoringSSL cache does not match the requested toolchain; choose a fresh BUNWASM_BORINGSSL_BUILD"
+    );
+}
+
 fn crypto(manifest: &Path, out: &Path) {
     for name in [
         "BUNWASM_BORINGSSL_SOURCE",
@@ -28,7 +61,11 @@ fn crypto(manifest: &Path, out: &Path) {
     let build = std::env::var_os("BUNWASM_BORINGSSL_BUILD")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| out.join("boringssl"));
-    // Reconfigure even an existing explicit cache: CMake tracks sysroot/compiler inputs.
+    // CMake can silently retain a native compiler when a WASI toolchain is requested.
+    // Validate the existing compiler and target before allowing reconfiguration.
+    let guard = manifest.join("../../scripts/check-cmake-cache.cmake");
+    println!("cargo:rerun-if-changed={}", guard.display());
+    check_crypto_cache(manifest, &build, wasm, &guard);
     {
         let mut configure = Command::new("cmake");
         configure
@@ -56,6 +93,7 @@ fn crypto(manifest: &Path, out: &Path) {
             configure.status().unwrap().success(),
             "BoringSSL configure failed"
         );
+        check_crypto_cache(manifest, &build, wasm, &guard);
         assert!(
             Command::new("cmake")
                 .arg("--build")

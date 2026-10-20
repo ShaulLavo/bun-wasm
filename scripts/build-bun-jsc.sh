@@ -2,7 +2,7 @@
 # Build dist/bun-jsc.wasm: bunwasm-cli with the JavaScriptCore engine (feature engine-jsc,
 # crates/bunwasm-runtime/src/engine_jsc.rs) linked with the static JavaScriptCore from
 # scripts/build-jsc.sh, then finalized (wasm-opt --spill-pointers, which JSC's GC needs; see
-# jsc/README.md). Same runtime and polyfills as dist/bun.wasm.
+# docs/jsc-build.md). Same runtime and polyfills as dist/bun.wasm.
 #
 # Its own target dir: `-C link-self-contained=no` (one wasi-libc, wasi-sdk's, for Rust, JSC and
 # libc++) changes RUSTFLAGS, which would invalidate the shared target dir's cache.
