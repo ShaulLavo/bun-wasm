@@ -521,7 +521,7 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> Result<String> {
         workspaces[path.as_ref()] = migration::workspace_meta(&member.meta, false);
     }
     let mut packages = serde_json::Map::new();
-    for (key, package) in &resolver.packages {
+    for (key, package) in resolver.packages.iter().chain(&resolver.skipped) {
         let original = package
             .source_chain
             .as_ref()
