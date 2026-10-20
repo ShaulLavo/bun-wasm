@@ -92,7 +92,7 @@ rewrite failure distinct. Raw logs and provenance are in
 `/work/reports/bun-wasm-web-streams-2026-10-16/next-integration/`, including
 `next-quickjs-dev.log`, `next-quickjs-build.log`, `next-jsc-dev.log` and
 `next-jsc-build.log`. The coordinator owns preserving the evidence until the
-follow-up has reproduced it. See `docs/app-matrix/README.md` for the replay command.
+follow-up has reproduced it. See `docs/app-matrix/compatibility.md` for the replay command.
 
 ### Second-review combined replay
 
@@ -167,7 +167,7 @@ browser-host subprocess lifecycle follow-up owned by the compatibility track.
 Track 4 continues with Web Crypto after the semantic import rewrite. Next 15.5.6 build,
 with PR 9's runtime fixes included, now reaches the unsupported `crypto.subtle.generateKey`
 stub in `crates/bunwasm-runtime/src/js/web.js:1277`. Dev still has no useful diagnostic;
-start is blocked by build. See [the exact command and retained evidence](../docs/app-matrix/guide.md#browser-import-parsing-follow-up).
+start is blocked by build. See [the exact command and retained evidence](../docs/app-matrix/compatibility.md#browser-import-parsing-follow-up).
 The crypto algorithm and any later required operations still need a bounded reproduction.
 
 ### Bun native-consumer stream state coverage
@@ -202,7 +202,7 @@ useful diagnostic. Browser build now reaches missing
 `crypto.subtle.generateKey`, beyond its former import-method syntax error. The
 crypto lane owns that operation; the WebAssembly lane owns llhttp table support.
 There are no missing Streams globals, registry misses or registry errors.
-The [app-matrix record](../docs/app-matrix/guide.md#web-streams-round-3-replay-with-semantic-imports)
+The [app-matrix record](../docs/app-matrix/compatibility.md#web-streams-round-3-replay-with-semantic-imports)
 links the exact artifacts and all 12 stage outcomes. PR #24's later WASI-host
 merge has separate verification before this lane's delivery.
 ## TypeScript follow-up

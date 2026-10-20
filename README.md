@@ -19,8 +19,8 @@ Use this launcher, not plain `wasmtime run`: it supplies the `runtime_proc` impo
 
 - [Project overview and supported tools](docs/overview.md)
 - [Browser package installation, ownership and offline guests](docs/browser-package.md)
-- [Playground](docs/playground.md) · [React sandbox](docs/sandbox.md)
+- [Playground](web/README.md) · [React sandbox](sandbox/README.md)
 - [Browser engine](docs/engine-browser.md) · [Host ABI](docs/host-abi.md)
 - [Bun builtins](docs/bun-builtins.md) · [Runtime TypeScript](docs/runtime-typescript.md)
-- [Bun test-suite compatibility](docs/bun-test-suite/guide.md)
+- [Bun test-suite compatibility](docs/bun-test-suite/results.md)
 - [Dependency patches and provenance](docs/bun-patches.md)

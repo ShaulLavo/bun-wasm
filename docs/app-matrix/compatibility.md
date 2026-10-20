@@ -49,7 +49,7 @@ The cache keeps original abbreviated npm metadata and tarballs by SHA-256, with 
 
 `pass` requires the declared exit and output assertion, or a successful HTTP response with the expected body. Frontend dev checks additionally wait for rendered DOM text in headless Chromium. Build checks require the declared output file and content. Playground servers must answer through their service-worker preview and render the expected page. A server that exits before its HTTP/DOM assertion fails even with exit zero. Install passes require the pinned package names and versions, package main files and declared CLI entry points on disk. TypeScript must emit the clean fixture and reject a deliberate type error with exit 2 and TS2322. ESLint must report zero errors on clean input and reject `debugger` with exit 1 and the `no-debugger` diagnostic. Install success alone does not establish app compatibility.
 
-Categories match [Bun's upstream suite](../bun-test-suite/guide.md). They describe the first blocker only.
+Categories match [Bun's upstream suite](../bun-test-suite/results.md). They describe the first blocker only.
 
 | Category | Meaning |
 | --- | --- |

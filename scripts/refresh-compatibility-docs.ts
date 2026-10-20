@@ -145,7 +145,7 @@ const engineRows = ["quickjs", "jsc", "browser"].flatMap(engine => scopes.map(ho
 const mirrorBlocks = before.rows.filter(row => row.status === "blocked" && row.blocker.includes("/esbuild-wasm")).length;
 const appProvenance = [before, recording, after].map(run => [run.path.split("/").at(-1) ?? run.path, string(run.provenance.revision), createHash("sha256").update(readFileSync(root + run.path)).digest("hex")]);
 const artifactRows = ["quickjs", "jsc", "browser"].map(engine => [engine, string(record(before.provenance.artifacts)[engine]), string(record(after.provenance.artifacts)[engine])]);
-section("docs/app-matrix/guide.md", "replay", [
+section("docs/app-matrix/compatibility.md", "replay", [
   "## Current full replay after mirror recording",
   "The recording and corrected offline replay have zero registry misses and zero registry errors. Counts below exclude the recording's native Bun controls.",
   table(["App", "Pass", "Fail", "Blocked", "First blocker"], appRows),
@@ -170,7 +170,7 @@ if (existsSync(root + partialPath)) {
     const counts = record(summary.counts);
     return [string(engine.engine), String(number(summary.files)), String(number(summary.fully_passing)), String(number(counts.pass)), String(number(counts.fail)), String(number(summary.timeouts))];
   });
-  section("docs/bun-test-suite/guide.md", "partial", [
+  section("docs/bun-test-suite/results.md", "partial", [
     "## Focused suite replay",
     `These ${array(partial.files).length} files were measured at runtime commit \`${string(partial.runtime_source_commit)}\`. Only their failure-index rows were refreshed. Full-census tables and summaries below retain the previous census; a full refresh is deferred to a separate run.`,
     table(["Engine", "Files", "Fully passing", "Observed passes", "Failures", "File timeouts"], rows),
@@ -181,7 +181,7 @@ if (existsSync(root + partialPath)) {
 const history = array(json("docs/bun-test-suite/progress.json")).map(record);
 const categories = ["a", "b", "c", "d", "e", "f"];
 const historyRows = history.map(row => [string(row.date), string(row.commit), String(number(row.fully_passing)), String(number(row.tests_passing)), String(number(row.timeouts))].concat(categories.map(key => String(number(record(row.categories)[key])))));
-section("docs/bun-test-suite/guide.md", "progress", [
+section("docs/bun-test-suite/results.md", "progress", [
   "## Progress",
   "QuickJS 282 → 411 is the sole comparable baseline by matched file selection. JSC and browser are non-comparable because their selections changed. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim for any engine.",
   table(["Date", "Runtime commit", "Files fully passing", "Tests passing", "Timeouts"].concat(categories), historyRows),
@@ -216,7 +216,7 @@ const headlineRows = ["quickjs", "jsc", "browser"].map(engine => {
   const result = (run: Record<string, unknown>) => `${number(run.fully_passing)} fully passing files; ${number(record(run.counts).pass)} observed passes; ${number(run.timeouts)} timeouts`;
   return [engine, String(number(old.files)), String(number(current.files)), result(old), result(current), engine === "quickjs" ? "Comparable baseline (matched selection)" : "Non-comparable"];
 });
-section("docs/bun-test-suite/guide.md", "history-comparison", [
+section("docs/bun-test-suite/results.md", "history-comparison", [
   "## Historical and current observations",
   "QuickJS 282 → 411 is the sole comparable baseline by matched file selection, with all 2,305 files selected on both sides. JSC and browser are non-comparable. They previously selected 1,082 files under js/bun, js/node, and js/web, while each current run selected all 2,305 files. Runner, suite, and supplemental-dependency hashes changed on all engines, so the matched QuickJS selection does not establish an isolated runtime gain.",
   table(["Engine", "Historical selected files", "Current selected files", "Historical result", "Current result", "Comparison"], headlineRows),

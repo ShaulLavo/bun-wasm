@@ -1,13 +1,6 @@
-# JavaScriptCore for WebAssembly
+# JavaScriptCore for WASI
 
-Bun's JavaScriptCore engine compiled for wasm32-wasip1, used by `bun-jsc.wasm`.
+Build scripts, the WASI toolchain and shim, and patches for Bun's WebKit fork.
 
-From the repository root:
-
-```sh
-source env.sh
-scripts/build-jsc.sh
-scripts/build-bun-jsc.sh
-```
-
-[Build inputs, prebuilds, engine details, tests, and benchmarks](../docs/jsc.md).
+See [the build and runtime guide](../docs/jsc-build.md) for setup, commands,
+input receipts, engine limits, GC requirements and debugging notes.
