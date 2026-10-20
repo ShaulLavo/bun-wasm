@@ -1,0 +1,2 @@
+Bun readv empty-vector behaviour
+empty arrays skip native reads; empty views and closed handles do not

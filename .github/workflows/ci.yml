@@ -154,6 +154,8 @@ jobs:
         run: |
           source env.sh
           bun run quality --native
+      - name: Test CMake cache toolchain preflight
+        run: bun test scripts/cmake-cache.test.ts
 
   package:
     name: Browser adapter package
@@ -173,6 +175,8 @@ jobs:
       - run: bun run test
         env:
           TMPDIR: ${{ runner.temp }}
+      - name: Test vectored reads and browser dependency resolution
+        run: bun test scripts/node-fs-readv.test.ts scripts/node-fs-runtime-proc.test.ts scripts/browser-build.test.ts
 
   web:
     name: Web host

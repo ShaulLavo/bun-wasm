@@ -8,7 +8,7 @@ type Completion = [error: unknown, count: number, buffer: Uint8Array];
 // Evaluate the shipped fs implementation and the real net.js waiter scheduler. The only
 // fake is the native boundary: runtime_proc reads return bytes, zero, or -WASI errno.
 // All resources are per-fixture memory; no processes, timers or files need teardown.
-function fixture(results: (Uint8Array | number)[], processAbi = true, networkingRead = true) {
+function fixture(results: (Uint8Array | number)[], processAbi = true, networkingRead = true, mode = 0o010000) {
   const immediate: (() => void)[] = [];
   const reads: [number, number][] = [];
   const syncReads: [number, number, number][] = [];
@@ -46,6 +46,7 @@ function fixture(results: (Uint8Array | number)[], processAbi = true, networking
       writev(fd: number, buffers: Uint8Array[]) { checkFd(fd); return buffers.reduce((n, buffer) => n + buffer.length, 0); },
       close(fd: number) { checkFd(fd); closed.add(fd); },
       open: () => 0,
+      fstat(fd: number) { checkFd(fd); return { mode }; },
     },
     realTimers: { setImmediate: (fn: () => void) => immediate.push(fn) },
     describe: (value: unknown) => String(value),
@@ -244,8 +245,8 @@ test("public empty-length I/O matches native Node and Bun on closed descriptors"
   const readAsync = (fs: any, fd: number, buffer: Buffer, length: number) => new Promise((resolve, reject) => {
     fs.read(fd, buffer, 0, length, null, (error: unknown, count: number) => error ? reject(error) : resolve(count));
   });
-  // Node 26.7.0 and Bun 1.4.2 agree on every row. readv/readvSync are a separate API
-  // follow-up: Bun returns 0 for [], whereas Node returns EINVAL for an empty vector.
+  // Node 26.7.0 and Bun 1.4.2 agree on every row. The readv [] disagreement
+  // (Bun: 0, Node: EINVAL) stays in node-fs-readv.test.ts, outside this shared table.
   const baseRows: Row[] = [
     { name: "readSync empty buffer", expected: 0, run: (fs, fd) => fs.readSync(fd, Buffer.alloc(0)) },
     { name: "readSync zero length", expected: 0, run: (fs, fd) => fs.readSync(fd, Buffer.alloc(4), 0, 0, null) },
@@ -300,6 +301,60 @@ test("public empty-length I/O matches native Node and Bun on closed descriptors"
   }
 });
 
+test("callback readv stdin shares the process waiter and scatters one short read", () => {
+  const runtime = fixture([-6, Buffer.from("abc")]);
+  const first = Buffer.alloc(2, "."), backing = Buffer.alloc(6, ".");
+  const buffers = [first, new DataView(backing.buffer, backing.byteOffset + 1, 3)];
+  const results: unknown[] = [];
+  runtime.fs.readv(0, buffers, (error: unknown, count: number, returned: unknown) => results.push([error, count, returned]));
+  runtime.setContext("polling");
+  expect(runtime.pending()).toBe(1);
+  expect(runtime.pump()).toBe(false);
+  expect(results).toEqual([]);
+  expect(runtime.wait()).toBe(true);
+  expect(runtime.pump()).toBe(true);
+  expect(results).toEqual([]);
+  runtime.flush();
+  expect(results).toEqual([[null, 3, buffers]]);
+  expect((results[0] as unknown[])[2]).toBe(buffers);
+  expect(first.toString()).toBe("ab");
+  expect(backing.toString()).toBe(".c....");
+  expect(runtime.contexts).toEqual(["registration"]);
+  expect(runtime.reads).toEqual([[0, 5], [0, 5]]);
+  expect(runtime.syncReads).toEqual([]);
+  expect(runtime.networkReads()).toBe(0);
+  expect(runtime.pending()).toBe(0);
+});
+
+test("callback readv stdin propagates EOF and EBADF without touching the views", () => {
+  for (const result of [0, -8]) {
+    const runtime = fixture([result]);
+    const buffers = [Buffer.from("keep")], results: unknown[] = [];
+    runtime.fs.readv(0, buffers, (error: unknown, count: number, returned: unknown) => results.push([error, count, returned]));
+    runtime.pump();
+    runtime.flush();
+    expect(results).toEqual([[result === 0 ? null : expect.objectContaining({ code: "EBADF" }), 0, buffers]]);
+    expect(buffers[0]!.toString()).toBe("keep");
+    expect(runtime.reads).toEqual([[0, 4]]);
+    expect(runtime.pending()).toBe(0);
+  }
+});
+
+test("callback readv with positioned stdin or empty views does not register a process waiter", () => {
+  const runtime = fixture([]);
+  const results: unknown[] = [], empty: Uint8Array[] = [], zero = [Buffer.alloc(0)], bytes = [Buffer.alloc(1)];
+  const complete = (error: unknown, count: number, returned: unknown) => results.push([error, count, returned]);
+  runtime.fs.readv(0, empty, complete);
+  runtime.fs.readv(0, zero, complete);
+  runtime.fs.readv(0, bytes, 0, complete);
+  expect(runtime.pending()).toBe(0);
+  expect(runtime.reads).toEqual([]);
+  expect(runtime.syncReads).toEqual([[0, 0, -1], [0, 1, 0]]);
+  expect(results).toEqual([]);
+  runtime.flush();
+  expect(results).toEqual([[null, 0, empty], [null, 0, zero], [null, 1, bytes]]);
+});
+
 test("without the generic process ABI stdin uses the synchronous native, not networking slots", () => {
   const runtime = fixture([], false);
   const buffer = Buffer.alloc(4);
@@ -309,4 +364,50 @@ test("without the generic process ABI stdin uses the synchronous native, not net
   expect(results).toEqual([[null, 4, buffer]]);
   expect(runtime.syncReads).toEqual([[0, 4, -1]]);
   expect(runtime.networkReads()).toBe(0);
+});
+
+
+test("stdin readv bounds 1024 aliases of one 4 MiB view to a 64 KiB request", () => {
+  const runtime = fixture([-6, Buffer.from("abcdefgh")]);
+  const view = Buffer.alloc(4 * 1024 * 1024, ".");
+  const buffers = Array.from({ length: 1024 }, () => view);
+  const results: unknown[] = [];
+  runtime.fs.readv(0, buffers, (error: unknown, count: number, returned: unknown) => results.push([error, count, returned]));
+  runtime.setContext("polling");
+  expect(runtime.pump()).toBe(false);
+  expect(runtime.pending()).toBe(1);
+  expect(runtime.pump()).toBe(true);
+  expect(results).toEqual([]);
+  runtime.flush();
+  expect(results).toEqual([[null, 8, buffers]]);
+  expect((results[0] as unknown[])[2]).toBe(buffers);
+  expect(view.subarray(0, 10).toString()).toBe("abcdefgh..");
+  expect(runtime.reads).toEqual([[0, 65536], [0, 65536]]);
+  expect(runtime.contexts).toEqual(["registration"]);
+  expect(runtime.pending()).toBe(0);
+});
+
+test("stdin readv returns a full first view without another read or waiting for future input", () => {
+  const runtime = fixture([Buffer.from("ab"), -6, Buffer.from("later")]);
+  const buffers = [Buffer.alloc(2, "."), Buffer.alloc(4, ".")];
+  const results: unknown[] = [];
+  runtime.fs.readv(0, buffers, (error: unknown, count: number, returned: unknown) => results.push([error, count, returned]));
+  expect(runtime.pump()).toBe(true);
+  expect(runtime.pending()).toBe(0);
+  runtime.flush();
+  expect(results).toEqual([[null, 2, buffers]]);
+  expect(buffers.map(view => view.toString())).toEqual(["ab", "...."]);
+  expect(runtime.reads).toEqual([[0, 6]]);
+});
+
+test("regular-file stdin uses the sequential native-file path rather than the pipe waiter", () => {
+  const runtime = fixture([], true, true, 0o100000);
+  const buffers = [Buffer.alloc(2), Buffer.alloc(2)];
+  const results: unknown[] = [];
+  runtime.fs.readv(0, buffers, (error: unknown, count: number, returned: unknown) => results.push([error, count, returned]));
+  expect(runtime.pending()).toBe(0);
+  runtime.flush();
+  expect(results).toEqual([[null, 4, buffers]]);
+  expect(runtime.reads).toEqual([]);
+  expect(runtime.syncReads).toEqual([[0, 2, -1], [0, 2, -1]]);
 });
