@@ -1,8 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { constants } from "node:os";
-import { randomUUID } from "node:crypto";
+import { enableSubreaper } from "./linux-subreaper.mts";
 import { setTimeout as delay } from "node:timers/promises";
+
+await enableSubreaper();
 
 type ProcessIdentity = { pid: number; parent: number; group: number; session: number; birth: string; state: string };
 const [seconds, command, ...args] = process.argv.slice(2);
@@ -10,7 +12,6 @@ const timeout = Number(seconds) * 1000;
 if (!command || !Number.isFinite(timeout) || timeout <= 0) {
   throw new Error("Usage: run-with-timeout.mts <seconds> <command> [args...]");
 }
-const marker = `BUN_WASM_DEADLINE_${randomUUID().replaceAll("-", "")}`;
 const owned = new Map<number, ProcessIdentity>();
 let root: ProcessIdentity | undefined;
 let timedOut = false;
@@ -43,27 +44,10 @@ function snapshot(): ProcessIdentity[] {
     return { pid: Number(pid), parent: Number(parent), group: Number(group), session: Number(session), birth: rest.slice(0, 5).join(" "), state: rest[5] ?? "" };
   });
 }
-function marked(row: ProcessIdentity): boolean {
-  if (process.platform !== "linux") return false;
-  try { return readFileSync(`/proc/${row.pid}/environ`, "utf8").split("\0").includes(`${marker}=1`); }
-  catch (error) {
-    if (isGone(error) || error instanceof Error && "code" in error && error.code === "EACCES") return false;
-    throw error;
-  }
-}
-function ownedSessionLeader(row: ProcessIdentity, current: ReadonlyMap<number, ProcessIdentity>): ProcessIdentity | undefined {
-  if (process.platform !== "linux" || !root) return undefined;
-  const leader = current.get(row.session);
-  if (!leader || leader.pid !== leader.group || leader.pid !== leader.session) return undefined;
-  if (Number(leader.birth) < Number(root.birth)) return undefined;
-  return leader;
-}
-function capture(includeOrphans = false): ProcessIdentity[] {
+function capture(): ProcessIdentity[] {
   const rows = snapshot();
   const current = new Map(rows.map(row => [row.pid, row]));
-  const pending = rows.filter(row => owned.get(row.pid)?.birth === row.birth || includeOrphans && marked(row));
-  // A browser leader can hide its environment; a marked member still identifies its newly-created session.
-  pending.push(...pending.flatMap(row => ownedSessionLeader(row, current) ?? []));
+  const pending = rows.filter(row => owned.get(row.pid)?.birth === row.birth || process.platform === "linux" && row.parent === process.pid);
   if (root && current.get(root.pid)?.birth === root.birth) pending.push(root);
   const found = new Set<number>();
   while (pending.length > 0) {
@@ -85,16 +69,16 @@ function signalOwned(signal: NodeJS.Signals) {
   }
 }
 async function teardown() {
-  capture(true);
+  capture();
   signalOwned("SIGTERM");
   const grace = performance.now() + 5000;
-  while (capture(true).length > 0 && performance.now() < grace) await delay(25);
+  while (capture().length > 0 && performance.now() < grace) await delay(25);
   const forced = performance.now() + 2000;
-  while (capture(true).length > 0 && performance.now() < forced) {
+  while (capture().length > 0 && performance.now() < forced) {
     signalOwned("SIGKILL");
     await delay(25);
   }
-  const remaining = capture(true);
+  const remaining = capture();
   if (remaining.length > 0) throw new Error(`owned processes survived teardown: ${remaining.map(row => `${row.pid}@${row.birth}`).join(", ")}`);
 }
 function stop(): Promise<void> {
@@ -110,7 +94,7 @@ function commandLine(pid: number): string {
 function diagnoseTimeout() {
   console.error(`command deadline exceeded after ${seconds}s: ${command} ${args.join(" ")}`);
   console.error(`owned process group ${root?.pid ?? "not started"} and detached descendants (pid ppid pgid state birth):`);
-  for (const row of capture(true)) console.error(`${row.pid} ${row.parent} ${row.group} ${row.state} ${row.birth} ${commandLine(row.pid)}`);
+  for (const row of capture()) console.error(`${row.pid} ${row.parent} ${row.group} ${row.state} ${row.birth} ${commandLine(row.pid)}`);
 }
 const handlers = ([ ["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129] ] as const).map(([signal, code]) => {
   const handler = () => { interrupted ??= code; void stop(); };
@@ -120,10 +104,10 @@ const handlers = ([ ["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129] ] as cons
 let tracker: ReturnType<typeof setInterval> | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 try {
-  const child = spawn(command, args, { stdio: "inherit", detached: true, env: { ...process.env, [marker]: "1" } });
+  const child = spawn(command, args, { stdio: "inherit", detached: true });
   if (child.pid !== undefined) {
     root = snapshot().find(row => row.pid === child.pid && row.parent === process.pid);
-    capture(true);
+    capture();
   }
   tracker = setInterval(() => capture(), 50);
   timer = setTimeout(() => {

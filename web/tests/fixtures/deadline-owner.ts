@@ -1,11 +1,34 @@
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { chromium } from "playwright";
 
 const [mode, scratch] = process.argv.slice(2);
 if (!scratch) throw new Error("missing fixture directory");
 writeFileSync(join(scratch, `${mode}.pid`), String(process.pid));
+function supervisorState(pid: string, birth: string): string | undefined {
+  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  if (fields[19] !== birth) throw new Error("supervisor identity changed");
+  return fields[0];
+}
+async function pauseSupervisor(directory: string) {
+  const identity = join(directory, "supervisor.identity");
+  const until = performance.now() + 5000;
+  while (!existsSync(identity)) {
+    if (performance.now() >= until) throw new Error("supervisor identity missing");
+    await delay(5);
+  }
+  const [pid, birth] = readFileSync(identity, "utf8").split(" ");
+  if (!pid || !birth || Number(pid) !== process.ppid) throw new Error("supervisor identity changed");
+  supervisorState(pid, birth);
+  process.kill(Number(pid), "SIGSTOP");
+  while (supervisorState(pid, birth) !== "T") {
+    if (performance.now() >= until) throw new Error("supervisor did not stop");
+    await delay(5);
+  }
+}
 if (mode === "quick-launcher") {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
   child.unref();
@@ -21,7 +44,10 @@ if (mode === "quick-launcher") {
     process.exit(0);
   }, 200));
 } else if (mode === "browser" || mode === "failed-browser" || mode === "control-browser") {
-  const browser = await chromium.launchServer({ headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+  const missed = mode === "failed-browser" && process.platform === "linux";
+  if (missed) await pauseSupervisor(scratch);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !missed || !key.startsWith("BUN_WASM_DEADLINE_")));
+  const browser = await chromium.launchServer({ headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false, env });
   const pid = browser.process().pid;
   if (pid === undefined) throw new Error("browser PID missing");
   writeFileSync(join(scratch, "browser.pid"), String(pid));

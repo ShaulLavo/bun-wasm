@@ -1,6 +1,6 @@
 import { expect } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,6 +80,21 @@ async function ready(directory: string) {
     await delay(25);
   }
 }
+async function resumeAfterLauncherExit(directory: string, supervisor: number) {
+  const identity = processIdentity(supervisor);
+  if (!identity?.birth) throw new Error("supervisor identity missing");
+  writeFileSync(join(directory, "supervisor.identity"), `${supervisor} ${identity.birth}`);
+  await ready(directory);
+  const pid = Number(readFileSync(join(directory, "failed-browser.pid"), "utf8"));
+  const launcher = processIdentity(pid);
+  const until = performance.now() + 5000;
+  while (processIdentity(pid)?.live && processIdentity(pid)?.birth === launcher?.birth) {
+    if (performance.now() >= until) throw new Error("launcher did not exit");
+    await delay(25);
+  }
+  if (processIdentity(supervisor)?.birth !== identity.birth) throw new Error("supervisor identity changed");
+  process.kill(supervisor, "SIGCONT");
+}
 function expectedStatus(mode: string, signal: "SIGINT" | "SIGTERM" | undefined) {
   if (signal) return signal === "SIGINT" ? 130 : 143;
   if (mode === "failed-browser") return 137;
@@ -114,6 +129,7 @@ export async function ownedScenario(mode: "launcher" | "browser" | "quick-launch
       stdout: "pipe", stderr: "pipe", env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
     });
     remember(child.pid, owned);
+    if (mode === "failed-browser" && process.platform === "linux") await resumeAfterLauncherExit(scratch, child.pid);
     if (signal) { await ready(scratch); child.kill(signal); }
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
     capture(scratch, owned);
