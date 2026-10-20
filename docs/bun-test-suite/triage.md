@@ -53,7 +53,7 @@ The full-run comparisons, timeout index and ranked investigations below retain t
 
 ## Regressions from the previous baseline
 
-QuickJS is the sole comparable baseline by matched file selection; JSC and browser remain non-comparable. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim. See [README.md](guide.md#historical-and-current-observations) and `summary.json` for selections and provenance.
+QuickJS is the sole comparable baseline by matched file selection; JSC and browser remain non-comparable. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim. See [README.md](results.md#historical-and-current-observations) and `summary.json` for selections and provenance.
 
 ## Timeout index
 
@@ -311,7 +311,7 @@ The complete audit with full-log hashes is retained in `review-r1/exclusion-audi
 
 ### Reproduce one cause
 
-Build the three artifacts from this branch and install the pinned dependencies as described in [the suite README](guide.md#reproduce). The helper runs each file unchanged through the required suite queue, with the same loopback network policy and deadlines as the baseline. Every cause below has one invocation. Every member file can be substituted.
+Build the three artifacts from this branch and install the pinned dependencies as described in [the suite README](results.md#reproduce). The helper runs each file unchanged through the required suite queue, with the same loopback network policy and deadlines as the baseline. Every cause below has one invocation. Every member file can be substituted.
 
 ```bash
 export PATH=$HOME/.local/share/mise/shims:$PATH

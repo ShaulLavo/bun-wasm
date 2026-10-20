@@ -40,7 +40,7 @@ It runs through all engines and the real Chromium/WebKit browser check.
 
 ## Reproduce
 
-Build all engines and install the pinned dependencies using [the suite guide](guide.md#reproduce).
+Build all engines and install the pinned dependencies using [the suite guide](results.md#reproduce).
 
 ```sh
 source env.sh
