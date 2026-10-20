@@ -2,24 +2,34 @@ import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { join, resolve } from "node:path";
 import { createNodeProcess } from "../scripts/node-process.ts";
 import { createWorkerProcessTransport, type WorkerProcessMessage } from "waffle/proc/worker-client";
 
-test("Node WASI translates descriptors across preopens, controls, renumber, churn and transfer failure", () => {
-  const scratch = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-node-fds-"));
-  try {
-    const result = spawnSync("node", ["--no-warnings", new URL("./fixtures/node-descriptors.ts", import.meta.url).pathname, scratch], {
-      cwd: resolve(import.meta.dirname, "../.."), encoding: "utf8", timeout: 15000,
-    });
-    expect(result.error).toBeUndefined();
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("Node descriptor translation, dynamic controls, churn, renumber, isolation and shared BADF checks passed\n");
-  } finally { rmSync(scratch, { recursive: true, force: true }); }
-});
+for (const output of ["pipe", "file"] as const) {
+  test(`Node WASI preserves ${output} stdio metadata and descriptor translation`, () => {
+    const scratch = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-node-fds-"));
+    const fixture = join(scratch, "fixture");
+    mkdirSync(fixture);
+    const outputPath = join(scratch, "stdout");
+    const stdout = output === "file" ? openSync(outputPath, "w") : "pipe";
+    try {
+      const result = spawnSync("node", ["--no-warnings", new URL("./fixtures/node-descriptors.ts", import.meta.url).pathname, fixture], {
+        cwd: resolve(import.meta.dirname, "../.."), encoding: "utf8", timeout: 15000, stdio: ["pipe", stdout, "pipe"],
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(output === "file" ? readFileSync(outputPath, "utf8") : result.stdout)
+        .toBe("Node descriptor translation, dynamic controls, churn, renumber, isolation and shared BADF checks passed\n");
+    } finally {
+      if (typeof stdout === "number") closeSync(stdout);
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+}
 
 test("a Node child reads relocated controls once and deletes their environment metadata", () => {
   const root = createWorkerProcessTransport();

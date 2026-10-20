@@ -16,9 +16,58 @@ jobs:
   quality:
     name: Code quality
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      rust: ${{ steps.changes.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Select native checks from the complete change list
+        id: changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bun scripts/ci-changes.ts "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Install locked JavaScript tools and application dependencies
+        run: |
+          bun install --frozen-lockfile
+          (cd web && bun install --frozen-lockfile)
+          (cd sandbox && bun install --frozen-lockfile)
+          (cd site && bun install --frozen-lockfile)
+      - name: Blocking quality gates
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bun run quality --javascript
+      - name: Install lightweight CMake preflight tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+      - name: Test CMake cache toolchain preflight
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bun test scripts/cmake-cache.test.ts
+
+  rust:
+    name: Rust workspace tests (QuickJS host)
+    needs: quality
+    if: needs.quality.outputs.rust == 'true'
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
+      QUALITY_RUST_JOBS: "2"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       GIT_AUTHOR_NAME: bun-wasm CI
@@ -28,31 +77,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure portable quality toolchain homes
+        id: homes
         run: |
           echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/quality-target" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
           echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
           echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
+          echo "image=$ImageVersion" >> "$GITHUB_OUTPUT"
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.RUSTUP_HOME }}
+          key: rust-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly-2026-09-15
           components: rustfmt, clippy
           targets: wasm32-wasip1
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
       - name: Install native build tools
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config
+      - uses: actions/cache@v4
+        id: sdk
+        with:
+          path: ${{ env.WASM_TOOLS }}
+          key: wasi-sdk-34.0-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'bun.lock', 'env.sh') }}
       - name: Install pinned WASI SDK
+        if: steps.sdk.outputs.cache-hit != 'true'
         run: |
           archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
           trap 'rm -f "$archive"' EXIT
@@ -62,65 +120,48 @@ jobs:
           echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
-      - name: Install locked JavaScript tools and application dependencies
-        run: |
-          bun install --frozen-lockfile
-          (cd web && bun install --frozen-lockfile)
-          (cd sandbox && bun install --frozen-lockfile)
-          (cd site && bun install --frozen-lockfile)
-      - name: Prepare pinned upstream sources and Rust dependency checker
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: |
+            vendor/bun
+            vendor/boringssl
+          key: native-sources-${{ runner.os }}-${{ hashFiles('scripts/sync-*.sh', 'patches/**') }}
+      - name: Prepare pinned upstream sources
         run: |
           source env.sh
           bash scripts/sync-bun.sh
           bash scripts/sync-crypto.sh
-          cargo install cargo-machete --version 0.9.2 --locked --jobs 1
+      - uses: actions/cache@v4
+        id: native-cache
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/bin/cargo-machete
+            ${{ env.CARGO_TARGET_DIR }}
+          key: native-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json') }}
+          restore-keys: native-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-
+      - name: Install pinned Rust dependency checker
+        run: |
+          source env.sh
+          if ! cargo machete --version 2>/dev/null | command grep -qx '0.9.2'; then
+            cargo install cargo-machete --version 0.9.2 --locked --jobs 2
+          fi
       - name: Build patched WASI sysroot
         run: |
           source env.sh
           time bun scripts/build-wasi-sysroot.ts
+      - name: Preserve unchanged build-script input timestamps
+        run: bun scripts/quality-input-times.ts
       - name: Blocking quality gates
         run: |
           source env.sh
-          bun run quality
-
-  rust:
-    name: Rust workspace tests (QuickJS host)
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.2
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Configure portable toolchain homes
-        run: |
-          echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
-          echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
-          echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cargo-target" >> "$GITHUB_ENV"
-          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-          git config --global user.name 'bun-wasm CI'
-          git config --global user.email 'ci@localhost'
-      - name: Install native build tools and pinned Rust
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config
-          rustup show
-      - run: bun install --frozen-lockfile
-      - name: Prepare pinned upstream sources and configure-time codegen
-        run: |
-          bash scripts/sync-bun.sh
-          bash scripts/sync-crypto.sh
-      - name: Test CMake cache toolchain preflight
-        run: bun test scripts/cmake-cache.test.ts
-      - name: Test every workspace crate on the host
-        # Defaults select QuickJS; JSC's host target links no WASM-only C++ libraries.
-        # bunwasm-posix is cfg(wasi), so its WASI-only tests are not host-runnable.
-        # This job covers unit-test targets; Code quality also checks every host target, including examples.
-        run: cargo test --workspace --lib --bins --locked --release -j 2
+          bun run quality --native
 
   package:
     name: Browser adapter package
@@ -158,7 +199,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Web host unit, type and bundle gates
+      - name: Web host unit, CLI shim, type and bundle gates
         run: bash ../scripts/test-web-host.sh --unit
       - name: Install Chromium and WebKit
         run: bunx playwright install --with-deps chromium webkit
@@ -183,19 +224,19 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --linker=isolated
       - name: Install browser
         run: bunx playwright install --with-deps ${{ matrix.browser }}
       - name: Process supervisor, generic preview1 and interrupt gate (no Rust or dist artifacts)
         env:
           PROCESS_SMOKE_PORT: "4186"
           TMPDIR: ${{ runner.temp }}
-        run: bun tests/browser-process.ts ${{ matrix.browser }}
+        run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-process.ts ${{ matrix.browser }}
       - name: Injected third-party interrupt checks (no Rust or dist artifacts)
         env:
           INTERRUPT_SCRATCH_ROOT: ${{ runner.temp }}
-        run: bun tests/browser-interrupt.ts ${{ matrix.browser }}
-      - name: Process pipes and runtime_proc guest ABI (no Rust or dist artifacts)
+        run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-interrupt.ts ${{ matrix.browser }}
+      - name: Process pipes, CLI ABI and foreground stop (isolated install, no Rust or dist artifacts)
         env:
           TMPDIR: ${{ runner.temp }}
-        run: bun tests/browser-runtime-proc.ts ${{ matrix.browser }}
+        run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-runtime-proc.ts ${{ matrix.browser }}
