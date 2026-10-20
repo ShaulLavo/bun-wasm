@@ -28,7 +28,7 @@ async function withRuntime(run: (runtime: ReturnType<typeof createRuntime>, regi
   } as unknown as typeof Worker;
   try {
     runtime = createRuntime({
-      filesystem: { workerURL: "https://example.test/fs.js", persistence: false },
+      filesystem: { workerURL: "https://example.test/fs.js", mode: "memory" },
       processHost: options => {
         registry = options.registry;
         return {

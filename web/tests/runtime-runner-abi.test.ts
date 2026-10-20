@@ -1,7 +1,7 @@
 import { createNotifyObserver } from "./notify-observer";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import type { Runtime } from "waffle";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { DescriptorTable } from "waffle/core/descriptors";
@@ -348,8 +348,9 @@ test("generic runtime byte registrations retain injected-check metadata at worke
 
 for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
   ? "untrusted compiled-only registration is rejected before child admission"
-  : "generic runtime SIMD refusal writes actionable inherited stderr before closing descriptors", async () => {
+  : "generic runtime SIMD refusal leaves inherited stderr untouched and reports typed startup failure", async () => {
   const output: { fd: number; text: string }[] = [];
+  const errors = spyOn(console, "error").mockImplementation(() => {});
   const state = registryFixture({ output(fd, data) { output.push({ fd, text: new TextDecoder().decode(data) }); } });
   try {
     const body = [0, 0xfd, 0x0c].concat(new Array<number>(16).fill(0), [0x1a, 0x0b]);
@@ -373,10 +374,11 @@ for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
       fds: [{ child: 2, parent: fd }] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     expect(await state.broker.wait(pid)).toEqual({ kind: "start-failed", code: 8, error: "ENOEXEC", status: null });
-    expect(output).toHaveLength(1);
-    expect(output[0]!.fd).toBe(2);
-    expect(output[0]!.text).toMatch(refusal === "SIMD" ? /Cannot instrument WebAssembly:.*SIMD/ : /require source bytes/);
-  } finally { await state.dispose(); }
+    // Waffle keeps runtime-child diagnostics on the host; the parent consumes START_FAILED.
+    expect(output).toHaveLength(0);
+    expect(errors).toHaveBeenCalledTimes(1);
+    expect(String(errors.mock.calls[0]?.[1])).toMatch(/Cannot instrument WebAssembly:.*SIMD/);
+  } finally { errors.mockRestore(); await state.dispose(); }
 });
 
 for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery of ["kill", "killJob"] as const) {

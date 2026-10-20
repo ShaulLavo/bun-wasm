@@ -15,5 +15,3 @@ test("worker bootstrap preserves real filesystem rights, shared offsets and unli
 test("partial inherited binding import is typed and rolls back all descriptors", () => {
   expect(partialBindingRollbackControl()).toEqual({ typed: true, rolledBack: true, released: true });
 });
-
-test.todo("generic child runtime diagnostics reach stderr completely before close: pending separate Waffle child-diagnostics fix; generic bootstrap currently drops the error text");

@@ -202,16 +202,23 @@ fn descriptor_metadata(fd: i32) -> io::Result<(fs::Metadata, libc::mode_t)> {
     // owned by their host until an explicit close or process exit.
     let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd as _) });
     let mode = unsafe { stat.assume_init() }.st_mode;
-    // Preview1 has no FIFO tag: both process hosts encode pipe endpoints as
-    // UNKNOWN, which libc preserves with no POSIX type bits. Adapt that host
-    // representation without bypassing fd_filestat_get capability checks.
+    // Preview1 UNKNOWN is not a pipe tag. Preserve fstat's capability check and
+    // consult the process resource only to restore FIFO's missing POSIX bits.
     #[cfg(target_os = "wasi")]
-    let mode = if mode & 0o170000 == 0 {
-        mode | 0o010000
+    let mode = descriptor_mode(mode, crate::host::proc_fd_kind(fd))?;
+    Ok((file.metadata()?, mode))
+}
+
+#[cfg(any(target_os = "wasi", test))]
+fn descriptor_mode(mode: libc::mode_t, kind: i32) -> io::Result<libc::mode_t> {
+    if kind < 0 {
+        return Err(io::Error::from_raw_os_error(-kind));
+    }
+    Ok(if kind == 1 {
+        (mode & !0o170000) | 0o010000
     } else {
         mode
-    };
-    Ok((file.metadata()?, mode))
+    })
 }
 
 fn descriptor_stat(fd: i32) -> io::Result<Val> {
@@ -1644,5 +1651,20 @@ mod builtin_tests {
                 crate::engine::ErrorKind::TypeError
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod descriptor_kind_tests {
+    use super::descriptor_mode;
+
+    #[test]
+    fn unknown_is_not_a_pipe_and_kind_does_not_bypass_errors() {
+        assert_eq!(descriptor_mode(0, 0).unwrap(), 0);
+        assert_eq!(descriptor_mode(0o600, 1).unwrap(), 0o010600);
+        assert_eq!(descriptor_mode(0o020600, 2).unwrap(), 0o020600);
+        assert_eq!(descriptor_mode(0o100600, 3).unwrap(), 0o100600);
+        assert_eq!(descriptor_mode(0o040700, 4).unwrap(), 0o040700);
+        assert_eq!(descriptor_mode(0, -8).unwrap_err().raw_os_error(), Some(8));
     }
 }

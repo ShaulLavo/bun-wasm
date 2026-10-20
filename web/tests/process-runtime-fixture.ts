@@ -4,6 +4,7 @@ import { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessIdentityAllocator } from "waffle/proc/identity";
 import { ProcessTable } from "waffle/proc/table";
 import { compileInterruptible } from "waffle/interrupt/loader";
+import { getVfsDescriptor } from "waffle";
 import type { Runtime, GuestLauncher, ProcessService, RuntimeFilesystem, RuntimeConsumer } from "waffle";
 
 /** A process-only fixture: no page owner, filesystem worker, browser cache or service locator.
@@ -15,7 +16,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
 } = {}): Runtime {
   const unused = (): never => { throw new Error("Unexpected filesystem operation in process-only fixture"); };
   let filesystem: RuntimeFilesystem = {
-    state: { status: "ready" }, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
+    vfs: getVfsDescriptor("memory"), state: { status: "ready" }, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
     revoke: unused, reap: unused, quiesce: unused, drain: unused, flush: unused,
     lookup: unused, readFile: unused, listFiles: unused,
     mkdirp: unused, writeFile: unused, remove: unused, move: unused, ...overrides,

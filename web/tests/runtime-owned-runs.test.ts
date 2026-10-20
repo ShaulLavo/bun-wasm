@@ -36,7 +36,7 @@ for (const alreadyFinishing of [false, true]) test(`page disposal fences two roo
   globalThis.Worker = FakeWorker as unknown as typeof Worker;
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/") });
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
-  const runtime = createRuntime({ filesystem: { workerURL: "https://example.test/fs-worker.js", persistence: false } });
+  const runtime = createRuntime({ filesystem: { workerURL: "https://example.test/fs-worker.js", mode: "memory" } });
   const descriptors = new DescriptorTable();
   let section: FilesystemSection | undefined;
   let entered = false;
@@ -104,7 +104,7 @@ for (const generic of [false, true]) test(`same-task page disposal owns an unadm
   globalThis.Worker = FakeWorker as unknown as typeof Worker;
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/") });
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
-  const runtime = createRuntime({ filesystem: { workerURL: "https://example.test/fs-worker.js", persistence: false } });
+  const runtime = createRuntime({ filesystem: { workerURL: "https://example.test/fs-worker.js", mode: "memory" } });
   const diagnostics = spyOn(console, "error").mockImplementation(() => {});
   let section: FilesystemSection | undefined, held = false, disposal: Promise<void> | undefined;
   try {
