@@ -9,7 +9,7 @@
   "use strict";
   const native = internal.native;
   const caps = native.hostCaps;
-  const { Request, Response, Headers, ReadableStream, DOMException } = internal.web;
+  const { Request, Response, Headers } = internal.web;
 
   const AGAIN = -2;
 
@@ -119,44 +119,9 @@
   }
 
   // Readable stream over a host handle's bytes (fetch bodies, sockets).
-  function handleStream(handle, onEnd) {
-    let done = false;
-    return new ReadableStream({
-      type: "bytes",
-      pull(controller) {
-        if (done) {
-          controller.close();
-          return undefined;
-        }
-        return new Promise((resolve, reject) => {
-          addWaiter({
-            step() {
-              if (done) { resolve(); return true; }
-              const chunk = native.hostRead(handle);
-              if (chunk === AGAIN) return false;
-              if (chunk === 0) {
-                done = true;
-                controller.close();
-                if (controller.byobRequest) controller.byobRequest.respond(0);
-                if (onEnd) onEnd();
-              } else if (typeof chunk === "number") {
-                done = true;
-                reject(hostError(handle, "network error while reading the body"));
-                if (onEnd) onEnd();
-              } else {
-                controller.enqueue(chunk);
-              }
-              resolve();
-              return true;
-            },
-            fail: reject,
-          });
-        });
-      },
-      cancel() {
-        done = true;
-        if (onEnd) onEnd();
-      },
+  function handleStream(handle, onEnd, signal) {
+    return internal.require("fetch_body").stream({
+      handle, onEnd, signal, read: native.hostRead, error: hostError, addWaiter, again: AGAIN,
     });
   }
 
@@ -176,23 +141,25 @@
     const handle = native.hostFetch(meta, await requestBody(req));
     if (handle < 0) throw hostError(0, "fetch failed");
     let closed = false;
+    let onAbort;
     const closeHandle = () => {
       if (!closed) native.hostClose(handle);
       closed = true;
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
     };
     // The signal may have fired while the request body was being read.
     const aborted = new Promise((resolve, reject) => {
       if (!signal) return;
-      const onAbort = () => {
+      onAbort = () => {
         closeHandle();
-        reject(signal.reason || new DOMException("The operation was aborted.", "AbortError"));
+        reject(signal.reason);
       };
       if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort);
+      else signal.addEventListener("abort", onAbort, { once: true });
     });
     const head = await Promise.race([waitHead(handle), aborted]);
     const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 304;
-    const body = nullBody ? null : internal.require("compression_streams").decode(handleStream(handle, closeHandle), head.bodyEncoding);
+    const body = nullBody ? null : internal.require("compression_streams").decode(handleStream(handle, closeHandle, signal), head.bodyEncoding);
     if (nullBody) closeHandle();
     const res = new Response(body, {
       status: head.status >= 200 && head.status <= 599 ? head.status : 200,
@@ -319,6 +286,7 @@
       this.queue = [];
       this.closing = false;
       this.closed = false;
+      this.readEnded = false;
       this.onData = null;
       this.onEnd = null;
       this.onError = null;
@@ -335,6 +303,16 @@
         ref: this.referenced !== false,
       });
     }
+    finishRead(chunk) {
+      this.reading = false;
+      if (chunk === 0) {
+        this.readEnded = true;
+        this.onEnd?.();
+        return true;
+      }
+      this.fail(hostError(this.handle, "connection error"));
+      return true;
+    }
     pumpRead() {
       if (this.closed) return true;
       let progressed = false;
@@ -342,12 +320,7 @@
         if (this.canRead && !this.canRead()) return progressed ? "progress" : false;
         const chunk = native.hostRead(this.handle);
         if (chunk === AGAIN) return progressed ? "progress" : false;
-        if (typeof chunk === "number") {
-          this.reading = false;
-          if (chunk === 0) this.onEnd?.();
-          else this.fail(hostError(this.handle, "connection error"));
-          return true;
-        }
+        if (typeof chunk === "number") return this.finishRead(chunk);
         progressed = true;
         if (this.onData) this.onData(chunk);
         if (this.closed) return true;
@@ -574,23 +547,11 @@
     return null;
   }
 
-  async function responseBytes(res) {
-    return new Uint8Array(await res.arrayBuffer());
-  }
-
-  async function writeResponse(conn, res, method, keepAlive) {
+  function writeResponse(conn, res, method, keepAlive) {
     if (!(res instanceof Response)) {
       throw new TypeError(`Expected a Response object, but received '${internal.describe(res)}'`);
     }
-    const body = method === "HEAD" ? new Uint8Array(0) : await responseBytes(res);
-    const pairs = Array.from(res.headers).filter(([k]) => k !== "content-length" && k !== "transfer-encoding");
-    if (!res.headers.has("date")) pairs.push(["date", new Date().toUTCString()]);
-    const bodyless = res.status === 204 || res.status === 304;
-    if (!bodyless) pairs.push(["content-length", String(method === "HEAD" ? Number(res.headers.get("content-length") || 0) : body.length)]);
-    if (!keepAlive) pairs.push(["connection", "close"]);
-    conn.write(serializeHead(res.status, res.statusText, pairs));
-    if (!bodyless && body.length) conn.write(body);
-    return keepAlive;
+    return internal.require("http_response").writeResponse(conn, res, method, keepAlive, serializeHead, internal.printError);
   }
 
   function errorResponse(err) {
@@ -749,7 +710,13 @@
       if (cookies) {
         for (const value of cookies.toSetCookieHeaders()) res.headers.append("Set-Cookie", value);
       }
-      return writeResponse(conn, res, request.method, keepAlive && !stopped);
+      const responseKeepAlive = keepAlive && !stopped;
+      try {
+        return await writeResponse(conn, res, request.method, responseKeepAlive);
+      } catch (error) {
+        const fallback = errorHandler ? await errorHandler.call(server, error) : errorResponse(error);
+        return writeResponse(conn, fallback, request.method, responseKeepAlive);
+      }
     }
 
     const accepting = acceptLoop(listener, (conn) => {

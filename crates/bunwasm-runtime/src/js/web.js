@@ -764,14 +764,15 @@
   const streamWeb = internal.require("streams");
   const { ReadableStream } = streamWeb;
 
+  const bodyStreams = internal.require("body_streams");
   internal.makeByteStream = function makeByteStream(bytes) {
-    return new ReadableStream({
+    return bodyStreams.remember(new ReadableStream({
       type: "bytes",
       start(controller) {
         if (bytes.length > 0) controller.enqueue(new Uint8Array(bytes));
         controller.close();
       },
-    });
+    }), bytes);
   };
 
   // --- Headers / Request / Response -------------------------------------------
@@ -885,7 +886,7 @@
     }
     if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
     if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return { bytes: new Uint8Array(toUint8(body)), type: null };
-    if (body instanceof ReadableStream) return { stream: body, bytes: null, type: null };
+    if (body instanceof ReadableStream) return { stream: body, bytes: bodyStreams.bytes(body) || null, type: null };
     return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
   }
 
@@ -1006,9 +1007,7 @@
       return this._stream;
     }
     clone() {
-      if (this.bodyUsed || this._stream?.locked) throw new TypeError("Body already used");
-      let body = this._body;
-      if (this._stream) [this._stream, body] = this._stream.tee();
+      const body = bodyStreams.clone(this);
       const copy = new Response(body, { status: this.#status, statusText: this.#statusText, headers: this.#headers });
       copy.#url = this.#url;
       return copy;
@@ -1072,9 +1071,7 @@
       return this._stream;
     }
     clone() {
-      if (this.bodyUsed || this._stream?.locked) throw new TypeError("Body already used");
-      let body = this._body;
-      if (this._stream) [this._stream, body] = this._stream.tee();
+      const body = bodyStreams.clone(this);
       return new Request(this, { body });
     }
     get [Symbol.toStringTag]() {

@@ -69,7 +69,632 @@ its destroyed TCP socket against Node. Completing TCP destruction in a later
 check phase preserves request-close before socket-close and prevents the
 Streams integration from changing that order.
 
-## Measurements
+## HTTP scoreboard census, 2026-10-18
+
+The starting scoreboard at `2ea5c62fa6bb63cc5396cb345e3897956bb710f1` assigns
+180 files to category d, HTTP/server/fetch/WebSocket semantics. Within those
+180, 32 have no named failure. The recorded count of 25 does not match this
+checkout. These are first-error groups, not 180 confirmed HTTP protocol bugs.
+An assertion method such as `toBe` does not identify one shared cause.
+
+There is no live HTTP PR at the start of this work. The previous HTTP, TCP and
+portable ws lanes merged as PRs #35, #14 and #16. The 11 Socket.IO collection
+failures all report the same missing `ws` builtin in their raw excerpts.
+PR #42 already fixed that CommonJS lookup. The fresh QuickJS control passes
+three of those files; the other eight are skip-only. TLS, QUIC, Unix sockets,
+private engine instrumentation and subprocess-dependent fixtures remain
+separate from the portable HTTP adapters.
+
+Generate this table and its complete file membership with
+`node scripts/http-suite-report.ts <scoreboard.tsv> <suite.json>`. The optional
+second argument reads the raw JSON to recover errors hidden by the recorded excerpt placeholder.
+The raw historical JSON is
+`/work/reports/bun-wasm-main-2026-10-17/suite/quickjs.json`.
+
+<!-- http-first-errors:start -->
+| First error | Files | Example |
+| --- | --- | --- |
+| error: expect(received).toBe(expected) | 37 | js/bun/http/async-iterator-stream.test.ts |
+| ^ this test timed out after 2000ms. | 16 | js/bun/http/node-http-pipeline-callbacks.test.ts |
+| ENOENT: no such file or directory | 13 | js/third_party/socket.io/socket.io-close.test.ts |
+| error: expect(received).toContain(expected) | 13 | cli/test/isolation.test.ts |
+| error: Bun.serve TLS is not supported by this networking host | 11 | cli/install/migration/pnpm-comprehensive.test.ts |
+| error: expect(received).toEqual(expected) | 11 | js/bun/dns/dns-prefetch.test.ts |
+| File timeout without a captured error | 7 | js/bun/http/bun-serve-html-build-holds-server.test.ts |
+| TypeError: not a function | 5 | js/bun/http/listener-getsockname.test.ts |
+| error: expect(received).toThrow(expected) | 4 | js/web/fetch/fetch.unix.test.ts |
+| error: expect(received).toMatch(expected) | 3 | js/bun/http/form-data-set-append.test.js |
+| SyntaxError: WebSocket requires a ws:// URL without credentials or a fragment | 3 | js/web/websocket/websocket-unix.test.ts |
+| TypeError: cannot read property 'Server' of undefined | 3 | js/third_party/grpc-js/test-call-propagation.test.ts |
+| AssertionError: Expected values to be strictly equal: | 2 | js/node/http/node-http-agent-free-socket.test.ts |
+| error: expect(received).not.toContain(expected) | 2 | cli/install/bun-update-transitive.test.ts |
+| error: expect(received).toMatchInlineSnapshot(expected) | 2 | js/web/fetch/response.test.ts |
+| error: Expected process to exit with code 0 but got 1 | 2 | js/bun/http/leaks-test.test.ts |
+| error: No such built-in module: node:quic | 2 | js/bun/http/serve-http3.test.ts |
+| error: Unix sockets and TLS sockets are not supported in bun-wasm | 2 | js/bun/http/bun-listen-connect-args.test.ts |
+| error: Unix sockets are not supported in bun-wasm | 2 | js/node/net/handle-leak.test.ts |
+| error: zlib.brotliCompressSync is not supported in bun-wasm: brotli is not compiled into bun.wasm | 2 | js/web/fetch/fetch-gzip.test.ts |
+| TypeError: parent class must be constructor | 2 | js/first_party/undici/undici-primordials.test.ts |
+| AssertionError: path.win32.resolve("c:/blah\\blah","d:/games","c:../a") | 1 | js/node/path/resolve.test.js |
+| BuildError: Expected ";" but found "RSA" | 1 | js/bun/http/bun-serve-ssl.test.ts |
+| BuildError: Unexpected � | 1 | js/web/fetch/fetch.brotli.test.ts |
+| bun-wasm: bun.wasm trapped: error while executing at wasm backtrace: | 1 | js/node/http/node-http-uaf.test.ts |
+| EACCES: permission denied | 1 | bake/dev/ecosystem.test.ts |
+| error: bun create is not supported in bun-wasm | 1 | cli/create/create-jsx.test.ts |
+| error: expect(received).not.toStartWith(expected) | 1 | js/bun/http/proxy-stress-lifecycle.test.ts |
+| error: expect(received).toBeDefined() | 1 | regression/issue/24575.test.ts |
+| error: expect(received).toBeGreaterThan(expected) | 1 | regression/issue/40111.test.ts |
+| error: expect(received).toBeGreaterThanOrEqual(expected) | 1 | js/bun/http/proxy-stress-concurrent.test.ts |
+| error: expect(received).toBeObject() | 1 | js/node/perf_hooks/perf_hooks.test.ts |
+| error: expect(received).toBeTruthy() | 1 | js/deno/fetch/response.test.ts |
+| error: expect(received).toHaveLength(expected) | 1 | js/web/fetch/utf8-bom.test.ts |
+| error: expect(received).toInclude(expected) | 1 | js/web/fetch/headers-case.test.ts |
+| error: expect(received).toMatchObject(expected) | 1 | js/node/http/node-http-upgrade-body.test.ts |
+| error: expect(received).toStrictEqual(expected) | 1 | js/node/net/node-net-server.test.ts |
+| error: expect(received).toThrow() | 1 | js/bun/http/server-url-invalid.test.ts |
+| error: expect(received).toThrowErrorMatchingInlineSnapshot(expected) | 1 | js/web/fetch/blob-write.test.ts |
+| error: No such module: http_parser | 1 | js/node/http/node-http-parser.test.ts |
+| error: WebSocket proxy and TLS options are not supported by this networking host | 1 | js/web/websocket/websocket-buffered-amount.test.ts |
+| error: WebSocket was closed before the connection was established | 1 | regression/issue/012040.test.ts |
+| QuotaExceededError: The ArrayBufferView's byte length (1000000) exceeds the number of bytes of entropy available via this API (65536) | 1 | js/web/fetch/body.test.ts |
+| SyntaxError: Could not find export 'estimateShallowMemoryUsageOf' in module 'bun:jsc' | 1 | js/bun/websocket/websocket-server.test.ts |
+| SyntaxError: The URL's protocol must be one of "ws:", "wss:", "http:", "https:", or "ws+unix:" | 1 | cli/inspect/inspect-inline-sourcemap.test.ts |
+| SyntaxError: Unexpected end of JSON input | 1 | js/bun/http/serve-stream-body-error.test.ts |
+| TypeError: Body already used | 1 | js/bun/http/serve-reused-response.test.ts |
+| TypeError: cannot read property 'counter' of undefined | 1 | regression/issue/18595.test.ts |
+| TypeError: cannot read property 'hash' of undefined | 1 | packages/s3-server/test/server.test.ts |
+| TypeError: class constructors must be invoked with 'new' | 1 | js/node/net/server.spec.ts |
+| TypeError: formData() is not supported in bun-wasm | 1 | js/bun/http/fetch-file-upload.test.ts |
+| TypeError: Invalid URL: "1" | 1 | js/bun/http/bun-serve-fetch-invalid-args.test.ts |
+| TypeError: Invalid URL: "http://undefined:undefined/api/hotels" | 1 | js/third_party/express/express.test.ts |
+| TypeError: protocol must be http:, https: or s3: | 1 | js/web/fetch/fetch-args.test.ts |
+| TypeError: Request with a GET or HEAD method cannot have a body. | 1 | js/web/fetch/fetch.upgrade.test.ts |
+| TypeError: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch() | 1 | js/web/fetch/chunked-trailing.test.js |
+| TypeError: UnexpectedRedirect fetching "http://127.0.0.1:43277/". For more information, pass `verbose: true` in the second argument to fetch() | 1 | js/web/fetch/fetch-redirect.test.ts |
+
+<details>
+<summary>File membership</summary>
+
+
+error: expect(received).toBe(expected)
+
+- `js/bun/http/async-iterator-stream.test.ts`
+- `js/bun/http/bun-serve-args.test.ts`
+- `js/bun/http/bun-serve-file.test.ts`
+- `js/bun/http/bun-serve-headers.test.ts`
+- `js/bun/http/bun-serve-html-manifest.test.ts`
+- `js/bun/http/bun-serve-propagate-errors.test.ts`
+- `js/bun/http/bun-serve-static-stress-access-body.test.ts`
+- `js/bun/http/bun-serve-static-stress-no-body.test.ts`
+- `js/bun/http/bun-serve-static.test.ts`
+- `js/bun/http/bun-server.test.ts`
+- `js/bun/http/fetch-header-count-limit.test.ts`
+- `js/bun/http/serve-directory-routes.test.ts`
+- `js/bun/http/serve-if-none-match.test.ts`
+- `js/bun/http/serve-pending-promise-abort-leak.test.ts`
+- `js/bun/io/fetch/fetch-abort-slow-connect.test.ts`
+- `js/bun/websocket/websocket-server-stop-retained-ws.test.ts`
+- `js/bun/websocket/websocket-server-upgrade-reentrant.test.ts`
+- `js/first_party/ws/ws-upgrade-events.test.ts`
+- `js/node/http/node-http-maxHeaderSize.test.ts`
+- `js/node/http/node-http-ondata-reregister-leak.test.ts`
+- `js/node/http/node-http-server-close-drain.test.ts`
+- `js/node/http/node-http-with-ws.test.ts`
+- `js/node/net/blocklist-gc.test.ts`
+- `js/node/net/node-net.test.ts`
+- `js/web/fetch/blob-array-fast-path.test.ts`
+- `js/web/fetch/blob-file-name-ownership.test.ts`
+- `js/web/fetch/body-async-iterator.test.ts`
+- `js/web/fetch/body-mixin-errors.test.ts`
+- `js/web/fetch/client-fetch.test.ts`
+- `js/web/fetch/fetch-abort-stream-body.test.ts`
+- `js/web/fetch/fetch-chunked-size.test.ts`
+- `js/web/fetch/fetch-compress.test.ts`
+- `js/web/fetch/fetch-keepalive.test.ts`
+- `js/web/fetch/fetch.stream.test.ts`
+- `js/web/workers/performance-observer-leak.test.ts`
+- `regression/issue/22353.test.ts`
+- `regression/issue/test-21049.test.ts`
+
+^ this test timed out after 2000ms.
+
+- `js/bun/http/node-http-pipeline-callbacks.test.ts`
+- `js/bun/http/serve-protocols.test.ts`
+- `js/node/http/node-http-connect.test.ts`
+- `js/node/http/node-http-displaced-response.test.ts`
+- `js/node/http/node-http-incoming-socket.test.ts`
+- `js/node/http/node-http-pinned-write.test.ts`
+- `js/node/http/node-http-req-complete.test.ts`
+- `js/node/http/node-http-req-socket-pause.test.ts`
+- `js/node/http/node-http-server-socket-end-drain.test.ts`
+- `js/node/http/node-http-server-timeouts.test.ts`
+- `js/node/http/node-https-agent-checkserveridentity-reuse.test.ts`
+- `js/node/http/node-https-checkServerIdentity.test.ts`
+- `js/node/net/socket-reconnect-live.test.ts`
+- `js/web/fetch/exiting.test.ts`
+- `js/web/fetch/fetch-stream-cancel-leak.test.ts`
+- `js/web/fetch/server-response-stream-leak.test.ts`
+
+ENOENT: no such file or directory
+
+- `js/third_party/socket.io/socket.io-close.test.ts`
+- `js/third_party/socket.io/socket.io-connection-state-recovery.test.ts`
+- `js/third_party/socket.io/socket.io-handshake.test.ts`
+- `js/third_party/socket.io/socket.io-messaging-many.test.ts`
+- `js/third_party/socket.io/socket.io-middleware.test.ts`
+- `js/third_party/socket.io/socket.io-namespaces.test.ts`
+- `js/third_party/socket.io/socket.io-server-attachment.test.ts`
+- `js/third_party/socket.io/socket.io-socket-middleware.test.ts`
+- `js/third_party/socket.io/socket.io-socket-timeout.test.ts`
+- `js/third_party/socket.io/socket.io-utility-methods.test.ts`
+- `js/third_party/socket.io/socket.io.test.ts`
+- `js/web/fetch/fetch-tcp-keepalive.test.ts`
+- `js/web/fetch/fetch-tcp-stress.test.ts`
+
+error: expect(received).toContain(expected)
+
+- `cli/test/isolation.test.ts`
+- `integration/bun-types/fixture/serve-types.test.ts`
+- `js/bun/http/bun-serve-html-entry.test.ts`
+- `js/bun/http/request-smuggling.test.ts`
+- `js/bun/http/serve.test.ts`
+- `js/bun/websocket/websocket-server-rsv-frames.test.ts`
+- `js/node/http/early-hints-crlf-injection.test.ts`
+- `js/web/websocket/websocket-close-connecting.test.ts`
+- `js/web/websocket/websocket-permessage-deflate-edge-cases.test.ts`
+- `js/web/websocket/websocket-permessage-deflate-simple.test.ts`
+- `js/web/websocket/websocket-permessage-deflate.test.ts`
+- `regression/issue/26142.test.ts`
+- `regression/issue/3613.test.ts`
+
+error: Bun.serve TLS is not supported by this networking host
+
+- `cli/install/migration/pnpm-comprehensive.test.ts`
+- `cli/install/migration/pnpm-lock-migration.test.ts`
+- `cli/install/migration/pnpm-migration-complete.test.ts`
+- `js/bun/http/serve-listen.test.ts`
+- `js/bun/module-graph/module-graph-callbacks.test.ts`
+- `js/web/fetch/abort-signal-leak.test.ts`
+- `js/web/fetch/fetch-http3-adversarial.test.ts`
+- `js/web/websocket/test-ws-bidir-proxy.test.ts`
+- `regression/issue/06443.test.ts`
+- `regression/issue/21792.test.ts`
+- `regression/issue/27358.test.ts`
+
+error: expect(received).toEqual(expected)
+
+- `js/bun/dns/dns-prefetch.test.ts`
+- `js/bun/http/bun-serve-html-405.test.ts`
+- `js/bun/http/bun-serve-routes.test.ts`
+- `js/bun/http/serve-error-handler-stream.test.ts`
+- `js/bun/net/socket-dns-error.test.ts`
+- `js/bun/net/unix-socket-long-path.test.ts`
+- `js/bun/websocket/websocket-server-unmasked-frames.test.ts`
+- `js/deno/fetch/blob.test.ts`
+- `js/deno/fetch/headers.test.ts`
+- `js/node/http/numeric-header.test.ts`
+- `js/web/websocket/websocket-close-code.test.ts`
+
+File timeout without a captured error
+
+- `js/bun/http/bun-serve-html-build-holds-server.test.ts`
+- `js/bun/http/hspec.test.ts`
+- `js/bun/http/serve-async-stream-client-abort.test.ts`
+- `js/bun/http/serve-response-stream-sink-leak.test.ts`
+- `js/bun/http/serve-stream-reject-flush-leak.test.ts`
+- `js/node/net/double-connect.test.ts`
+- `js/web/fetch/fetch-response-finalizer-sweep.test.ts`
+
+TypeError: not a function
+
+- `js/bun/http/listener-getsockname.test.ts`
+- `js/web/fetch/blob.test.ts`
+- `js/web/fetch/body-clone.test.ts`
+- `js/web/fetch/fetch-preconnect.test.ts`
+- `js/web/request/request-subclass.test.ts`
+
+error: expect(received).toThrow(expected)
+
+- `js/web/fetch/fetch.unix.test.ts`
+- `js/web/fetch/fetch_headers.test.js`
+- `js/web/fetch/headers.test.ts`
+- `js/web/fetch/headers.undici.test.ts`
+
+error: expect(received).toMatch(expected)
+
+- `js/bun/http/form-data-set-append.test.js`
+- `regression/issue/18413-deflate-semantics.test.ts`
+- `regression/issue/18413-truncation.test.ts`
+
+SyntaxError: WebSocket requires a ws:// URL without credentials or a fragment
+
+- `js/web/websocket/websocket-unix.test.ts`
+- `js/web/websocket/websocket.test.js`
+- `regression/issue/24388.test.ts`
+
+TypeError: cannot read property 'Server' of undefined
+
+- `js/third_party/grpc-js/test-call-propagation.test.ts`
+- `js/third_party/grpc-js/test-deadline.test.ts`
+- `js/third_party/grpc-js/test-idle-timer.test.ts`
+
+AssertionError: Expected values to be strictly equal:
+
+- `js/node/http/node-http-agent-free-socket.test.ts`
+- `js/node/path/is-absolute.test.js`
+
+error: expect(received).not.toContain(expected)
+
+- `cli/install/bun-update-transitive.test.ts`
+- `js/node/http/node-https-server.test.ts`
+
+error: expect(received).toMatchInlineSnapshot(expected)
+
+- `js/web/fetch/response.test.ts`
+- `js/web/websocket/error-event.test.ts`
+
+error: Expected process to exit with code 0 but got 1
+
+- `js/bun/http/leaks-test.test.ts`
+- `regression/issue/11866.test.ts`
+
+error: No such built-in module: node:quic
+
+- `js/bun/http/serve-http3.test.ts`
+- `js/web/fetch/fetch-http3-client.test.ts`
+
+error: Unix sockets and TLS sockets are not supported in bun-wasm
+
+- `js/bun/http/bun-listen-connect-args.test.ts`
+- `js/bun/net/unix-socket-unlink.test.ts`
+
+error: Unix sockets are not supported in bun-wasm
+
+- `js/node/net/handle-leak.test.ts`
+- `regression/issue/13696.test.ts`
+
+error: zlib.brotliCompressSync is not supported in bun-wasm: brotli is not compiled into bun.wasm
+
+- `js/web/fetch/fetch-gzip.test.ts`
+- `regression/issue/18413-all-compressions.test.ts`
+
+TypeError: parent class must be constructor
+
+- `js/first_party/undici/undici-primordials.test.ts`
+- `js/first_party/undici/undici.test.ts`
+
+AssertionError: path.win32.resolve("c:/blah\\blah","d:/games","c:../a")
+
+- `js/node/path/resolve.test.js`
+
+BuildError: Expected ";" but found "RSA"
+
+- `js/bun/http/bun-serve-ssl.test.ts`
+
+BuildError: Unexpected �
+
+- `js/web/fetch/fetch.brotli.test.ts`
+
+bun-wasm: bun.wasm trapped: error while executing at wasm backtrace:
+
+- `js/node/http/node-http-uaf.test.ts`
+
+EACCES: permission denied
+
+- `bake/dev/ecosystem.test.ts`
+
+error: bun create is not supported in bun-wasm
+
+- `cli/create/create-jsx.test.ts`
+
+error: expect(received).not.toStartWith(expected)
+
+- `js/bun/http/proxy-stress-lifecycle.test.ts`
+
+error: expect(received).toBeDefined()
+
+- `regression/issue/24575.test.ts`
+
+error: expect(received).toBeGreaterThan(expected)
+
+- `regression/issue/40111.test.ts`
+
+error: expect(received).toBeGreaterThanOrEqual(expected)
+
+- `js/bun/http/proxy-stress-concurrent.test.ts`
+
+error: expect(received).toBeObject()
+
+- `js/node/perf_hooks/perf_hooks.test.ts`
+
+error: expect(received).toBeTruthy()
+
+- `js/deno/fetch/response.test.ts`
+
+error: expect(received).toHaveLength(expected)
+
+- `js/web/fetch/utf8-bom.test.ts`
+
+error: expect(received).toInclude(expected)
+
+- `js/web/fetch/headers-case.test.ts`
+
+error: expect(received).toMatchObject(expected)
+
+- `js/node/http/node-http-upgrade-body.test.ts`
+
+error: expect(received).toStrictEqual(expected)
+
+- `js/node/net/node-net-server.test.ts`
+
+error: expect(received).toThrow()
+
+- `js/bun/http/server-url-invalid.test.ts`
+
+error: expect(received).toThrowErrorMatchingInlineSnapshot(expected)
+
+- `js/web/fetch/blob-write.test.ts`
+
+error: No such module: http_parser
+
+- `js/node/http/node-http-parser.test.ts`
+
+error: WebSocket proxy and TLS options are not supported by this networking host
+
+- `js/web/websocket/websocket-buffered-amount.test.ts`
+
+error: WebSocket was closed before the connection was established
+
+- `regression/issue/012040.test.ts`
+
+QuotaExceededError: The ArrayBufferView's byte length (1000000) exceeds the number of bytes of entropy available via this API (65536)
+
+- `js/web/fetch/body.test.ts`
+
+SyntaxError: Could not find export 'estimateShallowMemoryUsageOf' in module 'bun:jsc'
+
+- `js/bun/websocket/websocket-server.test.ts`
+
+SyntaxError: The URL's protocol must be one of "ws:", "wss:", "http:", "https:", or "ws+unix:"
+
+- `cli/inspect/inspect-inline-sourcemap.test.ts`
+
+SyntaxError: Unexpected end of JSON input
+
+- `js/bun/http/serve-stream-body-error.test.ts`
+
+TypeError: Body already used
+
+- `js/bun/http/serve-reused-response.test.ts`
+
+TypeError: cannot read property 'counter' of undefined
+
+- `regression/issue/18595.test.ts`
+
+TypeError: cannot read property 'hash' of undefined
+
+- `packages/s3-server/test/server.test.ts`
+
+TypeError: class constructors must be invoked with 'new'
+
+- `js/node/net/server.spec.ts`
+
+TypeError: formData() is not supported in bun-wasm
+
+- `js/bun/http/fetch-file-upload.test.ts`
+
+TypeError: Invalid URL: "1"
+
+- `js/bun/http/bun-serve-fetch-invalid-args.test.ts`
+
+TypeError: Invalid URL: "http://undefined:undefined/api/hotels"
+
+- `js/third_party/express/express.test.ts`
+
+TypeError: protocol must be http:, https: or s3:
+
+- `js/web/fetch/fetch-args.test.ts`
+
+TypeError: Request with a GET or HEAD method cannot have a body.
+
+- `js/web/fetch/fetch.upgrade.test.ts`
+
+TypeError: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()
+
+- `js/web/fetch/chunked-trailing.test.js`
+
+TypeError: UnexpectedRedirect fetching "http://127.0.0.1:43277/". For more information, pass `verbose: true` in the second argument to fetch()
+
+- `js/web/fetch/fetch-redirect.test.ts`
+
+</details>
+<!-- http-first-errors:end -->
+
+The generic assertions split across independent behavior. Static-route aliases,
+ETags and directory routes differ from header conversion, fetch decompression,
+body conversion, socket ownership and WebSocket framing. Their shared assertion
+text is not a reason to replace those implementations together.
+
+## Final response and EOF measurements, 2026-10-18
+
+The final response-streaming and empty-EOF adapters were measured against the
+same 180 files, suite revision, dependency hashes and deadlines on all three
+engines. The tools guest was absent for both suite replays. The artifact hashes
+and frozen input metadata are retained under the report directory.
+
+| Engine | Fully passing files | Observed passes | Observed failures | File timeouts |
+| --- | --- | --- | --- | --- |
+| QuickJS | 5 → 6 | 1,425 → 1,494 | 2,602 → 2,540 | 23 → 24 |
+| JSC | 5 → 6 | 1,111 → 1,173 | 2,050 → 1,993 | 23 → 24 |
+| Browser | 5 → 6 | 1,330 → 1,408 | 2,355 → 2,320 | 26 → 25 |
+
+The largest named gain is `fetch-abort-stream-body.test.ts`, from 2 to
+63 passing tests on QuickJS. The response-stream fixture passes its first
+chunk, second chunk, server-stop cancellation, fixed Blob length and abort
+reason checks on every engine. The empty-FIN fixture forces acceptance before a
+peer ends and passes on native Bun and all rebuilt guests. The complete fixture
+suite passes 238/238 on each engine. The web gate and six-run HMR check also
+pass.
+
+The bounded runs report no formerly fully passing file lost. Individual test
+counts vary when a file deadline cuts off a later test. Matched controls retain
+the original QuickJS socket timing and browser lifecycle counts. The direct
+body-memory control reaches the same guest allocation limit on both artifacts. The
+matched JSC controls keep gzip at 62 passes and the focused body-consumption
+check passes on both artifacts. The remaining one-test keepalive difference is
+timing-sensitive on unchanged main too. Five clean focused upstream JSC runs
+pass once and fail four times on both main `684da1f0` and the PR guest. Failed
+runs reuse one connection and read the test server's sentinel response instead
+of the expected fresh-connection reply. The native client is unchanged.
+A sized request-body experiment produced the same failure and was reverted.
+The exact command, guest hashes, logs and statuses are retained under the report's `early-upload-control/` directory. The interrupted second census control has
+zero completed files and is excluded. The separate direct diagnostic also
+reproduces the sentinel reply on unchanged main. See the
+[keepalive follow-up](../plans/compatibility-followups.md#early-response-keepalive-control-2026-10-18).
+
+The source hashes and before/after summaries are committed in
+[`http-results.json`](bun-test-suite/http-results.json). Eight affected API files
+have their failure-index rows refreshed with the shared partial-report helper
+from the test-runner lane. The newly passing `double-connect.test.ts` row is
+removed. Full-census summaries and README tables retain their prior census;
+this partial measurement does not replace the 2,305-file run.
+
+The exact commands and raw records are under
+`/work/reports/bun-wasm-http-scoreboard-20261018/final-r7/`.
+
+The server's whole-body buffering is a shared cause that the current code and
+runtime controls confirm. `serveHttp` waits for a complete upload before it
+calls a Node request listener. A client waiting for a response before ending
+its upload cannot make progress. Before this change, `writeResponse` also waited for `arrayBuffer()`
+before sending Bun Response headers. A stream that waits for a client handshake
+cannot make progress either. The retained upload reproducer and response-stream fixture exercise both
+handshakes without subprocesses or external network access.
+
+The response path is the selected fix. The Node request dispatcher retains its
+existing complete-upload behavior. Its header timing, unread-body draining and
+backpressure need a separate change. The reproduced upload cycle and raw
+controls are recorded in the compatibility follow-up plan.
+
+Bun Response streams now send headers and chunks before EOF. Socket write
+completion controls further reads. Unknown-length streams use chunked framing, including when the Response has a
+user-supplied Content-Length. Byte-backed Responses keep
+the existing fixed-length path. HEAD and bodyless responses send no stream body.
+
+The embedded streams library also uses Bun's reader-lock error text. The
+unchanged upstream file starts a body read before asserting the lock error. A
+wording mismatch leaves that read pending when test cleanup closes its server;
+the later rejection was attributed to the following deflate test. Tracing shows
+the rejection belongs to the prior handle, while direct wrapped and raw deflate
+controls pass. The generator now preserves Bun's message without changing
+locking or scheduling.
+
+An existing TCP close cycle also becomes visible in the QuickJS socket control.
+The original guest sometimes closes its listener before accepting the incoming
+socket. Forcing acceptance first reproduces the empty-FIN hang on unchanged
+main. A socket with zero buffered bytes waits for writable completion before
+processing readable EOF, while Duplex waits for readable end before finishing
+the write side. Removing that extra condition permits normal end and close
+without consuming buffered data. The deterministic fixture passes on native
+Bun and fails on the original guest before the fix.
+
+The exact 180-file before and after replays use the unchanged upstream tests,
+15-second file deadlines and 2,000 ms test deadlines on all three engines.
+These bounded observations include newly reached failures. They do not establish
+native memory ownership or leak freedom. TLS transport, CONNECT dispatch,
+request timeout policy, queued pipelined response objects and Bun's direct stream
+extension remain separate compatibility work.
+
+## Response-stream review controls, 2026-10-18
+
+Native Bun 1.4.2 supplies the expected values for three regression fixtures.
+The controls use loopback sockets and no external providers.
+
+| Case | Native Bun | Guest before the review fix |
+| --- | --- | --- |
+| Stream produces `abc`, declared length is 1, 3, or 5 | Omits Content-Length, sends chunked `abc`, next request succeeds | Retains the declared length |
+| Client closes during a pending response | Cancels the owned stream reader once with `undefined`; an iterator receives `return(undefined)` | Peer EOF leaves the active response pending |
+| Another caller owns the stream reader | Calls the server error handler and leaves that reader locked and uncancelled | Existing ownership guard retained |
+| Fetch body aborts with null, zero, false, string, or Error | Rejects with the original value by identity | Null becomes a new AbortError |
+
+Bun's `node:http` control retains explicit Content-Length and writes all three
+bytes for the same lengths. Its separate response writer is unchanged. Counting
+stream bytes against the supplied header would differ from Bun.serve. Unknown
+stream lengths therefore always select chunked framing; byte-backed responses
+keep their fixed-length path.
+
+The streaming response owns its reader and temporary connection callbacks.
+Peer EOF closes that connection, and the existing close callback cancels only
+the owned reader. Both callbacks are restored when streaming finishes. Native
+Bun passes `undefined` on disconnect. The fixture checks this reason and exactly
+one cancellation for a stream and a custom async iterator. Connections also
+retain peer EOF before the response writer exists. The writer checks EOF and
+closed state before taking reader ownership. It cancels the unused source once
+with `undefined`, without locking it or sending headers. Producer cleanup
+observers therefore see an unlocked source immediately. The
+`net-bun-response-early-disconnect` fixture holds the handler at an explicit
+promise, disconnects with both `end()` and `destroy()`, then releases it. It
+checks producer cleanup before stopping the server. Native Bun 1.4.2 passes;
+the pre-fix QuickJS, JSC and browser guests leave the producer locked and
+uncancelled. This changes only Bun response streaming, not Node's separate
+reply-after-FIN behavior. An async generator already awaiting an unrelated unresolved promise cannot be preempted by its
+`return()` method; native Bun has the same limit.
+
+The remaining review fix passes all eight focused fixtures on each rebuilt
+QuickJS, JSC and browser guest. The six portable HTTP/empty-FIN controls also
+pass on native Bun 1.4.2. Four-case disconnect timing output matches native
+byte-for-byte, including both early disconnect modes: no response data, one
+cancellation with `undefined`, and an unlocked source. The extra same-socket
+framing controls cover short, long and invalid declared lengths; extra body and
+header abort controls include the empty-string reason. All pass on native and
+the three guests. This is a focused replay, not another suite census or web gate.
+Failing-first output at `1e8d1f79`, final logs, commands, artifact hashes and
+cleanup checks are retained in
+`/work/reports/bun-wasm-pr80-review-1e8d1f79/takeover-r2/`, with the initial
+`takeover-baseline.log` and `early-disconnect-before.log` beside it. The
+coordinator owns removal after accepting PR #80. Private build targets and
+fixture copies are removed after each run; shared prebuilds are unchanged.
+
+The fetch adapter uses `signal.aborted` to select the original reason, including
+null and other falsy values. The header-wait path has the same identity contract.
+The new fixtures are `net-bun-response-length`, `net-bun-response-disconnect`,
+and `net-fetch-abort-reasons`. They failed on all three baseline guests before
+the production changes. Native output, baseline logs, artifact hashes, and the
+focused eight-file suite replay are retained under
+`/work/reports/bun-wasm-http-scoreboard-20261018/review-r1/` until coordinator
+acceptance of PR #80. This replay uses Bun suite revision
+`d71508d31edf06765c12adf0df137ef531539f68`, independently of the earlier
+180-file census above.
+
+The focused review replay has identical selection, launcher, tools, runner and
+dependency hashes on both sides. It measures the merged-main baseline
+`c8244547` against production code at `af670576`.
+
+| Engine | Fully passing files | Observed passes | Observed failures | File timeouts |
+| --- | --- | --- | --- | --- |
+| QuickJS | 0/8 → 0/8 | 162 → 164 | 198 → 196 | 5 → 5 |
+| JSC | 0/8 → 0/8 | 163 → 158 | 197 → 190 | 4 → 4 |
+| Browser | 0/8 → 0/8 | 148 → 149 | 200 → 200 | 3 → 3 |
+
+JSC's lower observed count includes five late checks not reached before the
+15-second file deadline and a timing-sensitive URL-normalization case. A focused
+replay of the unmodified `bun-server.test.ts` completes all seven selected checks
+without a file timeout. Its pass/fail counts are 6/1 → 6/1 on QuickJS,
+6/1 → 7/0 on JSC, and 6/1 → 6/1 on browser. The baseline reproduces the QuickJS
+URL-normalization failure and the browser Node HTTP loop-ref failure. Every late
+check absent from JSC's full-file replay passes in its final focused control.
+No previously passing file is lost. All eight files still have pre-existing
+failures, so this subset does not replace the full scoreboard.
+
+The complete fixture gates record 242 passes and only `node-misc` on QuickJS
+and JSC. Browser records 241 passes with `build-outdir` and `npm-packages`.
+The coordinator lists these as existing main failures; a direct browser control
+produces identical `npm-packages` output on baseline and final guests. The tools
+guest was rebuilt before these gates to remove a stale host-slot ABI mismatch.
+The full web gate encounters a pre-existing missing `runtime_proc.signal` import
+in its standalone CLI shim. See the process-runtime web gate follow-up in
+`plans/compatibility-followups.md`; no process-layer code is changed here.
+
+## Earlier HTTP upgrade measurements
 
 | Engine | Fully passing upstream files, before → after | Observed passes, before → after | File timeouts, before → after |
 | --- | --- | --- | --- |

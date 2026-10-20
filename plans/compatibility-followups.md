@@ -833,6 +833,118 @@ lock release is a candidate, not a confirmed cause. No runtime change or retry
 was added. Evidence is in `/work/reports/bun-wasm-web-worker/waffle-final/`;
 the coordinator removes it after PR acceptance and this observation is triaged.
 
+### Node HTTP upload dispatch, 2026-10-18
+
+Status: Approved follow-up. Keep separate from Bun response streaming.
+
+`serveHttp` in `crates/bunwasm-runtime/src/js/net.js` waits for the complete
+request before calling an ordinary Node HTTP listener. A client that writes
+`first` and waits for a response before calling `end()` stalls. Native Bun
+prints `handler false`, `chunk first false`, and `received` for the retained
+upload reproducer. All three original guest engines stall. Evidence and the
+reproducer are under `/work/reports/bun-wasm-http-scoreboard-20261018/`.
+The coordinator owns that evidence until this follow-up is accepted.
+
+Dispatching headers early also requires handling an ignored body larger than
+IncomingMessage's high-water mark. The retained `ignored-upload.ts` sends a
+128 KiB POST followed by a GET on one socket. Native Bun and unchanged main
+print `/ignored`, `/next`, `two responses`. An early-dispatch candidate stranded
+the second response. Its automatic-drain refinement then reduced the unmodified
+QuickJS gzip file from 62 observed passes to 33 before the file deadline.
+The candidate is excluded from the response-streaming PR.
+
+The two reproducers are retained in that report's `repro/` directory. From an
+owned worktree with its guest and launcher built, run:
+
+```sh
+source env.sh
+repro=/work/reports/bun-wasm-http-scoreboard-20261018/repro
+"$CARGO_TARGET_DIR/release/bun-wasm" --wasm dist/bun.wasm --dir "$repro"::/ run /upload-stream.ts
+"$CARGO_TARGET_DIR/release/bun-wasm" --wasm dist/bun.wasm --dir "$repro"::/ run /ignored-upload.ts
+```
+
+The coordinator retains these two small fixtures until the upload-dispatch
+follow-up is accepted or explicitly retired. The accepted empty-FIN close cycle
+is fixed separately by `net-tcp-empty-fin`; preserve that control.
+
+Start from unchanged Node dispatch. Reproduce both upload cases, preserve
+`req.complete`, explicit socket pauses, response close policy and connection
+reuse, then measure `node-http-req-complete.test.ts`,
+`node-http-req-socket-pause.test.ts`, `node-http-server-close-drain.test.ts` and
+`js/web/fetch/fetch-gzip.test.ts` on every engine. No process-layer changes were
+made. Keep the child larger-than-1-GiB gzip case distinct from protocol behavior;
+its direct original and changed controls both hit the guest memory limit with
+exit 134. Do not skip it or change its upstream assertions.
+
+### Early-response keepalive control, 2026-10-18
+
+Status: Approved follow-up. Pre-existing on main; excluded from the Bun response
+streaming change.
+
+The JSC census showed 32 versus 31 observed passes in
+`js/web/fetch/fetch-keepalive.test.ts`. The difference was the early 200 response
+to a 64 MiB POST. A following GET sometimes reuses that connection and receives
+the test server's sentinel status 299 instead of the expected status 200.
+Five clean runs of the unmodified focused upstream test pass once and fail four
+times on both unchanged main `684da1f0` and the PR guest. They use the same restored
+native launcher, source snapshot, preload, environment and loopback isolation.
+The runtime and native-client sources on that main commit match baseline
+`2ea5c62f`. The guest hashes are recorded in the retained control report.
+
+Run the upstream test with `-t '200 while a 64 MiB byte body'` through a rebuilt
+JSC guest and native launcher. Preserve the upstream preload and the suite's
+private loopback namespace. The exact executable command is retained as
+`early-upload-control/upstream-control.sh` under
+`/work/reports/bun-wasm-http-scoreboard-20261018/`. Each run has its own temporary
+directory, log and exit status. The paired direct diagnostic records bytes
+received and the declared length; both guests reach both connection outcomes.
+
+Changing the native request body from a byte vector to a sized blocking body
+did not fix the focused failure. That experiment is reverted. Inspect native
+`crates/bunwasm-host/src/net/fetch.rs` and reqwest's connection reuse after early
+responses before proposing a fix. Do not change guest response scheduling or
+weaken the upstream assertion to mask the observation. The coordinator owns the
+small reproducer and control evidence until this follow-up is resolved or retired.
+
+### Process-runtime web gate blocker from HTTP review, 2026-10-18
+
+Status: Resolved by landed PRs #92 and #94. The failures below are historical
+evidence, not current blockers. PR #80 does not change process integration.
+
+The full web gate cannot instantiate either the pre-review merged-main baseline
+`c8244547` or HTTP review guest `af670576` through `web/scripts/run.ts:42`. Both exit 1 with
+`TypeError: unsupported import runtime_proc.signal (function)` before the script
+runs. The shim constructs Waffle's `Wasi` without a `runtime_proc` namespace.
+Its source is also unchanged on main `7bc7ba37`. Reproduce from an owned worktree
+with its rebuilt QuickJS guest:
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+cd web
+bun scripts/run.ts ../dist/bun.wasm -e 'console.log("import control")'
+```
+
+The same failure blocks all seven CLI network fixtures in both table and import
+modes. The three HTTP review regressions pass through the native launcher on all
+engines. The missing import precedes their HTTP code. The process-runtime lane
+should migrate the standalone shim to the current process adapter and preserve
+both host-slot modes. Do not add a fake signal handler to make instantiation pass.
+
+The same web run also reports `TypeError: #<p> is not an integer typed array` from
+`Atomics.load` while stopping a foreground browser process. The stack reaches
+`web/tests/foreground.ts:17`, `runForeground:39`, `playground.mjs:139`, and
+`browser-install.mjs:37`. This second failure has not been isolated against a
+baseline browser build. Reproduce with `scripts/test-web.sh`, using the installed
+Playwright path and an explicit temporary root. Inspect the process signal state
+passed to the runtime's `kill` implementation before changing HTTP code.
+
+Exact paired import commands, hashes, exit statuses and the full web log are
+retained in `/work/reports/bun-wasm-http-scoreboard-20261018/review-r1/` as
+`import-control.*`, `import-control-before.*`, `import-control-after.*`, and
+`gate-web.log`. The coordinator owns this evidence until the process-runtime
+follow-up is resolved or retired. No process-layer fix, retry or skip is included
+in PR #80.
 
 ## Native standard-stdio close parity
 

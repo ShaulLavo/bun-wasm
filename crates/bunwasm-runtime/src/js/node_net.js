@@ -64,7 +64,7 @@
         this._drainEmptyEof();
       }
       _drainEmptyEof() {
-        if (this._ended && this.writableFinished && this.readableLength === 0) this.read(0);
+        if (this._ended && this.readableLength === 0) this.read(0);
       }
       _updatePeer() {
         const peer = this._conn.peer();

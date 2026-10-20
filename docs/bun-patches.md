@@ -137,7 +137,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`waffle/fs/`, filesystem quiescence](#filesystem-quiescence) | Host feature | Original shared admission and revocation fence lets controllers stop workers only after direct filesystem operations finish. |
 | [`waffle/fs/opfs.ts`, OPFS access-handle and quota adapters](#opfs-storage-adapter) | Host feature | Original one-file-per-payload storage adapter with guidance for occupied workspaces; adapts SLICC-kernel's Apache-2.0 `src/fs/opfs.ts` at 88c5bb3 for NotReadableError retries and QuotaExceededError mapping while retaining bun-wasm's checksummed snapshots, lazy index and bounded cache. |
 | [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
-| [`web/src/native-stream-state.ts`](#native-browser-stream-completion) | Host feature | Original native completion bridge preserves host hooks on instances as well as prototypes. |
+| [`web/src/native-stream-state.ts`](#native-browser-stream-completion) | Host feature | Original native completion bridge and WHATWG iterable conversion adapter preserve native construction and cancellation. |
 | [Cross-platform web test adapters](#cross-platform-web-tests) | Host feature | Original scratch, child-process cleanup, command-deadline and existing-browser-cache adapters run the same assertions on Linux and macOS. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
 | [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and support asynchronous stdin through process descriptors with live shared filesystem changes and large files. |
@@ -152,8 +152,10 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/crypto_keys.js` and `crypto_host_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters and `web/src/engine-host.js` provider capture`](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 | [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
-| [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, write-side shutdown and bounded native handle allocation over the existing host ABI. |
-| [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming, Agent pool and upgrade response adapters shared by all engines. |
+| [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. |
+| [Embedded WHATWG Streams](#whatwg-reader-lock-errors) | Port | Pinned portable streams with Bun reader-lock error text. |
+| [Streams AST hooks](#whatwg-reader-lock-errors) | Host feature | Original generator adapter preserves Node completion hooks and error codes. |
+| [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming bodies, response cancellation independent of transport disposal before and during writer ownership, Agent pool and upgrade response adapters shared by all engines. |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
 | [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns, pending-signal dispatch before check callbacks, and bounded immediate batches. |
 | [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations, with Node listener identity. |
@@ -548,6 +550,16 @@ node:net and node:http adapters instead. It adds no host networking path.
 See [the ws builtin](ws-builtin.md) for generation and verification.
 
 ## TCP and IP helpers
+
+The 2026-10-18 empty-EOF correction in `node_net.js` is an original **Host
+feature** adapter. An accepted socket with no buffered bytes must process its
+readable EOF before its writable side has finished. Waiting for both sides
+creates a cycle with Duplex's automatic write-side completion. The adapter now
+calls its existing zero-byte read after empty EOF. Buffered data is preserved.
+`net-tcp-empty-fin` forces server acceptance before the client ends, then checks
+readable end, socket close and server close. Native Bun 1.4.2 and Node 26.7.0
+supply the controls;
+unchanged main and the response-streaming guest both fail before the correction.
 
 The IP regular expressions in `crates/bunwasm-runtime/src/js/net_address.js` come
 from Bun `src/js/internal/net/isIP.ts` at
@@ -1706,10 +1718,34 @@ Local closure suppresses future delivery while selected messages finish, with
 promise continuations between messages. BroadcastChannel receive returns
 `undefined` without consuming its messages, matching native Bun 1.4.2.
 
+## WHATWG reader lock errors
+
+The generated `crates/bunwasm-runtime/src/js/streams_polyfill.js` is a **Port** of
+`web-streams-polyfill@4.2.0`, upstream `dist/ponyfill.mjs`, with SHA-256
+`5c36bb87ddfddc29a25420608770e9f26b54bb9233f5b59d56771854bb1bbcf8`.
+The relevant source algorithms are
+`src/lib/readable-stream/default-reader.ts` and
+`src/lib/readable-stream/byob-reader.ts` at that package revision.
+
+`scripts/stream-polyfill-node-hooks.ts` is an **original adapter**, class
+**Host feature**. It keeps the existing Node completion hooks and
+`ERR_INVALID_STATE` code, and changes the two exclusive-reader lock messages to
+`ReadableStream is locked`, matching Bun. The input hash, six completion-hook
+sites and two message sites are checked before output is written. Its compiler
+API is the declared `typescript-api` alias pinned to TypeScript 6.0.2, not Bun
+checkout dependencies. TypeScript 7 remains the typechecker and does not expose
+this compiler API. This changes error text, not reader locking, option validation
+or read scheduling.
+`scripts/vendor-streams.py` regenerates the bundled artifact and retains the
+upstream MIT license under `third_party/streams/`.
+
 ## HTTP framing
 
 Class **Host feature**, **original adapters** in `src/js/net.js`,
-`src/js/http_common.ts`, `src/js/http_body.ts`, `src/js/http_agent.ts`, socket-close
+`src/js/http_common.ts`, `src/js/http_body.ts`, `src/js/http_agent.ts`,
+`src/js/http_response.ts`, `src/js/fetch_body.ts`,
+`src/js/body_streams.ts`,
+byte-stream metadata in `src/js/web.js`, socket-close
 completion in `src/js/node_net.js`, and the `node:http` registry
 in `src/js/builtins.js`. No upstream implementation is copied or patched.
 Bun's `src/js/node/http.ts` depends on native HTTP bindings, so this change keeps
@@ -1752,6 +1788,34 @@ hooks. The original TCP adapter defers socket-destroy completion to the check
 phase so the completed request stream closes before its socket, as in Node.
 `net-http-close-order` compares this order unchanged on Node and all engines.
 
+The 2026-10-18 server refinement uses original typed adapters for Bun response
+streaming and fetch-body abort cleanup. Bun Response streams send headers and
+body chunks without waiting for EOF. Each socket write finishes before another
+chunk is read. Fixed byte bodies retain their existing Content-Length path.
+These adapters use Bun's unchanged tests at
+`5e0baa66516f3af00b008cdf1521c681317741e8` as behavioral references.
+The review refinement uses native Bun 1.4.2 as a behavioral reference. Unknown-
+length Bun response streams ignore a supplied Content-Length and use chunked
+framing. The response reader owns its EOF and close callbacks, which cancel it
+with native Bun's undefined disconnect reason and leave externally locked
+streams alone. The connection records peer EOF before notifying its reader.
+When an awaited handler returns after EOF or close, the response writer destroys
+the transport and starts cancellation of the unused source before acquiring a
+reader or writing headers. It does not await asynchronous producer cleanup,
+which may itself wait for the peer to observe EOF. Cancellation still runs once
+with an undefined reason. The existing ownership guard leaves externally locked
+streams alone. The deferred-cleanup regression uses native Bun 1.4.2 as its
+behavioral reference. Node sockets retain
+their separate half-close policy. Fetch-body waiter steps and rejection handling
+stay outside the promise executor, within three nesting levels. Fetch body and
+header waits preserve the exact AbortSignal reason, including null and other
+falsy values. These are original adapter corrections; no native Bun or Node
+source is copied. The shared body-stream helper owns clone validation and tee
+metadata for Request and Response. The
+strictly typed stream generator produces byte-identical output for its pinned
+input.
+Node request dispatch retains its existing complete-upload behavior.
+
 HTTPS requests continue to use the host's TLS fetch transport. The raw socket
 ABI has no TLS capability, so HTTPS upgrades without a caller-supplied connection
 fail with `ERR_TLS_NOT_SUPPORTED` instead of opening a plaintext connection.
@@ -1787,8 +1851,9 @@ and explicit overrides (including `0` and empty) are preserved. The isolated
 
 ### Native browser stream completion
 
-Class **Host feature**, original bun-wasm implementation. No upstream source was
-copied or adapted for `web/src/native-stream-state.ts`. Chromium and WebKit lack
+Class **Host feature**, original bun-wasm completion bridge with a WHATWG
+iterable-conversion adapter. No upstream implementation source was copied into
+`web/src/native-stream-state.ts`. Chromium and WebKit lack
 Node's private closed-promise and controller-error symbols. The host installs
 those hooks before the runtime bootstrap; Node-host execution retains Node's
 existing hooks and embedded engines retain the reference ponyfill hooks. Detection
@@ -1805,6 +1870,25 @@ WritableStream and TransformStream constructors and capture their controllers.
 Native prototypes, instance brands, byte/BYOB queues and algorithms stay native.
 The global constructor references change. Frozen underlying dictionaries are
 wrapped without mutation, and callbacks retain their original receiver.
+
+The host bridge also provides `ReadableStream.from` through its tracked native
+constructor on every browser host, without native-method or version detection.
+This is an original adapter of the WHATWG Streams
+[`ReadableStreamFromIterable`](https://streams.spec.whatwg.org/#readable-stream-from-iterable)
+algorithm and WebIDL async-sequence opening, next-value and closing algorithms,
+read October 20, 2026. It uses high-water mark zero, async-first iterator
+acquisition, and ECMAScript async-from-sync conversion. Current WebIDL promise
+reactions resolve yielded values after async-from-sync has resolved sync values.
+These are separate steps: a second-access then-getter failure rejects the read
+without invoking IteratorClose. The static operation is enumerable under WebIDL
+§3.7.7. The real-browser controls cover changing then getters, rejection identity
+and return-call counts. Cancellation calls the iterator's return with the original
+reason, while late next results never enqueue or close an
+already-cancelled native stream. Native brands, reader ownership and completion
+registration stay with the construction bridge. The real Chromium/WebKit
+interop gate includes conversion, malformed results, error identities and
+pending-next cancellation controls. The HTTP disconnect iterator fixture is
+unchanged.
 
 Completion comes from actual native reader/writer `closed` promises. Temporary
 probes release locks immediately without reading or writing. Releasing a pending

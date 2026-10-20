@@ -28,7 +28,7 @@ The full-run comparisons, timeout index and ranked investigations below retain t
 | d | Bun shell parser and execution | 63 | bake/dev/production.test.ts | production > works with sourcemaps - error thrown in React component | error: Bun.$ is not supported in bun-wasm: WASI has no processes |
 | d | CLI option or command implementation | 47 | bundler/bundler_bun.test.ts | bundler > bun/bytecode-depth-cli | error: Bundle Failed |
 | d | ES module mocking and loader invalidation | 7 | js/bun/test/mock/6874/A.test.ts | <collection/hook/exit; no named failure> | error: mock.module() is not supported in bun-wasm yet |
-| d | HTTP/server/fetch/WebSocket semantics | 187 | bake/dev/ecosystem.test.ts |  DEV:ecosystem-1: svelte component islands example | <see JSON excerpt; no error line> |
+| d | HTTP/server/fetch/WebSocket semantics | 186 | bake/dev/ecosystem.test.ts |  DEV:ecosystem-1: svelte component islands example | <see JSON excerpt; no error line> |
 | d | Module._resolveFilename options.paths lookup | 1 | js/node/module/module-resolve-filename-paths.test.js | Module._resolveFilename respects options.paths for package resolution | ResolveMessage: Cannot find package 'test-package' from '/some/other/directory/file.js' |
 | d | Node builtin aliases and stub modules | 1 | js/node/stubs.test.js | stubbed CJS import.meta.require _http_agent | ResolveMessage: Cannot find package '_http_agent' from '/bun/test/js/node/stubs.test.js' |
 | d | Node's test API adapter | 3 | internal/runner-junit.test.ts | parseJunitFileSuites reads the report bun test --parallel --reporter=junit writes | error: expect(received).toContain(expected) |
