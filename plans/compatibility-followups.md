@@ -908,8 +908,8 @@ small reproducer and control evidence until this follow-up is resolved or retire
 
 ### Process-runtime web gate blocker from HTTP review, 2026-10-18
 
-Status: Approved follow-up for the process-runtime lane. PR #80 does not change
-process integration.
+Status: Resolved by landed PRs #92 and #94. The failures below are historical
+evidence, not current blockers. PR #80 does not change process integration.
 
 The full web gate cannot instantiate either the pre-review merged-main baseline
 `c8244547` or HTTP review guest `af670576` through `web/scripts/run.ts:42`. Both exit 1 with
@@ -945,3 +945,45 @@ retained in `/work/reports/bun-wasm-http-scoreboard-20261018/review-r1/` as
 `gate-web.log`. The coordinator owns this evidence until the process-runtime
 follow-up is resolved or retired. No process-layer fix, retry or skip is included
 in PR #80.
+
+## Native standard-stdio close parity
+
+Status: Approved, deferred. The native runtime/descriptor track owns this work;
+PR #94 does not change native close behavior.
+
+At source `8c740de9a385a05693f21d96fefec8d3f2556a80`,
+`crates/bunwasm-runtime/src/natives.rs:717-721`, `close_descriptor` returns success
+for fd 0, 1 or 2 without calling libc close. The same guard exists in the PR base
+`3f071e7107a2133d06e89c80a4fa7c80c5ad470c`. Nonstandard descriptors do close.
+This is source-confirmed pre-existing behavior, not an observed failure in the
+103-pass native host run. No destructive stdio-close control was run in a shared
+process. Evidence is retained in
+`/work/reports/runtime-continuation-20261020/bun-integration/remaining-native-stdio.md`.
+
+Reproduce in a separate fresh native subprocess for each fd 0, 1 and 2. Compare
+native Bun with a source-matched native runtime build, recording both versions
+and the candidate source/artifact hashes. Give the child a separate inherited
+result fd, such as fd 3, which it must never close. Keep stdin/stdout/stderr as
+separate pipes and report results only through the result fd. After the first
+close succeeds, require the following to report `EBADF` independently:
+
+- a second close;
+- fstat;
+- a nonempty read on the closed input descriptor;
+- nonempty write and writev on each closed output descriptor.
+
+Preserve Node/Bun's public zero-byte read short-circuit. In a fresh control with
+no descriptor closed, verify each operation works and aliases retain the same
+open-file-description behavior. Do not close the runner's own standard streams.
+Remove or replace the early-return guard only after inspecting buffered output
+aliases and runtime ownership. Run equivalent browser/WASI subprocess controls
+with an explicit inherited result-descriptor mapping, not a filesystem preopen
+mistaken for the result fd.
+
+Acceptance requires source-matched native and browser/WASI controls, repeated
+close/fstat/nonempty I/O reporting `EBADF`, intact zero-byte read behavior and
+buffered alias output, and no new unowned descriptors/processes. Keep this entry
+until those controls and independent review pass. The implementing lane owns
+all probe processes, result pipes/files and private build scratch on every exit;
+the runtime coordinator owns retained evidence until the follow-up is accepted,
+then removes it. Preserve shared targets and caches.

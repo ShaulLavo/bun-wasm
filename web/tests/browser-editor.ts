@@ -34,15 +34,15 @@ const timeout = setTimeout(() => {
   void cleanup().finally(() => process.exit(1));
 }, 90_000);
 
-async function opfsWaitCheck(base: string) {
-  // WebKit's ephemeral contexts reject OPFS. Match the lifecycle gate's real,
-  // task-owned persistent profile; cleanup removes it after both pages close.
-  const context = await browserType!.launchPersistentContext(join(scratch!, "opfs-editor-profile"), { headless: true });
+async function fastWaitCheck(base: string) {
+  // The test-owned filesystem requests Waffle's supported waiting policy, not a
+  // product backend selector. The page and IndexedDB worker remain real.
+  const context = await browser!.newContext();
   const errors: string[] = [];
   context.on("page", page => page.on("pageerror", error => errors.push(error.message)));
   try {
     const owner = await context.newPage();
-    await owner.goto(`${base}/playground/?storage=opfs`);
+    await owner.goto(`${base}/playground/?mode=fast&wait-startup=1`);
     await owner.waitForFunction(() => !!(globalThis as any).playground?.editor || document.querySelector<HTMLElement>("#status")?.dataset.kind === "error");
     assert.equal(await owner.evaluate(() => !!(globalThis as any).playground?.editor), true, await owner.locator("#status").innerText());
     await owner.evaluate(async () => {
@@ -51,8 +51,14 @@ async function opfsWaitCheck(base: string) {
       await fs.flush();
     });
     const waiting = await context.newPage();
-    await waiting.goto(`${base}/playground/?storage=opfs`);
+    await waiting.goto(`${base}/playground/?mode=fast&wait-startup=1`);
     await waiting.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("Waiting for this workspace to close in another tab."));
+    assert.deepEqual(await owner.evaluate(() => {
+      const fs = window.playground?.fs;
+      if (!fs) throw new Error("Waiting control displaced its owner");
+      return { mode: fs.vfs.mode, implementation: fs.vfs.implementation, state: fs.state.status, ownershipLost: fs.ownershipLost };
+    }), { mode: "fast", implementation: "indexeddb", state: "ready", ownershipLost: false });
+    assert.equal(await waiting.locator("#editor .cm-editor").count(), 0);
     for (const selector of ["#run", "#new-file", "#engine", "#file-select"]) {
       assert.equal(await waiting.locator(selector).isDisabled(), true);
     }
@@ -66,7 +72,28 @@ async function opfsWaitCheck(base: string) {
       assert.equal(await waiting.locator(selector).isEnabled(), true);
     }
     assert.deepEqual(errors, []);
-    console.log(`ok ${engine} playground: OPFS waiting UI, disabled startup controls, automatic readiness without reload and durable saves`);
+    console.log(`ok ${engine} playground: fast IndexedDB waiting UI, disabled startup controls, automatic readiness without reload and durable saves`);
+  } finally { await context.close(); }
+}
+
+async function unsupportedModeChecks(base: string): Promise<void> {
+  for (const app of ["playground", "sandbox"]) {
+    for (const mode of ["safe", "invalid"]) await unsupportedModeCheck(base, app, mode);
+  }
+}
+
+async function unsupportedModeCheck(base: string, app: string, mode: string): Promise<void> {
+  const context = await browser!.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(`${base}/${app}/?mode=${mode}&wait-startup=1`);
+    await page.waitForFunction(() => document.querySelector<HTMLElement>("#status")?.dataset.kind === "error");
+    assert.match(await page.locator("#status").innerText(), /UNSUPPORTED_VFS/);
+    assert.match(await page.locator("#status").innerText(), new RegExp(mode));
+    assert.equal(await page.locator("#editor .cm-editor").count(), 0);
+    assert.deepEqual(await page.evaluate(async () => (await indexedDB.databases()).map(db => db.name)), []);
+    assert.equal(await page.locator(app === "sandbox" ? "#restart" : "#run").innerText(), "Reload");
+    console.log(`ok ${engine} ${app}: ${mode} has a typed startup refusal, no editor or database, even with the waiting control`);
   } finally { await context.close(); }
 }
 
@@ -199,9 +226,10 @@ try {
   page.on("response", response => { if (response.status() >= 400) console.error(`HTTP ${response.status()}: ${response.url()}`); });
   const base = `http://127.0.0.1:${server.port}`;
 
+  await unsupportedModeChecks(base);
   await startupFailureCheck(base);
   await startupStealChecks(base);
-  await opfsWaitCheck(base);
+  await fastWaitCheck(base);
   if (process.env.STARTUP_STEAL_ONLY !== "1") {
   await page.goto(`${base}/sandbox/`);
   await page.waitForFunction(() => (globalThis as any).sandbox?.editor.path === "src/App.tsx");

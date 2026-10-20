@@ -11,6 +11,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import type { Browser, Page } from "playwright";
 import { bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
 import { bunRuntimeProcSmoke } from "./bun-runtime-proc-smoke";
+import { assertBunRuntimeProcDiagnostics } from "./bun-runtime-proc-diagnostics";
 import { BUN_WASM_ASSET } from "../../src/guest-asset.generated.js";
 
 const engine = process.env.BUN_WASM_RUNTIME_PROC_ENGINE ?? "browser";
@@ -28,7 +29,7 @@ const bytes = new Uint8Array(await Bun.file(artifact).arrayBuffer());
 assert.deepEqual(Array.from(bytes.subarray(0, 8)), [0, 97, 115, 109, 1, 0, 0, 0], "explicit artifact must be Wasm version 1");
 const artifactModule = new WebAssembly.Module(bytes);
 const procImports = WebAssembly.Module.imports(artifactModule).filter(entry => entry.module === "runtime_proc").map(entry => entry.name);
-for (const name of ["spawn", "pipe", "read", "write", "wait", "wait_job", "kill", "kill_job", "poll", "job_of", "signal", "start_status", "access_start", "access_take", "access_cancel"]) {
+for (const name of ["spawn", "pipe", "read", "write", "wait", "wait_job", "kill", "kill_job", "poll", "job_of", "signal", "start_status", "access_start", "access_take", "access_cancel", "fd_kind"]) {
   assert.ok(procImports.includes(name), `matching rebuilt guest must directly import runtime_proc.${name}; an older slot-backed artifact does not prove step7b`);
 }
 const artifactReceipt = { engine, path: artifact, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), procImports };
@@ -77,18 +78,19 @@ let ownedPort: number | undefined;
 async function runScenario(browser: Browser, name: string, scenario: string) {
   let failed = false;
   const page: Page = await browser.newPage();
-  const errors: string[] = [];
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
   const guestRequests: string[] = [];
   page.on("request", request => {
     if (request.url() === BUN_WASM_ASSET?.url || new URL(request.url()).pathname === "/bun-guest.wasm") guestRequests.push(request.url());
   });
-  page.on("pageerror", error => errors.push(error.message));
-  page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  page.on("pageerror", error => pageErrors.push(error.message));
+  page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
   try {
     await page.goto(`http://127.0.0.1:${ownedPort}/?engine=${engine}&scenario=${encodeURIComponent(scenario)}${publishedDefault ? "&published-default" : ""}`);
     await page.waitForFunction(() => Reflect.get(globalThis, "bunRuntimeProcResult"), undefined, { timeout: 90_000 });
     const result = await page.evaluate(() => Reflect.get(globalThis, "bunRuntimeProcResult"));
-    console.log(JSON.stringify({ browser: name, version: browser.version(), scenario, artifact: artifactReceipt, publishedDefault, guestRequests, result, pageErrors: errors }));
+    console.log(JSON.stringify({ browser: name, version: browser.version(), scenario, artifact: artifactReceipt, publishedDefault, guestRequests, result, pageErrors, consoleErrors }));
     if (publishedDefault) {
       // The generic byte fixture and throwing module provider never enter a Bun guest.
       const expectedRequests = scenario === "generic-control" || scenario === "start-failed" ? [] : [BUN_WASM_ASSET!.url];
@@ -97,11 +99,11 @@ async function runScenario(browser: Browser, name: string, scenario: string) {
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(result.cleanup.activeWorkers, 0, "normal path must stop all workers, not rely on forced teardown");
     assert.deepEqual(result.teardown, { forcedWorkers: 0, activeWorkers: 0 });
-    assert.deepEqual(errors, []);
+    assertBunRuntimeProcDiagnostics(scenario, pageErrors, consoleErrors);
   } catch (error) {
     failed = true;
     const diagnostics = await page.evaluate(() => Reflect.get(globalThis, "bunRuntimeProcDiagnostics")?.()).catch(error => ({ diagnosticsError: String(error) }));
-    console.error(JSON.stringify({ browser: name, scenario, artifact: artifactReceipt, error: String(error), diagnostics, pageErrors: errors }));
+    console.error(JSON.stringify({ browser: name, scenario, artifact: artifactReceipt, error: String(error), diagnostics, pageErrors, consoleErrors }));
   } finally { await page.close(); }
   return failed;
 }

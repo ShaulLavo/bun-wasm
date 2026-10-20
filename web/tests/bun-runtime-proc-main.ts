@@ -191,7 +191,10 @@ function verifyOutput() {
     equal(stderr, "child-stderr\n", "generic inherited terminal targets");
   } else if (name === "start-failed") {
     equal(stdout, scenario!.stdout, "start failure still settles blocking wait_job");
-    if (!stderr.includes("bun-runtime-proc-start-failed-control")) throw new Error("start failure diagnostic was lost");
+    equal(stderr, "", "startup diagnostics stay out of guest stderr");
+    const failed = confirmedExits.filter(exit => exit.kind === "start-failed");
+    equal(failed.length, 1, "one typed startup refusal reached the parent");
+    equal(failed[0]!.status, null, "startup refusal is not an exited guest");
   } else if (scenario!.action === "kill" || scenario!.action === "kill-detached") {
     if (!stdout.endsWith(scenario!.stdout)) throw new Error(`kill did not unblock root wait_job: ${stdout}`);
     equal(stderr, "", "kill stderr");

@@ -62,7 +62,7 @@ function runtimeRealm() {
   // Install constructor-failure cleanup before replacing a global or starting the page owner.
   try {
     globalThis.Worker = FakeWorker as unknown as typeof Worker;
-    runtime = createRuntime({ filesystem: { workerURL: filesystemURL, persistence: false } });
+    runtime = createRuntime({ filesystem: { workerURL: filesystemURL, mode: "memory" } });
   } catch (error) { restore(); throw error; }
   return {
     runtime, workers, filesystemWorkers, ports, closedPorts,

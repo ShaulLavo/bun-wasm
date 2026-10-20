@@ -990,19 +990,7 @@ js/node/net/socket-reconnect-live.test.ts	d	HTTP/server/fetch/WebSocket semantic
 js/node/no-addons.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	2	False	--no-addons stays in effect inside a Worker with an empty execArgv	error: expect(received).toBe(expected)
 js/node/nodettywrap.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	1	False	process.binding('tty_wrap')	error: No such module: tty_wrap
 js/node/os/os.test.js	d	test runner/assertion or runtime semantics	needs reproduction	19	35	False	arch	error: expect(received).toBe(expected)
-js/node/path/basename.test.js	d	test runner/assertion or runtime semantics	needs reproduction	3	1	False	path.dirname > win32	AssertionError: Expected values to be strictly equal:
-js/node/path/browserify.test.js	d	test runner/assertion or runtime semantics	needs reproduction	40	12	False	browserify path tests > dirname > path.win32.dirname	error: expect(received).toBe(expected)
-js/node/path/dirname.test.js	d	test runner/assertion or runtime semantics	needs reproduction	2	1	False	path.dirname > win32	AssertionError: Expected values to be strictly equal:
-js/node/path/extname.test.js	d	unresolved runtime/module semantics, inspect the recorded failure first	needs reproduction	1	2	False	path.extname > general	AssertionError:
-js/node/path/is-absolute.test.js	d	HTTP/server/fetch/WebSocket semantics	needs reproduction	1	1	False	path.isAbsolute > win32	AssertionError: Expected values to be strictly equal:
-js/node/path/join.test.js	d	unresolved runtime/module semantics, inspect the recorded failure first	needs reproduction	0	1	False	path.join > general	AssertionError:
-js/node/path/matches-glob.test.ts	c	test runner boolean or snapshot matchers	error/context	10	21	False	path.posix.matchesGlob(path, glob) > path 'foo.js' matches pattern '*.js'	TypeError: not a function
-js/node/path/normalize.test.js	d	test runner/assertion or runtime semantics	needs reproduction	2	2	False	path.normalize > win32	AssertionError: Expected values to be strictly equal:
-js/node/path/parse-format.test.js	d	test runner/assertion or runtime semantics	needs reproduction	0	2	False	path.parse > general	AssertionError: Expected values to be strictly equal:
-js/node/path/path.test.js	d	test runner/assertion or runtime semantics	needs reproduction	3	1	False	String-object arguments whose toPrimitive triggers GC do not corrupt earlier arguments	error: expect(received).toEqual(expected)
-js/node/path/relative.test.js	d	unresolved runtime/module semantics, inspect the recorded failure first	needs reproduction	1	1	False	path.relative > general	AssertionError:
-js/node/path/resolve.test.js	d	HTTP/server/fetch/WebSocket semantics	needs reproduction	2	3	False	path.resolve > general	"AssertionError: path.win32.resolve(""c:/blah\\blah"",""d:/games"",""c:../a"")"
-js/node/path/to-namespaced-path.test.js	d	test runner/assertion or runtime semantics	needs reproduction	2	2	False	path.toNamespacedPath > alias as _makeLong	AssertionError: Expected values to be strictly equal:
+js/node/path/resolve.test.js	f	passes on browser	measured	4	1	False	path.resolve > win32 drive-relative input resolves when the working directory is the filesystem root	error: spawn /bin/bun ENOENT
 js/node/perf_hooks/perf_hooks.test.ts	d	HTTP/server/fetch/WebSocket semantics	needs reproduction	1	12	False	stubs	error: expect(received).toBeObject()
 js/node/process-binding.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	2	False	process.binding > process.binding('constants')	error: No such module: constants
 js/node/process/call-constructor.test.js	d	test runner/assertion or runtime semantics	needs reproduction	1	1	False	the constructor of process can be called	TypeError: not an object

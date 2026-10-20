@@ -199,9 +199,23 @@ Categories are mutually exclusive first-blocker assignments. Passing, empty and 
 | v8 | 1 | 0 | 0/1 | 0 | 0 |
 <!-- current:end -->
 
-### Current run provenance
+<!-- partial:start -->
+## Focused suite replay
 
-The current replay used `scripts/bun-suite.sh` with `--network loopback`, a 15-second file deadline, a 2,000 ms test deadline, and the installed dependency tree at `docs/bun-test-suite/dependencies/node_modules`. It ran all 2,305 discovered files on each engine.
+These 19 files were measured at runtime commit `d2f764b91783596ccc20961f0969f6609375ea03`. Only their failure-index rows were refreshed. Full-census tables and summaries below retain the previous census; a full refresh is deferred to a separate run.
+
+| Engine | Files | Fully passing | Observed passes | Failures | File timeouts |
+| --- | --- | --- | --- | --- | --- |
+| quickjs | 19 | 17 | 123 | 1 | 0 |
+| jsc | 19 | 17 | 123 | 1 | 0 |
+| browser | 19 | 18 | 124 | 0 | 0 |
+
+See [the matched path comparison and earlier regression controls](category-d-runtime.md#measurements). Raw input hashes and selected paths are in [partial-summary.json](partial-summary.json).
+<!-- partial:end -->
+
+### Previous full-census provenance
+
+The previous full replay used `scripts/bun-suite.sh` with `--network loopback`, a 15-second file deadline, a 2,000 ms test deadline, and the installed dependency tree at `docs/bun-test-suite/dependencies/node_modules`. It ran all 2,305 discovered files on each engine.
 
 ```sh
 source env.sh
@@ -281,9 +295,21 @@ systemd-run --user --scope -p MemoryMax=2G nice -n 5 \
   --output "$results/jsc.json"
 python3 scripts/bun-suite-report.py "$results/quickjs.json" \
   --compare "$results/browser.json" --compare "$results/jsc.json" \
-  --previous /path/to/previous-full-quickjs.json --runtime-commit "$(git rev-parse HEAD)"
+  --previous /path/to/previous-full-quickjs.json --runtime-commit "$(git rev-parse HEAD)" \
+  --output "$results/report"
 python3 scripts/test-bun-suite-report.py
 ```
+
+Refresh only measured failure-index rows with
+`bun scripts/refresh-compatibility-docs.ts --suite-partial-results "$results"`.
+The directory contains matched `quickjs.json`, `jsc.json`, and `browser.json`,
+plus `runtime-commit.txt` with the full artifact source commit.
+The refresh rejects incomplete or mismatched selections and preserves every
+unmeasured failure row. Full-census summaries and historical investigations stay
+at the previous census. The focused counts and input hashes are recorded in
+`partial-summary.json`. A full scoreboard refresh is deferred to a separate
+census run. Check the generated tables with
+`bun scripts/refresh-compatibility-docs.ts --check`.
 
 Each file has a 15-second wall limit excluding snapshot setup/reset. The initial per-test limit is 2 seconds; tests can override it. Longer diagnostic runs retain their own JSON and never replace the bounded baseline. Repeat any timeout with the same runner command, a new output path, `--jobs 1 --timeout 60`, and its exact file path from the index. Preserve cleanup ownership when creating your own target or evidence directory.
 

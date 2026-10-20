@@ -288,6 +288,7 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 | `runtime_proc.spawn` | `(desc_ptr, desc_len) -> pid` |
 | `runtime_proc.job_of` | `(pid) -> job`; `job_of(0)` is the caller's own job |
 | `runtime_proc.pipe` | `(out_ptr) -> 0` (two `u32`: read end, write end) |
+| `runtime_proc.fd_kind` | `(fd) -> kind` or negative WASI errno |
 | `runtime_proc.read` | `(fd, buf, len) -> n` |
 | `runtime_proc.write` | `(fd, buf, len) -> n` |
 | `runtime_proc.start_status` | `(pid) -> status`, non-consuming entry observation described below |
@@ -298,6 +299,14 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 | `runtime_proc.poll` | `(subs_ptr, n, timeout_ms, out_ptr) -> n_ready` |
 | `runtime_proc.signal` | `(sig, mode) -> result`, see [Signal dispositions](#signal-dispositions) |
 | `wasi_snapshot_preview1.fd_close` | `(fd) -> errno`, the only way to close a pipe end |
+
+`fd_kind` is a non-consuming query of the effective descriptor binding. Its kinds are 0 for
+other or unknown, 1 for a pipe, 2 for a terminal, 3 for a regular file and 4 for a directory.
+Closed or absent bindings return `-8` BADF. The query neither reads bytes nor moves a cursor,
+and duplication or renumbering preserves the resource kind. Kind 0 must never imply a pipe.
+The guest still performs ordinary fstat first, preserving its capability checks, and uses kind 1
+only to restore FIFO mode bits missing from preview1's file-type enumeration. The host and
+guest must both implement this import; no legacy-host fallback exists.
 
 Executable access requests observe live filesystem metadata and executable registry admission.
 The guest asks for executable mode `1`, consumes each completion once, and cancels outstanding
@@ -319,7 +328,7 @@ The guest never chooses descriptor numbers for itself. `spawn` takes UTF-8 JSON:
   Names containing `/` bypass PATH; otherwise entries are tried in order, including empty entries
   as cwd. ENOENT and ENOTDIR candidates are skipped; EACCES is remembered while later executable
   candidates remain eligible. Bun.which uses the same lookup. Absolute paths are never rewritten.
-  Program files and engine PATH defaults are documented in the [package guide](../README.md#installation-and-ownership).
+  Program files and engine PATH defaults are documented in the [package guide](browser-package.md#installation-and-ownership).
   The worker supplies the resolved executable as guest argv[0], making process.execPath a real
   executable path; spawn error metadata still names the caller's original command.
 - `env` replaces the child environment; the host sets `PWD` to `cwd`.

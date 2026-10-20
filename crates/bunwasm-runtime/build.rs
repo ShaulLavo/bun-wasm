@@ -123,6 +123,21 @@ fn main() {
     polyfills::embed(Path::new(&manifest), Path::new(&out));
 
     let bun_dir = Path::new(&manifest).join("../../vendor/bun");
+    let path_source = bun_dir.join("src/node_path/lib.rs");
+    let path_generator = Path::new(&manifest).join("../../scripts/generate-node-path.ts");
+    println!("cargo:rerun-if-changed={}", path_source.display());
+    println!("cargo:rerun-if-changed={}", path_generator.display());
+    let output = Command::new("node")
+        .arg(path_generator)
+        .arg(path_source)
+        .arg(Path::new(&out).join("node_path_relative.rs"))
+        .output()
+        .expect("generate Bun path routines");
+    assert!(
+        output.status.success(),
+        "generate Bun path routines: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     for path in [
         bun_dir.join(".git/HEAD"),
         bun_dir.join(".git/refs/heads"),

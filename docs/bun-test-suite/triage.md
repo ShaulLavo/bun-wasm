@@ -24,12 +24,11 @@ The full-run comparisons, timeout index and ranked investigations below retain t
 | b | runtime behavior or regression fixture in a child program | 35 | bake/dev-and-prod.test.ts |  DEV:dev-and-prod-1: define config via bunfig.toml | error: Child process IPC is not supported in bun-wasm |
 | b | test runner output, hooks, assertions and exit status | 5 | bake/dev/react-spa.test.ts |  DEV:react-spa-1: react in html | error: Unknown install option: --linker=hoisted |
 | c | boxed String paths from harness.tempDir | 1 | js/bun/resolve/png/test-png-import.test.js | png import | TypeError: The "paths[0]" property must be of type string, got object |
-| c | test runner boolean or snapshot matchers | 1 | js/node/path/matches-glob.test.ts | path.posix.matchesGlob(path, glob) > path 'foo.js' matches pattern '*.js' | TypeError: not a function |
 | c | test runner helpers or matcher methods | 3 | js/bun/module-graph/module-graph-isolation.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'setSystemTime' in module 'bun:test' |
 | d | Bun shell parser and execution | 63 | bake/dev/production.test.ts | production > works with sourcemaps - error thrown in React component | error: Bun.$ is not supported in bun-wasm: WASI has no processes |
 | d | CLI option or command implementation | 47 | bundler/bundler_bun.test.ts | bundler > bun/bytecode-depth-cli | error: Bundle Failed |
 | d | ES module mocking and loader invalidation | 7 | js/bun/test/mock/6874/A.test.ts | <collection/hook/exit; no named failure> | error: mock.module() is not supported in bun-wasm yet |
-| d | HTTP/server/fetch/WebSocket semantics | 188 | bake/dev/ecosystem.test.ts |  DEV:ecosystem-1: svelte component islands example | <see JSON excerpt; no error line> |
+| d | HTTP/server/fetch/WebSocket semantics | 186 | bake/dev/ecosystem.test.ts |  DEV:ecosystem-1: svelte component islands example | <see JSON excerpt; no error line> |
 | d | Module._resolveFilename options.paths lookup | 1 | js/node/module/module-resolve-filename-paths.test.js | Module._resolveFilename respects options.paths for package resolution | ResolveMessage: Cannot find package 'test-package' from '/some/other/directory/file.js' |
 | d | Node builtin aliases and stub modules | 1 | js/node/stubs.test.js | stubbed CJS import.meta.require _http_agent | ResolveMessage: Cannot find package '_http_agent' from '/bun/test/js/node/stubs.test.js' |
 | d | Node's test API adapter | 3 | internal/runner-junit.test.ts | parseJunitFileSuites reads the report bun test --parallel --reporter=junit writes | error: expect(received).toContain(expected) |
@@ -42,19 +41,19 @@ The full-run comparisons, timeout index and ranked investigations below retain t
 | d | data parser/serializer semantics | 14 | cli/format/toml-layout.test.ts | TOML layout > formats every case without errors, and --check passes afterwards | error: expect(received).toEqual(expected) |
 | d | database, Redis or S3 clients | 130 | js/bun/image/image.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'S3Client' in module 'bun' |
 | d | filesystem API semantics | 2 | js/bun/util/filesystem_router.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'FileSystemRouter' in module 'bun' |
-| d | test runner/assertion or runtime semantics | 727 | cli/bunfig-test-options.test.ts | bunfig.toml test options > randomize with seed produces consistent order | error: expect(received).not.toEqual(expected) |
+| d | test runner/assertion or runtime semantics | 720 | cli/bunfig-test-options.test.ts | bunfig.toml test options > randomize with seed produces consistent order | error: expect(received).not.toEqual(expected) |
 | d | timeout, first unblock and rerun without reducing it to an API verdict | 5 | js/node/buffer-indexof-worstcase.test.ts | <collection/hook/exit; no named failure> | <see JSON excerpt; no error line> |
 | d | tsconfig JSX runtime selection and jsxImportSource | 1 | bundler/transpiler/jsx-tsconfig-react-jsx.test.ts | tsconfig compilerOptions.jsx > "react-jsx" selects the matching automatic runtime | error: Cannot find module 'react/jsx-dev-runtime' from '/tmp/jsx-tsconfig_Q3qJ7t/m.jsx' |
-| d | unresolved runtime/module semantics, inspect the recorded failure first | 74 | bake/hmr-socket-protocol.test.ts | a duplicate testing-batch frame (H) during an in-flight bundle closes the socket instead of aborting |   ^ this test timed out after 2000ms. |
+| d | unresolved runtime/module semantics, inspect the recorded failure first | 71 | bake/hmr-socket-protocol.test.ts | a duplicate testing-batch frame (H) during an in-flight bundle closes the socket instead of aborting |   ^ this test timed out after 2000ms. |
 | e | private native-engine/compiler instrumentation has no portable equivalent | 93 | bake/deinitialization.test.ts | dev server deinitializes itself | SyntaxError: Could not find export 'getDevServerDeinitCount' in module 'bun:internal-for-testing' |
-| f | passes on browser | 17 | js/bun/crypto/wpt-webcrypto.generateKey.test.ts | <collection/hook/exit; no named failure> | <see JSON excerpt; no error line> |
+| f | passes on browser | 18 | js/bun/crypto/wpt-webcrypto.generateKey.test.ts | <collection/hook/exit; no named failure> | <see JSON excerpt; no error line> |
 | f | passes on browser, jsc | 3 | js/bun/jsc/webkit-upgrade-ccdcb8a026.test.ts | WebKit ccdcb8a026 upgrade > Atomics.isLockFree uses ToIntegerOrInfinity instead of wrapping to int32 | ReferenceError: Atomics is not defined |
 | f | passes on jsc | 4 | js/bun/jsc/webkit-upgrade-8c4fd56347.test.ts | WebKit 8c4fd56347 upgrade > Promise.try returns a native promise as-is (7f38ebbabf) | error: expect(received).toBe(expected) |
 <!-- failure-groups:end -->
 
 ## Regressions from the previous baseline
 
-QuickJS is the sole comparable baseline by matched file selection; JSC and browser remain non-comparable. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim. See [README.md](README.md#historical-and-current-observations) and `summary.json` for selections and provenance.
+QuickJS is the sole comparable baseline by matched file selection; JSC and browser remain non-comparable. Changed runner, suite, and supplemental-dependency hashes prevent an isolated runtime-gain claim. See [README.md](results.md#historical-and-current-observations) and `summary.json` for selections and provenance.
 
 ## Timeout index
 
@@ -312,7 +311,7 @@ The complete audit with full-log hashes is retained in `review-r1/exclusion-audi
 
 ### Reproduce one cause
 
-Build the three artifacts from this branch and install the pinned dependencies as described in [the suite README](README.md#reproduce). The helper runs each file unchanged through the required suite queue, with the same loopback network policy and deadlines as the baseline. Every cause below has one invocation. Every member file can be substituted.
+Build the three artifacts from this branch and install the pinned dependencies as described in [the suite README](results.md#reproduce). The helper runs each file unchanged through the required suite queue, with the same loopback network policy and deadlines as the baseline. Every cause below has one invocation. Every member file can be substituted.
 
 ```bash
 export PATH=$HOME/.local/share/mise/shims:$PATH

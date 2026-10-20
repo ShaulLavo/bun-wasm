@@ -11,6 +11,9 @@ import { NetHost } from "../src/net/host";
 import { createRing } from "../src/net/ring";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "../src/net/trampoline";
 import { Wasi } from "waffle/core";
+import { ProcessABI, ProcessSignalExit } from "waffle/proc/abi";
+import { ExecutableRegistry } from "waffle/proc/registry";
+import { ProcessSupervisor } from "waffle/proc/supervisor";
 
 const [wasmPath, ...args] = process.argv.slice(2);
 if (!wasmPath) {
@@ -27,8 +30,10 @@ function testEnv(): Record<string, string> {
 
 const cell = new Int32Array(new SharedArrayBuffer(4));
 const module = new WebAssembly.Module(readFileSync(wasmPath));
+const processImports: Record<string, (...args: number[]) => number> = {};
 const wasi = new Wasi({
   hostCallFd: HOST_CALL_FD,
+  namespaces: { runtime_proc: processImports },
   args: ["bun", ...args],
   // TEST_* variables pass through (TEST_SERVER for the network fixtures).
   env: { HOME, PWD: HOME, USER: "user", TERM: "xterm-256color", TMPDIR: "/tmp", ...testEnv() },
@@ -39,7 +44,20 @@ const wasi = new Wasi({
   sleep: (ms) => void Atomics.wait(cell, 0, 0, ms),
   trace: process.env.WASI_TRACE ? (line) => process.stderr.write(`[wasi] ${line}\n`) : undefined,
 });
-const instance = new WebAssembly.Instance(module, wasi.imports(module));
+const supervisor = new ProcessSupervisor({
+  registry: new ExecutableRegistry(),
+  launch() { throw new Error("The CLI shim has no registered child executables"); },
+});
+const pid = supervisor.createRoot({ descriptors: wasi.descriptors });
+const root = supervisor.get(pid)!;
+let instance: WebAssembly.Instance;
+const abi = new ProcessABI({
+  memory: () => instance.exports.memory as WebAssembly.Memory,
+  descriptors: wasi.descriptors, fs, pid, service: supervisor,
+  signals: root,
+});
+Object.assign(processImports, abi.imports);
+instance = new WebAssembly.Instance(module, wasi.imports(module));
 if (process.env.NET !== "0") {
   // The helper needs its own thread: this one blocks inside bun.wasm until it exits.
   const ring = createRing();
@@ -50,5 +68,10 @@ if (process.env.NET !== "0") {
   if (process.env.SLOTS === "imports") wasi.hostCall = installHostSlotsViaImport(instance, host.slots());
   else installHostSlots(instance, host.slots());
 }
-const code = wasi.start(instance);
+let code: number;
+try { code = wasi.start(instance); }
+catch (error) {
+  if (!(error instanceof ProcessSignalExit)) throw error;
+  code = error.status;
+} finally { supervisor.dispose(); }
 process.exit(code);

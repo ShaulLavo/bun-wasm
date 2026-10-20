@@ -474,6 +474,37 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
         },
     )?;
     linker.allow_shadowing(true);
+    let kind_stat = original(linker, store, "fd_fdstat_get")?;
+    let kind_memory = wasmtime::Memory::new(&mut *store, wasmtime::MemoryType::new(1, None))?;
+    let state = namespace.clone();
+    linker.func_wrap(
+        "runtime_proc",
+        "fd_kind",
+        move |mut caller: Caller<'_, Host>, fd: i32| -> Result<i32> {
+            let mut state = state.lock().unwrap();
+            state.initialize(&mut caller)?;
+            if caller.data().processes.owns(fd) {
+                return Ok(caller.data().processes.fd_kind(fd));
+            }
+            let Some(&actual) = state.files.get(&fd) else {
+                return Ok(BADF);
+            };
+            let result = call_values_in(
+                &kind_stat,
+                &mut caller,
+                &[Val::I32(actual), Val::I32(0)],
+                Some(kind_memory),
+            )?;
+            if result != 0 {
+                return Ok(-result);
+            }
+            Ok(match kind_memory.data(&caller)[0] {
+                4 => 3,
+                3 => 4,
+                _ => 0,
+            })
+        },
+    )?;
     for (name, write, delegate) in [("read", false, file_read), ("write", true, file_write)] {
         let state = namespace.clone();
         linker.func_wrap(

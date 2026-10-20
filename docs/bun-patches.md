@@ -52,13 +52,15 @@ Each row has one class. A file with independent changes has separate rows.
 | [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun/Node and native adapters consume eight-byte typed process/job completions, map seven portable startup errnos, and preserve failed Node streams. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
+| [Descriptor kinds and storage modes](#descriptor-kinds-and-storage-modes) | Host feature | Original Rust descriptor-kind adapters and page startup handling adopt the pinned Waffle contract without guessing pipe types or changing workspace names. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, process-aware idle waits, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
 | [Process startup and executable identity](#process-startup-and-executable-identity) | Host feature | Original startup-before-wait observation, admitted executable metadata, lazy-root cancellation and Node child tool routing; no upstream implementation copied. |
 | [Node startup diagnostic drain](#node-startup-diagnostic-drain) | Host feature | Use Waffle's public cancellable, bounded asynchronous diagnostic drain for the Node process host's immediate stderr writes. |
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [Filesystem vectored reads](#filesystem-vectored-reads) | Host feature | Original readv/readvSync and FileHandle.readv adapters avoid summed-capacity allocations, use one bounded read for non-regular descriptors, preserve shared cursors and follow Bun's empty-vector contract. |
-| [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle 0.0.48's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
+| [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
+| [Deadline descendant ownership](#cross-platform-web-tests) | Host feature | Original PID/birth deadline supervision and Linux child-subreaper adapter preserve detached descendants across launcher death. |
 | [CMake toolchain cache preflight](#cmake-toolchain-cache-preflight) | Port | Reject an existing CMake cache whose recorded compiler, toolchain file, target, system, processor or sysroot does not match the requested native or WASI configure/build. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
@@ -103,7 +105,10 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/inspect.js`, Bun formatter](#bun-console-formatter) | Port | Translate Bun's formatter and property enumeration to JavaScript. |
 | [`crates/bunwasm-runtime/src/js/inspect.js`, Node formatter](#node-inspection) | Port | Adapt Bun's Node inspection implementation to ordinary engine intrinsics. |
 | [`crates/bunwasm-runtime/src/js/inspect.js`, host hooks](#inspection-host-hooks) | Host feature | Let the host expose promise, proxy, namespace, and iterator state. |
-| [`crates/bunwasm-runtime/src/js/path.js`](#node-path) | Port | Adapt Node's POSIX path implementation to the guest filesystem. |
+| [`vendor/bun/src/node_path/lib.rs`](#node-path) | Port | Run Bun's unmodified POSIX and Windows path algorithms over UTF-16 slices. |
+| [`scripts/generate-node-path.ts`](#node-path) | Port | Extract Bun's relative-path computation with guest-resolved paths supplied by the adapter. |
+| [`vendor/bun/src/runtime/node/path.rs`](#node-path) | Port | Adapt the public path argument traversal and validation order to the JavaScript boundary. |
+| [`crates/bunwasm-runtime/src/js/path.ts`](#node-path) and `src/node_path.rs` | Host feature | Original adapters for JavaScript validation, guest cwd, and lossless UTF-16 transport. |
 | [`crates/bunwasm-runtime/src/js/buffer.js`](#node-buffer-fragments) | Port | Adapt Node Buffer construction and concatenation routines over typed arrays. |
 | [`crates/bunwasm-runtime/src/js/events.js`](#node-event-emitter) | Port | Adapt Node listener bookkeeping without native async hooks. |
 | [`crates/bunwasm-runtime/src/js/events.js`, listener publication](#node-event-emitter) | Host feature | Original mutation hook publishes signal dispositions before user listener-removal callbacks. |
@@ -1137,9 +1142,46 @@ Read promise state/results, proxy targets, namespace brands, ordered keys, and r
 
 ### Node path
 
-`crates/bunwasm-runtime/src/js/path.js`. Class **Port**. Upstream Node `lib/path.js`, POSIX implementation, at the Node comparison revision above. The import revision is not recorded. Bun's older browser fallback `src/node-fallbacks/path.js` at the Bun pin carries related POSIX code and identifies its own origin as Node v8.11.1. That does not establish bun-wasm's import revision.
+`vendor/bun/src/node_path/lib.rs`, Bun upstream revision
+`9510e74152073d850a18758ca41114d8f214ffa6`. The path sources are unchanged in
+the measured WASI checkout `5e0baa66516f3af00b008cdf1521c681317741e8`.
+Class **Port**. The existing `bun_node_path` crate is a direct dependency, with no
+source changes. Its POSIX and Windows basename,
+dirname, extname, isAbsolute, normalize, join, and parse algorithms run on
+`u16` slices. These are the same algorithms Bun's runtime and toolchain use.
+The previous partial Node POSIX implementation in `src/js/path.js` is removed.
 
-Retain the segment scans and POSIX normalize, resolve, relative, dirname, basename, extname, format, and parse algorithms. Extract helpers such as `popSegment` and `scanExt`, replace primordials and validators, accept boxed strings to match Bun, and resolve against guest `process.cwd()`. Export a factory. `win32` reuses the POSIX functions with different separator constants and does not implement Windows paths. The changes avoid host filesystem and native path dependencies.
+`crates/bunwasm-runtime/src/node_path.rs` and `src/js/path.ts` are **Host feature**
+original adapters. Little-endian UTF-16 buffers preserve JavaScript code units,
+including lone surrogates and U+FEFF. JavaScript validates and converts arguments
+before native calls. The adapter implements POSIX resolve, relative, format, namespace
+conversion, and `_makeLong` over the native lexical operations and guest
+`process.cwd()`. Bun's native resolve and relative functions read a process-wide
+filesystem singleton, so calling them directly would use the toolchain's cwd
+instead of the current guest cwd. The adapter does not initialize or change
+that shared state.
+
+`scripts/generate-node-path.ts` extracts Bun's Windows resolver, tail normalizer,
+and six private helpers from the same upstream file. Class **Port**. It replaces the
+two cwd reads with a supplied guest cwd slice and specializes the tail normalizer
+to Windows. Bun's device selection, separator handling, tail normalization and
+output writes remain unchanged. The generated upstream functions retain their
+original control flow. Dependency imports come through the authored adapter so
+Cargo dependency analysis sees the crates used by generated source. The original
+host adapter passes validated UTF-16 paths
+and the current guest cwd to this resolver. It replaces the previous handwritten
+Windows resolution algorithm, which could create a false UNC root by joining
+cwd `/` and a relative tail before normalization.
+
+The generator also extracts each relative function's computation after its
+resolution preamble. It specializes `T` to `u16` and accepts resolved input slices
+instead of reading cwd. Bun's comparisons, separator scans, UNC rules, and output
+writes remain unchanged. The generator rejects an unexpected source shape or
+residual cwd dependency. Argument traversal and suffix-before-path validation adapt
+`src/runtime/node/path.rs` at the same revision. POSIX resolution stops checking
+arguments at an absolute path; Windows resolution validates every argument.
+`matchesGlob` uses the existing Bun glob native and normalizes
+Windows separators, matching `src/js/node/path.ts` at the same revision.
 
 ### Node Buffer fragments
 
@@ -1789,10 +1831,15 @@ or adapted. `web/tests/{subprocess,playground,browser-net}.mjs` and
 `tests/install/run.mjs` use the host temporary directory or `BUN_WASM_TEST_TMP`.
 `scripts/test-web.sh` honors that override or `TMPDIR`, installs scratch teardown
 before allocation, and waits for its fixture server to exit. Its original
-`scripts/run-with-timeout.mts` adapter owns a POSIX process group and kills command
-descendants on normal exit, deadline and interruption rather than requiring GNU
-timeout on macOS. Browser network teardown uses owned
-ChildProcess handles, not Linux-only `/proc` paths. Test assertions are unchanged.
+`scripts/run-with-timeout.mts` adapter records process identities and kills only
+owned descendants on normal exit, deadline and interruption rather than requiring
+GNU timeout on macOS. The original `scripts/linux-subreaper.mts` adapter calls
+Linux `prctl` through Bun FFI so orphaned descendants retain kernel-enforced
+ownership even when polling and environment markers miss their launcher. Node
+entry execs through Bun and back to Node at the same PID. No upstream source is
+copied. The [deadline contract](browser-deadlines.md) describes the controls.
+Browser network teardown uses owned ChildProcess handles, not Linux-only `/proc`
+paths. Test assertions are unchanged.
 The original `env.sh` host-cache adapter exports `PLAYWRIGHT_BROWSERS_PATH` only
 when it is unset and `/work/cache/ms-playwright` exists. It never downloads
 browsers; hosts without that directory retain Playwright's native cache lookup,
@@ -2959,7 +3006,7 @@ its final cursor check and owns all opened descriptors.
 ## Patched sysroot and native descriptor bridge
 
 Class **Port**, with an original local build wrapper and native runtime adapter. The libc input is
-not copied into this repository: Waffle 0.0.48 at `7d095e53040484afaf8363af34fc5284e132798c`
+not copied into this repository: Waffle 0.0.53 at `f6017d12f59c81dae75eece5a6cb62c0470d166e`
 builds wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13` from the installed
 `waffle/scripts/build-wasi-libc.sh`. Its `preopen-scan.patch` skips occupied inherited descriptors
 only when `fd_fdstat_get` succeeds and stops on the first real BADF. `scripts/build-wasi-sysroot.ts`
@@ -2991,10 +3038,10 @@ to use the same read/write/fstat/ftruncate namespace and preserving shared open-
 reads and writes validate descriptors, negative closes return EBADF, interrupted writes retry, and later failures return committed partial
 progress. Direct writes flush both output streams first because inherited descriptors can alias
 stdout or stderr. Native inherited fstat preserves the libc mode, including pipes and devices.
-On WASI, preview1 has no FIFO tag and both process hosts encode pipes as UNKNOWN.
-The original adapter maps that host pipe representation (which libc preserves with no POSIX
-file-type bits) to FIFO, preserving device, socket and filesystem kinds and propagating
-metadata capability errors. Waffle #34 grants FD_FILESTAT_GET to both pipe endpoints; inherited
+On WASI, preview1 has no FIFO tag. After the ordinary fstat capability check, the original
+adapter consults `runtime_proc.fd_kind` and restores FIFO bits only for an explicit pipe kind.
+UNKNOWN remains unknown rather than becoming a pipe. Device, socket and filesystem modes
+and metadata capability errors remain intact. Waffle #34 grants FD_FILESTAT_GET to both pipe endpoints; inherited
 descriptors keep those exact rights, so the real pipe-fstat controls succeed without bypassing
 metadata capability checks. No upstream implementation or new binding dependency is copied.
 The original `src/js/node_fs.js` Stats predicates test those type bits rather than hard-coding false.
@@ -3118,3 +3165,32 @@ Class **Port**. Upstream remains Bun
   native filesystem-event buffers, callback, trace and merge/dispatch helpers.
   These declarations remain type-checked. No whole module, authored crate or
   warning category is capped globally, and no Clippy lint is disabled.
+
+
+## Descriptor kinds and storage modes
+
+Class **Host feature**. These are original adapters, not copied or translated upstream code.
+The matching contract is Waffle main `f6017d12f59c81dae75eece5a6cb62c0470d166e`, specifically
+`proc/abi.ts`, `core/descriptors.ts`, `fs/vfs.ts` and `browser/shared-fs.ts`. The root package,
+web page and sandbox pin that exact revision together, including their lockfiles.
+
+`crates/bunwasm-runtime/src/host.rs` imports `runtime_proc.fd_kind`. The original descriptor
+metadata adapter in `natives.rs` retains libc fstat and its rights checks before restoring the
+missing FIFO type for kind 1 only. The native Wasmtime adapters in
+`crates/bunwasm-host/src/process/{descriptors,mod,wasi}.rs` inspect the effective descriptor
+namespace without reading a payload or moving a file cursor. Closed descriptors return BADF;
+files, directories, terminals and runtime pipes remain distinct through duplication and remapping.
+
+`web/src/main.ts` and `sandbox/src/main.ts` use the public `fast|safe|memory` mode contract.
+Their outer startup handlers share `web/src/startup.ts` to expose typed failures even when
+construction fails before a filesystem exists. Both pages retain the existing workspace
+names and never switch stores on failure. The original editor-gate fixture in
+`web/tests/fixtures/startup-filesystem.ts` selects Waffle's supported `whenBusy: "wait"`
+policy for an explicit fast-mode control. It does not expose a product backend selector or
+alter default takeover behavior; the real page and filesystem worker still own waiting,
+recovery and persistence.
+The old physical-store selector is removed from product pages. Conformance fixtures alone use
+Waffle's internal implementation override to retain IndexedDB and OPFS backend tests. Runtime-child startup-refusal tests also follow Waffle's current host-only diagnostics contract,
+leaving inherited stderr untouched while the parent consumes the typed START_FAILED result. No old
+request shapes, version detection or compatibility fallback are added. See
+[storage modes](storage-modes.md) and [the process ABI](host-abi.md#process-imports).
