@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { projectFiles } from "./apps.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
 import { browserDiagnostics } from "./browser-diagnostics.ts";
+import { verifyBrowserServer, stoppedPreviewError } from "./server-browser.ts";
 import { observeHmr } from "./hmr.ts";
 import { failure, stageOutput } from "./classify.mjs";
 
@@ -30,22 +31,30 @@ export async function serverCommand({ page, context, command, app, engine, optio
   const preview = await context.newPage();
   const errors = [];
   preview.on("pageerror", error => errors.push(String(error)));
+  let checked;
+  let url;
   try {
-    const url = await page.evaluate(() => globalThis.playground.previews.url(3137));
+    url = await page.evaluate(() => globalThis.playground.previews.url(3137));
     const response = await preview.goto(url, { timeout: options.timeout });
     if (!response?.ok()) throw new Error(`Preview HTTP ${response?.status()}`);
     const check = command.check;
+    if (check.framework && !response.fromServiceWorker()) throw new Error("Preview response bypassed the service worker");
     await preview.locator(check.kind === "http" ? "body" : check.selector).filter({ hasText: check.text }).waitFor({ timeout: options.timeout });
+    const contract = check.framework ? await verifyBrowserServer(preview, url, check.framework, options.timeout, join(options.output, `${app.id}-${engine}-requests.json`)) : "";
     if (errors.length) throw new Error(errors.join("\n"));
     if (await page.evaluate(() => globalThis.__matrixDone)) return earlyServerExit({ code: await page.evaluate(() => globalThis.playground.shell.lastExit), output: await output() }, command.name);
     await preview.screenshot({ path: join(options.output, `${app.id}-${engine}-playground-${command.name}.png`) });
-    return { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}` };
+    checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}` };
   } catch (error) {
-    return { status: "fail", ...failure((await output()) || String(error), command.name) };
+    checked = { status: "fail", ...failure(`${String(error)}\n${await output()}`, command.name) };
   } finally {
-    await preview.close();
     await page.evaluate(async () => { globalThis.playground.shell.input("\x03"); await globalThis.__matrixCommand; });
+    const error = checked?.status === "pass" && command.check.framework ? await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`)) : undefined;
+    if (error) checked = { status: "fail", ...failure(error, command.name) };
+    if (checked?.status === "pass" && command.check.framework) checked.assertion += "; guest stop removes preview listener (502)";
+    await preview.close();
   }
+  return checked;
 }
 
 
