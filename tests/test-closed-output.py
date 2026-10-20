@@ -144,7 +144,7 @@ def check_batch(directory: Path, fd: int):
     print(f"PASS pipe-closed-output {args.engine}/{host}: fd={fd} batch callbacks/identity/order/state/survival in {time.monotonic() - started:.3f}s")
 
 
-with tempfile.TemporaryDirectory(prefix="bun-wasm-closed-output-", dir="/work/tmp") as directory:
+with tempfile.TemporaryDirectory(prefix="bun-wasm-closed-output-", dir=tempfile.gettempdir()) as directory:
     work = Path(directory)
     for name in ("index.js", "large.js", "batch.ts", "callback.ts"):
         (work / name).write_bytes((FIXTURE / name).read_bytes())

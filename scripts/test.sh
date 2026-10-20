@@ -64,7 +64,7 @@ case "$engine" in
   *) echo "unknown engine $engine (quickjs, jsc or browser)"; exit 2 ;;
 esac
 
-scratch="$(mktemp -d /work/tmp/bun-wasm-runtime-test-XXXXXX)"
+scratch="$(mktemp -d "$TMPDIR/bun-wasm-runtime-test-XXXXXX")"
 server_pid=""
 trap 'if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null; fi; rm -rf "$scratch"' EXIT INT TERM
 
@@ -122,6 +122,9 @@ entry_of() {
     [[ -f "$dir/$f" ]] && { echo "$f"; return; }
   done
 }
+
+native_bun=""
+[[ $update == 0 ]] || native_bun="$(bun -p process.execPath)"
 
 pass=0
 fail=0
@@ -197,7 +200,13 @@ for name in "${names[@]}"; do
   if [[ $update == 1 ]]; then
     native_cmd=("${cmd[@]}")
     [[ ! -f "$work/cmd" ]] && native_cmd=(run "./$entry")
-    (cd "$work" && AGENT=0 CLAUDECODE= HOME=/ bun "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+    (cd "$work" && AGENT=0 CLAUDECODE= HOME=/ "$native_bun" "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+    code=$?
+    if [[ "$code" != "$expected_exit" ]]; then
+      echo "native Bun failed $name (exit $code, expected $expected_exit)"
+      cat "$scratch/err"
+      exit 1
+    fi
     show_files "$work" "$scratch/out"
     # Native runs live in the scratch dir; inside wasm the fixture is `/`.
     sed -e "s#$work/#/#g" -e "s#$work#/#g" "$scratch/out" | normalize >"$src/expected.txt"

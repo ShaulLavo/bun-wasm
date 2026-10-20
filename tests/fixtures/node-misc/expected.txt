@@ -5,13 +5,14 @@ querystring: a=1&a=2&b=x%20y {"a":["1","2"],"b":"x y"}
 net.isIP: 4 6 0
 process module: true
 util default: function
-http.createServer throws: true
-net.connect throws: true
+http.createServer: true
+net.connect: true
 child_process.spawn failure: true
 child_process.spawnSync failure: true
 Bun.which: null
 Bun.spawnSync failure: true
 Bun.spawn throws: true
-Bun.serve throws: true
+Bun.serve: served
+fetch: hello from the test server
 fetch rejects: true
 fetch file: URL: true
