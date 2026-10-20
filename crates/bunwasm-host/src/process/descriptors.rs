@@ -156,6 +156,13 @@ impl Endpoint {
         (self.terminal(), io | (1u64 << 27))
     }
 
+    pub fn kind(&self) -> i32 {
+        if self.pipe.is_some() {
+            return 1;
+        }
+        if self.terminal() { 2 } else { 0 }
+    }
+
     fn terminal(&self) -> bool {
         match &self.stream {
             Stream::Input(input) => input.terminal,

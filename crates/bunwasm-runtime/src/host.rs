@@ -274,6 +274,7 @@ mod runtime_proc {
         pub fn job_of(pid: i32) -> i32;
         pub fn start_status(pid: i32) -> i32;
         pub fn pipe(out_ptr: i32) -> i32;
+        pub fn fd_kind(fd: i32) -> i32;
         pub fn read(fd: i32, buf: i32, len: i32) -> i32;
         pub fn write(fd: i32, buf: i32, len: i32) -> i32;
         pub fn wait(pid: i32, out_ptr: i32) -> i32;
@@ -310,6 +311,9 @@ mod runtime_proc {
         UNSUPPORTED
     }
     pub unsafe fn start_status(_: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn fd_kind(_: i32) -> i32 {
         UNSUPPORTED
     }
     pub unsafe fn pipe(_: i32) -> i32 {
@@ -397,6 +401,11 @@ pub fn proc_pipe() -> Result<(u32, u32), i32> {
     } else {
         Ok((ends[0], ends[1]))
     }
+}
+
+/// Non-consuming lookup of the underlying process descriptor resource.
+pub fn proc_fd_kind(fd: i32) -> i32 {
+    proc_call!(runtime_proc::fd_kind(fd))
 }
 
 pub fn proc_close(fd: i32) -> i32 {

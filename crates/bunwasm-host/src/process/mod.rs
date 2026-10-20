@@ -480,6 +480,10 @@ impl Processes {
         0
     }
 
+    pub fn fd_kind(&self, fd: i32) -> i32 {
+        self.fds.get(&fd).map_or(BADF, |endpoint| endpoint.kind())
+    }
+
     pub fn fdstat(&self, fd: i32) -> Option<(bool, u64)> {
         self.fds.get(&fd).map(|endpoint| endpoint.fdstat())
     }
