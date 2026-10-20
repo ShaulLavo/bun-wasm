@@ -56,7 +56,7 @@ The catalog is the complete hook inventory. The following groups block the next 
 | --- | --- |
 | events | Native validators 45 through 57, shared uncaught-exception hook 29, Node error constructors, EventTarget integration, async resource hooks. |
 | util, assert | Native comparison and assertion bindings, MIME bindings, validation and error construction. Local inspection already adapts Bun's inspector. |
-| path | createNodePathBinding in Path.cpp. Bun's JavaScript is a binding wrapper; retaining the current path implementation is necessary until that native binding is ported. |
+| path | createNodePathBinding in Path.cpp. Bun's JavaScript wrapper still needs that binding. The runtime now uses Bun's `bun_node_path` Rust algorithms with adapters for guest cwd and JavaScript arguments. |
 | url | Native URL and ICU bindings, parser and formatting hooks. |
 | string_decoder | Native module NodeStringDecoder, not a src/js JavaScript module at this revision. |
 | buffer | Native module NodeBuffer, with additional engine-specific allocation and encoding hooks. |

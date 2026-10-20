@@ -19,6 +19,10 @@ bun_glob = { path = "../../vendor/bun/src/glob" }
 bun_semver = { path = "../../vendor/bun/src/semver" }
 bunwasm-semver = { path = "../bunwasm-semver" }
 bun_sys = { path = "../../vendor/bun/src/sys" }
+bun_node_path = { path = "../../vendor/bun/src/node_path" }
+bytemuck = "1"
+bun_core = { path = "../../vendor/bun/src/bun_core" }
+bun_paths = { path = "../../vendor/bun/src/paths" }
 bunwasm-jsc = { path = "../bunwasm-jsc", optional = true }
 rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"], optional = true }
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }

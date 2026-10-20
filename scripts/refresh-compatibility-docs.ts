@@ -1,13 +1,16 @@
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
 
 type Status = "pass" | "fail" | "blocked";
 type Stage = { app: string; engine: string; host: string; stage: string; status: Status; blocker: string };
 const root = fileURLToPath(new URL("../", import.meta.url));
 const check = process.argv.includes("--check");
-if (process.argv.slice(2).some(arg => arg !== "--check")) throw new Error("Use --check or no arguments");
+const args = process.argv.slice(2);
+const suiteDirectory = args[0] === "--suite-partial-results" && args.length === 2 && args[1] ? resolve(args[1]) : undefined;
+if (args.length && !suiteDirectory && !(args.length === 1 && check)) throw new Error("Use --check, --suite-partial-results <directory>, or no arguments");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -89,6 +92,33 @@ function section(path: string, name: string, text: string) {
   write(path, contents.slice(0, first) + start + "\n" + text.trim() + "\n" + contents.slice(last));
 }
 
+function importSuite(directory: string) {
+  const engines = ["quickjs", "jsc", "browser"];
+  const runs = engines.map(engine => record(JSON.parse(readFileSync(join(directory, `${engine}.json`), "utf8"))));
+  const selections = runs.map(run => array(run.results).map(value => string(record(value).file)).sort());
+  for (const selection of selections) {
+    if (new Set(selection).size !== selection.length || JSON.stringify(selection) !== JSON.stringify(selections[0])) throw new Error("Suite engine selections differ");
+  }
+  for (const [i, run] of runs.entries()) {
+    if (string(record(run.provenance).engine) !== engines[i] || number(run.selected_files) !== array(run.results).length) throw new Error("Incomplete suite run");
+    for (const key of ["suite_commit", "runner_sha256", "network", "timeout_seconds", "test_timeout_ms", "dependencies", "test_dependencies"]) {
+      if (JSON.stringify(record(run.provenance)[key]) !== JSON.stringify(record(runs.at(0)?.provenance)[key])) throw new Error(`Suite input differs across engines: ${key}`);
+    }
+  }
+  const commit = readFileSync(join(directory, "runtime-commit.txt"), "utf8").trim();
+  if (!/^[a-f0-9]{40}$/i.test(commit)) throw new Error("Invalid runtime source commit");
+  const command = [root + "scripts/bun-suite-report.py", join(directory, "quickjs.json"), "--compare", join(directory, "jsc.json"), "--compare", join(directory, "browser.json"), "--update-failures", root + "docs/bun-test-suite/failures.tsv"];
+  execFileSync("python3", command, { cwd: root, stdio: "inherit" });
+  const evidence = {
+    runtime_source_commit: commit,
+    files: selections[0],
+    engines: runs.map((run, index) => ({ engine: engines[index], provenance: run.provenance, summary: run.summary, projection: run.projection })),
+  };
+  writeFileSync(root + "docs/bun-test-suite/partial-summary.json", JSON.stringify(evidence, null, 2) + "\n");
+}
+
+if (suiteDirectory) importSuite(suiteDirectory);
+
 const evidence = "docs/app-matrix/measurements/2026-10-17/";
 const before = matrix(evidence + "before.json");
 const after = matrix(evidence + "after.json");
@@ -130,6 +160,23 @@ section("docs/app-matrix/compatibility.md", "replay", [
   "Regenerate or check every table in this section, and the suite headline and progress tables, with:",
   "```sh\nbun scripts/refresh-compatibility-docs.ts\nbun scripts/refresh-compatibility-docs.ts --check\n```",
 ].join("\n\n"));
+
+const partialPath = "docs/bun-test-suite/partial-summary.json";
+if (existsSync(root + partialPath)) {
+  const partial = record(json(partialPath));
+  const rows = array(partial.engines).map(value => {
+    const engine = record(value);
+    const summary = record(engine.summary);
+    const counts = record(summary.counts);
+    return [string(engine.engine), String(number(summary.files)), String(number(summary.fully_passing)), String(number(counts.pass)), String(number(counts.fail)), String(number(summary.timeouts))];
+  });
+  section("docs/bun-test-suite/results.md", "partial", [
+    "## Focused suite replay",
+    `These ${array(partial.files).length} files were measured at runtime commit \`${string(partial.runtime_source_commit)}\`. Only their failure-index rows were refreshed. Full-census tables and summaries below retain the previous census; a full refresh is deferred to a separate run.`,
+    table(["Engine", "Files", "Fully passing", "Observed passes", "Failures", "File timeouts"], rows),
+    "See [the matched path comparison and earlier regression controls](category-d-runtime.md#measurements). Raw input hashes and selected paths are in [partial-summary.json](partial-summary.json).",
+  ].join("\n\n"));
+}
 
 const history = array(json("docs/bun-test-suite/progress.json")).map(record);
 const categories = ["a", "b", "c", "d", "e", "f"];

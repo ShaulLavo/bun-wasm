@@ -258,6 +258,7 @@ pub fn table(state: &Rc<State>) -> Table {
     });
     crate::glob::install(&mut t);
     crate::semver::install(&mut t);
+    crate::node_path::install(&mut t);
     install_encoding(&mut t);
     crate::streams::install(&mut t);
     crate::archive::install(&mut t);

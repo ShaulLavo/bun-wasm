@@ -31,6 +31,7 @@ mod html_rewriter;
 pub mod install;
 mod modules;
 mod natives;
+mod node_path;
 mod resolve;
 mod semver;
 mod sourcemap;

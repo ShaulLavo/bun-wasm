@@ -207,12 +207,22 @@ def investigation_index(data, delta):
     return text + markdown_table(["File", "Change", "Report observed", "Passes", "Last failure observed", "First error"], rows) + "\n"
 
 
+def merge_measured_failures(previous, assignments, measured):
+    if len(measured) != len(set(measured)):
+        raise ValueError("Duplicate measured file")
+    selected = set(measured)
+    if any(item["file"] not in selected for item in assignments):
+        raise ValueError("Failure outside measured selection")
+    return sorted([item for item in previous if item["file"] not in selected] + assignments, key=lambda item: item["file"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("results", type=Path)
     parser.add_argument("--compare", type=Path, action="append", default=[])
     parser.add_argument("--suite", type=Path, default=ROOT / "vendor/bun")
     parser.add_argument("--output", type=Path, default=ROOT / "docs/bun-test-suite")
+    parser.add_argument("--update-failures", type=Path, help="replace only measured rows in an existing failure index; preserve full-census summaries")
     parser.add_argument("--previous", type=Path, help="previous full QuickJS JSON for pass and timeout comparisons")
     parser.add_argument("--date", default=date.today().isoformat(), help="measurement date for the progress table")
     parser.add_argument("--runtime-commit", default=subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip())
@@ -228,6 +238,17 @@ def main():
         source = (opts.suite / "test" / record["file"]).read_text(errors="replace")
         category, topic, confidence = classify(record, source, comparisons)
         assignments.append({"file": record["file"], "category": category, "topic": topic, "confidence": confidence, "tests_passed": record["counts"]["pass"], "tests_failed": record["counts"]["fail"], "timed_out": record["timed_out"], "test": next(iter(record["failing_tests"]), "<collection/hook/exit; no named failure>"), "error": next(iter(error_lines(record)), "<see JSON excerpt; no error line>").rstrip()})
+    if opts.update_failures:
+        with opts.update_failures.open() as previous:
+            reader = csv.DictReader(previous, delimiter="\t")
+            fields = reader.fieldnames
+            merged = merge_measured_failures(list(reader), assignments, [item["file"] for item in data["results"]])
+        with opts.update_failures.open("w") as output:
+            writer = csv.DictWriter(output, fieldnames=fields, delimiter="\t", lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(merged)
+        print(f"Updated {len(data['results'])} measured files; {len(merged)} failure rows remain")
+        return
     with (opts.output / "failures.tsv").open("w") as output:
         writer = csv.DictWriter(output, fieldnames=["file", "category", "topic", "confidence", "tests_passed", "tests_failed", "timed_out", "test", "error"], delimiter="\t", lineterminator="\n")
         writer.writeheader()
@@ -265,10 +286,10 @@ def main():
         text += "\n" + markdown_table(["Engine", "Compared files", "Fully passing", "Observed passes", "File timeouts", "QuickJS failures passing here", "QuickJS passes failing here"], [[engine, len(records), sum(r["fully_passing"] for r in records.values()), sum(r["counts"]["pass"] for r in records.values()), sum(r["timed_out"] for r in records.values()), summary["comparison"][engine]["quickjs_fail_other_pass"], summary["comparison"][engine]["quickjs_pass_other_fail"]] for engine, records in comparisons.items()]) + "\n"
         for engine, records in comparisons.items():
             text += f"\n### {engine} comparison\n\n" + tables({"results": list(records.values())}) + "\n"
-    readme = opts.output / "README.md"
-    template = readme.read_text() if readme.exists() else "# Bun's upstream suite\n\n<!-- baseline:start -->\n<!-- baseline:end -->\n"
+    guide = opts.output / "guide.md"
+    template = guide.read_text() if guide.exists() else "# Bun's upstream suite\n\n<!-- baseline:start -->\n<!-- baseline:end -->\n"
     template = re.sub(r"<!-- progress:start -->.*?<!-- progress:end -->", "", template, flags=re.S).rstrip() + "\n\n<!-- progress:start -->\n" + history + "<!-- progress:end -->\n"
-    readme.write_text(re.sub(r"<!-- baseline:start -->.*?<!-- baseline:end -->", lambda match: "<!-- baseline:start -->\n" + text + "<!-- baseline:end -->", template, flags=re.S))
+    guide.write_text(re.sub(r"<!-- baseline:start -->.*?<!-- baseline:end -->", lambda match: "<!-- baseline:start -->\n" + text + "<!-- baseline:end -->", template, flags=re.S))
     print(json.dumps(summary, indent=2))
 
 

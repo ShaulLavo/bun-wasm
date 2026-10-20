@@ -328,7 +328,7 @@ The guest never chooses descriptor numbers for itself. `spawn` takes UTF-8 JSON:
   Names containing `/` bypass PATH; otherwise entries are tried in order, including empty entries
   as cwd. ENOENT and ENOTDIR candidates are skipped; EACCES is remembered while later executable
   candidates remain eligible. Bun.which uses the same lookup. Absolute paths are never rewritten.
-  Program files and engine PATH defaults are documented in the [package guide](../README.md#installation-and-ownership).
+  Program files and engine PATH defaults are documented in the [package guide](browser-package.md#installation-and-ownership).
   The worker supplies the resolved executable as guest argv[0], making process.execPath a real
   executable path; spawn error metadata still names the caller's original command.
 - `env` replaces the child environment; the host sets `PWD` to `cwd`.
