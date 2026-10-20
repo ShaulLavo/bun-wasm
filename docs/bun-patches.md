@@ -1731,8 +1731,11 @@ The relevant source algorithms are
 **Host feature**. It keeps the existing Node completion hooks and
 `ERR_INVALID_STATE` code, and changes the two exclusive-reader lock messages to
 `ReadableStream is locked`, matching Bun. The input hash, six completion-hook
-sites and two message sites are checked before output is written. This changes
-error text, not reader locking, option validation or read scheduling.
+sites and two message sites are checked before output is written. Its compiler
+API is the declared `typescript-api` alias pinned to TypeScript 6.0.2, not Bun
+checkout dependencies. TypeScript 7 remains the typechecker and does not expose
+this compiler API. This changes error text, not reader locking, option validation
+or read scheduling.
 `scripts/vendor-streams.py` regenerates the bundled artifact and retains the
 upstream MIT license under `third_party/streams/`.
 

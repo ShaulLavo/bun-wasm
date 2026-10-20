@@ -1,11 +1,6 @@
-import type * as TS from "../vendor/bun/node_modules/typescript";
+import ts from "typescript-api";
 import { readFileSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ts: typeof TS = createRequire(resolve(root, "vendor/bun/package.json"))("typescript");
 const input = process.argv[2], output = process.argv[3];
 if (!input || !output) throw new Error("Usage: stream-polyfill-node-hooks.ts <input> <output>");
 const source = readFileSync(input, "utf8");
@@ -13,9 +8,9 @@ if (createHash("sha256").update(source).digest("hex") !== "5c36bb87ddfddc29a2542
 const tree = ts.createSourceFile("ponyfill.mjs", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 let readerLockErrors = 0;
 const counts = { readableInit: 0, writableInit: 0, readableClose: 0, writableClose: 0, readableError: 0, writableError: 0 };
-function directStates(node: TS.Node): string[] {
+function directStates(node: ts.Node): string[] {
   const found: string[] = [];
-  function visit(child: TS.Node): void {
+  function visit(child: ts.Node): void {
     if (child !== node && ts.isFunctionLike(child)) return;
     if (ts.isBinaryExpression(child) && child.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(child.left) && child.left.name.text === "_state" && ts.isStringLiteral(child.right)) found.push(child.right.text);
     ts.forEachChild(child, visit);
@@ -23,14 +18,14 @@ function directStates(node: TS.Node): string[] {
   visit(node);
   return found;
 }
-function readerLockMessage(argument: TS.Expression): TS.Expression {
+function readerLockMessage(argument: ts.Expression): ts.Expression {
   if (!ts.isStringLiteral(argument) || argument.text !== "This stream has already been locked for exclusive reading by another reader") return argument;
   readerLockErrors++;
   return ts.factory.createStringLiteral("ReadableStream is locked");
 }
 const transformed = ts.transform(tree, [context => {
   const f = context.factory;
-  const visit: TS.Visitor = node => {
+  const visit: ts.Visitor = node => {
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "TypeError" && node.arguments?.some(argument => ts.isStringLiteral(argument) && /locked|already has a writer/i.test(argument.text))) {
       const args = Array.from(node.arguments, readerLockMessage);
       return f.createCallExpression(f.createIdentifier("__bunNodeInvalidState"), undefined, args);
