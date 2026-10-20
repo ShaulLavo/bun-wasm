@@ -790,7 +790,7 @@ lookups, the eager Host header and numeric key ordering.
 The focused fixtures also support `--no-build` and `--engine`.
 The exact upstream file selection is recorded in each result's `selection` field.
 Repeat it with `scripts/bun-suite.sh --network loopback --jobs 2 --timeout 10` and
-an engine-specific output path. [The upstream suite guide](bun-test-suite/README.md#reproduce)
+an engine-specific output path. [The upstream suite guide](bun-test-suite/results.md#reproduce)
 describes dependencies and source snapshots.
 
 ```sh

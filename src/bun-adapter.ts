@@ -1,4 +1,6 @@
 import type { Runtime } from "waffle";
+import { FilesystemClient } from "waffle/fs/client";
+import { FilesystemError } from "waffle/fs/protocol";
 import { loadBunWasm, type LoadBunWasmOptions } from "./assets.js";
 
 import { bunLauncher } from "../web/src/bun-launcher.js";
@@ -34,6 +36,31 @@ const executableMarker = new TextEncoder().encode("bun-wasm registered executabl
 const matchesMarker = (bytes: Uint8Array | undefined): boolean => bytes !== undefined
   && bytes.length === executableMarker.length && bytes.every((byte, index) => byte === executableMarker[index]);
 
+async function createExecutable(filesystem: FilesystemClient, name: string): Promise<boolean> {
+  try {
+    await filesystem.asyncCall("writeFile", [name, false, true], executableMarker);
+    return true;
+  } catch (error) {
+    if (!(error instanceof FilesystemError) || error.errno !== 20) throw error;
+    const entry = await filesystem.asyncCall("lookup", [name]);
+    if (entry?.kind !== "file" || !matchesMarker(await filesystem.asyncCall("readFile", [name]))) {
+      throw new BunWasmExecutableConflictError(name);
+    }
+    return false;
+  }
+}
+
+async function rollbackExecutables(filesystem: FilesystemClient, created: string[]): Promise<void> {
+  for (const name of created.reverse()) {
+    try {
+      if (!matchesMarker(await filesystem.asyncCall("readFile", [name]))) continue;
+      await filesystem.asyncCall("remove", [name]);
+    } catch {
+      // A failed operation owns its own result; continue without touching page errors.
+    }
+  }
+}
+
 /** Register Bun on a caller-owned Runtime, provisioning executable files without reserving a root. */
 export async function installBunAdapters(runtime: Runtime, options: BunAdapterOptions): Promise<BunAdapterInstallation> {
   if (installations.has(runtime) || installing.has(runtime)) throw new Error("bun-wasm adapters are already installed on this Runtime");
@@ -52,22 +79,38 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
   }
   const unregisters: Array<() => void> = [];
   const created: string[] = [];
+  let filesystem: FilesystemClient | undefined;
   installing.add(runtime);
   try {
+    // The page-side ordering primitive waits for previously queued writes without
+    // consuming their explicit-drain-owned failure. The fork has no page write queue:
+    // every installer operation observes only its own completion, including EEXIST.
+    await runtime.filesystem.resolvePath("/");
+    filesystem = new FilesystemClient(runtime.filesystem.fork());
     for (const name of ["quickjs", "jsc", "browser"] as const) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString() })));
     for (const name of names) unregisters.push(runtime.registerProgram(name, {
       adapter: `bun:${engine}`, cooperative: true,
       module: () => loadBunWasm(options),
     }));
-    // Preflight every path before writing; provisionMarker rechecks after parent creation.
-    for (const name of names) await checkMarker(runtime.filesystem, name);
-    for (const name of names) await provisionMarker(runtime.filesystem, name, created);
+    // Check every path before creating any files, so a conflict cannot leave a partial install.
+    for (const name of names) {
+      const entry = await filesystem.asyncCall("lookup", [name]);
+      if (entry && (entry.kind !== "file" || !matchesMarker(await filesystem.asyncCall("readFile", [name])))) {
+        throw new BunWasmExecutableConflictError(name);
+      }
+    }
+    for (const name of names) {
+      await filesystem.asyncCall("mkdirp", [name.slice(0, name.lastIndexOf("/")) || "/"]);
+      if (await createExecutable(filesystem, name)) created.push(name);
+    }
   } catch (error) {
     for (const unregister of unregisters.reverse()) unregister();
-    await clearMutationFailure(runtime.filesystem);
-    for (const name of created.reverse()) await rollbackMarker(runtime.filesystem, name);
+    if (filesystem) await rollbackExecutables(filesystem, created);
     throw error;
-  } finally { installing.delete(runtime); }
+  } finally {
+    try { filesystem?.dispose(); }
+    finally { installing.delete(runtime); }
+  }
   let active = true;
   const installation: BunAdapterInstallation = {
     dispose() {
@@ -81,30 +124,3 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
   return installation;
 }
 
-async function checkMarker(filesystem: Runtime["filesystem"], path: string): Promise<boolean> {
-  const entry = await filesystem.lookup(path);
-  if (!entry) return false;
-  if (entry.kind !== "file" || !matchesMarker(await filesystem.readFile(path))) throw new BunWasmExecutableConflictError(path);
-  return true;
-}
-
-async function provisionMarker(filesystem: Runtime["filesystem"], path: string, created: string[]): Promise<void> {
-  if (await checkMarker(filesystem, path)) return;
-  await filesystem.mkdirp(path.slice(0, path.lastIndexOf("/")) || "/");
-  if (await checkMarker(filesystem, path)) return;
-  await filesystem.writeFile(path, executableMarker);
-  created.push(path);
-}
-
-async function clearMutationFailure(filesystem: Runtime["filesystem"]): Promise<void> {
-  // Waffle queues mutation failures for drain, including failures already caught here.
-  try { await filesystem.drain(); } catch {}
-}
-
-async function rollbackMarker(filesystem: Runtime["filesystem"], path: string): Promise<void> {
-  try {
-    if (matchesMarker(await filesystem.readFile(path))) await filesystem.remove(path);
-  } catch {
-    await clearMutationFailure(filesystem);
-  }
-}

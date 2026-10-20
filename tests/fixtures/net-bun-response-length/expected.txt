@@ -1,3 +1,7 @@
 stream length 1 chunked abc next
 stream length 3 chunked abc next
 stream length 5 chunked abc next
+same socket length "1" abc next
+same socket length "5" abc next
+same socket length "-1" abc next
+same socket length "abc" abc next

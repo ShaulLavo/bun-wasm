@@ -2,6 +2,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$root/env.sh"
+bun "$root/scripts/build-wasi-sysroot.ts"
 cd "$root"
 scratch="$(mktemp -d /work/tmp/bun-wasm-transpiler-example-XXXXXX)"
 trap 'rm -rf "$scratch"' EXIT

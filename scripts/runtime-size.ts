@@ -27,8 +27,9 @@ export function initialJavaScript(outputs: OutputGraph, roots: readonly string[]
   return Array.from(seen).sort();
 }
 
-// Waffle 0.0.41: typed startup, directory and fd-3 support; measured 7,516 B.
-const CORE_BUDGET_KIB = 7.5;
+// Waffle 0.0.47 captures host intrinsics and validates shared-view identities (#31).
+// Measured core: 8,073 B gzip; retain a tight 8 KiB budget for these required checks.
+const CORE_BUDGET_KIB = 8;
 export function checkCoreBudget(gzipBytes: number): void {
   const budget = CORE_BUDGET_KIB * 1024;
   if (gzipBytes > budget) throw new Error(`core exceeds ${budget} B gzip budget by ${gzipBytes - budget} B; inspect runtime/core imports and the layer report`);
@@ -39,7 +40,7 @@ export function checkCoreBudget(gzipBytes: number): void {
 export function processServiceInputs(inputs: readonly string[], runtime: RuntimePackage): string[] {
   return inputs.filter(path => {
     const match = /^(?:dist\/)?proc\/(.+)\.(?:ts|js)$/.exec(runtime.relativeInput(path) ?? "");
-    return match !== null && !["identity", "stub", "control", "directory", "outcome", "start-errno", "start-failure", "wait-status", "signals", "types"].includes(match[1]!);
+    return match !== null && !["identity", "stub", "intrinsics", "control", "directory", "outcome", "start-errno", "start-failure", "wait-status", "signals", "types"].includes(match[1]!);
   });
 }
 export function checkLazyProcessService(inputs: readonly string[], runtime: RuntimePackage): void {

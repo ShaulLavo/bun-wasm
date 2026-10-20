@@ -74,6 +74,10 @@ jobs:
           bash scripts/sync-bun.sh
           bash scripts/sync-crypto.sh
           cargo install cargo-machete --version 0.9.2 --locked --jobs 1
+      - name: Build patched WASI sysroot
+        run: |
+          source env.sh
+          time bun scripts/build-wasi-sysroot.ts
       - name: Blocking quality gates
         run: |
           source env.sh
@@ -110,6 +114,8 @@ jobs:
         run: |
           bash scripts/sync-bun.sh
           bash scripts/sync-crypto.sh
+      - name: Test CMake cache toolchain preflight
+        run: bun test scripts/cmake-cache.test.ts
       - name: Test every workspace crate on the host
         # Defaults select QuickJS; JSC's host target links no WASM-only C++ libraries.
         # bunwasm-posix is cfg(wasi), so its WASI-only tests are not host-runnable.
@@ -134,6 +140,8 @@ jobs:
       - run: bun run test
         env:
           TMPDIR: ${{ runner.temp }}
+      - name: Test vectored reads and browser dependency resolution
+        run: bun test scripts/node-fs-readv.test.ts scripts/node-fs-runtime-proc.test.ts scripts/browser-build.test.ts
 
   web:
     name: Web host

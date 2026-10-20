@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { SpawnRequest } from "waffle/proc/types";
-import { bunRuntimeProcFixture, bunRuntimeProcPending, bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
+import { bunRuntimeProcFixture, bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
 
 for (const scenario of bunRuntimeProcScenarios) test(`external generic root fixture ${scenario.name} retains requests, fds and blocking job status checks`, () => {
   const bytes = bunRuntimeProcFixture(scenario);
@@ -32,11 +32,26 @@ for (const scenario of bunRuntimeProcScenarios) test(`external generic root fixt
         output.push(new TextDecoder().decode(new Uint8Array(memory.buffer, pointer, length))); return length;
       },
       pipe(pointer: number) { const view = new DataView(memory.buffer); view.setInt32(pointer, 123, true); view.setInt32(pointer + 4, 456, true); return 0; },
-      read(_fd: number, pointer: number) { if (++reads % 2 === 1) return -6; new Uint8Array(memory.buffer)[pointer] = 82; return 1; },
+      read(fd: number, pointer: number, length: number) {
+        if (scenario.fileCursor) {
+          expect(fd).toBe(123);
+          const value = ++reads === 1 ? "xx" : "!";
+          expect(length).toBe(value.length);
+          new Uint8Array(memory.buffer).set(new TextEncoder().encode(value), pointer);
+          return length;
+        }
+        if (++reads % 2 === 1) return -6; new Uint8Array(memory.buffer)[pointer] = 82; return 1;
+      },
       poll() { return 1; },
       kill_job(job: number, signal: number) { expect(signal).toBe(9); killed.push(job); return 0; },
     },
     wasi_snapshot_preview1: {
+      path_open(fd: number, flags: number, path: number, length: number, oflags: number, rights: bigint, inheriting: bigint, fdflags: number, result: number) {
+        const expectedRights = scenario.fileCursor === "positioned" ? (1n << 21n) | 6n : 2n;
+        expect([fd, flags, oflags, rights, inheriting, fdflags]).toEqual([3, 0, 0, expectedRights, 0n, 0]);
+        expect(new TextDecoder().decode(new Uint8Array(memory.buffer, path, length))).toBe("home/user/inherited-cursor");
+        new DataView(memory.buffer).setUint32(result, 123, true); return 0;
+      },
       fd_close(fd: number) { closed.push(fd); return 0; },
       proc_exit(code: number) { throw new Error(`external root failed stage ${code}`); },
     },
@@ -54,7 +69,7 @@ for (const scenario of bunRuntimeProcScenarios) test(`external generic root fixt
     });
   }
   expect(waited).toEqual(scenario.commands.map((_, index) => 111 + index));
-  expect(closed).toEqual(scenario.pipe ? [123, 456] : []);
+  expect(closed).toEqual(scenario.pipe ? [123, 456] : scenario.fileCursor ? [123] : []);
   expect(killed).toEqual(scenario.pipe === "signal" ? [111] : []);
   expect(output).toEqual((scenario.pipe === "input" ? [scenario.input ?? ""] : []).concat(["external-root-ok\n"]));
 });
@@ -76,7 +91,20 @@ test("pipeline fixture starts every real child before blocking on the first job"
   (instance.exports._start as () => void)();
 });
 
-for (const pending of bunRuntimeProcPending) test.todo(pending);
+test("actual Bun relocated-root acceptance covers inherited fd3, prefixes, holes and a sparse high fd with exit0", () => {
+  const scenarios = bunRuntimeProcScenarios.filter(item => item.name.startsWith("preopen-inherited-"));
+  expect(scenarios.map(item => item.name)).toEqual(["preopen-inherited-3", "preopen-inherited-3-4", "preopen-inherited-3-5", "preopen-inherited-3-1000000"]);
+  for (const scenario of scenarios) {
+    expect(scenario.stdout).toBe("ROOT_PREOPEN_OK\nexternal-root-ok\n");
+    expect(scenario.commands[0]!.status ?? 0).toBe(0);
+  }
+});
+
+test("actual Bun fd4-read/fd3-write acceptance is enabled with exit0 rather than an EBADF allowance", () => {
+  const scenario = bunRuntimeProcScenarios.find(item => item.name === "preopen-blocks-fd4-read-fd3-write")!;
+  expect(scenario.commands[0]!.status ?? 0).toBe(0);
+  expect(scenario.stdout).toBe("FD3:cursor\nexternal-root-ok\n");
+});
 
 for (const control of [
   { returned: -27, kind: 0, value: 0 },

@@ -6,6 +6,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$root/env.sh"
+bun "$root/scripts/build-wasi-sysroot.ts"
 "$root/scripts/sync-crypto.sh"
 # rquickjs-sys looks for wasi-sdk here (otherwise it downloads one).
 export WASI_SDK="${WASI_SDK:-$WASI_SDK_PATH}"
@@ -15,6 +16,7 @@ if [[ "${1:-}" == "--no-bun-transpiler" ]]; then
   features=(--no-default-features)
 fi
 
+guest_inputs=$(bun "$root/scripts/guest-build-receipt.ts" inputs)
 cargo build -j "${JOBS:-12}" --release --target wasm32-wasip1 -p bunwasm-cli "${features[@]}"
 
 if [[ "${1:-}" != "--no-bun-transpiler" ]]; then
@@ -31,5 +33,6 @@ if command -v wasm-opt >/dev/null; then
 else
   cp "$raw" "$root/dist/bun.wasm"
 fi
+bun "$root/scripts/guest-build-receipt.ts" write "$root/dist/bun.wasm" "$guest_inputs"
 printf 'dist/bun.wasm: %s bytes (cargo output: %s bytes)\n' \
   "$(stat -c %s "$root/dist/bun.wasm")" "$(stat -c %s "$raw")"

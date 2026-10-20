@@ -1,11 +1,17 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import type { Runtime, GuestLauncher, ProgramDefinition } from "waffle";
+import { FilesystemClient } from "waffle/fs/client";
+import { MemoryBackend } from "waffle/fs/backend";
+import { FilesystemService } from "waffle/fs/service";
+import { createFilesystemConnection, FilesystemError } from "waffle/fs/protocol";
 import { installBunAdapters as installReal, type BunAdapterOptions, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
 const workerUrl = "https://example.test/worker.js";
 const installBunAdapters = (runtime: Runtime, options: Omit<BunAdapterOptions, "workerUrl"> & { workerUrl?: string | URL } = {}) => installReal(runtime, { workerUrl, ...options });
 
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+const cleanups: Array<() => void> = [];
+afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
 function fixture() {
   const adapters = new Map<string, GuestLauncher>();
   const programs = new Map<string, ProgramDefinition>();
@@ -23,10 +29,33 @@ function fixture() {
     filesystem: {
       lookup: async (path: string) => files.has(path) ? { kind: "file" } : directories.has(path) ? { kind: "dir" } : undefined,
       readFile: async (path: string) => files.get(path),
-      writeFile: async (path: string, bytes: Uint8Array) => { files.set(path, new Uint8Array(bytes)); },
+      writeFile: async (path: string, bytes: Uint8Array, mode?: { exclusive?: boolean }) => {
+        if (mode?.exclusive && (files.has(path) || directories.has(path))) throw new FilesystemError(20);
+        files.set(path, new Uint8Array(bytes));
+      },
       mkdirp: async (path: string) => { directories.add(path); },
       remove: async (path: string) => files.delete(path),
       drain: async () => {},
+      resolvePath: async () => ({ path: "/", kind: "dir" }),
+      fork: () => {
+        const backend = new MemoryBackend();
+        backend.execute = (operation, args, bytes) => {
+          const path = args[0] as string;
+          switch (operation) {
+            case "writeFile": return runtime.filesystem.writeFile(path, bytes!, { exclusive: args[2] === true });
+            case "mkdirp": return runtime.filesystem.mkdirp(path);
+            case "lookup": return runtime.filesystem.lookup(path);
+            case "readFile": return runtime.filesystem.readFile(path);
+            case "remove": return runtime.filesystem.remove(path);
+            default: throw new Error(`Unexpected fixture operation: ${operation}`);
+          }
+        };
+        const service = new FilesystemService(backend);
+        const connection = createFilesystemConnection();
+        cleanups.push(() => { service.dispose(); connection.server.port.close(); connection.client.port.close(); });
+        service.connect(connection.server);
+        return connection.client;
+      },
     },
   } as unknown as Runtime;
   return { runtime, adapters, programs, files, directories, removed };
@@ -128,3 +157,49 @@ test("invalid executable names and explicit engines are validated before registr
   expect(f.programs.get("/opt/bun/quickjs/bin/bun")?.adapter).toBe("bun:quickjs");
   install.dispose();
 });
+
+for (const failure of [new FilesystemError(29), Object.assign(new Error("not a filesystem conflict"), { errno: 20 })]) {
+  test(`exclusive marker creation preserves unrelated ${failure.message} errors`, async () => {
+    const f = fixture();
+    f.runtime.filesystem.writeFile = async (_path, _bytes, mode) => {
+      expect(mode).toEqual({ exclusive: true });
+      throw failure;
+    };
+    // The service preserves typed errno and normalizes arbitrary backend errors to EIO.
+    expect(await installBunAdapters(f.runtime).catch(error => error)).toMatchObject({ errno: 29 });
+    expect(f.adapters.size).toBe(0);
+    expect(f.programs.size).toBe(0);
+    expect(f.files.size).toBe(0);
+  });
+}
+
+test("resolving an exclusive marker race never consumes a shared drain error", async () => {
+  const f = fixture();
+  const failure = new FilesystemError(29);
+  const winner = new TextEncoder().encode("bun-wasm registered executable\n");
+  f.runtime.filesystem.writeFile = async path => {
+    f.files.set(path, winner);
+    throw new FilesystemError(20);
+  };
+  f.runtime.filesystem.drain = async () => { throw failure; };
+  const install = await installBunAdapters(f.runtime);
+  try {
+    expect(f.files.get("/bin/bun")).toBe(winner);
+    await expect(f.runtime.filesystem.drain()).rejects.toBe(failure);
+  } finally { install.dispose(); }
+  expect(f.adapters.size).toBe(0);
+  expect(f.programs.size).toBe(0);
+});
+
+for (const conflict of [false, true]) {
+  test(`installer disposes its borrowed filesystem client after ${conflict ? "failure" : "success"}`, async () => {
+    const f = fixture();
+    if (conflict) f.files.set("/bin/bun", new Uint8Array([1]));
+    const dispose = spyOn(FilesystemClient.prototype, "dispose");
+    try {
+      if (conflict) await expect(installBunAdapters(f.runtime)).rejects.toBeInstanceOf(BunWasmExecutableConflictError);
+      else (await installBunAdapters(f.runtime)).dispose();
+      expect(dispose).toHaveBeenCalledTimes(1);
+    } finally { dispose.mockRestore(); }
+  });
+}

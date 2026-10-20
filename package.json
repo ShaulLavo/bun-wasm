@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm",
-  "version": "0.0.6",
+  "version": "0.0.12",
   "private": true,
   "type": "module",
   "exports": {
@@ -69,13 +69,13 @@
     "quality:wasi": "bun scripts/quality-wasi.ts"
   },
   "peerDependencies": {
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#0a9fe12bf73cce81047999d0499543dfe0d9e513"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#7d095e53040484afaf8363af34fc5284e132798c"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "typescript": "7.0.2",
     "vite": "8.3.4",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#0a9fe12bf73cce81047999d0499543dfe0d9e513",
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#7d095e53040484afaf8363af34fc5284e132798c",
     "jscpd": "5.4.1",
     "knip": "6.41.0",
     "oxlint": "1.88.0",

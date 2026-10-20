@@ -3,12 +3,13 @@
 # build, finalize. Outputs go to ${JSC_BUILD_DIR:-/work/tmp/bun-wasm-jsc}, never the repo:
 #   build/jsc/lib/lib{JavaScriptCore,WTF,bmalloc}.a  icu/prefix/lib/libicu*.a  shim/libwasi-compat.a
 #   jsc.wasm (the jsc shell, finalized)
-# See jsc/README.md.
+# See docs/jsc-build.md.
 set -euo pipefail
 jsc="$(cd "$(dirname "${BASH_SOURCE[0]}")/../jsc" && pwd)"
+source "$jsc/common.sh"
+bun "$REPO/scripts/build-wasi-sysroot.ts"
 "$jsc/fetch-webkit.sh"
 "$jsc/build-icu.sh"
-source "$jsc/common.sh"
 rm -f "$JSC_INPUTS_STAMP"
 "$jsc/configure.sh"
 "$jsc/build.sh"

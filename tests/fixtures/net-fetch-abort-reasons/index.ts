@@ -36,11 +36,13 @@ async function check(label: string, reason: unknown): Promise<void> {
 }
 
 try {
+  await checkHeaders("empty", "");
   await checkHeaders("null", null);
   await checkHeaders("zero", 0);
   await checkHeaders("false", false);
   await checkHeaders("string", "stopped");
   await checkHeaders("error", new Error("stopped"));
+  await check("empty", "");
   await check("null", null);
   await check("zero", 0);
   await check("false", false);

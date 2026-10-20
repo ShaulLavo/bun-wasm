@@ -57,6 +57,9 @@ Each row has one class. A file with independent changes has separate rows.
 | [Node startup diagnostic drain](#node-startup-diagnostic-drain) | Host feature | Use Waffle's public cancellable, bounded asynchronous diagnostic drain for the Node process host's immediate stderr writes. |
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
+| [Filesystem vectored reads](#filesystem-vectored-reads) | Host feature | Original readv/readvSync and FileHandle.readv adapters avoid summed-capacity allocations, use one bounded read for non-regular descriptors, preserve shared cursors and follow Bun's empty-vector contract. |
+| [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle 0.0.48's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
+| [CMake toolchain cache preflight](#cmake-toolchain-cache-preflight) | Port | Reject an existing CMake cache whose recorded compiler, toolchain file, target, system, processor or sysroot does not match the requested native or WASI configure/build. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
 | [Vendor source synchronization](#vendor-source-synchronization) | Host feature | Original patch-tree verification updates existing clones and detached worktrees without overwriting local changes. |
@@ -639,15 +642,20 @@ Node, WebKit, PGlite, or SQLite implementation.
 Unbundled Node host adapters import Waffle's exported JavaScript memory helper through
 `waffle/core/memory-views`, so headless CLI workflows remain dependency-free.
 The original browser-build adapter resolves declared exports through the consuming app.
-It returns equivalent public installed-package paths so encoded isolated-cache directory
-names do not trigger Bun's double-dot plugin-path rejection. No upstream code is copied.
+It validates the installed-package boundary and returns consumer-installed aliases for both
+exported and relative imports, hiding isolated-cache directory names. No upstream code is copied.
 
 ## Browser package resolution
 
 Class **Host feature** for the original adapter in `scripts/browser-build.ts`. The adapter resolves
-the consuming app's `waffle` exports with Bun, then maps the resolved file back through
-the consumer's package path. This keeps the returned path absolute without exposing Bun's isolated
-package-cache spelling to the build plugin. No upstream source is copied.
+the consuming app's declared `waffle` browser exports and verifies that each target stays inside
+the installed package. Bare package imports and relative runtime imports return paths under
+the same consumer-installed alias, preserving one module identity without exposing physical
+cache directory names containing `..` to Bun's file-namespace plugin-path check. Mixing a
+symlink alias with physical relative imports duplicated `FilesystemError` and broke the
+installer's typed EEXIST handling during reinstall. A synthetic symlinked-package build checks
+error-constructor identity with a double-dot cache name, alongside real-browser reinstall
+acceptance. No upstream source is copied.
 
 ## Portable semver host functions
 
@@ -1017,7 +1025,7 @@ File `jsc/webkit-wasi.patch`. The following hunks have class **Port**.
 | `Source/cmake/OptionsJSCOnly.cmake` | Disable native API tests for WASI. | The cross-build includes unsupported test targets. |
 | `Source/cmake/WebKitCommon.cmake` | Recognize CMake's WASI system name. | Configure rejects the OS. |
 
-`jsc/wasi-jsc.cmake`, `jsc/configure.sh`, and `jsc/shim/wasi-compat.{h,c}` plus `madvise.c` are our **Port** configuration and glue, not edits to upstream source. They select the C-loop interpreter, system malloc, single-thread GC, and disabled JIT/Wasm tiers; supply temporary-file helpers and inert signal/scheduling declarations; and link the WASI support library. Without them the target cannot configure or link. `jsc/finalize.sh` runs Binaryen's `--spill-pointers`, without which conservative GC misses references in wasm locals. See [the JSC notes](../jsc/README.md).
+`jsc/wasi-jsc.cmake`, `jsc/configure.sh`, and `jsc/shim/wasi-compat.{h,c}` plus `madvise.c` are our **Port** configuration and glue, not edits to upstream source. They select the C-loop interpreter, system malloc, single-thread GC, and disabled JIT/Wasm tiers; supply temporary-file helpers and inert signal/scheduling declarations; and link the WASI support library. Without them the target cannot configure or link. `jsc/finalize.sh` runs Binaryen's `--spill-pointers`, without which conservative GC misses references in wasm locals. See [the JSC notes](jsc-build.md).
 
 ### WebKit module import slots
 
@@ -2896,6 +2904,140 @@ The Waffle core budget is 7,680 B gzip, matching its upstream budget; this pin
 measures 7,516 B. Tagged process directory/control and startup value primitives
 remain included in the startup byte totals. Supervisor, registry, table, worker
 service, pipes and interrupt rewriting still cannot load before first use.
+
+## Filesystem vectored reads
+
+Class **Host feature**. `crates/bunwasm-runtime/src/js/node_fs.js` adds original
+`readvSync`, callback `readv`, and `FileHandle.readv` adapters over the existing
+Rust `read` native. No Bun or Node implementation is copied or adapted. Public
+behaviour is measured against Bun 1.4.2 (`744846f84`) and Node 26.7.0. Positively
+identified regular files read one view at a time, stopping at the first short
+read or EOF; subsequent explicit positions advance only by committed bytes.
+Errors after progress return the committed prefix. No allocation or native read
+request uses the vector's combined capacity: 1024 aliases of one 4 MiB view over
+an eight-byte file stop after the first view-sized request.
+
+Non-regular descriptors (pipes, terminals and sockets), and descriptors whose
+metadata is unavailable, perform exactly one read capped at 64 KiB, then scatter
+its possibly short result in vector order. This avoids blocking on a second read
+after filling an earlier view. It also bounds the sequential process-stdin
+waiter's staging allocation to 64 KiB; stdin keeps EAGAIN, saved async context,
+EOF and errno handling without waiting for more input after progress. The JSC
+C API explicitly does not guarantee `JSObjectGetTypedArrayBytesPtr` pointers
+across subsequent API calls (`JSTypedArray.h`, WebKit
+`3d3257150c40a1aabdc5f8b48d5b33d0413674cb`), so this adapter does not collect
+unpinned engine pointers for a zero-copy native iovec call.
+
+At most 1024 views participate, while every supplied view is validated. Writes
+stay within each borrowed view and leave bytes after EOF unchanged. Positioned
+reads retain the shared open-file cursor. Only nonnegative safe integer positions
+select a positioned read, matching Bun's observed coercion. Callbacks deliver the
+original array on a later turn. Explicitly positioned stdin keeps the native
+positional-read path rather than silently discarding its position.
+
+Bun returns zero for an empty vector `[]`, including a closed positive fd,
+without issuing a native read. Node returns EINVAL instead; this known difference
+is excluded from the shared Bun/Node parity cases. Both validate fd argument
+shape, and a nonempty vector containing only empty views still validates the
+actual descriptor. A closed FileHandle rejects even `readv([])`. Counted native
+fixtures exercise short reads, overlapping and offset DataViews, EOF, argument
+ordering, 1024 large aliases, bounded native requests and callback identity.
+A production-factory subprocess fixture uses real kernel pipes with the writer
+held open: both a short first view and a completely filled first view must return
+without another read. The parent enforces a deadline and owns writer closure,
+child termination and reaping. Separate native-reference fixtures keep the
+shared behaviour and Bun-only empty-vector contract apart; those fixtures own
+and remove their temporary input files. Browser acceptance adds real inherited-file
+positioned/sequential cursor checks and process-stdin short-read/EOF scattering,
+including mixed offset views and callback identity. The external root retains
+its final cursor check and owns all opened descriptors.
+
+## Patched sysroot and native descriptor bridge
+
+Class **Port**, with an original local build wrapper and native runtime adapter. The libc input is
+not copied into this repository: Waffle 0.0.48 at `7d095e53040484afaf8363af34fc5284e132798c`
+builds wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13` from the installed
+`waffle/scripts/build-wasi-libc.sh`. Its `preopen-scan.patch` skips occupied inherited descriptors
+only when `fd_fdstat_get` succeeds and stops on the first real BADF. `scripts/build-wasi-sysroot.ts`
+keys reuse on the actual builder and patch content, SDK VERSION, compiler/archive-tool binaries and
+versions, host build tools, effective compiler environment and SDK overlay targets, with an integrity
+hash of the built libc. Waffle package revisions remain provenance rather than cache inputs: an
+unrelated process-only revision reuses the identical receipt, as the package regression proves. A
+nonmatching receipt is rejected outright, without upgrades or compatibility handling. The wrapper
+claims an atomic output lock, stages next to the destination for same-filesystem atomic publication,
+and refuses stale or caller-owned outputs. Reuse verifies the SDK overlay targets against the selected SDK, even
+when two SDK directories have identical VERSION files. It symlinks only
+unchanged SDK C++ headers and noeh libraries; CRT, libc and emulation archives come from the
+patched sysroot. Every guest and native C/C++ consumer receives that sysroot explicitly, while
+Rust self-contained libc remains disabled. The JSC/ICU side uses the same receipt boundary:
+`jsc/build-icu.sh` fingerprints the ICU source, wasi-sdk VERSION, patched sysroot receipt, compiler
+versions, effective host compiler commands and paths, compiler/include/linker environment, and build
+script before accepting an existing cache; a failed compiler probe or missing or mismatched receipt on a
+nonempty cache is an error rather than a silent reuse of older libc inputs. `jsc/common.sh` extends
+the JSC prebuild fingerprint with that receipt and the effective toolchain, and `scripts/build-bun-jsc.sh`
+requires the matching stamp before linking a guest. Each guest build also checks that the clean
+imported Bun tree matches the checked-in patch series before compilation. Its final optimized Wasm
+gets the shared [guest build receipt](guest-build-receipts.md), recording the vendor commit/tree,
+patched-sysroot receipt hash and exact artifact hash/size. The build refuses a source or input-receipt
+change before writing that sidecar; browser acceptance and publication can consume the same format.
+
+`crates/bunwasm-runtime/src/natives.rs` is original bun-wasm code, not a copied wasi-libc or Node
+implementation. Its open-file table stores real descriptors, allowing inherited fd3/fd4 resources
+to use the same read/write/fstat/ftruncate namespace and preserving shared open-file cursors. Empty
+reads and writes validate descriptors, negative closes return EBADF, interrupted writes retry, and later failures return committed partial
+progress. Direct writes flush both output streams first because inherited descriptors can alias
+stdout or stderr. Native inherited fstat preserves the libc mode, including pipes and devices.
+On WASI, preview1 has no FIFO tag and both process hosts encode pipes as UNKNOWN.
+The original adapter maps that host pipe representation (which libc preserves with no POSIX
+file-type bits) to FIFO, preserving device, socket and filesystem kinds and propagating
+metadata capability errors. Waffle #34 grants FD_FILESTAT_GET to both pipe endpoints; inherited
+descriptors keep those exact rights, so the real pipe-fstat controls succeed without bypassing
+metadata capability checks. No upstream implementation or new binding dependency is copied.
+The original `src/js/node_fs.js` Stats predicates test those type bits rather than hard-coding false.
+Its public readSync and callback read validate buffer/offset/length arguments, then return zero before
+invoking the native for a zero-byte request, as native Node and Bun do even on a closed descriptor.
+A zero-byte request allows an offset beyond the buffer, and follows Bun in ignoring its position.
+Direct native empty reads still validate the descriptor.
+FileHandle.read checks the handle's closed state first, so closing a handle cannot be hidden by that
+public short-circuit. A parity table distinguishes these reads from empty writes, which still fail
+with EBADF. These are original adapters, not copied Node or Bun implementations.
+The browser process controls create a real filesystem file and inherited pipe, verify shared open-file
+cursors and pipe/device metadata, reject empty writes to closed descriptors, and preserve buffered
+output ordering across direct fd aliases in Chromium, Firefox and WebKit. The package installer uses exclusive marker creation and rolls back only paths
+it created. A borrowed public FilesystemClient observes each mutation's own completion, including
+exclusive-create EEXIST, and is disposed after success or failure. The page-side resolvePath ordering
+primitive makes earlier undrained writes visible without consuming the caller-owned sticky failure.
+A matching concurrent marker is shared; unrelated page failures remain available to the caller's
+explicit drain in either request ordering. The formerly expected-failing libc controls are now
+strict successes: all 18 scenarios pass
+without retries in each of Chromium, Firefox and WebKit for browser, QuickJS and JSC artifacts.
+This supersedes the historical expected-failure notes for earlier pins below and above.
+
+Waffle #31 in this pin captures host intrinsics and validates shared-view identities. The measured
+core closure is 24,744 B minified / 8,073 B gzip; the core gate is now a tight 8,192 B gzip.
+The captured-intrinsics module is classified with eager reservation/control primitives, not the
+lazy process supervisor. Test-only wait, notify and outcome instrumentation uses module injection
+or a pre-import fixture observer; no production mutable hook or export was added.
+
+## CMake toolchain cache preflight
+
+Class **Port**, implemented in the original build boundary. `scripts/check-cmake-cache.cmake` is a
+read-only, fail-closed validator for existing Ninja CMake build directories. Before BoringSSL or
+JavaScriptCore configure/build, it resolves the recorded C and C++ compiler paths, toolchain file,
+CMake system and processor, compiler target flags in `rules.ninja`, and effective compile/link
+sysroots, including `CMAKE_SYSROOT_COMPILE` and `CMAKE_SYSROOT_LINK` overrides. Native builds reject
+an unexpected toolchain or sysroot; WASI builds require the requested paths to match and exist. A missing or malformed cache is rejected with a fresh-directory diagnostic; a fresh
+directory is allowed to configure normally. The validator never edits or removes the caller's cache.
+`crates/bunwasm-crypto-sys/build.rs` checks before configure and build; the original shared shell
+adapter `scripts/check-wasi-cmake-cache.sh` covers `jsc/configure.sh`, `jsc/build.sh`, and
+`scripts/real-runtime-network-tls.sh` before shim, configure or Ninja work. Regression fixtures use
+actual C/C++ Ninja caches, cover matching reuse and compiler/toolchain/target/system/processor/
+sysroot mismatches, deleted toolchain files, incomplete metadata, and byte-for-byte preservation.
+Build-command sentinels verify the real shell entry points refuse mismatches without launching
+compilers, Ninja or services. Real configure probes use the existing descendant-safe command
+wrapper with a 15-second deadline inside a 30-second integration-test budget, accommodating
+cold or contended compiler discovery without unbounded waits.
+This is build safety for the wasm port, not a copied CMake implementation.
 
 ## Node startup diagnostic drain
 
