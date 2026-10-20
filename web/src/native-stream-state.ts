@@ -234,6 +234,82 @@ function construct<T extends typeof ReadableStream | typeof WritableStream | typ
   } });
   return wrapper;
 }
+type Sequence = { kind: "async" | "sync"; iterator: object; next: unknown };
+type SequenceStep = { done: true } | { done: false; value: unknown };
+function sequenceObject(value: unknown): object {
+  if (value === null || typeof value !== "object" && typeof value !== "function") throw new TypeError("Iterator result must be an object");
+  return value;
+}
+function sequenceMethod(object: object, key: PropertyKey): Function | undefined {
+  const value = Reflect.get(object, key);
+  if (value === undefined || value === null) return;
+  if (typeof value !== "function") throw new TypeError("Iterator method must be callable");
+  return value;
+}
+function openSequence(input: unknown): Sequence {
+  const object = sequenceObject(input);
+  const asyncMethod = sequenceMethod(object, Symbol.asyncIterator);
+  const method = asyncMethod ?? sequenceMethod(object, Symbol.iterator);
+  if (!method) throw new TypeError("Value must be iterable");
+  const iterator = sequenceObject(apply(method, object, []));
+  return { kind: asyncMethod ? "async" : "sync", iterator, next: Reflect.get(iterator, "next") };
+}
+function callNext(sequence: Sequence): object {
+  if (typeof sequence.next !== "function") throw new TypeError("Iterator next must be callable");
+  return sequenceObject(apply(sequence.next, sequence.iterator, []));
+}
+function closeRejectedSync(sequence: Sequence, error: unknown): never {
+  try {
+    const method = sequenceMethod(sequence.iterator, "return");
+    if (method) apply(method, sequence.iterator, []);
+  } catch { /* IteratorClose preserves the original abrupt completion. */ }
+  throw error;
+}
+async function syncSequenceResult(sequence: Sequence, result: object, closeOnRejection: boolean): Promise<SequenceStep> {
+  const done = Boolean(Reflect.get(result, "done"));
+  const value = Reflect.get(result, "value");
+  let unwrapped;
+  try { unwrapped = await value; }
+  catch (error) {
+    if (!done && closeOnRejection) closeRejectedSync(sequence, error);
+    throw error;
+  }
+  return done ? { done: true } : { done: false, value: unwrapped };
+}
+async function nextSequence(sequence: Sequence): Promise<SequenceStep> {
+  const result = callNext(sequence);
+  if (sequence.kind === "sync") return syncSequenceResult(sequence, result, true);
+  const resolved = sequenceObject(await result);
+  if (Reflect.get(resolved, "done")) return { done: true };
+  return { done: false, value: await Reflect.get(resolved, "value") };
+}
+async function closeSequence(sequence: Sequence, reason: unknown): Promise<void> {
+  const method = sequenceMethod(sequence.iterator, "return");
+  if (!method) return;
+  const result = apply(method, sequence.iterator, [reason]);
+  if (sequence.kind === "sync") {
+    await syncSequenceResult(sequence, sequenceObject(result), false);
+    return;
+  }
+  sequenceObject(await result);
+}
+function readableFrom(Ctor: typeof ReadableStream, input: unknown): ReadableStream<unknown> {
+  const sequence = openSequence(input);
+  let cancelled = false;
+  return new Ctor({
+    async pull(controller) {
+      const step = await nextSequence(sequence);
+      if (cancelled) return;
+      if (step.done) controller.close();
+      else controller.enqueue(step.value);
+    },
+    cancel(reason) { cancelled = true; return closeSequence(sequence, reason); },
+  }, { highWaterMark: 0 });
+}
+function installReadableFrom(Ctor: typeof ReadableStream) {
+  const method = { from(input: unknown) { return readableFrom(Ctor, input); } }.from;
+  Object.defineProperty(Ctor, "from", { configurable: true, enumerable: false, writable: true, value: method });
+}
 function method(prototype: object, name: PropertyKey, after: (self: object, args: unknown[], result: unknown) => void) {
   const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
   if (!descriptor?.value) return;
@@ -360,6 +436,7 @@ export function installNativeStreamState() {
     const readable = construct(Native.ReadableStream, "readable", ["start", "pull", "cancel"]);
     const writable = construct(Native.WritableStream, "writable", ["start", "write", "close", "abort"]);
     const transform = construct(Native.TransformStream, "transform", ["start", "transform", "flush", "cancel"]);
+    installReadableFrom(readable);
     linkConstructor(Native.ReadableStream, readable);
     linkConstructor(Native.WritableStream, writable);
     linkConstructor(Native.TransformStream, transform);

@@ -12,6 +12,7 @@ function inputs() {
   const builtins = readFileSync(join(sourceRoot, "builtins.js"), "utf8");
   sources.asyncHooks = builtins.slice(builtins.indexOf("  function asyncHooksModule()"), builtins.indexOf("  function diagnosticsChannelModule()"));
   sources.hostBridge = stripTypeScriptTypes(readFileSync(join(root, "web/src/native-stream-state.ts"), "utf8"));
+  sources.fromControls = stripTypeScriptTypes(readFileSync(join(root, "web/tests/native-readable-from-controls.ts"), "utf8"));
   sources.fixture = readFileSync(join(root, "tests/fixtures/node-native-web-streams/index.js"), "utf8");
   return sources;
 }
@@ -75,6 +76,11 @@ for (const name of ["chromium", "webkit"]) {
       let error;
       try { await new Function("core", "return (async () => {" + body + "})()")(bundle.Stream); }
       catch (failure) { error = String(failure); }
+      try {
+        const checkFrom = new Function(sources.fromControls.replace("export async function checkNativeReadableFrom", "async function checkNativeReadableFrom") + ";return checkNativeReadableFrom;")();
+        const rows = await checkFrom(native.ReadableStream);
+        globalThis.__nativeStreamResults = globalThis.__nativeStreamResults.concat(rows);
+      } catch (failure) { error = String(failure); }
       const brands = Object.fromEntries(Object.entries(native).map(([name, Ctor]) => [name, {
         sameConstructor: globalThis[name] === Ctor,
         samePrototype: globalThis[name].prototype === Ctor.prototype,

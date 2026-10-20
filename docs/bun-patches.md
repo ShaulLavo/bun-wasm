@@ -137,7 +137,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`waffle/fs/`, filesystem quiescence](#filesystem-quiescence) | Host feature | Original shared admission and revocation fence lets controllers stop workers only after direct filesystem operations finish. |
 | [`waffle/fs/opfs.ts`, OPFS access-handle and quota adapters](#opfs-storage-adapter) | Host feature | Original one-file-per-payload storage adapter with guidance for occupied workspaces; adapts SLICC-kernel's Apache-2.0 `src/fs/opfs.ts` at 88c5bb3 for NotReadableError retries and QuotaExceededError mapping while retaining bun-wasm's checksummed snapshots, lazy index and bounded cache. |
 | [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
-| [`web/src/native-stream-state.ts`](#native-browser-stream-completion) | Host feature | Original native completion bridge preserves host hooks on instances as well as prototypes. |
+| [`web/src/native-stream-state.ts`](#native-browser-stream-completion) | Host feature | Original native completion bridge and WHATWG iterable conversion adapter preserve native construction and cancellation. |
 | [Cross-platform web test adapters](#cross-platform-web-tests) | Host feature | Original scratch, child-process cleanup, command-deadline and existing-browser-cache adapters run the same assertions on Linux and macOS. |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
 | [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and support asynchronous stdin through process descriptors with live shared filesystem changes and large files. |
@@ -1851,8 +1851,9 @@ and explicit overrides (including `0` and empty) are preserved. The isolated
 
 ### Native browser stream completion
 
-Class **Host feature**, original bun-wasm implementation. No upstream source was
-copied or adapted for `web/src/native-stream-state.ts`. Chromium and WebKit lack
+Class **Host feature**, original bun-wasm completion bridge with a WHATWG
+iterable-conversion adapter. No upstream implementation source was copied into
+`web/src/native-stream-state.ts`. Chromium and WebKit lack
 Node's private closed-promise and controller-error symbols. The host installs
 those hooks before the runtime bootstrap; Node-host execution retains Node's
 existing hooks and embedded engines retain the reference ponyfill hooks. Detection
@@ -1869,6 +1870,21 @@ WritableStream and TransformStream constructors and capture their controllers.
 Native prototypes, instance brands, byte/BYOB queues and algorithms stay native.
 The global constructor references change. Frozen underlying dictionaries are
 wrapped without mutation, and callbacks retain their original receiver.
+
+The host bridge also provides `ReadableStream.from` through its tracked native
+constructor on every browser host, without native-method or version detection.
+This is an original adapter of the WHATWG Streams
+[`ReadableStreamFromIterable`](https://streams.spec.whatwg.org/#readable-stream-from-iterable)
+algorithm and WebIDL async-sequence opening, next-value and closing algorithms,
+read October 20, 2026. It uses high-water mark zero, async-first iterator
+acquisition, and ECMAScript async-from-sync conversion. Current WebIDL promise
+reactions assimilate yielded thenables. Cancellation calls the iterator's return
+with the original reason, while late next results never enqueue or close an
+already-cancelled native stream. Native brands, reader ownership and completion
+registration stay with the construction bridge. The real Chromium/WebKit
+interop gate includes conversion, malformed results, error identities and
+pending-next cancellation controls. The HTTP disconnect iterator fixture is
+unchanged.
 
 Completion comes from actual native reader/writer `closed` promises. Temporary
 probes release locks immediately without reading or writing. Releasing a pending
