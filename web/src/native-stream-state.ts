@@ -278,8 +278,9 @@ async function syncSequenceResult(sequence: Sequence, result: object, closeOnRej
 }
 async function nextSequence(sequence: Sequence): Promise<SequenceStep> {
   const result = callNext(sequence);
-  if (sequence.kind === "sync") return syncSequenceResult(sequence, result, true);
-  const resolved = sequenceObject(await result);
+  const resolved = sequence.kind === "sync"
+    ? await syncSequenceResult(sequence, result, true)
+    : sequenceObject(await result);
   if (Reflect.get(resolved, "done")) return { done: true };
   return { done: false, value: await Reflect.get(resolved, "value") };
 }
@@ -308,7 +309,7 @@ function readableFrom(Ctor: typeof ReadableStream, input: unknown): ReadableStre
 }
 function installReadableFrom(Ctor: typeof ReadableStream) {
   const method = { from(input: unknown) { return readableFrom(Ctor, input); } }.from;
-  Object.defineProperty(Ctor, "from", { configurable: true, enumerable: false, writable: true, value: method });
+  Object.defineProperty(Ctor, "from", { configurable: true, enumerable: true, writable: true, value: method });
 }
 function method(prototype: object, name: PropertyKey, after: (self: object, args: unknown[], result: unknown) => void) {
   const descriptor = Object.getOwnPropertyDescriptor(prototype, name);

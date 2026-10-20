@@ -1878,8 +1878,12 @@ This is an original adapter of the WHATWG Streams
 algorithm and WebIDL async-sequence opening, next-value and closing algorithms,
 read October 20, 2026. It uses high-water mark zero, async-first iterator
 acquisition, and ECMAScript async-from-sync conversion. Current WebIDL promise
-reactions assimilate yielded thenables. Cancellation calls the iterator's return
-with the original reason, while late next results never enqueue or close an
+reactions resolve yielded values after async-from-sync has resolved sync values.
+These are separate steps: a second-access then-getter failure rejects the read
+without invoking IteratorClose. The static operation is enumerable under WebIDL
+§3.7.7. The real-browser controls cover changing then getters, rejection identity
+and return-call counts. Cancellation calls the iterator's return with the original
+reason, while late next results never enqueue or close an
 already-cancelled native stream. Native brands, reader ownership and completion
 registration stay with the construction bridge. The real Chromium/WebKit
 interop gate includes conversion, malformed results, error identities and

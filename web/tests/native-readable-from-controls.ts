@@ -77,6 +77,29 @@ async function promisedValues(sync: boolean) {
   ensure((await reader.read()).done, "iterator completion");
   reader.releaseLock();
 }
+async function secondValueResolution(throwOnSecond: boolean) {
+  let thenGets = 0, nextCalls = 0, returns = 0;
+  const value = { get then() {
+    thenGets++;
+    if (thenGets === 1) return undefined;
+    if (throwOnSecond) throw marker;
+    return (resolve: (value: unknown) => void) => resolve(42);
+  } };
+  const iterator = {
+    next() { return nextCalls++ === 0 ? { value } : { done: true }; },
+    return() { returns++; return {}; },
+  };
+  const reader = fromIterable(iterable(iterator, true)).getReader();
+  try {
+    if (throwOnSecond) await rejectsSame(reader.read(), marker);
+    else {
+      ensure((await reader.read()).value === 42, "outer WebIDL reaction resolves sync value again");
+      ensure((await reader.read()).done, "sync iterator completes");
+    }
+    ensure(thenGets === 2, "AsyncFromSync and outer WebIDL reaction each access then");
+    ensure(returns === 0, "outer value resolution must not IteratorClose");
+  } finally { reader.releaseLock(); }
+}
 const marker = { failure: "identity" };
 const fromControls: Array<[string, () => unknown]> = [
   ["async first, cached next, zero eager pulls, native ownership", async () => {
@@ -96,7 +119,7 @@ const fromControls: Array<[string, () => unknown]> = [
   ["static descriptor and non-generic construction", async () => {
     const method = Reflect.get(ReadableStream, "from");
     const descriptor = Object.getOwnPropertyDescriptor(ReadableStream, "from");
-    ensure(method.name === "from" && method.length === 1 && descriptor?.writable && descriptor.configurable && !descriptor.enumerable, "static method descriptor");
+    ensure(method.name === "from" && method.length === 1 && descriptor?.writable && descriptor.configurable && descriptor.enumerable, "static WebIDL operation descriptor");
     class Subclass extends ReadableStream<unknown> {}
     const stream = Reflect.apply(method, Subclass, [[]]);
     ensure(stream instanceof ReadableStream && Object.getPrototypeOf(stream) === ReadableStream.prototype && !(stream instanceof Subclass), "from ignores receiver constructor");
@@ -105,6 +128,8 @@ const fromControls: Array<[string, () => unknown]> = [
   }],
   ["sync values assimilated", () => promisedValues(true)],
   ["async values assimilated", () => promisedValues(false)],
+  ["sync value second then access resolves", () => secondValueResolution(false)],
+  ["sync value second then access rejects without close", () => secondValueResolution(true)],
   ["null async method selects sync", async () => {
     const stream = fromIterable({ [Symbol.asyncIterator]: null, [Symbol.iterator]() { return [1][Symbol.iterator](); } });
     ensure((await stream.getReader().read()).value === 1, "sync fallback is iterator protocol, not native-method fallback");
