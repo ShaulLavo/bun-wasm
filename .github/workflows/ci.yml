@@ -199,7 +199,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Web host unit, type and bundle gates
+      - name: Web host unit, CLI shim, type and bundle gates
         run: bash ../scripts/test-web-host.sh --unit
       - name: Install Chromium and WebKit
         run: bunx playwright install --with-deps chromium webkit
@@ -224,19 +224,19 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --linker=isolated
       - name: Install browser
         run: bunx playwright install --with-deps ${{ matrix.browser }}
       - name: Process supervisor, generic preview1 and interrupt gate (no Rust or dist artifacts)
         env:
           PROCESS_SMOKE_PORT: "4186"
           TMPDIR: ${{ runner.temp }}
-        run: bun tests/browser-process.ts ${{ matrix.browser }}
+        run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-process.ts ${{ matrix.browser }}
       - name: Injected third-party interrupt checks (no Rust or dist artifacts)
         env:
           INTERRUPT_SCRATCH_ROOT: ${{ runner.temp }}
-        run: bun tests/browser-interrupt.ts ${{ matrix.browser }}
-      - name: Process pipes and runtime_proc guest ABI (no Rust or dist artifacts)
+        run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-interrupt.ts ${{ matrix.browser }}
+      - name: Process pipes, CLI ABI and foreground stop (isolated install, no Rust or dist artifacts)
         env:
           TMPDIR: ${{ runner.temp }}
-        run: bun tests/browser-runtime-proc.ts ${{ matrix.browser }}
+        run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-runtime-proc.ts ${{ matrix.browser }}

@@ -15,6 +15,7 @@ import { runtimeProcFailure } from "./runtime-proc-browser-diagnostics";
 type RuntimeProcResult = Record<string, unknown> & {
   ok: boolean;
   checks: string[];
+  stopCodes: number[];
   admissionReports: number;
   cleanup: { activeWorkers: number };
   teardown: { forcedWorkers: number; activeWorkers: number };
@@ -100,12 +101,13 @@ try {
         result = completed;
         assert.equal(completed.ok, true, JSON.stringify(completed));
         assert.deepEqual(completed.checks, Array.from<string>(scenario === "job-wait" ? runtimeProcJobWaitChecks : runtimeProcChecks));
+        assert.deepEqual(completed.stopCodes, scenario === "pipes" ? [130, 137] : []);
         assert.equal(completed.cleanup.activeWorkers, 0);
         assert.equal(completed.teardown.forcedWorkers, 0);
         assert.equal(completed.teardown.activeWorkers, 0);
         assert.deepEqual(errors, []);
         console.log(JSON.stringify({ browser: name, version: browser.version(), iteration, mode, scenario, ok: true,
-          checks: completed.checks, admissionReports: completed.admissionReports, cleanup: completed.cleanup, teardown: completed.teardown, pageErrors: errors }));
+          checks: completed.checks, stopCodes: completed.stopCodes, admissionReports: completed.admissionReports, cleanup: completed.cleanup, teardown: completed.teardown, pageErrors: errors }));
       } catch (error) {
         failed = true;
         console.error(await runtimeProcFailure({ browser: name, version: browser.version(), iteration, mode, scenario, pageErrors: errors }, error, result,

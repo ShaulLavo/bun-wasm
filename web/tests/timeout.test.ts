@@ -63,7 +63,10 @@ for (const mode of ["normal", "deadline", "interruption"]) {
       await Promise.race([ready, deadline]);
       if (mode === "interruption") wrapper.kill("SIGTERM");
       expect(await Promise.race([closed, deadline])).toBe(mode === "normal" ? 0 : mode === "deadline" ? 124 : 143);
-      expect(stderr).toBe("");
+      if (mode === "deadline") {
+        expect(stderr).toContain("command deadline exceeded after 1s");
+        expect(stderr).toContain("owned process group");
+      } else expect(stderr).toBe("");
       const pid = Number(/descendant (\d+)/.exec(output)![1]);
       const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
       // A killed orphan can briefly remain as a zombie until the OS reaps it.
