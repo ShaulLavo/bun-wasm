@@ -1,5 +1,5 @@
-import { expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
+import { chmodSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,20 +13,39 @@ function preflight(build: string, overrides: Record<string, string> = {}) {
   return Bun.spawnSync(["cmake"].concat(Object.entries(inputs).map(([key, value]) => `-D${key}=${value}`), ["-P", guard]), { stdout: "pipe", stderr: "pipe" });
 }
 
-// Every fixture owns one tiny CMake source/build tree and synchronous compiler probes.
-// No project build, downloaded inputs, daemon or shared cache is created or modified.
-function fixture(run: (build: string) => void, configure: (root: string) => string[] = () => []) {
-  const root = mkdtempSync(join(tmpdir(), "bun-wasm-cmake-cache-"));
+// Restore the same configured path, not a relocated CMake cache. Only compiler
+// detection is shared; every case regenerates its real cache and Ninja rules.
+const suite = mkdtempSync(join(tmpdir(), "bun-wasm-cmake-cache-"));
+const root = join(suite, "fixture"), seed = join(suite, "seed");
+afterAll(() => rmSync(suite, { recursive: true, force: true }));
+beforeAll(() => {
+  const source = join(root, "source");
+  mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\nproject(cache_fixture C CXX)\nadd_library(c STATIC fixture.c)\nadd_library(cxx STATIC fixture.cc)\nadd_executable(executable fixture.c)\n");
+  writeFileSync(join(source, "fixture.c"), "int c_fixture(void) { return 1; }\nint main(void) { return 0; }\n");
+  writeFileSync(join(source, "fixture.cc"), "int cxx_fixture() { return 2; }\n");
+  const configured = configureFixture([]);
+  expect(configured.stdout.toString()).toContain("The C compiler identification is");
+  expect(configured.stdout.toString()).toContain("The CXX compiler identification is");
+  cpSync(root, seed, { recursive: true });
+});
+
+function configureFixture(options: readonly string[]) {
+  const source = join(root, "source"), build = join(root, "build");
+  const configured = Bun.spawnSync(["node", timeoutWrapper, "15", "cmake", "-S", source, "-B", build, "-G", "Ninja", "-DCMAKE_C_COMPILER=/usr/bin/cc", "-DCMAKE_CXX_COMPILER=/usr/bin/c++"].concat(options), { stdout: "pipe", stderr: "pipe", timeout: 20_000, killSignal: "SIGTERM" });
+  expect(configured.exitCode, configured.stdout.toString() + configured.stderr.toString()).toBe(0);
+  return configured;
+}
+
+function fixture(run: (build: string) => void, configure: (root: string) => readonly string[] = () => []) {
   try {
-    const source = join(root, "source"), build = join(root, "build");
-    mkdirSync(source);
-    writeFileSync(join(source, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\nproject(cache_fixture C CXX)\nadd_library(c STATIC fixture.c)\nadd_library(cxx STATIC fixture.cc)\nadd_executable(executable fixture.c)\n");
-    writeFileSync(join(source, "fixture.c"), "int c_fixture(void) { return 1; }\nint main(void) { return 0; }\n");
-    writeFileSync(join(source, "fixture.cc"), "int cxx_fixture() { return 2; }\n");
-    const configured = Bun.spawnSync(["node", timeoutWrapper, "15", "cmake", "-S", source, "-B", build, "-G", "Ninja", "-DCMAKE_C_COMPILER=/usr/bin/cc", "-DCMAKE_CXX_COMPILER=/usr/bin/c++"].concat(configure(root)), { stdout: "pipe", stderr: "pipe", timeout: 20_000, killSignal: "SIGTERM" });
-    expect(configured.exitCode, configured.stderr.toString()).toBe(0);
-    run(build);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+    const configured = configureFixture(configure(root));
+    run(join(root, "build"));
+    return configured.stdout.toString();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    cpSync(seed, root, { recursive: true });
+  }
 }
 
 function refuseUnchanged(build: string, overrides: Record<string, string>, diagnostic: string) {
@@ -182,7 +201,7 @@ for (const phase of ["COMPILE", "LINK"]) {
     }, root => {
       const expected = join(root, "expected-sysroot");
       mkdirSync(expected);
-      // A real configure, with static compiler probes, needs no SDK or system headers.
+      // Regenerate real rules for the empty sysroot without building project targets.
       return [`-DCMAKE_SYSROOT:PATH=${expected}`, "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY", `-DCMAKE_SYSROOT_${phase}:PATH=/`];
     });
   });
@@ -198,4 +217,25 @@ test("matching explicit compile and link sysroots remain reusable", () => {
   fixture(build => {
     expect(preflight(build, { EXPECTED_SYSROOT: "/" }).exitCode).toBe(0);
   }, () => ["-DCMAKE_SYSROOT:PATH=/", "-DCMAKE_SYSROOT_COMPILE:PATH=/", "-DCMAKE_SYSROOT_LINK:PATH=/"]);
+});
+
+test("fixture variants reuse detected compilers while regenerating real sysroot rules", () => {
+  const native = fixture(build => {
+    expect(readFileSync(join(build, "CMakeFiles/rules.ninja"), "utf8")).not.toContain("--sysroot=");
+  });
+  const changed = fixture(build => {
+    const expected = join(build, "../expected-sysroot");
+    const rules = readFileSync(join(build, "CMakeFiles/rules.ninja"), "utf8");
+    expect(rules).toContain(`--sysroot=${expected} `);
+    expect(rules).toContain("--sysroot=/ ");
+    refuseUnchanged(build, { EXPECTED_SYSROOT: expected }, "LINK sysroot is /, requested");
+  }, root => {
+    const expected = join(root, "expected-sysroot");
+    mkdirSync(expected);
+    return [`-DCMAKE_SYSROOT:PATH=${expected}`, "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY", "-DCMAKE_SYSROOT_LINK:PATH=/"];
+  });
+  for (const output of [native, changed]) {
+    expect(output).not.toContain("compiler identification");
+    expect(output).not.toContain("compiler ABI info");
+  }
 });
