@@ -1,6 +1,7 @@
 import { expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -51,8 +52,8 @@ async function cleanupScenario(scratch: string, owned: Map<number, Identity>) {
   await rm(scratch, { recursive: true, force: true });
   expect(live(owned)).toEqual([]);
 }
-export async function ownedScenario(mode: "launcher" | "browser" | "quick-launcher") {
-  const scratch = await mkdtemp(join(process.env.TMPDIR ?? "/work/tmp", "bw-dl-"));
+export async function ownedScenario(mode: "launcher" | "browser" | "quick-launcher", runtime: "node" | "bun" = "node") {
+  const scratch = await mkdtemp(join(existsSync("/work/tmp") ? "/work/tmp" : tmpdir(), "bw-dl-"));
   const owned = new Map<number, Identity>();
   let cleanupPromise: Promise<void> | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -67,7 +68,7 @@ export async function ownedScenario(mode: "launcher" | "browser" | "quick-launch
     const control = Bun.spawn(["node", "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
     remember(control.pid, owned);
     const fixture = join(import.meta.dir, "../../web/tests/fixtures/deadline-owner.ts");
-    const child = Bun.spawn(["node", wrapper, mode === "browser" ? "3" : "1", "node", fixture, mode, scratch], {
+    const child = Bun.spawn([runtime, wrapper, mode === "browser" ? "3" : "1", "node", fixture, mode, scratch], {
       stdout: "pipe", stderr: "pipe", env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
     });
     remember(child.pid, owned);

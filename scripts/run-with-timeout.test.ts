@@ -53,3 +53,5 @@ test("command deadline lets teardown finish before forced termination", async ()
 test("command deadline honors descendant grace after its launcher exits and preserves unrelated processes", () => ownedScenario("launcher"), 12000);
 
 test("ordinary launcher exit removes reparented detached descendants", () => ownedScenario("quick-launcher"), 12000);
+
+test("Bun command deadline preserves descendant grace after launcher exit", () => ownedScenario("launcher", "bun"), 12000);
