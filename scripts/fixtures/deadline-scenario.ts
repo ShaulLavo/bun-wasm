@@ -1,6 +1,6 @@
 import { expect } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -81,6 +81,9 @@ async function ready(directory: string) {
   }
 }
 async function resumeAfterLauncherExit(directory: string, supervisor: number) {
+  const identity = processIdentity(supervisor);
+  if (!identity?.birth) throw new Error("supervisor identity missing");
+  writeFileSync(join(directory, "supervisor.identity"), `${supervisor} ${identity.birth}`);
   await ready(directory);
   const pid = Number(readFileSync(join(directory, "failed-browser.pid"), "utf8"));
   const launcher = processIdentity(pid);
@@ -89,6 +92,7 @@ async function resumeAfterLauncherExit(directory: string, supervisor: number) {
     if (performance.now() >= until) throw new Error("launcher did not exit");
     await delay(25);
   }
+  if (processIdentity(supervisor)?.birth !== identity.birth) throw new Error("supervisor identity changed");
   process.kill(supervisor, "SIGCONT");
 }
 function expectedStatus(mode: string, signal: "SIGINT" | "SIGTERM" | undefined) {
