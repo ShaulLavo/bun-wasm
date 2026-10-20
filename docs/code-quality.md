@@ -1,6 +1,6 @@
 # Code quality
 
-Run the same blocking command as the PR/main CI job from the repository root:
+Run both groups of blocking checks from the repository root:
 
 ```sh
 source env.sh
@@ -19,7 +19,63 @@ On this machine, run the last command through the shared heavy runner. Use one R
 compile job by default; `QUALITY_RUST_JOBS` can raise that on larger runners.
 The command stops at the first failure. Existing package, bundle, browser and
 runtime test jobs remain separate blocking checks. CI disables Rust debug symbols
-and incremental compilation to limit runner disk use; it runs the same checks.
+and incremental compilation to limit runner disk use.
+
+CI runs `bun run quality --javascript` on every PR and main push. The package
+job owns `tsconfig.package.json`; the web job owns the runtime-factory type check.
+`quality:types` owns the scripts/site and broader web/sandbox quality projects.
+The quality negative controls still rerun individual gates with invalid input.
+Those are required failure checks, not duplicate successful coverage.
+
+The same always-on job is the sole owner of the lightweight CMake preflight suite.
+It runs independently of native selection, so changes to its tests, timeout helper,
+shell entry points, shared helpers or shim inputs cannot skip the suite. These
+checks configure tiny fixtures; they do not build JSC, BoringSSL or Rust.
+
+The existing Rust job runs `bun run quality --native` only when native inputs
+change. `scripts/ci-changes.ts` examines the entire Git diff, including deleted
+and renamed files, with no API path-count limit. It uses the PR merge base or
+both endpoints of a main push. Invalid or unavailable comparisons fail the
+quality job instead of skipping Rust. Native inputs include crates, upstream
+sources/patches, Cargo config/manifests/lock, pinned toolchains, build/source-sync
+scripts, the quality drivers, this workflow, and the root dependency lock.
+The WASI crypto toolchain, its CMake cache preflight dependencies, and the shared
+process-request JSON compiled into host tests also select native checks.
+Browser-only and documentation changes install no Rust toolchain or SDK.
+
+Host Clippy covers all test/example targets once. Host tests run once, in release
+mode, including integration and documentation tests. Both WASI feature graphs
+remain checked; their features are not interchangeable. All Clippy commands use
+`--no-deps` so upstream dependencies compile but do not become lint targets.
+
+The native job keeps `CARGO_TARGET_DIR` at the explicitly cached workspace
+`target/`, rather than an uncached runner-temp directory. It caches the complete
+Cargo target and registry, including vendored path dependencies, test binaries
+and workspace crates. Swatinem's target cleaner excludes in-repository path
+dependencies outside the workspace, including Bun's large parser crates; the
+native job uses an explicit cache instead. The pinned nightly uses checksum
+freshness for Rust source. Cargo still uses
+modification times for build-script inputs. `quality-input-times.ts` records
+content hashes and timestamps inside the cached target. Before compiling, it
+restores timestamps only for unchanged files and directories under the owned
+source/build-input roots. Changed, added or renamed inputs get a fresh time.
+This keeps a fresh checkout from rebuilding every embedded runtime or C archive,
+without hiding real edits. Symlinks are fingerprinted without modifying targets.
+Rustup, Bun downloads, pinned
+upstream sources, and WASI SDK/sysroot each have caches. The sysroot cache key
+includes the runner image and builder/dependency inputs; its existing receipt
+still verifies every tool and archive. Rust cache keys include upstream patches,
+third-party inputs, the WASI crypto toolchain, CMake preflight dependencies and
+native gate/build scripts. Cargo explicitly watches the crypto toolchain, and
+the timestamp receipt fingerprints it too. A source hash refreshes the cache
+after crate or compiled process-request fixture edits, with a same-toolchain/input
+restore prefix for reuse.
+Cache logs show restored paths,
+keys, sizes and hits. A hit alone is not proof that Cargo reused build output.
+
+Moving native work to the PC or UpCloud requires an owner-approved runner or
+an authenticated dispatcher. CI does not silently skip those checks when no
+private executor is configured.
 
 ## Coverage and versions
 
@@ -53,7 +109,7 @@ and incremental compilation to limit runner disk use; it runs the same checks.
 - Rust uses `nightly-2026-09-15`, the existing pinned Bun toolchain. Every authored
   Rust file under `crates/` is formatted, then all 14 workspace crates and all host
   targets get Clippy with `-D warnings`, locked workspace tests, and
-  cargo-machete 0.9.2. No whole authored crate is excluded. These are native-host
+  cargo-machete 0.9.2. Tests run in release mode. No whole authored crate is excluded. These are native-host
   default-feature checks.
 - `quality:wasi` runs locked production Clippy on `wasm32-wasip1` with
   `-D warnings`, once with QuickJS defaults and once with the browser build's
@@ -66,8 +122,8 @@ and incremental compilation to limit runner disk use; it runs the same checks.
   cap with `-C link-self-contained=no`, and leaves the general build environment
   unchanged. Native `--all-targets` cannot see these WASI-only paths.
 - After both target configurations pass, the WASI gate temporarily appends a
-  `needless_bool` violation to the actual cfg(wasi) POSIX library. The same
-  production Clippy command must reject it with exit 101 and the expected lint
+  `needless_bool` violation to the actual cfg(wasi) POSIX library. A focused
+  production Clippy command for the POSIX crate must reject it with exit 101 and the expected lint
   and source path. The probe restores the original bytes in `finally`; signal
   handlers stop its Cargo process group before restoration. A compile-only gate
   cannot satisfy this control.
