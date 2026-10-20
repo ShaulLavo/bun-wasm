@@ -25,11 +25,19 @@ child.on('close', code => {
   const mixed = spawnSync(process.execPath, ['-e', `
     const fs = require('node:fs');
     const first = Buffer.alloc(1);
-    fs.readSync(0, first, 0, 1, null);
-    fs.read(0, Buffer.alloc(4), { length: 4 }, (error, count, buffer) => {
+    if (fs.readSync(0, first, 0, 1, null) !== 1) throw new Error('missing first byte');
+    const rest = Buffer.alloc(4);
+    function readRemaining(offset) {
+      fs.read(0, rest, { offset, length: rest.length - offset }, onRead.bind(null, offset));
+    }
+    function onRead(offset, error, count) {
       if (error) throw error;
-      console.log('mixed', first.toString(), buffer.toString('utf8', 0, count));
-    });
+      if (count === 0) throw new Error('stdin ended before the buffer was filled');
+      const next = offset + count;
+      if (next < rest.length) return readRemaining(next);
+      console.log('mixed', first.toString(), rest.toString());
+    }
+    readRemaining(0);
   `], { input: 'hello', encoding: 'utf8' });
   if (mixed.status) throw new Error(mixed.stderr);
   process.stdout.write(mixed.stdout);

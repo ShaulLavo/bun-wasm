@@ -35,6 +35,7 @@ function setup(preopenCount = 0, transport = createWorkerProcessTransport(), env
   const preopens = Object.fromEntries(Array.from({ length: preopenCount }, (_, i) => [`/mount-${i}`, scratch]));
   const wasi = new WASI({ version: "preview1", preopens, env: host.env, args: [], returnOnExit: true });
   const imports = wasi.getImportObject() as NodeWasiImports;
+  const nativeStat = { fd_fdstat_get: imports.wasi_snapshot_preview1.fd_fdstat_get!, fd_filestat_get: imports.wasi_snapshot_preview1.fd_filestat_get! };
   let instance: WebAssembly.Instance;
   const { proc } = host.install(imports, () => instance);
   instance = new WebAssembly.Instance(guest, imports);
@@ -78,7 +79,7 @@ function setup(preopenCount = 0, transport = createWorkerProcessTransport(), env
     });
     return { status, events };
   };
-  const value = { host, transport, proc, messages, memory, view, bytes, call, open, pipe, spawn, read, poll };
+  const value = { host, transport, proc, messages, memory, view, bytes, call, open, pipe, spawn, read, poll, nativeStat };
   return value;
 }
 const request = (fds: SpawnRequest["fds"] = [], env = {}): SpawnRequest => ({ executable: "bun", argv: ["bun"], cwd: "/", env, job: 0, fds });
@@ -93,7 +94,29 @@ function fileContents(f: ReturnType<typeof setup>, fd: number) {
   assert.equal(f.call("fd_read", fd, 192, 1, 200), 0);
   return decoder.decode(f.bytes().subarray(512, 512 + f.view().getUint32(200, true)));
 }
+function checkStdioMetadata(f: ReturnType<typeof setup>, guest: number, native: number) {
+  for (const name of ["fd_fdstat_get", "fd_filestat_get"] as const) {
+    const offset = name === "fd_fdstat_get" ? 0 : 16;
+    assert.equal(f.nativeStat[name](native, 128), 0);
+    const expected = f.view().getUint8(128 + offset);
+    assert.equal(f.call(name, guest, 256), 0);
+    assert.equal(f.view().getUint8(256 + offset), expected, `${name} preserves native stdio type`);
+    if (name === "fd_fdstat_get") assert.equal(f.view().getBigUint64(264, true), f.host.descriptors.get(guest)!.rightsBase);
+  }
+}
 try {
+  const stdio = setup();
+  for (const fd of [1, 2, 0]) checkStdioMetadata(stdio, fd, fd);
+  const duplicate = stdio.proc.dup!(1);
+  assert.ok(duplicate > 2);
+  checkStdioMetadata(stdio, duplicate, 1);
+  const target = stdio.proc.dup!(2);
+  assert.ok(target > duplicate);
+  assert.equal(stdio.call("fd_renumber", duplicate, target), 0);
+  checkStdioMetadata(stdio, target, 1);
+  assert.ok(stdio.spawn(request([{ child: 19, parent: target }])) > 1);
+  const stdioChildMessage = latestSpawn(stdio), stdioChild = setup(0, stdioChildMessage.transport);
+  checkStdioMetadata(stdioChild, 19, 1);
   writeFileSync(`${scratch}/data`, "file-data");
   for (const count of [1, 4, 9]) {
     const parent = setup(count), [input, inputWriter] = parent.pipe(), [outputReader, output] = parent.pipe();
