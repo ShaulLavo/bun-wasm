@@ -17,11 +17,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const flags = new Map();
 for (const arg of process.argv.slice(2)) {
   const [key, value = "true"] = arg.split(/=(.*)/s);
-  if (!/^--(apps|engines|hosts|cache|output|launcher|timeout|record|reference|help)$/.test(key)) throw new Error(`Unknown option ${key}; use --help`);
+  if (!/^--(apps|engines|hosts|cache|output|launcher|timeout|record|reference|strict|help)$/.test(key)) throw new Error(`Unknown option ${key}; use --help`);
   flags.set(key.slice(2), value);
 }
 if (flags.has("help")) {
-  console.log("scripts/app-matrix.sh [--record] [--reference] --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-app-matrix/run [--apps=hono,drizzle] [--engines=quickjs,jsc,browser] [--hosts=native,playground] [--timeout=90] [--launcher=PATH]\nDefault is offline replay. --record permits missing npm records to be downloaded. App failures are census results; missing cache records or host artifacts exit nonzero.");
+  console.log("scripts/app-matrix.sh [--record] [--reference] [--strict] --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-app-matrix/run [--apps=hono,drizzle] [--engines=quickjs,jsc,browser] [--hosts=native,playground] [--timeout=90] [--launcher=PATH]\nDefault is offline replay. --record permits missing npm records to be downloaded. App failures are census results unless --strict is set; missing cache records or host artifacts exit nonzero.");
   process.exit(0);
 }
 const options = {
@@ -31,7 +31,7 @@ const options = {
   engines: (flags.get("engines") ?? "quickjs,jsc,browser").split(","),
   hosts: (flags.get("hosts") ?? "native,playground").split(","),
   timeout: Number(flags.get("timeout") ?? 90) * 1000,
-  record: flags.has("record"), reference: flags.has("reference"),
+  strict: flags.has("strict"), record: flags.has("record"), reference: flags.has("reference"),
 };
 if (!Number.isFinite(options.timeout) || options.timeout < 1000) throw new Error("--timeout must be at least one second");
 for (const engine of options.engines) if (!["quickjs", "jsc", "browser"].includes(engine)) throw new Error(`Unknown engine ${engine}`);
@@ -227,7 +227,7 @@ try {
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.mjs", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts"].map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.mjs", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts"].map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
   mirror = await registry({ directory: options.cache, record: options.record });
   const { browserHost } = await import("./browser.mjs");
@@ -259,4 +259,4 @@ try {
 }
 const counts = Object.fromEntries(["pass", "fail", "blocked"].map(status => [status, results.filter(row => row.status === status).length]));
 console.log(JSON.stringify({ counts, output: options.output, cleanup: !existsSync(scratch), registry: mirror?.snapshot() }));
-process.exitCode = infrastructureError || mirror?.misses.length || mirror?.errors.length ? 1 : 0;
+process.exitCode = infrastructureError || mirror?.misses.length || mirror?.errors.length || (options.strict && results.some(row => row.status !== "pass")) ? 1 : 0;

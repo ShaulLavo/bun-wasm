@@ -1,9 +1,7 @@
+import { serverApps, serverIds } from "./server-fixtures.ts";
+
 const marker = "bun-wasm app matrix";
 const html = `<html><body><h1>${marker}</h1><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>`;
-const server = (id, dependencies, source) => ({
-  id, dependencies, files: { "server.ts": source },
-  commands: [{ name: "start", args: ["run", "server.ts"], check: { kind: "http", text: marker } }],
-});
 const vite = (id, dependencies, source, extra = {}) => ({
   id, dependencies: { vite: "7.1.12", ...dependencies },
   files: { "index.html": html, "src/main.js": source, ...extra },
@@ -13,12 +11,7 @@ const vite = (id, dependencies, source, extra = {}) => ({
   ],
 });
 
-export const apps = [
-  server("hono", { hono: "4.10.2" }, `import { Hono } from 'hono'; const app = new Hono(); app.get('/', c => c.text('${marker}')); Bun.serve({ port: Number(process.env.PORT ?? '3137'), fetch: app.fetch });`),
-  server("express", { express: "5.1.0" }, `import express from 'express'; const app = express(); app.get('/', (req, res) => res.send('${marker}')); app.listen(Number(process.env.PORT ?? '3137'), '127.0.0.1');`),
-  server("elysia", { elysia: "1.4.13" }, `import { Elysia } from 'elysia'; new Elysia().get('/', () => '${marker}').listen(Number(process.env.PORT ?? '3137'));`),
-  server("fastify", { fastify: "5.6.1" }, `import Fastify from 'fastify'; const app = Fastify(); app.get('/', async () => '${marker}'); await app.listen({ port: Number(process.env.PORT ?? '3137'), host: '127.0.0.1' });`),
-  server("koa", { koa: "3.0.1" }, `import Koa from 'koa'; const app = new Koa(); app.use(ctx => { ctx.body = '${marker}'; }); app.listen(Number(process.env.PORT ?? '3137'), '127.0.0.1');`),
+const otherApps = [
   vite("vite-vanilla", {}, `document.querySelector('#app').textContent = '${marker}';`),
   vite("vite-react", { react: "19.1.1", "react-dom": "19.1.1" }, `import React from 'react'; import { createRoot } from 'react-dom/client'; createRoot(document.querySelector('#app')).render(React.createElement('p', null, '${marker}'));`),
   vite("vite-vue", { vue: "3.5.22" }, `import { createApp, h } from 'vue'; createApp({ render: () => h('p', '${marker}') }).mount('#app');`),
@@ -101,7 +94,9 @@ export const apps = [
   },
 ];
 
-export const browserSubset = ["hono", "vite-react", "drizzle", "prettier", "typescript", "eslint"];
+export const apps = serverApps.concat(otherApps);
+
+export const browserSubset = serverIds.concat(["vite-react", "drizzle", "prettier", "typescript", "eslint"]);
 
 export function projectFiles(app, registry) {
   return {
