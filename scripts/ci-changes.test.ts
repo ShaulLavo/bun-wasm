@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { changedPaths, needsRust } from "./ci-changes";
 
 test.each([
+  "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json",
+  "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "crates/bunwasm-runtime/src/lib.rs", "vendor/bun/src/parser.rs", "patches/bun/001.patch",
   "third_party/libc/src/lib.rs", "Cargo.lock", "Cargo.toml", ".cargo/config.toml", "rust-toolchain.toml",
   "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts",
@@ -78,3 +80,15 @@ test("multi-commit main push includes earlier native changes", () => {
 test("unavailable commit comparison fails rather than skipping native checks", () => {
   expect(() => select("f".repeat(40), javascript)).toThrow();
 });
+
+for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh"]) {
+  test.each(["pull_request", "push"])(`${path} retains native checks through the real %s event CLI`, event => {
+    if (!fixture) throw new Error("Fixture not initialized");
+    git(["checkout", "-q", "--detach", base]);
+    mkdirSync(join(fixture, path, ".."), { recursive: true });
+    writeFileSync(join(fixture, path), "changed native input\n");
+    git(["add", "."]);
+    git(["commit", "-qm", `change ${path}`]);
+    expect(select(base, git(["rev-parse", "HEAD"]), event)).toBe("rust=true");
+  });
+}

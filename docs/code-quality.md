@@ -34,6 +34,8 @@ both endpoints of a main push. Invalid or unavailable comparisons fail the
 quality job instead of skipping Rust. Native inputs include crates, upstream
 sources/patches, Cargo config/manifests/lock, pinned toolchains, build/source-sync
 scripts, the quality drivers, this workflow, and the root dependency lock.
+The WASI crypto toolchain, its CMake cache preflight dependencies, and the shared
+process-request JSON compiled into host tests also select native checks.
 Browser-only and documentation changes install no Rust toolchain or SDK.
 
 Host Clippy covers all test/example targets once. Host tests run once, in release
@@ -58,8 +60,11 @@ Rustup, Bun downloads, pinned
 upstream sources, and WASI SDK/sysroot each have caches. The sysroot cache key
 includes the runner image and builder/dependency inputs; its existing receipt
 still verifies every tool and archive. Rust cache keys include upstream patches,
-third-party inputs and native gate/build scripts. A source hash refreshes the
-cache after crate edits, with a same-toolchain/input restore prefix for reuse.
+third-party inputs, the WASI crypto toolchain, CMake preflight dependencies and
+native gate/build scripts. Cargo explicitly watches the crypto toolchain, and
+the timestamp receipt fingerprints it too. A source hash refreshes the cache
+after crate or compiled process-request fixture edits, with a same-toolchain/input
+restore prefix for reuse.
 Cache logs show restored paths,
 keys, sizes and hits. A hit alone is not proof that Cargo reused build output.
 

@@ -61,3 +61,30 @@ test("cached build inputs are compared before the native gate", () => {
   expect(inputTimes).toBeGreaterThan(rust.indexOf("name: Build patched WASI sysroot"));
   expect(rust.indexOf("bun scripts/quality-input-times.ts")).toBeLessThan(rust.indexOf("bun run quality --native"));
 });
+
+test("toolchain and preflight changes cannot restore an incompatible native cache", () => {
+  const keys = rust.split("\n").filter(line => /(?:key|restore-keys): native-v/.test(line));
+  expect(keys).toHaveLength(2);
+  for (const key of keys) {
+    for (const input of ["jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh"]) {
+      expect(key.slice(0, key.indexOf(" }}-", key.indexOf("hashFiles")))).toContain(`'${input}'`);
+    }
+  }
+  expect(keys[0]).toContain("hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json')");
+});
+
+test("crypto declares the toolchain and CMake preflight as Cargo build inputs", () => {
+  const build = readFileSync(new URL("../crates/bunwasm-crypto-sys/build.rs", import.meta.url), "utf8");
+  expect(build).toContain('println!("cargo:rerun-if-changed=../../jsc/wasi-jsc.cmake")');
+  expect(build).toContain('println!("cargo:rerun-if-changed={}", guard.display())');
+  const times = readFileSync(new URL("./quality-input-times.ts", import.meta.url), "utf8");
+  expect(times).toContain('"jsc/wasi-jsc.cmake"');
+  expect(times).toContain('"tests/fixtures/runtime-proc-spawn-requests.json"');
+});
+
+test("merged main keeps its CMake and package identity checks with one owner each", () => {
+  expect(workflow.match(/bun test scripts\/cmake-cache.test.ts/g)).toHaveLength(1);
+  expect(workflow.match(/bun test scripts\/node-fs-readv.test.ts scripts\/node-fs-runtime-proc.test.ts scripts\/browser-build.test.ts/g)).toHaveLength(1);
+  expect(workflow.match(/^  rust:$/gm)).toHaveLength(1);
+  expect(workflow).not.toContain("continue-on-error");
+});

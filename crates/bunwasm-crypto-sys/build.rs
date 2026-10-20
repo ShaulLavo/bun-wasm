@@ -50,6 +50,7 @@ fn crypto(manifest: &Path, out: &Path) {
         println!("cargo:rerun-if-env-changed={name}");
     }
     println!("cargo:rerun-if-changed=c/rsa.c");
+    println!("cargo:rerun-if-changed=../../jsc/wasi-jsc.cmake");
     let source = std::env::var_os("BUNWASM_BORINGSSL_SOURCE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| manifest.join("../../vendor/boringssl"));
