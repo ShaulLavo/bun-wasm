@@ -18,27 +18,24 @@ console.log("querystring:", qs.stringify({ a: [1, 2], b: "x y" }), JSON.stringif
 console.log("net.isIP:", net.isIP("127.0.0.1"), net.isIP("::1"), net.isIP("nope"));
 console.log("process module:", process2 === process);
 console.log("util default:", typeof util.inspect);
-for (const [name, fn] of [
-  ["http.createServer", () => createServer()],
-  ["net.connect", () => net.connect(80)],
-]) {
-  try {
-    fn();
-    console.log(name, "works");
-  } catch (err) {
-    console.log(name, "throws:", err instanceof Error);
-  }
-}
+const httpServer = createServer();
+console.log("http.createServer:", typeof httpServer.listen === "function");
+httpServer.close();
+const endpoint = new URL(process.env.TEST_SERVER);
+await new Promise<void>((resolve, reject) => {
+  const socket = net.connect({ host: endpoint.hostname, port: Number(endpoint.port) });
+  socket.once("error", reject);
+  socket.once("connect", () => { console.log("net.connect:", true); socket.end(); });
+  socket.once("close", () => { resolve(); });
+});
 
-const processHost = process.env.BUNWASM_TEST_HOST === "node";
-const missingCode = processHost ? "ENOENT" : "ERR_NOT_SUPPORTED_IN_WASM";
+const missingCommand = "bun-wasm-no-such-executable";
 function validError(error, syscall) {
-  if (!(error instanceof Error) || error.code !== missingCode) return false;
-  if (!processHost) return true;
-  return error.errno === -2 && error.path === "ls" && error.syscall === syscall &&
+  if (!(error instanceof Error) || error.code !== "ENOENT") return false;
+  return error.errno === -2 && error.path === missingCommand && error.syscall === syscall &&
     JSON.stringify(error.spawnargs) === '["argument"]';
 }
-const missingChild = childProcess.spawn("ls", ["argument"]);
+const missingChild = childProcess.spawn(missingCommand, ["argument"]);
 const failedSpawn = await new Promise((resolve) => {
   let error;
   const events = [];
@@ -49,36 +46,37 @@ const failedSpawn = await new Promise((resolve) => {
   missingChild.on("close", (code, signal) => {
     clearTimeout(timer);
     events.push("close");
-    resolve(validError(error, "spawn ls") && missingChild.pid === undefined && code === -2 && signal === null &&
+    resolve(validError(error, `spawn ${missingCommand}`) && missingChild.pid === undefined && code === -2 && signal === null &&
       missingChild.exitCode === -2 && missingChild.stdin?.destroyed === true &&
       missingChild.stdout?.readableEnded === true && missingChild.stderr?.readableEnded === true &&
       JSON.stringify(events) === '["error","close"]');
   });
 });
 console.log("child_process.spawn failure:", failedSpawn);
-const nodeSync = childProcess.spawnSync("ls", ["argument"]);
-console.log("child_process.spawnSync failure:", validError(nodeSync.error, "spawnSync ls") && nodeSync.status === null && nodeSync.signal === null);
-console.log("Bun.which:", Bun.which("ls"));
+const nodeSync = childProcess.spawnSync(missingCommand, ["argument"]);
+console.log("child_process.spawnSync failure:", validError(nodeSync.error, `spawnSync ${missingCommand}`) && nodeSync.status === null && nodeSync.signal === null);
+console.log("Bun.which:", Bun.which(missingCommand));
 let syncFailure = false;
 try {
-  const spawned = Bun.spawnSync({ cmd: ["ls"] });
-  syncFailure = !processHost && !spawned.success && spawned.exitCode !== 0 && spawned.error?.code === missingCode;
+  Bun.spawnSync({ cmd: [missingCommand] });
 } catch (error) {
-  syncFailure = processHost && error instanceof Error && error.code === "ENOENT" && error.errno === -2 && error.path === "ls";
+  syncFailure = error instanceof Error && error.code === "ENOENT" && error.errno === -2 && error.path === missingCommand;
 }
 console.log("Bun.spawnSync failure:", syncFailure);
 try {
-  const child = Bun.spawn({ cmd: ["ls"] });
+  const child = Bun.spawn({ cmd: [missingCommand] });
   child.kill();
   console.log("Bun.spawn throws:", false);
 } catch (error) {
-  console.log("Bun.spawn throws:", error.code === missingCode && (!processHost || error.errno === -2 && error.path === "ls"));
+  console.log("Bun.spawn throws:", error instanceof Error && error.code === "ENOENT" && error.errno === -2 && error.path === missingCommand);
 }
+const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { return new Response("served"); } });
 try {
-  const server = Bun.serve({ port: 0, fetch() { return new Response("unexpected"); } });
-  server.stop(true);
-  console.log("Bun.serve throws:", false);
-} catch (error) { console.log("Bun.serve throws:", error instanceof Error && error.message.includes("not supported in bun-wasm")); }
+  console.log("Bun.serve:", await (await fetch(`http://127.0.0.1:${server.port}/`)).text());
+} finally {
+  await server.stop(true);
+}
+console.log("fetch:", await (await fetch(new URL("/text", endpoint))).text());
 try {
   await fetch("http://127.0.0.1:9/");
   console.log("fetch resolved");

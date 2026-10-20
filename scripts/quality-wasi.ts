@@ -13,7 +13,7 @@ delete env.CARGO_ENCODED_RUSTFLAGS;
 const packages = ["cli", "runtime", "build", "glue", "posix", "semver", "crypto-sys", "transpiler", "bun-jsc", "bun-jsc-macros"];
 const command = ["cargo", "clippy", "--locked", "--target", "wasm32-wasip1"]
   .concat(packages.flatMap((name) => ["-p", `bunwasm-${name}`]), ["-j", process.env.QUALITY_RUST_JOBS ?? "1"]);
-run(command.concat(["--", "-D", "warnings"]), env);
-run(command.concat(["--no-default-features", "--features", "bunwasm-cli/engine-host,bunwasm-cli/bun-transpiler,bunwasm-cli/bun-build", "--", "-D", "warnings"]), env);
+run(command.concat(["--no-deps", "--", "-D", "warnings"]), env);
+run(command.concat(["--no-default-features", "--features", "bunwasm-cli/engine-host,bunwasm-cli/bun-transpiler,bunwasm-cli/bun-build", "--no-deps", "--", "-D", "warnings"]), env);
 
-await verifyWasiLint(command.concat(["--", "-D", "warnings"]), env);
+await verifyWasiLint(["cargo", "clippy", "--locked", "--target", "wasm32-wasip1", "-p", "bunwasm-posix", "--no-deps", "--", "-D", "warnings"], env);

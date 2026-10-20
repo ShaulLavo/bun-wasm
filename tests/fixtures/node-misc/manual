@@ -1,0 +1,3 @@
+Native Bun 1.4.2 leaves failed child exitCode and readableEnded unset and returns
+undefined for spawnSync status. Keep the stricter settled-stream and null-status
+checks. Networking and ENOENT metadata match native Bun.
