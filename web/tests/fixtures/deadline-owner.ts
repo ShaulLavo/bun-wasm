@@ -21,7 +21,10 @@ if (mode === "quick-launcher") {
     process.exit(0);
   }, 200));
 } else if (mode === "browser" || mode === "failed-browser" || mode === "control-browser") {
-  const browser = await chromium.launchServer({ headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+  const missed = mode === "failed-browser" && process.platform === "linux";
+  if (missed) process.kill(process.ppid, "SIGSTOP");
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !missed || !key.startsWith("BUN_WASM_DEADLINE_")));
+  const browser = await chromium.launchServer({ headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false, env });
   const pid = browser.process().pid;
   if (pid === undefined) throw new Error("browser PID missing");
   writeFileSync(join(scratch, "browser.pid"), String(pid));
