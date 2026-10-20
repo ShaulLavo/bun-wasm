@@ -16,6 +16,23 @@ process.on("disconnect", () => {
 });
 `;
 
+export const ipcExitBurstChild = `
+const count = 257;
+let callbacks = 0;
+function exit(error) {
+  if (error) throw error;
+  process.exit(0);
+}
+for (let index = 0; index < count; index++) {
+  process.send({ kind: "burst", index, token }, error => {
+    if (error) throw error;
+    callbacks++;
+    if (callbacks !== count) return;
+    process.send({ kind: "callbacks", count: callbacks }, exit);
+  });
+}
+`;
+
 export function ipcParent(token: string, port: number) {
   return `
 import { fork, spawn } from "node:child_process";
@@ -66,6 +83,24 @@ async function exchange(id) {
   return { id, ready, replies: replies.length, callbacks: callbacks.length, disconnected, closedError: error.code };
 }
 const exchanges = await Promise.all([exchange("a"), exchange("b")]);
+const burst = spawn(process.execPath, ["-e", "const token=" + JSON.stringify(token) + ";" + ${JSON.stringify(ipcExitBurstChild)}], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+const burstDone = closed(burst);
+const indices = [];
+let burstCallbacks = 0;
+let burstDisconnects = 0;
+burst.on("message", message => {
+  if (message.kind === "callbacks") { burstCallbacks = message.count; return; }
+  assert(message.kind === "burst" && message.token === token, "dynamic exit-burst frame");
+  indices.push(message.index);
+});
+burst.on("disconnect", () => burstDisconnects++);
+const occupiedUntil = Date.now() + 2000;
+while (Date.now() < occupiedUntil) {}
+await burstDone;
+assert(indices.every((value, index) => value === index), "separate exit-burst frame order");
+assert(burstDisconnects === 1 && !burst.connected, "exit-burst disconnect");
+const exitBurst = { received: indices.length, last: indices.at(-1), callbacks: burstCallbacks, disconnected: burstDisconnects, connected: burst.connected };
+
 const exitChild = spawn(process.execPath, ["-e", "process.send({bye:73});process.exit(0)"], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
 const exitDone = closed(exitChild);
 let bye = 0;
@@ -93,7 +128,7 @@ const bunChild = Bun.spawn([process.execPath, "-e", 'process.on("message", messa
   ipc(message, child) { if (message.ready) child.send({ token }); else bunReply = message.token; }
 });
 assert(await bunChild.exited === 0 && bunReply === token && !bunChild.connected, "Bun JSON IPC callback and process.disconnect");
-const report = { token, exchanges, bye, idleExited: true, advancedRejected: true, selfMessage, selfDisconnects, bunReply };
+const report = { token, exchanges, exitBurst, bye, idleExited: true, advancedRejected: true, selfMessage, selfDisconnects, bunReply };
 const server = Bun.serve({ port: ${port}, fetch(request) {
   const url = new URL(request.url);
   if (url.pathname === "/stop") { setTimeout(() => server.stop(true), 10); return new Response("stopped"); }

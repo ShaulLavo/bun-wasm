@@ -84,18 +84,19 @@
       }
       if (incoming.length > 64 * 1024 * 1024) throw channelError("ERR_IPC_MESSAGE_TOO_LARGE", "IPC message exceeds 64 MiB");
     }
-    function read() {
+    function read(limit = 32) {
       let progressed = false;
-      for (let turn = 0; turn < 32 && state !== "closed"; turn++) {
+      for (let turn = 0; turn < limit && state !== "closed"; turn++) {
         const bytes = native.procRead(descriptors.input, 65536);
         if (bytes === AGAIN) break;
-        if (typeof bytes === "number") {
-          if (bytes < 0 || incoming.length) throw channelError("ERR_IPC_CHANNEL_CLOSED", "Invalid or incomplete IPC message");
-          close(); return true;
+        if (typeof bytes !== "number") {
+          progressed = true;
+          incoming += decoder.decode(bytes, { stream: true });
+          deliverLines();
+          continue;
         }
-        progressed = true;
-        incoming += decoder.decode(bytes, { stream: true });
-        deliverLines();
+        if (bytes < 0 || incoming.length) throw channelError("ERR_IPC_CHANNEL_CLOSED", "Invalid or incomplete IPC message");
+        close(); return true;
       }
       return progressed;
     }
@@ -118,7 +119,7 @@
         state = "draining";
         flush();
       },
-      finish() { if (state !== "closed") read(); close(); },
+      finish() { if (state !== "closed") read(Infinity); close(); },
       close,
       ref() { explicitRef = true; return channel; },
       unref() { explicitRef = false; return channel; },

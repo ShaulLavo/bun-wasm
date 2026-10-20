@@ -98,6 +98,7 @@ try {
       assert.equal(response.fromServiceWorker(), true, "actual service-worker preview request");
       assert.equal(result.report.token, token);
       assert.equal(result.report.exchanges.length, 2);
+      assert.deepEqual(result.report.exitBurst, { received: 257, last: 256, callbacks: 257, disconnected: 1, connected: false });
       await page.waitForFunction(initial => Reflect.get(globalThis, "ipcWorkerCounts")().active === initial + 1, workersBefore.active, { timeout: 15_000 });
       console.log(JSON.stringify({ childrenReapedWhileParentLive: await page.evaluate(() => Reflect.get(globalThis, "ipcWorkerCounts")()) }));
       assert.deepEqual(errors, []);

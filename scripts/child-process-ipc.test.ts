@@ -97,6 +97,63 @@ test("child exit drains messages and fails pending sends once without leaking de
   expect(fake.open()).toBe(0);
 });
 
+test("exited child drains every separate frame through EOF before terminal events", async () => {
+  const { fake, pump, child, record, descriptors } = setup();
+  const messages: number[] = [];
+  const callbacks: number[] = [];
+  const terminalCounts: number[] = [];
+  const inputPipe = record.held.get(descriptors.output)!.pipe;
+  const outputPipe = record.held.get(descriptors.input)!.pipe;
+  const parentInput = Array.from(fake.pipes).find(([, entry]) => entry.pipe === inputPipe && !entry.write)![0];
+  const parentOutput = Array.from(fake.pipes).find(([, entry]) => entry.pipe === outputPipe && entry.write)![0];
+  const reads = fake.native.procRead;
+  const closes = fake.native.procClose;
+  const closedDescriptors: number[] = [];
+  let eof = 0;
+  fake.native.procRead = (fd: number) => {
+    const bytes = reads(fd);
+    if (fd === parentInput && bytes === 0) eof++;
+    return bytes;
+  };
+  fake.native.procClose = (fd: number) => { closedDescriptors.push(fd); return closes(fd); };
+  fake.native.procWrite = () => -6;
+  child.on("message", (message: { index: number }) => messages.push(message.index));
+  child.on("disconnect", () => terminalCounts.push(messages.length));
+  child.on("exit", () => terminalCounts.push(messages.length));
+  const closed = new Promise<void>(resolve => child.once("close", () => { terminalCounts.push(messages.length); resolve(); }));
+  for (let index = 0; index < 3; index++) child.send({ pending: index }, (error: unknown) => {
+    expect(error).toMatchObject({ code: "ERR_IPC_CHANNEL_CLOSED" });
+    callbacks.push(index);
+  });
+  for (let index = 0; index < 257; index++) fake.childWrite(record, descriptors.output, JSON.stringify({ index }) + "\n");
+  fake.exit(record, 0);
+  await pump();
+  await closed;
+  expect(messages).toEqual(Array.from({ length: 257 }, (_, index) => index));
+  expect(terminalCounts).toEqual([257, 257, 257]);
+  expect(callbacks).toEqual([0, 1, 2]);
+  expect(eof).toBe(1);
+  expect(closedDescriptors.filter(fd => fd === parentInput)).toHaveLength(1);
+  expect(closedDescriptors.filter(fd => fd === parentOutput)).toHaveLength(1);
+  expect(child.connected).toBe(false);
+  expect(fake.open()).toBe(0);
+});
+
+test("live child reads remain fair before the unlimited terminal drain", async () => {
+  const { fake, pump, pumpTurn, child, record, descriptors } = setup();
+  const messages: number[] = [];
+  child.on("message", (message: { index: number }) => messages.push(message.index));
+  for (let index = 0; index < 129; index++) fake.childWrite(record, descriptors.output, JSON.stringify({ index }) + "\n");
+  pumpTurn();
+  await Promise.resolve();
+  expect(messages).toEqual(Array.from({ length: 32 }, (_, index) => index));
+  expect(child.connected).toBe(true);
+  fake.exit(record, 0);
+  await pump();
+  expect(messages).toEqual(Array.from({ length: 129 }, (_, index) => index));
+  expect(fake.open()).toBe(0);
+});
+
 test("closed send reports callback or error asynchronously, never both", async () => {
   const { fake, pump, child, record } = setup();
   child.disconnect();

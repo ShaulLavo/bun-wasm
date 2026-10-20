@@ -3234,7 +3234,9 @@ entry after stdin/stdout/stderr, and Bun `spawn()` accepts an `ipc` callback.
 Both sides expose send/disconnect and connected state; Node endpoints emit
 message/disconnect events. Writes retain partial offsets and ordered asynchronous
 callbacks. Disconnect rejects new sends, drains accepted writes and releases both
-ends. EOF and child completion drain received frames and close endpoints once.
+ends. Live input reads stop after 32 records per event-loop turn. Once child exit
+is published, completion drains its finite buffered input through EOF without that
+fairness limit, then closes endpoints once. Terminal events follow those frames.
 Child message/disconnect listeners and queued writes hold the event loop alive;
 without those listeners the channel alone does not hold the child open.
 
@@ -3247,6 +3249,7 @@ Focused unit tests are `scripts/child-process-ipc.test.ts`. For literal-browser
 acceptance, build the modified Browser guest and web assets, then run
 `bun web/tests/browser-child-process-ipc.ts` through the host's browser queue.
 The gate forks two children simultaneously, exchanges dynamic queued JSON and
-callbacks, checks disconnect/error and ordinary-exit cleanup, and reads the
+callbacks, checks disconnect/error and ordinary-exit cleanup, drains 257 separately
+written messages from an exited child while its parent was occupied, and reads the
 result through the real Waffle service-worker HTTP preview. It never executes
 guest source on the host JavaScript engine.
