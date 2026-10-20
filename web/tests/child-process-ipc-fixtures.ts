@@ -16,7 +16,7 @@ process.on("disconnect", () => {
 });
 `;
 
-export const ipcExitBurstChild = `
+const ipcExitBurstChild = `
 const count = 257;
 let callbacks = 0;
 function exit(error) {
