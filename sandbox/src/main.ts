@@ -14,7 +14,7 @@ import { decode } from "../../web/src/fs";
 import type { NetHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
 import { createRuntime } from "waffle";
-import { WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../web/src/shared-fs";
+import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../web/src/shared-fs";
 import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
 import { enableTerminalCopy } from "../../web/src/terminal-copy";
 import { linkLocalUrls } from "../../web/src/terminal-links";
@@ -22,6 +22,7 @@ import { measureStartup } from "../../web/src/startup";
 import { depsCacheKey, readDeps, writeDeps } from "./deps-cache";
 import { StartupOutput } from "./startup-output";
 
+async function main(): Promise<void> {
 const HOME = "/home/user";
 /** The project's directory in the guest's filesystem. */
 const APP = `${HOME}/app`;
@@ -64,6 +65,7 @@ const DEFAULT_ENGINE: Engine = "browser";
 const requested = params.get("engine");
 const engine: Engine = isEngine(requested) ? requested : DEFAULT_ENGINE;
 const wasmUrl = params.get("wasm") ?? ENGINES[engine].wasm;
+const mode = getVfsDescriptor(params.get("mode") ?? "fast").mode;
 
 engineSelect.value = engine;
 engineSelect.addEventListener("change", () => {
@@ -93,11 +95,11 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 // ---------- filesystem ----------
 
 let startup: "starting" | "ready" | "failed" = "starting";
-const runtime = createRuntime({ filesystem: { name: `bun-wasm-sandbox-${template}` } });
+const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${template}` } });
 const fs = runtime.filesystem;
 function showStartupFailure(error: unknown): void {
   startup = "failed";
-  setStatus(String(error), "error");
+  setStatus(error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error), "error");
   restartButton.textContent = "Reload";
   restartButton.disabled = false;
   restartButton.title = "Open the latest saved workspace";
@@ -389,7 +391,7 @@ async function save(path: string, text: string, revision: number): Promise<void>
 }
 
 function reportError(error: unknown): void {
-  setStatus(String(error), "error");
+  setStatus(error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error), "error");
   term.write(`\x1b[31m${String(error)}\x1b[0m\r\n`);
 }
 
@@ -672,3 +674,24 @@ async function boot(): Promise<void> {
 void boot().catch(error => { showStartupFailure(error); reportError(error); });
 
 Object.assign(globalThis, { sandbox: { fs, editor, term, restart: startDevServer, server: () => server, engine, template } });
+
+}
+
+void main().catch(error => {
+  console.error(error);
+  const status = document.querySelector<HTMLElement>("#status");
+  if (status) {
+    status.textContent = error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error);
+    status.dataset.kind = "error";
+  }
+  const restart = document.querySelector<HTMLButtonElement>("#restart");
+  if (restart) {
+    restart.textContent = "Reload";
+    restart.disabled = false;
+    restart.title = "Retry sandbox startup";
+    restart.onclick = () => location.reload();
+  }
+  const reset = document.querySelector<HTMLButtonElement>("#reset");
+  if (reset) reset.disabled = true;
+  for (const select of document.querySelectorAll<HTMLSelectElement>("#engine, #template, #file-select")) select.disabled = true;
+});

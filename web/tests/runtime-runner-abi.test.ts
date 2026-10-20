@@ -160,7 +160,7 @@ test("UI signals freeze canonical root pipe publication only for fatal actions",
   } finally { controller?.dispose(); await state.dispose(); }
 });
 
-function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("waffle/proc")> }) {
+function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("waffle/proc")>; onError?: (error: unknown) => void }) {
   const ports: MessagePort[] = [];
   const filesystem = {
     connect(identity: object) {
@@ -172,7 +172,7 @@ function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker
     revoke: revokeFilesystem, client: { sweep() {} },
     async quiesce(identity: Parameters<typeof revokeFilesystem>[0]) { revokeFilesystem(identity); },
   } as unknown as SharedFilesystem;
-  const runtime = processRuntimeFixture(filesystem, { activate: options?.activate });
+  const runtime = processRuntimeFixture(filesystem, { activate: options?.activate, onError: options?.onError });
   const root = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   root.data = { filesystem: createFilesystemIdentity() };
   const broker = new SubprocessBroker("http://localhost/worker.js", runtime, options);
@@ -348,9 +348,10 @@ test("generic runtime byte registrations retain injected-check metadata at worke
 
 for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
   ? "untrusted compiled-only registration is rejected before child admission"
-  : "generic runtime SIMD refusal writes actionable inherited stderr before closing descriptors", async () => {
+  : "generic runtime SIMD refusal leaves inherited stderr untouched and reports typed startup failure", async () => {
   const output: { fd: number; text: string }[] = [];
-  const state = registryFixture({ output(fd, data) { output.push({ fd, text: new TextDecoder().decode(data) }); } });
+  const errors: unknown[] = [];
+  const state = registryFixture({ output(fd, data) { output.push({ fd, text: new TextDecoder().decode(data) }); }, onError(error) { errors.push(error); } });
   try {
     const body = [0, 0xfd, 0x0c].concat(new Array<number>(16).fill(0), [0x1a, 0x0b]);
     const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 0x60, 0, 0, 3, 2, 1, 0,
@@ -373,9 +374,10 @@ for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
       fds: [{ child: 2, parent: fd }] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     expect(await state.broker.wait(pid)).toEqual({ kind: "start-failed", code: 8, error: "ENOEXEC", status: null });
-    expect(output).toHaveLength(1);
-    expect(output[0]!.fd).toBe(2);
-    expect(output[0]!.text).toMatch(refusal === "SIMD" ? /Cannot instrument WebAssembly:.*SIMD/ : /require source bytes/);
+    // Waffle keeps runtime-child diagnostics on the host; the parent consumes START_FAILED.
+    expect(output).toHaveLength(0);
+    expect(errors).toHaveLength(1);
+    expect(String(errors[0])).toMatch(/Cannot instrument WebAssembly:.*SIMD/);
   } finally { await state.dispose(); }
 });
 

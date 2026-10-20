@@ -1,3 +1,5 @@
+// Conformance-only implementation override, never exposed by either product page.
+import { withVfsImplementation } from "../node_modules/waffle/fs/vfs-internal.ts";
 import { SharedFilesystem, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../src/shared-fs";
 
 let fs: SharedFilesystem | undefined;
@@ -30,7 +32,7 @@ Object.assign(globalThis, {
     async open(name: string, persistence = true, storage: "indexeddb" | "opfs" = "indexeddb") {
       await fs?.dispose();
       state.ownershipLost = false; state.ownershipMessage = "";
-      fs = new SharedFilesystem({ name, persistence, storage });
+      fs = new SharedFilesystem(withVfsImplementation(persistence ? storage === "opfs" ? "opfs-memory" : "indexeddb" : "memory", { name, mode: persistence ? "fast" : "memory" }));
       fs.onOwnershipLost = () => {
         state.ownershipLost = true;
         state.ownershipMessage = `${WORKSPACE_TAKEN_OVER} ${UNSAVED_CHANGES_LOST}`;

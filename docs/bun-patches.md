@@ -52,13 +52,14 @@ Each row has one class. A file with independent changes has separate rows.
 | [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun/Node and native adapters consume eight-byte typed process/job completions, map seven portable startup errnos, and preserve failed Node streams. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
+| [Descriptor kinds and storage modes](#descriptor-kinds-and-storage-modes) | Host feature | Original Rust descriptor-kind adapters and page startup handling adopt the pinned Waffle contract without guessing pipe types or changing workspace names. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, process-aware idle waits, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
 | [Process startup and executable identity](#process-startup-and-executable-identity) | Host feature | Original startup-before-wait observation, admitted executable metadata, lazy-root cancellation and Node child tool routing; no upstream implementation copied. |
 | [Node startup diagnostic drain](#node-startup-diagnostic-drain) | Host feature | Use Waffle's public cancellable, bounded asynchronous diagnostic drain for the Node process host's immediate stderr writes. |
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [Filesystem vectored reads](#filesystem-vectored-reads) | Host feature | Original readv/readvSync and FileHandle.readv adapters avoid summed-capacity allocations, use one bounded read for non-regular descriptors, preserve shared cursors and follow Bun's empty-vector contract. |
-| [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle 0.0.48's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
+| [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
 | [CMake toolchain cache preflight](#cmake-toolchain-cache-preflight) | Port | Reject an existing CMake cache whose recorded compiler, toolchain file, target, system, processor or sysroot does not match the requested native or WASI configure/build. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
@@ -2898,7 +2899,7 @@ its final cursor check and owns all opened descriptors.
 ## Patched sysroot and native descriptor bridge
 
 Class **Port**, with an original local build wrapper and native runtime adapter. The libc input is
-not copied into this repository: Waffle 0.0.48 at `7d095e53040484afaf8363af34fc5284e132798c`
+not copied into this repository: Waffle 0.0.53 at `f6017d12f59c81dae75eece5a6cb62c0470d166e`
 builds wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13` from the installed
 `waffle/scripts/build-wasi-libc.sh`. Its `preopen-scan.patch` skips occupied inherited descriptors
 only when `fd_fdstat_get` succeeds and stops on the first real BADF. `scripts/build-wasi-sysroot.ts`
@@ -2930,10 +2931,10 @@ to use the same read/write/fstat/ftruncate namespace and preserving shared open-
 reads and writes validate descriptors, negative closes return EBADF, interrupted writes retry, and later failures return committed partial
 progress. Direct writes flush both output streams first because inherited descriptors can alias
 stdout or stderr. Native inherited fstat preserves the libc mode, including pipes and devices.
-On WASI, preview1 has no FIFO tag and both process hosts encode pipes as UNKNOWN.
-The original adapter maps that host pipe representation (which libc preserves with no POSIX
-file-type bits) to FIFO, preserving device, socket and filesystem kinds and propagating
-metadata capability errors. Waffle #34 grants FD_FILESTAT_GET to both pipe endpoints; inherited
+On WASI, preview1 has no FIFO tag. After the ordinary fstat capability check, the original
+adapter consults `runtime_proc.fd_kind` and restores FIFO bits only for an explicit pipe kind.
+UNKNOWN remains unknown rather than becoming a pipe. Device, socket and filesystem modes
+and metadata capability errors remain intact. Waffle #34 grants FD_FILESTAT_GET to both pipe endpoints; inherited
 descriptors keep those exact rights, so the real pipe-fstat controls succeed without bypassing
 metadata capability checks. No upstream implementation or new binding dependency is copied.
 The original `src/js/node_fs.js` Stats predicates test those type bits rather than hard-coding false.
@@ -3057,3 +3058,27 @@ Class **Port**. Upstream remains Bun
   native filesystem-event buffers, callback, trace and merge/dispatch helpers.
   These declarations remain type-checked. No whole module, authored crate or
   warning category is capped globally, and no Clippy lint is disabled.
+
+
+## Descriptor kinds and storage modes
+
+Class **Host feature**. These are original adapters, not copied or translated upstream code.
+The matching contract is Waffle main `f6017d12f59c81dae75eece5a6cb62c0470d166e`, specifically
+`proc/abi.ts`, `core/descriptors.ts`, `fs/vfs.ts` and `browser/shared-fs.ts`. The root package,
+web page and sandbox pin that exact revision together, including their lockfiles.
+
+`crates/bunwasm-runtime/src/host.rs` imports `runtime_proc.fd_kind`. The original descriptor
+metadata adapter in `natives.rs` retains libc fstat and its rights checks before restoring the
+missing FIFO type for kind 1 only. The native Wasmtime adapters in
+`crates/bunwasm-host/src/process/{descriptors,mod,wasi}.rs` inspect the effective descriptor
+namespace without reading a payload or moving a file cursor. Closed descriptors return BADF;
+files, directories, terminals and runtime pipes remain distinct through duplication and remapping.
+
+`web/src/main.ts` and `sandbox/src/main.ts` use the public `fast|safe|memory` mode contract.
+Their outer startup handlers expose typed failures even when construction fails before a
+filesystem exists. They retain the existing workspace names and never switch stores on failure.
+The old physical-store selector is removed from product pages. Conformance fixtures alone use
+Waffle's internal implementation override to retain IndexedDB and OPFS backend tests. Runtime-child startup-refusal tests also follow Waffle's current host-only diagnostics contract,
+leaving inherited stderr untouched while the parent consumes the typed START_FAILED result. No old
+request shapes, version detection or compatibility fallback are added. See
+[storage modes](storage-modes.md) and [the process ABI](host-abi.md#process-imports).

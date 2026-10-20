@@ -1,3 +1,4 @@
+import { withVfsImplementation } from "../../node_modules/waffle/fs/vfs-internal.ts";
 import { SharedFilesystem, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../src/shared-fs";
 
 const options = new URLSearchParams(location.search);
@@ -10,7 +11,7 @@ function log(event: Event) {
 }
 addEventListener("pagehide", log);
 addEventListener("pageshow", log);
-const fs = new SharedFilesystem({ storage, name: options.get("name") ?? "lifecycle" });
+const fs = new SharedFilesystem(withVfsImplementation(storage === "opfs" ? "opfs-memory" : "indexeddb", { mode: "fast", name: options.get("name") ?? "lifecycle" }));
 const state = { fs, id, ready: false, error: "" };
 Object.assign(globalThis, { lifecycle: state });
 const edits = document.createElement("textarea");

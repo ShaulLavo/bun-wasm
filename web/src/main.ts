@@ -11,7 +11,7 @@ import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
 import { decode, normalize } from "./fs";
 import { createRuntime } from "waffle";
-import { WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
+import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
 import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
 import { type Output, Shell } from "./shell";
@@ -37,7 +37,7 @@ const engine: Engine = isEngine(requested) ? requested : defaultEngine;
 const engineName = engines[engine].name;
 const wasmUrl = params.get("wasm") ?? engines[engine].wasm;
 const trace = params.has("trace");
-const storage = params.get("storage") === "opfs" ? "opfs" as const : "indexeddb" as const;
+const mode = getVfsDescriptor(params.get("mode") ?? "fast").mode;
 const isolated = globalThis.crossOriginIsolated === true;
 const sleepMode = isolated ? "Atomics.wait (cross-origin isolated)" : "busy-wait (page is not cross-origin isolated)";
 
@@ -64,7 +64,7 @@ runButton.disabled = true;
 newFileButton.disabled = true;
 engineSelect.disabled = true;
 fileSelect.disabled = true;
-const runtime = createRuntime({ filesystem: { storage, name: "bun-wasm-workspace" } });
+const runtime = createRuntime({ filesystem: { mode, name: "bun-wasm-workspace" } });
 const fs = runtime.filesystem;
 fs.onStateChange = state => {
   if (state.status === "waiting") {
@@ -455,7 +455,7 @@ void main().catch(error => {
   console.error(error);
   const status = document.querySelector<HTMLElement>("#status");
   if (status) {
-    status.textContent = String(error);
+    status.textContent = error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error);
     status.dataset.kind = "error";
   }
   const run = document.querySelector<HTMLButtonElement>("#run");

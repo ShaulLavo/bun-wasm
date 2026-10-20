@@ -4,6 +4,7 @@ import { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessIdentityAllocator } from "waffle/proc/identity";
 import { ProcessTable } from "waffle/proc/table";
 import { compileInterruptible } from "waffle/interrupt/loader";
+import { getVfsDescriptor } from "waffle";
 import type { Runtime, GuestLauncher, ProcessService, RuntimeFilesystem, RuntimeConsumer } from "waffle";
 
 /** A process-only fixture: no page owner, filesystem worker, browser cache or service locator.
@@ -12,10 +13,11 @@ import type { Runtime, GuestLauncher, ProcessService, RuntimeFilesystem, Runtime
  */
 export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, options: {
   activate?: () => Promise<typeof import("waffle/proc")>;
+  onError?: (error: unknown) => void;
 } = {}): Runtime {
   const unused = (): never => { throw new Error("Unexpected filesystem operation in process-only fixture"); };
   let filesystem: RuntimeFilesystem = {
-    state: { status: "ready" }, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
+    vfs: getVfsDescriptor("memory"), state: { status: "ready" }, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
     revoke: unused, reap: unused, quiesce: unused, drain: unused, flush: unused,
     lookup: unused, readFile: unused, listFiles: unused,
     mkdirp: unused, writeFile: unused, remove: unused, move: unused, ...overrides,
@@ -67,7 +69,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
     processes() {
       if (disposed) return Promise.reject(new Error("Runtime is disposed"));
       return activation ??= Promise.resolve().then(() => {
-        broker = new BrowserProcessBroker({ filesystem, identities, registry, table, activate: options.activate,
+        broker = new BrowserProcessBroker({ filesystem, identities, registry, table, activate: options.activate, onError: options.onError,
           launch: context => {
             const launch = adapters.get(context.adapter);
             if (!launch) throw new Error(`Unknown adapter: ${context.adapter}`);

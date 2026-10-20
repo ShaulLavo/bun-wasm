@@ -996,3 +996,38 @@ fn both_wait_imports_encode_startup_failure_as_eight_bytes_without_consuming_on_
         }
     }
 }
+
+#[test]
+fn fd_kind_tracks_pipes_files_remaps_and_closed_descriptors_without_consuming() {
+    let mut f = Fixture::new();
+    assert_eq!(f.call("runtime_proc", "fd_kind", 3), 4);
+    for fd in [-1, 400000, i32::MAX] {
+        assert_eq!(f.call("runtime_proc", "fd_kind", fd), process::BADF);
+    }
+    let [read, write] = f.pipe();
+    for fd in [read, write] {
+        assert_eq!(f.call("runtime_proc", "fd_kind", fd), 1);
+    }
+    let duplicate = f.call("runtime_proc", "dup", read);
+    assert_eq!(f.call("runtime_proc", "fd_kind", duplicate), 1);
+    assert_eq!(f.call("runtime_proc", "write", (write, 256, 1)), 1);
+    assert_eq!(f.call("runtime_proc", "fd_kind", read), 1);
+    assert_eq!(f.call("runtime_proc", "read", (read, 512, 1)), 1);
+    let file = f.open_manifest(3);
+    assert_eq!(f.call("runtime_proc", "fd_kind", file), 3);
+    f.iovec(2048, 8);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_read", (file, 32, 1, 48)),
+        0
+    );
+    assert_eq!(f.bytes(2048, 8), b"[package");
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_renumber", (file, 0)),
+        0
+    );
+    assert_eq!(f.call("runtime_proc", "fd_kind", 0), 3);
+    assert_eq!(f.call("runtime_proc", "fd_kind", file), process::BADF);
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", read), 0);
+    assert_eq!(f.call("runtime_proc", "fd_kind", read), process::BADF);
+    assert_eq!(f.call("runtime_proc", "fd_kind", duplicate), 1);
+}

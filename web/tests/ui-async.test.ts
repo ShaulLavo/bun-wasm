@@ -255,15 +255,6 @@ test("sandbox HMR notifications stay ordered and stale replies do not replace th
   expect(statuses).toEqual(["saved"]);
 });
 
-test("playground storage selection defaults to IndexedDB and requires an explicit OPFS query", async () => {
-  const source = await Bun.file(new URL("../src/main.ts", import.meta.url)).text();
-  const selector = source.match(/^const storage = .*;$/m)![0];
-  const select = new Function("params", `${transpiler.transformSync(selector)} return storage;`);
-  expect(select(new URLSearchParams())).toBe("indexeddb");
-  expect(select(new URLSearchParams("storage=opfs"))).toBe("opfs");
-  expect(select(new URLSearchParams("storage=unknown"))).toBe("indexeddb");
-});
-
 test("playground only seeds examples in a new home, preserving changes and deletions on reload", async () => {
   const source = await Bun.file(new URL("../src/main.ts", import.meta.url)).text();
   const code = source.slice(source.indexOf("const runtime = createRuntime"), source.indexOf("// ---------- bun.wasm ----------"));
@@ -280,8 +271,8 @@ test("playground only seeds examples in a new home, preserving changes and delet
     },
     async flush() { checkpoints++; },
   };
-  const startup = new Function("createRuntime", "HOME", "examples", "storage", `return (async () => { ${transpiler.transformSync(code)} })();`);
-  const start = () => startup(() => ({ filesystem: fs }), "/home/user", { "index.ts": "example", "deleted.ts": "delete me" }, "indexeddb");
+  const startup = new Function("createRuntime", "HOME", "examples", "mode", `return (async () => { ${transpiler.transformSync(code)} })();`);
+  const start = () => startup(() => ({ filesystem: fs }), "/home/user", { "index.ts": "example", "deleted.ts": "delete me" }, "fast");
   await start();
   expect(files.get("/home/user/index.ts")).toBe("example");
   expect(checkpoints).toBe(1);
@@ -356,7 +347,7 @@ for (const app of ["web", "sandbox"] as const) {
     const workspace = app === "web" ? "/home/user" : "/home/user/app";
     const sources = { "index.html": "page", "first.ts": "first file", "second.ts": "second file" };
     const env = {
-      createRuntime: () => ({ filesystem: fs }), fs, HOME: workspace, APP: workspace, examples: sources, storage: "indexeddb",
+      createRuntime: () => ({ filesystem: fs }), fs, HOME: workspace, APP: workspace, examples: sources, mode: "fast",
       setStatus() {}, templateFile: "template.json", measureStartup() {},
       abs: (path: string) => `${workspace}/${path}`,
       fetch: async () => ({ ok: true, text: async () => JSON.stringify({ files: sources }) }),
