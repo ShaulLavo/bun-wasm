@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { installHmrConnection, waitForHmrConnection } from "./hmr-connection.ts";
 
-const { chromium }: typeof import("../../web/node_modules/playwright") = await import(process.env.PLAYWRIGHT ?? "../../web/node_modules/playwright/index.mjs");
+const { chromium }: typeof import("playwright") = await import(process.env.PLAYWRIGHT ?? "playwright");
 const connected = "[Bun] Hot-module-reloading socket connected, waiting for changes...";
 
 test("HMR readiness belongs to the target document across tabs and navigation", async () => {
