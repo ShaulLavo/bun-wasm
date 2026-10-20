@@ -3,23 +3,40 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 
 const wrapper = join(import.meta.dir, "../run-with-timeout.mts");
 function processIdentity(pid: number) {
+  if (process.platform !== "linux") return portableSnapshot(pid).find(row => row.pid === pid);
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     return { pid, parent: Number(fields[1]), birth: fields[19], live: fields[0] !== "Z" };
   } catch { return undefined; }
 }
-type Identity = NonNullable<ReturnType<typeof processIdentity>>;
+type Identity = { pid: number; parent: number; birth: string | undefined; live: boolean };
+function portableSnapshot(pid?: number): Identity[] {
+  const args = pid === undefined ? ["-axo", "pid=,ppid=,lstart=,stat="] : ["-p", String(pid), "-o", "pid=,ppid=,lstart=,stat="];
+  const result = spawnSync("ps", args, { encoding: "utf8", timeout: 2000 });
+  if (result.error) throw result.error;
+  if (!result.stdout.trim()) return [];
+  return result.stdout.trim().split("\n").map(line => {
+    const [pid, parent, ...fields] = line.trim().split(/\s+/);
+    return { pid: Number(pid), parent: Number(parent), birth: fields.slice(0, 5).join(" "), live: !fields[5]?.startsWith("Z") };
+  });
+}
+function processSnapshot() {
+  if (process.platform !== "linux") return portableSnapshot();
+  return readdirSync("/proc").filter(name => /^\d+$/.test(name)).flatMap(name => processIdentity(Number(name)) ?? []);
+}
 function capture(scratch: string, owned: Map<number, Identity>) {
   for (const name of readdirSync(scratch).filter(name => name.endsWith(".pid"))) {
     const row = processIdentity(Number(readFileSync(join(scratch, name), "utf8")));
     if (row && !owned.has(row.pid)) owned.set(row.pid, row);
   }
-  const rows = readdirSync("/proc").filter(name => /^\d+$/.test(name)).flatMap(name => processIdentity(Number(name)) ?? []);
+  const rows = processSnapshot();
   const pending = rows.filter(row => owned.get(row.pid)?.birth === row.birth);
   while (pending.length > 0) {
     const row = pending.pop();
@@ -67,7 +84,7 @@ export async function ownedScenario(mode: "launcher" | "browser" | "quick-launch
   try {
     const control = Bun.spawn(["node", "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
     remember(control.pid, owned);
-    const fixture = join(import.meta.dir, "../../web/tests/fixtures/deadline-owner.ts");
+    const fixture = fileURLToPath(new URL("../../web/tests/fixtures/deadline-owner.ts", import.meta.url));
     const child = Bun.spawn([runtime, wrapper, mode === "browser" ? "3" : "1", "node", fixture, mode, scratch], {
       stdout: "pipe", stderr: "pipe", env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
     });
