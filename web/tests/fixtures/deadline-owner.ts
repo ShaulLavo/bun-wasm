@@ -20,12 +20,14 @@ if (mode === "quick-launcher") {
     writeFileSync(join(scratch, "grace-complete"), "complete");
     process.exit(0);
   }, 200));
-} else if (mode === "browser") {
-  const browser = await chromium.launchServer({ headless: true });
+} else if (mode === "browser" || mode === "failed-browser" || mode === "control-browser") {
+  const browser = await chromium.launchServer({ headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
   const pid = browser.process().pid;
   if (pid === undefined) throw new Error("browser PID missing");
   writeFileSync(join(scratch, "browser.pid"), String(pid));
+  if (mode !== "control-browser") process.kill(-pid, "SIGSTOP");
   process.on("SIGTERM", () => {});
-  process.kill(-pid, "SIGSTOP");
+  writeFileSync(join(scratch, "ready"), "ready");
+  if (mode === "failed-browser") process.kill(process.pid, "SIGKILL");
 }
 setInterval(() => {}, 1000);

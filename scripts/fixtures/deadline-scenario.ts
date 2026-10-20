@@ -1,5 +1,5 @@
 import { expect } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,43 +61,70 @@ function live(owned: Map<number, Identity>) {
     return current !== undefined && current.birth === row.birth && current.live;
   });
 }
-async function cleanupScenario(scratch: string, owned: Map<number, Identity>) {
+async function cleanupScenario(scratch: string, owned: Map<number, Identity>, controls: Map<number, Identity>) {
   capture(scratch, owned);
-  kill(owned);
+  const controlDirectory = join(scratch, "control");
+  if (existsSync(controlDirectory)) capture(controlDirectory, controls);
+  const all = new Map(Array.from(owned).concat(Array.from(controls)));
+  kill(all);
   const until = performance.now() + 2000;
-  while (live(owned).length > 0 && performance.now() < until) await delay(25);
+  while (live(all).length > 0 && performance.now() < until) await delay(25);
+  expect(live(all)).toEqual([]);
   await rm(scratch, { recursive: true, force: true });
-  expect(live(owned)).toEqual([]);
+  console.info(JSON.stringify({ cleanup: "pass", scratch, removed: !existsSync(scratch), owned: Array.from(all.values()), remaining: live(all) }));
 }
-export async function ownedScenario(mode: "launcher" | "browser" | "quick-launcher", runtime: "node" | "bun" = "node") {
+async function ready(directory: string) {
+  const until = performance.now() + 5000;
+  while (!existsSync(join(directory, "ready"))) {
+    if (performance.now() >= until) throw new Error("browser fixture did not become ready");
+    await delay(25);
+  }
+}
+function expectedStatus(mode: string, signal: "SIGINT" | "SIGTERM" | undefined) {
+  if (signal) return signal === "SIGINT" ? 130 : 143;
+  if (mode === "failed-browser") return 137;
+  return mode === "quick-launcher" ? 7 : 124;
+}
+export async function ownedScenario(mode: "launcher" | "browser" | "quick-launcher" | "failed-browser", runtime: "node" | "bun" = "node", signal?: "SIGINT" | "SIGTERM") {
   const scratch = await mkdtemp(join(existsSync("/work/tmp") ? "/work/tmp" : tmpdir(), "bw-dl-"));
-  const owned = new Map<number, Identity>();
+  const controlDirectory = join(scratch, "control");
+  const owned = new Map<number, Identity>(), controls = new Map<number, Identity>();
   let cleanupPromise: Promise<void> | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   const cleanup = () => {
     clearInterval(timer);
-    return cleanupPromise ??= cleanupScenario(scratch, owned);
+    return cleanupPromise ??= cleanupScenario(scratch, owned, controls);
   };
   const interrupted = () => { void cleanup().finally(() => process.exit(143)); };
   process.on("SIGTERM", interrupted);
   process.on("SIGINT", interrupted);
   try {
-    const control = Bun.spawn(["node", "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
-    remember(control.pid, owned);
+    await mkdir(controlDirectory);
     const fixture = fileURLToPath(new URL("../../web/tests/fixtures/deadline-owner.ts", import.meta.url));
-    const child = Bun.spawn([runtime, wrapper, mode === "browser" ? "3" : "1", "node", fixture, mode, scratch], {
+    const browser = mode === "browser" || mode === "failed-browser";
+    const controlArgs = browser ? [fixture, "control-browser", controlDirectory] : ["-e", "setInterval(() => {}, 1000)"];
+    const control = Bun.spawn(["node"].concat(controlArgs), { stdout: "ignore", stderr: "ignore", env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch } });
+    remember(control.pid, controls);
+    timer = setInterval(() => { capture(scratch, owned); capture(controlDirectory, controls); }, 25);
+    if (browser) await ready(controlDirectory);
+    const deadline = !signal && mode !== "failed-browser" && mode !== "quick-launcher";
+    const seconds = deadline ? mode === "browser" ? "3" : "1" : "30";
+    const began = performance.now();
+    const child = Bun.spawn([runtime, wrapper, seconds, "node", fixture, mode, scratch], {
       stdout: "pipe", stderr: "pipe", env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
     });
     remember(child.pid, owned);
-    timer = setInterval(() => capture(scratch, owned), 50);
+    if (signal) { await ready(scratch); child.kill(signal); }
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
     capture(scratch, owned);
-    expect(code).toBe(mode === "quick-launcher" ? 7 : 124);
-    if (mode !== "quick-launcher") expect(stderr).toContain("command deadline exceeded");
+    expect(code).toBe(expectedStatus(mode, signal));
+    expect(deadline ? stderr.includes("command deadline exceeded") : stderr === "").toBe(true);
     expect(processIdentity(control.pid)?.live).toBe(true);
+    if (browser) expect(processIdentity(Number(readFileSync(join(controlDirectory, "browser.pid"), "utf8")))?.live).toBe(true);
     if (mode === "launcher") expect(readFileSync(join(scratch, "grace-complete"), "utf8")).toBe("complete");
-    const descendants = new Map(Array.from(owned).filter(([pid]) => pid !== control.pid));
-    expect(live(descendants)).toEqual([]);
+    const remaining = live(owned);
+    console.info(JSON.stringify({ mode, runtime, signal, code, elapsedMs: performance.now() - began, remaining, scratch, unrelated: live(controls) }));
+    expect(remaining).toEqual([]);
   } finally {
     await cleanup();
     process.off("SIGTERM", interrupted);

@@ -9,8 +9,10 @@ Every browser test command has a 300-second deadline. Set
 owned processes and sends SIGTERM so teardown can run. It remembers each
 process's PID and birth identity, including descendants that detach into other
 groups. On Linux, an inherited random ownership marker also finds descendants
-that outlive a launcher before the next process-tree snapshot. It never signals
-an unowned process group.
+that outlive a launcher before the next process-tree snapshot. A marked member
+also identifies its session leader when that leader no longer exposes the
+marker. Only sessions created no earlier than the owned launcher qualify. Every
+signal still checks an individual PID and birth identity, never a whole group.
 
 The five-second teardown grace continues after the launcher exits. Remaining
 owned processes receive SIGKILL, and the wrapper verifies that none are live
@@ -21,7 +23,9 @@ an independent 60-second deadline.
 The unit gate checks a launcher that exits during a descendant's 200ms cleanup
 and a launcher that leaves a detached child behind on normal exit. The browser
 gate stops a real detached Chromium with SIGSTOP, then checks its removal after
-the deadline. Each regression keeps an unrelated process alive as a control.
+the deadline, abrupt launcher SIGKILL, wrapper SIGTERM and Bun wrapper SIGINT.
+Both Node and Bun launcher-failure cases must retain exit 137. The browser cases
+keep a separate real Chromium and its launcher alive as unrelated controls.
 The Chromium regression runs after browser installation, not in the unit gate.
 
 CI's web host unit gate runs a byte-encoded guest through `web/scripts/run.ts`.

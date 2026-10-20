@@ -51,10 +51,19 @@ function marked(row: ProcessIdentity): boolean {
     throw error;
   }
 }
+function ownedSessionLeader(row: ProcessIdentity, current: ReadonlyMap<number, ProcessIdentity>): ProcessIdentity | undefined {
+  if (process.platform !== "linux" || !root) return undefined;
+  const leader = current.get(row.session);
+  if (!leader || leader.pid !== leader.group || leader.pid !== leader.session) return undefined;
+  if (Number(leader.birth) < Number(root.birth)) return undefined;
+  return leader;
+}
 function capture(includeOrphans = false): ProcessIdentity[] {
   const rows = snapshot();
   const current = new Map(rows.map(row => [row.pid, row]));
   const pending = rows.filter(row => owned.get(row.pid)?.birth === row.birth || includeOrphans && marked(row));
+  // A browser leader can hide its environment; a marked member still identifies its newly-created session.
+  pending.push(...pending.flatMap(row => ownedSessionLeader(row, current) ?? []));
   if (root && current.get(root.pid)?.birth === root.birth) pending.push(root);
   const found = new Set<number>();
   while (pending.length > 0) {
@@ -113,7 +122,7 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 try {
   const child = spawn(command, args, { stdio: "inherit", detached: true, env: { ...process.env, [marker]: "1" } });
   if (child.pid !== undefined) {
-    root = snapshot().find(row => row.pid === child.pid && row.parent === process.pid && (process.platform !== "linux" || marked(row)));
+    root = snapshot().find(row => row.pid === child.pid && row.parent === process.pid);
     capture(true);
   }
   tracker = setInterval(() => capture(), 50);
