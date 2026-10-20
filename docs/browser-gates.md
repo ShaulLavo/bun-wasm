@@ -6,10 +6,23 @@ fresh `dist/bun.wasm`, `dist/bun-jsc.wasm`, `dist/bun-browser.wasm` and
 
 Every browser test command has a 300-second deadline. Set
 `BROWSER_TEST_TIMEOUT_SECONDS` to change it. A timeout prints the command and its
-owned process group and sends SIGTERM so teardown can run. After five seconds it
-kills any remaining descendants and returns 124. The gate records failure
-and continues with the remaining browser tests. The CLI network cases each have
+owned processes and sends SIGTERM so teardown can run. It remembers each
+process's PID and birth identity, including descendants that detach into other
+groups. On Linux, an inherited random ownership marker also finds descendants
+that outlive a launcher before the next process-tree snapshot. It never signals
+an unowned process group.
+
+The five-second teardown grace continues after the launcher exits. Remaining
+owned processes receive SIGKILL, and the wrapper verifies that none are live
+before returning 124. Normal exits and external termination use the same teardown.
+The gate records failure and continues with the remaining browser tests. The CLI network cases each have
 an independent 60-second deadline.
+
+The unit gate checks a launcher that exits during a descendant's 200ms cleanup
+and a launcher that leaves a detached child behind on normal exit. The browser
+gate stops a real detached Chromium with SIGSTOP, then checks its removal after
+the deadline. Each regression keeps an unrelated process alive as a control.
+The Chromium regression runs after browser installation, not in the unit gate.
 
 CI's web host unit gate runs a byte-encoded guest through `web/scripts/run.ts`.
 It links the same `runtime_proc` imports as Bun, exercises handled signal delivery

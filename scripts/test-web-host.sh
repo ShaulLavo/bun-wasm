@@ -30,6 +30,7 @@ if [[ "$phase" != --unit ]]; then
   export SMOKE_PORT="${SMOKE_PORT:-4179}"
   listeners=$(ss -H -ltn "sport = :$SMOKE_PORT")
   test -z "$listeners"
+  browser_test bun test ../scripts/run-with-timeout-browser.test.ts
   browser_test bun run test:browser
   browser_test env SPLIT_SMOKE_PORT="${SPLIT_SMOKE_PORT:-4180}" bun tests/browser-splitting.mjs
   browser_test env PLAYWRIGHT="$root/web/node_modules/playwright/index.mjs" node ../scripts/test-native-stream-interop.mjs

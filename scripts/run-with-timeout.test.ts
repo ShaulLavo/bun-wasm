@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { ownedScenario } from "./fixtures/deadline-scenario";
 import { tmpdir } from "node:os";
 
 const wrapper = join(import.meta.dir, "run-with-timeout.mts");
@@ -48,3 +49,7 @@ test("command deadline lets teardown finish before forced termination", async ()
   expect(result.code).toBe(124);
   expect(result.stdout).toBe("teardown complete\n");
 });
+
+test("command deadline honors descendant grace after its launcher exits and preserves unrelated processes", () => ownedScenario("launcher"), 12000);
+
+test("ordinary launcher exit removes reparented detached descendants", () => ownedScenario("quick-launcher"), 12000);
