@@ -195,6 +195,8 @@ export function load(fake: ReturnType<typeof service>, options: { timers?: TestT
       return modules[name];
     },
   };
+  modules.child_ipc = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.ipcFactory = ${readFileSync(
+    new URL("../crates/bunwasm-runtime/src/js/child_ipc.ts", import.meta.url), "utf8")}`), { TextEncoder, TextDecoder })(internal);
   const module = factory(internal);
   /** Match pumpIo: remove a throwing waiter before handing the error to its fail handler. */
   const pumpTurn = () => {
@@ -217,5 +219,5 @@ export function load(fake: ReturnType<typeof service>, options: { timers?: TestT
     }
     throw new Error("waiters did not finish");
   };
-  return { module, waiters, pump, pumpTurn };
+  return { module, waiters, pump, pumpTurn, ipc: modules.child_ipc as { open(target: EventEmitter, descriptors: { input: number; output: number }, childSide?: boolean): { connected: boolean; send(message: unknown, handle?: unknown, options?: unknown, callback?: unknown): boolean; disconnect(): void; close(): void; ref(): unknown; unref(): unknown } } };
 }
