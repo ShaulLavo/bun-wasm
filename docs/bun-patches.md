@@ -60,6 +60,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
 | [Filesystem vectored reads](#filesystem-vectored-reads) | Host feature | Original readv/readvSync and FileHandle.readv adapters avoid summed-capacity allocations, use one bounded read for non-regular descriptors, preserve shared cursors and follow Bun's empty-vector contract. |
 | [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
+| [Deadline descendant ownership](#cross-platform-web-tests) | Host feature | Original PID/birth deadline supervision and Linux child-subreaper adapter preserve detached descendants across launcher death. |
 | [CMake toolchain cache preflight](#cmake-toolchain-cache-preflight) | Port | Reject an existing CMake cache whose recorded compiler, toolchain file, target, system, processor or sysroot does not match the requested native or WASI configure/build. |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
@@ -1769,10 +1770,15 @@ or adapted. `web/tests/{subprocess,playground,browser-net}.mjs` and
 `tests/install/run.mjs` use the host temporary directory or `BUN_WASM_TEST_TMP`.
 `scripts/test-web.sh` honors that override or `TMPDIR`, installs scratch teardown
 before allocation, and waits for its fixture server to exit. Its original
-`scripts/run-with-timeout.mts` adapter owns a POSIX process group and kills command
-descendants on normal exit, deadline and interruption rather than requiring GNU
-timeout on macOS. Browser network teardown uses owned
-ChildProcess handles, not Linux-only `/proc` paths. Test assertions are unchanged.
+`scripts/run-with-timeout.mts` adapter records process identities and kills only
+owned descendants on normal exit, deadline and interruption rather than requiring
+GNU timeout on macOS. The original `scripts/linux-subreaper.mts` adapter calls
+Linux `prctl` through Bun FFI so orphaned descendants retain kernel-enforced
+ownership even when polling and environment markers miss their launcher. Node
+entry execs through Bun and back to Node at the same PID. No upstream source is
+copied. The [deadline contract](browser-deadlines.md) describes the controls.
+Browser network teardown uses owned ChildProcess handles, not Linux-only `/proc`
+paths. Test assertions are unchanged.
 The original `env.sh` host-cache adapter exports `PLAYWRIGHT_BROWSERS_PATH` only
 when it is unset and `/work/cache/ms-playwright` exists. It never downloads
 browsers; hosts without that directory retain Playwright's native cache lookup,
