@@ -120,6 +120,10 @@ test("real no-op launcher cannot pass install or tooling stages", async () => {
     expect(results.length).toBe(6);
     expect(results.filter(row => row.status === "pass")).toEqual([]);
     expect(results.filter(row => row.stage === "install").map(row => row.status)).toEqual(["fail", "fail"]);
+    rmSync(join(directory, "results"), { recursive: true });
+    const strict = await matrix(directory, ["--strict"]);
+    expect(strict.code, strict.output).toBe(1);
+    expect(strict.output).toContain('"cleanup":true');
     expect(readdirSync(join(directory, "owned-scratch"))).toEqual([]);
   } finally { cleanup(); }
 }, 30000);
