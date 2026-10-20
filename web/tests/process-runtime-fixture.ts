@@ -13,7 +13,6 @@ import type { Runtime, GuestLauncher, ProcessService, RuntimeFilesystem, Runtime
  */
 export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, options: {
   activate?: () => Promise<typeof import("waffle/proc")>;
-  onError?: (error: unknown) => void;
 } = {}): Runtime {
   const unused = (): never => { throw new Error("Unexpected filesystem operation in process-only fixture"); };
   let filesystem: RuntimeFilesystem = {
@@ -69,7 +68,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
     processes() {
       if (disposed) return Promise.reject(new Error("Runtime is disposed"));
       return activation ??= Promise.resolve().then(() => {
-        broker = new BrowserProcessBroker({ filesystem, identities, registry, table, activate: options.activate, onError: options.onError,
+        broker = new BrowserProcessBroker({ filesystem, identities, registry, table, activate: options.activate,
           launch: context => {
             const launch = adapters.get(context.adapter);
             if (!launch) throw new Error(`Unknown adapter: ${context.adapter}`);

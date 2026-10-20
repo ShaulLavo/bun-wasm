@@ -1,4 +1,5 @@
 import "@xterm/xterm/css/xterm.css";
+import { showPageStartupFailure } from "./startup";
 import "./style.css";
 
 import { javascript } from "@codemirror/lang-javascript";
@@ -451,21 +452,6 @@ if (!fs.ownershipLost) {
 pageSetUp();
 }
 
-void main().catch(error => {
-  console.error(error);
-  const status = document.querySelector<HTMLElement>("#status");
-  if (status) {
-    status.textContent = error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error);
-    status.dataset.kind = "error";
-  }
-  const run = document.querySelector<HTMLButtonElement>("#run");
-  if (run) {
-    run.textContent = "Reload";
-    run.disabled = false;
-    run.title = "Retry playground startup";
-    run.onclick = () => location.reload();
-  }
-  const newFile = document.querySelector<HTMLButtonElement>("#new-file");
-  if (newFile) newFile.disabled = true;
-  for (const select of document.querySelectorAll<HTMLSelectElement>("#engine, #file-select")) select.disabled = true;
-});
+void main().catch(error => showPageStartupFailure(error, {
+  button: "#run", disable: "#new-file, #engine, #file-select", title: "Retry playground startup",
+}));

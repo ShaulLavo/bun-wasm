@@ -18,7 +18,7 @@ import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "..
 import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
 import { enableTerminalCopy } from "../../web/src/terminal-copy";
 import { linkLocalUrls } from "../../web/src/terminal-links";
-import { measureStartup } from "../../web/src/startup";
+import { measureStartup, showPageStartupFailure } from "../../web/src/startup";
 import { depsCacheKey, readDeps, writeDeps } from "./deps-cache";
 import { StartupOutput } from "./startup-output";
 
@@ -677,21 +677,6 @@ Object.assign(globalThis, { sandbox: { fs, editor, term, restart: startDevServer
 
 }
 
-void main().catch(error => {
-  console.error(error);
-  const status = document.querySelector<HTMLElement>("#status");
-  if (status) {
-    status.textContent = error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error);
-    status.dataset.kind = "error";
-  }
-  const restart = document.querySelector<HTMLButtonElement>("#restart");
-  if (restart) {
-    restart.textContent = "Reload";
-    restart.disabled = false;
-    restart.title = "Retry sandbox startup";
-    restart.onclick = () => location.reload();
-  }
-  const reset = document.querySelector<HTMLButtonElement>("#reset");
-  if (reset) reset.disabled = true;
-  for (const select of document.querySelectorAll<HTMLSelectElement>("#engine, #template, #file-select")) select.disabled = true;
-});
+void main().catch(error => showPageStartupFailure(error, {
+  button: "#restart", disable: "#reset, #engine, #template, #file-select", title: "Retry sandbox startup",
+}));

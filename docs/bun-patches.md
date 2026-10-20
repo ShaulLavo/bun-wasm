@@ -3075,8 +3075,8 @@ namespace without reading a payload or moving a file cursor. Closed descriptors 
 files, directories, terminals and runtime pipes remain distinct through duplication and remapping.
 
 `web/src/main.ts` and `sandbox/src/main.ts` use the public `fast|safe|memory` mode contract.
-Their outer startup handlers expose typed failures even when construction fails before a
-filesystem exists. They retain the existing workspace names and never switch stores on failure.
+Their outer startup handlers share `web/src/startup.ts` to expose typed failures even when
+construction fails before a filesystem exists. They retain the existing workspace names and never switch stores on failure.
 The old physical-store selector is removed from product pages. Conformance fixtures alone use
 Waffle's internal implementation override to retain IndexedDB and OPFS backend tests. Runtime-child startup-refusal tests also follow Waffle's current host-only diagnostics contract,
 leaving inherited stderr untouched while the parent consumes the typed START_FAILED result. No old

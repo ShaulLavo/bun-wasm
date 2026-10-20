@@ -1,7 +1,7 @@
 import { createNotifyObserver } from "./notify-observer";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import type { Runtime } from "waffle";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { DescriptorTable } from "waffle/core/descriptors";
@@ -160,7 +160,7 @@ test("UI signals freeze canonical root pipe publication only for fatal actions",
   } finally { controller?.dispose(); await state.dispose(); }
 });
 
-function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("waffle/proc")>; onError?: (error: unknown) => void }) {
+function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("waffle/proc")> }) {
   const ports: MessagePort[] = [];
   const filesystem = {
     connect(identity: object) {
@@ -172,7 +172,7 @@ function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker
     revoke: revokeFilesystem, client: { sweep() {} },
     async quiesce(identity: Parameters<typeof revokeFilesystem>[0]) { revokeFilesystem(identity); },
   } as unknown as SharedFilesystem;
-  const runtime = processRuntimeFixture(filesystem, { activate: options?.activate, onError: options?.onError });
+  const runtime = processRuntimeFixture(filesystem, { activate: options?.activate });
   const root = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   root.data = { filesystem: createFilesystemIdentity() };
   const broker = new SubprocessBroker("http://localhost/worker.js", runtime, options);
@@ -350,8 +350,8 @@ for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
   ? "untrusted compiled-only registration is rejected before child admission"
   : "generic runtime SIMD refusal leaves inherited stderr untouched and reports typed startup failure", async () => {
   const output: { fd: number; text: string }[] = [];
-  const errors: unknown[] = [];
-  const state = registryFixture({ output(fd, data) { output.push({ fd, text: new TextDecoder().decode(data) }); }, onError(error) { errors.push(error); } });
+  const errors = spyOn(console, "error").mockImplementation(() => {});
+  const state = registryFixture({ output(fd, data) { output.push({ fd, text: new TextDecoder().decode(data) }); } });
   try {
     const body = [0, 0xfd, 0x0c].concat(new Array<number>(16).fill(0), [0x1a, 0x0b]);
     const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 0x60, 0, 0, 3, 2, 1, 0,
@@ -376,9 +376,9 @@ for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
     expect(await state.broker.wait(pid)).toEqual({ kind: "start-failed", code: 8, error: "ENOEXEC", status: null });
     // Waffle keeps runtime-child diagnostics on the host; the parent consumes START_FAILED.
     expect(output).toHaveLength(0);
-    expect(errors).toHaveLength(1);
-    expect(String(errors[0])).toMatch(/Cannot instrument WebAssembly:.*SIMD/);
-  } finally { await state.dispose(); }
+    expect(errors).toHaveBeenCalledTimes(1);
+    expect(String(errors.mock.calls[0]?.[1])).toMatch(/Cannot instrument WebAssembly:.*SIMD/);
+  } finally { errors.mockRestore(); await state.dispose(); }
 });
 
 for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery of ["kill", "killJob"] as const) {
