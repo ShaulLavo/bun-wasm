@@ -4,17 +4,18 @@ export function lifetime() {
   const acquired: (() => Promise<unknown>)[] = [];
   let closing: Promise<void> | undefined;
   function close(): Promise<void> {
-    closing ??= drain();
+    closing ??= drain(acquired);
     return closing;
   }
-  async function drain() {
-    const failures: unknown[] = [];
-    for (const stop of acquired.reverse()) {
-      try { await stop(); } catch (error) { failures.push(error); }
-    }
-    if (failures.length) throw new AggregateError(failures, "App shutdown failed");
-  }
   return { own: (stop: () => Promise<unknown>) => acquired.push(stop), close };
+}
+
+async function drain(acquired: (() => Promise<unknown>)[]) {
+  const failures: unknown[] = [];
+  for (const stop of acquired.reverse()) {
+    try { await stop(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, "App shutdown failed");
 }
 
 export async function listen(server: Server, port: number): Promise<void> {

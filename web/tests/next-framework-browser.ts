@@ -9,6 +9,7 @@ import { playwright, ready, run, session, terminalText, writeFile } from "./play
 import { stopForeground } from "./foreground";
 import { nextRegistry } from "./next-framework-registry";
 import { nextPageContract } from "./next-framework-contract";
+import { observePreviewSockets, previewSocketEvents } from "./next-framework-sockets";
 
 type PlaygroundGlobal = typeof globalThis & {
   playground: {
@@ -109,14 +110,19 @@ async function stopGuest(page: Page) {
 
 async function browserHotUpdate(preview: Page, page: Page, base: string) {
   const source = readFileSync(join(fixture, "app/page.tsx"), "utf8");
-  const sockets: string[] = [];
-  preview.on("websocket", socket => sockets.push(socket.url()));
+  await observePreviewSockets(preview);
   try {
     await preview.goto(base);
     await preview.getByRole("heading", { name: "Five frameworks, one Next app", exact: true }).waitFor();
+    const beforeUpdate = (await previewSocketEvents(preview)).length;
     await writeFile(page, "/home/user/app/page.tsx", source.replace("Five frameworks, one Next app", "Guest hot update"));
     await preview.getByRole("heading", { name: "Guest hot update", exact: true }).waitFor({ timeout: 30000 });
-    assert.ok(sockets.some(url => url.includes("/_next/webpack-hmr")), "preview HMR socket");
+    const events = await previewSocketEvents(preview);
+    const sockets = events.filter(event => event.url.includes("/_next/webpack-hmr"));
+    const updates = events.slice(beforeUpdate).filter(event => event.url.includes("/_next/webpack-hmr"));
+    assert.ok(sockets.some(event => event.type === "open"), "preview HMR socket opened");
+    assert.ok(updates.some(event => event.type === "message"), "preview HMR socket received an update after the source edit");
+    writeFileSync(join(reports, "browser-hmr.json"), JSON.stringify({ status: "pass", sockets }));
   } finally { await writeFile(page, "/home/user/app/page.tsx", source); }
 }
 

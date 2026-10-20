@@ -32,3 +32,21 @@ test("all five listeners close, including Bun servers", async () => {
     await closeServer(probe);
   }
 });
+
+test("cleanup drains in reverse order and shares aggregate failure across repeated closes", async () => {
+  const scope = lifetime();
+  const order: number[] = [];
+  const first = new Error("first cleanup");
+  const last = new Error("last cleanup");
+  scope.own(async () => { order.push(1); throw first; });
+  scope.own(async () => { order.push(2); });
+  scope.own(async () => { order.push(3); throw last; });
+  const closing = scope.close();
+  expect(scope.close()).toBe(closing);
+  const failure = await closing.catch(error => error);
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect(failure.errors).toEqual([last, first]);
+  expect(order).toEqual([3, 2, 1]);
+  await expect(scope.close()).rejects.toBe(failure);
+  expect(order).toEqual([3, 2, 1]);
+});

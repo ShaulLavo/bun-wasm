@@ -6,6 +6,7 @@ import { entryPort } from "../../examples/frameworks/ports.server";
 import { frameworks } from "../../examples/frameworks/names";
 import { chromium } from "playwright";
 import { nextPageContract } from "./next-framework-contract";
+import { stopProcessGroup } from "./next-framework-process";
 
 assert.equal(Bun.version, "1.4.2", "Native control requires Bun 1.4.2");
 const reports = resolve(process.env.NEXT_REPORTS ?? "/work/tmp/bun-wasm-next-control");
@@ -21,14 +22,11 @@ function stop() {
   return stopping;
 }
 async function stopChild() {
-  restoreSource?.();
-  restoreSource = undefined;
-  if (!child || child.exitCode !== null) return;
   const current = child;
-  const exited = new Promise<void>(resolve => current.once("exit", () => resolve()));
-  if (current.pid) process.kill(-current.pid, "SIGTERM");
-  const timer = setTimeout(() => { if (current.pid) process.kill(-current.pid, "SIGKILL"); }, 5000);
-  try { await exited; } finally { clearTimeout(timer); }
+  const restore = restoreSource;
+  restoreSource = undefined;
+  try { restore?.(); }
+  finally { if (current) await stopProcessGroup(current); }
 }
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => { void stop().finally(() => process.exit(130)); });
