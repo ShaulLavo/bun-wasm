@@ -27,6 +27,11 @@ job owns `tsconfig.package.json`; the web job owns the runtime-factory type chec
 The quality negative controls still rerun individual gates with invalid input.
 Those are required failure checks, not duplicate successful coverage.
 
+The same always-on job is the sole owner of the lightweight CMake preflight suite.
+It runs independently of native selection, so changes to its tests, timeout helper,
+shell entry points, shared helpers or shim inputs cannot skip the suite. These
+checks configure tiny fixtures; they do not build JSC, BoringSSL or Rust.
+
 The existing Rust job runs `bun run quality --native` only when native inputs
 change. `scripts/ci-changes.ts` examines the entire Git diff, including deleted
 and renamed files, with no API path-count limit. It uses the PR merge base or

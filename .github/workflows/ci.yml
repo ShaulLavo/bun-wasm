@@ -49,6 +49,14 @@ jobs:
         env:
           TMPDIR: ${{ runner.temp }}
         run: bun run quality --javascript
+      - name: Install lightweight CMake preflight tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+      - name: Test CMake cache toolchain preflight
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bun test scripts/cmake-cache.test.ts
 
   rust:
     name: Rust workspace tests (QuickJS host)
@@ -154,8 +162,6 @@ jobs:
         run: |
           source env.sh
           bun run quality --native
-      - name: Test CMake cache toolchain preflight
-        run: bun test scripts/cmake-cache.test.ts
 
   package:
     name: Browser adapter package

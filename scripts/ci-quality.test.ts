@@ -88,3 +88,10 @@ test("merged main keeps its CMake and package identity checks with one owner eac
   expect(workflow.match(/^  rust:$/gm)).toHaveLength(1);
   expect(workflow).not.toContain("continue-on-error");
 });
+
+test("CMake preflight has one always-on lightweight owner, independent of native selection", () => {
+  expect(quality).toContain("run: bun test scripts/cmake-cache.test.ts");
+  expect(quality).toContain("sudo apt-get install -y cmake ninja-build g++");
+  expect(quality).not.toMatch(/^\s+(?:if|needs):/m);
+  expect(rust).not.toContain("scripts/cmake-cache.test.ts");
+});

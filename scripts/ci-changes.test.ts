@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changedPaths, needsRust } from "./ci-changes";
@@ -81,14 +81,31 @@ test("unavailable commit comparison fails rather than skipping native checks", (
   expect(() => select("f".repeat(40), javascript)).toThrow();
 });
 
+function commitInput(path: string): string {
+  if (!fixture) throw new Error("Fixture not initialized");
+  git(["checkout", "-q", "--detach", base]);
+  mkdirSync(join(fixture, path, ".."), { recursive: true });
+  writeFileSync(join(fixture, path), "changed input\n");
+  git(["add", "."]);
+  git(["commit", "-qm", `change ${path}`]);
+  return git(["rev-parse", "HEAD"]);
+}
+
 for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh"]) {
   test.each(["pull_request", "push"])(`${path} retains native checks through the real %s event CLI`, event => {
-    if (!fixture) throw new Error("Fixture not initialized");
-    git(["checkout", "-q", "--detach", base]);
-    mkdirSync(join(fixture, path, ".."), { recursive: true });
-    writeFileSync(join(fixture, path), "changed native input\n");
-    git(["add", "."]);
-    git(["commit", "-qm", `change ${path}`]);
-    expect(select(base, git(["rev-parse", "HEAD"]), event)).toBe("rust=true");
+    expect(select(base, commitInput(path), event)).toBe("rust=true");
+  });
+}
+
+const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const quality = workflow.split("\n  quality:\n")[1]!.split("\n  rust:\n")[0]!;
+for (const path of [
+  "scripts/cmake-cache.test.ts", "scripts/run-with-timeout.mts", "jsc/configure.sh", "jsc/build.sh", "jsc/common.sh",
+  "scripts/real-runtime-network-tls.sh", "jsc/shim/wasi-compat.h", "jsc/shim/wasi-compat.c", "jsc/shim/madvise.c",
+]) {
+  test.each(["pull_request", "push"])(`${path} keeps the blocking lightweight CMake owner for a real %s event`, event => {
+    expect(select(base, commitInput(path), event)).toBe("rust=false");
+    expect(quality).toContain("run: bun test scripts/cmake-cache.test.ts");
+    expect(quality).not.toMatch(/^\s+(?:if|needs):/m);
   });
 }
