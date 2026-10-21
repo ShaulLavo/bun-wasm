@@ -7,7 +7,8 @@ function deepBlocks(file: string, scope?: string): string[] {
   const failures: string[] = [];
   let found = scope === undefined;
   function visit(node: ts.Node, depth: number, selected: boolean) {
-    const match = ts.isFunctionDeclaration(node) && node.name?.text === scope;
+    const named = ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node);
+    const match = named && node.name !== undefined && ts.isIdentifier(node.name) && node.name.text === scope;
     const withinScope = selected || match;
     if (match) found = true;
     const block = ts.isBlock(node) || ts.isCaseBlock(node);
@@ -30,4 +31,12 @@ test("Next cleanup and observer code stays within three block levels", () => {
 test("production VM functions stay within three block levels in their registry", () => {
   const path = new URL("../crates/bunwasm-runtime/src/js/builtins.js", import.meta.url).pathname;
   expect(deepBlocks(path, "vmModule")).toEqual([]);
+});
+
+
+test("HTTP header adapters and fixtures stay within three block levels", () => {
+  const files = ["node-http-headers.test.ts", "node-http-response-fixture.ts", "../tests/fixtures/net-http-implicit-headers/index.ts", "../tests/fixtures/net-http-implicit-headers/contract.ts"];
+  const path = new URL("../crates/bunwasm-runtime/src/js/net.js", import.meta.url).pathname;
+  const failures = files.flatMap(file => deepBlocks(new URL(file, import.meta.url).pathname));
+  expect(failures.concat(deepBlocks(path, "prepareResponseHeader"), deepBlocks(path, "_implicitHeader"))).toEqual([]);
 });

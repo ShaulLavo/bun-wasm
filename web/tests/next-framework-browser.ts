@@ -29,6 +29,7 @@ const filesystemFixture = resolve(import.meta.dir, "../../tests/fixtures/fs-stre
 const moduleFixture = resolve(import.meta.dir, "../../tests/fixtures/module-compile");
 const cursorFixture = resolve(import.meta.dir, "../../tests/fixtures/stdio-cursor");
 const vmFixture = resolve(import.meta.dir, "../../tests/fixtures/vm-context");
+const httpFixture = resolve(import.meta.dir, "../../tests/fixtures/net-http-implicit-headers");
 const assets = process.env.NEXT_WEB_ROOT;
 const supplemental = process.env.NEXT_REGISTRY_EXTRA;
 if (!assets || !supplemental) throw new Error("Set NEXT_WEB_ROOT to a browser playground build and NEXT_REGISTRY_EXTRA to staged locked tarballs");
@@ -263,6 +264,8 @@ try {
   await guestCommand(page, "fs-stream-constructors", "bun run fs-stream-constructors/index.ts");
   for (const path of sourceFiles(cursorFixture, "", [])) await writeFile(page, `/home/user/stdio-cursor/${path}`, readFileSync(join(cursorFixture, path), "utf8"));
   await cursorOutputFixture(page);
+  for (const path of sourceFiles(httpFixture, "", [])) await writeFile(page, `/home/user/net-http-implicit-headers/${path}`, readFileSync(join(httpFixture, path), "utf8"));
+  await guestCommand(page, "net-http-implicit-headers", "bun run net-http-implicit-headers/index.ts");
   const beforeApp = await page.evaluate(async root => ({
     files: await (globalThis as PlaygroundGlobal).playground.fs.listFiles(root),
     seed: await (globalThis as PlaygroundGlobal).playground.fs.readFile("/home/user/files.ts"),

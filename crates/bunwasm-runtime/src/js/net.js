@@ -785,6 +785,13 @@
 
   // --- node:http ----------------------------------------------------------------
 
+  function prepareResponseHeader(response, streaming, finalLength) {
+    if (response._header) return;
+    response._implicitFraming = { streaming, finalLength };
+    try { response._implicitHeader(); }
+    finally { response._implicitFraming = undefined; }
+  }
+
   function nodeHttp(protocol) {
     const EventEmitter = internal.require("events");
     const { Readable, Writable } = internal.builtin("node:stream");
@@ -844,6 +851,7 @@
         this._headers = new Map();
         this._trailers = [];
         this._headersFlushed = false;
+        this._header = null;
         this._chunked = false;
         this._bodyless = req.method === "HEAD";
         this._completed = false;
@@ -944,7 +952,8 @@
         } else if (headers) {
           for (const k of Object.keys(headers)) this.setHeader(k, headers[k]);
         }
-        this._flushHeaders(true, 0, false);
+        const framing = this._implicitFraming;
+        this._flushHeaders(framing?.streaming ?? true, framing?.finalLength ?? 0, false);
         return this;
       }
       write(chunk, encoding, callback) {
@@ -995,6 +1004,9 @@
         this.destroyed = true;
         this.emit("close");
       }
+      _implicitHeader() {
+        this.writeHead(this.statusCode);
+      }
       flushHeaders() {
         this._flushHeaders(true);
       }
@@ -1016,6 +1028,7 @@
       }
       _flushHeaders(streaming, finalLength = 0, send = true) {
         if (this._headersFlushed) return;
+        if (send) prepareResponseHeader(this, streaming, finalLength);
         if (this._headBytes) {
           if (send) { this._conn.write(this._headBytes); this._headersFlushed = true; }
           return;
@@ -1048,6 +1061,7 @@
         }
         this.headersSent = true;
         this._headBytes = serializeHead(this.statusCode, this.statusMessage, pairs);
+        this._header = this._headBytes.toString("latin1");
         if (send) { this._conn.write(this._headBytes); this._headersFlushed = true; }
       }
       _writeBody(bytes) {
