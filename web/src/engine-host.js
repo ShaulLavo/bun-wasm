@@ -57,7 +57,6 @@ const nativeAddEventListener = typeof globalThis.addEventListener === "function"
 
 const utf8 = new NativeTextEncoder();
 const fromUtf8 = new NativeTextDecoder();
-// Wire strings preserve their contents; public decoders own BOM removal.
 const wireFromUtf8 = new NativeTextDecoder("utf-8", { ignoreBOM: true });
 
 // --- the value encoding (engine_host.rs encode/decode) ------------------------------------
