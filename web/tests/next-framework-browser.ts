@@ -7,6 +7,7 @@ import type { Page } from "playwright";
 import type { Runtime } from "waffle";
 import { playwright, ready, run, session, terminalText, writeFile } from "./playground.mjs";
 import { stopForeground } from "./foreground";
+import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt";
 import { nextRegistry } from "./next-framework-registry";
 import { nextPageContract } from "./next-framework-contract";
 import { observePreviewSockets, previewSocketEvents } from "./next-framework-sockets";
@@ -15,7 +16,7 @@ type PlaygroundGlobal = typeof globalThis & {
   playground: {
     shell: { submit(command: string): Promise<void>; lastExit: number; running: boolean; input(text: string): void };
     previews: { serves(port: number): boolean; url(port: number): string };
-    fs: Pick<Runtime["filesystem"], "readFile" | "createIdentity" | "revoke" | "reap">;
+    fs: Pick<Runtime["filesystem"], "readFile" | "listFiles" | "createIdentity" | "revoke" | "reap">;
   };
   nextFinished: boolean;
 };
@@ -25,12 +26,19 @@ const assets = process.env.NEXT_WEB_ROOT;
 const supplemental = process.env.NEXT_REGISTRY_EXTRA;
 if (!assets || !supplemental) throw new Error("Set NEXT_WEB_ROOT to a browser playground build and NEXT_REGISTRY_EXTRA to staged locked tarballs");
 mkdirSync(reports, { recursive: true });
-const receipt = JSON.parse(readFileSync(join(assets, "engine-builds.json"), "utf8"));
-assert.equal(receipt["bun-browser.wasm"], "5e37d2afc8d73da8544ba4c1ac32d6c899b85ce1b2325892dd8aa9dcbc4a53bb", "Expected baseline guest");
+const receipt: unknown = JSON.parse(readFileSync(join(assets, "engine-builds.json"), "utf8"));
+assert.ok(receipt && typeof receipt === "object" && "bun-browser.wasm" in receipt);
 const rawGuest = process.env.NEXT_GUEST_WASM;
-if (!rawGuest) throw new Error("Set NEXT_GUEST_WASM for independent digest verification");
-assert.equal(createHash("sha256").update(readFileSync(rawGuest)).digest("hex"), receipt["bun-browser.wasm"]);
-assert.equal(createHash("sha256").update(gunzipSync(readFileSync(join(assets, "bun-browser.wasm.gz")))).digest("hex"), receipt["bun-browser.wasm"], "Distributed guest bytes match the verified raw guest");
+const expectedGuest = process.env.NEXT_GUEST_SHA256;
+if (!rawGuest || !expectedGuest) throw new Error("Set NEXT_GUEST_WASM and NEXT_GUEST_SHA256 for independent guest verification");
+const raw = readFileSync(rawGuest);
+const guestReceipt: unknown = JSON.parse(readFileSync(`${rawGuest}.build.json`, "utf8"));
+verifyGuestBuildReceipt(raw, guestReceipt);
+const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+assert.equal(digest(raw), expectedGuest, "Selected raw guest matches the declared input");
+assert.equal(receipt["bun-browser.wasm"], expectedGuest, "Host build used the selected guest");
+assert.equal(digest(gunzipSync(readFileSync(join(assets, "bun-browser.wasm.gz")))), expectedGuest, "Distributed guest bytes match the verified raw guest");
+const compilerDirectory = "./node_modules/@next/swc-wasm-nodejs";
 const task = session("next-browser-");
 let registry: ReturnType<typeof nextRegistry> | undefined;
 const stages: Record<string, unknown> = { dev: { status: "not-run" }, build: { status: "not-run" }, start: { status: "blocked", reason: "requires a guest build" } };
@@ -53,24 +61,27 @@ function sourceFiles(directory: string, prefix = ""): string[] {
     if (["node_modules", ".next", "next-env.d.ts"].includes(name) || name.endsWith("tsbuildinfo")) continue;
     const path = join(directory, name);
     if (statSync(path).isDirectory()) { files = files.concat(sourceFiles(path, `${prefix}${name}/`)); continue; }
-    if (/\.(?:tsx?|json|lock|txt)$/.test(name)) files.push(prefix + name);
+    if (name === ".env" || /\.(?:tsx?|json|lock|txt)$/.test(name)) files.push(prefix + name);
   }
   return files;
 }
 
 async function serverStage(page: Page, stage: "dev" | "start", command: string) {
+  process.stdout.write(`START ${stage}: ${command}\n`);
   await page.evaluate(command => {
     const state = globalThis as PlaygroundGlobal;
     state.nextFinished = false;
     void state.playground.shell.submit(command).finally(() => { state.nextFinished = true; });
   }, command);
   const until = Date.now() + 120000;
+  let listening = false;
   while (Date.now() < until) {
     const state = await page.evaluate(() => ({ done: (globalThis as PlaygroundGlobal).nextFinished, listening: (globalThis as PlaygroundGlobal).playground.previews.serves(43100) }));
     if (state.done) throw new Error(`Guest server exited before Next listener: ${await terminalText(page)}`);
-    if (state.listening) break;
+    if (state.listening) { listening = true; break; }
     await page.waitForTimeout(100);
   }
+  assert.ok(listening, `Guest ${stage} listener timed out: ${await terminalText(page)}`);
   const url = await page.evaluate(() => (globalThis as PlaygroundGlobal).playground.previews.url(43100));
   const preview = await page.context().newPage();
   try {
@@ -83,19 +94,31 @@ async function serverStage(page: Page, stage: "dev" | "start", command: string) 
 }
 
 async function storageCounters(page: Page) {
-  return page.evaluate(() => {
+  const maxBytes = await page.evaluate(() => {
     const fs = (globalThis as PlaygroundGlobal).playground.fs;
     const identity = fs.createIdentity();
-    try {
-      // Read-only f6017d12 shared allocator layout; the guest digest is checked above.
-      const cells = new Int32Array(identity.shared);
-      const pageBytes = 65536;
-      const totalPages = identity.maxBytes / pageBytes;
-      const slots = new Int32Array(identity.shared, (16 + totalPages) * 4, 4096 * 12);
-      const files = Array.from({ length: 4095 }, (_value, slot) => Atomics.load(slots, (slot + 1) * 12)).filter(value => value !== 0).length;
-      return { usedBytes: Atomics.load(cells, 2) * pageBytes, maxBytes: identity.maxBytes, files };
-    } finally { fs.revoke(identity); fs.reap(identity); }
+    try { return identity.maxBytes; }
+    finally { fs.revoke(identity); fs.reap(identity); }
   });
+  assert.equal(maxBytes, 1024 * 1024 * 1024, "Unchanged 1 GiB guest filesystem budget");
+  const files = await page.evaluate(async () => (await (globalThis as PlaygroundGlobal).playground.fs.listFiles("/home/user")).length);
+  return { maxBytes, files };
+}
+
+async function fixtureSnapshot(page: Page, stage: string) {
+  const observed = await page.evaluate(async () => {
+    const fs = (globalThis as PlaygroundGlobal).playground.fs;
+    const lock = await fs.readFile("/home/user/bun.lock");
+    const manifest = await fs.readFile("/home/user/package.json");
+    return { lock: lock ? Array.from(lock) : null, manifest: manifest ? Array.from(manifest) : null };
+  });
+  assert.ok(observed.lock && observed.manifest, "Guest lock and manifest exist");
+  const lock = Buffer.from(observed.lock);
+  const manifest = Buffer.from(observed.manifest);
+  writeFileSync(join(reports, `${stage}-bun.lock`), lock);
+  assert.deepEqual(lock, readFileSync(join(fixture, "bun.lock")), "Unchanged fixture lock bytes");
+  assert.deepEqual(manifest, readFileSync(join(fixture, "package.json")), "Unchanged fixture manifest bytes");
+  return { lock: { bytes: lock.length, sha256: digest(lock) }, manifest: { bytes: manifest.length, sha256: digest(manifest) } };
 }
 
 async function stopGuest(page: Page) {
@@ -128,7 +151,10 @@ async function browserHotUpdate(preview: Page, page: Page, base: string) {
 
 async function runServer(page: Page, stage: "dev" | "start", mode: "dev" | "prod") {
   try { await serverStage(page, stage, `bun run server.ts ${mode}`); }
-  catch (error) { stages[stage] = { status: "fail", error: String(error) }; }
+  catch (error) {
+    stages[stage] = { status: "fail", error: String(error) };
+    process.stdout.write(`FAIL ${stage}: ${String(error)}\n${await terminalText(page)}\n`);
+  }
   finally {
     await stopGuest(page);
     writeFileSync(join(reports, `browser-${stage}.log`), await terminalText(page));
@@ -151,12 +177,15 @@ try {
   assert.match(await ready(page), /ready · Browser/);
   for (const path of sourceFiles(fixture)) await writeFile(page, `/home/user/${path}`, readFileSync(join(fixture, path), "utf8"));
   await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);
+  stages.fixtureBefore = await fixtureSnapshot(page, "before");
+  stages.filesystemBefore = await storageCounters(page);
   let installed = false;
   try {
     await guestCommand(page, "install", "bun install --frozen-lockfile", 600000);
     installed = true;
   } catch (error) { stages.installFailure = String(error); }
   stages.filesystemAfterInstall = await storageCounters(page);
+  stages.fixtureAfterInstall = await fixtureSnapshot(page, "after-install");
   try { await guestCommand(page, "compiler", "bun run compiler-probe.ts"); }
   catch (error) {
     stages.compiler = { status: "fail", error: String(error) };
@@ -169,6 +198,10 @@ try {
     stages.build = { status: "blocked", reason: "frozen install incomplete" };
     throw new Error("Frozen install incomplete; compiler measured but Next server gates remain blocked");
   }
+  stages.fixtureAfterCompiler = await fixtureSnapshot(page, "after-compiler");
+  await writeFile(page, "/home/user/compiler-discovery.ts", readFileSync(join(import.meta.dir, "next-framework-compiler-discovery.ts"), "utf8"));
+  await guestCommand(page, "compiler-discovery", "bun run compiler-discovery.ts");
+  stages.compilerSelection = { environment: "NEXT_TEST_WASM_DIR", source: "fixture .env loaded by Next", directory: compilerDirectory, reason: "Explicit published Next WASM compiler path; no package patch" };
   await runServer(page, "dev", "dev");
   let built = false;
   try {
@@ -191,7 +224,7 @@ try {
   clearTimeout(timer);
   const mirror = registry ? { requests: registry.requests, misses: registry.misses } : null;
   try { await registry?.close(); } finally { await task.cleanup(); }
-  writeFileSync(join(reports, "browser-results.json"), JSON.stringify({ guest: receipt, stages, mirror, external, cleanup: true }, null, 2));
+  writeFileSync(join(reports, "browser-results.json"), JSON.stringify({ guest: receipt, guestReceipt, expectedGuest, stages, mirror, external, cleanup: true }, null, 2));
 }
 process.stdout.write(JSON.stringify(stages, null, 2) + "\n");
 if (Object.values(stages).some(value => value && typeof value === "object" && "status" in value && value.status !== "pass") || stages.failure) process.exitCode = 1;

@@ -33,19 +33,20 @@ bun web/tests/next-framework-native.ts cleanup
 
 The dedicated runner uses the existing playground's one Waffle runtime and the Browser native engine. Only a static host and an offline package mirror run on the host. Application listeners run inside the guest. Browser pages enter through the Waffle service-worker preview, and the contract checks that transport explicitly.
 
-Keep one fixture `bun.lock`. Do not copy native `.next` output into the guest. The exact-version `@next/swc-wasm-nodejs` dependency lets Next load its compiler without querying npm for a missing fallback. Run the compiler probe before Next startup or build.
+Keep one fixture `bun.lock`. Do not copy native `.next` output into the guest. The exact-version `@next/swc-wasm-nodejs` dependency lets Next load its compiler without querying npm for a missing fallback. Run the compiler probe before Next startup or build. The fixture `.env` explicitly selects `NEXT_TEST_WASM_DIR=./node_modules/@next/swc-wasm-nodejs`, read by Next itself. This is the exact installed15.5.6 compiler, not a package modification. Published Next15.5.6 otherwise converts a bare compiler package name to a cwd file URL and fails discovery on native Node too. The setting is Next's shipped, unstable testing hook; reassess it when changing Next versions. Separate require, bare dynamic-import and resolved-file-URL diagnostics remain mandatory so the explicit selection cannot hide a guest module-import failure.
 
 ```sh
 # Stage only missing tarballs named by the fixture lock. No package is patched.
 bun web/tests/next-framework-registry.ts "$SCRATCH/registry" examples/frameworks/bun.lock
 NEXT_WEB_ROOT="$PLAYGROUND_DIST" \
-NEXT_GUEST_WASM="$BASELINE_GUEST" \
+NEXT_GUEST_WASM="$SELECTED_GUEST" \
+NEXT_GUEST_SHA256="$SELECTED_GUEST_SHA256" \
 NEXT_REGISTRY_EXTRA="$SCRATCH/registry" \
 NEXT_REPORTS="$REPORTS" \
 bun web/tests/next-framework-browser.ts
 ```
 
-This baseline measurement requires the supplied guest digest `5e37d2afc8d73da8544ba4c1ac32d6c899b85ce1b2325892dd8aa9dcbc4a53bb`, built from c4794d69. `NEXT_WEB_ROOT` points to the matching built playground. The runner verifies the raw guest and the build receipt. `NEXT_WEB_PORT` and `NEXT_REGISTRY_PORT` default to43220 and43221; choose free explicit ports. Use a short task-owned `TMPDIR` for Chromium. `PLAYWRIGHT` can select the installed package entry.
+Select an explicit guest path and SHA-256. `NEXT_WEB_ROOT` points to a playground built from the current checkout with that same guest. The runner verifies its raw build receipt, declared digest, host engine receipt and decompressed distributed bytes independently. It also compares complete fixture manifest and lock bytes before and after frozen installation and compiler probing, under the unchanged1GiB filesystem cap. `NEXT_WEB_PORT` and `NEXT_REGISTRY_PORT` default to43220 and43221; choose free explicit ports. Use a short task-owned `TMPDIR` for Chromium. `PLAYWRIGHT` can select the installed package entry.
 
 The existing `/work/cache/bun-wasm-app-matrix` registry is read-only. The supplemental mirror downloads exact locked tarballs and checks SHA-512 integrity. The guest frozen installer also requests foreign-platform optional tarballs, so stage the whole lock, not just native Linux packages. Browser runs never fetch npm directly.
 
@@ -55,6 +56,6 @@ Reports separate install, compiler, dev, build and start. A failed compiler bloc
 
 On c4794d69, the pinned native control passed dev, production build and production start. Chromium exercised five framework mutations, independent backend lists, dynamic Next API POST/GET, status/headers, server rendering, hydration, navigation, reload and assets. Native dev HMR passed. Partial-start rollback, repeated close and the five-second forced stop passed.
 
-The literal browser replay reached an earlier installation blocker. With the complete locked mirror and no cache misses or external requests, frozen install exited1 with `No space left on device (os error 51)` while installing `@sinclair/typebox@0.34.52`, after several platform-optional SWC packages hit the same error. The real SWC WASM15.5.6 compiler had already installed and its TypeScript transform probe passed. Browser dev, build and start remain blocked, not supported. There was no static export, copied native build output, package patch or host application server.
+The October21 replay from merged6bd66574 with corrected guest8f0228da passed actual Chromium frozen install of214packages and the real SWC transform. The complete52,751-byte lock and849-byte manifest remained unchanged under the1GiB filesystem cap. Direct require, bare dynamic import and resolved-file-URL compiler transforms all passed. The prior installation storage blocker is therefore cleared for this run.
 
-A repeat recorded1,070,792,704 allocated bytes out of the1,073,741,824-byte filesystem limit, with41 occupied shared slots. Storage, not the shared identity-table count, blocked this install. The locked installer requested Darwin, Windows and foreign-CPU optional binaries on the browser guest. The follow-up belongs to the installer/filesystem owners. Keep those packages unchanged and rerun this fixture after that capability is fixed. Reaching this boundary does not verify Next IPC, loopback rewrites, service-worker Next navigation or browser HMR.
+With the explicit compiler directory, actual guest dev starts the five backend listeners but Next fails compiling unchanged `next.config.ts` because the runtime lacks `Module.prototype._compile`. Guest production build independently fails at the same method, with no BUILD_ID. The runtime fix and focused production-path fixture are now recorded, but corrected-guest application verification is still pending. No browser hydration, navigation, rewrite, HMR or production-start acceptance is claimed. No static export, host application server, copied native build output, package patch or TypeScript-config rename was used.
