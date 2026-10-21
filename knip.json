@@ -70,9 +70,11 @@
         "tests/**/*.{ts,mjs,js}"
       ],
       "ignoreDependencies": [
-        "benchmark",
-        "next"
+        "benchmark"
       ],
+      "ignoreIssues": {
+        "tests/next-framework-cache-probe.ts": ["unlisted"]
+      },
       "ignoreUnresolved": [
         "../src/subprocess.js"
       ]

@@ -66,3 +66,12 @@ test("structural Rust clones also fail the same baseline", () => {
     expect(rejectsGate("duplicates", "new clone", ["--kind", "ast"])).toContain("quality_clone_probe.rs");
   });
 });
+
+test("Knip allows the guest Next diagnostic but rejects a host Next import", () => {
+  const clean = spawnSync("bun", ["run", "quality:unused"], { cwd: root, encoding: "utf8" });
+  expect(clean.status, clean.stdout + clean.stderr).toBe(0);
+  withProbe("web/tests/browser-quality-next-probe.ts", 'import "next";\n', () => {
+    const output = rejectsGate("unused", "next");
+    expect(output).toContain("web/tests/browser-quality-next-probe.ts");
+  });
+});

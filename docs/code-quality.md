@@ -56,6 +56,8 @@ sources/patches, Cargo config/manifests/lock, pinned toolchains, build/source-sy
 scripts, the quality drivers, this workflow, and the root dependency lock.
 The WASI crypto toolchain, its CMake cache preflight dependencies, and the shared
 process-request JSON compiled into host tests also select native checks.
+Registered native fixture directories, their server inputs, the fixture launcher, and the
+FS, VM, and HTTP production-source checks also select the same native job.
 Browser-only and documentation changes install no Rust toolchain or SDK.
 
 Host Clippy covers all test/example targets once. Host tests run once, in release
@@ -113,6 +115,10 @@ private executor is configured.
   every source file. `benchmark:` is a build-time module namespace; `unshare` and
   `ss` are OS commands; `build.mjs` runs in the upstream streams checkout. The
   unresolved Unicode/space fixture specifier is intentional guest input.
+  Only `web/tests/next-framework-cache-probe.ts` excludes unlisted-dependency
+  diagnostics because the runner copies it into the guest fixture, where Next is
+  declared and installed. Host imports of Next remain errors. No host Next package
+  is installed for that probe.
   `process-bench-baseline.ts` compiles against a frozen Git snapshot in the benchmark
   runner. Its retired imports are deliberately unresolved in the current tree; it
   stays linted and clone-scanned, but is excluded from the current-API type project.

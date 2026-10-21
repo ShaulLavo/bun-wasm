@@ -109,3 +109,36 @@ for (const path of [
     expect(quality).not.toMatch(/^\s+(?:if|needs):/m);
   });
 }
+
+test.each([
+  "scripts/node-fs-streams.test.ts", "scripts/node-vm-context.test.ts", "scripts/node-http-headers.test.ts", "scripts/node-http-response-fixture.ts",
+  "scripts/test.sh", "scripts/check-runtime.sh", "tests/servers/http.ts",
+  "tests/fixtures/stdio-cursor/source-probe.ts", "tests/fixtures/stdio-cursor/expected_stderr.txt",
+  "tests/fixtures/fs-stream-constructors/contract.ts", "tests/fixtures/vm-context/contract.ts",
+  "tests/fixtures/module-compile/index.ts", "tests/fixtures/net-http-implicit-headers/contract.ts",
+])("new native fixture input %s selects the existing native job", path => {
+  expect(needsRust([path])).toBe(true);
+});
+
+test.each([
+  "web/tests/next-framework-browser.ts", "web/tests/preview-policy.test.ts", "docs/framework-routes.md",
+  "scripts/node-http-headers.test.ts.md", "tests/fixtures-docs/module-compile.md", "tests/servers-docs/http.md",
+  "tests/fixtures/unregistered-guest/index.ts",
+])("host or neighboring input %s does not add a native job", path => {
+  expect(needsRust([path])).toBe(false);
+});
+
+
+for (const path of ["scripts/node-fs-streams.test.ts", "tests/fixtures/vm-context/contract.ts", "scripts/node-http-response-fixture.ts"]) {
+  test.each(["pull_request", "push"])(`${path} selects native gates through the real %s event CLI`, event => {
+    expect(select(base, commitInput(path), event)).toBe("rust=true");
+  });
+}
+
+
+test("each registered native guest fixture selects its existing job", () => {
+  const command = workflow.match(/bash scripts\/test\.sh --no-build ([^\n]+)/)?.[1];
+  expect(command).toBeDefined();
+  if (!command) throw new Error("Native fixture command missing");
+  for (const name of command.trim().split(/\s+/)) expect(needsRust([`tests/fixtures/${name}/changed-input.ts`])).toBe(true);
+});
