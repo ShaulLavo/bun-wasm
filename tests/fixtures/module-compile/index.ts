@@ -4,6 +4,11 @@ import { dirname, join } from "node:path";
 
 const require = createRequire(import.meta.url);
 const Module = require("node:module");
+for (const name of ["process", "node:process", "buffer", "node:buffer", "fs", "node:fs", "path", "node:path"]) {
+  assert.equal(require.resolve(name), name);
+  assert.equal(Module._resolveFilename(name, new Module("/virtual.cjs")), name);
+}
+console.log("builtin resolution preserves requested spelling");
 const filename = join(import.meta.dirname, "nested", "virtual.cjs");
 const parent = new Module(join(import.meta.dirname, "parent.cjs"));
 const compiled = new Module(filename, parent);
@@ -68,7 +73,15 @@ for (const source of ["\ufeffmodule.exports = 5;", "#!/usr/bin/env node\nmodule.
   prefixed._compile(source, filename);
   assert.equal(prefixed.exports, 5);
 }
-console.log("exports replacement, strict directives, BOM and hashbang");
+for (const separator of ["\u2028", "\u2029"]) {
+  const prefixed = new Module(filename, parent);
+  prefixed._compile(`#!ignored${separator}module.exports = 5;`, filename);
+  assert.equal(prefixed.exports, 5);
+}
+const shadowed = new Module(filename, parent);
+shadowed._compile('const globalThis = null; module.exports = import("./value.ts");', filename);
+assert.equal((await shadowed.exports).default, "dynamic value");
+console.log("exports replacement, directives, prefixes and shadowed import binding");
 
 const broken = new Module(filename, parent);
 assert.throws(() => broken._compile("const invalid: number = 1;", filename), SyntaxError);

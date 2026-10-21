@@ -1,3 +1,4 @@
+builtin resolution preserves requested spelling
 compile source, wrapper, require, imports and metadata
-exports replacement, strict directives, BOM and hashbang
+exports replacement, directives, prefixes and shadowed import binding
 syntax and runtime errors propagate without marking loaded

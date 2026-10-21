@@ -530,7 +530,7 @@
       defineHidden(this, { parent });
     }
     _compile(content, filename) {
-      const source = content.replace(/^#![^\r\n]*/, "").replace(/^\uFEFF/, "");
+      const source = content.replace(/^#![^\r\n\u2028\u2029]*/, "").replace(/^\uFEFF/, "");
       const code = compileModuleImports(source, filename);
       const wrapper = native.evalScript(`(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {\n${code}\n})`, filename);
       return callModuleWrapper(this, wrapper, filename);
@@ -547,7 +547,7 @@
   function compileModuleImports(source, filename) {
     if (native.engine !== "host" || !source.includes("import")) return source;
     const offsets = native.functionImports([source], "normal")[0];
-    const replacement = `globalThis.__bunwasm_dynamicImport(${JSON.stringify(filename)})`;
+    const replacement = `(function(){})["__bunwasmFunctionImport"](${JSON.stringify(filename)})`;
     for (const offset of offsets.sort((a, b) => b - a)) {
       source = source.slice(0, offset) + replacement + source.slice(offset + 6);
     }
@@ -633,6 +633,12 @@
     return native.resolve(spec, fromPath, true);
   }
 
+  function resolveFilename(spec, fromPath) {
+    const resolved = resolveFrom(spec, fromPath);
+    return isBuiltinId(resolved) ? spec : resolved;
+  }
+  internal.resolveFilename = resolveFilename;
+
   function requireFrom(spec, fromPath) {
     const resolved = resolveFrom(spec, fromPath);
     if (isBuiltinId(resolved)) return internal.builtin(resolved);
@@ -644,7 +650,7 @@
       return mod ? mod.require(spec) : requireFrom(spec, fromPath);
     }
     require.resolve = function resolve(spec) {
-      return resolveFrom(spec, fromPath);
+      return resolveFilename(spec, fromPath);
     };
     require.resolve.paths = function paths(spec) {
       return isBuiltinId(spec) ? null : nodeModulePaths(dirname(fromPath));

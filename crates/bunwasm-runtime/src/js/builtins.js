@@ -279,7 +279,7 @@
       isBuiltin: (name) => Object.prototype.hasOwnProperty.call(reg, name.startsWith("node:") ? name : "node:" + name) || name === "bun" || name.startsWith("bun:"),
       _cache: internal.moduleCache,
       _extensions: { ".js": () => {}, ".json": () => {}, ".node": () => {} },
-      _resolveFilename: (request, parent) => native.resolve(request, (parent && parent.filename) || native.cwd() + "/", true),
+      _resolveFilename: (request, parent) => internal.resolveFilename(request, (parent && parent.filename) || native.cwd() + "/"),
       _nodeModulePaths: (dir) => new Module(dir + "/x", null).paths,
       wrap: (code) => `(function (exports, require, module, __filename, __dirname) { ${code}\n});`,
       register() {},
