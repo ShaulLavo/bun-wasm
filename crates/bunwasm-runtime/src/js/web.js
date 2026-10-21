@@ -123,9 +123,10 @@
       return this.#decodeBytes(bytes);
     }
     #decodeBytes(bytes) {
-      if (this.#encoding === "utf-16le") return native.utf16leDecode(bytes.slice());
       if (this.#encoding === "windows-1252") return native.latin1Decode(bytes.slice());
-      let text = native.utf8Decode(bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice(), this.#fatal);
+      let text = this.#encoding === "utf-16le"
+        ? native.utf16leDecode(bytes.slice())
+        : native.utf8Decode(bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice(), this.#fatal);
       if (!this.#ignoreBOM && text.charCodeAt(0) === 0xfeff) text = text.slice(1);
       return text;
     }

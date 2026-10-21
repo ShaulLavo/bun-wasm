@@ -44,11 +44,20 @@ function rustUtf8DecodeModel(bytes: Uint8Array, fatal: boolean): unknown {
   return roundTrip(new TextDecoder("utf-8", { ignoreBOM: true, fatal }).decode(bytes));
 }
 
+// Only complete, nonsurrogate UTF-16LE code units are modeled.
+function rustUtf16leDecodeModel(bytes: Uint8Array): unknown {
+  assert.equal(bytes.length % 2, 0);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const units = Array.from({ length: bytes.length / 2 }, (_, index) => view.getUint16(index * 2, true));
+  assert.ok(units.every(unit => unit < 0xd800 || unit > 0xdfff));
+  return roundTrip(String.fromCharCode(...units));
+}
+
 const web = readFileSync(new URL("../crates/bunwasm-runtime/src/js/web.js", import.meta.url), "utf8");
 const publicSource = sourceSection(web, "  function toUint8(data)", "  // --- base64");
 const publicCodecs = evaluate(`${publicSource}\n({
-  decode(input, options) { return new TextDecoder("utf-8", options).decode(input); },
-})`, { ...globals, internal: {}, native: { utf8Decode: rustUtf8DecodeModel } });
+  decode(input, options, label = "utf-8") { return new TextDecoder(label, options).decode(input); },
+})`, { ...globals, internal: {}, native: { utf8Decode: rustUtf8DecodeModel, utf16leDecode: rustUtf16leDecodeModel } });
 const publicDecode = method(publicCodecs, "decode");
 
 for (const count of [1, 2]) {
@@ -68,12 +77,24 @@ for (const count of [1, 2]) {
     assert.equal(Reflect.get(result, key), value);
   });
 
-  test(`public default decoder removes only one of ${count} BOMs through the wire model`, () => {
+  for (const label of ["utf-16le", "utf-16"]) {
+    const bytes = new Uint8Array(Array.from({ length: count }, () => [0xff, 0xfe]).flat().concat([0x41, 0x00]));
+    test(`public ${label} default decoder removes only one of ${count} BOMs through the wire model`, () => {
+      assert.equal(publicDecode(bytes, undefined, label), `${prefix}A`.slice(1));
+      assert.equal(publicDecode(bytes, { ignoreBOM: false }, label), `${prefix}A`.slice(1));
+    });
+
+    test(`public ${label} ignoreBOM decoder preserves ${count} BOMs through the wire model`, () => {
+      assert.equal(publicDecode(bytes, { ignoreBOM: true }, label), `${prefix}A`);
+    });
+  }
+
+  test(`public utf-8 default decoder removes only one of ${count} BOMs through the wire model`, () => {
     const bytes = new TextEncoder().encode(`${prefix}A`);
     assert.equal(publicDecode(bytes), `${prefix}A`.slice(1));
   });
 
-  test(`public ignoreBOM decoder preserves ${count} BOMs through the wire model`, () => {
+  test(`public utf-8 ignoreBOM decoder preserves ${count} BOMs through the wire model`, () => {
     const bytes = new TextEncoder().encode(`${prefix}A`);
     assert.equal(publicDecode(bytes, { ignoreBOM: true }), `${prefix}A`);
   });
