@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { allocateSafariDriverPort, assertSafariDriverAlive, assertSafariDriverOwnership, ownSafariDriver, parseSafariProcessTable, safariDriverOwnershipDiagnostic, stopSafariDriver,
   type SafariDriverIdentity, type SafariInspection, type SafariProcessIdentity } from "./engine-interruption-safari";
@@ -318,13 +318,16 @@ test("Safari teardown tolerates ESRCH but does not claim success on inspection o
 });
 test("Safari teardown shares one bounded inspection deadline instead of leaving an inspection race running", async () => {
   const before = Date.now(), deadlines: (number | undefined)[] = [];
-  let processes = [row()];
-  await stopSafariDriver(scope(), 43186, { processes: async deadline => { deadlines.push(deadline); return processes; },
-    listeners: async (_port, deadline) => { deadlines.push(deadline); return []; } }, () => { processes = []; });
-  expect(deadlines).toHaveLength(3);
-  expect(deadlines.every(deadline => deadline === deadlines[0])).toBe(true);
-  expect(deadlines[0]).toBeGreaterThan(before);
-  expect(deadlines[0]! - before).toBeLessThanOrEqual(12_000);
+  const clock = spyOn(Date, "now").mockReturnValue(before);
+  try {
+    let processes = [row()];
+    await stopSafariDriver(scope(), 43186, { processes: async deadline => { deadlines.push(deadline); return processes; },
+      listeners: async (_port, deadline) => { deadlines.push(deadline); return []; } }, () => { processes = []; });
+    expect(deadlines).toHaveLength(3);
+    expect(deadlines.every(deadline => deadline === deadlines[0])).toBe(true);
+    expect(deadlines[0]).toBeGreaterThan(before);
+    expect(deadlines[0]! - before).toBe(12_000);
+  } finally { clock.mockRestore(); }
 });
 test("Safari teardown discovers a non-listening child forked during shutdown but signals only the root", async () => {
   const owned = scope(), signalled: number[] = [];

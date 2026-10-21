@@ -1,4 +1,4 @@
-import { packageFetch } from "./package-fetch";
+import { packageFetch } from "./package-fetch.js";
 
 const METADATA = "application/vnd.npm.install-v1+json";
 const TARBALL = "application/vnd.bun.install-tarball";

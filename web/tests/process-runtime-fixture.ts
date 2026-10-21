@@ -1,3 +1,5 @@
+import { NetHelper, NetNamespace } from "waffle/browser/net/helper";
+import type { RuntimeNetwork } from "waffle";
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
 import { MemFS } from "waffle/fs/memory";
 import { ExecutableRegistry } from "waffle/proc/registry";
@@ -36,10 +38,19 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
   let activation: Promise<ProcessService> | undefined;
   let disposed = false;
   let disposal: Promise<void> | undefined;
+  const namespace = new NetNamespace();
+  const helpers = new Set<NetHelper>();
+  const network: RuntimeNetwork = { createHelper({ ring, fetch, hooks }) {
+    if (disposed) throw new Error("Runtime is disposed");
+    const helper = new NetHelper(ring, fetch, hooks, namespace);
+    helpers.add(helper);
+    return helper;
+  } };
   const consumers = new Set<RuntimeConsumer>();
   let service!: ProcessService;
   return {
     filesystem, identities,
+    async network() { if (disposed) throw new Error("Runtime is disposed"); return network; },
     get disposed() { return disposed; },
     retainConsumer(consumer) {
       if (disposed) throw new Error("Runtime is disposed");
@@ -102,6 +113,8 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
           const stops = await Promise.allSettled(retained.map(consumer => Promise.resolve().then(() => consumer.stop())));
           for (const result of stops) if (result.status === "rejected") errors.push(result.reason);
           consumers.clear();
+          for (const helper of helpers) helper.dispose();
+          helpers.clear();
         }
         try {
           if (failures.length) await broker?.quiesce();

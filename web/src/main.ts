@@ -13,6 +13,7 @@ import { HOME, examples } from "./examples";
 import { decode, normalize } from "./fs";
 import { createRuntime } from "waffle";
 import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
+import type { BunNetworkOptions } from "./net/helper";
 import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
 import { type Output, Shell } from "./shell";
@@ -53,6 +54,10 @@ engineSelect.addEventListener("change", () => {
 
 // Networking needs SharedArrayBuffer: without cross-origin isolation bun.wasm gets no fetch slots.
 const previews = new Previews();
+const network: BunNetworkOptions = {
+  listening: (port, helper) => { previews.register(port, helper); void previews.ready.then(state => term.write(previewLine(port, state))); },
+  stopped: (port, helper) => previews.unregister(port, helper),
+};
 
 // ---------- filesystem ----------
 
@@ -161,14 +166,9 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
   runButton.disabled = true;
   try {
     await fs.drain();
-    const run = startRun({ engine, module: wasm.module, args, env, runtime, moduleScope: scoped, trace }, {
+    const run = startRun({ engine, module: wasm.module, args, env, runtime, moduleScope: scoped, trace, network }, {
       stdout: (data) => io.out(data),
       stderr: (data) => io.err(data),
-      listening: (port, helper) => {
-        previews.register(port, helper);
-        void previews.ready.then((state) => io.out(previewLine(port, state)));
-      },
-      stopped: (port, helper) => previews.unregister(port, helper),
     });
     current = run;
     const result = await run.done;

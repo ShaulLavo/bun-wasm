@@ -22,8 +22,9 @@ export class NetHost {
     sab: SharedArrayBuffer,
     send: (msg: NetRequest, transfer?: Transferable[]) => void,
     writeFile?: (path: string, bytes: Uint8Array) => void,
+    options?: { shared?: boolean },
   ) {
-    this.host = new RuntimeNetHost(sab, send, writeFile);
+    this.host = new RuntimeNetHost(sab, send, writeFile, options);
   }
 
   attach(memory: WebAssembly.Memory): void {

@@ -305,13 +305,17 @@ for (const early of [false, true]) test(`explicit generic runner roots preserve 
   let run: ReturnType<typeof startRun> | undefined;
   try {
     run = startRun({ engine: "browser", module, args: [], env: {}, runtime, moduleScope: false, runtimeProcess: transport }, { stdout() {}, stderr() {} });
+    expect(workerProcessState(transport)).toMatchObject({ pid: 11, job: 7 });
     if (early) run.kill(9);
-    await ready;
-    expect(sent.runtimeProcess).toBe(transport);
-    expect(workerProcessState(sent.runtimeProcess!)).toMatchObject({ pid: 11, job: 7 });
-    expect(connections).toBe(1);
-    if (!early) run.kill(9);
+    else {
+      await ready;
+      expect(sent.runtimeProcess).toBe(transport);
+      expect(workerProcessState(sent.runtimeProcess!)).toMatchObject({ pid: 11, job: 7 });
+      run.kill(9);
+    }
     expect(await run.done).toEqual({ code: 137 });
+    expect(connections).toBe(1);
+    if (early) expect(sent).toBeUndefined();
     expect(requestedAtRevocation).toContain(9);
     expect(() => workerProcessState(transport)).toThrow("collected");
     await Promise.resolve();

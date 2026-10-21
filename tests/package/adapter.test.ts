@@ -1,3 +1,5 @@
+import { processRuntimeFixture } from "../../web/tests/process-runtime-fixture";
+import { outcomeWord } from "waffle/proc/outcome";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import type { Runtime, GuestLauncher, ProgramDefinition } from "waffle";
 import { FilesystemClient } from "waffle/fs/client";
@@ -23,7 +25,9 @@ function fixture() {
     entries.set(name, value);
     return () => { if (entries.get(name) === value) { entries.delete(name); removed.push(`${kind}:${name}`); } };
   }
+  const networkOwner = processRuntimeFixture({});
   const runtime = {
+    network: () => networkOwner.network(),
     registerAdapter: (name: string, value: GuestLauncher) => register("adapter", adapters, name, value),
     registerProgram: (name: string, value: ProgramDefinition) => register("program", programs, name, value),
     filesystem: {
@@ -106,7 +110,7 @@ test("every engine forwards to the production process worker", async () => {
   const install = await installBunAdapters(f.runtime, { module });
   try {
     const launches: any[] = [];
-    const context = { module, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { PATH: "/bin" }, cwd: "/" } };
+    const context = { outcome: outcomeWord(), registerRevocation: () => () => {}, module, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { PATH: "/bin" }, cwd: "/" } };
     for (const [name, launch] of f.adapters) {
       await launch(context as never, { launchWorker(_context: unknown, options: unknown) { launches.push(options); return { terminate() {} }; } } as never);
       expect(launches.at(-1)).toMatchObject({ workerUrl, request: { engine: name.slice(4), module, args: ["bun", "-e", "0"], env: { BUNWASM_EXEC_PATH: "/bin/bun", PATH: "/bin" } } });
