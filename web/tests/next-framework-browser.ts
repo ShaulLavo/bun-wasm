@@ -28,6 +28,7 @@ const fixture = resolve(import.meta.dir, "../../examples/frameworks");
 const filesystemFixture = resolve(import.meta.dir, "../../tests/fixtures/fs-stream-constructors");
 const moduleFixture = resolve(import.meta.dir, "../../tests/fixtures/module-compile");
 const cursorFixture = resolve(import.meta.dir, "../../tests/fixtures/stdio-cursor");
+const vmFixture = resolve(import.meta.dir, "../../tests/fixtures/vm-context");
 const assets = process.env.NEXT_WEB_ROOT;
 const supplemental = process.env.NEXT_REGISTRY_EXTRA;
 if (!assets || !supplemental) throw new Error("Set NEXT_WEB_ROOT to a browser playground build and NEXT_REGISTRY_EXTRA to staged locked tarballs");
@@ -254,6 +255,8 @@ try {
   await page.goto(`${match[1]}?engine=browser`);
   assert.match(await ready(page), /ready · Browser/);
   await page.evaluate(captureGuestOutput);
+  for (const path of sourceFiles(vmFixture, "", [])) await writeFile(page, `/home/user/vm-context/${path}`, readFileSync(join(vmFixture, path), "utf8"));
+  await guestCommand(page, "vm-context", "bun run vm-context/index.ts");
   for (const path of sourceFiles(moduleFixture, "", [])) await writeFile(page, `/home/user/module-compile/${path}`, readFileSync(join(moduleFixture, path), "utf8"));
   await guestCommand(page, "module-compile", "bun run module-compile/index.ts");
   for (const path of sourceFiles(filesystemFixture, "", [])) await writeFile(page, `/home/user/fs-stream-constructors/${path}`, readFileSync(join(filesystemFixture, path), "utf8"));
