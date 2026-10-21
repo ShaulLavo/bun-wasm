@@ -45,5 +45,5 @@ test("Request async-body adapter and contracts stay within three block levels", 
   const files = ["node-request-body.test.ts", "node-request-body-fixture.ts", "../tests/fixtures/request-body-streams/index.ts", "../tests/fixtures/request-body-streams/contract.ts"];
   const path = new URL("../crates/bunwasm-runtime/src/js/web.js", import.meta.url).pathname;
   const failures = files.flatMap(file => deepBlocks(new URL(file, import.meta.url).pathname));
-  expect(failures.concat(deepBlocks(path, "requestBody"), deepBlocks(path, "requestBodyChunks"), deepBlocks(path, "requestBodyChunk"))).toEqual([]);
+  expect(failures.concat(deepBlocks(path, "requestBody"), deepBlocks(path, "requestBodyChunks"), deepBlocks(path, "requestBodyChunk"), deepBlocks(path, "observeRequestBody"), deepBlocks(path, "requestBodyUsed"))).toEqual([]);
 });

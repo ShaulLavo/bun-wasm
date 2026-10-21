@@ -111,6 +111,9 @@ async function verifyUnreadCancellation(create: CreateRequest) {
   const { state, body } = trackedBody();
   const request = create(body);
   assert.deepEqual(state, { acquired: 1, next: 0, returned: 0 }, "construction acquires the source without pulling");
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(state.next, 0, "construction does not schedule a pull");
   const stream = object(Reflect.get(request, "body"));
   await call(stream, "cancel", ["stop before reading"]);
   assert.deepEqual(state, { acquired: 1, next: 0, returned: 1 }, "unread cancellation returns the original iterator");
@@ -147,9 +150,69 @@ function webBody(bytes: Uint8Array): object {
 
 async function verifyWebBody(create: CreateRequest, makeStream: (bytes: Uint8Array) => object, bytes: Uint8Array) {
   const stream = makeStream(bytes);
+  const prototype = Object.getPrototypeOf(stream);
   const request = create(stream);
   assert.equal(Reflect.get(request, "body"), stream, "existing Web stream identity is unchanged");
+  assert.equal(Object.getPrototypeOf(stream), prototype, "native stream prototype is unchanged");
   assert.equal(await call(request, "text"), payload);
+  await consumed(request);
+}
+
+async function verifyReaderState(create: CreateRequest, body: unknown, bytes: Uint8Array) {
+  const request = create(body);
+  const stream = object(Reflect.get(request, "body"));
+  assert.equal(Reflect.get(request, "body"), stream, "body getter preserves stream identity");
+  const unused = object(call(stream, "getReader"));
+  assert.equal(Reflect.get(request, "bodyUsed"), false, "locking is not disturbance");
+  assert.throws(() => call(request, "clone"), { name: "TypeError" });
+  call(unused, "releaseLock");
+  assert.equal(Reflect.get(request, "bodyUsed"), false, "releasing an unread reader is not disturbance");
+  const reader = object(call(stream, "getReader"));
+  const reading = call(reader, "read");
+  assert.equal(Reflect.get(request, "bodyUsed"), true, "reading disturbs the body synchronously");
+  const first = object(await reading);
+  assert.deepEqual(Reflect.get(first, "value"), bytes);
+  call(reader, "releaseLock");
+  await consumed(request);
+  await call(stream, "cancel");
+}
+
+async function verifyCloneBranches(create: CreateRequest) {
+  const request = create({ async *[Symbol.asyncIterator]() { yield encoder.encode(payload); } });
+  const original = object(Reflect.get(request, "body"));
+  const copy = object(call(request, "clone"));
+  const source = object(Reflect.get(request, "body"));
+  assert.notEqual(source, original, "clone replaces the original with its tee branch");
+  assert.notEqual(Reflect.get(copy, "body"), source, "clone has an independent tee branch");
+  assert.equal(Reflect.get(request, "bodyUsed"), false);
+  assert.equal(Reflect.get(copy, "bodyUsed"), false);
+  const reader = object(call(source, "getReader"));
+  const first = object(await call(reader, "read"));
+  assert.deepEqual(Reflect.get(first, "value"), encoder.encode(payload));
+  call(reader, "releaseLock");
+  await consumed(request);
+  assert.equal(Reflect.get(copy, "bodyUsed"), false, "reading one branch does not disturb the other");
+  assert.equal(await call(copy, "text"), payload);
+  await consumed(copy);
+  await call(source, "cancel");
+}
+
+async function verifyUnreadWebCancellation(create: CreateRequest, makeStream: (bytes: Uint8Array) => object) {
+  const stream = makeStream(encoder.encode(payload));
+  const request = create(stream);
+  assert.equal(Reflect.get(request, "bodyUsed"), false);
+  await call(stream, "cancel", ["cancel existing Web body before reading"]);
+  await consumed(request);
+}
+
+async function verifyReaderError(create: CreateRequest) {
+  const failure = new Error("direct reader failed");
+  const request = create({ async *[Symbol.asyncIterator]() { throw failure; } });
+  const reader = object(call(object(Reflect.get(request, "body")), "getReader"));
+  const reading = call(reader, "read");
+  assert.equal(Reflect.get(request, "bodyUsed"), true, "a failing read still disturbs the body");
+  await assert.rejects(async () => reading, error => error === failure);
+  call(reader, "releaseLock");
   await consumed(request);
 }
 
@@ -164,6 +227,12 @@ export async function verifyRequestBodies(create: CreateRequest, makeStream = we
   await verifyText(create, {}, "[object Object]");
   await verifyWebBody(create, makeStream, bytes);
   await verifyByteChunks(create);
+  await verifyReaderState(create, makeStream(bytes), bytes);
+  await verifyReaderState(create, payload, bytes);
+  await verifyReaderState(create, bytes, bytes);
+  await verifyUnreadWebCancellation(create, makeStream);
+  await verifyReaderError(create);
+  await verifyCloneBranches(create);
   await verifyArrayBuffer(create);
   await verifyClone(create);
   await verifyErrors(create);

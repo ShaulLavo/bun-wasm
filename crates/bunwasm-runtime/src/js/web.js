@@ -3,6 +3,8 @@
 (function (internal) {
   "use strict";
   const native = internal.native;
+  const PlatformRequest = native.engine === "host" ? globalThis.Request : null;
+  const requestBodyObservers = new WeakMap();
 
   // --- DOMException -----------------------------------------------------------
 
@@ -1053,6 +1055,18 @@
     return ReadableStream.from(requestBodyChunks(body));
   }
 
+  function observeRequestBody(stream) {
+    if (!PlatformRequest || !stream || requestBodyObservers.has(stream)) return stream;
+    const observer = new PlatformRequest("http://localhost/", { method: "POST", body: stream, duplex: "half" });
+    requestBodyObservers.set(stream, observer);
+    return stream;
+  }
+
+  function requestBodyUsed(target) {
+    const observer = target._stream && requestBodyObservers.get(target._stream);
+    return target._bodyUsed || (observer ? observer.bodyUsed : Boolean(target._stream && target._stream._disturbed));
+  }
+
   class Request {
     #url;
     #method;
@@ -1074,6 +1088,7 @@
         throw new TypeError("Request with a GET or HEAD method cannot have a body.");
       }
       initBody(this, requestBody(body), this.#headers);
+      observeRequestBody(this._stream);
     }
     get url() {
       return this.#url;
@@ -1091,16 +1106,17 @@
       return this.#redirect;
     }
     get bodyUsed() {
-      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
+      return requestBodyUsed(this);
     }
     get body() {
       if (this._stream) return this._stream;
       if (this._body === null) return null;
-      this._stream = internal.makeByteStream(this._body);
+      this._stream = observeRequestBody(internal.makeByteStream(this._body));
       return this._stream;
     }
     clone() {
       const body = bodyStreams.clone(this);
+      observeRequestBody(this._stream);
       return new Request(this, { body });
     }
     get [Symbol.toStringTag]() {

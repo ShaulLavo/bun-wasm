@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInThisContext } from "node:vm";
 import { URL as NativeURL } from "node:url";
+import ts from "typescript-api";
 
-const transpiler = new Bun.Transpiler({ loader: "ts" });
 function evaluate(code: string): unknown {
   const module = { exports: undefined };
   const load: unknown = runInThisContext(`(function(module) { ${code}\n})`);
@@ -15,7 +15,7 @@ function evaluate(code: string): unknown {
 function factory(name: string): (...args: unknown[]) => unknown {
   const source = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}`, import.meta.url), "utf8");
   const assignment = `module.exports = ${source}`;
-  const value = evaluate(name.endsWith(".ts") ? transpiler.transformSync(assignment) : assignment);
+  const value = evaluate(name.endsWith(".ts") ? ts.transpileModule(assignment, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText : assignment);
   assert.ok(typeof value === "function");
   return (...args) => Reflect.apply(value, undefined, args);
 }
@@ -26,14 +26,18 @@ function urlParse(input: string, base?: string) {
   return [url.href, url.protocol, url.username, url.password, url.hostname, url.port, url.pathname, url.search, url.hash, url.origin];
 }
 
-export function requestBodyFixture() {
-  const streams = factory("streams_polyfill.js")();
-  const bodyStreams = factory("body_streams.ts")();
-  const brand = factory("web_brand.ts")();
+export function requestBodyFixture(engine: "host" | "portable" = "portable") {
+  const modules = new Map<string, unknown>([
+    ["streams_polyfill", factory("streams_polyfill.js")()],
+    ["body_streams", factory("body_streams.ts")()],
+    ["web_brand", factory("web_brand.ts")()],
+  ]);
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const internal = {
     native: {
+      engine: engine === "host" ? "host" : "jsc",
+      streams: { release() { throw new Error("Unexpected native codec release"); } },
       utf8Encode: (text: string) => encoder.encode(text),
       utf8Decode: (bytes: Uint8Array) => decoder.decode(bytes),
       urlParse, timeOrigin: () => 0,
@@ -41,12 +45,13 @@ export function requestBodyFixture() {
     },
     web: undefined,
     require(name: string): unknown {
-      if (name === "streams") return streams;
-      if (name === "body_streams") return bodyStreams;
-      if (name === "web_brand") return brand;
+      if (modules.has(name)) return modules.get(name);
       throw new Error(`Unexpected web factory dependency ${name}`);
     },
   };
+  modules.set("compression_streams", factory("compression_streams.ts")(internal));
+  const streams = factory("streams.js")(internal);
+  modules.set("streams", streams);
   factory("web.js")(internal);
   const web: unknown = internal.web;
   assert.ok(web && typeof web === "object" && "Request" in web && typeof web.Request === "function");
@@ -58,6 +63,8 @@ export function requestBodyFixture() {
   };
   assert.ok(streams && typeof streams === "object" && "ReadableStream" in streams && typeof streams.ReadableStream === "function");
   const Stream = streams.ReadableStream;
+  if (engine === "host") assert.equal(Stream, globalThis.ReadableStream, "streams.js selects native Web streams");
+  if (engine === "portable") assert.notEqual(Stream, globalThis.ReadableStream, "streams.js selects the portable implementation");
   function stream(bytes: Uint8Array): object {
     const value: unknown = Reflect.construct(Stream, [{ start(controller: ReadableStreamDefaultController<Uint8Array>) { controller.enqueue(bytes); controller.close(); } }]);
     assert.ok(value && typeof value === "object");
