@@ -50,6 +50,8 @@
     maxBuffer?: number | string;
     onExit?: (child: unknown, exitCode: number | null, signalCode: string | number | null, error: unknown) => void;
     _worker?: unknown;
+    _ipc?: boolean;
+    _ipcTarget?: BunWasm.NodeEmitter;
     [key: string]: unknown;
   }
   interface SpawnMeta {
@@ -74,6 +76,7 @@
     outputFds: number[];
     discard: boolean[];
     worker: { input: number; output: number } | null;
+    ipc: BunWasm.IpcDescriptors | null;
   }
   interface Sink {
     write(chunk: unknown): number;
@@ -110,6 +113,8 @@
     unref(): Child;
     resourceUsage(): undefined;
     [Symbol.asyncDispose](): Promise<void>;
+    send?: BunWasm.ChildIpc["send"];
+    disconnect?: () => void;
     _finishWorker?: () => void;
     _abortWorker?: () => void;
     _workerChannel?: { input: number; output: number };
@@ -184,7 +189,9 @@
     options = options || {};
     if (!Array.isArray(cmd) || !cmd.length) throw new TypeError("cmd must be a non-empty array");
     validateCommandLength(cmd);
-    if (options.ipc !== undefined) throw unsupported("Child process IPC");
+    if (options.serialization !== undefined && options.serialization !== "json") throw unsupported("Advanced child process serialization");
+    if (options.ipc !== undefined && typeof options.ipc !== "function") throw new TypeError("ipc must be a function");
+    if (sync && (options._ipc || options.ipc)) throw unsupported("Synchronous child process IPC");
     const argv = internal.require("package_scripts").spawnArguments(cmd.map(String), options.cwd);
     if (argv.some((arg) => arg.includes("\0"))) throw new TypeError("Command arguments cannot contain null bytes");
     const proc = process as unknown as BunWasm.GuestProcess;
@@ -274,6 +281,7 @@
       const outputFds = [-1, -1];
       const discard = [false, false];
       let worker: Started["worker"] = null;
+      let ipc: Started["ipc"] = null;
       [spec.meta.stdin, spec.meta.stdout, spec.meta.stderr].forEach((mode, fd) => {
         if (mode === "inherit") { bindings.push({ child: fd, parent: fd }); return; }
         const [read, write] = pipe();
@@ -304,6 +312,14 @@
         worker = { input: fromWorker[0], output: toWorker[1] };
         env = Object.assign({}, env, { BUNWASM_WORKER_CONTROL: JSON.stringify({ input: toWorker[0], output: fromWorker[1] }) });
       }
+      if (spec.options._ipc || spec.options.ipc) {
+        const toChild = pipe();
+        const fromChild = pipe();
+        bindings.push({ child: toChild[0], parent: toChild[0] }, { child: fromChild[1], parent: fromChild[1] });
+        childEnds.push(toChild[0], fromChild[1]);
+        ipc = { input: fromChild[0], output: toChild[1] };
+        env = Object.assign({}, env, { BUNWASM_IPC_CHANNEL: JSON.stringify({ input: toChild[0], output: fromChild[1] }) });
+      }
       // Children join the caller's own job so job-wide signals and waits reach them; a detached
       // child starts a new foreground job instead. Failing to name the caller's job is an error.
       const detached = Boolean(spec.options.detached);
@@ -320,7 +336,7 @@
       held.clear();
       // Only a job this child owns is ours to reap or kill; an inherited group belongs to its owner.
       const job = detached ? native.procJobOf(pid) : 0;
-      return Object.assign(spec, { pid, job: job > 0 ? job : 0, outcome: null, stdinFd, outputFds, discard, worker });
+      return Object.assign(spec, { pid, job: job > 0 ? job : 0, outcome: null, stdinFd, outputFds, discard, worker, ipc });
     } catch (error) {
       for (const fd of Array.from(held)) release(fd);
       throw error;
@@ -534,11 +550,21 @@
       resourceUsage() { return undefined; },
       async [Symbol.asyncDispose]() { if (!settled) child.kill(); await exited; },
     };
+    let ipc: BunWasm.ChildIpc | undefined;
+    if (spec.ipc) {
+      const target = spec.options._ipcTarget || new (internal.require("events"))();
+      ipc = internal.require("child_ipc").open(target, spec.ipc);
+      Object.defineProperty(child, "connected", { get: () => ipc!.connected });
+      child.send = ipc.send;
+      child.disconnect = ipc.disconnect;
+      if (typeof spec.options.ipc === "function") target.on("message", message => (spec.options.ipc as (message: unknown, child: Child) => void)(message, child));
+    }
     function clearExitHooks() {
       if (timer) internal.realTimers.clearTimeout(timer);
       if (abort) spec.options.signal!.removeEventListener("abort", abort);
     }
     function finish(status: Exit) {
+      ipc?.finish();
       if (status.kind === 2) {
         // The wait has already consumed the child. Do not signal or wait it a second time.
         settled = true;
@@ -560,6 +586,7 @@
     function close() {
       if (closed) return;
       closed = true;
+      ipc?.close();
       sink.destroy();
     }
     function observeAndWait(): Exit | null {
@@ -751,10 +778,13 @@
     const { Readable, Writable } = internal.builtin("node:stream");
 
     function nodeOptions(options: Loose = {}) {
+      if (options.serialization !== undefined && options.serialization !== "json") throw unsupported("Advanced child process serialization");
       const io = options.stdio === undefined ? "pipe" : options.stdio;
       const stdio = Array.isArray(io) ? io : [io, io, io];
-      if (stdio.includes("ipc")) throw unsupported("Child process IPC");
-      return Object.assign({}, options, { stdio });
+      const channels = stdio.filter((mode: unknown) => mode === "ipc").length;
+      if (channels > 1) throw new TypeError("Only one IPC channel is allowed");
+      if (stdio.slice(0, 3).includes("ipc")) throw unsupported("IPC in stdin/stdout/stderr");
+      return Object.assign({}, options, { stdio, _ipc: channels === 1 });
     }
 
     function nodeArgv(command: string, args: string[], options: Loose) {
@@ -809,8 +839,14 @@
       }
       ref() { if (this._child) this._child.ref(); return this; }
       unref() { if (this._child) this._child.unref(); return this; }
-      send() { throw unsupported("Child process IPC"); }
-      disconnect() { throw unsupported("Child process IPC"); }
+      send(message: unknown, handle?: unknown, options?: unknown, callback?: unknown) {
+        if (!this.channel) throw Object.assign(new Error("Channel is closed"), { code: "ERR_IPC_CHANNEL_CLOSED" });
+        return this.channel.send(message, handle, options, callback);
+      }
+      disconnect() {
+        if (!this.channel) throw Object.assign(new Error("IPC channel is already disconnected"), { code: "ERR_IPC_DISCONNECTED" });
+        this.channel.disconnect();
+      }
     }
 
     function reportExit(child: Loose, code: number) {
@@ -853,14 +889,14 @@
       const argv = nodeArgv(command, args, options);
       child.spawnfile = String(command);
       child.spawnargs = argv;
-      try { child._child = spawn(argv, Object.assign({}, options, { _onSpawn: () => child.emit("spawn") })); } catch (error) {
+      try { child._child = spawn(argv, Object.assign({}, options, { _onSpawn: () => child.emit("spawn"), _ipcTarget: child })); } catch (error) {
         return failedNodeChild(child, nodeSpawnError(error, command, args, false), options);
       }
       child.pid = child._child.pid;
       child.stdin = nodeWritable(child._child.stdin);
       child.stdout = nodeReadable(child._child.stdout);
       child.stderr = nodeReadable(child._child.stderr);
-      child.stdio = [child.stdin, child.stdout, child.stderr];
+      child.stdio = [child.stdin, child.stdout, child.stderr].concat(options.stdio.slice(3).map(() => null));
       child._drains = [child.stdout, child.stderr].filter(Boolean).map((stream) => stream._childDrained);
       if (options.signal) {
         const aborted = () => child.emit("error", Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR", cause: options.signal.reason }));
@@ -958,7 +994,10 @@
       if (!Array.isArray(args)) { options = args || {}; args = []; }
       options = options || {};
       const execArgs = options.execArgv || (process as unknown as BunWasm.GuestProcess).execArgv;
-      const config = Object.assign({}, options, { stdio: options.stdio || (options.silent ? "pipe" : "inherit") });
+      const mode = options.stdio || (options.silent ? "pipe" : "inherit");
+      const stdio = Array.isArray(mode) ? mode : [mode, mode, mode, "ipc"];
+      if (!stdio.includes("ipc")) throw Object.assign(new Error("Fork requires an IPC channel"), { code: "ERR_CHILD_PROCESS_IPC_REQUIRED" });
+      const config = Object.assign({}, options, { stdio });
       return nodeSpawn(options.execPath || (process as unknown as BunWasm.GuestProcess).execPath, execArgs.concat([String(modulePath)], args), config);
     }
 

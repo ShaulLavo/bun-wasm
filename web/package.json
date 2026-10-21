@@ -11,6 +11,7 @@
     "test": "bun test ./tests/*.test.js ./tests/*.test.ts",
     "test:browser": "bun tests/browser-smoke.mjs",
     "test:browser:startup-mode": "bun tests/browser-startup-mode.ts",
+    "test:browser:child-ipc": "bun tests/browser-child-process-ipc.ts",
     "test:browser:bun-runtime-proc": "bun tests/bun-runtime-proc-browser.ts",
     "test:browser:engine-interruption": "bun tests/browser-engine-interruption.ts chromium firefox webkit",
     "test:next:native": "bun tests/next-framework-native.ts",
