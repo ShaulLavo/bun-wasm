@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 import type { Page } from "playwright";
 import type { Runtime } from "waffle";
+import type { ShellHost } from "../src/shell";
 import { playwright, ready, run, session, terminalText, writeFile } from "./playground.mjs";
 import { stopForeground } from "./foreground";
 import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt";
@@ -15,7 +16,7 @@ import { observePreviewSockets, previewSocketEvents } from "./next-framework-soc
 
 type PlaygroundGlobal = typeof globalThis & {
   playground: {
-    shell: { submit(command: string): Promise<void>; lastExit: number; running: boolean; input(text: string): void };
+    shell: { submit(command: string): Promise<void>; lastExit: number; running: boolean; input(text: string): void; host: Pick<ShellHost, "runBun" | "kill"> };
     previews: { serves(port: number): boolean; url(port: number): string };
     fs: Pick<Runtime["filesystem"], "readFile" | "listFiles" | "createIdentity" | "revoke" | "reap">;
   };
@@ -25,6 +26,7 @@ const reports = resolve(process.env.NEXT_REPORTS ?? "/work/tmp/bun-wasm-next-bro
 const fixture = resolve(import.meta.dir, "../../examples/frameworks");
 const filesystemFixture = resolve(import.meta.dir, "../../tests/fixtures/fs-stream-constructors");
 const moduleFixture = resolve(import.meta.dir, "../../tests/fixtures/module-compile");
+const cursorFixture = resolve(import.meta.dir, "../../tests/fixtures/stdio-cursor");
 const assets = process.env.NEXT_WEB_ROOT;
 const supplemental = process.env.NEXT_REGISTRY_EXTRA;
 if (!assets || !supplemental) throw new Error("Set NEXT_WEB_ROOT to a browser playground build and NEXT_REGISTRY_EXTRA to staged locked tarballs");
@@ -57,6 +59,39 @@ async function guestCommand(page: Page, stage: string, command: string, timeout 
   writeFileSync(join(reports, `browser-${stage}.log`), result.output);
   assert.equal(result.code, 0, `${stage} failed: ${result.output}`);
   return result;
+}
+
+async function cursorOutputFixture(page: Page) {
+  const result = await page.evaluate(async () => {
+    const { host } = (globalThis as PlaygroundGlobal).playground.shell;
+    const encoder = new TextEncoder();
+    let stdout: number[] = [];
+    let stderr: number[] = [];
+    const bytes = (data: string | Uint8Array) => Array.from(typeof data === "string" ? encoder.encode(data) : data);
+    const io = {
+      out(data: string | Uint8Array) { stdout = stdout.concat(bytes(data)); },
+      err(data: string | Uint8Array) { stderr = stderr.concat(bytes(data)); },
+    };
+    const started = performance.now();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; host.kill(); }, 60000);
+    try {
+      const code = await host.runBun(["run", "stdio-cursor/index.ts"], "/home/user", io);
+      return { code, ms: performance.now() - started, timedOut, stdout, stderr };
+    } finally { clearTimeout(timer); }
+  });
+  const stdout = Buffer.from(result.stdout);
+  const stderr = Buffer.from(result.stderr);
+  const expectedOut = readFileSync(join(cursorFixture, "expected.txt"));
+  const expectedErr = readFileSync(join(cursorFixture, "expected_stderr.txt"));
+  const passed = !result.timedOut && result.code === 0 && stdout.equals(expectedOut) && stderr.equals(expectedErr);
+  stages["stdio-cursor"] = { status: passed ? "pass" : "fail", ...result };
+  writeFileSync(join(reports, "browser-stdio-cursor.stdout.log"), stdout);
+  writeFileSync(join(reports, "browser-stdio-cursor.stderr.log"), stderr);
+  assert.equal(result.timedOut, false, "stdio-cursor finished within its 60-second fixture budget");
+  assert.equal(result.code, 0, `stdio-cursor failed: ${stderr.toString()}`);
+  assert.deepEqual(stdout, expectedOut, "stdio-cursor raw stdout ANSI bytes and callback assertions");
+  assert.deepEqual(stderr, expectedErr, "stdio-cursor raw stderr ANSI bytes");
 }
 
 function sourceFiles(directory: string, prefix = "", excluded: readonly string[] = ["node_modules", ".next", "next-env.d.ts"]): string[] {
@@ -192,6 +227,8 @@ try {
   await guestCommand(page, "module-compile", "bun run module-compile/index.ts");
   for (const path of sourceFiles(filesystemFixture, "", [])) await writeFile(page, `/home/user/fs-stream-constructors/${path}`, readFileSync(join(filesystemFixture, path), "utf8"));
   await guestCommand(page, "fs-stream-constructors", "bun run fs-stream-constructors/index.ts");
+  for (const path of sourceFiles(cursorFixture, "", [])) await writeFile(page, `/home/user/stdio-cursor/${path}`, readFileSync(join(cursorFixture, path), "utf8"));
+  await cursorOutputFixture(page);
   for (const path of sourceFiles(fixture)) await writeFile(page, `/home/user/${path}`, readFileSync(join(fixture, path), "utf8"));
   await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);
   stages.fixtureBefore = await fixtureSnapshot(page, "before");
