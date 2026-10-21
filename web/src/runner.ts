@@ -403,6 +403,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   } catch (error) {
     finish({ code: 126, error: String(error) });
   }
+  let interrupted = false;
   let prepared = false;
   let pendingKill: 2 | 9 | 15 | undefined;
   void (async () => {
@@ -445,8 +446,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       else watchOutcome();
     }, 4);
   }
-  let interrupted = false;
-  const kill = (requestedSignal?: 2 | 9 | 15): void => {
+  function kill(requestedSignal?: 2 | 9 | 15): void {
     if (finished) return;
     if (!prepared && options.runtimeProcess) { pendingKill = requestedSignal ?? 2; return; }
     if (!prepared) { finish({ code: 128 + (requestedSignal ?? 2) }, false, requestedSignal ?? 2); return; }
@@ -457,6 +457,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     void subprocess.killJob(rootJob, signal).catch(error => console.error("bun-wasm: job signal failed", error));
     const result = readOutcome(rootOutcome!);
     if (result) finish({ code: waitStatus(result) }, false, result.kind === "signaled" ? result.code : undefined);
-  };
+  }
   return { done, kill };
 }
