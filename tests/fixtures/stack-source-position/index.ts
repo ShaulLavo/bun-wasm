@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newTokenLength, verifyMappedStackSource, verifyStackSources } from "./contract.ts";
 
 const require = createRequire(import.meta.url);
 const original = Error.prepareStackTrace;
-const scratch = mkdtempSync(join(tmpdir(), "stack-source-"));
+const scratch = mkdtempSync(join(process.cwd(), "stack-source-"));
 function nodeOracle(_error: Error, sites: NodeJS.CallSite[]): string {
   const site = sites[0];
   assert.ok(site);

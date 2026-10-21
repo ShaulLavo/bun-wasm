@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nativeStackProbe, stackFormatter, stackSite } from "./node-stack-position-fixture";
@@ -93,4 +93,20 @@ test("production bootstrap consumes only numeric native results on huge lines", 
   const formatter = stackFormatter({ engine: "host", mapPosition: () => undefined, sourceNewOffset() { calls++; return result; }, getSourceLine() { throw new Error("whole line transferred"); } });
   for (let index = 0; index < 64; index++) expect(formatter.format(stackSite(7))).toBe("caller (/huge.cjs:1:12)");
   expect(calls).toBe(64);
+});
+
+
+test("stack fixture uses its isolated launcher root without requiring a temp parent", () => {
+  assert.ok(scratch);
+  const root = join(scratch, "launcher-root");
+  cpSync(new URL("../tests/fixtures/stack-source-position", import.meta.url), root, { recursive: true });
+  const files = readdirSync(root);
+  const missing = join(scratch, "missing-temp-parent");
+  expect(existsSync(missing)).toBe(false);
+  const stdout = execFileSync("node", ["--no-warnings", join(root, "index.ts")], {
+    cwd: root, env: { ...process.env, TMPDIR: missing }, encoding: "utf8", stdio: "pipe",
+  });
+  expect(stdout).toBe(readFileSync(join(root, "expected.txt"), "utf8"));
+  expect(readdirSync(root)).toEqual(files);
+  expect(existsSync(missing)).toBe(false);
 });
