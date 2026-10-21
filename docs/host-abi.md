@@ -378,7 +378,11 @@ output and lifecycle observations wake it directly.
 `Bun.spawnSync` polls the same way until completion. Pipe capacity, the number of concurrent
 children and per-process memory belong to the process service, not to this guest contract.
 
-Fork launches a bun child; IPC channels and inherited native descriptors are not implemented.
+Fork launches a Bun child with two explicitly bound `runtime_proc` pipes for JSON IPC.
+The child consumes its `{ input, output }` descriptor pair from `BUNWASM_IPC_CHANNEL`
+during bootstrap. Newline-delimited JSON, queued writes, EOF/disconnect and endpoint
+cleanup are guest policy. No new host import or broker is involved. Native handle
+passing and advanced serialization remain unsupported.
 Shell execution accepts a single quoted bun command, without shell operators or expansion. `$`
 remains unsupported.
 

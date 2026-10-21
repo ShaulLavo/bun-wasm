@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm-web",
-  "version": "0.0.54",
+  "version": "0.0.56",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,8 +11,12 @@
     "test": "bun test ./tests/*.test.js ./tests/*.test.ts",
     "test:browser": "bun tests/browser-smoke.mjs",
     "test:browser:startup-mode": "bun tests/browser-startup-mode.ts",
+    "test:browser:child-ipc": "bun tests/browser-child-process-ipc.ts",
     "test:browser:bun-runtime-proc": "bun tests/bun-runtime-proc-browser.ts",
-    "test:browser:engine-interruption": "bun tests/browser-engine-interruption.ts chromium firefox webkit"
+    "test:browser:engine-interruption": "bun tests/browser-engine-interruption.ts chromium firefox webkit",
+    "test:next:native": "bun tests/next-framework-native.ts",
+    "test:next:browser": "bun tests/next-framework-browser.ts",
+    "test:next:registry": "bun tests/next-framework-registry.ts"
   },
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.5",
