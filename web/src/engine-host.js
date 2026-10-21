@@ -57,6 +57,8 @@ const nativeAddEventListener = typeof globalThis.addEventListener === "function"
 
 const utf8 = new NativeTextEncoder();
 const fromUtf8 = new NativeTextDecoder();
+// Wire strings preserve their contents; public decoders own BOM removal.
+const wireFromUtf8 = new NativeTextDecoder("utf-8", { ignoreBOM: true });
 
 // --- the value encoding (engine_host.rs encode/decode) ------------------------------------
 
@@ -198,7 +200,7 @@ class Reader {
         return n;
       }
       case T.STR:
-        return fromUtf8.decode(this.raw().slice());
+        return wireFromUtf8.decode(this.raw().slice());
       case T.BYTES:
         // Copied out: wasm memory can grow (and detach) on the next call.
         return this.raw().slice();
@@ -212,7 +214,7 @@ class Reader {
         const n = this.u32();
         const out = {};
         for (let i = 0; i < n; i++) {
-          const k = fromUtf8.decode(this.raw().slice());
+          const k = wireFromUtf8.decode(this.raw().slice());
           out[k] = this.value();
         }
         return out;
