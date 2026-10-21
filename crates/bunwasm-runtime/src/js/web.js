@@ -1024,6 +1024,21 @@
     }
   }
 
+  function requestBodyChunk(chunk) {
+    if (typeof chunk === "string") return native.utf8Encode(chunk);
+    if (!(chunk instanceof Uint8Array)) throw new TypeError("Expected a string or Uint8Array body chunk");
+    return chunk;
+  }
+
+  async function* requestBodyChunks(body) {
+    for await (const chunk of body) yield requestBodyChunk(chunk);
+  }
+
+  function requestBody(body) {
+    if (body == null || body instanceof ReadableStream || typeof body[Symbol.asyncIterator] !== "function") return body;
+    return ReadableStream.from(requestBodyChunks(body));
+  }
+
   class Request {
     #url;
     #method;
@@ -1044,7 +1059,7 @@
       if (body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
         throw new TypeError("Request with a GET or HEAD method cannot have a body.");
       }
-      initBody(this, body, this.#headers);
+      initBody(this, requestBody(body), this.#headers);
     }
     get url() {
       return this.#url;

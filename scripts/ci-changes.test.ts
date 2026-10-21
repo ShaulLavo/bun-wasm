@@ -116,6 +116,7 @@ test.each([
   "tests/fixtures/stdio-cursor/source-probe.ts", "tests/fixtures/stdio-cursor/expected_stderr.txt",
   "tests/fixtures/fs-stream-constructors/contract.ts", "tests/fixtures/vm-context/contract.ts",
   "tests/fixtures/module-compile/index.ts", "tests/fixtures/net-http-implicit-headers/contract.ts",
+  "tests/fixtures/request-body-streams/contract.ts", "scripts/node-request-body.test.ts", "scripts/node-request-body-fixture.ts",
 ])("new native fixture input %s selects the existing native job", path => {
   expect(needsRust([path])).toBe(true);
 });
