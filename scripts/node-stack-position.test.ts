@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nativeStackProbe, quickjsColumnProbe, quickjsLexerInputs, stackFormatter, stackSite } from "./node-stack-position-fixture";
-import { newTokenLength, tokenCases, verifyTokenLengths } from "../tests/fixtures/stack-source-position/contract";
+import { newTokenLength, tokenCases, verifyRawStackSources, verifyTokenLengths } from "../tests/fixtures/stack-source-position/contract";
 
 test("production stack formatting does not transfer complete minified source lines", () => {
   const source = "new Error();/*" + "x".repeat(1024 * 1024) + "*/";
@@ -265,4 +265,65 @@ test("actual QuickJS tokenization bounds monotonic call-column work on a huge li
 test("actual QuickJS lexer keeps errors on the current line after multiline tokens", () => {
   expect(lexerRows("/*😀*/'x\\\ny'; 'bad\n", "error")[0]?.values).toEqual([-1, 2]);
   expect(lexerRows("/*😀*/`x\ny`; /*unterminated", "error")[0]?.values).toEqual([-1, 2]);
+});
+
+function rawFixtureObserverProbe(): string {
+  const source = readFileSync(new URL("../tests/fixtures/stack-source-position/index.ts", import.meta.url), "utf8");
+  const helper = source.indexOf("function rawModulePosition(");
+  const start = helper < 0 ? source.indexOf("function loadObserved(") : helper;
+  const end = source.indexOf("\ntry {", start);
+  assert.ok(start > 0 && end > start);
+  return [
+    'import assert from "node:assert/strict";',
+    'import { join } from "node:path";',
+    'const scratch = "/fixture";',
+    'let calls = 0; let observed: NodeJS.CallSite[] = [];',
+    'Error.prepareStackTrace = function(error, sites) { calls++; observed = sites; assert.equal(this, Error); return `independent:${error.message}`; };',
+    'function load(source: string, name: string) {',
+    '  const path = join(scratch, name);',
+    '  const wrapper = (0, eval)(`(function __bunwasm_cjs__(module){\\nvar exports=module.exports;\\n${source}\\nreturn module.exports;\\n})\\n//# sourceURL=${path}`.replaceAll("\\\\n", "\\n"));',
+    '  const error: unknown = wrapper({ exports: {} });',
+    '  assert.ok(error instanceof Error); return String(error.stack);',
+    '}',
+    source.slice(start, end),
+    'const source = "/*😀中é*/module.exports = new\\t\\uFEFF\\u00A0Error(\'raw\');".replaceAll("\\\\t", "\\t").replaceAll("\\\\uFEFF", "\\uFEFF").replaceAll("\\\\u00A0", "\\u00A0");',
+    'assert.deepEqual(loadObserved(source, "raw.cjs"), { raw: [{ line: 1, column: 26 }], formatted: "independent:raw" });',
+    'assert.equal(calls, 1);',
+    'const real = observed[0]; assert.ok(real);',
+    'assert.equal(real.getFileName(), undefined); assert.equal(real.getLineNumber(), 3);',
+    'assert.deepEqual(rawModulePosition(real, "/fixture/raw.cjs"), { line: 1, column: 26 });',
+    'assert.deepEqual(rawModulePosition(real, "/fixture/raw.cjs"), { line: 1, column: 26 });',
+    'assert.equal(real.getLineNumber(), 3);',
+    'const direct = { getFileName: () => "/fixture/raw.cjs", getScriptNameOrSourceURL: () => "/unrelated.cjs", getEvalOrigin: () => "/unrelated.cjs", isEval: () => true, getLineNumber: () => 3, getColumnNumber: () => 26 };',
+    'assert.deepEqual(rawModulePosition(direct, "/fixture/raw.cjs"), { line: 3, column: 26 });',
+    'assert.deepEqual(rawModulePosition({ ...direct, isEval: () => false, getLineNumber: () => 1 }, "/fixture/raw.cjs"), { line: 1, column: 26 });',
+    'const evaluated = { ...direct, getFileName: () => undefined, getScriptNameOrSourceURL: () => "/fixture/raw.cjs", getEvalOrigin: () => "/fixture/raw.cjs" };',
+    'for (const changed of [{ getFileName: () => "/other.cjs" }, { getScriptNameOrSourceURL: () => "/other.cjs" }, { getEvalOrigin: () => "/other.cjs" }, { isEval: () => false }]) assert.equal(rawModulePosition({ ...evaluated, ...changed }, "/fixture/raw.cjs"), undefined);',
+    'assert.throws(() => rawModulePosition({ ...evaluated, getLineNumber: () => 2 }, "/fixture/raw.cjs"));',
+    'assert.throws(() => rawModulePosition({ ...direct, getColumnNumber: () => null }, "/fixture/raw.cjs"));',
+    'for (const column of [0, -1, NaN, Infinity, 1.5]) assert.throws(() => rawModulePosition({ ...direct, getColumnNumber: () => column }, "/fixture/raw.cjs"));',
+    'assert.throws(() => loadObserved("module.exports = Error()", "unrelated.cts"));',
+    'assert.throws(() => loadObserved("await Promise.resolve()", "unrelated.cjs"));',
+    'assert.deepEqual(loadObserved("function fail() { return Error(\'two\'); } module.exports = fail();", "two.cjs"), { raw: [{ line: 1, column: 26 }, { line: 1, column: 59 }], formatted: "independent:two" });',
+    'assert.deepEqual(loadObserved("void `x\\ny`; module.exports = Error(\'multi\');".replaceAll("\\\\n", "\\n"), "multi.cjs"), { raw: [{ line: 2, column: 22 }], formatted: "independent:multi" });',
+    'console.log("Actual Node sourceURL wrapper, direct coordinates, exclusion and independent formatter pass");',
+  ].join("\n");
+}
+
+test("raw stack fixture observes exact sourceURL wrappers without remapping direct frames", () => {
+  assert.ok(scratch);
+  const path = join(scratch, "raw-fixture-observer.ts");
+  writeFileSync(path, rawFixtureObserverProbe());
+  expect(execFileSync("node", [path], { encoding: "utf8", timeout: 30_000 })).toBe("Actual Node sourceURL wrapper, direct coordinates, exclusion and independent formatter pass\n");
+});
+
+
+test("raw stack contract rejects missing, duplicated or wrong observations and independent formatting", () => {
+  const first = { line: 1, column: 32 };
+  const raw = { line: 1, column: 26 };
+  expect(() => verifyRawStackSources(() => ({ raw: [], formatted: first }))).toThrow();
+  expect(() => verifyRawStackSources(() => ({ raw: [raw, raw], formatted: first }))).toThrow();
+  expect(() => verifyRawStackSources(() => ({ raw: [{ line: 2, column: 26 }], formatted: first }))).toThrow();
+  expect(() => verifyRawStackSources(() => ({ raw: [{ line: 1, column: 27 }], formatted: first }))).toThrow();
+  expect(() => verifyRawStackSources(() => ({ raw: [raw], formatted: { line: 1, column: 33 } }))).toThrow();
 });

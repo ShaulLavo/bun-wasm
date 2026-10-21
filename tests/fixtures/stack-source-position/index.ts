@@ -28,18 +28,26 @@ function load(source: string, name: string) {
   assert.ok(match, `source frame missing for ${name}: ${error.stack}`);
   return { line: Number(match[1]), column: Number(match[2]) };
 }
+function rawModulePosition(site: Pick<NodeJS.CallSite, "getFileName" | "getScriptNameOrSourceURL" | "getEvalOrigin" | "isEval" | "getLineNumber" | "getColumnNumber">, path: string) {
+  const file = site.getFileName();
+  const evaluated = file == null && site.isEval() && site.getScriptNameOrSourceURL() === path && site.getEvalOrigin() === path;
+  if (file !== path && !evaluated) return undefined;
+  const headerLines = evaluated ? 2 : 0;
+  const line = site.getLineNumber();
+  const column = site.getColumnNumber();
+  assert.ok(line && Number.isInteger(line) && line > headerLines && column && Number.isInteger(column) && column > 0);
+  return { line: line - headerLines, column };
+}
 function loadObserved(source: string, name: string) {
+  assert.ok(name.endsWith(".cjs") && !/\bawait\b/.test(source));
   const path = join(scratch, name);
   const raw: { line: number; column: number }[] = [];
   const prepare = Error.prepareStackTrace;
   assert.ok(prepare);
   Error.prepareStackTrace = (error, sites) => {
     for (const site of sites) {
-      if (site.getFileName() !== path) continue;
-      const line = site.getLineNumber();
-      const column = site.getColumnNumber();
-      assert.ok(line && column);
-      raw.push({ line, column });
+      const position = rawModulePosition(site, path);
+      if (position) raw.push(position);
     }
     return Reflect.apply(prepare, Error, [error, sites]);
   };
