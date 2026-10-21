@@ -897,7 +897,9 @@
   function initializeFileStreams() {
     if (fileStreams) return fileStreams;
     fileStreams = internal.builtin("node:stream");
+    Object.setPrototypeOf(ReadStream, fileStreams.Readable);
     Object.setPrototypeOf(ReadStream.prototype, fileStreams.Readable.prototype);
+    Object.setPrototypeOf(WriteStream, fileStreams.Writable);
     Object.setPrototypeOf(WriteStream.prototype, fileStreams.Writable.prototype);
     Object.defineProperties(fs, {
       ReadStream: { value: ReadStream, writable: true, enumerable: true, configurable: true },

@@ -20,6 +20,8 @@ export async function verifyFilesystemStreams(fs: Filesystem, root: string, stre
   assert.equal(typeof fs.WriteStream, "function");
   assert.equal(Reflect.get(fs, "FileReadStream"), fs.ReadStream);
   assert.equal(Reflect.get(fs, "FileWriteStream"), fs.WriteStream);
+  assert.equal(Object.getPrototypeOf(fs.ReadStream), streams.Readable);
+  assert.equal(Object.getPrototypeOf(fs.WriteStream), streams.Writable);
   assert.ok(fs.ReadStream.prototype instanceof streams.Readable);
   assert.ok(fs.WriteStream.prototype instanceof streams.Writable);
 
