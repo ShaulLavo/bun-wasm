@@ -16,7 +16,7 @@ function deepBlocks(file: string): string[] {
 }
 
 test("Next cleanup and observer code stays within three block levels", () => {
-  const paths = ["../../examples/frameworks/lifetime.ts", "next-framework-native.ts", "next-framework-browser.ts", "next-framework-process.ts", "next-framework-sockets.ts", "next-framework-process.test.ts", "next-framework-nesting.test.ts", "browser-next-sockets.ts", "../../examples/frameworks/lifecycle.test.ts"];
+  const paths = ["../examples/frameworks/lifetime.ts", "../web/tests/next-framework-native.ts", "../web/tests/next-framework-browser.ts", "../web/tests/next-framework-process.ts", "../web/tests/next-framework-sockets.ts", "../web/tests/next-framework-process.test.ts", "next-framework-nesting.test.ts", "../web/tests/browser-next-sockets.ts", "../examples/frameworks/lifecycle.test.ts"];
   const failures = paths.flatMap(path => deepBlocks(new URL(path, import.meta.url).pathname));
   expect(failures).toEqual([]);
 });
