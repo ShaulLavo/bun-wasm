@@ -27,9 +27,9 @@ export function initialJavaScript(outputs: OutputGraph, roots: readonly string[]
   return Array.from(seen).sort();
 }
 
-// Waffle 0.0.47 captures host intrinsics and validates shared-view identities (#31).
-// Measured core: 8,073 B gzip; retain a tight 8 KiB budget for these required checks.
-const CORE_BUDGET_KIB = 8;
+// Waffle 0.0.58 adds inode permission queries and typed filesystem errors.
+// Same Bun/config: 8,121 B at 0.0.53 -> 8,443 B; retain a tight 8.5 KiB cap.
+const CORE_BUDGET_KIB = 8.5;
 export function checkCoreBudget(gzipBytes: number): void {
   const budget = CORE_BUDGET_KIB * 1024;
   if (gzipBytes > budget) throw new Error(`core exceeds ${budget} B gzip budget by ${gzipBytes - budget} B; inspect runtime/core imports and the layer report`);

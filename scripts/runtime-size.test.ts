@@ -49,8 +49,8 @@ test("Bun policy attribution names current adapters without hiding generic servi
 });
 
 test("core gzip budget includes boundary, reports actionable excess", () => {
-  expect(() => checkCoreBudget(8 * 1024)).not.toThrow();
-  expect(() => checkCoreBudget(8 * 1024 + 1)).toThrow("core exceeds 8192 B gzip budget by 1 B");
+  expect(() => checkCoreBudget(8.5 * 1024)).not.toThrow();
+  expect(() => checkCoreBudget(8.5 * 1024 + 1)).toThrow("core exceeds 8704 B gzip budget by 1 B");
 });
 
 test("Bun light initial downloads allow the tiny fatal check but never the binary rewriter", () => {
