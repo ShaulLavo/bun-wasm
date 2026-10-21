@@ -84,7 +84,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     signalError(signal): never { throw new DefaultSignal(signal); },
     terminalSignal: error => error instanceof DefaultSignal ? error.signal : undefined,
     instantiated({ instance, wasi, fs, checkActive }) {
-      netHost = req.net ? new NetHost(req.net, (net, transfer = []) => host.postMessage({ type: "net", req: net }, transfer), (path, bytes) => fs.writeFile(path, bytes)) : null;
+      netHost = req.net ? new NetHost(req.net, (net, transfer = []) => host.postMessage({ type: "net", req: net }, transfer), (path, bytes) => fs.writeFile(path, bytes), { shared: true }) : null;
       if (slots === "off") return;
       const memory = instance.exports.memory;
       if (!(memory instanceof WebAssembly.Memory)) throw new Error("bun-wasm has no memory");

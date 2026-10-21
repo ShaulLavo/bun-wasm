@@ -51,6 +51,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
 | [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun/Node and native adapters consume eight-byte typed process/job completions, map seven portable startup errnos, and preserve failed Node streams. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
+| [Runtime-owned network consumer](#runtime-owned-network-consumer) | Host feature | Original per-process session wiring over Waffle's borrowed runtime network, with physical-stop cleanup and shared preview observation. |
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
 | [Descriptor kinds and storage modes](#descriptor-kinds-and-storage-modes) | Host feature | Original Rust descriptor-kind adapters and page startup handling adopt the pinned Waffle contract without guessing pipe types or changing workspace names. |
 | [Child process JSON IPC](#child-process-json-ipc) | Host feature | Original TypeScript JSON framing and lifecycle adapter over Waffle runtime_proc pipes, including implicit fork channels and process bootstrap. |
@@ -3253,3 +3254,15 @@ callbacks, checks disconnect/error and ordinary-exit cleanup, drains 257 separat
 written messages from an exited child while its parent was occupied, and reads the
 result through the real Waffle service-worker HTTP preview. It never executes
 guest source on the host JavaScript engine.
+
+## Runtime-owned network consumer
+
+`web/src/net/helper.ts`, `bun-launcher.ts`, `subprocess-broker.ts`, `runner.ts`,
+`net/host.ts`, `bun-executor.ts`, the page entries and `src/bun-adapter.ts` are
+original TypeScript adapters, not copied upstream implementations. They consume
+Waffle's reviewed `fc58a532f0d7a617e631ea4b7580a190915d4ed6` contract. The caller's
+Runtime owns one namespace. Each Bun process borrows a distinct ring and helper;
+only physical worker cleanup releases that session and its module cache. Parent
+exit and adapter uninstall leave admitted children alive. The existing installer
+fetch cache remains the default policy; injected network fetch stays separate from
+asset-download fetch. Preview1 receives no network session.

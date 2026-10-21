@@ -3,6 +3,7 @@ import { FilesystemClient } from "waffle/fs/client";
 import { FilesystemError } from "waffle/fs/protocol";
 import { loadBunWasm, type LoadBunWasmOptions } from "./assets.js";
 
+import type { BunNetworkOptions } from "../web/src/net/helper.js";
 import { bunLauncher } from "../web/src/bun-launcher.js";
 import { ENGINE_BIN } from "./executable-paths.js";
 export type { Engine } from "../web/src/bun-executor.js";
@@ -17,6 +18,7 @@ export class BunWasmExecutableConflictError extends Error {
 }
 
 export interface BunAdapterOptions extends LoadBunWasmOptions {
+  readonly network?: BunNetworkOptions;
   /** Bundler-produced module worker URL running bun-wasm/worker. */
   readonly workerUrl: string | URL;
   /** Engine for the registered executable; defaults to browser. */
@@ -87,7 +89,7 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
     // every installer operation observes only its own completion, including EEXIST.
     await runtime.filesystem.resolvePath("/");
     filesystem = new FilesystemClient(runtime.filesystem.fork());
-    for (const name of ["quickjs", "jsc", "browser"] as const) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString() })));
+    for (const name of ["quickjs", "jsc", "browser"] as const) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), runtime, network: options.network })));
     for (const name of names) unregisters.push(runtime.registerProgram(name, {
       adapter: `bun:${engine}`, cooperative: true,
       module: () => loadBunWasm(options),

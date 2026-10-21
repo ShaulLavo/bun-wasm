@@ -3,7 +3,7 @@
 // and the sandbox (../sandbox/).
 
 import type { Runtime } from "waffle";
-import { NetHelper } from "./net/helper";
+import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, type RuntimeNetworkHelper } from "./net/helper";
 import { createRing } from "./net/ring";
 import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
@@ -190,6 +190,7 @@ export interface RunOptions {
   env: Record<string, string>;
   /** Shared service owned by the page, also used by editor and shell. */
   runtime: Runtime;
+  network?: BunNetworkOptions;
   /** From registerModuleScope(): run the worker under ./__bunwasm/. */
   moduleScope: boolean;
   trace?: boolean;
@@ -203,9 +204,6 @@ export interface RunHooks {
   phase?(name: string, duration: number): void;
   stdout(data: Uint8Array): void;
   stderr(data: Uint8Array): void;
-  /** A guest server started listening; `helper` delivers requests to it. */
-  listening?(port: number, helper: NetHelper): void;
-  stopped?(port: number, helper: NetHelper): void;
 }
 
 export interface RunResult {
@@ -230,14 +228,9 @@ const registeredPrograms = new WeakMap<Runtime, Set<string>>();
 
 /** Starts `bun <args>` in a fresh worker, rooting a process tree in the page's runtime. */
 export function startRun(options: RunOptions, hooks: RunHooks): Run {
-  const ring = globalThis.crossOriginIsolated === true ? createRing() : null;
-  const helper: NetHelper | null = ring
-    ? new NetHelper(ring, {
-        listening: (port) => hooks.listening?.(port, helper!),
-        stopped: (port) => hooks.stopped?.(port, helper!),
-      })
-    : null;
-  // One Cache Storage cache per run holds its modules; deleted when the run ends.
+  const ring = options.adapter !== "preview1" && globalThis.crossOriginIsolated === true ? createRing() : null;
+  let helper: RuntimeNetworkHelper | undefined;
+  // One Cache Storage cache per run holds its modules; deleted when the worker physically stops.
   const moduleCache = options.moduleScope ? `bunwasm-m-${crypto.randomUUID()}` : null;
   // The runtime exists only on an isolated page, so every run roots a process tree. The root
   // worker, its children and the shell all spawn through the same service; its transport and
@@ -274,7 +267,9 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (workerStopped) return;
     workerStopped = true;
     request.filesystem.port.close();
-    worker.terminate();
+    worker?.terminate();
+    try { helper?.dispose(); }
+    finally { if (moduleCache) void caches.delete(moduleCache); }
   };
   const stopRoot = () => { if (rootStopped) return; rootStopped = true; stopWorker(); };
   rootConsumerRelease = options.runtime.retainConsumer({
@@ -283,7 +278,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     stop: stopRoot,
   });
   const subprocess = new SubprocessBroker(workerUrl, options.runtime, {
-    loadTools,
+    loadTools, network: options.network,
     rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged,
     stopRoot: () => finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true),
     output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data),
@@ -305,7 +300,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
   }
   const starting = performance.now();
-  const worker = new Worker(workerUrl, { type: "module" });
+  let worker: Worker | undefined;
   let settle: (result: RunResult) => void = () => {};
   const done = new Promise<RunResult>((resolve) => (settle = resolve));
   let finished = false;
@@ -344,13 +339,16 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     // Outcome/revocation is immediate; confirmation and physical stop require the filesystem
     // fence. An adopted root's exit already joins it; only a root the service never saw needs its own.
     const quiescence = acknowledged || ownedDisposal || rootExit ? undefined : quiesceRoot();
-    helper?.dispose();
-    if (moduleCache) void caches.delete(moduleCache);
     if (quiescence || rootExit) void Promise.all([quiescence, rootExit]).then(() => confirm())
       .catch(error => { if (!options.runtime.disposed) console.error("bun-wasm: root teardown failed", error); });
     else confirm(ownedDisposal);
   };
-  worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
+  const onNetwork = (message: unknown) => {
+    if (!helper) return;
+    try { dispatchBunNetwork(helper, message); }
+    catch (error) { finish({ code: 126, error: String(error) }); }
+  };
+  const onMessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
     if (options.runtime.disposed) return;
     if (finished) {
@@ -381,7 +379,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       return;
     }
     if (msg.type === "net") {
-      helper?.handle(msg.req);
+      onNetwork(msg);
       return;
     }
     if (msg.type === "stdout" || msg.type === "stderr") {
@@ -394,26 +392,44 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (msg.type === "error") finish({ code: msg.code, error: `bun.wasm crashed: ${msg.message}`.replace(/\r?\n/g, "\r\n") }, true);
     else finish({ code: msg.code }, true, msg.signal);
   };
-  worker.onerror = (event) => {
+  const onError = (event: ErrorEvent) => {
     event.preventDefault();
     finish({ code: 1, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
+  try {
+    worker = new Worker(workerUrl, { type: "module" });
+    worker.onmessage = onMessage;
+    worker.onerror = onError;
+  } catch (error) {
+    finish({ code: 126, error: String(error) });
+  }
   let prepared = false;
-  const preparation = (async () => {
-      const { workerProcessState, createWorkerProcessTransport } = await import("waffle/proc/worker-client");
-      const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
-      const state = workerProcessState(transport);
-      // The host endpoint and descriptor reservations use the same filesystem identity.
-      const { port: _port, ...filesystem } = request.filesystem;
-      transport.data = { ...(transport.data as object | undefined), filesystem };
+  let pendingKill: 2 | 9 | 15 | undefined;
+  void (async () => {
+    if (finished || options.runtime.disposed) return;
+    const { workerProcessState, createWorkerProcessTransport } = await import("waffle/proc/worker-client");
+    if (finished || options.runtime.disposed) return;
+    const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
+    const state = workerProcessState(transport);
+    // The host endpoint and descriptor reservations use the same filesystem identity.
+    const { port: _port, ...filesystem } = request.filesystem;
+    transport.data = { ...(transport.data as object | undefined), filesystem };
     if (!await subprocess.adoptRuntimeRoot(transport, () => finished)) return;
-    if (options.adapter !== "preview1" && isToolCommand(options.args)) request.module = await loadTools();
-      rootOutcome = state.signals.outcome;
+    rootOutcome = state.signals.outcome;
     rootPid = state.pid;
     rootJob = state.job;
     releaseRootConsumer();
     prepared = true;
-    if (!finished) {
+    if (pendingKill) { kill(pendingKill); return; }
+    if (options.adapter !== "preview1" && isToolCommand(options.args)) request.module = await loadTools();
+    if (finished || options.runtime.disposed) return;
+    if (ring) {
+      const network = await options.runtime.network();
+      if (finished || options.runtime.disposed) return;
+      helper = createBunNetworkHelper(network, ring, options.network);
+      if (finished || options.runtime.disposed) return helper.dispose();
+    }
+    if (!finished && !options.runtime.disposed && worker) {
       worker.postMessage(request, [request.filesystem.port]);
       watchOutcome();
     }
@@ -432,7 +448,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   let interrupted = false;
   const kill = (requestedSignal?: 2 | 9 | 15): void => {
     if (finished) return;
-    if (!prepared) { void preparation.then(() => kill(requestedSignal)); return; }
+    if (!prepared && options.runtimeProcess) { pendingKill = requestedSignal ?? 2; return; }
+    if (!prepared) { finish({ code: 128 + (requestedSignal ?? 2) }, false, requestedSignal ?? 2); return; }
     const signal = requestedSignal ?? (interrupted ? 9 : 2);
     interrupted = true;
     // The broker synchronously publishes every job member before any teardown callback. Root

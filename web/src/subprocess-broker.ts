@@ -8,6 +8,7 @@ import type { Runtime, ProcessService, RuntimeSupervisor } from "waffle";
 import type { WorkerProcessMessage, WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { FilesystemIdentity } from "waffle/fs";
 import { bunLauncher, preview1Launcher } from "./bun-launcher.js";
+import type { BunNetworkOptions } from "./net/helper.js";
 import type { Engine } from "./bun-executor.js";
 
 type CompiledExecutable = WebAssembly.Module | (() => Promise<WebAssembly.Module>);
@@ -17,6 +18,7 @@ export type ExecutableRegistration =
   | { bytes: Uint8Array | (() => Uint8Array | Promise<Uint8Array>); adapter: "preview1"; cooperative?: false };
 
 export interface SubprocessBrokerOptions {
+  network?: BunNetworkOptions;
   loadTools?(): Promise<WebAssembly.Module>;
   output?(fd: 1 | 2, data: Uint8Array): void;
   rootFilesystem?: FilesystemIdentity;
@@ -30,7 +32,7 @@ export class SubprocessBroker {
   private service?: ProcessService;
   private root?: SignalTransport & { pid: number; job: number };
   constructor(workerUrl: string, private runtime: Runtime, private options: SubprocessBrokerOptions = {}) {
-    installBunAdapters(runtime, workerUrl, options.loadTools);
+    installBunAdapters(runtime, workerUrl, options.loadTools, options.network);
   }
 
   register(name: string, entry: ExecutableRegistration): void {
@@ -117,9 +119,9 @@ export class SubprocessBroker {
 const programFiles = new WeakMap<Runtime, Promise<void>>();
 const installedAdapters = new WeakSet<Runtime>();
 /** Immutable engine-qualified registrations; concurrent runs never replace a global engine alias. */
-export function installBunAdapters(runtime: Runtime, workerUrl: string, loadTools?: () => Promise<WebAssembly.Module>): void {
+export function installBunAdapters(runtime: Runtime, workerUrl: string, loadTools?: () => Promise<WebAssembly.Module>, network?: BunNetworkOptions): void {
   if (installedAdapters.has(runtime)) return;
   installedAdapters.add(runtime);
   runtime.registerAdapter("preview1", preview1Launcher({ workerUrl }));
-  for (const engine of ["quickjs", "jsc", "browser"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, loadTools }));
+  for (const engine of ["quickjs", "jsc", "browser"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, loadTools, runtime, network }));
 }

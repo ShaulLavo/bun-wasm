@@ -11,7 +11,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
 import { decode } from "../../web/src/fs";
-import type { NetHelper } from "../../web/src/net/helper";
+import type { BunNetworkOptions, RuntimeNetworkHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
 import { createRuntime } from "waffle";
 import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../web/src/shared-fs";
@@ -196,7 +196,7 @@ const DEPS_PATH = "/.bunwasm/deps-cache";
 
 interface Server {
   port: number;
-  helper: NetHelper;
+  helper: RuntimeNetworkHelper;
   updates: Promise<void>;
 }
 
@@ -204,6 +204,23 @@ let run: Run | null = null;
 let server: Server | null = null;
 let serverRevision = 0;
 let editRevision = 0;
+let serverTiming = { started: 0, visibleStart: 0 };
+const network: BunNetworkOptions = {
+  listening: (port, helper) => {
+    previews.register(port, helper);
+    server = { port, helper, updates: Promise.resolve() };
+    measureStartup("dev-server", serverTiming.started);
+    void showPreview(server, serverTiming.visibleStart).catch(reportError);
+    for (const [path, revision] of unsent) void sendUpdate(path, revision);
+    unsent.clear();
+  },
+  stopped: (port, helper) => {
+    previews.unregister(port, helper);
+    if (server?.helper !== helper) return;
+    server = null;
+    setServerState("down", "dev server stopped · press Restart");
+  },
+};
 /** Saved while the dev server was starting (before it listens): sent once it listens. */
 const unsent = new Map<string, number>();
 
@@ -258,25 +275,13 @@ async function startDevServer(): Promise<void> {
   };
   const started = performance.now();
   const output = new StartupOutput((text) => term.write(text), startupRecord);
-  const current = startRun({ engine, module: wasm.module, args: ["./index.html"], env, runtime, moduleScope: scoped }, {
+  serverTiming = { started, visibleStart };
+  const current = startRun({ engine, module: wasm.module, args: ["./index.html"], env, runtime, moduleScope: scoped, network }, {
     phase: (name) => {
       if (name === "worker-start") setStatus("starting dev server…");
     },
     stdout: (data) => output.write(data),
     stderr: (data) => output.write(data),
-    listening: (port, helper) => {
-      if (run !== current) return;
-      previews.register(port, helper);
-      server = { port, helper, updates: Promise.resolve() };
-      measureStartup("dev-server", started);
-      void showPreview(server, visibleStart).catch(reportError);
-      for (const [path, revision] of unsent) void sendUpdate(path, revision);
-      unsent.clear();
-    },
-    stopped: (port, helper) => {
-      previews.unregister(port, helper);
-      if (server?.helper === helper) server = null;
-    },
   });
   run = current;
   const result = await current.done;
@@ -284,9 +289,8 @@ async function startDevServer(): Promise<void> {
   if (result.error) term.write(`\x1b[31m${result.error}\x1b[0m\r\n`);
   if (run !== current) return; // restarted
   run = null;
-  server = null;
   term.write(`\x1b[2m[dev server exited with code ${result.code}]\x1b[0m\r\n`);
-  setServerState("down", `dev server stopped (exit ${result.code}) · press Restart`);
+  if (!server) setServerState("down", `dev server stopped (exit ${result.code}) · press Restart`);
 }
 
 function startupRecord(line: string): boolean {
