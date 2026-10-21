@@ -93,7 +93,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`jsc/webkit-wasi.patch`, non-JIT declarations](#webkit-non-jit-declarations) | Upstream bug | Expose a required enum without DFG and add two missing includes. |
 | [`third_party/libc/src/wasi/mod.rs` and `posix_compat.rs`](#libc) | Port | Declare missing WASI POSIX types and functions. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, buffer tags](#quickjs-data-conversion) | Host feature | Query ordinary and shared buffer classes without throwing. |
-| [`third_party/rquickjs-sys/quickjs/quickjs.c`, call locations](#quickjs) | Host feature | Match JSC's call-site stack columns. |
+| [`third_party/rquickjs-sys/quickjs/quickjs.c`, call locations](#quickjs) | Host feature | Original adapter matches JSC's call-site columns in UTF-16 units. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, inspection helpers](#quickjs) | Host feature | Inspect keys and iterator entries without consuming them. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, async context](#quickjs) | Host feature | Capture and restore async context in promise reactions. |
 | [`third_party/rquickjs-sys/build.rs`](#quickjs) | Host feature | Rebuild when the locally patched C sources or binding header change. |
@@ -1073,11 +1073,32 @@ The vendored package omits upstream tests and Cargo's `.cargo_vcs_info.json`. Ot
 
 | File and area | Change | What breaks without it |
 | --- | --- | --- |
-| `quickjs/quickjs.c`, parser call locations | Record the callee, property, or constructor position after parsing arguments. | Stack frames and source maps point to QuickJS's argument position instead of Bun/JSC's call position. This is a compatibility policy, not an ECMAScript violation by QuickJS. |
+| `quickjs/quickjs.c`, parser call locations | Original adapter records the callee, property, or constructor position in UTF-16 units after parsing arguments. | Stack frames and source maps point to QuickJS's argument position instead of Bun/JSC's call position. This is a compatibility policy, not an ECMAScript violation by QuickJS. |
 | `quickjs/quickjs.c`, `JS_bunwasm_OwnKeysInOrder` | Return ordinary-object keys in JSC's inspection order, with integer keys sorted and symbols interleaved by insertion. | Bun-compatible console inspection cannot reproduce that order through `Reflect.ownKeys`. |
 | `quickjs/quickjs.c`, `JS_bunwasm_IteratorEntries` | Snapshot remaining Map/Set iterator entries without advancing the iterator. | Console inspection either lacks the entries or consumes the user's iterator. |
 | `quickjs/quickjs.c`, async context | Store and trace a context value, capture it in promise reactions, restore it for jobs, and expose get/set functions. | QuickJS `AsyncLocalStorage` loses its store across promise and await boundaries. The original engine has no obligation to implement Node's API. |
 | `build.rs` | Add rerun tracking for `quickjs` and `quickjs.bind.h`. | Local C changes can leave Cargo using a stale engine until another input invalidates it. This hook supports our fork. |
+
+The four parser call-location assignments use a cursor owned by `JSParseState` to
+count UTF-16 code units from the current line start to the selected token. The
+existing parser initializer zeros it. A changed line or backwards token resets
+it; monotonic positions on one line scan each prefix byte once with the bundled
+bounded UTF-8 decoder. Astral code points count two units, BMP characters and TAB
+one. Explicit rewinds may rescan a prefix. There is no filename/global cache,
+source-line allocation or transfer, lexer-wide coordinate change, or token
+selection change. Source-location emission, maps, CallSites and the host numeric
+stack query retain their existing roles. Genuine inspection still receives full
+source lines.
+
+`node-stack-position.test.ts` compiles the actual extracted assignments, cursor,
+initializer and bundled decoder into a small C probe. It covers state resets,
+independent parsers, line changes, rewinds, Unicode widths and bounded work on a
+large minified line. This is not a complete engine build. The shared
+`stack-source-position` fixture checks raw and formatted constructor, direct,
+identifier and property-call positions against JavaScript UTF-16 indexing and
+keeps its mapped TypeScript assertion. Standard Node's raw constructor position
+uses `new`; the existing JS regex adjustment supplies the constructor position.
+Corrected native and browser guest execution remain separate acceptance gates.
 
 No existing binding source or C header is modified. Our Rust engine declares the added functions. The vendored tree keeps Linux x86_64 and wasm32-wasip1 bindings and the C files needed by the library, dropping other targets, shell programs, tests, build tooling, and package metadata. It adds the license copy. These packaging choices do not change retained upstream implementations. Every other retained source file matches the published crate.
 

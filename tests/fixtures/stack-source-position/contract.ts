@@ -46,3 +46,29 @@ export function verifyMappedStackSource(load: (source: string, name: string) => 
   const column = line.indexOf("new") + 1;
   assert.deepEqual(load(source, "mapped.cts"), { line: 2, column: column + newTokenLength(line, column) });
 }
+
+export function verifyRawStackSources(load: (source: string, name: string) => { raw: readonly { line: number; column: number }[]; formatted: { line: number; column: number } }) {
+  const prefix = "/*😀中é*/";
+  const cases = [
+    { body: "module.exports = new\t\ufeff\u00a0Error('raw');", markers: ["Error('raw')"] },
+    { body: "module.exports = Error('raw');", markers: ["Error('raw')"] },
+    { body: "\r\n/*é😀*/module.exports = new\tError('raw');", markers: ["Error('raw')"] },
+    { body: "function fail() { return Error('raw'); } module.exports = fail();", markers: ["Error('raw')", "fail();"] },
+    { body: "const owner = { fail() { return Error('raw'); } }; module.exports = owner.fail();", markers: ["Error('raw')", "fail();"] },
+  ];
+  for (const [index, item] of cases.entries()) {
+    const source = prefix + item.body;
+    const result = load(source, `raw-${index}.cjs`);
+    const expected = item.markers.map(marker => {
+      const lines = source.slice(0, source.lastIndexOf(marker)).split("\n");
+      return { line: lines.length, column: (lines.at(-1)?.length ?? 0) + 1 };
+    });
+    const normalized = result.raw.map(site => {
+      const line = source.split("\n")[site.line - 1];
+      assert.notEqual(line, undefined);
+      return { line: site.line, column: site.column + newTokenLength(line ?? "", site.column) };
+    });
+    assert.deepEqual(normalized, expected, source);
+    assert.deepEqual(result.formatted, expected[0], source);
+  }
+}

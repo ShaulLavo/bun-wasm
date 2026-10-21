@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { nativeStackProbe, stackFormatter, stackSite } from "./node-stack-position-fixture";
+import { nativeStackProbe, quickjsColumnProbe, stackFormatter, stackSite } from "./node-stack-position-fixture";
 import { newTokenLength, tokenCases, verifyTokenLengths } from "../tests/fixtures/stack-source-position/contract";
 
 test("production stack formatting does not transfer complete minified source lines", () => {
@@ -25,10 +25,16 @@ test("production stack formatting does not transfer complete minified source lin
 
 let scratch: string | undefined;
 let probe = "";
+let columnProbe = "";
 beforeAll(() => {
   scratch = mkdtempSync(join(tmpdir(), "bun-wasm-stack-native-"));
   const source = join(scratch, "probe.rs");
   writeFileSync(source, nativeStackProbe());
+  const columnSource = join(scratch, "column-probe.c");
+  columnProbe = join(scratch, "column-probe");
+  writeFileSync(columnSource, quickjsColumnProbe());
+  const include = new URL("../third_party/rquickjs-sys/quickjs", import.meta.url).pathname;
+  execFileSync("cc", ["-std=c11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror", "-isystem", include, columnSource, "-o", columnProbe], { stdio: "pipe" });
   const tests = join(scratch, "tests");
   execFileSync("rustc", ["--edition=2024", "--test", source, "-o", tests], { stdio: "pipe" });
   console.log(execFileSync(tests, ["--test-threads=1", "--nocapture"], { encoding: "utf8" }));
@@ -95,7 +101,6 @@ test("production bootstrap consumes only numeric native results on huge lines", 
   expect(calls).toBe(64);
 });
 
-
 test("stack fixture uses its isolated launcher root without requiring a temp parent", () => {
   assert.ok(scratch);
   const root = join(scratch, "launcher-root");
@@ -109,4 +114,86 @@ test("stack fixture uses its isolated launcher root without requiring a temp par
   expect(stdout).toBe(readFileSync(join(root, "expected.txt"), "utf8"));
   expect(readdirSync(root)).toEqual(files);
   expect(existsSync(missing)).toBe(false);
+});
+
+function quickjsColumns(source: string, positions: readonly { line: number; token: number; reset?: boolean; parser?: 0 | 1 }[]) {
+  assert.ok(scratch);
+  const file = join(scratch, "column-input.js");
+  writeFileSync(file, source);
+  const input = positions.map(item => `${item.parser ?? 0} ${Number(item.reset ?? false)} ${item.line} ${item.token}`).join("\n") + "\n";
+  return execFileSync(columnProbe, [file], { input, encoding: "utf8", timeout: 30_000 }).trim().split("\n").map(line => line.split(" ").map(Number));
+}
+
+test("QuickJS call coordinates preserve UTF-16 at all four parser owners", () => {
+  const source = "/*😀𐐀*/module.exports = new\t\ufeff\u00a0Error('stack');/**/";
+  const token = Buffer.byteLength(source.slice(0, source.indexOf("Error")));
+  expect(quickjsColumns(source, [{ line: 0, token }])[0]?.slice(0, 4)).toEqual([32, 32, 32, 32]);
+});
+
+
+test("QuickJS cursor resets for parser initialization, line changes and rewinds", () => {
+  const source = "a😀bé𝄞c\r\n中d\n😀z";
+  const positions = [
+    { line: 0, token: 8 }, { line: 0, token: 8 },
+    { line: 0, token: 3 }, { line: 0, token: 8 },
+    { line: 10, token: 12 }, { line: 13, token: 15 },
+    { line: 10, token: 11 }, { line: 0, token: 4 },
+    { line: 0, token: 8, reset: true },
+    { line: 0, token: 4, parser: 1 }, { line: 0, token: 8 },
+    { line: 0, token: 8, parser: 1 }, { line: 0, token: 0, reset: true },
+  ] satisfies Parameters<typeof quickjsColumns>[1];
+  const bytes = positions.map(item => ({ ...item, line: Buffer.byteLength(source.slice(0, item.line)), token: Buffer.byteLength(source.slice(0, item.token)) }));
+  const rows = quickjsColumns(source, bytes);
+  expect(rows.map(row => row.slice(0, 4))).toEqual(positions.map(item => Array.from({ length: 4 }, () => item.token - item.line + 1)));
+  expect(rows[1]?.[4]).toBe(rows[0]?.[4]);
+  expect(rows[10]?.[4]).toBe(rows[9]?.[4]);
+});
+
+test("QuickJS cursor counts ASCII, BMP and astral codepoint widths like JavaScript", () => {
+  const characters = ["a", "\t", "\ufeff", "\u00a0", "\u0085", "\u007f", "\u07ff", "\u0800", "\ud7ff", "\ue000", "\uffff", "𐀀", "􏿿"];
+  let random = 7;
+  for (let index = 0; index < 256; index++) {
+    random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+    const codepoint = random % 0x110000;
+    if (codepoint >= 0xd800 && codepoint <= 0xdfff) continue;
+    characters.push(String.fromCodePoint(codepoint));
+  }
+  const source = characters.join("");
+  let token = 0;
+  const positions = characters.map(character => { const position = { line: 0, token }; token += Buffer.byteLength(character); return position; });
+  let column = 1;
+  const expected = characters.map(character => { const value = Array.from({ length: 4 }, () => column); column += character.length; return value; });
+  expect(quickjsColumns(source, positions).map(row => row.slice(0, 4))).toEqual(expected);
+  const ascii = "identifier();".repeat(256);
+  const asciiPositions = Array.from({ length: ascii.length + 1 }, (_, token) => ({ line: 0, token }));
+  expect(quickjsColumns(ascii, asciiPositions).map(row => row.slice(0, 4))).toEqual(asciiPositions.map(item => Array.from({ length: 4 }, () => item.token + 1)));
+});
+
+test("QuickJS monotonic minified call columns scan each requested prefix byte once", () => {
+  const prefix = "/*" + "😀中é".repeat(128 * 1024) + "*/";
+  const call = "f();/*😀é*/";
+  const count = 1024;
+  const source = prefix + call.repeat(count) + "/*" + "x".repeat(4 * 1024 * 1024) + "*/";
+  const prefixBytes = Buffer.byteLength(prefix);
+  const callBytes = Buffer.byteLength(call);
+  const positions = Array.from({ length: count }, (_, index) => ({ line: 0, token: prefixBytes + index * callBytes }));
+  const rows = quickjsColumns(source, positions);
+  expect(rows.map(row => row.slice(0, 4))).toEqual(positions.map((_, index) => Array.from({ length: 4 }, () => prefix.length + index * call.length + 1)));
+  const scanned = rows.at(-1)?.[4];
+  expect(scanned).toBe(prefixBytes + (count - 1) * callBytes);
+  console.log(JSON.stringify({ parserCallQueries: count * 4, sourceBytes: Buffer.byteLength(source), scannedBytes: scanned, unusedTailBytes: Buffer.byteLength(source) - (scanned ?? 0) }));
+});
+
+
+test("QuickJS cursor resets across every ECMAScript line separator", () => {
+  const separators = ["\n", "\r\n", "\r", "\u2028", "\u2029"];
+  const text = "é😀x";
+  const source = separators.map(separator => text + separator).join("") + text;
+  let line = 0;
+  const positions = separators.map(separator => {
+    const position = { line, token: line + Buffer.byteLength(text) };
+    line += Buffer.byteLength(text + separator);
+    return position;
+  }).concat([{ line, token: line + Buffer.byteLength(text) }, { line: 0, token: Buffer.byteLength(text) }]);
+  expect(quickjsColumns(source, positions).map(row => row.slice(0, 4))).toEqual(positions.map(() => [5, 5, 5, 5]));
 });

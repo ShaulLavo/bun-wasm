@@ -117,6 +117,7 @@ test.each([
   "tests/fixtures/fs-stream-constructors/contract.ts", "tests/fixtures/vm-context/contract.ts",
   "tests/fixtures/module-compile/index.ts", "tests/fixtures/net-http-implicit-headers/contract.ts",
   "tests/fixtures/stack-source-position/native-probe.rs", "tests/fixtures/stack-source-position/contract.ts",
+  "tests/fixtures/stack-source-position/quickjs-column-probe.c",
   "scripts/node-stack-position.test.ts", "scripts/node-stack-position-fixture.ts",
   "tests/fixtures/request-body-streams/contract.ts", "scripts/node-request-body.test.ts", "scripts/node-request-body-fixture.ts",
 ])("new native fixture input %s selects the existing native job", path => {

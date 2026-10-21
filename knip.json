@@ -97,6 +97,7 @@
     }
   },
   "ignoreBinaries": [
+    "cc",
     "rustc",
     "unshare",
     "ss",

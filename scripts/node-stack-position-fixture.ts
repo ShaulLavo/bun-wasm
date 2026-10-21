@@ -56,3 +56,28 @@ export function nativeStackProbe(): string {
     .replace("__NATIVE_BODY__", natives.slice(nativeStart, natives.indexOf("    // `Bun.build`", nativeStart)))
     .replace("__NATIVE_TEST__", section(natives, "    #[test]\n    fn stack_column_native_", "    #[test]\n    fn real_descriptors_"));
 }
+
+function quickjsAssignment(source: string, marker: string, name: string): string {
+  const start = source.indexOf(marker);
+  assert.ok(start >= 0, `QuickJS location ${marker} exists`);
+  const match = source.slice(start).match(new RegExp(`${name}\\s*=\\s*([^;]+);`));
+  assert.ok(match?.[1], `QuickJS column assignment ${name} exists`);
+  return match[1].trim();
+}
+
+export function quickjsColumnProbe(): string {
+  const source = readFileSync(new URL("../third_party/rquickjs-sys/quickjs/quickjs.c", import.meta.url), "utf8");
+  const fields = source.match(/    const uint8_t \*line_start; \/\* first character of the current line \*\/[\s\S]*?(?=    \/\* current function code \*\/)/)?.[0];
+  const init = source.match(/static void js_parse_init\([\s\S]*?\n\}/)?.[0];
+  const helper = source.match(/static int js_parse_call_column\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.ok(fields && init, "QuickJS parser fields and initializer exist");
+  return readFileSync(new URL("../tests/fixtures/stack-source-position/quickjs-column-probe.c", import.meta.url), "utf8")
+    .replace("__CURSOR_FIELDS__", fields)
+    .replace("__COLUMN_HELPER__", helper)
+    .replace("__PARSE_INIT__", init)
+    .replace("__CURSOR_INIT_ASSERTS__", helper ? "    assert(!state->call_column_line && !state->call_column_ptr && state->call_column_utf16 == 0);" : "")
+    .replace("__CALLEE_COLUMN__", quickjsAssignment(source, "int callee_line_num = s->token.line_num;", "callee_col_num"))
+    .replace("__IDENTIFIER_COLUMN__", quickjsAssignment(source, "int identifier_line_num = s->token.line_num;", "identifier_col_num"))
+    .replace("__CONSTRUCTOR_COLUMN__", quickjsAssignment(source, "/* bun-wasm: `new X()` is reported at X. */", "callee_col_num"))
+    .replace("__PROPERTY_COLUMN__", quickjsAssignment(source, "/* bun-wasm: `a.b.c()` is reported at c. */", "callee_col_num"));
+}
