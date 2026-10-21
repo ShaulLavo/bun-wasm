@@ -32,6 +32,7 @@ test("production fs adapter obeys the same real-descriptor stream contract as No
         },
         write: (fd: number, bytes: Uint8Array, position: number) => fs.writeSync(fd, bytes, 0, Math.min(bytes.length, 2), position < 0 ? null : position),
         readFile: fs.readFileSync,
+        writeFile: (path: string, bytes: Uint8Array, append: boolean) => fs.writeFileSync(path, bytes, { flag: append ? "a" : "w" }),
         fstat: fs.fstatSync,
       },
       require(name: string) { return name === "fs_watch" ? () => ({}) : require(name); },
@@ -44,7 +45,7 @@ test("production fs adapter obeys the same real-descriptor stream contract as No
     const build = await Bun.build({ entrypoints: [fixture], target: "node", format: "cjs" });
     assert.ok(build.success && build.outputs[0]);
     const module: { exports: unknown } = { exports: {} };
-    runInNewContext(await build.outputs[0].text(), { module, exports: module.exports, require, Buffer });
+    runInNewContext(await build.outputs[0].text(), { module, exports: module.exports, require, Buffer, setTimeout, clearTimeout });
     const exports = module.exports;
     assert.ok(exports && typeof exports === "object" && "verifyFilesystemStreams" in exports && typeof exports.verifyFilesystemStreams === "function");
     await exports.verifyFilesystemStreams(runtime.fs, root, streams.Stream);

@@ -952,7 +952,7 @@
     initializeFileStream(this, path, options, "w");
     this.start = options.start;
     this.bytesWritten = 0;
-    streams.Writable.call(this, { ...options, defaultEncoding: options.encoding || options.defaultEncoding, autoDestroy: this.autoClose });
+    streams.Writable.call(this, { ...options, decodeStrings: true, defaultEncoding: options.encoding || options.defaultEncoding, autoDestroy: this.autoClose });
   }
 
   function constructFileStream(callback) {
@@ -984,9 +984,7 @@
     const length = Math.min(Math.max(size, 1), this.end - (this.pos === undefined ? this.bytesRead : this.pos) + 1);
     if (length <= 0) { this.push(null); return; }
     const chunk = Buffer.allocUnsafe(length);
-    let count;
-    try { count = readSync(this.fd, chunk, 0, length, this.pos); }
-    catch (error) { this.destroy(error); return; }
+    const count = readSync(this.fd, chunk, 0, length, this.pos);
     this.bytesRead += count;
     if (this.pos !== undefined) this.pos += count;
     this.push(count === 0 ? null : chunk.subarray(0, count));
@@ -1012,11 +1010,16 @@
   };
 
   ReadStream.prototype.close = function (callback) {
-    if (callback) this.once("close", callback);
+    if (typeof callback === "function") fileStreams.finished(this, callback);
     this.destroy();
   };
   WriteStream.prototype.close = function (callback) {
+    if (callback && this.closed) {
+      internal.require("process").nextTick(callback);
+      return;
+    }
     if (callback) this.once("close", callback);
+    if (!this.autoClose) this.once("finish", () => this.destroy());
     this.end();
   };
 

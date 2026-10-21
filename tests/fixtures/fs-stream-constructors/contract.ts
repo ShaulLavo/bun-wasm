@@ -77,6 +77,7 @@ export async function verifyFilesystemStreams(fs: Filesystem, root: string, stre
   await borrowedDescriptor(fs, path);
   await inheritedStreams(fs, path, root);
   await errorAndDestroy(fs, path, root);
+  await verifyFileStreamLifecycle(fs, root);
 }
 
 async function inheritedStreams(fs: Filesystem, path: string, root: string) {
@@ -164,4 +165,129 @@ async function borrowedDescriptor(fs: Filesystem, path: string) {
   input.destroy();
   await done;
   assert.throws(() => fs.fstatSync(fd), { code: "EBADF" });
+}
+
+async function bounded<T>(pending: Promise<T>, name: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${name} did not complete`)), 2000);
+  });
+  try { return await Promise.race([pending, deadline]); }
+  finally { clearTimeout(timer); }
+}
+
+type FileStream = ReturnType<Filesystem["createReadStream"]> | ReturnType<Filesystem["createWriteStream"]>;
+
+async function closeResult(stream: FileStream) {
+  let callbacks = 0;
+  let result: unknown;
+  const pending = new Promise<void>(resolve => {
+    stream.close(error => { callbacks++; result = error; resolve(); });
+  });
+  assert.equal(callbacks, 0, "close callback is deferred");
+  await bounded(pending, "file stream close callback");
+  assert.equal(callbacks, 1);
+  return result;
+}
+
+async function explicitWriterClose(fs: Filesystem, root: string) {
+  const path = join(root, "explicit-close.txt");
+  const writer = fs.createWriteStream(path, { autoClose: false, highWaterMark: 1 });
+  const events: string[] = [];
+  for (const event of ["finish", "close"]) writer.on(event, () => events.push(event));
+  let fd: number | undefined;
+  writer.once("open", opened => { fd = opened; });
+  writer.write("abcd");
+  try {
+    assert.ifError(await closeResult(writer));
+    assert.ok(typeof fd === "number");
+    const savedFd = fd;
+    assert.deepEqual(events, ["finish", "close"]);
+    assert.equal(writer.destroyed, true);
+    assert.equal(writer.closed, true);
+    assert.equal(descriptor(writer), null);
+    assert.throws(() => fs.fstatSync(savedFd), { code: "EBADF" });
+    assert.equal(fs.readFileSync(path, "utf8"), "abcd");
+  } finally {
+    if (!writer.closed) { const done = closed(writer); writer.destroy(); await bounded(done, "explicit writer cleanup"); }
+  }
+}
+
+async function borrowedReadError(fs: Filesystem, root: string) {
+  const fd = fs.openSync(join(root, "borrowed-read-error.txt"), "w");
+  const reader = fs.createReadStream("", { fd, autoClose: false });
+  const failed = once(reader, "error");
+  reader.resume();
+  try {
+    const [error] = await bounded(failed, "borrowed read error");
+    assert.ok(error && typeof error === "object" && "code" in error);
+    assert.equal(error.code, "EBADF");
+    assert.equal(reader.destroyed, false);
+    assert.equal(reader.closed, false);
+    assert.equal(descriptor(reader), fd);
+    fs.fstatSync(fd);
+    assert.equal(fs.writeSync(fd, "!"), 1);
+  } finally {
+    if (!reader.closed) { const done = closed(reader); reader.destroy(); await bounded(done, "borrowed reader cleanup"); }
+  }
+  assert.throws(() => fs.fstatSync(fd), { code: "EBADF" });
+}
+
+async function closeAfterDestroy(fs: Filesystem, root: string) {
+  const path = join(root, "close-again.txt");
+  fs.writeFileSync(path, "abcd");
+  const writer = fs.createWriteStream(path);
+  const written = closed(writer);
+  writer.destroy();
+  await bounded(written, "premature writer destroy");
+  assert.ifError(await closeResult(writer));
+  const reader = fs.createReadStream(path);
+  const read = closed(reader);
+  reader.destroy();
+  await bounded(read, "premature reader destroy");
+  const error = await closeResult(reader);
+  assert.ok(error && typeof error === "object" && "code" in error);
+  assert.equal(error.code, "ERR_STREAM_PREMATURE_CLOSE");
+  const ended = fs.createReadStream(path);
+  const endedClosed = closed(ended);
+  ended.resume();
+  await bounded(endedClosed, "completed reader");
+  assert.ifError(await closeResult(ended));
+}
+
+function assertBufferedWrites(stream: ReturnType<Filesystem["createWriteStream"]>) {
+  const write = stream._write;
+  stream._write = function (chunk, encoding, callback) {
+    assert.ok(Buffer.isBuffer(chunk), "filesystem _write receives bytes even with decodeStrings false");
+    write.call(this, chunk, encoding, callback);
+  };
+}
+
+async function byteBufferInvariant(fs: Filesystem, root: string) {
+  const path = join(root, "decode-position.txt");
+  fs.writeFileSync(path, "abcdef");
+  const options = { flags: "r+", start: 2, decodeStrings: false };
+  const positioned = fs.createWriteStream(path, options);
+  assertBufferedWrites(positioned);
+  const positionedClosed = once(positioned, "close");
+  positioned.end("XY");
+  await bounded(positionedClosed, "positioned string write");
+  assert.equal(fs.readFileSync(path, "utf8"), "abXYef");
+  assert.equal(positioned.bytesWritten, 2);
+  const partialPath = join(root, "decode-partial.txt");
+  const partialOptions = { flags: "w", decodeStrings: false };
+  const partial = fs.createWriteStream(partialPath, partialOptions);
+  assertBufferedWrites(partial);
+  const partialClosed = once(partial, "close");
+  partial.end("abcdé");
+  await bounded(partialClosed, "partial string write");
+  assert.equal(fs.readFileSync(partialPath, "utf8"), "abcdé");
+  assert.equal(partial.bytesWritten, 6);
+}
+
+export async function verifyFileStreamLifecycle(fs: Filesystem, root: string) {
+  await explicitWriterClose(fs, root);
+  await borrowedReadError(fs, root);
+  await closeAfterDestroy(fs, root);
+  await byteBufferInvariant(fs, root);
 }
