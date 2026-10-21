@@ -8,10 +8,29 @@ export function closedPreviewPolicy(reason: string, upstream?: Response): Respon
     "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp",
   } });
 }
-export async function previewPolicyResponse(response: Response | Promise<Response>, request: Request, state: PreviewPolicyState): Promise<Response> {
+const redirectStatuses = [301, 302, 303, 307, 308];
+export type PreviewPolicyRefusal = { requestURL: string; redirectURL: string; method: string; reason: string };
+
+function redirectRefusal(upstream: Response, request: Request): PreviewPolicyRefusal | null {
+  const location = upstream.headers.get("location");
+  if (!location || !redirectStatuses.includes(upstream.status)) return null;
+  let target: URL;
+  try { target = new URL(location, request.url); }
+  catch { return { requestURL: request.url, redirectURL: location, method: request.method, reason: "Invalid redirect Location" }; }
+  if (target.origin === new URL(request.url).origin) return null;
+  return { requestURL: request.url, redirectURL: target.href, method: request.method, reason: "Off-origin redirect is forbidden by preview policy" };
+}
+
+export async function previewPolicyResponse(response: Response | Promise<Response>, request: Request, state: PreviewPolicyState, onRefusal?: (entry: PreviewPolicyRefusal) => void): Promise<Response> {
   const upstream = await response;
   if (state.kind === "none") return upstream;
   if (state.kind === "invalid") return closedPreviewPolicy(state.reason, upstream);
+  const refusal = redirectRefusal(upstream, request);
+  if (refusal) {
+    onRefusal?.(refusal);
+    return closedPreviewPolicy(refusal.reason, upstream);
+  }
+  if (upstream.headers.has("location") && redirectStatuses.includes(upstream.status)) return upstream;
   const type = upstream.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   const html = type === "text/html";
   const charset = /charset\s*=\s*["']?([^;"'\s]+)/i.exec(upstream.headers.get("content-type") ?? "")?.[1]?.toLowerCase();

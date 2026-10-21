@@ -22,7 +22,7 @@ export function parsePreviewDocumentPolicy(value: unknown, origin: string): Prev
   const script = new URL(value.bootstrapURL, origin);
   if (script.origin !== origin || script.username || script.password || script.search || script.hash) throw new Error("Preview bootstrap must be same-origin");
   const scriptPath = canonicalPath(script.pathname, origin);
-  if (script.href !== value.bootstrapURL) throw new Error("Preview bootstrap URL must be canonical and absolute");
+  if (script.href !== value.bootstrapURL || script.href !== script.origin + scriptPath) throw new Error("Preview bootstrap URL must be canonical and absolute");
   if (!("hostResourcePaths" in value) || !Array.isArray(value.hostResourcePaths)) throw new Error("Missing host resource paths");
   const hostResourcePaths = value.hostResourcePaths.map(path => canonicalPath(path, origin));
   if (!hostResourcePaths.includes(scriptPath) || new Set(hostResourcePaths).size !== hostResourcePaths.length) throw new Error("Invalid bootstrap host resource declaration");

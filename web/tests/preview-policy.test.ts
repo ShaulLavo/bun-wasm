@@ -16,19 +16,23 @@ beforeAll(async () => {
 });
 afterAll(async () => { if (directory) await rm(directory, { recursive: true, force: true }); });
 
-function worker(base: string, mount: string, contentType = "text/html", encoding?: string, policy?: unknown) {
+function worker(base: string, mount: string, contentType = "text/html", encoding?: string, policy?: unknown, redirect?: string) {
   const handlers = new Map<string, (event: any) => void>();
   const cached = new Map<string, Response>();
   const requests: string[] = [];
   const cacheWrites: string[] = [];
+  const auditMessages: unknown[] = [];
+  const auditChannels: string[] = [];
+  let closedChannels = 0;
   const scope = `${base}${mount}/`;
   const page = {
     url: `${base}index.html`,
     postMessage(_ask: unknown, ports: MessagePort[]) {
       const port = ports[0]!;
       const headers = [["content-type", contentType]];
+      if (redirect) headers.push(["location", redirect]);
       if (encoding) headers.push(["content-encoding", encoding]);
-      port.postMessage({ type: "head", status: 200, statusText: "OK", headers });
+      port.postMessage({ type: "head", status: redirect ? 302 : 200, statusText: redirect ? "Found" : "OK", headers });
       port.postMessage({ type: "data", chunk: new TextEncoder().encode("<!doctype html><html>preview</html>") });
       port.postMessage({ type: "end" });
       port.close();
@@ -47,10 +51,15 @@ function worker(base: string, mount: string, contentType = "text/html", encoding
       }; },
     },
     async fetch(request: Request | string) { requests.push(typeof request === "string" ? request : request.url); return new Response("app chunk"); },
+    BroadcastChannel: class {
+      constructor(name: string) { auditChannels.push(name); }
+      postMessage(value: unknown) { auditMessages.push(value); }
+      close() { closedChannels++; }
+    },
     URL, Response, Request, Headers, ReadableStream, TextEncoder, TextDecoder, MessageChannel, Uint8Array, setTimeout, clearTimeout,
   });
   return {
-    cached, requests, cacheWrites,
+    cached, requests, cacheWrites, auditMessages, auditChannels, closedChannels: () => closedChannels,
     install() { handlers.get("install")!({}); },
     fetch(path: string, clientId = "", method = "GET"): Promise<Response> | undefined {
       let response: Promise<Response> | undefined;
@@ -136,3 +145,18 @@ test("invalid policy in built worker refuses preview before guest routing", asyn
   expect(await response?.text()).toContain("Invalid requested preview policy");
   expect(sw.requests).toEqual([]);
 });
+
+for (const base of ["https://example.test/", "https://example.test/nested/app/"]) {
+  test(`built worker refuses and audits redirect before browser handoff at ${base}`, async () => {
+    const script = new URL("policy.js", base);
+    const policy = { contentSecurityPolicy: "connect-src 'self'", bootstrapURL: script.href, hostResourcePaths: [script.pathname] };
+    const sw = worker(base, "__preview", "text/html", undefined, policy, "https://example.invalid/review-redirect");
+    const response = await sw.fetch("__preview/8123/redirect");
+    expect(response?.status).toBe(502);
+    expect(response?.headers.has("location")).toBe(false);
+    expect(await response?.text()).toContain("Off-origin redirect");
+    expect(sw.auditChannels).toEqual([`bunwasm-preview-policy:${base}__preview/`]);
+    expect(sw.closedChannels()).toBe(1);
+    expect(sw.auditMessages).toEqual([{ type: "bunwasm-preview-policy-refused", scope: `${base}__preview/`, refusal: { requestURL: `${base}__preview/8123/redirect`, redirectURL: "https://example.invalid/review-redirect", method: "GET", reason: "Off-origin redirect is forbidden by preview policy" } }]);
+  });
+}

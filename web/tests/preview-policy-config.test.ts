@@ -79,3 +79,48 @@ test("upstream stream errors never emit unguarded bytes", async () => {
   const body = new ReadableStream<Uint8Array>({ start(controller) { controller.error(new Error("fixture stream failed")); } });
   await expect(new Response(prependPreviewScript(body, policy.bootstrapURL)).text()).rejects.toThrow("fixture stream failed");
 });
+
+test("bootstrap descriptors reject empty and nonempty query and fragment suffixes", () => {
+  for (const suffix of ["?", "#", "?x=1", "#fragment"]) {
+    const requested = { ...policy, bootstrapURL: policy.bootstrapURL + suffix };
+    expect(() => parsePreviewDocumentPolicy(requested, origin)).toThrow();
+    expect(readPreviewWorkerPolicy(previewWorkerURL(origin, requested)).kind).toBe("invalid");
+  }
+});
+
+test("configured redirects refuse resolved off-origin locations and audit before delivery", async () => {
+  for (const status of [301, 302, 303, 307, 308]) {
+    let cancelled = false;
+    const audits: unknown[] = [];
+    const body = new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } });
+    const upstream = new Response(body, { status, headers: { location: "//example.invalid/review-redirect", "content-type": "text/html" } });
+    const request = new Request(origin + "/app/__preview/43100/redirect");
+    const result = await previewPolicyResponse(upstream, request, state, entry => { audits.push(entry); });
+    expect(result.status).toBe(502);
+    expect(result.headers.has("location")).toBe(false);
+    expect(await result.text()).toContain("Off-origin redirect");
+    expect(cancelled).toBe(true);
+    expect(audits).toEqual([{ requestURL: request.url, redirectURL: "https://example.invalid/review-redirect", method: "GET", reason: "Off-origin redirect is forbidden by preview policy" }]);
+  }
+});
+
+test("same-origin relative redirects preserve status, Location, body and guest headers", async () => {
+  for (const location of ["../permitted", "/app/__preview/43100/permitted", origin + "/app/__preview/43100/permitted"]) {
+    const upstream = new Response("redirect body", { status: 302, statusText: "Found", headers: { location, "x-guest": "preserved" } });
+    const result = await previewPolicyResponse(upstream, new Request(origin + "/app/__preview/43100/sub/redirect"), state);
+    expect(result.status).toBe(302);
+    expect(result.statusText).toBe("Found");
+    expect(result.headers.get("location")).toBe(location);
+    expect(result.headers.get("x-guest")).toBe("preserved");
+    expect(await result.text()).toBe("redirect body");
+  }
+  const upstream = new Response(null, { status: 302, headers: { location: "https://example.invalid/unconfigured" } });
+  expect(await previewPolicyResponse(upstream, new Request(origin), { kind: "none" })).toBe(upstream);
+});
+
+test("same-origin redirects without a document content type retain response identity", async () => {
+  const response = new Response(null, { status: 302, headers: { location: "./permitted", "x-guest": "preserved" } });
+  const request = new Request(origin + "/app/__preview/43100/redirect");
+  Object.defineProperty(request, "destination", { value: "document" });
+  expect(await previewPolicyResponse(response, request, state)).toBe(response);
+});

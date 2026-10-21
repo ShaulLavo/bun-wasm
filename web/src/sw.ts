@@ -13,7 +13,7 @@
 // `/style.css`) go to the same port.
 
 import { isPreviewHostResource, readPreviewWorkerPolicy } from "./preview-policy";
-import { closedPreviewPolicy, previewPolicyResponse } from "./preview-policy-response";
+import { closedPreviewPolicy, previewPolicyResponse, type PreviewPolicyRefusal } from "./preview-policy-response";
 import { createPreviewServiceWorker } from "waffle/browser/service-worker";
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
@@ -56,8 +56,15 @@ sw.addEventListener("fetch", event => {
     return;
   }
   const response = previews.fetch(event.request, event.clientId);
-  if (response) event.respondWith(previewPolicyResponse(response, event.request, documentPolicy));
+  if (response) event.respondWith(previewPolicyResponse(response, event.request, documentPolicy, auditPolicyRefusal));
 });
+
+function auditPolicyRefusal(refusal: PreviewPolicyRefusal): void {
+  const scope = sw.registration.scope;
+  const channel = new BroadcastChannel(`bunwasm-preview-policy:${scope}`);
+  try { channel.postMessage({ type: "bunwasm-preview-policy-refused", scope, refusal }); }
+  finally { channel.close(); }
+}
 
 /** `m/<run>/<key>`: a module the worker stored; anything else: the app file of that name. */
 async function moduleScope(request: Request, rest: string): Promise<Response> {
