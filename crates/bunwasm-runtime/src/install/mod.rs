@@ -218,7 +218,9 @@ fn execute(
                 format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()).as_bytes(),
             )?;
         }
-        if !opts.production && fs::read_to_string("bun.lock").ok().as_deref() != Some(lock.as_str())
+        if !opts.frozen
+            && !opts.production
+            && fs::read_to_string("bun.lock").ok().as_deref() != Some(lock.as_str())
         {
             io::write(Path::new("bun.lock"), lock.as_bytes())?;
             eprintln!("Saved lockfile");
@@ -521,7 +523,7 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> Result<String> {
         workspaces[path.as_ref()] = migration::workspace_meta(&member.meta, false);
     }
     let mut packages = serde_json::Map::new();
-    for (key, package) in &resolver.packages {
+    for (key, package) in resolver.packages.iter().chain(&resolver.skipped) {
         let original = package
             .source_chain
             .as_ref()
@@ -1076,3 +1078,6 @@ fn package_binary(
         .map(|(_, file)| base.join(file))
         .filter(|file| file.is_file()))
 }
+
+#[cfg(test)]
+mod lockfile_tests;

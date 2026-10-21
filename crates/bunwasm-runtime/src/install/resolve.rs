@@ -159,6 +159,7 @@ enum LockLookup {
 
 pub struct Resolver {
     pub packages: BTreeMap<String, Package>,
+    pub skipped: BTreeMap<String, Package>,
     pub registry: io::Registry,
     pub locked: Value,
     pub refresh: bool,
@@ -173,6 +174,7 @@ impl Resolver {
     pub fn new(registry: io::Registry, locked: Value, refresh: bool) -> Self {
         Self {
             packages: BTreeMap::new(),
+            skipped: BTreeMap::new(),
             registry,
             locked,
             refresh,
@@ -197,7 +199,98 @@ impl Resolver {
             let package = self.packages[&key].clone();
             self.children(&package)?;
         }
+        self.select_platform(manifest)
+    }
+
+    fn select_platform(&mut self, manifest: &Value) -> Result<()> {
+        let mut pending: VecDeque<_> = dependencies(manifest, self.production, true)
+            .into_keys()
+            .chain(self.workspaces.keys().cloned())
+            .collect();
+        let mut active = BTreeSet::new();
+        while let Some(key) = pending.pop_front() {
+            if active.contains(&key) {
+                continue;
+            }
+            let Some(children) = self.platform_children(&key)? else {
+                continue;
+            };
+            active.insert(key);
+            pending.extend(children);
+        }
+        let (packages, skipped) = std::mem::take(&mut self.packages)
+            .into_iter()
+            .partition(|(key, _)| active.contains(key));
+        self.packages = packages;
+        self.skipped = skipped;
         Ok(())
+    }
+
+    fn platform_children(&mut self, key: &str) -> Result<Option<Vec<String>>> {
+        let Some(package) = self.packages.get(key).cloned() else {
+            return Ok(None);
+        };
+        let compatible = match self.package_compatible(&package) {
+            Ok(compatible) => compatible,
+            Err(error) if package.optional => {
+                eprintln!(
+                    "warn: optional dependency {}: {}",
+                    package.name,
+                    self.registry.redact(&error)
+                );
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        if !compatible {
+            if package.optional {
+                return Ok(None);
+            }
+            return Err(format!(
+                "{}@{} is not compatible with linux/wasm32",
+                package.name, package.version
+            ));
+        }
+        let workspace = package.local.as_ref().is_some_and(|local| local.workspace);
+        Ok(Some(
+            dependencies(&package.meta, self.production, workspace)
+                .into_keys()
+                .filter_map(|name| self.dependency_key(&package, &name))
+                .collect(),
+        ))
+    }
+
+    fn package_compatible(&mut self, package: &Package) -> Result<bool> {
+        let meta = &package.meta;
+        if package.source_chain.is_none() {
+            return Ok(compatible(meta));
+        }
+        for (field, target) in [("os", "linux"), ("cpu", "wasm32")] {
+            if meta[field] != "none" && !compatible_field(&meta[field], target) {
+                return Ok(false);
+            }
+        }
+        if meta["os"] != "none" && meta["cpu"] != "none" {
+            return Ok(true);
+        }
+        self.load_packument(&package.name)?;
+        let metadata = self.packuments[&package.name]["versions"]
+            .get(&package.version)
+            .filter(|meta| meta.is_object())
+            .ok_or("Locked version is missing from registry metadata")?;
+        Ok(compatible(metadata))
+    }
+
+    fn dependency_key(&self, parent: &Package, name: &str) -> Option<String> {
+        for level in (0..=parent.chain.len()).rev() {
+            let mut chain = parent.chain[..level].to_vec();
+            chain.push(name.into());
+            let key = chain.join("/");
+            if self.packages.contains_key(&key) {
+                return Some(key);
+            }
+        }
+        None
     }
 
     fn children(&mut self, parent: &Package) -> Result<()> {
@@ -406,18 +499,7 @@ impl Resolver {
         {
             return Ok(package);
         }
-        if !self.packuments.contains_key(name) {
-            let encoded = name.replace('/', "%2f");
-            let bytes = io::fetch(
-                &format!("{}/{encoded}", self.registry.url),
-                false,
-                self.refresh,
-                &self.registry,
-            )?;
-            let meta = serde_json::from_slice(&bytes)
-                .map_err(|e| format!("Invalid registry response for {name}: {e}"))?;
-            self.packuments.insert(name.into(), meta);
-        }
+        self.load_packument(name)?;
         let packument = &self.packuments[name];
         let range = packument["dist-tags"][range].as_str().unwrap_or(range);
         let versions = packument["versions"]
@@ -436,11 +518,6 @@ impl Resolver {
             return self.package(replacement, &version, chain, optional, lookup);
         }
         let meta = versions[version].clone();
-        if !compatible(&meta) {
-            return Err(format!(
-                "{name}@{version} is not compatible with wasm32-wasip1"
-            ));
-        }
         let tarball = io::source_url(
             meta["dist"]["tarball"]
                 .as_str()
@@ -458,6 +535,22 @@ impl Resolver {
             integrity,
             optional,
         })
+    }
+
+    fn load_packument(&mut self, name: &str) -> Result<()> {
+        if !self.packuments.contains_key(name) {
+            let encoded = name.replace('/', "%2f");
+            let bytes = io::fetch(
+                &format!("{}/{encoded}", self.registry.url),
+                false,
+                self.refresh,
+                &self.registry,
+            )?;
+            let meta = serde_json::from_slice(&bytes)
+                .map_err(|e| format!("Invalid registry response for {name}: {e}"))?;
+            self.packuments.insert(name.into(), meta);
+        }
+        Ok(())
     }
 
     fn local_package(&self, name: &str, range: &str) -> Result<Option<Local>> {
@@ -650,23 +743,35 @@ fn package_integrity(meta: &Value) -> Result<String> {
 }
 
 fn compatible(meta: &Value) -> bool {
-    compatible_field(&meta["os"], "wasi") && compatible_field(&meta["cpu"], "wasm32")
+    compatible_field(&meta["os"], "linux") && compatible_field(&meta["cpu"], "wasm32")
 }
 
 fn compatible_field(field: &Value, value: &str) -> bool {
+    if let Some(rule) = field.as_str() {
+        return rule == "any"
+            || rule
+                .strip_prefix('!')
+                .map_or(rule == value, |deny| deny != value);
+    }
     let Some(values) = field.as_array() else {
         return true;
     };
-    if values
-        .iter()
-        .any(|v| v.as_str() == Some(&format!("!{value}")))
-    {
-        return false;
+    if values.len() == 1 && values[0] == "any" {
+        return true;
     }
-    !values
-        .iter()
-        .any(|v| !v.as_str().unwrap_or("").starts_with('!'))
-        || values.iter().any(|v| v == value || v == "any")
+    let mut positive = false;
+    let mut matched = false;
+    for rule in values.iter().filter_map(Value::as_str) {
+        if rule.strip_prefix('!') == Some(value) {
+            return false;
+        }
+        if rule.starts_with('!') {
+            continue;
+        }
+        positive = true;
+        matched |= rule == value;
+    }
+    !positive || matched
 }
 
 pub fn lock_info(meta: &Value) -> Value {
@@ -708,3 +813,7 @@ pub fn lock_info(meta: &Value) -> Value {
     }
     info
 }
+
+#[cfg(test)]
+#[path = "platform_tests.rs"]
+mod platform_tests;
