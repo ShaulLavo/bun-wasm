@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { existsSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 
-const require = createRequire(import.meta.url);
+const require = createRequire(`${process.cwd()}/package.json`);
 const fs: unknown = require("node:fs");
 assert.ok(fs && typeof fs === "object");
 const webpack: unknown = require("next/dist/compiled/webpack/webpack");
@@ -42,10 +43,10 @@ async function probe(filesystem: object, method: string, path: string) {
   }
 }
 
-const output = "/home/user/webpack-cache-constructor-probe";
+const output = "/tmp/webpack-cache-constructor-probe";
 try {
   await probe(intermediate, "createWriteStream", output);
-  await probe(intermediate, "createReadStream", "/home/user/package.json");
+  await probe(intermediate, "createReadStream", join(process.cwd(), "package.json"));
 } finally { if (existsSync(output)) unlinkSync(output); }
 
 assert.equal(failures, 0, "Published graceful-fs read and write constructors must succeed");

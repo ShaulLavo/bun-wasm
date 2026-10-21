@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 
-const require = createRequire(import.meta.url);
+const require = createRequire(`${process.cwd()}/package.json`);
 const name = "@next/swc-wasm-nodejs";
 const resolved = require.resolve(name);
 const expectedSource = "const value: number = 42;";
@@ -17,7 +17,7 @@ function transform(compiler: unknown) {
 
 const required: unknown = require(name);
 const rows: { kind: string; specifier: string; code: string }[] = [{ kind: "require", specifier: resolved, code: transform(required) }];
-for (const specifier of [name, pathToFileURL(resolved).href]) {
+for (const specifier of [resolved, pathToFileURL(resolved).href]) {
   const imported: unknown = await import(specifier);
   rows.push({ kind: "import", specifier, code: transform(imported) });
 }
