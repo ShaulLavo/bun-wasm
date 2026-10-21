@@ -73,6 +73,57 @@
   }
   memoryUsage.rss = () => native.memoryUsage().rss;
 
+  function validateCursorCallback(callback) {
+    if (callback === undefined || typeof callback === "function") return;
+    throw Object.assign(new TypeError('The "callback" argument must be of type function'), { code: "ERR_INVALID_ARG_TYPE" });
+  }
+
+  function clearLine(direction, callback) {
+    validateCursorCallback(callback);
+    const mode = direction < 0 ? 1 : direction > 0 ? 0 : 2;
+    return this.write(`\x1b[${mode}K`, callback);
+  }
+
+  function clearScreenDown(callback) {
+    validateCursorCallback(callback);
+    return this.write("\x1b[0J", callback);
+  }
+
+  function cursorTo(x, y, callback) {
+    validateCursorCallback(callback);
+    if (typeof y === "function") {
+      callback = y;
+      y = undefined;
+    }
+    if (Number.isNaN(x) || Number.isNaN(y)) {
+      const name = Number.isNaN(x) ? "x" : "y";
+      throw Object.assign(new TypeError(`The argument '${name}' is invalid. Received NaN`), { code: "ERR_INVALID_ARG_VALUE" });
+    }
+    if (typeof x !== "number" && typeof y !== "number") {
+      if (callback) internal.nextTick(callback, null);
+      return true;
+    }
+    if (typeof x !== "number") {
+      throw Object.assign(new TypeError("Cannot set cursor row without setting its column"), { code: "ERR_INVALID_CURSOR_POS" });
+    }
+    const sequence = typeof y === "number" ? `\x1b[${y + 1};${x + 1}H` : `\x1b[${x + 1}G`;
+    return this.write(sequence, callback);
+  }
+
+  function moveCursor(dx, dy, callback) {
+    validateCursorCallback(callback);
+    if (!dx && !dy) {
+      if (callback) internal.nextTick(callback, null);
+      return true;
+    }
+    let sequence = "";
+    if (dx < 0) sequence += `\x1b[${-dx}D`;
+    if (dx > 0) sequence += `\x1b[${dx}C`;
+    if (dy < 0) sequence += `\x1b[${-dy}A`;
+    if (dy > 0) sequence += `\x1b[${dy}B`;
+    return this.write(sequence, callback);
+  }
+
   // stdout/stderr: synchronous writers with the bits of the stream API that
   // CLI programs actually touch.
   function makeWriter(fd) {
@@ -126,6 +177,10 @@
       setDefaultEncoding() {
         return stream;
       },
+      clearLine,
+      clearScreenDown,
+      cursorTo,
+      moveCursor,
       getColorDepth: () => (stream.isTTY ? 8 : 1),
       hasColors: () => stream.isTTY,
       getWindowSize: () => [stream.columns, stream.rows],
