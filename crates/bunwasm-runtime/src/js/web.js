@@ -1030,8 +1030,22 @@
     return chunk;
   }
 
-  async function* requestBodyChunks(body) {
-    for await (const chunk of body) yield requestBodyChunk(chunk);
+  function requestBodyChunks(body) {
+    const iterator = body[Symbol.asyncIterator]();
+    if (iterator === null || (typeof iterator !== "object" && typeof iterator !== "function")) throw new TypeError("Expected an async iterator object");
+    const next = iterator.next;
+    return {
+      async next() {
+        const result = await next.call(iterator);
+        if (result.done) return result;
+        return { done: false, value: requestBodyChunk(result.value) };
+      },
+      return() {
+        const close = iterator.return;
+        return close == null ? Promise.resolve({ done: true }) : close.call(iterator);
+      },
+      [Symbol.asyncIterator]() { return this; },
+    };
   }
 
   function requestBody(body) {

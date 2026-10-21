@@ -97,6 +97,50 @@ async function verifyCancellation(create: CreateRequest) {
   await consumed(request);
 }
 
+function trackedBody() {
+  const state = { acquired: 0, next: 0, returned: 0 };
+  const iterator = {
+    next() { state.next += 1; return Promise.resolve({ done: false, value: encoder.encode("first") }); },
+    return() { state.returned += 1; return Promise.resolve({ done: true }); },
+  };
+  const body = { [Symbol.asyncIterator]() { state.acquired += 1; return iterator; } };
+  return { state, body };
+}
+
+async function verifyUnreadCancellation(create: CreateRequest) {
+  const { state, body } = trackedBody();
+  const request = create(body);
+  assert.deepEqual(state, { acquired: 1, next: 0, returned: 0 }, "construction acquires the source without pulling");
+  const stream = object(Reflect.get(request, "body"));
+  await call(stream, "cancel", ["stop before reading"]);
+  assert.deepEqual(state, { acquired: 1, next: 0, returned: 1 }, "unread cancellation returns the original iterator");
+  await call(stream, "cancel", ["already closed"]);
+  assert.equal(state.returned, 1, "repeated cancellation returns only once");
+  await consumed(request);
+}
+
+function verifyAcquisitionError(create: CreateRequest) {
+  const failure = new Error("iterator acquisition failed");
+  assert.throws(() => create({ [Symbol.asyncIterator]() { throw failure; } }), error => error === failure);
+}
+
+async function verifyNodeCancellation(create: CreateRequest) {
+  const unread = new Readable({ read() { this.push(encoder.encode("first")); } });
+  const read = new Readable({ read() { this.push(encoder.encode("first")); } });
+  try {
+    await call(object(Reflect.get(create(unread), "body")), "cancel", ["unread"]);
+    assert.equal(unread.destroyed, false, "Node does not destroy its unstarted Readable iterator");
+    const reader = object(call(object(Reflect.get(create(read), "body")), "getReader"));
+    await call(reader, "read");
+    await call(reader, "cancel", ["read"]);
+    call(reader, "releaseLock");
+    assert.equal(read.destroyed, true, "cancellation after reading tears down the Node Readable");
+  } finally {
+    unread.destroy();
+    read.destroy();
+  }
+}
+
 function webBody(bytes: Uint8Array): object {
   return new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } });
 }
@@ -124,6 +168,9 @@ export async function verifyRequestBodies(create: CreateRequest, makeStream = we
   await verifyClone(create);
   await verifyErrors(create);
   await verifyCancellation(create);
+  await verifyUnreadCancellation(create);
+  verifyAcquisitionError(create);
+  await verifyNodeCancellation(create);
   for (const method of ["GET", "HEAD"]) assert.throws(() => create(Readable.from([bytes]), method), { name: "TypeError" });
 }
 
