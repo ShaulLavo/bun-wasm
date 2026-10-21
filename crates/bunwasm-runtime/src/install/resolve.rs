@@ -19,7 +19,6 @@ pub struct Package {
     pub chain: Vec<String>,
     pub source_chain: Option<Vec<String>>,
     pub meta: Value,
-    platform: Option<Value>,
     pub integrity: String,
     pub tarball: String,
     pub local: Option<Local>,
@@ -227,11 +226,23 @@ impl Resolver {
         Ok(())
     }
 
-    fn platform_children(&self, key: &str) -> Result<Option<Vec<String>>> {
-        let Some(package) = self.packages.get(key) else {
+    fn platform_children(&mut self, key: &str) -> Result<Option<Vec<String>>> {
+        let Some(package) = self.packages.get(key).cloned() else {
             return Ok(None);
         };
-        if !compatible(package.platform.as_ref().unwrap_or(&package.meta)) {
+        let compatible = match self.package_compatible(&package) {
+            Ok(compatible) => compatible,
+            Err(error) if package.optional => {
+                eprintln!(
+                    "warn: optional dependency {}: {}",
+                    package.name,
+                    self.registry.redact(&error)
+                );
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        if !compatible {
             if package.optional {
                 return Ok(None);
             }
@@ -244,9 +255,30 @@ impl Resolver {
         Ok(Some(
             dependencies(&package.meta, self.production, workspace)
                 .into_keys()
-                .filter_map(|name| self.dependency_key(package, &name))
+                .filter_map(|name| self.dependency_key(&package, &name))
                 .collect(),
         ))
+    }
+
+    fn package_compatible(&mut self, package: &Package) -> Result<bool> {
+        let meta = &package.meta;
+        if package.source_chain.is_none() {
+            return Ok(compatible(meta));
+        }
+        for (field, target) in [("os", "linux"), ("cpu", "wasm32")] {
+            if meta[field] != "none" && !compatible_field(&meta[field], target) {
+                return Ok(false);
+            }
+        }
+        if meta["os"] != "none" && meta["cpu"] != "none" {
+            return Ok(true);
+        }
+        self.load_packument(&package.name)?;
+        let metadata = self.packuments[&package.name]["versions"]
+            .get(&package.version)
+            .filter(|meta| meta.is_object())
+            .ok_or("Locked version is missing from registry metadata")?;
+        Ok(compatible(metadata))
     }
 
     fn dependency_key(&self, parent: &Package, name: &str) -> Option<String> {
@@ -456,7 +488,6 @@ impl Resolver {
                 chain,
                 source_chain: None,
                 meta: local.meta.clone(),
-                platform: None,
                 integrity: String::new(),
                 tarball: String::new(),
                 optional,
@@ -464,16 +495,8 @@ impl Resolver {
             });
         }
         if matches!(lookup, LockLookup::Use)
-            && let Some(mut package) = self.resolve_from_lock(name, range, &chain, optional)
+            && let Some(package) = self.resolve_from_lock(name, range, &chain, optional)
         {
-            if package.meta["os"] == "none" || package.meta["cpu"] == "none" {
-                self.load_packument(&package.name)?;
-                let meta = self.packuments[&package.name]["versions"]
-                    .get(&package.version)
-                    .filter(|meta| meta.is_object())
-                    .ok_or("Locked version is missing from registry metadata")?;
-                package.platform = Some(json!({"os": meta["os"], "cpu": meta["cpu"]}));
-            }
             return Ok(package);
         }
         self.load_packument(name)?;
@@ -507,7 +530,6 @@ impl Resolver {
             chain,
             source_chain: None,
             meta,
-            platform: None,
             tarball,
             local: None,
             integrity,
@@ -637,7 +659,6 @@ impl Resolver {
             chain: chain.to_vec(),
             source_chain: Some(chain.to_vec()),
             meta,
-            platform: None,
             tarball,
             local: None,
             integrity: row[3].as_str()?.into(),

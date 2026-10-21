@@ -269,3 +269,68 @@ fn lossy_lock_platforms_use_exact_registry_metadata_without_rewriting_lock() {
         super::super::write_lock(&resolver.locked, &resolver.registry).unwrap()
     );
 }
+
+fn lossy_optional_lock() -> (Resolver, Value) {
+    let (mut resolver, manifest) = fixture(true, false);
+    resolver.registry =
+        io::Registry::new("http://registry.invalid/platform-recovery-unavailable").unwrap();
+    resolver.locked["packages"]["foreign"][2]["os"] = "linux".into();
+    resolver.locked["packages"]["foreign"][2]["cpu"] = "none".into();
+    resolver.locked["packages"]["foreign-child"][2]["cpu"] = "none".into();
+    resolver.packuments.remove("foreign");
+    resolver.packuments.remove("foreign-child");
+    (resolver, manifest)
+}
+
+fn assert_optional_lock_preserved(mut resolver: Resolver, manifest: &Value) {
+    let expected = super::super::write_lock(&resolver.locked, &resolver.registry).unwrap();
+    resolver.resolve(manifest, false).unwrap();
+    assert_eq!(lockfile(manifest, &resolver).unwrap(), expected);
+    assert_eq!(
+        resolver.packages.keys().cloned().collect::<Vec<_>>(),
+        ["compatible", "neutral"]
+    );
+    assert_eq!(
+        resolver.skipped.keys().cloned().collect::<Vec<_>>(),
+        ["foreign", "foreign-child"]
+    );
+}
+
+#[test]
+fn unavailable_optional_platform_metadata_preserves_lock_graph() {
+    for os in ["darwin", "linux"] {
+        let (mut resolver, manifest) = lossy_optional_lock();
+        resolver.locked["packages"]["foreign"][2]["os"] = os.into();
+        assert_optional_lock_preserved(resolver, &manifest);
+    }
+}
+
+#[test]
+fn missing_optional_pinned_metadata_preserves_lock_graph() {
+    let (mut resolver, manifest) = lossy_optional_lock();
+    let latest = json!({"dist-tags": {"latest": "2.0.0"}, "versions": {"2.0.0": {}}});
+    resolver.packuments.insert("foreign".into(), latest.clone());
+    resolver.packuments.insert("foreign-child".into(), latest);
+    assert_optional_lock_preserved(resolver, &manifest);
+}
+
+#[test]
+fn required_unresolved_platform_metadata_still_errors() {
+    for missing_version in [false, true] {
+        let (mut resolver, manifest) = lossy_optional_lock();
+        let manifest = json!({"dependencies": manifest["optionalDependencies"]});
+        if missing_version {
+            resolver.packuments.insert(
+                "foreign".into(),
+                json!({"dist-tags": {"latest": "2.0.0"}, "versions": {"2.0.0": {}}}),
+            );
+        }
+        let error = resolver.resolve(&manifest, false).unwrap_err();
+        let expected = if missing_version {
+            "Locked version is missing from registry metadata"
+        } else {
+            "Package installation needs a host with networking support"
+        };
+        assert_eq!(error, expected);
+    }
+}
