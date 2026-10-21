@@ -167,6 +167,7 @@ jobs:
           source env.sh
           export WASI_SDK="$WASI_SDK_PATH"
           bun install --cwd web --frozen-lockfile
+          bun test web/tests/next-framework-offline.test.ts
           cargo build --release --locked -j 2 -p bunwasm-host
           cargo build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli
           mkdir -p dist

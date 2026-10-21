@@ -19,7 +19,7 @@ function index(directory: string): Record<string, Entry> {
 }
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-export function nextRegistry(directory: string, port: number) {
+export function nextRegistry(directory: string, port: number, offlinePolicy: (request: Request) => Response | null = () => null) {
   const borrowed = index(shared);
   const supplemental = index(directory);
   const requests: string[] = [];
@@ -30,6 +30,8 @@ export function nextRegistry(directory: string, port: number) {
       const headers = { "access-control-allow-origin": "*", "cross-origin-resource-policy": "cross-origin" };
       const path = new URL(request.url).pathname;
       requests.push(path);
+      const offline = offlinePolicy(request);
+      if (offline) return offline;
       const entry = supplemental[path] ?? borrowed[path];
       if (!entry) { misses.push(path); return new Response(`Unrecorded ${path}`, { status: 503, headers }); }
       const root = supplemental[path] ? directory : shared;

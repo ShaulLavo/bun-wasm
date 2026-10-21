@@ -9,6 +9,7 @@ import { playwright, ready, run, session, terminalText, writeFile } from "./play
 import { stopForeground } from "./foreground";
 import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt";
 import { nextRegistry } from "./next-framework-registry";
+import { isNextDistTagsRequest, nextDistTags, nextDistTagsResponse } from "./next-framework-offline";
 import { nextPageContract } from "./next-framework-contract";
 import { observePreviewSockets, previewSocketEvents } from "./next-framework-sockets";
 
@@ -44,6 +45,7 @@ const task = session("next-browser-");
 let registry: ReturnType<typeof nextRegistry> | undefined;
 const stages: Record<string, unknown> = { dev: { status: "not-run" }, build: { status: "not-run" }, start: { status: "blocked", reason: "requires a guest build" } };
 const external: string[] = [];
+const offlineMetadata: { requestedURL: string; servedURL: string; provenance: string; responseSHA256: string }[] = [];
 const timer = setTimeout(() => { void task.cleanup().finally(() => process.exit(1)); }, 900000);
 
 async function guestCommand(page: Page, stage: string, command: string, timeout = 120000) {
@@ -163,12 +165,21 @@ async function runServer(page: Page, stage: "dev" | "start", mode: "dev" | "prod
 }
 
 try {
-  registry = nextRegistry(supplemental, Number(process.env.NEXT_REGISTRY_PORT ?? "43221"));
+  registry = nextRegistry(supplemental, Number(process.env.NEXT_REGISTRY_PORT ?? "43221"), nextDistTagsResponse);
   const match = await task.start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { ROOT: assets, PORT: process.env.NEXT_WEB_PORT ?? "43220" });
   const browser = await task.launch(playwright.chromium);
   const context = await browser.newContext({ serviceWorkers: "allow" });
-  await context.route("**/*", route => {
-    const url = new URL(route.request().url());
+  await context.route("**/*", async route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (isNextDistTagsRequest(request.url(), request.method())) {
+      assert.ok(registry);
+      const servedURL = registry.base + nextDistTags.registryPath;
+      offlineMetadata.push({ requestedURL: request.url(), servedURL, provenance: nextDistTags.provenance, responseSHA256: digest(Buffer.from(nextDistTags.body)) });
+      const response = await route.fetch({ url: servedURL });
+      assert.equal(await response.text(), nextDistTags.body);
+      return route.fulfill({ response });
+    }
     if (["127.0.0.1", "localhost"].includes(url.hostname) || ["data:", "blob:"].includes(url.protocol)) return route.continue();
     external.push(url.href);
     return route.abort();
@@ -204,6 +215,8 @@ try {
   stages.fixtureAfterCompiler = await fixtureSnapshot(page, "after-compiler");
   await writeFile(page, "/home/user/compiler-discovery.ts", readFileSync(join(import.meta.dir, "next-framework-compiler-discovery.ts"), "utf8"));
   await guestCommand(page, "compiler-discovery", "bun run compiler-discovery.ts");
+  await writeFile(page, "/home/user/cache-stream-probe.ts", readFileSync(join(import.meta.dir, "next-framework-cache-probe.ts"), "utf8"));
+  await guestCommand(page, "cache-stream-probe", "bun run cache-stream-probe.ts");
   stages.compilerSelection = { environment: "NEXT_TEST_WASM_DIR", source: "fixture .env loaded by Next", directory: compilerDirectory, reason: "Explicit published Next WASM compiler path; no package patch" };
   await runServer(page, "dev", "dev");
   let built = false;
@@ -227,7 +240,7 @@ try {
   clearTimeout(timer);
   const mirror = registry ? { requests: registry.requests, misses: registry.misses } : null;
   try { await registry?.close(); } finally { await task.cleanup(); }
-  writeFileSync(join(reports, "browser-results.json"), JSON.stringify({ guest: receipt, guestReceipt, expectedGuest, stages, mirror, external, cleanup: true }, null, 2));
+  writeFileSync(join(reports, "browser-results.json"), JSON.stringify({ guest: receipt, guestReceipt, expectedGuest, stages, mirror, offlineMetadata, external, cleanup: true }, null, 2));
 }
 process.stdout.write(JSON.stringify(stages, null, 2) + "\n");
 if (Object.values(stages).some(value => value && typeof value === "object" && "status" in value && value.status !== "pass") || stages.failure) process.exitCode = 1;
