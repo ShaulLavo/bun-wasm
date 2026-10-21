@@ -12,6 +12,8 @@
 // and streams the parsed response back here. Root-relative requests made by a preview page (e.g.
 // `/style.css`) go to the same port.
 
+import { isPreviewHostResource, readPreviewWorkerPolicy } from "./preview-policy";
+import { closedPreviewPolicy, previewPolicyResponse } from "./preview-policy-response";
 import { createPreviewServiceWorker } from "waffle/browser/service-worker";
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
@@ -19,6 +21,7 @@ const prefix = new URL(sw.registration.scope).pathname;
 declare const __PREVIEW_SOCKET_SCRIPT__: string;
 const SOCKET_SCRIPT_PATH = new URL("../preview-websocket.js", sw.registration.scope).pathname;
 const MODULES = prefix.endsWith("/__bunwasm/");
+const documentPolicy = readPreviewWorkerPolicy(location.href);
 
 const previews = createPreviewServiceWorker({
   scope: sw.registration.scope,
@@ -46,12 +49,14 @@ sw.addEventListener("fetch", event => {
     if (url.pathname.startsWith(prefix)) event.respondWith(moduleScope(event.request, url.pathname.slice(prefix.length)));
     return;
   }
+  if (documentPolicy.kind === "invalid") { event.respondWith(closedPreviewPolicy(documentPolicy.reason)); return; }
+  if (event.request.method === "GET" && isPreviewHostResource(event.request.url, documentPolicy, location.origin)) return;
   if (url.pathname === SOCKET_SCRIPT_PATH) {
     event.respondWith(new Response(__PREVIEW_SOCKET_SCRIPT__, { headers: { "content-type": "text/javascript" } }));
     return;
   }
   const response = previews.fetch(event.request, event.clientId);
-  if (response) event.respondWith(response);
+  if (response) event.respondWith(previewPolicyResponse(response, event.request, documentPolicy));
 });
 
 /** `m/<run>/<key>`: a module the worker stored; anything else: the app file of that name. */
@@ -72,24 +77,30 @@ function text(status: number, body: string): Response {
   return new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 }
 
+async function socketPrelude(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  while (length < 1024) {
+    const { value, done } = await reader.read();
+    if (value) { chunks.push(value); length += value.length; }
+    if (done || value?.includes(62)) break;
+  }
+  const initial = new Uint8Array(length);
+  let at = 0;
+  for (const chunk of chunks) { initial.set(chunk, at); at += chunk.length; }
+  if (documentPolicy.kind === "configured" && (initial[0] === 255 || initial[0] === 254)) { await reader.cancel("Non-UTF-8 HTML is unsupported"); throw new Error("Non-UTF-8 HTML is unsupported"); }
+  const text = new TextDecoder("utf-8", { ignoreBOM: true }).decode(initial);
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(text)?.[0] ?? "";
+  const offset = new TextEncoder().encode(doctype).length;
+  return { initial, offset };
+}
+
 function injectSocket(stream: ReadableStream<Uint8Array>, port: number): ReadableStream<Uint8Array> {
   const script = `<script src="${SOCKET_SCRIPT_PATH}" data-bun-port="${port}" data-bun-prefix="${prefix}"></script>`;
   const reader = stream.getReader();
   return new ReadableStream<Uint8Array>({
     async start(controller) {
-      const chunks: Uint8Array[] = [];
-      let length = 0;
-      while (length < 1024) {
-        const { value, done } = await reader.read();
-        if (value) { chunks.push(value); length += value.length; }
-        if (done || value?.includes(62)) break;
-      }
-      const initial = new Uint8Array(length);
-      let at = 0;
-      for (const chunk of chunks) { initial.set(chunk, at); at += chunk.length; }
-      const text = new TextDecoder().decode(initial);
-      const doctype = /^\s*<!doctype[^>]*>/i.exec(text)?.[0] ?? "";
-      const offset = new TextEncoder().encode(doctype).length;
+      const { initial, offset } = await socketPrelude(reader);
       controller.enqueue(initial.subarray(0, offset));
       controller.enqueue(new TextEncoder().encode(script));
       controller.enqueue(initial.subarray(offset));

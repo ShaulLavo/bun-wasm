@@ -53,7 +53,7 @@ engineSelect.addEventListener("change", () => {
 });
 
 // Networking needs SharedArrayBuffer: without cross-origin isolation bun.wasm gets no fetch slots.
-const previews = new Previews();
+const previews = new Previews({ documentPolicy: globalThis.__bunwasmPreviewPolicy });
 const network: BunNetworkOptions = {
   listening: (port, helper) => { previews.register(port, helper); void previews.ready.then(state => term.write(previewLine(port, state))); },
   stopped: (port, helper) => previews.unregister(port, helper),

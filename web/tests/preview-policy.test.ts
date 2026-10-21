@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
+import { previewWorkerURL } from "../src/preview-policy";
 import { buildClassicWorker } from "../../scripts/browser-build";
 
 let directory: string;
@@ -15,7 +16,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { if (directory) await rm(directory, { recursive: true, force: true }); });
 
-function worker(base: string, mount: string, contentType = "text/html", encoding?: string) {
+function worker(base: string, mount: string, contentType = "text/html", encoding?: string, policy?: unknown) {
   const handlers = new Map<string, (event: any) => void>();
   const cached = new Map<string, Response>();
   const requests: string[] = [];
@@ -36,7 +37,7 @@ function worker(base: string, mount: string, contentType = "text/html", encoding
   const clients = { async matchAll() { return [page]; }, async get() { return undefined; }, async claim() {} };
   runInNewContext(source, {
     self: { registration: { scope }, clients, async skipWaiting() {}, addEventListener(type: string, handler: (event: any) => void) { handlers.set(type, handler); } },
-    location: { origin: new URL(base).origin },
+    location: { origin: new URL(base).origin, href: previewWorkerURL(base, policy) },
     caches: {
       async match(request: Request) { return cached.get(request.url); },
       async open() { return {
@@ -51,9 +52,9 @@ function worker(base: string, mount: string, contentType = "text/html", encoding
   return {
     cached, requests, cacheWrites,
     install() { handlers.get("install")!({}); },
-    fetch(path: string, clientId = ""): Promise<Response> | undefined {
+    fetch(path: string, clientId = "", method = "GET"): Promise<Response> | undefined {
       let response: Promise<Response> | undefined;
-      handlers.get("fetch")!({ request: new Request(`${base}${path}`), clientId, respondWith(value: Response | Promise<Response>) { response = Promise.resolve(value); } });
+      handlers.get("fetch")!({ request: new Request(`${base}${path}`, { method }), clientId, respondWith(value: Response | Promise<Response>) { response = Promise.resolve(value); } });
       return response;
     },
   };
@@ -109,4 +110,29 @@ test("tools stay out of service-worker precaching and retain their fingerprint q
   expect(response?.status).toBe(200);
   expect(sw.requests).toEqual(["https://example.test/nested/app/bun-tools.wasm.gz?v=expected-fingerprint"]);
   expect(sw.cacheWrites).toEqual([]);
+});
+
+for (const base of ["https://example.test/", "https://example.test/nested/app/"]) {
+  test(`configured built worker prepends policy before socket and only bypasses declared host GET at ${base}`, async () => {
+    const script = new URL("policy.js", base);
+    const policy = { contentSecurityPolicy: "connect-src 'self'", bootstrapURL: script.href, hostResourcePaths: [script.pathname] };
+    const sw = worker(base, "__preview", "text/html", undefined, policy);
+    const response = await sw.fetch("__preview/8123/");
+    const html = await response?.text();
+    expect(response?.headers.get("content-security-policy")).toBe("connect-src 'self'");
+    expect(html).toStartWith(`<!doctype html><script src="${script.href}"></script><script src="`);
+    expect(sw.fetch("policy.js")).toBeUndefined();
+    expect(sw.fetch("policy.js?x=1")).toBeUndefined();
+    await sw.fetch("policy.js?x=1", "preview-client");
+    await sw.fetch("policy.js", "preview-client", "POST");
+    expect(sw.requests).toEqual([`${base}policy.js?x=1`, `${base}policy.js`]);
+  });
+}
+
+test("invalid policy in built worker refuses preview before guest routing", async () => {
+  const sw = worker("https://example.test/", "__preview", "text/html", undefined, null);
+  const response = await sw.fetch("__preview/8123/");
+  expect(response?.status).toBe(502);
+  expect(await response?.text()).toContain("Invalid requested preview policy");
+  expect(sw.requests).toEqual([]);
 });
