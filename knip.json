@@ -59,7 +59,10 @@
         "tests/fixtures/{filesystem-lifecycle,safari-driver-listener,startup-filesystem}.ts",
         "tests/bun-runtime-proc-main.ts",
         "tests/worker-bootstrap-browser.ts",
-        "tests/worker-bootstrap-browser-main.ts"
+        "tests/worker-bootstrap-browser-main.ts",
+        "tests/preview-policy-fixture.ts",
+        "tests/next-framework-cache-probe.ts",
+        "tests/next-framework-compiler-discovery.ts"
       ],
       "project": [
         "src/**/*.{ts,js}",
@@ -67,7 +70,8 @@
         "tests/**/*.{ts,mjs,js}"
       ],
       "ignoreDependencies": [
-        "benchmark"
+        "benchmark",
+        "next"
       ],
       "ignoreUnresolved": [
         "../src/subprocess.js"

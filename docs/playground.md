@@ -55,6 +55,8 @@ Browser-engine module loading also creates `blob:` URLs for acyclic modules. If 
 Content-Security-Policy, its `script-src` must allow `blob:` (alongside the policy's existing
 Wasm and eval permissions). Import cycles use the service worker's same-origin module URLs.
 
+The default preview remains unconfigured. An embedding application can supply an [opt-in preview document policy](preview-policy.md) before loading the main module.
+
 ## Networking
 
 When the page is cross-origin isolated, the program gets the `bun_wasm` host functions
