@@ -865,6 +865,7 @@
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
   internal.require("function");
   internal.fakeTimers = internal.require("fake_timers");
+  if (process.env.BUNWASM_IPC_CHANNEL) internal.require("child_ipc").initialize();
   if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
 
   return internal;
