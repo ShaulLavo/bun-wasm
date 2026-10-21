@@ -22,6 +22,7 @@ type PlaygroundGlobal = typeof globalThis & {
 };
 const reports = resolve(process.env.NEXT_REPORTS ?? "/work/tmp/bun-wasm-next-browser");
 const fixture = resolve(import.meta.dir, "../../examples/frameworks");
+const moduleFixture = resolve(import.meta.dir, "../../tests/fixtures/module-compile");
 const assets = process.env.NEXT_WEB_ROOT;
 const supplemental = process.env.NEXT_REGISTRY_EXTRA;
 if (!assets || !supplemental) throw new Error("Set NEXT_WEB_ROOT to a browser playground build and NEXT_REGISTRY_EXTRA to staged locked tarballs");
@@ -55,12 +56,12 @@ async function guestCommand(page: Page, stage: string, command: string, timeout 
   return result;
 }
 
-function sourceFiles(directory: string, prefix = ""): string[] {
+function sourceFiles(directory: string, prefix = "", excluded: readonly string[] = ["node_modules", ".next", "next-env.d.ts"]): string[] {
   let files: string[] = [];
   for (const name of readdirSync(directory)) {
-    if (["node_modules", ".next", "next-env.d.ts"].includes(name) || name.endsWith("tsbuildinfo")) continue;
+    if (excluded.includes(name) || name.endsWith("tsbuildinfo")) continue;
     const path = join(directory, name);
-    if (statSync(path).isDirectory()) { files = files.concat(sourceFiles(path, `${prefix}${name}/`)); continue; }
+    if (statSync(path).isDirectory()) { files = files.concat(sourceFiles(path, `${prefix}${name}/`, excluded)); continue; }
     if (name === ".env" || /\.(?:tsx?|json|lock|txt)$/.test(name)) files.push(prefix + name);
   }
   return files;
@@ -175,6 +176,8 @@ try {
   const page = await context.newPage();
   await page.goto(`${match[1]}?engine=browser`);
   assert.match(await ready(page), /ready · Browser/);
+  for (const path of sourceFiles(moduleFixture, "", [])) await writeFile(page, `/home/user/module-compile/${path}`, readFileSync(join(moduleFixture, path), "utf8"));
+  await guestCommand(page, "module-compile", "bun run module-compile/index.ts");
   for (const path of sourceFiles(fixture)) await writeFile(page, `/home/user/${path}`, readFileSync(join(fixture, path), "utf8"));
   await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);
   stages.fixtureBefore = await fixtureSnapshot(page, "before");
