@@ -9,6 +9,9 @@
 
 use std::rc::Rc;
 
+#[path = "stack_position.rs"]
+mod stack_position;
+
 use crate::State;
 use crate::engine::NativeError;
 use crate::resolve::Kind;
@@ -399,6 +402,22 @@ impl State {
         let sources = self.sources.borrow();
         let (code, _) = sources.get(file)?;
         code.lines().nth(line.checked_sub(1)?).map(str::to_owned)
+    }
+
+    pub fn source_new_offset(&self, file: &str, line: usize, column: f64) -> usize {
+        if let Some(original) = self
+            .positions
+            .borrow()
+            .get(file)
+            .and_then(|p| p.original.clone())
+        {
+            return stack_position::new_offset(&original, line, column);
+        }
+        let sources = self.sources.borrow();
+        let Some((code, _)) = sources.get(file) else {
+            return 0;
+        };
+        stack_position::new_offset(code, line, column)
     }
 
     /// Original position for a stack frame, if the file needs any fixup.

@@ -30,6 +30,7 @@ const moduleFixture = resolve(import.meta.dir, "../../tests/fixtures/module-comp
 const cursorFixture = resolve(import.meta.dir, "../../tests/fixtures/stdio-cursor");
 const vmFixture = resolve(import.meta.dir, "../../tests/fixtures/vm-context");
 const httpFixture = resolve(import.meta.dir, "../../tests/fixtures/net-http-implicit-headers");
+const stackFixture = resolve(import.meta.dir, "../../tests/fixtures/stack-source-position");
 const bodyFixture = resolve(import.meta.dir, "../../tests/fixtures/request-body-streams");
 const assets = process.env.NEXT_WEB_ROOT;
 const supplemental = process.env.NEXT_REGISTRY_EXTRA;
@@ -269,6 +270,8 @@ try {
   await guestCommand(page, "net-http-implicit-headers", "bun run net-http-implicit-headers/index.ts");
   for (const path of sourceFiles(bodyFixture, "", [])) await writeFile(page, `/home/user/request-body-streams/${path}`, readFileSync(join(bodyFixture, path), "utf8"));
   await guestCommand(page, "request-body-streams", "bun run request-body-streams/index.ts");
+  for (const path of sourceFiles(stackFixture, "", [])) await writeFile(page, `/home/user/stack-source-position/${path}`, readFileSync(join(stackFixture, path), "utf8"));
+  await guestCommand(page, "stack-source-position", "bun run stack-source-position/index.ts");
   const beforeApp = await page.evaluate(async root => ({
     files: await (globalThis as PlaygroundGlobal).playground.fs.listFiles(root),
     seed: await (globalThis as PlaygroundGlobal).playground.fs.readFile("/home/user/files.ts"),

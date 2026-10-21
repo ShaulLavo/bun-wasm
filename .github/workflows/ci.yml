@@ -167,13 +167,14 @@ jobs:
           source env.sh
           export WASI_SDK="$WASI_SDK_PATH"
           bun install --cwd web --frozen-lockfile
-          bun test scripts/node-fs-streams.test.ts scripts/node-vm-context.test.ts scripts/node-http-headers.test.ts scripts/node-request-body.test.ts
+          bun test scripts/node-fs-streams.test.ts scripts/node-vm-context.test.ts scripts/node-http-headers.test.ts scripts/node-request-body.test.ts scripts/node-stack-position.test.ts
           node tests/fixtures/stdio-cursor/source-probe.ts
+          node tests/fixtures/stack-source-position/index.ts
           cargo build --release --locked -j 2 -p bunwasm-host
           cargo build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli
           mkdir -p dist
           cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm" dist/
-          bash scripts/test.sh --no-build node-misc module-compile fs-stream-constructors stdio-cursor vm-context net-http-implicit-headers request-body-streams
+          bash scripts/test.sh --no-build node-misc module-compile fs-stream-constructors stdio-cursor vm-context net-http-implicit-headers request-body-streams stack-source-position
 
   package:
     name: Browser adapter package

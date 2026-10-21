@@ -61,15 +61,13 @@
 
   // V8 places `new Error()` at `new`; Bun (JSC) at the constructor name.
   function pastNew(file, line, col) {
-    let text;
+    let offset;
     try {
-      text = internal.getSourceLine && internal.getSourceLine(file, line);
+      offset = native.sourceNewOffset(file, line, col);
     } catch {
       return col;
     }
-    if (typeof text !== "string") return col;
-    const m = /^new\s+/.exec(text.slice(col - 1));
-    return m ? col + m[0].length : col;
+    return offset ? col + offset : col;
   }
 
   function evalOriginFile(site) {

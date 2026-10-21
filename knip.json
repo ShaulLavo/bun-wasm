@@ -97,6 +97,7 @@
     }
   },
   "ignoreBinaries": [
+    "rustc",
     "unshare",
     "ss",
     "build.mjs"
