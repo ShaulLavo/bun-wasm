@@ -404,7 +404,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   }
   let interrupted = false;
   let prepared = false;
-  let pendingKill: 2 | 9 | 15 | undefined;
+  const pendingKills: (2 | 9 | 15)[] = [];
   void (async () => {
     if (finished || options.runtime.disposed) return;
     const { workerProcessState, createWorkerProcessTransport } = await import("waffle/proc/worker-client");
@@ -419,20 +419,30 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     rootJob = state.job;
     releaseRootConsumer();
     prepared = true;
-    if (pendingKill) { kill(pendingKill); return; }
+    for (const signal of pendingKills) kill(signal);
+    pendingKills.length = 0;
+    if (preparationStopped()) return;
     if (options.adapter !== "preview1" && isToolCommand(options.args)) request.module = await loadTools();
-    if (finished || options.runtime.disposed) return;
+    if (preparationStopped()) return;
     if (ring) {
       const network = await options.runtime.network();
-      if (finished || options.runtime.disposed) return;
+      if (preparationStopped()) return;
       helper = createBunNetworkHelper(network, ring, options.network);
-      if (finished || options.runtime.disposed) return helper.dispose();
+      if (workerStopped) return helper.dispose();
+      if (preparationStopped()) return;
     }
-    if (!finished && !options.runtime.disposed && worker) {
+    if (!preparationStopped() && worker) {
       worker.postMessage(request, [request.filesystem.port]);
       watchOutcome();
     }
   })().catch(error => finish({ code: 126, error: String(error) }));
+  function preparationStopped(): boolean {
+    if (finished || options.runtime.disposed) return true;
+    const result = rootOutcome && readOutcome(rootOutcome);
+    if (!result) return false;
+    finish({ code: waitStatus(result) }, false, result.kind === "signaled" ? result.code : undefined);
+    return true;
+  }
   function watchOutcome(): void {
     if (!rootOutcome || finished) return;
     outcomeTimer = setTimeout(() => {
@@ -446,10 +456,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   }
   function kill(requestedSignal?: 2 | 9 | 15): void {
     if (finished) return;
-    if (!prepared && options.runtimeProcess) { pendingKill = requestedSignal ?? 2; return; }
-    if (!prepared) { finish({ code: 128 + (requestedSignal ?? 2) }, false, requestedSignal ?? 2); return; }
     const signal = requestedSignal ?? (interrupted ? 9 : 2);
     interrupted = true;
+    if (!prepared && options.runtimeProcess) { pendingKills.push(signal); return; }
+    if (!prepared) { finish({ code: 128 + signal }, false, signal); return; }
     // The broker synchronously publishes every job member before any teardown callback. Root
     // HANDLE/IGNORE stays alive; DEFAULT selects its typed outcome without guest cooperation.
     void subprocess.killJob(rootJob, signal).catch(error => console.error("bun-wasm: job signal failed", error));
