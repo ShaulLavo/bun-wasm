@@ -32,14 +32,29 @@ package.json, bunfig.toml and the JSONC text lockfile. Root dependencies take
 priority in the hoisted node_modules tree; incompatible transitive versions go
 under their dependent package. Required peers are installed, incompatible peers
 produce warnings, optional peers are skipped, and unavailable optional packages
-produce warnings. Native platform packages incompatible with WASI are skipped
-when optional.
+produce warnings. Platform selection uses the guest's advertised `linux` OS and
+`wasm32` architecture. Absent or empty `os`/`cpu` rules allow any platform;
+positive lists select platforms and `!` entries exclude them. Incompatible
+optional packages and their optional-only descendants are excluded from archive
+downloads and extraction. An incompatible required dependency fails installation,
+including when a required consumer shares a hoisted package with an optional dependency.
+
+Locked installs keep the complete dependency graph even when some packages cannot
+be installed on this platform. If a compact lock field contains lossy `none`
+platform metadata, the installer reads metadata for that exact pinned version
+through the existing cache and registry policy. It never substitutes the latest
+version or replaces the original locked metadata. An optional metadata failure
+keeps the package's lock row and lock-only descendants; required unresolved
+metadata remains an error.
 
 New lockfiles use Bun's text `bun.lock` version 2/config version 1. Simple project
 output matches native Bun's lockfile byte for byte, checked against a local
 registry golden. Existing locked resolutions and integrity hashes are reused,
-including when a dist-tag changes. `--frozen-lockfile` rejects changes.
-`--production` omits dev dependencies and preserves the full lockfile.
+including when a dist-tag changes. `--frozen-lockfile` and `bun ci` reject semantic
+changes before installation or writes. Successful frozen installs preserve the
+existing lockfile bytes, including metadata property order and formatting.
+Unlocked installs can still update or migrate locks. `--production` omits dev
+dependencies and preserves the full lockfile.
 
 Tarballs and packuments are cached in `$BUN_INSTALL_CACHE_DIR`, or
 `$HOME/.bun/install/cache/bun-wasm` (relative to cwd when HOME is absent).
@@ -138,6 +153,14 @@ Bun's metadata parser (`src/install/npm.rs:2314`) and lock writer
 so they cannot be linked as independent parser/serializer libraries.
 
 ## Verification
+
+The native Rust installer tests cover locked and unlocked platform selection,
+required versus optional consumers, transitive dependencies, pinned metadata
+recovery, real archive extraction and frozen lock-byte preservation. Run them with
+`cargo test --locked --offline -p bunwasm-runtime --lib --no-default-features --features engine-host install::`.
+These source tests are not browser guest acceptance or proof of complete framework
+support; the unchanged application and lockfile must also pass against the built
+guest.
 
 `tests/install/run.mjs` starts a local CORS registry with deterministic tarballs.
 It tests aliases, add/remove, all dev flags, exact versions, hoisting conflicts,
