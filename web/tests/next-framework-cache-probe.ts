@@ -21,6 +21,8 @@ const intermediate = compiler.intermediateFileSystem;
 assert.ok(intermediate && typeof intermediate === "object");
 process.stdout.write(JSON.stringify({ WriteStream: typeof Reflect.get(fs, "WriteStream"), ReadStream: typeof Reflect.get(fs, "ReadStream") }) + "\n");
 
+let failures = 0;
+
 async function probe(filesystem: object, method: string, path: string) {
   const factory: unknown = Reflect.get(filesystem, method);
   assert.equal(typeof factory, "function");
@@ -35,7 +37,8 @@ async function probe(filesystem: object, method: string, path: string) {
     await closed;
     process.stdout.write(`${method}: constructed and closed\n`);
   } catch (error) {
-    process.stderr.write(`${method}: ${error instanceof Error ? error.stack : String(error)}\n`);
+    failures++;
+    process.stderr.write(`${method}: ${error instanceof Error ? `${String(error)}\n${error.stack}` : String(error)}\n`);
   }
 }
 
@@ -44,3 +47,5 @@ try {
   await probe(intermediate, "createWriteStream", output);
   await probe(intermediate, "createReadStream", "/home/user/package.json");
 } finally { if (existsSync(output)) unlinkSync(output); }
+
+assert.equal(failures, 0, "Published graceful-fs read and write constructors must succeed");

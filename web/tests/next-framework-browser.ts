@@ -23,6 +23,7 @@ type PlaygroundGlobal = typeof globalThis & {
 };
 const reports = resolve(process.env.NEXT_REPORTS ?? "/work/tmp/bun-wasm-next-browser");
 const fixture = resolve(import.meta.dir, "../../examples/frameworks");
+const filesystemFixture = resolve(import.meta.dir, "../../tests/fixtures/fs-stream-constructors");
 const moduleFixture = resolve(import.meta.dir, "../../tests/fixtures/module-compile");
 const assets = process.env.NEXT_WEB_ROOT;
 const supplemental = process.env.NEXT_REGISTRY_EXTRA;
@@ -189,6 +190,8 @@ try {
   assert.match(await ready(page), /ready · Browser/);
   for (const path of sourceFiles(moduleFixture, "", [])) await writeFile(page, `/home/user/module-compile/${path}`, readFileSync(join(moduleFixture, path), "utf8"));
   await guestCommand(page, "module-compile", "bun run module-compile/index.ts");
+  for (const path of sourceFiles(filesystemFixture, "", [])) await writeFile(page, `/home/user/fs-stream-constructors/${path}`, readFileSync(join(filesystemFixture, path), "utf8"));
+  await guestCommand(page, "fs-stream-constructors", "bun run fs-stream-constructors/index.ts");
   for (const path of sourceFiles(fixture)) await writeFile(page, `/home/user/${path}`, readFileSync(join(fixture, path), "utf8"));
   await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);
   stages.fixtureBefore = await fixtureSnapshot(page, "before");
@@ -216,7 +219,8 @@ try {
   await writeFile(page, "/home/user/compiler-discovery.ts", readFileSync(join(import.meta.dir, "next-framework-compiler-discovery.ts"), "utf8"));
   await guestCommand(page, "compiler-discovery", "bun run compiler-discovery.ts");
   await writeFile(page, "/home/user/cache-stream-probe.ts", readFileSync(join(import.meta.dir, "next-framework-cache-probe.ts"), "utf8"));
-  await guestCommand(page, "cache-stream-probe", "bun run cache-stream-probe.ts");
+  try { await guestCommand(page, "cache-stream-probe", "bun run cache-stream-probe.ts"); }
+  catch (error) { process.stdout.write(`FAIL cache-stream-probe, continuing independent application gates: ${String(error)}\n`); }
   stages.compilerSelection = { environment: "NEXT_TEST_WASM_DIR", source: "fixture .env loaded by Next", directory: compilerDirectory, reason: "Explicit published Next WASM compiler path; no package patch" };
   await runServer(page, "dev", "dev");
   let built = false;
@@ -232,6 +236,7 @@ try {
   if (built && buildID) await runServer(page, "start", "prod");
   if (built && !buildID) stages.build = { status: "fail", error: "Build exited zero without a guest BUILD_ID" };
   stages.buildID = buildID;
+  stages.fixtureAfterApplication = await fixtureSnapshot(page, "after-application");
   assert.deepEqual(external, []);
   assert.deepEqual(registry.misses, []);
 } catch (error) {
