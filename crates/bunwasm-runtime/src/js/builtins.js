@@ -309,14 +309,15 @@
     }
     // Not a separate realm: missing globals still fall back to this realm.
     const contexts = new WeakMap();
+    function contextProperty(target, key) {
+      if (Reflect.has(target, key)) return Reflect.get(target, key, target);
+      return key === "globalThis" ? contexts.get(target) : globalThis[key];
+    }
     function contextGlobal(context) {
       if (contexts.has(context)) return contexts.get(context);
       const view = new Proxy(context, {
         has: (target, key) => key === "globalThis" || Reflect.has(target, key),
-        get(target, key) {
-          if (Reflect.has(target, key)) return Reflect.get(target, key, target);
-          return key === "globalThis" ? view : globalThis[key];
-        },
+        get: contextProperty,
         set: (target, key, value) => Reflect.set(target, key, value, target),
       });
       contexts.set(context, view);
