@@ -55,6 +55,11 @@ export function verifyRawStackSources(load: (source: string, name: string) => { 
     { body: "\r\n/*é😀*/module.exports = new\tError('raw');", markers: ["Error('raw')"] },
     { body: "function fail() { return Error('raw'); } module.exports = fail();", markers: ["Error('raw')", "fail();"] },
     { body: "const owner = { fail() { return Error('raw'); } }; module.exports = owner.fail();", markers: ["Error('raw')", "fail();"] },
+    { body: "'x\\\ny'; /*😀*/module.exports = Error('raw');", markers: ["Error('raw')"] },
+    { body: "'x\\\r\ny'; /*中😀*/module.exports = Error('raw');", markers: ["Error('raw')"] },
+    { body: "`x\ny`; /*😀*/module.exports = Error('raw');", markers: ["Error('raw')"] },
+    { body: "void 'x\\\ny'; /*😀*/module.exports = new\tError('raw');", markers: ["Error('raw')"] },
+    { body: "void `x\r\ny`; /*😀*/module.exports = Error('raw');", markers: ["Error('raw')"] },
   ];
   for (const [index, item] of cases.entries()) {
     const source = prefix + item.body;

@@ -1080,7 +1080,7 @@ The vendored package omits upstream tests and Cargo's `.cargo_vcs_info.json`. Ot
 | `build.rs` | Add rerun tracking for `quickjs` and `quickjs.bind.h`. | Local C changes can leave Cargo using a stale engine until another input invalidates it. This hook supports our fork. |
 
 The four parser call-location assignments use a cursor owned by `JSParseState` to
-count UTF-16 code units from the current line start to the selected token. The
+count UTF-16 code units from the selected token's saved line start. The
 existing parser initializer zeros it. A changed line or backwards token resets
 it; monotonic positions on one line scan each prefix byte once with the bundled
 bounded UTF-8 decoder. Astral code points count two units, BMP characters and TAB
@@ -1088,10 +1088,19 @@ one. Explicit rewinds may rescan a prefix. There is no filename/global cache,
 source-line allocation or transfer, lexer-wide coordinate change, or token
 selection change. Source-location emission, maps, CallSites and the host numeric
 stack query retain their existing roles. Genuine inspection still receives full
-source lines.
+source lines. A multiline string or template advances the scanner beyond the
+token's starting line. The call-column cursor uses `JSToken.line_start`, and
+`js_parse_get_pos` saves that origin so the existing seek can retokenize the
+same literal without assigning its final scanner line to its start. This is
+private coordinate bookkeeping, not a lexer line-policy rewrite.
 
 `node-stack-position.test.ts` compiles the actual extracted assignments, cursor,
-initializer and bundled decoder into a small C probe. It covers state resets,
+initializer and bundled decoder into a small C probe. It also extracts the real
+lexer, string/template/regexp scanners, private token/state structs and
+get-position/seek functions. Small allocation/value sinks support only the tested
+syntax; they do not stand in for an engine acceptance run. Actual tokenization
+checks multiline LF/CRLF/bareCR literals and repeated seeks, including unchanged
+following-token and scanner state. It covers state resets,
 independent parsers, line changes, rewinds, Unicode widths and bounded work on a
 large minified line. This is not a complete engine build. The shared
 `stack-source-position` fixture checks raw and formatted constructor, direct,

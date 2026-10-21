@@ -25024,7 +25024,7 @@ static int js_parse_get_pos(JSParseState *s, JSParsePos *sp)
     sp->line_num = s->token.line_num;
     sp->col_num = s->token.col_num;
     sp->ptr = s->token.ptr;
-    sp->line_start = s->line_start;
+    sp->line_start = s->token.line_start;
     sp->eol = s->eol;
     sp->mark = s->mark;
     sp->got_lf = s->got_lf;
@@ -27075,10 +27075,10 @@ static void optional_chain_test(JSParseState *s, int *poptional_chaining_label,
 /* bun-wasm: CallSite columns count UTF-16 units, not source UTF-8 bytes. */
 static int js_parse_call_column(JSParseState *s)
 {
-    if (s->call_column_line != s->line_start || !s->call_column_ptr ||
+    if (s->call_column_line != s->token.line_start || !s->call_column_ptr ||
         s->token.ptr < s->call_column_ptr) {
-        s->call_column_line = s->line_start;
-        s->call_column_ptr = s->line_start;
+        s->call_column_line = s->token.line_start;
+        s->call_column_ptr = s->token.line_start;
         s->call_column_utf16 = 1;
     }
     while (s->call_column_ptr < s->token.ptr) {

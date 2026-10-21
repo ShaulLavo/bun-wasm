@@ -65,16 +65,44 @@ function quickjsAssignment(source: string, marker: string, name: string): string
   return match[1].trim();
 }
 
+function quickjsFunction(source: string, name: string): string {
+  const match = source.match(new RegExp(`static [^\\n]*\\b${name}\\([^;{]*\\)\\n\\{[\\s\\S]*?\\n\\}`));
+  assert.ok(match, `QuickJS function ${name} exists`);
+  return match[0];
+}
+
+function quickjsStruct(source: string, name: string): string {
+  const match = source.match(new RegExp(`typedef struct ${name} \\{[\\s\\S]*?\\n\\} ${name};`));
+  assert.ok(match, `QuickJS struct ${name} exists`);
+  return match[0];
+}
+
+export function quickjsLexerInputs() {
+  const source = readFileSync(new URL("../third_party/rquickjs-sys/quickjs/quickjs.c", import.meta.url), "utf8");
+  const start = source.indexOf("enum {\n    TOK_NUMBER = -128,");
+  const end = source.indexOf("#define TOK_FIRST_KEYWORD", start);
+  assert.ok(start >= 0 && end > start);
+  const stubs = readFileSync(new URL("../tests/fixtures/stack-source-position/quickjs-lexer-stubs.h", import.meta.url), "utf8")
+    .replace("__TOKENS__", source.slice(start, end))
+    .replace("__TOKEN_STRUCT__", quickjsStruct(source, "JSToken"))
+    .replace("__STATE_STRUCT__", quickjsStruct(source, "JSParseState"))
+    .replace("__POSITION_STRUCT__", quickjsStruct(source, "JSParsePos"));
+  const lexer = ["js_parse_template_part", "js_parse_string", "js_parse_regexp", "next_token"]
+    .map(name => quickjsFunction(source, name)).join("\n");
+  return { stubs, lexer };
+}
+
 export function quickjsColumnProbe(): string {
   const source = readFileSync(new URL("../third_party/rquickjs-sys/quickjs/quickjs.c", import.meta.url), "utf8");
   const fields = source.match(/    const uint8_t \*line_start; \/\* first character of the current line \*\/[\s\S]*?(?=    \/\* current function code \*\/)/)?.[0];
-  const init = source.match(/static void js_parse_init\([\s\S]*?\n\}/)?.[0];
+  const init = quickjsFunction(source, "js_parse_init");
   const helper = source.match(/static int js_parse_call_column\([\s\S]*?\n\}/)?.[0] ?? "";
   assert.ok(fields && init, "QuickJS parser fields and initializer exist");
   return readFileSync(new URL("../tests/fixtures/stack-source-position/quickjs-column-probe.c", import.meta.url), "utf8")
-    .replace("__CURSOR_FIELDS__", fields)
     .replace("__COLUMN_HELPER__", helper)
     .replace("__PARSE_INIT__", init)
+    .replace("__GET_POSITION__", quickjsFunction(source, "js_parse_get_pos"))
+    .replace("__SEEK_TOKEN__", quickjsFunction(source, "js_parse_seek_token"))
     .replace("__CURSOR_INIT_ASSERTS__", helper ? "    assert(!state->call_column_line && !state->call_column_ptr && state->call_column_utf16 == 0);" : "")
     .replace("__CALLEE_COLUMN__", quickjsAssignment(source, "int callee_line_num = s->token.line_num;", "callee_col_num"))
     .replace("__IDENTIFIER_COLUMN__", quickjsAssignment(source, "int identifier_line_num = s->token.line_num;", "identifier_col_num"))

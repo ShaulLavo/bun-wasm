@@ -1,33 +1,15 @@
 #include "cutils.h"
 
-typedef void JSContext;
-typedef struct JSToken {
-    int val, line_num, col_num;
-    const uint8_t *ptr;
-} JSToken;
-typedef struct JSParseState {
-    JSContext *ctx;
-    const char *filename;
-    int line_num, col_num;
-    const uint8_t *buf_start, *buf_ptr, *buf_end;
-    JSToken token;
-__CURSOR_FIELDS__
-} JSParseState;
-
-static size_t scanned_bytes;
-static inline uint32_t counted_decode(const uint8_t *p, size_t length,
-                                     const uint8_t **next)
-{
-    uint32_t result = utf8_decode_len(p, length, next);
-    scanned_bytes += *next - p;
-    return result;
-}
+#include "quickjs-lexer-stubs.h"
+#include <quickjs-lexer.h>
 
 #define utf8_decode_len counted_decode
 __COLUMN_HELPER__
 #undef utf8_decode_len
 
 __PARSE_INIT__
+__GET_POSITION__
+__SEEK_TOKEN__
 
 static int callee_position(JSParseState *s)
 {
@@ -69,11 +51,102 @@ static void initialize(JSParseState *state, const char *source, size_t length)
 __CURSOR_INIT_ASSERTS__
 }
 
+static void token_position(JSParseState *s, const uint8_t *source)
+{
+    int column = callee_position(s);
+    assert(identifier_position(s) == column);
+    assert(constructor_position(s) == column);
+    assert(property_position(s) == column);
+    printf("%zu %d %zu %zu %d %zu %zu %zu %zu %d %d %d %d %d\n", (size_t)(s->token.ptr - source),
+           s->token.line_num, (size_t)(s->token.line_start - source),
+           (size_t)(s->line_start - source), column, scanned_bytes,
+           (size_t)(s->eol - source), (size_t)(s->mark - source),
+           (size_t)(s->buf_ptr - source), s->line_num, s->token.val,
+           s->token.col_num, s->last_line_num, s->last_col_num);
+}
+
+static void resume_template(JSParseState *s, bool *in_template)
+{
+    free_token(s, &s->token);
+    s->got_lf = false;
+    s->last_line_num = s->token.line_num;
+    s->last_col_num = s->token.col_num;
+    assert(js_parse_template_part(s, s->buf_ptr) == 0);
+    *in_template = s->token.u.str.sep != '`';
+}
+
+static void scan_tokens(JSParseState *s, const uint8_t *source, JSParsePos *saved,
+                        size_t save_index, bool volume)
+{
+    bool in_template = false;
+    size_t count = 0;
+    while (true) {
+        assert(next_token(s) == 0);
+        if (s->token.val == TOK_EOF) break;
+        if (s->token.val == '}' && in_template) {
+            resume_template(s, &in_template);
+            continue;
+        }
+        if (s->token.val == TOK_TEMPLATE) in_template = s->token.u.str.sep != '`';
+        if (saved && count == save_index) js_parse_get_pos(s, saved);
+        if (!volume) token_position(s, source);
+        if (volume) js_parse_call_column(s);
+        if (s->token.val == '/') {
+            s->buf_ptr--;
+            assert(js_parse_regexp(s) == 0);
+        }
+        count++;
+    }
+    if (saved) assert(count > save_index);
+    if (volume) printf("%zu %zu\n", count, scanned_bytes);
+}
+
+static void scan_error(JSParseState *s)
+{
+    int result;
+    do {
+        result = next_token(s);
+    } while (!result && s->token.val != TOK_EOF);
+    printf("%d %d\n", result, s->token.line_num);
+}
+
+static void lexer_positions(const char *source, size_t length, const char *mode,
+                            size_t save_index)
+{
+    JSContext context = {0};
+    JSFunctionDef function = {0};
+    JSParseState state;
+    memset(&state, 0xa5, sizeof(state));
+    initialize(&state, source, length);
+    state.ctx = &context;
+    state.cur_func = &function;
+    if (!strcmp(mode, "error")) {
+        scan_error(&state);
+        return;
+    }
+    JSParsePos saved;
+    bool seek = !strcmp(mode, "seek");
+    scan_tokens(&state, (const uint8_t *)source, seek ? &saved : NULL,
+                save_index, !strcmp(mode, "volume"));
+    if (!seek) return;
+    for (int repeat = 0; repeat < 3; repeat++) {
+        assert(js_parse_seek_token(&state, &saved) == 0);
+        printf("rewound ");
+        token_position(&state, (const uint8_t *)source);
+        scan_tokens(&state, (const uint8_t *)source, NULL, 0, false);
+    }
+}
+
 int main(int argc, char **argv)
 {
-    assert(argc == 2);
+    assert(argc >= 2 && argc <= 4);
     size_t length;
     char *source = read_source(argv[1], &length);
+    if (argc >= 3) {
+        lexer_positions(source, length, argv[2], argc == 4 ? strtoul(argv[3], NULL, 10) : 0);
+        free(source);
+        return 0;
+    }
     JSParseState states[2];
     memset(states, 0xa5, sizeof(states));
     initialize(&states[0], source, length);
@@ -85,6 +158,7 @@ int main(int argc, char **argv)
         JSParseState *state = &states[parser];
         if (reset) initialize(state, source, length);
         state->line_start = (const uint8_t *)source + line;
+        state->token.line_start = state->line_start;
         state->token.ptr = (const uint8_t *)source + token;
         int callee = callee_position(state);
         int identifier = identifier_position(state);

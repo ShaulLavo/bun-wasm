@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { nativeStackProbe, quickjsColumnProbe, stackFormatter, stackSite } from "./node-stack-position-fixture";
+import { nativeStackProbe, quickjsColumnProbe, quickjsLexerInputs, stackFormatter, stackSite } from "./node-stack-position-fixture";
 import { newTokenLength, tokenCases, verifyTokenLengths } from "../tests/fixtures/stack-source-position/contract";
 
 test("production stack formatting does not transfer complete minified source lines", () => {
@@ -33,8 +33,11 @@ beforeAll(() => {
   const columnSource = join(scratch, "column-probe.c");
   columnProbe = join(scratch, "column-probe");
   writeFileSync(columnSource, quickjsColumnProbe());
+  const lexer = quickjsLexerInputs();
+  writeFileSync(join(scratch, "quickjs-lexer-stubs.h"), lexer.stubs);
+  writeFileSync(join(scratch, "quickjs-lexer.h"), lexer.lexer);
   const include = new URL("../third_party/rquickjs-sys/quickjs", import.meta.url).pathname;
-  execFileSync("cc", ["-std=c11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror", "-isystem", include, columnSource, "-o", columnProbe], { stdio: "pipe" });
+  execFileSync("cc", ["-std=c11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror", "-isystem", include, "-isystem", scratch, columnSource, "-o", columnProbe], { stdio: "pipe" });
   const tests = join(scratch, "tests");
   execFileSync("rustc", ["--edition=2024", "--test", source, "-o", tests], { stdio: "pipe" });
   console.log(execFileSync(tests, ["--test-threads=1", "--nocapture"], { encoding: "utf8" }));
@@ -196,4 +199,70 @@ test("QuickJS cursor resets across every ECMAScript line separator", () => {
     return position;
   }).concat([{ line, token: line + Buffer.byteLength(text) }, { line: 0, token: Buffer.byteLength(text) }]);
   expect(quickjsColumns(source, positions).map(row => row.slice(0, 4))).toEqual(positions.map(() => [5, 5, 5, 5]));
+});
+
+function lexerRows(source: string, mode = "lexer", saveIndex = 0) {
+  assert.ok(scratch);
+  const path = join(scratch, "lexer-input.js");
+  writeFileSync(path, source);
+  const output = execFileSync(columnProbe, [path, mode, String(saveIndex)], { encoding: "utf8", timeout: 30_000 });
+  return output.trim().split("\n").map(row => ({
+    rewound: row.startsWith("rewound "),
+    values: row.replace(/^rewound /, "").split(" ").map(Number),
+  }));
+}
+
+function multilineSources() {
+  const prefixes = ["/*😀*/", "void /*😀中é*/"];
+  const literals = ["'x\\\ny'", "'x\\\r\ny'", "'x\\\ry'", "`x\ny`", "`x\r\ny`", "`x\ry`"];
+  return prefixes.flatMap(prefix => literals.map(literal => ({ source: prefix + literal + "();", saveIndex: Number(prefix.startsWith("void")) })));
+}
+
+function verifyLexerColumns(source: string, rows: ReturnType<typeof lexerRows>) {
+  const bytes = Buffer.from(source);
+  for (const row of rows) {
+    const [token, , origin, , column] = row.values;
+    assert.ok(token !== undefined && origin !== undefined);
+    expect(origin).toBeLessThanOrEqual(token);
+    expect(column).toBe(bytes.subarray(origin, token).toString("utf8").length + 1);
+  }
+}
+
+test("actual QuickJS lexer retains selected-token origins across multiline literals", () => {
+  for (const item of multilineSources()) {
+    const rows = lexerRows(item.source);
+    const selected = rows[item.saveIndex]?.values;
+    expect(selected?.[1]).toBe(1);
+    expect(selected?.[2]).toBe(0);
+    expect(selected?.[3]).toBeGreaterThan(selected?.[0] ?? Infinity);
+    verifyLexerColumns(item.source, rows);
+  }
+});
+
+test("actual QuickJS get-position and repeated seeks preserve multiline token origins", () => {
+  for (const item of multilineSources()) {
+    const baseline = lexerRows(item.source).slice(item.saveIndex).map(row => row.values.filter((_, index) => index !== 5));
+    const rows = lexerRows(item.source, "seek", item.saveIndex);
+    expect(rows.filter(row => row.rewound)).toHaveLength(3);
+    expect(rows.slice(item.saveIndex).map(row => row.values.filter((_, index) => index !== 5))).toEqual(baseline.concat(baseline, baseline, baseline));
+    verifyLexerColumns(item.source, rows);
+  }
+});
+
+test("actual QuickJS lexer preserves ordinary Unicode lines, regex and template-resume positions", () => {
+  const cases = ["/*é😀*/Error('x');\r\n/*中*/Error('y');", "/*😀*/ /é😀/.test('x'); Error('y');", "/*😀*/`x\n${Error('x')}y`;", "/*😀*/\u2028Error('x');\u2029Error('y');"];
+  for (const source of cases) verifyLexerColumns(source, lexerRows(source));
+});
+
+test("actual QuickJS tokenization bounds monotonic call-column work on a huge line", () => {
+  const prefix = "/*" + "😀中é".repeat(128 * 1024) + "*/";
+  const calls = "Error('x');".repeat(1024);
+  const source = prefix + calls + "/*" + "x".repeat(1024 * 1024) + "*/";
+  expect(lexerRows(source, "volume")[0]?.values).toEqual([5120, Buffer.byteLength(prefix + calls) - 1]);
+});
+
+
+test("actual QuickJS lexer keeps errors on the current line after multiline tokens", () => {
+  expect(lexerRows("/*😀*/'x\\\ny'; 'bad\n", "error")[0]?.values).toEqual([-1, 2]);
+  expect(lexerRows("/*😀*/`x\ny`; /*unterminated", "error")[0]?.values).toEqual([-1, 2]);
 });
