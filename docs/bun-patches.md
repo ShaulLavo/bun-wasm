@@ -20,6 +20,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Bun public transpiler adapter](#public-transpiler-adapter) | Port | Adapt the real Rust parse/print and scan paths to the engine-independent native boundary. |
 | [Generated `bun:wrap` helpers](#bun-wrap-helpers) | Host feature | Load Bun's unmodified runtime helpers through the builtin registry. |
 | [Partial strict comparison](#partial-strict-comparison) | Port | Translate Bun's native partial-comparison rules to TypeScript for all engines. |
+| [CommonJS source compilation adapter](#commonjs-source-compilation-adapter) | Host feature | Original `Module._compile` adapter evaluates caller-provided JavaScript with the existing CommonJS wrapper and host dynamic-import resolver. |
 | [Small public runtime adapters](#small-public-runtime-adapters) | Host feature | Original matcher, native and browser promise reaction, version, web-brand and resolver-diagnostic adapters. |
 | [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
@@ -3266,3 +3267,11 @@ only physical worker cleanup releases that session and its module cache. Parent
 exit and adapter uninstall leave admitted children alive. The existing installer
 fetch cache remains the default policy; injected network fetch stays separate from
 asset-download fetch. Preview1 receives no network session.
+
+## CommonJS source compilation adapter
+
+`crates/bunwasm-runtime/src/js/bootstrap.js` implements `Module.prototype._compile` as an original adapter, not copied upstream source. Its reference contract is Node's `lib/internal/modules/cjs/loader.js`, observed with released Node26.7.0. It evaluates the supplied JavaScript rather than reading or transpiling a file, passes the five CommonJS arguments with `this === exports`, returns the wrapper result, and propagates errors. It leaves module metadata, loaded state and cache insertion to the caller. Leading BOM and hashbang handling preserve script parsing.
+
+The adapter reuses the existing module require hook and wrapper invocation. In the Browser engine, Bun's existing semantic Function import scanner identifies dynamic-import keywords, then the adapter routes only those keywords through the existing filename-bound host resolver. Strings, templates and comments are not rewritten. Other engines use the evaluator's supplied source filename. No Next source or compiler package is changed.
+
+`tests/fixtures/module-compile` exercises the production method, relative and package requires, prototype interception, file-relative imports after a Unicode character, wrapper arguments and return value, exports replacement, directives, source prefixes and error propagation. Its expected output follows the Node contract. Native Bun1.4.2 differs in wrapper `this` and loaded-state behavior, so native Bun is not used to regenerate this fixture.

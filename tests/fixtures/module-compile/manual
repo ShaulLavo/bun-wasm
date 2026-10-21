@@ -1,0 +1,1 @@
+Node CommonJS _compile contract; native Bun1.4.2 has different this/loaded behavior.

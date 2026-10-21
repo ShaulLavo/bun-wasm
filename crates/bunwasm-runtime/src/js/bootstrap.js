@@ -529,6 +529,12 @@
       this.paths = nodeModulePaths(this.path);
       defineHidden(this, { parent });
     }
+    _compile(content, filename) {
+      const source = content.replace(/^#![^\r\n]*/, "").replace(/^\uFEFF/, "");
+      const code = compileModuleImports(source, filename);
+      const wrapper = native.evalScript(`(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {\n${code}\n})`, filename);
+      return callModuleWrapper(this, wrapper, filename);
+    }
     require(spec) {
       if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
         const exposed = internal.require("node_stream_internals").modules;
@@ -536,6 +542,16 @@
       }
       return requireFrom(spec, this.filename);
     }
+  }
+
+  function compileModuleImports(source, filename) {
+    if (native.engine !== "host" || !source.includes("import")) return source;
+    const offsets = native.functionImports([source], "normal")[0];
+    const replacement = `globalThis.__bunwasm_dynamicImport(${JSON.stringify(filename)})`;
+    for (const offset of offsets.sort((a, b) => b - a)) {
+      source = source.slice(0, offset) + replacement + source.slice(offset + 6);
+    }
+    return source;
   }
 
   function nodeModulePaths(dir) {
@@ -601,12 +617,11 @@
     topLevelFunctions.add(wrapper);
     const require = makeRequire(path, mod);
     if (wrapper.length !== 6) {
-      wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
-      return;
+      return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
     }
     const meta = Object.create(null);
     internal.initImportMeta(meta, path, mod === mainModule);
-    wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
+    return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
   }
 
   function resolveFrom(spec, fromPath) {
