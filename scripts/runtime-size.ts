@@ -27,8 +27,6 @@ export function initialJavaScript(outputs: OutputGraph, roots: readonly string[]
   return Array.from(seen).sort();
 }
 
-// Waffle 0.0.58 adds inode permission queries and typed filesystem errors.
-// Same Bun/config: 8,121 B at 0.0.53 -> 8,443 B; retain a tight 8.5 KiB cap.
 const CORE_BUDGET_KIB = 8.5;
 export function checkCoreBudget(gzipBytes: number): void {
   const budget = CORE_BUDGET_KIB * 1024;

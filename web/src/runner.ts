@@ -230,7 +230,6 @@ const registeredPrograms = new WeakMap<Runtime, Set<string>>();
 export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const ring = options.adapter !== "preview1" && globalThis.crossOriginIsolated === true ? createRing() : null;
   let helper: RuntimeNetworkHelper | undefined;
-  // One Cache Storage cache per run holds its modules; deleted when the worker physically stops.
   const moduleCache = options.moduleScope ? `bunwasm-m-${crypto.randomUUID()}` : null;
   // The runtime exists only on an isolated page, so every run roots a process tree. The root
   // worker, its children and the shell all spawn through the same service; its transport and
@@ -412,7 +411,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (finished || options.runtime.disposed) return;
     const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
     const state = workerProcessState(transport);
-    // The host endpoint and descriptor reservations use the same filesystem identity.
     const { port: _port, ...filesystem } = request.filesystem;
     transport.data = { ...(transport.data as object | undefined), filesystem };
     if (!await subprocess.adoptRuntimeRoot(transport, () => finished)) return;

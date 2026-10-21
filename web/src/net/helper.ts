@@ -22,7 +22,6 @@ export interface BunNetworkOptions {
   stopped?(port: number, helper: RuntimeNetworkHelper): void;
 }
 
-/** Each physical process borrows its own session from the caller's Runtime. */
 export function createBunNetworkHelper(network: RuntimeNetwork, ring: SharedArrayBuffer, options: BunNetworkOptions = {}): RuntimeNetworkHelper {
   const fetch = options.fetch ?? installFetch;
   const listening = options.listening;
@@ -62,7 +61,6 @@ function validFetch(value: object): boolean {
   return "headers" in value && Array.isArray(value.headers) && value.headers.every(header => Array.isArray(header) && header.length === 2 && header.every(part => typeof part === "string"));
 }
 
-/** Worker messages are untrusted; no process or namespace authority travels with them. */
 export function dispatchBunNetwork(helper: RuntimeNetworkHelper, message: unknown): void {
   if (!message || typeof message !== "object" || !("type" in message) || message.type !== "net") return;
   if (!("req" in message) || !isNetRequest(message.req)) throw new TypeError("Invalid Bun network request");

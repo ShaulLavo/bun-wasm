@@ -143,7 +143,6 @@ process.exit(0);
     const backpressure = await pausedGuestReader();
     const collision = await bindCollision();
     const lifetime = await transientLifetime();
-    // Keep the first root alive while unrelated root and child sessions finish.
     check(listeners.has(ports.root), "unrelated root listener survives");
     return { ports, parentExit: 0, backpressure, collision, lifetime, listeners: Array.from(listeners.keys()), stdout, stderr };
   },
@@ -160,7 +159,6 @@ process.exit(0);
     return true;
   },
   async publicAdapter() {
-    // A fresh page exercises the public installer without runner registration overlap.
     module = await WebAssembly.compileStreaming(fetch("./bun-guest.wasm"));
     await runtime.filesystem.mkdirp("/home/user"); await runtime.filesystem.flush();
     const installation = await installBunAdapters(runtime, { workerUrl: new URL("./worker.js", location.href), module, network });

@@ -30,7 +30,6 @@ function scopedWorker(workerUrl: string): boolean {
   return new URL(workerUrl, base()).pathname.endsWith("/__bunwasm/worker.js");
 }
 
-/** Launch Bun with a process-owned session in the caller's shared network. */
 export function bunLauncher(engine: Engine, options: BunLauncherOptions): GuestLauncher {
   return (context, service) => launchBunProcess(engine, options, context, service);
 }
