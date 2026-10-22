@@ -159,6 +159,7 @@ process.exit(0);
     return true;
   },
   async publicAdapter() {
+    check(await previews.ready === "ready", "service worker ready");
     module = await WebAssembly.compileStreaming(fetch("./bun-guest.wasm"));
     await runtime.filesystem.mkdirp("/home/user"); await runtime.filesystem.flush();
     const installation = await installBunAdapters(runtime, { workerUrl: new URL("./worker.js", location.href), module, network });

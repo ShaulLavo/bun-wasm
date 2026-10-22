@@ -3,9 +3,8 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
-import { chromium, firefox, webkit, type Browser, type BrowserContext, type Page } from "playwright";
-import { buildBrowserEntries, buildClassicWorker } from "../../scripts/browser-build";
-import { previewWebsocketScript } from "../preview-build";
+import type { Browser, BrowserContext, Page } from "playwright";
+import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt";
 
 const names = process.argv.slice(2);
 assert.ok(names.length > 0 && names.every(name => ["chromium", "firefox", "webkit"].includes(name)), "explicit known browsers required");
@@ -13,8 +12,20 @@ const artifactInput = process.env.NETWORK_CONSUMER_GUEST;
 assert.ok(artifactInput && isAbsolute(artifactInput), "NETWORK_CONSUMER_GUEST must be an absolute borrowed artifact path");
 const artifact = await realpath(artifactInput);
 const guest = new Uint8Array(await Bun.file(artifact).arrayBuffer());
-const hash = new Bun.CryptoHasher("sha256").update(guest).digest("hex");
-assert.equal(hash, "55a2193329a2899e7c0f82687f3bb550a738cef3aab3dbb27b6ac956755f0ae2", "reviewed IPC guest identity");
+const receipt: unknown = await Bun.file(`${artifact}.build.json`).json();
+verifyGuestBuildReceipt(guest, receipt);
+const expectedInputs = process.env.NETWORK_CONSUMER_EXPECTED_INPUTS;
+assert.ok(expectedInputs && isAbsolute(expectedInputs), "NETWORK_CONSUMER_EXPECTED_INPUTS must be an absolute accepted build inputs JSON path");
+const accepted: unknown = await Bun.file(expectedInputs).json();
+assert.ok(accepted && typeof accepted === "object", "accepted build inputs must be an object");
+for (const field of ["bunHead", "bunTree", "sysrootReceiptSha256"] as const) {
+  assert.equal(receipt[field], Reflect.get(accepted, field), `guest build receipt matches accepted ${field}`);
+}
+const artifactReceipt = { path: artifact, receipt, expectedInputs };
+if (process.env.NETWORK_CONSUMER_PREFLIGHT_ONLY === "1") {
+  console.log(JSON.stringify({ ready: true, artifact: artifactReceipt, acceptance: "pending browser execution" }));
+  process.exit(0);
+}
 const port = Number(process.env.NETWORK_CONSUMER_PORT ?? 43829);
 assert.ok(Number.isInteger(port) && port > 1024 && port <= 65535, "explicit free listener port required");
 let scratch: string | undefined;
@@ -30,7 +41,6 @@ function cleanup(): Promise<void> {
 }
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
 const deadline = setTimeout(() => { console.error("consumer browser deadline"); void cleanup().finally(() => process.exit(1)); }, 600_000);
-const types = { chromium, firefox, webkit };
 const echoSocket = () => new Promise<string>((resolve, reject) => {
       const ws = new WebSocket(location.origin.replace("http", "ws") + "/socket");
       const timer = setTimeout(() => { ws.close(); reject(new Error("child socket deadline")); }, 15_000);
@@ -93,9 +103,13 @@ async function exercise(name: string, mode: "prepare" | "publicAdapter") {
   } finally { await context.close(); }
 }
 try {
+  const { chromium, firefox, webkit } = await import("playwright");
+  const { buildBrowserEntries, buildClassicWorker } = await import("../../scripts/browser-build");
+  const { previewWebsocketScript } = await import("../preview-build");
+  const types = { chromium, firefox, webkit };
   const base = process.env.NETWORK_CONSUMER_SCRATCH ?? process.env.SCRATCH ?? tmpdir();
   scratch = await mkdtemp(join(base, "network-consumer-"));
-  console.log(JSON.stringify({ resources: { existing: { artifact, hash, bytes: guest.length, browsers: "borrowed cache" }, created: { scratch, port, browsers: names } } }));
+  console.log(JSON.stringify({ resources: { existing: { artifact: artifactReceipt, browsers: "borrowed cache" }, created: { scratch, port, browsers: names } } }));
   const out = join(scratch, "dist");
   const root = resolve(import.meta.dir, "../..");
   const entry = join(import.meta.dir, "browser-network-consumer-main.ts");
@@ -106,7 +120,7 @@ try {
     const pathname = new URL(request.url).pathname;
     const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };
     if (pathname === "/favicon.ico") return new Response(null, { status: 204, headers });
-    if (pathname === "/bun-guest.wasm") return new Response(Bun.file(artifact), { headers: { ...headers, "Content-Type": "application/wasm" } });
+    if (pathname === "/bun-guest.wasm") return new Response(guest, { headers: { ...headers, "Content-Type": "application/wasm" } });
     const path = resolve(out, `.${pathname === "/" ? "/index.html" : pathname}`);
     if (!path.startsWith(out + sep) || !await Bun.file(path).exists()) return new Response(null, { status: 404, headers });
     return new Response(Bun.file(path), { headers });
