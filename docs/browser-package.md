@@ -66,13 +66,32 @@ storage errors remain errors. Disposal leaves markers in the caller-owned filesy
 reinstall works without deleting files that existing processes might use.
 Callers that register extra programs with Waffle are responsible for their own unregister handles.
 
-### Current networking limitations
+### Shared networking
 
-Processes launched by this installer do not receive networking slots or share the playground's
-networking ring. QuickJS and JSC processes therefore have no networking support through these
-launchers. The browser engine retains direct host `fetch`, subject to browser restrictions such
-as CORS; it does not gain a shared socket namespace. Sharing networking between processes is
-tracked in [browser runtime plan, row 6](../plans/browser-runtime.md#build-plan).
+The installer borrows networking from the caller's Runtime. Bun processes and their children
+share its loopback namespace for HTTP and WebSocket previews, with a separate helper for each
+process. Stopping one process releases its helper without closing another process's connections.
+The installer's fetch policy applies to roots and children. Browser host `fetch` remains subject
+to browser restrictions such as CORS. Preview1 programs do not receive Bun networking helpers.
+
+To check a selected guest before browser acceptance, supply its absolute artifact path and an
+independently accepted `GuestBuildInputs` JSON file from `scripts/guest-build-receipt.ts inputs`.
+The gate requires the artifact's adjacent `.build.json` receipt and checks its source commit,
+source tree, sysroot receipt digest, artifact SHA-256, and byte count before browser setup.
+It never downloads a guest. The accepted input file uses the existing fields `bunHead`, `bunTree`,
+and `sysrootReceiptSha256`. Do not derive those expectations from an unreviewed artifact sidecar.
+
+```sh
+NETWORK_CONSUMER_GUEST=/absolute/bun-browser.wasm \
+NETWORK_CONSUMER_EXPECTED_INPUTS=/absolute/accepted-inputs.json \
+NETWORK_CONSUMER_PREFLIGHT_ONLY=1 \
+  bun web/tests/browser-network-consumer.ts chromium
+```
+
+Preflight prints the verified receipt but does not establish browser acceptance. After source
+review and artifact selection, omit `NETWORK_CONSUMER_PREFLIGHT_ONLY` and set
+`NETWORK_CONSUMER_PORT` to an explicit free port for the existing browser gate. It runs both
+`prepare` and `publicAdapter` modes for each browser named on the command line.
 
 ### Worker bundling
 

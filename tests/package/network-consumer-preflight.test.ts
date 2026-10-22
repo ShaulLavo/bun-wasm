@@ -2,9 +2,10 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { GuestBuildInputs, GuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 
-const gate = new URL("../../web/tests/browser-network-consumer.ts", import.meta.url).pathname;
+const gate = fileURLToPath(new URL("../../web/tests/browser-network-consumer.ts", import.meta.url));
 const guest = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const inputs: GuestBuildInputs = {
   bunHead: "a".repeat(40), bunTree: "b".repeat(40), sysrootReceiptSha256: "c".repeat(64),
