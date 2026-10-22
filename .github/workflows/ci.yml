@@ -211,6 +211,11 @@ jobs:
           node-version: '24'
       - name: Web host unit, CLI shim, type and bundle gates
         run: bash ../scripts/test-web-host.sh --unit
+      - name: Use Ubuntu HTTPS archives for browser dependencies
+        run: |
+          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+          test -s /etc/apt/apt-mirrors.txt
+          cat /etc/apt/apt-mirrors.txt
       - name: Install Chromium and WebKit
         run: bunx playwright install --with-deps chromium webkit
       - name: Web host browser gates
@@ -235,6 +240,11 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile --linker=isolated
+      - name: Use Ubuntu HTTPS archives for browser dependencies
+        run: |
+          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+          test -s /etc/apt/apt-mirrors.txt
+          cat /etc/apt/apt-mirrors.txt
       - name: Install browser
         run: bunx playwright install --with-deps ${{ matrix.browser }}
       - name: Process supervisor, generic preview1 and interrupt gate (no Rust or dist artifacts)
