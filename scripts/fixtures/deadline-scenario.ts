@@ -100,7 +100,7 @@ function expectedStatus(mode: string, signal: "SIGINT" | "SIGTERM" | undefined) 
   if (mode === "failed-browser") return 137;
   return mode === "quick-launcher" ? 7 : 124;
 }
-export async function ownedScenario(mode: "launcher" | "browser" | "quick-launcher" | "failed-browser", runtime: "node" | "bun" = "node", signal?: "SIGINT" | "SIGTERM") {
+export async function ownedScenario(mode: "launcher" | "browser" | "quick-launcher" | "failed-browser", runtime: "node" | "bun" = "node", signal?: "SIGINT" | "SIGTERM", env: NodeJS.ProcessEnv = {}) {
   const scratch = await mkdtemp(join(existsSync("/work/tmp") ? "/work/tmp" : tmpdir(), "bw-dl-"));
   const controlDirectory = join(scratch, "control");
   const owned = new Map<number, Identity>(), controls = new Map<number, Identity>();
@@ -126,18 +126,24 @@ export async function ownedScenario(mode: "launcher" | "browser" | "quick-launch
     const seconds = deadline ? mode === "browser" ? "3" : "1" : "30";
     const began = performance.now();
     const child = Bun.spawn([runtime, wrapper, seconds, "node", fixture, mode, scratch], {
-      stdout: "pipe", stderr: "pipe", env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
+      stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
     });
     remember(child.pid, owned);
     if (mode === "failed-browser" && process.platform === "linux") await resumeAfterLauncherExit(scratch, child.pid);
     if (signal) { await ready(scratch); child.kill(signal); }
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
     capture(scratch, owned);
+    console.info(JSON.stringify({ mode, runtime, code, stderr, workerReady: existsSync(join(scratch, "worker-ready")), workerTerm: existsSync(join(scratch, "worker-term")), blockedBrowserImport: existsSync(join(scratch, "worker-browser-import.pid")) }));
     expect(code).toBe(expectedStatus(mode, signal));
     expect(deadline ? stderr.includes("command deadline exceeded") : stderr === "").toBe(true);
     expect(processIdentity(control.pid)?.live).toBe(true);
     if (browser) expect(processIdentity(Number(readFileSync(join(controlDirectory, "browser.pid"), "utf8")))?.live).toBe(true);
-    if (mode === "launcher") expect(readFileSync(join(scratch, "grace-complete"), "utf8")).toBe("complete");
+    if (mode === "launcher") {
+      expect(readFileSync(join(scratch, "grace-complete"), "utf8")).toBe("complete");
+      expect(readFileSync(join(scratch, "worker-ready"), "utf8")).toBe("ready");
+      expect(readFileSync(join(scratch, "worker-term"), "utf8")).toBe("received");
+      expect(existsSync(join(scratch, "worker-browser-import.pid"))).toBe(false);
+    }
     const remaining = live(owned);
     console.info(JSON.stringify({ mode, runtime, signal, code, elapsedMs: performance.now() - began, remaining, scratch, unrelated: live(controls) }));
     expect(remaining).toEqual([]);

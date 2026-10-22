@@ -22,11 +22,11 @@ test("consumer browser gate requires an explicit borrowed artifact", () => {
   rejects(["chromium"], "NETWORK_CONSUMER_GUEST must be an absolute borrowed artifact path");
 });
 
-test("consumer browser gate rejects an unreviewed guest before launching a browser", () => {
+test("consumer browser gate rejects a guest without a build receipt before launching a browser", () => {
   const scratch = mkdtempSync(join(process.env.NETWORK_CONSUMER_SCRATCH ?? tmpdir(), "network-consumer-control-"));
   try {
     const guest = join(scratch, "wrong.wasm");
     writeFileSync(guest, new Uint8Array([0]));
-    rejects(["chromium"], "reviewed IPC guest identity", guest);
+    rejects(["chromium"], `${guest}.build.json`, guest);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
