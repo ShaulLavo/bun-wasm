@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { qualityGates } from "./quality";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -95,3 +98,39 @@ test("CMake preflight has one always-on lightweight owner, independent of native
   expect(quality).not.toMatch(/^\s+(?:if|needs):/m);
   expect(rust).not.toContain("scripts/cmake-cache.test.ts");
 });
+
+for (const { job, install } of [
+  { job: "web", install: "bunx playwright install --with-deps chromium webkit" },
+  { job: "browser-process", install: "bunx playwright install --with-deps ${{ matrix.browser }}" },
+]) {
+  test(`${job} selects the existing HTTPS apt mirrors before installing browsers`, () => {
+    const section = workflow.split(`\n  ${job}:\n`)[1] ?? "";
+    const step = section.match(/      - name: Use Ubuntu HTTPS archives for browser dependencies\n        run: \|\n((?:          .*\n)+)/);
+    if (!step?.[1]) throw new Error("configure apt transport before installing browser dependencies");
+    const command = step[1];
+    expect(section).toContain("timeout-minutes: 10");
+    expect(section).toContain(`run: ${install}`);
+    expect(section.indexOf(command)).toBeLessThan(section.indexOf(install));
+    const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-apt-"));
+    try {
+      const mirrors = join(directory, "apt-mirrors.txt");
+      const fallbacks = "https://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n";
+      const unrelated = "https://azure.archive.ubuntu.com/ubuntu/\tpriority:4\nhttp://azureXarchiveXubuntuXcom/ubuntu/\tpriority:5\n# http://azure.archive.ubuntu.com/ubuntu/\n";
+      const preserved = fallbacks + unrelated;
+      writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n" + preserved);
+      const run = command.replaceAll("sudo ", "").replaceAll("/etc/apt/apt-mirrors.txt", mirrors);
+      const result = spawnSync("bash", ["-euc", run], { encoding: "utf8" });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(readFileSync(mirrors, "utf8")).toBe(preserved);
+      expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
+      expect(readFileSync(mirrors, "utf8")).toBe(preserved);
+      writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n");
+      expect(spawnSync("bash", ["-euc", run]).status).not.toBe(0);
+      rmSync(mirrors);
+      expect(spawnSync("bash", ["-euc", run]).status).not.toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
