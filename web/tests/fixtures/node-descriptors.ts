@@ -122,7 +122,8 @@ try {
     const parent = setup(count), [input, inputWriter] = parent.pipe(), [outputReader, output] = parent.pipe();
     assert.ok(input >= count + 3 && input < 65535);
     const env = { BUNWASM_WORKER_CONTROL: JSON.stringify({ input, output }) };
-    assert.ok(parent.spawn(request([{ child: input, parent: input }, { child: output, parent: output }], env)) > 1);
+    const stdioBindings = [0, 1, 2].map(fd => ({ child: fd, parent: fd }));
+    assert.ok(parent.spawn(request(stdioBindings.concat([{ child: input, parent: input }, { child: output, parent: output }]), env)) > 1);
     const message = latestSpawn(parent);
     // Child may have a different number of preopens than its parent.
     const child = setup(count + 2, message.transport, message.request.env);
@@ -141,10 +142,14 @@ try {
     assert.equal(parent.read(outputReader), 1);
     assert.equal(child.bytes()[512], 41);
 
+    for (const fd of [0, 1, 2]) checkStdioMetadata(child, fd, fd);
     // A native path_open initially returns a private number that equals a control fd. Its
     // translated guest result, metadata, reads, closes and renumbers must never hit that pipe.
     const opened = child.open();
     assert.ok(opened > controls.output);
+    const openedResource = child.host.descriptors.get(opened)!.resource;
+    assert.ok("nodeWasiFd" in openedResource);
+    assert.equal(openedResource.nodeWasiFd, controls.input);
     assert.equal(fileContents(child, opened), "file-data");
     assert.equal(child.call("fd_fdstat_get", controls.input, 128), 0);
     assert.equal(child.view().getUint8(128), 6);
