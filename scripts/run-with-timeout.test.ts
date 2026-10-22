@@ -57,3 +57,9 @@ test("ordinary launcher exit removes reparented detached descendants", () => own
 test("Bun command deadline preserves descendant grace after launcher exit", () => ownedScenario("launcher", "bun"), 12000);
 
 test("Bun ordinary launcher exit removes reparented detached descendants", () => ownedScenario("quick-launcher", "bun"), 12000);
+
+for (const runtime of ["node", "bun"] as const) {
+  test(`${runtime} deadline grace does not depend on worker browser import startup`, () => ownedScenario("launcher", runtime, undefined, {
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${new URL("./fixtures/deadline-worker-import-control.ts", import.meta.url).href}`].filter(Boolean).join(" "),
+  }), 12000);
+}
