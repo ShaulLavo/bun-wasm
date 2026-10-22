@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { qualityGates } from "./quality";
+import { inBatches, missingPackages, parseArchives } from "./ci-browser-deps";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const quality = workflow.split("\n  quality:\n")[1]!.split("\n  rust:\n")[0]!;
@@ -100,8 +101,8 @@ test("CMake preflight has one always-on lightweight owner, independent of native
 });
 
 for (const { job, install } of [
-  { job: "web", install: "bunx playwright install --with-deps chromium webkit" },
-  { job: "browser-process", install: "bunx playwright install --with-deps ${{ matrix.browser }}" },
+  { job: "web", install: "bunx playwright install chromium webkit" },
+  { job: "browser-process", install: "bunx playwright install ${{ matrix.browser }}" },
 ]) {
   test(`${job} selects the existing HTTPS apt mirrors before installing browsers`, () => {
     const section = (workflow.split(`\n  ${job}:\n`)[1] ?? "").split(/\n  \S/)[0] ?? "";
@@ -144,8 +145,59 @@ for (const { job, browsers } of [
     expect(section).toContain(`bun ../scripts/ci-browser-deps.ts ${browsers}`);
     expect(section).toContain(`bunx playwright install ${browsers}`);
     expect(section).not.toContain("playwright install --with-deps");
-    expect(section).toContain("${{ runner.temp }}/browser-apt");
+    expect(section).toContain("${{ runner.temp }}/browser-apt/*.deb");
     expect(section).toContain("~/.cache/ms-playwright");
     expect(section).toContain("timeout-minutes: 10");
   });
 }
+
+test("browser dependency reports fail closed and retain every missing package", () => {
+  expect(missingPackages("All system dependencies are installed.\n")).toEqual([]);
+  expect(missingPackages("Missing system dependencies (2):\n  fonts-noto-color-emoji\n  libcodec2-1.2\n")).toEqual(["fonts-noto-color-emoji", "libcodec2-1.2"]);
+  expect(() => missingPackages("Missing system dependencies (2):\n  libcodec2-1.2\n")).toThrow("Invalid");
+  expect(() => missingPackages("Missing system dependencies (1):\n  --allow-unauthenticated\n")).toThrow("Invalid");
+  expect(() => missingPackages("apt simulation failed")).toThrow("Unexpected");
+});
+
+test("apt prefetch uses signed-index SHA256 hashes and preserves mirror resolution", () => {
+  const hash = "a".repeat(64);
+  const uri = "mirror+file:/etc/apt/apt-mirrors.txt/pool/main/a/archive.deb";
+  const row = `'${uri}' archive_1.0_amd64.deb 42 SHA256:${hash}`;
+  expect(parseArchives(`Reading package lists...\n${row}\n`)).toEqual([{ uri, filename: "archive_1.0_amd64.deb", size: 42, sha256: hash }]);
+  expect(parseArchives(row.replace(uri, "https://archive.ubuntu.com/ubuntu/pool/main/a/archive.deb"))).toHaveLength(1);
+  expect(() => parseArchives(row.replace("SHA256:", "MD5Sum:"))).toThrow("SHA256");
+  expect(() => parseArchives(row.replace("archive_1.0_amd64.deb", "../archive.deb"))).toThrow("SHA256");
+  expect(() => parseArchives(row.replace(uri, "http://azure.archive.ubuntu.com/ubuntu/pool/main/a/archive.deb"))).toThrow("transport");
+  expect(() => parseArchives(row.replace(" 42 ", " 0 "))).toThrow("size");
+});
+
+test("prefetch starts a bounded batch before waiting, unlike serial apt downloads", async () => {
+  const started: number[] = [];
+  const release: (() => void)[] = [];
+  const download = (item: number) => new Promise<void>(resolve => {
+    started.push(item);
+    release.push(resolve);
+  });
+  const result = inBatches([1, 2, 3, 4, 5], 3, download);
+  expect(started).toEqual([1, 2, 3]);
+  for (const resolve of release.splice(0)) resolve();
+  await Bun.sleep(0);
+  expect(started).toEqual([1, 2, 3, 4, 5]);
+  for (const resolve of release) resolve();
+  await result;
+});
+
+test("failed prefetch waits for active downloads and never starts the next batch", async () => {
+  const started: number[] = [];
+  let settled = false;
+  const download = async (item: number) => {
+    started.push(item);
+    if (item === 1) throw new Error("hash mismatch");
+    await Bun.sleep(5);
+    settled = true;
+  };
+  await expect(inBatches([1, 2, 3], 2, download)).rejects.toThrow("hash mismatch");
+  expect(started).toEqual([1, 2]);
+  expect(settled).toBe(true);
+  await expect(inBatches([], 0, download)).rejects.toThrow("positive concurrency");
+});
