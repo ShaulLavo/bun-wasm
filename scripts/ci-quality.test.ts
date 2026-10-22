@@ -104,7 +104,7 @@ for (const { job, install } of [
   { job: "browser-process", install: "bunx playwright install --with-deps ${{ matrix.browser }}" },
 ]) {
   test(`${job} selects the existing HTTPS apt mirrors before installing browsers`, () => {
-    const section = workflow.split(`\n  ${job}:\n`)[1] ?? "";
+    const section = (workflow.split(`\n  ${job}:\n`)[1] ?? "").split(/\n  \S/)[0] ?? "";
     const step = section.match(/      - name: Use Ubuntu HTTPS archives for browser dependencies\n        run: \|\n((?:          .*\n)+)/);
     if (!step?.[1]) throw new Error("configure apt transport before installing browser dependencies");
     const command = step[1];
