@@ -134,3 +134,18 @@ for (const { job, install } of [
     }
   });
 }
+
+for (const { job, browsers } of [
+  { job: "web", browsers: "chromium webkit" },
+  { job: "browser-process", browsers: "${{ matrix.browser }}" },
+]) {
+  test(`${job} prefetches verified apt archives instead of serial browser dependency downloads`, () => {
+    const section = (workflow.split(`\n  ${job}:\n`)[1] ?? "").split(/\n  \S/)[0] ?? "";
+    expect(section).toContain(`bun ../scripts/ci-browser-deps.ts ${browsers}`);
+    expect(section).toContain(`bunx playwright install ${browsers}`);
+    expect(section).not.toContain("playwright install --with-deps");
+    expect(section).toContain("${{ runner.temp }}/browser-apt");
+    expect(section).toContain("~/.cache/ms-playwright");
+    expect(section).toContain("timeout-minutes: 10");
+  });
+}
