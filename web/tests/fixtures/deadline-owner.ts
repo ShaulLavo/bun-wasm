@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { chromium } from "playwright";
 
 const [mode, scratch] = process.argv.slice(2);
 if (!scratch) throw new Error("missing fixture directory");
@@ -48,6 +47,7 @@ if (mode === "quick-launcher") {
   });
   writeFileSync(join(scratch, "worker-ready"), "ready");
 } else if (mode === "browser" || mode === "failed-browser" || mode === "control-browser") {
+  const { chromium } = await import("playwright");
   const missed = mode === "failed-browser" && process.platform === "linux";
   if (missed) await pauseSupervisor(scratch);
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !missed || !key.startsWith("BUN_WASM_DEADLINE_")));
