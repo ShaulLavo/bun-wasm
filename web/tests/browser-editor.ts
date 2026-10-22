@@ -47,7 +47,11 @@ async function filesystemInfoCheck(base: string, mode: "memory" | "fast" | null)
     const input = page.locator(".xterm-helper-textarea");
     await input.pressSequentially("help > /tmp/filesystem-info.txt");
     await input.press("Enter");
-    await page.waitForFunction(async () => !!await window.playground?.fs.lookup("/tmp/filesystem-info.txt"));
+    await page.waitForFunction(async () => {
+      const fs = window.playground?.fs;
+      if (!fs || !await fs.lookup("/tmp/filesystem-info.txt")) return false;
+      return new TextDecoder().decode(await fs.readFile("/tmp/filesystem-info.txt")).includes("filesystem:");
+    });
     const output = await page.evaluate(async () => new TextDecoder().decode(await window.playground!.fs.readFile("/tmp/filesystem-info.txt")));
     const storage = mode === "memory" ? "memory-only browser storage" : "persistent browser storage";
     const durability = mode === "memory" ? "do not survive" : "survive";

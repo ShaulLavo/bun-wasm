@@ -233,7 +233,9 @@ const shell = new Shell(term, {
     `sleeps: ${sleepMode}`,
     `engine: ${engineName}`,
     `network: ${networkInfo()}`,
-    `filesystem: persistent browser storage, preopened at /, cwd ${HOME}; editor saves survive reload`,
+    fs.vfs.persistent
+      ? `filesystem: persistent browser storage, preopened at /, cwd ${HOME}; editor saves survive reload`
+      : `filesystem: memory-only browser storage, preopened at /, cwd ${HOME}; editor saves do not survive reload`,
   ],
 });
 

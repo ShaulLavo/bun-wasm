@@ -111,6 +111,25 @@ than it is today. The process layer loads on the first spawn.
   relay mode above.
 - **Not adopted:** `@wasmer/sdk`, a fork of `@bjorn3/browser_wasi_shim`, SLICC code.
 
+## Controlled engine navigation
+
+Status: Approved, blocked on Waffle's reversible writer and admission contract.
+
+The engine selector in `web/src/main.ts` still navigates immediately. The accepted
+Waffle pin `b20fad173ebaa225cb87c51776f35edaaafd4a40`, package `0.0.67`, has no
+reversible barrier covering guest writers and pending process admissions.
+`fs.drain()` orders page mutations, but a guest can write during a held `flush()`.
+Quiesce permanently revokes writers, disposal is terminal, and a completed root
+can leave independent descendants alive. None provides recovery after a failed flush.
+
+Waffle owns the missing admission and writer contract. After that lands, Bun must
+order incoming guest and editor writes, await admitted work, flush, and navigate
+only on success. Prove held and rejected flushes prevent navigation, admitted writes
+cannot overtake the barrier or disappear, and failed flushes allow recovery.
+Keep one runtime, borrowed lifetime ownership, and editor saves' targeted flush.
+The pin and truthful memory diagnostic do not complete this navigation requirement
+or certify FAST, SAFE, or storage durability.
+
 ## Layers
 
 | Layer | Contents | Loaded by |
