@@ -20,6 +20,14 @@ Each row has one class. A file with independent changes has separate rows.
 | [Bun public transpiler adapter](#public-transpiler-adapter) | Port | Adapt the real Rust parse/print and scan paths to the engine-independent native boundary. |
 | [Generated `bun:wrap` helpers](#bun-wrap-helpers) | Host feature | Load Bun's unmodified runtime helpers through the builtin registry. |
 | [Partial strict comparison](#partial-strict-comparison) | Port | Translate Bun's native partial-comparison rules to TypeScript for all engines. |
+| [Builtin resolution spelling adapter](#builtin-resolution-spelling-adapter) | Host feature | Original `require.resolve` and `Module._resolveFilename` adapter preserves bare and node-prefixed builtin requests without changing loader identities. |
+| [Standard output cursor adapter](#standard-output-cursor-adapter) | Host feature | Original stdout and stderr cursor methods forward ANSI bytes, callbacks, and write return values through the existing writer. |
+| [Filesystem stream constructors](#filesystem-stream-constructors) | Host feature | Original callable ReadStream and WriteStream adapters use the shipped Node stream lifecycle over WASI file descriptors. |
+| [Request async-body adapter](#request-async-body-adapter) | Host feature | Original Request adapter converts Node and other async-iterable request bodies into ordered byte streams. |
+| [HTTP response header preparation](#http-response-header-preparation) | Host feature | Original ServerResponse adapter prepares implicit headers through overridable writeHead before sending existing wire bytes. |
+| [Stack constructor-column query](#stack-constructor-column-query) | Host feature | Original numeric source query avoids whole-line transfers for stack column adjustment while retaining full inspect excerpts. |
+| [VM context-global adapter](#vm-context-global-adapter) | Host feature | Original context-global view keeps default globalThis and top-level this property writes on the supplied context. |
+| [CommonJS source compilation adapter](#commonjs-source-compilation-adapter) | Host feature | Original `Module._compile` adapter evaluates caller-provided JavaScript with the existing CommonJS wrapper and host dynamic-import resolver. |
 | [Small public runtime adapters](#small-public-runtime-adapters) | Host feature | Original matcher, native and browser promise reaction, version, web-brand and resolver-diagnostic adapters. |
 | [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
@@ -85,7 +93,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`jsc/webkit-wasi.patch`, non-JIT declarations](#webkit-non-jit-declarations) | Upstream bug | Expose a required enum without DFG and add two missing includes. |
 | [`third_party/libc/src/wasi/mod.rs` and `posix_compat.rs`](#libc) | Port | Declare missing WASI POSIX types and functions. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, buffer tags](#quickjs-data-conversion) | Host feature | Query ordinary and shared buffer classes without throwing. |
-| [`third_party/rquickjs-sys/quickjs/quickjs.c`, call locations](#quickjs) | Host feature | Match JSC's call-site stack columns. |
+| [`third_party/rquickjs-sys/quickjs/quickjs.c`, call locations](#quickjs) | Host feature | Original adapter matches JSC's call-site columns in UTF-16 units. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, inspection helpers](#quickjs) | Host feature | Inspect keys and iterator entries without consuming them. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, async context](#quickjs) | Host feature | Capture and restore async context in promise reactions. |
 | [`third_party/rquickjs-sys/build.rs`](#quickjs) | Host feature | Rebuild when the locally patched C sources or binding header change. |
@@ -133,6 +141,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
 | [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, `web/src/engine-host.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
 | [Waffle browser services](#waffle-preparation) | Host feature | The Waffle package owns the browser runtime, worker/executor, filesystem, terminal, network and preview adapters separately from Bun policy. |
+| [Preview document policy](preview-policy.md) | Host feature | Original opt-in Bun service-worker document policy, bootstrap injection and scoped redirect-refusal audit over the unchanged Waffle preview transport. |
 | [`waffle/core/`, `waffle/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, shared filesystem, IndexedDB persistence, lazy residency, startup diagnostics and descriptor adapters. |
 | [`web/tests/persistence-browser-worker.ts`, persistence corpus](#browser-runtime-core) | Host feature | Original browser test adapter reproduces the local storage spike's generated sizes and synthetic bytes; no package contents or upstream implementation. |
 | [`waffle/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry, jobs, registered signal dispositions including Node/Bun's ignored SIGPIPE default, immutable final-kind query and byte-sized exit statuses. |
@@ -1064,11 +1073,41 @@ The vendored package omits upstream tests and Cargo's `.cargo_vcs_info.json`. Ot
 
 | File and area | Change | What breaks without it |
 | --- | --- | --- |
-| `quickjs/quickjs.c`, parser call locations | Record the callee, property, or constructor position after parsing arguments. | Stack frames and source maps point to QuickJS's argument position instead of Bun/JSC's call position. This is a compatibility policy, not an ECMAScript violation by QuickJS. |
+| `quickjs/quickjs.c`, parser call locations | Original adapter records the callee, property, or constructor position in UTF-16 units after parsing arguments. | Stack frames and source maps point to QuickJS's argument position instead of Bun/JSC's call position. This is a compatibility policy, not an ECMAScript violation by QuickJS. |
 | `quickjs/quickjs.c`, `JS_bunwasm_OwnKeysInOrder` | Return ordinary-object keys in JSC's inspection order, with integer keys sorted and symbols interleaved by insertion. | Bun-compatible console inspection cannot reproduce that order through `Reflect.ownKeys`. |
 | `quickjs/quickjs.c`, `JS_bunwasm_IteratorEntries` | Snapshot remaining Map/Set iterator entries without advancing the iterator. | Console inspection either lacks the entries or consumes the user's iterator. |
 | `quickjs/quickjs.c`, async context | Store and trace a context value, capture it in promise reactions, restore it for jobs, and expose get/set functions. | QuickJS `AsyncLocalStorage` loses its store across promise and await boundaries. The original engine has no obligation to implement Node's API. |
 | `build.rs` | Add rerun tracking for `quickjs` and `quickjs.bind.h`. | Local C changes can leave Cargo using a stale engine until another input invalidates it. This hook supports our fork. |
+
+The four parser call-location assignments use a cursor owned by `JSParseState` to
+count UTF-16 code units from the selected token's saved line start. The
+existing parser initializer zeros it. A changed line or backwards token resets
+it; monotonic positions on one line scan each prefix byte once with the bundled
+bounded UTF-8 decoder. Astral code points count two units, BMP characters and TAB
+one. Explicit rewinds may rescan a prefix. There is no filename/global cache,
+source-line allocation or transfer, lexer-wide coordinate change, or token
+selection change. Source-location emission, maps, CallSites and the host numeric
+stack query retain their existing roles. Genuine inspection still receives full
+source lines. A multiline string or template advances the scanner beyond the
+token's starting line. The call-column cursor uses `JSToken.line_start`, and
+`js_parse_get_pos` saves that origin so the existing seek can retokenize the
+same literal without assigning its final scanner line to its start. This is
+private coordinate bookkeeping, not a lexer line-policy rewrite.
+
+`node-stack-position.test.ts` compiles the actual extracted assignments, cursor,
+initializer and bundled decoder into a small C probe. It also extracts the real
+lexer, string/template/regexp scanners, private token/state structs and
+get-position/seek functions. Small allocation/value sinks support only the tested
+syntax; they do not stand in for an engine acceptance run. Actual tokenization
+checks multiline LF/CRLF/bareCR literals and repeated seeks, including unchanged
+following-token and scanner state. It covers state resets,
+independent parsers, line changes, rewinds, Unicode widths and bounded work on a
+large minified line. This is not a complete engine build. The shared
+`stack-source-position` fixture checks raw and formatted constructor, direct,
+identifier and property-call positions against JavaScript UTF-16 indexing and
+keeps its mapped TypeScript assertion. Standard Node's raw constructor position
+uses `new`; the existing JS regex adjustment supplies the constructor position.
+Corrected native and browser guest execution remain separate acceptance gates.
 
 No existing binding source or C header is modified. Our Rust engine declares the added functions. The vendored tree keeps Linux x86_64 and wasm32-wasip1 bindings and the C files needed by the library, dropping other targets, shell programs, tests, build tooling, and package metadata. It adds the license copy. These packaging choices do not change retained upstream implementations. Every other retained source file matches the published crate.
 
@@ -3266,3 +3305,72 @@ only physical worker cleanup releases that session and its module cache. Parent
 exit and adapter uninstall leave admitted children alive. The existing installer
 fetch cache remains the default policy; injected network fetch stays separate from
 asset-download fetch. Preview1 receives no network session.
+
+## CommonJS source compilation adapter
+
+`crates/bunwasm-runtime/src/js/bootstrap.js` implements `Module.prototype._compile` as an original adapter, not copied upstream source. Its reference contract is Node's `lib/internal/modules/cjs/loader.js`, observed with released Node26.7.0. It evaluates the supplied JavaScript rather than reading or transpiling a file, passes the five CommonJS arguments with `this === exports`, returns the wrapper result, and propagates errors. It leaves module metadata, loaded state and cache insertion to the caller. Leading BOM and hashbang handling preserve script parsing, including CR, LF, U+2028 and U+2029 line terminators.
+
+The adapter reuses the existing module require hook and wrapper invocation. In the Browser engine, Bun's existing semantic Function import scanner identifies dynamic-import keywords, then the adapter routes only those keywords through the existing Function-prototype import helper. A function literal avoids capturing a caller's shadowed `globalThis` binding, without adding a sixth wrapper argument. Strings, templates and comments are not rewritten. Other engines use the evaluator's supplied source filename. No Next source or compiler package is changed.
+
+`tests/fixtures/module-compile` exercises the production method, relative and package requires, prototype interception, file-relative imports after a Unicode character, wrapper arguments and return value, exports replacement, directives, source prefixes and error propagation. Its expected output follows the Node contract. Native Bun1.4.2 differs in wrapper `this` and loaded-state behavior, so native Bun is not used to regenerate this fixture.
+
+## Builtin resolution spelling adapter
+
+`crates/bunwasm-runtime/src/js/bootstrap.js` and `src/js/builtins.js` use an original adapter for the Node builtin resolution contract. Native Node26.7.0 and Bun1.4.2 both return `process` for `require.resolve("process")` and `node:process` for the explicitly prefixed request. `Module._resolveFilename` preserves the same spelling. The runtime previously returned the canonical loader identity `node:process` for both.
+
+The shared `resolveFilename` adapter first uses the existing resolver and argument validation. It returns the request spelling only for validated builtins. Files and packages retain their resolved paths. Internal `require` loading still uses canonical identities, so this change does not create another builtin instance. The production `module-compile` fixture checks both resolution APIs for bare and prefixed process, buffer, fs and path. Next's unchanged webpack ProvidePlugin can therefore use its normal bare-process client fallback instead of treating `node:process` as an unsupported URL scheme. No Next or webpack implementation is copied or patched.
+
+## Filesystem stream constructors
+
+`crates/bunwasm-runtime/src/js/node_fs.js` implements original callable `ReadStream` and `WriteStream` constructors. No upstream filesystem implementation is copied. The public reference is Node26.7.0 `node:fs`, including prototype inheritance and constructor initialization through `.apply`. The adapters inherit the existing shipped `node:stream` Readable and Writable implementations. Lazy constructor setup keeps filesystem-only module initialization independent of stream loading. The factories construct those same types, with the standard FileReadStream and FileWriteStream aliases.
+
+The existing descriptor operations supply deferred open, bounded chunked reads, partial-write completion, byte counters, and close-on-destroy. The Node stream implementation supplies buffering, backpressure, encoding, pipe, async iteration, and finish/error/close lifecycle behavior. This replaces the prior whole-file EventEmitter facsimiles rather than adding a second stream implementation.
+
+Read failures propagate through the shipped Readable error lifecycle, so `autoClose: false` leaves a borrowed descriptor open after an error until explicit destruction. ReadStream close callbacks use the shipped `finished` observer, including premature-close errors after destruction. Explicit WriteStream close drains pending writes and destroys the stream even when automatic closing is off. Already-closed writer callbacks run on the next tick. The writer forces byte decoding before `_write`, preserving positions and partial writes even if a caller supplies `decodeStrings: false`. These contracts were checked against Node v26.7.0 `lib/internal/fs/streams.js` and the shipped stream core.
+
+`tests/fixtures/fs-stream-constructors` follows the Node oracle for constructors, `.apply` wrappers, inheritance, binary and encoded streaming, ranges, append, backpressure, open/write errors, and descriptor cleanup. `scripts/node-fs-streams.test.ts` runs that same contract against the production fs factory with real native descriptors and deliberately short writes. Next15.5.6's unchanged bundled graceful-fs provides the package-backed browser diagnostic. It captures both missing-constructor stacks before this correction; this alone does not establish why dev navigation timed out. No Next package, cache configuration, Waffle source, or runtime network policy changes.
+
+## Standard output cursor adapter
+
+Class **Host feature**. The cursor methods in `crates/bunwasm-runtime/src/js/process.js` are original bun-wasm adapters for the public Node TTY contract, not a copied upstream fork. Behavior was compared with Node v26.7.0 `lib/tty.js` and `lib/internal/readline/callbacks.js` on real PTYs. `clearLine`, `clearScreenDown`, `cursorTo`, and `moveCursor` delegate ANSI bytes and the exact callback to the receiver's existing `write` method, and return its boolean. Empty positioning and zero movement defer successful callbacks without writing.
+
+The adapter leaves writer flushing, fd binding, TTY detection, ordinary pipe writes, and EPIPE batching unchanged. `tests/fixtures/stdio-cursor` checks both stdout and stderr bytes, callback identity, deferred callback order, and write return values. The lightweight production-source probe also checks both TTY states, validation, EPIPE identity, error delivery order, and pipe recovery. The native guest gate and Chromium gate compare both expected byte streams. The Chromium check captures output before xterm consumes its ANSI sequences.
+
+The manual fixture retains the Node oracle. Native Bun v1.4.2 omits cursor methods on pipes and invokes terminal-write callbacks synchronously. Neither difference replaces the expected Node contract. No Next typecheck, cache, or timeout control changes.
+
+## VM context-global adapter
+
+Class **Host feature**. The `node:vm` factory in `crates/bunwasm-runtime/src/js/builtins.js` is an original adapter, not copied Node source. Its context-global reference is the public Node26.7.0 `lib/vm.js` contract. A cached proxy supplies the default `globalThis` binding and top-level `this` for `runInNewContext`, `runInContext`, and the corresponding Script methods. Property writes and deletes reach the caller's context, without adding a `globalThis` property to it. Explicit context-provided `globalThis` values are retained, including undefined. Context accessors keep the original context as their receiver. Repeated evaluation reuses the context-global view; separate contexts remain separate.
+
+This corrects context-global binding in the existing `with`/direct-eval implementation. It does not create a separate realm or a security boundary. Missing bindings still fall back to the ambient realm, and full Node declaration/contextification semantics, isolated intrinsics, execution timeouts, and sandbox security are not supplied. `runInThisContext`, `compileFunction`, context creation, and ordinary evaluation results/errors are unchanged.
+
+`tests/fixtures/vm-context` shares one contract between standard Node, the production factory test in `scripts/node-vm-context.test.ts`, and the real Chromium guest preflight. It checks strict and ordinary `this` identity, property writes/deletes, default and supplied globalThis, accessors, repeated contexts, Script methods, results/errors, and caller-global marker cleanup. The native fixture gate also retains the Node expected output. Next15.5.6's generated client-reference manifests exposed the defect by writing through globalThis before its unchanged loader read the empty context; no Next-specific name, package patch, or manifest shortcut is present in the correction.
+
+
+## HTTP response header preparation
+
+Class **Host feature**. The `ServerResponse` in `crates/bunwasm-runtime/src/js/net.js` is an original adapter. Its public reference is Node26.7.0 `node:http` and the observable `_header`, `_implicitHeader`, and `writeHead` contract. No upstream implementation is copied. `_header` starts as null and becomes the serialized Latin-1 header string. `_implicitHeader` delegates through the current `writeHead`, so middleware can change status and headers before serialization.
+
+Explicit header preparation still sends no socket bytes. Automatic write, end, and flush paths prepare through the same hook, then use the existing serializer, body framing, socket writes, and completion ownership. Temporary framing arguments preserve known-length end and streaming behavior, and clear even if a hook throws. Repeated flush and end do not generate another header. Existing status, header validation, and headers-already-sent errors remain in force.
+
+`tests/fixtures/net-http-implicit-headers` shares its Node oracle with the production factory test and the Chromium preflight. It covers direct middleware preparation without internal framing state, status and content-encoding hooks, explicit and implicit headers, real body completion, retries after hook failure, and repeated completion. The source test also checks exact wire framing and the absence of writes during preparation. The defect was reproduced with unchanged Next15.5.6 compression, whose normal write and end wrappers call `_implicitHeader`. No package patch, compression bypass, cache change, or timeout increase is part of this adapter. Corrected-guest application acceptance remains pending.
+
+
+## Request async-body adapter
+
+Class **Host feature**. The Request-specific conversion in `crates/bunwasm-runtime/src/js/web.js` is an original adapter for the Node26.7.0 Request BodyInit extension, not copied Undici or Node source. It converts Node Readable and other asynchronous iterable bodies through the existing shipped `ReadableStream.from`. String chunks become UTF-8 bytes; Uint8Array chunks retain byte order and view bounds. Unsupported chunks and iterator failures reject consumption. The adapter acquires the source iterator once during Request construction without pulling, so acquisition errors throw synchronously and cancellation before any read calls the original iterator return exactly once. Node Readable retains Node's own lifecycle: cancelling an unstarted iterator does not destroy the stream, while cancelling after reading tears it down. The existing body reader supplies single consumption and cloning.
+
+For the host-engine stream selection, Request captures the platform Request constructor before global installation. A private WeakMap retains an unfetched native Request for each body stream solely to observe its intrinsic bodyUsed state. Observation neither reads nor replaces the stream. Construction, lazy byte-body creation and clone branch replacement register their current streams. Locking alone remains unused; reading or cancellation remains disturbed after releasing the reader. The portable selection keeps its existing disturbance flag. This state adapter changes Request only, not Response or the general stream implementation.
+
+Existing Web ReadableStream bodies keep their identity and native prototype. Strings, byte arrays and ordinary object fallback remain unchanged. These adapters are Request-only. They do not change Response, Blob, fetch dispatch, request methods or payloads. Next15.5.6 exposed the missing conversion by forwarding its real Node IncomingMessage to NextRequest, where the old generic fallback converted the stream object to the literal text `[object Object]`.
+
+`tests/fixtures/request-body-streams` shares one standard-Node oracle with source tests that evaluate both actual streams.js selections and the registered guest preflight. The source tests previously injected only the portable stream factory and missed native-stream disturbance. Actual Chromium r12 on the32182055 guest exposed that gap after draining and releasing a body reader. Source success alone does not count as corrected-guest acceptance. It covers split UTF-8 bytes, mixed string/byte chunks, empty streams, exact JSON POST data, real IncomingMessage delivery, stream bytes, clone consumption, iterator errors, unread and post-read cancellation, synchronous acquisition errors, Node Readable cleanup, lock versus disturbance, first-read and drained-reader state, stream identity/prototypes, lazy byte bodies, independent clone branches, and repeated consumption. A host-source control replaces the installed Request/fetch globals after factory initialization to verify captured observation without fetch. No Next package patch, post-data rewrite or application gate change is part of this adapter. Corrected-guest application acceptance remains pending.
+
+
+## Stack constructor-column query
+
+Class **Host feature**. The constructor-column query in `bootstrap.js`, `natives.rs`, `modules.rs` and `stack_position.rs` is an original bun-wasm adapter, not copied V8, Node or Bun source. Its reference is the existing JavaScript `/^new\s+/` match at `sourceLine.slice(column - 1)`. The native `sourceNewOffset(file, line, column)` returns only the numeric UTF-16 match length. Bootstrap still maps positions first, skips already-mapped callsites, adds the match length and keeps the original column when source lookup throws or does not match. Non-host formatting is unchanged.
+
+The query borrows the current original source when present, otherwise the current evaluated source, using the same precedence as `getSourceLine`. It adds no filename cache. Positive positions scan preceding lines, the requested UTF-16 prefix and the matched token/whitespace plus lookahead, not the remainder of a minified line. Negative slice positions need the line length first. Astral prefixes count two UTF-16 units. The whitespace set follows ECMAScript, including FEFF and excluding0085. `getSourceLine` and inspect's full-line excerpt/callee consumers remain unchanged. The previous original-source clone was an Rc clone; the avoided allocation and transfer were the returned line String, not a full original-source clone.
+
+The focused regression first reproduced32 complete1MiB-line transfers through the unchanged production formatter. The corrected path uses numeric results and zero complete-line calls. Standard-Node regex controls, actual Rust helper tests, extracted production State/native functions and the identical registered native test check whitespace, invalid positions, original/evaluated source precedence, current-source replacement, maps/wrapper offsets, missing source/errors and full-line output. The std-only probe uses minimal host types and does not replace a full Cargo or guest run. The registered native and Chromium fixture also checks actual loaded CJS/TypeScript errors and huge source lines. No measured application speedup, stack disabling, excerpt truncation, generic codec change, package patch or application timeout change is claimed. Corrected-guest replay remains parent-owned and pending.

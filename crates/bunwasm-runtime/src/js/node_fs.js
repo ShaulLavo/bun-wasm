@@ -891,84 +891,154 @@
   delete promises.fstat;
   delete promises.ftruncate;
 
-  // --- streams (minimal: whole-file reads, synchronous writes) --------------
+  // --- file streams over the existing descriptor and Node stream adapters -----
 
-  function createReadStream(path, options = {}) {
-    const EventEmitter = internal.require("events");
-    const stream = new EventEmitter();
-    const encoding = encodingOf(options);
-    stream.path = path;
-    stream.readable = true;
-    stream.setEncoding = (enc) => {
-      stream._encoding = enc;
-      return stream;
-    };
-    stream.pipe = (dest) => {
-      stream.on("data", (chunk) => dest.write(chunk));
-      stream.on("end", () => dest !== globalThis.process.stdout && dest.end && dest.end());
-      return dest;
-    };
-    stream.destroy = () => stream;
-    stream[Symbol.asyncIterator] = async function* () {
-      yield readChunk();
-    };
-    function readChunk() {
-      let buf = readFileSync(path);
-      if (options.start !== undefined || options.end !== undefined) buf = buf.subarray(options.start || 0, options.end === undefined ? undefined : options.end + 1);
-      const enc = stream._encoding || encoding;
-      return enc ? buf.toString(enc) : buf;
-    }
-    later(() => {
-      let chunk;
-      try {
-        chunk = readChunk();
-      } catch (err) {
-        stream.emit("error", err);
-        return;
-      }
-      stream.emit("open");
-      stream.emit("ready");
-      if (chunk.length > 0) stream.emit("data", chunk);
-      stream.emit("end");
-      stream.emit("close");
+  let fileStreams;
+  function initializeFileStreams() {
+    if (fileStreams) return fileStreams;
+    fileStreams = internal.builtin("node:stream");
+    Object.setPrototypeOf(ReadStream, fileStreams.Readable);
+    Object.setPrototypeOf(ReadStream.prototype, fileStreams.Readable.prototype);
+    Object.setPrototypeOf(WriteStream, fileStreams.Writable);
+    Object.setPrototypeOf(WriteStream.prototype, fileStreams.Writable.prototype);
+    Object.defineProperties(fs, {
+      ReadStream: { value: ReadStream, writable: true, enumerable: true, configurable: true },
+      WriteStream: { value: WriteStream, writable: true, enumerable: true, configurable: true },
+      FileReadStream: { value: ReadStream, writable: true, enumerable: true, configurable: true },
+      FileWriteStream: { value: WriteStream, writable: true, enumerable: true, configurable: true },
     });
-    return stream;
+    return fileStreams;
   }
 
-  function createWriteStream(path, options = {}) {
-    const EventEmitter = internal.require("events");
-    const stream = new EventEmitter();
-    const flags = (typeof options === "object" && options.flags) || "w";
-    const fd = openSync(path, flags);
-    stream.path = path;
-    stream.fd = fd;
-    stream.writable = true;
-    stream.bytesWritten = 0;
-    stream.write = (chunk, encoding, cb) => {
-      if (typeof encoding === "function") cb = encoding;
-      stream.bytesWritten += writeSync(fd, chunk, undefined, typeof encoding === "string" ? encoding : undefined);
-      if (typeof cb === "function") later(cb);
-      return true;
-    };
-    stream.end = (chunk, encoding, cb) => {
-      if (typeof chunk === "function") cb = chunk;
-      else if (chunk !== undefined && chunk !== null) stream.write(chunk, encoding);
-      closeSync(fd);
-      stream.writable = false;
-      later(() => {
-        stream.emit("finish");
-        stream.emit("close");
-        if (typeof cb === "function") cb();
-      });
-      return stream;
-    };
-    stream.close = (cb) => stream.end(cb);
-    stream.destroy = () => stream;
-    later(() => {
-      stream.emit("open", fd);
-      stream.emit("ready");
-    });
-    return stream;
+  function fileStreamOptions(options) {
+    if (typeof options === "string") return { encoding: options };
+    if (options == null) return {};
+    if (typeof options !== "object") throw invalidArg("options", "an object or string", options);
+    return options;
+  }
+
+  function fileStreamPosition(name, value) {
+    if (!Number.isSafeInteger(value) || value < 0) throw readRange(name, value);
+    return value;
+  }
+
+  function initializeFileStream(stream, path, options, flags) {
+    stream.fd = options.fd === undefined ? null : options.fd;
+    if (stream.fd !== null) validateFd(stream.fd);
+    stream.path = stream.fd === null ? toPath(path) : path;
+    stream.flags = options.flags === undefined ? flags : options.flags;
+    stream.mode = options.mode === undefined ? 0o666 : options.mode;
+    stream.autoClose = options.autoClose !== false;
+    stream.pending = stream.fd === null;
+    stream.pos = options.start === undefined ? undefined : fileStreamPosition("start", options.start);
+  }
+
+  function ReadStream(path, options) {
+    if (!(this instanceof ReadStream)) return new ReadStream(path, options);
+    const streams = initializeFileStreams();
+    options = fileStreamOptions(options);
+    initializeFileStream(this, path, options, "r");
+    this.start = options.start;
+    this.end = options.end === undefined || options.end === Infinity ? Infinity : fileStreamPosition("end", options.end);
+    if (this.end < (this.pos || 0)) throw readRange("start", this.pos);
+    this.bytesRead = 0;
+    streams.Readable.call(this, { highWaterMark: 65536, ...options, autoDestroy: this.autoClose });
+  }
+
+  function WriteStream(path, options) {
+    if (!(this instanceof WriteStream)) return new WriteStream(path, options);
+    const streams = initializeFileStreams();
+    options = fileStreamOptions(options);
+    initializeFileStream(this, path, options, "w");
+    this.start = options.start;
+    this.bytesWritten = 0;
+    streams.Writable.call(this, { ...options, decodeStrings: true, defaultEncoding: options.encoding || options.defaultEncoding, autoDestroy: this.autoClose });
+  }
+
+  function constructFileStream(callback) {
+    if (this.fd !== null) { callback(); return; }
+    try { this.fd = openSync(this.path, this.flags); }
+    catch (error) { this.pending = false; callback(error); return; }
+    this.pending = false;
+    this.emit("open", this.fd);
+    this.emit("ready");
+    callback();
+  }
+
+  function destroyFileStream(error, callback) {
+    const fd = this.fd;
+    this.fd = null;
+    this.pending = false;
+    if (fd === null) { callback(error); return; }
+    try { closeSync(fd); }
+    catch (closeError) { callback(error || closeError); return; }
+    callback(error);
+  }
+
+  ReadStream.prototype._construct = constructFileStream;
+  WriteStream.prototype._construct = constructFileStream;
+  ReadStream.prototype._destroy = destroyFileStream;
+  WriteStream.prototype._destroy = destroyFileStream;
+
+  ReadStream.prototype._read = function (size) {
+    const length = Math.min(Math.max(size, 1), this.end - (this.pos === undefined ? this.bytesRead : this.pos) + 1);
+    if (length <= 0) { this.push(null); return; }
+    const chunk = Buffer.allocUnsafe(length);
+    const count = readSync(this.fd, chunk, 0, length, this.pos);
+    this.bytesRead += count;
+    if (this.pos !== undefined) this.pos += count;
+    this.push(count === 0 ? null : chunk.subarray(0, count));
+  };
+
+  function writeFileStreamStep(stream, chunk, offset) {
+    const count = writeSync(stream.fd, chunk, offset, chunk.length - offset, stream.pos);
+    if (count === 0) throw Object.assign(new Error("write made no progress"), { code: "EIO", syscall: "write" });
+    stream.bytesWritten += count;
+    if (stream.pos !== undefined) stream.pos += count;
+    return count;
+  }
+
+  function writeFileStreamChunk(stream, chunk) {
+    let offset = 0;
+    while (offset < chunk.length) offset += writeFileStreamStep(stream, chunk, offset);
+  }
+
+  WriteStream.prototype._write = function (chunk, encoding, callback) {
+    try { writeFileStreamChunk(this, chunk); }
+    catch (error) { callback(error); return; }
+    callback();
+  };
+
+  ReadStream.prototype.close = function (callback) {
+    if (typeof callback === "function") fileStreams.finished(this, callback);
+    this.destroy();
+  };
+  WriteStream.prototype.close = function (callback) {
+    if (callback && this.closed) {
+      internal.require("process").nextTick(callback);
+      return;
+    }
+    if (callback) this.once("close", callback);
+    if (!this.autoClose) this.once("finish", () => this.destroy());
+    this.end();
+  };
+
+  function createReadStream(path, options) {
+    return new ReadStream(path, options);
+  }
+
+  function createWriteStream(path, options) {
+    return new WriteStream(path, options);
+  }
+
+  function readStreamConstructor() {
+    initializeFileStreams();
+    return ReadStream;
+  }
+
+  function writeStreamConstructor() {
+    initializeFileStreams();
+    return WriteStream;
   }
 
   function watchUnsupported() {
@@ -994,5 +1064,11 @@
     X_OK: 1,
   });
 
+  Object.defineProperties(fs, {
+    ReadStream: { get: readStreamConstructor, enumerable: true, configurable: true },
+    WriteStream: { get: writeStreamConstructor, enumerable: true, configurable: true },
+    FileReadStream: { get: readStreamConstructor, enumerable: true, configurable: true },
+    FileWriteStream: { get: writeStreamConstructor, enumerable: true, configurable: true },
+  });
   return { fs, promises };
 })

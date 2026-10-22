@@ -1,0 +1,1 @@
+Node 26.7.0 tty.WriteStream reference. Native Bun 1.4.2 omits cursor methods on pipes and invokes terminal-write callbacks synchronously. Expected files capture Node PTY bytes; the guest must retain its deferred writer callbacks.

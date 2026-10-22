@@ -22418,6 +22418,9 @@ typedef struct JSParseState {
     const uint8_t *line_start; /* first character of the current line */
     const uint8_t *eol;  // most recently seen end-of-line character
     const uint8_t *mark; // first token character, invariant: eol < mark
+    const uint8_t *call_column_line;
+    const uint8_t *call_column_ptr;
+    int call_column_utf16;
 
     /* current function code */
     JSFunctionDef *cur_func;
@@ -25021,7 +25024,7 @@ static int js_parse_get_pos(JSParseState *s, JSParsePos *sp)
     sp->line_num = s->token.line_num;
     sp->col_num = s->token.col_num;
     sp->ptr = s->token.ptr;
-    sp->line_start = s->line_start;
+    sp->line_start = s->token.line_start;
     sp->eol = s->eol;
     sp->mark = s->mark;
     sp->got_lf = s->got_lf;
@@ -27069,6 +27072,24 @@ static void optional_chain_test(JSParseState *s, int *poptional_chaining_label,
     emit_label(s, label_next);
 }
 
+/* bun-wasm: CallSite columns count UTF-16 units, not source UTF-8 bytes. */
+static int js_parse_call_column(JSParseState *s)
+{
+    if (s->call_column_line != s->token.line_start || !s->call_column_ptr ||
+        s->token.ptr < s->call_column_ptr) {
+        s->call_column_line = s->token.line_start;
+        s->call_column_ptr = s->token.line_start;
+        s->call_column_utf16 = 1;
+    }
+    while (s->call_column_ptr < s->token.ptr) {
+        uint32_t c = utf8_decode_len(s->call_column_ptr,
+                                    s->token.ptr - s->call_column_ptr,
+                                    &s->call_column_ptr);
+        s->call_column_utf16 += 1 + (c > 0xFFFF);
+    }
+    return s->call_column_utf16;
+}
+
 /* allowed parse_flags: PF_POSTFIX_CALL */
 static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
 {
@@ -27081,7 +27102,7 @@ static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
        method call, or the constructor after `new`. Upstream QuickJS reports
        the first argument. */
     int callee_line_num = s->token.line_num;
-    int callee_col_num = (int)(s->token.ptr - s->line_start) + 1;
+    int callee_col_num = js_parse_call_column(s);
 
     call_type = FUNC_CALL_NORMAL;
     switch(s->token.val) {
@@ -27206,7 +27227,7 @@ static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
             JSAtom name;
             int identifier_line_num = s->token.line_num;
             int identifier_col_num =
-                (int)(s->token.ptr - s->line_start) + 1;
+                js_parse_call_column(s);
             if (s->token.u.ident.is_reserved) {
                 return js_parse_error_reserved_identifier(s);
             }
@@ -27288,7 +27309,7 @@ static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
             emit_source_loc(s);
             /* bun-wasm: `new X()` is reported at X. */
             callee_line_num = s->token.line_num;
-            callee_col_num = (int)(s->token.ptr - s->line_start) + 1;
+            callee_col_num = js_parse_call_column(s);
             if (js_parse_postfix_expr(s, 0))
                 return -1;
             accept_lparen = true;
@@ -27681,7 +27702,7 @@ static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
                 }
                 /* bun-wasm: `a.b.c()` is reported at c. */
                 callee_line_num = s->token.line_num;
-                callee_col_num = (int)(s->token.ptr - s->line_start) + 1;
+                callee_col_num = js_parse_call_column(s);
                 if (get_prev_opcode(fd) == OP_get_super) {
                     JSValue val;
                     int ret;

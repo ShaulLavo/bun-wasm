@@ -1,0 +1,1 @@
+VM context globals, this, Script APIs and errors preserve the Node contract

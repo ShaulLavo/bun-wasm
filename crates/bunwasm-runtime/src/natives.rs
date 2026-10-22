@@ -901,6 +901,12 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
     t.add("getSourceLine", move |a| {
         Ok(st.source_line(a.str(0)?, a.num(1)? as usize).into())
     });
+    let st = state.clone();
+    t.add("sourceNewOffset", move |a| {
+        Ok(Val::Num(
+            st.source_new_offset(a.str(0)?, a.num(1)? as usize, a.num(2)?) as f64,
+        ))
+    });
     // `Bun.build`: the options as JSON (src/js/bun.js normalizes them), the
     // outputs as `{ outputs: [{ path, kind, contents }], logs }`.
     let st = state.clone();
@@ -1365,6 +1371,89 @@ mod builtin_tests {
             .find(|(key, _)| *key == name)
             .expect("shared data native");
         function(Args(args))
+    }
+
+    #[test]
+    fn stack_column_native_uses_current_original_source_without_changing_excerpts() {
+        let state = Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)));
+        let natives = table(&state);
+        let file = "/stack.cjs";
+        state
+            .sources
+            .borrow_mut()
+            .insert(file.into(), (Rc::from("new Error"), modules::Format::Cjs));
+        let args = [Val::from(file), Val::Num(1.0), Val::Num(1.0)];
+        assert_eq!(
+            call(&natives, "sourceNewOffset", &args).unwrap(),
+            Val::Num(4.0)
+        );
+        let original = "😀new\t\u{feff} Error";
+        state.positions.borrow_mut().insert(
+            file.into(),
+            modules::PositionMap {
+                original: Some(Rc::from(original)),
+                map: Some(crate::sourcemap::SourceMap::parse("AAAE")),
+                line1_shift: 5,
+                line_offset: 2,
+            },
+        );
+        assert_eq!(state.map_position(file, 3, 6), Some((1, 3)));
+        let mapped = [Val::from(file), Val::Num(1.0), Val::Num(3.0)];
+        assert_eq!(
+            call(&natives, "sourceNewOffset", &mapped).unwrap(),
+            Val::Num(6.0)
+        );
+        assert_eq!(
+            call(&natives, "getSourceLine", &args[..2]).unwrap(),
+            Val::from(original)
+        );
+        state.positions.borrow_mut().get_mut(file).unwrap().original =
+            Some(Rc::from("😀renew Error"));
+        assert_eq!(
+            call(&natives, "sourceNewOffset", &mapped).unwrap(),
+            Val::Num(0.0)
+        );
+        state.positions.borrow_mut().remove(file);
+        state.sources.borrow_mut().insert(
+            file.into(),
+            (Rc::from("new\u{0085}Error"), modules::Format::Cjs),
+        );
+        assert_eq!(
+            call(&natives, "sourceNewOffset", &args).unwrap(),
+            Val::Num(0.0)
+        );
+        state.sources.borrow_mut().insert(
+            file.into(),
+            (Rc::from("new\u{feff}Error"), modules::Format::Cjs),
+        );
+        assert_eq!(
+            call(&natives, "sourceNewOffset", &args).unwrap(),
+            Val::Num(4.0)
+        );
+        let missing = [Val::from("/missing"), Val::Num(1.0), Val::Num(1.0)];
+        assert_eq!(
+            call(&natives, "sourceNewOffset", &missing).unwrap(),
+            Val::Num(0.0)
+        );
+        let no_line = [Val::from(file), Val::Num(2.0), Val::Num(1.0)];
+        assert_eq!(
+            call(&natives, "sourceNewOffset", &no_line).unwrap(),
+            Val::Num(0.0)
+        );
+        assert!(call(&natives, "sourceNewOffset", &[Val::Num(1.0)]).is_err());
+        let huge = format!("new Error();/*{}*/", "x".repeat(1024 * 1024));
+        state
+            .sources
+            .borrow_mut()
+            .insert(file.into(), (Rc::from(huge.as_str()), modules::Format::Cjs));
+        assert_eq!(
+            call(&natives, "sourceNewOffset", &args).unwrap(),
+            Val::Num(4.0)
+        );
+        assert_eq!(
+            call(&natives, "getSourceLine", &args[..2]).unwrap(),
+            Val::from(huge.as_str())
+        );
     }
 
     #[test]

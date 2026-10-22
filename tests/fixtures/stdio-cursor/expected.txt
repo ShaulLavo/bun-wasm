@@ -1,0 +1,2 @@
+[1K[2K[0K[0J[1G[4;3H[2D[3B[2C[3A[1A[1C
+stdout and stderr cursor bytes, write return values, callback identity and tick order

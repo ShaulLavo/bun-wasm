@@ -279,7 +279,7 @@
       isBuiltin: (name) => Object.prototype.hasOwnProperty.call(reg, name.startsWith("node:") ? name : "node:" + name) || name === "bun" || name.startsWith("bun:"),
       _cache: internal.moduleCache,
       _extensions: { ".js": () => {}, ".json": () => {}, ".node": () => {} },
-      _resolveFilename: (request, parent) => native.resolve(request, (parent && parent.filename) || native.cwd() + "/", true),
+      _resolveFilename: (request, parent) => internal.resolveFilename(request, (parent && parent.filename) || native.cwd() + "/"),
       _nodeModulePaths: (dir) => new Module(dir + "/x", null).paths,
       wrap: (code) => `(function (exports, require, module, __filename, __dirname) { ${code}\n});`,
       register() {},
@@ -307,11 +307,26 @@
         return runWith(this.code, context, this.filename);
       }
     }
-    // Not a real separate realm: globals resolve through the context object
-    // first (`with`), then fall back to this realm's globals.
+    // Not a separate realm: missing globals still fall back to this realm.
+    const contexts = new WeakMap();
+    function contextProperty(target, key) {
+      if (Reflect.has(target, key)) return Reflect.get(target, key, target);
+      return key === "globalThis" ? contexts.get(target) : globalThis[key];
+    }
+    function contextGlobal(context) {
+      if (contexts.has(context)) return contexts.get(context);
+      const view = new Proxy(context, {
+        has: (target, key) => key === "globalThis" || Reflect.has(target, key),
+        get: contextProperty,
+        set: (target, key, value) => Reflect.set(target, key, value, target),
+      });
+      contexts.set(context, view);
+      return view;
+    }
     function runWith(code, context, filename) {
+      const view = contextGlobal(context);
       const runner = native.evalScript(`(function (__ctx, __code) { with (__ctx) { return eval(__code); } })`, filename);
-      return runner(context, String(code));
+      return runner.call(view, view, String(code));
     }
     return {
       Script,

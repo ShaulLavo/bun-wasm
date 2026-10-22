@@ -61,15 +61,13 @@
 
   // V8 places `new Error()` at `new`; Bun (JSC) at the constructor name.
   function pastNew(file, line, col) {
-    let text;
+    let offset;
     try {
-      text = internal.getSourceLine && internal.getSourceLine(file, line);
+      offset = native.sourceNewOffset(file, line, col);
     } catch {
       return col;
     }
-    if (typeof text !== "string") return col;
-    const m = /^new\s+/.exec(text.slice(col - 1));
-    return m ? col + m[0].length : col;
+    return offset ? col + offset : col;
   }
 
   function evalOriginFile(site) {
@@ -529,6 +527,12 @@
       this.paths = nodeModulePaths(this.path);
       defineHidden(this, { parent });
     }
+    _compile(content, filename) {
+      const source = content.replace(/^#![^\r\n\u2028\u2029]*/, "").replace(/^\uFEFF/, "");
+      const code = compileModuleImports(source, filename);
+      const wrapper = native.evalScript(`(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {\n${code}\n})`, filename);
+      return callModuleWrapper(this, wrapper, filename);
+    }
     require(spec) {
       if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
         const exposed = internal.require("node_stream_internals").modules;
@@ -536,6 +540,16 @@
       }
       return requireFrom(spec, this.filename);
     }
+  }
+
+  function compileModuleImports(source, filename) {
+    if (native.engine !== "host" || !source.includes("import")) return source;
+    const offsets = native.functionImports([source], "normal")[0];
+    const replacement = `(function(){})["__bunwasmFunctionImport"](${JSON.stringify(filename)})`;
+    for (const offset of offsets.sort((a, b) => b - a)) {
+      source = source.slice(0, offset) + replacement + source.slice(offset + 6);
+    }
+    return source;
   }
 
   function nodeModulePaths(dir) {
@@ -601,12 +615,11 @@
     topLevelFunctions.add(wrapper);
     const require = makeRequire(path, mod);
     if (wrapper.length !== 6) {
-      wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
-      return;
+      return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
     }
     const meta = Object.create(null);
     internal.initImportMeta(meta, path, mod === mainModule);
-    wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
+    return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
   }
 
   function resolveFrom(spec, fromPath) {
@@ -617,6 +630,12 @@
     }
     return native.resolve(spec, fromPath, true);
   }
+
+  function resolveFilename(spec, fromPath) {
+    const resolved = resolveFrom(spec, fromPath);
+    return isBuiltinId(resolved) ? spec : resolved;
+  }
+  internal.resolveFilename = resolveFilename;
 
   function requireFrom(spec, fromPath) {
     const resolved = resolveFrom(spec, fromPath);
@@ -629,7 +648,7 @@
       return mod ? mod.require(spec) : requireFrom(spec, fromPath);
     }
     require.resolve = function resolve(spec) {
-      return resolveFrom(spec, fromPath);
+      return resolveFilename(spec, fromPath);
     };
     require.resolve.paths = function paths(spec) {
       return isBuiltinId(spec) ? null : nodeModulePaths(dirname(fromPath));

@@ -987,3 +987,40 @@ until those controls and independent review pass. The implementing lane owns
 all probe processes, result pipes/files and private build scratch on every exit;
 the runtime coordinator owns retained evidence until the follow-up is accepted,
 then removes it. Preserve shared targets and caches.
+
+
+## Inherited QuickJS comment line bookkeeping
+
+Status: Approved, deferred to the parser/diagnostics owner. The selected-token
+UTF16 coordinate repair does not change comment scanning policy.
+
+At9a97fd86 and its61c5 parser parent, the exact extracted `next_token` retains
+these existing line/origin pairs. Inputs below are JSON strings so CR, LS and PS
+are unambiguous:
+
+- `"/*😀\r中*/Error('x');"`: first token byte12, line1, line origin7,
+  numeric UTF16 column4. The block-comment bareCR branch advances its origin
+  without incrementing the line number.
+- `"/*😀\u2028中*/Error('x');"` and the U+2029 equivalent: first token
+  byte14, line1, origin0, numeric column9. Block-comment LS/PS mark ASI but do
+  not update the line/origin.
+- `"//😀\u2028Error('x');"` and the U+2029 equivalent: first token byte9,
+  line1, origin0, numeric column6. Line-comment LS/PS stop scanning without
+  applying the ordinary token line-terminator bookkeeping.
+
+Exact sources/rows and reproduction are retained in
+`/work/reports/bun-wasm-frameworks-20261021/next-browser-finish/quickjs-stack-column-review-r1/independent-results.json`,
+keys `block_cr`, `block_ls`, `block_ps`, `line_ls` and `line_ps`.
+Run its unchanged `independent-probe.py ROOT SCRATCH REPORT` with its unchanged
+`literal-oracle.ts` copied to REPORT, using an owned admitted scratch directory.
+This extracts actual lexer functions and private state, not a complete engine.
+`ordinary_ls`/`ordinary_ps` and `block_crlf` are distinct passing controls.
+The same observations were reproduced before the selected-token fix in
+`quickjs-token-origin-fix-r1/before/independent-results.json`.
+
+A future fix must compare actual lexer line numbers/origins, parser diagnostics
+and raw/formatted/mapped frames with JavaScript line-terminator semantics.
+Do not change token choices or lower expected columns. Parent owns the small
+retained evidence until this follow-up is resolved; each executor owns its test
+processes and scratch. No comment scanner repair or complete-engine claim is
+included in the current patch.
