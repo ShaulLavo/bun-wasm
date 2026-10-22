@@ -39,10 +39,14 @@ if (mode === "quick-launcher") {
 } else if (mode === "worker") {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
   writeFileSync(join(scratch, "detached.pid"), String(child.pid));
-  process.on("SIGTERM", () => setTimeout(() => {
-    writeFileSync(join(scratch, "grace-complete"), "complete");
-    process.exit(0);
-  }, 200));
+  process.on("SIGTERM", () => {
+    writeFileSync(join(scratch, "worker-term"), "received");
+    setTimeout(() => {
+      writeFileSync(join(scratch, "grace-complete"), "complete");
+      process.exit(0);
+    }, 200);
+  });
+  writeFileSync(join(scratch, "worker-ready"), "ready");
 } else if (mode === "browser" || mode === "failed-browser" || mode === "control-browser") {
   const missed = mode === "failed-browser" && process.platform === "linux";
   if (missed) await pauseSupervisor(scratch);
